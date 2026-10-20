@@ -128,6 +128,11 @@ func TestLoadRefuses(t *testing.T) {
 			return strings.Replace(s, `"service=junos-exec"`, `"service=`+strings.Repeat("A", 20)+"+"+strings.Repeat("B", 24)+`"`, 1)
 		}, "long base64")
 	})
+	t.Run("a JWT value", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, `"service=junos-exec"`, `"service=eyJhbGciOiJIUzI1"`, 1)
+		}, "a JWT")
+	})
 	t.Run("a token-shaped value", func(t *testing.T) {
 		refused(t, func(s string) string {
 			return strings.Replace(s, `"service=junos-exec"`, `"`+randBase62(t, 30)+`"`, 1)

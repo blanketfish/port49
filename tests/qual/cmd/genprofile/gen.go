@@ -196,7 +196,7 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	if err := minorVersions(evDir, &r, p, note); err != nil {
 		return nil, g, err
 	}
-	if p.Stimulus.Connections, err = connPattern(evDir, &r, len(p.Stimulus.Steps)); err != nil {
+	if p.Stimulus.Connections, err = connPattern(evDir, len(p.Stimulus.Steps)); err != nil {
 		return nil, g, err
 	}
 	if tls, err := tlsStimulus(evDir, note); err != nil {
@@ -213,6 +213,9 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	p.Reactions = prefillReactions(all, &r, note)
 	p.Acceptance = prefillAcceptance(all, note)
 	p.Scenarios = scenarios(&r)
+	if p.Stimulus.TLS != nil && p.Stimulus.TLS.FlightDelay == 0 {
+		p.Scenarios = slices.DeleteFunc(p.Scenarios, func(sc string) bool { return sc == "flight_delay" })
+	}
 	if g, err = goldenFrom(p, recs, win, &r); err != nil {
 		return nil, g, err
 	}
@@ -220,7 +223,8 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 }
 
 // StimulusEqual compares what genprofile generates and nothing reviewed:
-// stimulus, platform, firmware and transports.
+// stimulus, platform, firmware and transports. client_chain and server_identity
+// are review-left defaults, so they are blanked on both sides.
 func StimulusEqual(a, b *devicemock.Profile) bool {
 	return a.Platform == b.Platform && a.Firmware == b.Firmware &&
 		slices.Equal(a.Transports, b.Transports) && stimulusYAML(a) == stimulusYAML(b)
@@ -229,7 +233,13 @@ func StimulusEqual(a, b *devicemock.Profile) bool {
 // stimulusYAML is the stimulus as it is written, so a profile read back from
 // disk (empty lists) equals one just generated (nil lists).
 func stimulusYAML(p *devicemock.Profile) string {
-	b, err := yaml.Marshal(p.Stimulus)
+	st := p.Stimulus
+	if st.TLS != nil {
+		t := *st.TLS
+		t.ClientChain, t.ServerIdentity = "", ""
+		st.TLS = &t
+	}
+	b, err := yaml.Marshal(st)
 	if err != nil {
 		return err.Error()
 	}
@@ -308,18 +318,31 @@ func readRecords(path string) ([]*rec, error) {
 	return out, sc.Err()
 }
 
-// checkResults refuses a run with a cell that failed or never ran: a profile is
-// generated from a passing conformance run only. not_applicable passes.
+// checkResults refuses a run with a cell that failed or has no result.
+// not_applicable and not_run pass: TestQualify grades the TLS cells not_run on
+// an image with no RFC 9887 client and single_connection not_run on one with no
+// single-connection form, and a scenario whose cell did not run is not listed.
 func checkResults(r *run) error {
 	var bad []string
-	for cell, v := range r.Results {
-		if v != "pass" && v != "not_applicable" {
+	cells := map[string]bool{}
+	for c := range r.Cells {
+		cells[c] = true
+	}
+	for c := range r.Results {
+		cells[c] = true
+	}
+	for cell := range cells {
+		switch v := r.Results[cell]; v {
+		case "pass", "not_applicable", "not_run":
+		case "":
+			bad = append(bad, cell+" (no result)")
+		default:
 			bad = append(bad, cell+" ("+v+")")
 		}
 	}
 	if len(bad) > 0 {
 		sort.Strings(bad)
-		return fmt.Errorf("run.json: cells did not pass: %s", strings.Join(bad, ", "))
+		return fmt.Errorf("run.json: cells failed or have no result: %s", strings.Join(bad, ", "))
 	}
 	return nil
 }
@@ -501,10 +524,16 @@ func plainConns(evDir string) ([]conn, error) {
 
 var typeCode = map[string]uint8{"authen": 1, "author": 2, "acct": 3}
 
+// minorVersionFile is the conns file a step's header comes from.
+var minorVersionFile = map[string]string{"login": "token_login", "authorize_session": "token_login",
+	"command_permitted": "command_permitted", "command_denied": "command_denied",
+	"account_start": "accounting", "account_stop": "accounting"}
+
 // minorVersions sets each step's minor version from the first header of its
-// type (M4: the low nibble of the version byte). Over TLS the header is hidden,
-// so an authen step with no plain header gets 1 for pap or chap and 0 otherwise (author and acct are 0), and
-// an engine gap saying so.
+// type (M4: the low nibble of the version byte). A run with a tcp transport has
+// the headers, and a missing type is an error. Only a run with no tcp transport
+// hides them: its authen steps get 1 for pap, chap, mschap and mschapv2 (RFC
+// 8907 section 5.4.2) and every other step 0, each with an engine gap saying so.
 func minorVersions(evDir string, r *run, p *devicemock.Profile, note devicemock.Source) error {
 	cs, err := plainConns(evDir)
 	if err != nil {
@@ -522,13 +551,18 @@ func minorVersions(evDir string, r *run, p *devicemock.Profile, note devicemock.
 			}
 		}
 	}
+	tlsOnly := !slices.Contains(r.Transports, "tcp")
 	for i := range p.Stimulus.Steps {
 		s := &p.Stimulus.Steps[i]
 		if v, ok := versions[typeCode[s.Type]]; ok {
 			s.MinorVersion = v
 			continue
 		}
-		if s.Type == "authen" && (s.Fields.AuthenType == "pap" || s.Fields.AuthenType == "chap") {
+		if !tlsOnly {
+			return fmt.Errorf("step %s: no %s header in %s.conns.json; a tcp run's minor version is read, never inferred",
+				s.Name, s.Type, minorVersionFile[s.Name])
+		}
+		if s.Type == "authen" && slices.Contains([]string{"pap", "chap", "mschap", "mschapv2"}, s.Fields.AuthenType) {
 			s.MinorVersion = 1
 		}
 		p.EngineGaps = append(p.EngineGaps, devicemock.EngineGap{ID: "minor_version_inferred_over_tls",
@@ -542,7 +576,7 @@ func minorVersions(evDir string, r *run, p *devicemock.Profile, note devicemock.
 // token_login scenario's cells made together, never from one cell. With
 // neither condition met it leaves the mode empty, so the profile fails Load
 // loudly: a mode is never guessed.
-func connPattern(evDir string, r *run, n int) (devicemock.ConnPattern, error) {
+func connPattern(evDir string, n int) (devicemock.ConnPattern, error) {
 	var cp devicemock.ConnPattern
 	cs, err := plainConns(evDir)
 	if err != nil {
@@ -618,6 +652,7 @@ func tlsStimulus(evDir string, note devicemock.Source) (*devicemock.TLSStimulus,
 			}
 		}
 	}
+	// No observed delay: none is written, and Generate drops the flight_delay scenario.
 	t.FlightDelay = time.Duration(math.Round(float64(min)/1e7) * 1e7)
 	return t, nil
 }
@@ -727,7 +762,7 @@ func scenarios(r *run) []string {
 		if sc == "flight_delay" {
 			cell = "tls_token_login"
 		}
-		if _, ok := r.Cells[cell]; !ok {
+		if _, ok := r.Cells[cell]; !ok || r.Results[cell] == "not_run" {
 			continue
 		}
 		if tr := devicemock.ScenarioTransport(sc); slices.Contains(r.Transports, tr) {

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -59,15 +61,7 @@ func run1(evidence string, check bool) error {
 	if err := devicemock.WriteGolden(p.Golden, g); err != nil {
 		return err
 	}
-	fmt.Printf("wrote %s and %s\n\nReview before committing:\n", path, p.Golden)
-	for i, item := range []string{
-		"each reaction against the note's cell text",
-		"each acceptance rule's status: measured only when a note for this firmware measured it (ruling 4)",
-		"every engine_gaps entry's code",
-		"the golden's outcomes against the note",
-	} {
-		fmt.Printf("  %d. %s\n", i+1, item)
-	}
+	fmt.Printf("wrote %s and %s\n\n%s", path, p.Golden, checklist(p, g))
 	return nil
 }
 
@@ -87,4 +81,53 @@ func writeProfile(path string, p *devicemock.Profile, _ string) error {
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+// checklist is what the vetter confirms before committing: names, enums and
+// ids only, never a value from the evidence.
+func checklist(p *devicemock.Profile, g devicemock.Golden) string {
+	var b strings.Builder
+	b.WriteString("Review before committing:\n")
+	b.WriteString("1. Reactions. Each is pre-filled as measured from port49's verdicts; confirm what the device did next against the note's cell text.\n")
+	for _, r := range p.Reactions {
+		out := ""
+		if r.Outcome != "" {
+			out = " (" + r.Outcome + ")"
+		}
+		fmt.Fprintf(&b, "   - %s %s -> %s%s [%s, pre-filled]\n", r.Step, r.On, r.Then, out, r.Status)
+	}
+	b.WriteString("2. Acceptance rules: a rule is measured only when a note for this firmware measured it (ruling 4).\n")
+	for _, a := range p.Acceptance {
+		cite := ""
+		for _, s := range a.Sources {
+			cite += ", " + s.Note
+		}
+		fmt.Fprintf(&b, "   - %s: %s, %s%s\n", a.ID, a.Kind, a.Status, cite)
+	}
+	b.WriteString("3. Review-left defaults:\n")
+	if t := p.Stimulus.TLS; t != nil {
+		fmt.Fprintf(&b, "   - client_chain=%s server_identity=%s\n", t.ClientChain, t.ServerIdentity)
+		if t.FlightDelay == 0 {
+			b.WriteString("   - no flight delay was observed: none written, and no flight_delay scenario\n")
+		}
+	} else {
+		b.WriteString("   - none (no TLS)\n")
+	}
+	b.WriteString("4. Engine gaps:\n")
+	for _, e := range p.EngineGaps {
+		fmt.Fprintf(&b, "   - %s (code %q)\n", e.ID, e.Code)
+	}
+	if len(p.EngineGaps) == 0 {
+		b.WriteString("   - none\n")
+	}
+	b.WriteString("5. Golden outcomes against the note:\n")
+	names := make([]string, 0, len(g.Scenarios))
+	for n := range g.Scenarios {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Fprintf(&b, "   - golden %s: %s\n", n, g.Scenarios[n].Outcome)
+	}
+	return b.String()
 }

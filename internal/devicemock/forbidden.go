@@ -18,6 +18,7 @@ var (
 		{regexp.MustCompile(`[A-Za-z0-9+/]{44,}={0,2}`), "long base64"},
 		{regexp.MustCompile(`[0-9A-Za-z]{30,}`), "a port49 token shape"},
 		{regexp.MustCompile(`(?i)\b(credential|token)_sha256=`), "a credential hash"},
+		{regexp.MustCompile(`eyJ[A-Za-z0-9_-]{8,}`), "a JWT"},
 	}
 	// Keys the schema itself defines that match forbiddenKey's shape but
 	// hold no secret.

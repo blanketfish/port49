@@ -278,7 +278,10 @@ func TestConnPatternCountsTheUnionOfTheScenariosCells(t *testing.T) {
 // (c) neither condition met: the mode stays empty and Load fails loudly.
 func TestConnPatternWithNeitherConditionLeavesTheModeEmpty(t *testing.T) {
 	dir := copyFixture(t)
-	remove(t, dir, "command_permitted.conns.json", "command_denied.conns.json", "accounting.conns.json", "single_connection.conns.json")
+	remove(t, dir, "command_permitted.conns.json", "command_denied.conns.json")
+	// Four connections in all, and a single connection too short to carry every step.
+	short, _ := json.Marshal([]conn{{Plain: []plainHeader{{Version: 0xc1, Type: 1}, {Version: 0xc0, Type: 2}}}})
+	os.WriteFile(filepath.Join(dir, "single_connection.conns.json"), short, 0o644)
 	p, _, err := Generate(dir, "testdata")
 	if err != nil {
 		t.Fatal(err)
@@ -457,22 +460,161 @@ func TestAFailedCellRefusesTheRun(t *testing.T) {
 	}
 }
 
-// Over TLS the header is hidden: an authen step's minor version is inferred
-// (1 for pap) and each inferred step is an engine gap.
-func TestMinorVersionOverTLSIsInferredAndRecordedAsAGap(t *testing.T) {
+// Over TLS alone the header is hidden: an authen step's minor version is
+// inferred (1 for pap, chap, mschap and mschapv2) and each inferred step is an
+// engine gap.
+func TestMinorVersionOverTLSAloneIsInferredAndRecordedAsAGap(t *testing.T) {
+	for _, at := range []string{"pap", "mschapv2"} {
+		dir := copyFixture(t)
+		remove(t, dir, "token_login.conns.json", "command_permitted.conns.json", "command_denied.conns.json",
+			"accounting.conns.json", "single_connection.conns.json", "wrong_credential.conns.json", "store_unavailable.conns.json")
+		editRun(t, dir, func(m map[string]any) { m["transports"] = []string{"tls"} })
+		editRecords(t, dir, func(m map[string]any) bool {
+			if pf, ok := m["packet_fields"].(map[string]any); ok && m["event"] == "redeem" {
+				pf["authen_type"] = at
+			}
+			return true
+		})
+		p, _, err := Generate(dir, "testdata")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.EngineGaps) != 6 || p.EngineGaps[0].ID != "minor_version_inferred_over_tls" {
+			t.Fatalf("one gap per inferred step: %+v", p.EngineGaps)
+		}
+		for _, s := range p.Stimulus.Steps {
+			if want := uint8(map[bool]int{true: 1}[s.Name == "login"]); s.MinorVersion != want {
+				t.Fatalf("%s (%s): minor %d, want %d", s.Name, at, s.MinorVersion, want)
+			}
+		}
+	}
+}
+
+// A run with a tcp transport has the headers; one missing is an error naming
+// the step and the file, never an inference.
+func TestMinorVersionOverTCPNeverInfers(t *testing.T) {
 	dir := copyFixture(t)
-	remove(t, dir, "token_login.conns.json", "command_permitted.conns.json", "command_denied.conns.json",
-		"accounting.conns.json", "single_connection.conns.json", "wrong_credential.conns.json", "store_unavailable.conns.json")
+	remove(t, dir, "accounting.conns.json", "single_connection.conns.json")
+	_, _, err := Generate(dir, "testdata")
+	if err == nil || !strings.Contains(err.Error(), "account_start") || !strings.Contains(err.Error(), "accounting.conns.json") {
+		t.Fatalf("expected an error naming the step and its conns file: %v", err)
+	}
+}
+
+// TestQualify writes not_run for the TLS cells on an image with no RFC 9887
+// client, and for single_connection on one with no single-connection form.
+func TestATCPOnlyRunGenerates(t *testing.T) {
+	dir := copyFixture(t)
+	remove(t, dir, "tls_token_login.tls.json", "tls_unknown_ca.tls.json")
+	editRun(t, dir, func(m map[string]any) {
+		m["transports"] = []string{"tcp"}
+		for _, c := range []string{"tls_token_login", "tls_store_unavailable", "tls_unknown_ca"} {
+			m["results"].(map[string]any)[c] = "not_run"
+			delete(m["cells"].(map[string]any), c)
+		}
+	})
+	p, g, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Stimulus.TLS != nil || !slices.Equal(p.Scenarios, []string{"token_login", "wrong_credential", "store_unavailable", "single_connection"}) {
+		t.Fatalf("%v %+v", p.Scenarios, p.Stimulus.TLS)
+	}
+	if len(g.Scenarios) != 4 {
+		t.Fatalf("%v", g.Scenarios)
+	}
+}
+
+func TestASingleConnectionNotRunRunGenerates(t *testing.T) {
+	dir := copyFixture(t)
+	remove(t, dir, "single_connection.conns.json")
+	editRun(t, dir, func(m map[string]any) {
+		m["results"].(map[string]any)["single_connection"] = "not_run"
+		delete(m["cells"].(map[string]any), "single_connection")
+	})
 	p, _, err := Generate(dir, "testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.EngineGaps) != 6 || p.EngineGaps[0].ID != "minor_version_inferred_over_tls" {
-		t.Fatalf("one gap per inferred step: %+v", p.EngineGaps)
+	if slices.Contains(p.Scenarios, "single_connection") || p.Stimulus.Connections.Mode != "per_step" {
+		t.Fatalf("%v %+v", p.Scenarios, p.Stimulus.Connections)
 	}
-	for _, s := range p.Stimulus.Steps {
-		if want := uint8(map[bool]int{true: 1}[s.Name == "login"]); s.MinorVersion != want {
-			t.Fatalf("%s: minor %d, want %d", s.Name, s.MinorVersion, want)
+}
+
+func TestAFailedOrUngradedCellStillRefusesTheRun(t *testing.T) {
+	dir := copyFixture(t)
+	editRun(t, dir, func(m map[string]any) { delete(m["results"].(map[string]any), "accounting") })
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "accounting") {
+		t.Fatalf("a cell with no result is refused: %v", err)
+	}
+}
+
+// With no observed delay, none is written and the flight_delay scenario is
+// not listed; the checklist says so.
+func TestNoObservedFlightDelayWritesNoneAndSaysSo(t *testing.T) {
+	dir := copyFixture(t)
+	path := filepath.Join(dir, "tls_token_login.tls.json")
+	b, _ := os.ReadFile(path)
+	var cs []map[string]any
+	json.Unmarshal(b, &cs)
+	for _, c := range cs {
+		delete(c, "server_flight_at")
+		delete(c, "device_reply_at")
+	}
+	b, _ = json.Marshal(cs)
+	os.WriteFile(path, b, 0o644)
+	p, g, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Stimulus.TLS.FlightDelay != 0 || slices.Contains(p.Scenarios, "flight_delay") {
+		t.Fatalf("%v %v", p.Stimulus.TLS.FlightDelay, p.Scenarios)
+	}
+	if _, ok := g.Scenarios["flight_delay"]; ok {
+		t.Fatal("no golden for a scenario not listed")
+	}
+	if c := checklist(p, g); !strings.Contains(c, "no flight delay") {
+		t.Fatalf("the checklist says no delay was observed:\n%s", c)
+	}
+}
+
+func TestStimulusEqualIgnoresTheReviewLeftDefaults(t *testing.T) {
+	a, _, _ := Generate(fixture, "testdata")
+	b, _, _ := Generate(fixture, "testdata")
+	b.Stimulus.TLS.ClientChain, b.Stimulus.TLS.ServerIdentity = "leaf", "ip"
+	if !StimulusEqual(a, b) {
+		t.Fatal("client_chain and server_identity are set in review")
+	}
+	if a.Stimulus.TLS.ClientChain != "leaf_and_intermediate" {
+		t.Fatal("StimulusEqual must not edit its arguments")
+	}
+}
+
+// The checklist names steps, events, enums and ids: what the vetter must
+// confirm, and nothing from the evidence beyond that.
+func TestChecklistListsWhatTheVetterMustCheck(t *testing.T) {
+	p, g, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := checklist(p, g)
+	for _, want := range []string{
+		"login authen_pass -> next_step",
+		"login authen_fail -> stop (login_refused)",
+		"login authen_error -> failover_local (falls_to_local)",
+		"measured, pre-filled",
+		"priv_lvl_range: priv_lvl_range, unmeasured, tests/lab/results/QUAL-1.0-fixture_junos.md",
+		"client_chain=leaf_and_intermediate",
+		"server_identity=chain_only",
+		"golden token_login: login_ok",
+	} {
+		if !strings.Contains(c, want) {
+			t.Errorf("checklist lacks %q:\n%s", want, c)
+		}
+	}
+	for _, never := range []string{"service=junos-exec", "172.100", "show", "allow-commands"} {
+		if strings.Contains(c, never) {
+			t.Errorf("checklist leaks evidence %q", never)
 		}
 	}
 }
@@ -505,7 +647,15 @@ func TestCheckComparesTheCommittedStimulus(t *testing.T) {
 		t.Fatalf("-check on a fresh profile: %v", err)
 	}
 	b, _ := os.ReadFile(path)
-	os.WriteFile(path, []byte(strings.Replace(string(b), "port: \"0\"", "port: tty9", 1)), 0o644)
+	reviewed := strings.Replace(string(b), "client_chain: leaf_and_intermediate", "client_chain: leaf", 1)
+	if reviewed == string(b) {
+		t.Fatal("the written profile has no client_chain to review")
+	}
+	os.WriteFile(path, []byte(reviewed), 0o644)
+	if err := run1(ev, true); err != nil {
+		t.Fatalf("-check after a reviewed client_chain edit: %v", err)
+	}
+	os.WriteFile(path, []byte(strings.Replace(reviewed, "port: \"0\"", "port: tty9", 1)), 0o644)
 	if err := run1(ev, true); err == nil || !strings.Contains(err.Error(), "differs") {
 		t.Fatalf("-check on a moved stimulus: %v", err)
 	}
