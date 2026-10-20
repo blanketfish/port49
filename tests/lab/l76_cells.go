@@ -1074,10 +1074,14 @@ func l76WriteText(first, second l76Write) string {
 		switch {
 		case first.State == l76WriteExists && second.State == l76WriteExists:
 			b.WriteString("wrote on both exec channels of one SSH login: the `p49-read` rule `/ read` does not gate `tools` commands.")
-		case first.State == l76WriteExists:
+		case first.State == l76WriteExists && second.State == l76WriteAbsent:
 			b.WriteString("wrote on the first exec channel of one SSH login; the second exec channel refused the same write.")
-		case second.State == l76WriteExists:
+		case second.State == l76WriteExists && first.State == l76WriteAbsent:
 			b.WriteString("wrote on the second exec channel of one SSH login; the first exec channel of the same login, with the same roles, refused the same write.")
+		case first.State == l76WriteExists:
+			b.WriteString("wrote on the first exec channel of one SSH login; whether the second exec channel wrote could not be determined.")
+		case second.State == l76WriteExists:
+			b.WriteString("wrote on the second exec channel of one SSH login; whether the first exec channel wrote could not be determined.")
 		default:
 			b.WriteString("may have written: the device's state after the attempt could not be determined for at least one channel, " +
 				"so a write is not ruled out. Treat it as a write until a run reads the state.")
