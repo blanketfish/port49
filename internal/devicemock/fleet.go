@@ -2,6 +2,7 @@ package devicemock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -22,7 +23,37 @@ type FleetResult struct {
 	Plays    int
 	Outcomes map[string]int
 	Errors   int
+	// ErrorKinds counts Errors by a fixed class name (no_reaction, connection,
+	// context, other), never by error text.
+	ErrorKinds map[string]int
+	// P50 and P99 are nearest-rank over the plays that reached an outcome;
+	// a play that ended in an error is not a latency.
 	P50, P99 time.Duration
+}
+
+// errorKind names an error's class. The text is not kept: it may carry a
+// platform, a step or an address, and a fleet's errors are not read one by one.
+func errorKind(err error) string {
+	var nr *noReactionError
+	switch {
+	case errors.As(err, &nr):
+		return "no_reaction"
+	case errors.Is(err, errConn):
+		return "connection"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "context"
+	}
+	return "other"
+}
+
+// percentile is the nearest-rank p-th percentile of sorted: element
+// ceil(p*n/100)-1.
+func percentile(sorted []time.Duration, p int) time.Duration {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	return sorted[max(0, (p*n+99)/100-1)]
 }
 
 // LoopbackSource is fleet device i's source address: 127.0.1.1 to 127.0.1.254,
@@ -43,12 +74,18 @@ func (f Fleet) Run(ctx context.Context, target func(i int) Target, login func(i 
 	var (
 		mu    sync.Mutex
 		wg    sync.WaitGroup
-		res   = FleetResult{Outcomes: map[string]int{}}
+		res   = FleetResult{Outcomes: map[string]int{}, ErrorKinds: map[string]int{}}
 		times []time.Duration
 	)
 	for i := range f.N {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -58,18 +95,17 @@ func (f Fleet) Run(ctx context.Context, target func(i int) Target, login func(i 
 			mu.Lock()
 			defer mu.Unlock()
 			res.Plays++
-			times = append(times, d)
 			if err != nil {
-				res.Errors++ // never printed: a transcript names steps, but a fleet's are not read one by one
+				res.Errors++
+				res.ErrorKinds[errorKind(err)]++
 				return
 			}
+			times = append(times, d)
 			res.Outcomes[tr.Outcome]++
 		}()
 	}
 	wg.Wait()
 	slices.Sort(times)
-	if n := len(times); n > 0 {
-		res.P50, res.P99 = times[n/2], times[min(n-1, n*99/100)]
-	}
+	res.P50, res.P99 = percentile(times, 50), percentile(times, 99)
 	return res
 }

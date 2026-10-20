@@ -387,13 +387,19 @@ func (r *qualRun) login(i int) devicemock.Login {
 }
 
 // touchPolicy rewrites the policy file with one more harmless deny, a real
-// change the broker's policy watch reloads. It calls no t helper: fleet mode
-// calls it from a goroutine, so the error is returned.
+// change the broker's policy watch reloads. The deny alternates between two
+// Junos keyword paths the keyword tree proves (platforms/keywords/1.3.0/
+// juniper_junos.yaml), so every touch changes the file and none makes a Junos
+// projection fail closed. It calls no t helper: fleet mode calls it from a
+// goroutine, so the error is returned.
 func (r *qualRun) touchPolicy() error {
 	r.touches++
-	cmd := fmt.Sprintf("show qual-reload-%d", r.touches)
+	cmd := []string{"show system uptime", "show system alarms"}[r.touches%2]
 	text := strings.ReplaceAll(r.policyText, `deny: ["show users"]`, `deny: ["show users", "`+cmd+`"]`)
 	text = strings.ReplaceAll(text, `deny: ["show system users"]`, `deny: ["show system users", "`+cmd+`"]`)
+	if text == r.policyText {
+		return errors.New("touchPolicy: the policy has no qual_denies deny to extend")
+	}
 	tmp := r.policyPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
 		return err

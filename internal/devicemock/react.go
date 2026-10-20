@@ -19,8 +19,13 @@ func (p *Profile) React(step, on string) (Reaction, error) {
 			}
 		}
 	}
-	return Reaction{}, fmt.Errorf("%s %s: no reaction for %s at %s; add it from the lab notes", p.Platform, p.Firmware, on, step)
+	return Reaction{}, &noReactionError{fmt.Sprintf("%s %s: no reaction for %s at %s; add it from the lab notes", p.Platform, p.Firmware, on, step)}
 }
+
+// noReactionError is an event the profile has no entry for; Fleet counts it by class.
+type noReactionError struct{ msg string }
+
+func (e *noReactionError) Error() string { return e.msg }
 
 // refusalEvents are the ways a device sees port49 refuse it. Whether the alert
 // or the reset arrives first is a race, so a refusal is one class: Validate
