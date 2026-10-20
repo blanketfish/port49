@@ -528,6 +528,12 @@ func (q *qualEnv) cellSingleConnection() {
 func (q *qualEnv) tlsCells(d l73Dialect) {
 	e := newL73Env(q.t, q.l, d)
 	q.e = e
+	// The help probe fills e.x, the words the image's CLI lists: NX-OS types
+	// `tacacs-server secure tls` only when the help offers it, and without it the
+	// device sends plain TACACS+ to port 300.
+	if !e.helpProbe() {
+		q.t.Fatalf("INVALID: %s lists no RFC 9887 client", q.l.p.version)
+	}
 	q.guard()
 	e.enrol()
 	// EOS defaults to 300 and its running-config omits a port typed as 300
