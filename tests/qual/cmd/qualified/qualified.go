@@ -1,9 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/rhwendt/port49/internal/devicemock"
@@ -75,7 +77,7 @@ func Build(repoRoot string) (string, error) {
 		rows = append(rows, row{name.vendor, name.os, p.Firmware, cells(p.Transports, g, gap)})
 	}
 	slices.SortFunc(rows, func(a, b row) int {
-		return strings.Compare(a.vendor+"\x00"+a.os+"\x00"+a.version, b.vendor+"\x00"+b.os+"\x00"+b.version)
+		return cmp.Or(strings.Compare(a.vendor, b.vendor), strings.Compare(a.os, b.os), compareVersions(a.version, b.version))
 	})
 	var b strings.Builder
 	b.WriteString(header)
@@ -166,4 +168,35 @@ func status(transports []string, g devicemock.Golden, commandGap bool) string {
 		}
 	}
 	return "qualified"
+}
+
+// compareVersions orders versions with their digit runs compared as numbers, so
+// 9.3 sorts before 10.1. Other text compares bytewise.
+func compareVersions(a, b string) int {
+	for a != "" && b != "" {
+		da, db := digitRun(a), digitRun(b)
+		if da > 0 && db > 0 {
+			na, _ := strconv.ParseUint(a[:da], 10, 64)
+			nb, _ := strconv.ParseUint(b[:db], 10, 64)
+			if c := cmp.Compare(na, nb); c != 0 {
+				return c
+			}
+			a, b = a[da:], b[db:]
+			continue
+		}
+		if a[0] != b[0] {
+			return cmp.Compare(a[0], b[0])
+		}
+		a, b = a[1:], b[1:]
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+// digitRun is the length of s's leading run of ASCII digits.
+func digitRun(s string) int {
+	n := 0
+	for n < len(s) && s[n] >= '0' && s[n] <= '9' {
+		n++
+	}
+	return n
 }

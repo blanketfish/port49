@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,7 +94,7 @@ func TestCommandAuthorizationNotApplicableNeedsTheMarker(t *testing.T) {
 
 // repoWith is a repository root holding one profile, copied from the fixtures with
 // its golden path and gaps set, and the fixture notes unless withNotes is false.
-func repoWith(t *testing.T, g devicemock.Golden, gap, withNotes bool) string {
+func repoWith(t *testing.T, g devicemock.Golden, gap, withNotes bool, edits ...func(string) string) string {
 	dir := t.TempDir()
 	if withNotes {
 		notes := filepath.Join(dir, "tests/lab/results")
@@ -111,6 +112,9 @@ func repoWith(t *testing.T, g devicemock.Golden, gap, withNotes bool) string {
 	s := strings.Replace(string(raw), `golden: ""`, "golden: tests/qual/golden/juniper_junos/1.0.json", 1)
 	if gap {
 		s = strings.Replace(s, "engine_gaps: []", `engine_gaps: [{id: command_authorization_not_sent, what: "L18", sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}]`, 1)
+	}
+	for _, e := range edits {
+		s = e(s)
 	}
 	os.MkdirAll(filepath.Join(dir, "tests/qual/profiles/juniper_junos"), 0o755)
 	os.WriteFile(filepath.Join(dir, "tests/qual/profiles/juniper_junos/1.0.yaml"), []byte(s), 0o600)
@@ -148,5 +152,58 @@ func TestAMissingGoldenFailsTheBuild(t *testing.T) {
 	os.Remove(filepath.Join(dir, "tests/qual/golden/juniper_junos/1.0.json"))
 	if _, err := Build(dir); err == nil {
 		t.Fatal("a profile without its golden makes no row")
+	}
+}
+
+func rowWith(t *testing.T, g devicemock.Golden, edits ...func(string) string) string {
+	t.Helper()
+	got, err := Build(repoWith(t, g, false, true, edits...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func replace(old, new string) func(string) string {
+	return func(s string) string {
+		if !strings.Contains(s, old) {
+			panic("stale replace: " + old)
+		}
+		return strings.Replace(s, old, new, 1)
+	}
+}
+
+// A TLS-only platform has no 49 cell, and its command and accounting cells read
+// from tls_token_login.
+func TestATLSOnlyRowReadsTheTLSLogin(t *testing.T) {
+	g := devicemock.Golden{Scenarios: map[string]devicemock.GoldenScenario{
+		"tls_token_login": {Outcome: "login_ok", Steps: []devicemock.GoldenStep{permitted, denied, stop}}}}
+	got := rowWith(t, g, replace("transports: [tcp]", "transports: [tls]"), replace("scenarios: [token_login, wrong_credential, store_unavailable]", "scenarios: [tls_token_login]"))
+	want := "| Juniper | Junos | 1.0 | — | yes | yes | yes | yes | qualified |\n"
+	if !strings.Contains(got, want) {
+		t.Fatalf("want %q in:\n%s", want, got)
+	}
+}
+
+func TestTheGenericPlatformIsNamedByItsLabPlatform(t *testing.T) {
+	got := rowWith(t, golden(permitted, denied, stop), replace("platform: juniper_junos", "platform: generic"), replace("lab_platform: fixture_junos", "lab_platform: cisco_xrd"))
+	if !strings.Contains(got, "| Cisco | IOS XR (XRd) | 1.0 | yes |") {
+		t.Fatalf("generic/cisco_xrd:\n%s", got)
+	}
+}
+
+func TestAnUnmappedPlatformFailsTheBuild(t *testing.T) {
+	_, err := Build(repoWith(t, golden(stop), false, true, replace("platform: juniper_junos", "platform: generic"), replace("lab_platform: fixture_junos", "lab_platform: unlisted_os")))
+	if err == nil || !strings.Contains(err.Error(), "generic/unlisted_os") {
+		t.Fatalf("an unmapped platform makes no row: the build fails naming it: %v", err)
+	}
+}
+
+func TestVersionsSortNumerically(t *testing.T) {
+	vs := []string{"10.1", "9.3", "9.10", "23.4R2-S2.1", "9.3.1"}
+	slices.SortFunc(vs, compareVersions)
+	want := []string{"9.3", "9.3.1", "9.10", "10.1", "23.4R2-S2.1"}
+	if !slices.Equal(vs, want) {
+		t.Fatalf("got %v, want %v", vs, want)
 	}
 }

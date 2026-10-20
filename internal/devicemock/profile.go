@@ -255,6 +255,9 @@ func (p *Profile) Validate(repoRoot string) error {
 		enum("stimulus.tls.client_chain", t.ClientChain, clientChains, true)
 		enum("stimulus.tls.server_identity", t.ServerIdentity, serverIdentities, true)
 	}
+	if err := goldenPath(p.Golden); err != nil {
+		errs = append(errs, err)
+	}
 	for _, n := range p.Vetted.Notes {
 		if err := notePath(n); err != nil {
 			errs = append(errs, fmt.Errorf("vetted.notes: %w", err))
@@ -365,6 +368,20 @@ func notePath(n string) error {
 	c := path.Clean(n)
 	if strings.Contains(n, "..") || c != n || !strings.HasPrefix(c, "tests/lab/results/") || !strings.HasSuffix(c, ".md") {
 		return fmt.Errorf("note %q must be a clean .md path under tests/lab/results/", n)
+	}
+	return nil
+}
+
+// goldenPath accepts "" (a fixture with no golden) or a clean .json path under
+// tests/qual/golden/, so a profile cannot make a consumer read any other file.
+// The error does not echo the value.
+func goldenPath(g string) error {
+	if g == "" {
+		return nil
+	}
+	c := path.Clean(g)
+	if strings.Contains(g, "..") || c != g || !strings.HasPrefix(c, "tests/qual/golden/") || !strings.HasSuffix(c, ".json") {
+		return errors.New("golden: must be a clean relative .json path under tests/qual/golden/")
 	}
 	return nil
 }

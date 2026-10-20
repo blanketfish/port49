@@ -107,6 +107,29 @@ func TestLoadRefuses(t *testing.T) {
 			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L99-fixture_junos-2.md, register: L99}]\n    note:", 1)
 		}, "Image version")
 	})
+	for name, g := range map[string]string{
+		"an absolute golden":          "/etc/passwd.json",
+		"a golden with a dot-dot":     "tests/qual/golden/../../x.json",
+		"a golden outside the prefix": "docs/x.json",
+		"a golden that is not json":   "tests/qual/golden/x.yaml",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadEdited(t, func(s string) string { return strings.Replace(s, `golden: ""`, "golden: "+g, 1) })
+			if err == nil || !strings.Contains(err.Error(), "golden:") {
+				t.Fatalf("want an error naming the golden field, got %v", err)
+			}
+			if strings.Contains(err.Error(), g) {
+				t.Fatalf("the error echoes the value: %v", err)
+			}
+		})
+	}
+	t.Run("a golden under the prefix", func(t *testing.T) {
+		if _, err := loadEdited(t, func(s string) string {
+			return strings.Replace(s, `golden: ""`, "golden: tests/qual/golden/juniper_junos/1.0.json", 1)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("an unknown reaction", func(t *testing.T) {
 		refused(t, func(s string) string { return strings.Replace(s, "then: stop", "then: shrug", 1) }, "shrug")
 	})
