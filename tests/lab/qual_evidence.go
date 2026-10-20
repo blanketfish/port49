@@ -75,7 +75,7 @@ func qualProbeCommands(platform string) []string {
 }
 
 // qualRecord keeps what a profile is generated from (spec §13 decision 52
-// ruling 2): event, verdict, reason, packet_fields, the request's service and
+// ruling 2): ts (genprofile cuts the records into cells by it), event, verdict, reason, packet_fields, the request's service and
 // attribute list, the reply's attributes, the accounting record's flags and
 // attribute list, and the session's port and privilege. The minted user
 // becomes {user}; any other username (a device's own account, such as SR
@@ -93,11 +93,14 @@ func qualRecord(r map[string]any, user string) (map[string]any, bool) {
 		if u == nil || u["diagnosis"] != "tls_refused" {
 			return nil, false
 		}
-		return map[string]any{"event": ev, "diagnosis": u["diagnosis"], "transport": u["transport"], "tls_outcome": u["tls_outcome"]}, true
+		out := map[string]any{"event": ev, "diagnosis": u["diagnosis"], "transport": u["transport"], "tls_outcome": u["tls_outcome"]}
+		keepTS(out, r)
+		return out, true
 	default:
 		return nil, false
 	}
 	out := map[string]any{"event": ev}
+	keepTS(out, r)
 	for _, k := range []string{"verdict", "reason", "flags", "attribution"} {
 		if v, ok := r[k]; ok {
 			out[k] = v
@@ -132,6 +135,13 @@ func qualRecord(r map[string]any, user string) (map[string]any, bool) {
 		out["record"] = map[string]any{"raw": templated(q["raw"]), "priv_lvl": q["priv_lvl"]}
 	}
 	return out, true
+}
+
+// keepTS copies the record's time, the one thing that cuts records into cells.
+func keepTS(out, r map[string]any) {
+	if ts, ok := r["ts"]; ok {
+		out["ts"] = ts
+	}
 }
 
 func templated(v any) any {

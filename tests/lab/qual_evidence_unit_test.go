@@ -409,3 +409,18 @@ func TestQualWriteEvidenceWritesNothingOnAHit(t *testing.T) {
 		t.Fatal("a clean run writes its evidence")
 	}
 }
+
+// genprofile cuts the records into cells by their time, so every kept record
+// carries its ts, tls_refused ones included.
+func TestQualRecordKeepsItsTimestamp(t *testing.T) {
+	const at = "2026-10-20T12:00:01.000Z"
+	for _, in := range []map[string]any{
+		{"ts": at, "event": "redeem", "verdict": "permit"},
+		{"ts": at, "event": "unvalidated", "unvalidated": map[string]any{"diagnosis": "tls_refused", "tls_outcome": "unknown_ca"}},
+	} {
+		out, ok := qualRecord(in, "qual01")
+		if !ok || out["ts"] != at {
+			t.Fatalf("%v: kept %v with ts %v", in["event"], ok, out["ts"])
+		}
+	}
+}
