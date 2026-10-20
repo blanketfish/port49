@@ -544,7 +544,15 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.guard()
 	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
 	q.guard()
-	e.configure(e.base())
+	base := e.base()
+	if e.d.Family == "nxos" {
+		// NX-OS 10.6 sends no command authorization on a per-request TLS connection
+		// (L73-cisco_nxos.md: cell a's logins show only `end`, cell h's single-connection
+		// logins show `show version`), so the TLS cells run with single-connection on.
+		base.SingleConnection = true
+		e.facts = append(e.facts, "NX-OS sends no command authorization on a per-request TLS connection (L73 cells a and h); the TLS cells run with single-connection on")
+	}
+	e.configure(base)
 	q.login()
 	e.ready("qual-tls")
 
