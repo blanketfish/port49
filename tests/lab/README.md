@@ -929,8 +929,8 @@ The runner stops at the first failure. Of the 8:
   flake, so retry the entry.
 
 **NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
-`feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device appears to hang while the launcher applies its
-startup config. Retry the entry.
+`feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device
+appears to hang while the launcher applies its startup config. Retry the entry.
 
 **What a run needs beyond the base setup:**
 
