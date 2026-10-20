@@ -1,0 +1,32 @@
+[
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 47162,
+    "syn_at": "2026-10-20T21:58:29.137915Z",
+    "end": "open",
+    "end_at": "0001-01-01T00:00:00Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 2,
+        "seq_no": 1,
+        "flags": 4,
+        "length": 98
+      },
+      {
+        "version": 192,
+        "type": 2,
+        "seq_no": 1,
+        "flags": 4,
+        "length": 85
+      },
+      {
+        "version": 192,
+        "type": 2,
+        "seq_no": 1,
+        "flags": 4,
+        "length": 83
+      }
+    ]
+  }
+]
