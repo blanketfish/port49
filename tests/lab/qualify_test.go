@@ -562,6 +562,13 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	}
 	q.login()
 	e.ready("qual-tls")
+	if base.SingleConnection {
+		// The probe's connection would carry the cell's login, so the cell's capture would
+		// hold no handshake; a restart ends it and the login opens its own.
+		q.guard()
+		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+		q.login()
+	}
 
 	dial := d.LoginDial
 	if dial == 0 {
