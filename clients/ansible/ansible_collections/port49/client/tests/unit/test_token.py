@@ -517,6 +517,34 @@ class HostKeys(PluginCase):
                                               "ansible_connection": NETWORK_CLI})
         self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
 
+    def test_the_plays_network_cli_beats_the_current_hosts_inventory_connection(self):  # review fix round 1, m1
+        # Ansible's play vars override inventory host_vars: an inventory ssh under a play's network_cli
+        # connects with network_cli, so the check must run. Any source saying network_cli counts (fail closed).
+        other = self.newkey("other")
+        self.hostvars["leaf1"]["ansible_connection"] = "ssh"
+        self.put(self.names, f"leaf1 {ED}\nsrx1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        for hostvars in (self.hostvars, HostVars(self.hostvars)):
+            with self.subTest(stub=isinstance(hostvars, HostVars)):
+                WARNINGS.clear()
+                said = self.refused(variables={"inventory_hostname": "leaf1", "hostvars": hostvars,
+                                               "ansible_connection": NETWORK_CLI})
+                self.assertIn("[host_key_changed]", said)
+                WARNINGS.clear()
+                said = self.refused(("srx1",), variables={"inventory_hostname": "leaf1", "hostvars": hostvars,
+                                                          "ansible_connection": "network_cli"})
+                self.assertIn("[host_key_uncheckable]", said)
+        self.assertEqual(self.calls.agent, [])
+
+    def test_the_inventorys_network_cli_still_counts_under_a_plays_other_connection(self):  # fail closed
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        said = self.refused(variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                       "ansible_connection": "ssh"})
+        self.assertIn("[host_key_changed]", said)
+        self.assertEqual(self.calls.agent, [])
+
     def test_a_term_outside_the_inventory_mints_when_the_current_host_is_not_on_network_cli(self):  # L66 e2
         self.hostvars["l66a"] = {"ansible_connection": "ssh", "ansible_host": "10.0.0.13", "p49_name": "srx1"}
         self.put(self.names, f"srx1 {ED}\n")

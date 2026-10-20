@@ -60,7 +60,8 @@ options:
     description:
       - The file C(network_cli) keeps a device's address in. Only a device whose C(ansible_connection) is
         C(network_cli) or C(ansible.netcommon.network_cli), or that has none visible but an C(ansible_network_os),
-        is checked, before any token is minted.
+        is checked, before any token is minted. For the current host, an C(ansible_connection) of C(network_cli) in
+        either its inventory or its play's vars counts.
       - A device that is not a host in Ansible's inventory has no address to check, so minting it on a host that
         connects with C(network_cli) refuses with C(host_key_uncheckable). Name the inventory host by its port49 name.
       - The address (C(ansible_host), else the inventory name; C([address]:port) when C(ansible_port) is not 22)
@@ -168,10 +169,16 @@ def _visible(variables, device, name):
 def _is_network_cli(variables, device):
     """Whether device connects with network_cli: its ansible_connection, else its play's. A play's `connection:`
     keyword may not reach a lookup as a variable, so with none visible, an ansible_network_os (which network_cli
-    always needs) says so. Checking a device that is not network_cli only files a key the name already trusts."""
-    connection = _visible(variables, device, "ansible_connection")
-    if connection:
-        return connection in NETWORK_CLI
+    always needs) says so. Checking a device that is not network_cli only files a key the name already trusts.
+    For the current host both its hostvars and the lookup's variables (where a play's vars override host_vars, as
+    in Ansible) are read, and either one naming network_cli counts: the check runs whenever Ansible might connect
+    with it."""
+    connections = [_hostvar(variables, device, "ansible_connection")]
+    if device == variables.get("inventory_hostname"):
+        connections.append(variables.get("ansible_connection"))
+    connections = [c for c in connections if c]
+    if connections:
+        return any(c in NETWORK_CLI for c in connections)
     return bool(_visible(variables, device, "ansible_network_os"))
 
 

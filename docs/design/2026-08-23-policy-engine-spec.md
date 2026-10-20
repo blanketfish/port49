@@ -9779,6 +9779,9 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   only a device's own hostvars count for it (fix 2026-10-20: the check indexed `hostvars` with such a
   name, which ansible-core 2.21.4 answers with an undefined marker, not a `KeyError`, and so failed
   L66 (e2)'s alias pattern before the mint). On any other connection it mints unchecked, as above.
+  For the current host, an `ansible_connection` naming `network_cli` in either its inventory hostvars or
+  the lookup's own variables (where a play's `vars:` override host_vars, as in Ansible) counts, so an
+  inventory `ssh` under a play's `network_cli` is checked (review fix round 1, 2026-10-20).
 - **16. The Netmiko example** is `port49.netmiko.connect`.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).

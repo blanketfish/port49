@@ -263,6 +263,35 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
         with open(self.log, encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 2)  # one mint per run
 
+    def test_the_plays_network_cli_over_an_inventory_ssh_is_checked(self):  # review fix round 1, m1
+        # Play vars override inventory host_vars, so Ansible connects with network_cli: the lookup must check
+        # the address's key, refuse the one that differs from the name's, and mint nothing.
+        head, vars_lines = readme_play(self.fake)
+        port = closed_port()
+        keys = []
+        for name in ("name_key", "addr_key"):
+            path = os.path.join(self.tmp, name)
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path], check=True,
+                           stdout=subprocess.DEVNULL)
+            with open(path + ".pub", encoding="ascii") as f:
+                keys.append(" ".join(f.read().split()[:2]))
+        os.makedirs(os.path.join(self.tmp, "home", ".ssh"), mode=0o700, exist_ok=True)
+        with open(os.path.join(self.tmp, "home", ".ssh", "known_hosts"), "w", encoding="ascii") as f:
+            f.write(f"leaf1 {keys[0]}\n[127.0.0.1]:{port} {keys[1]}\n")
+        inventory = ("all:\n  children:\n    leaves:\n      hosts:\n        leaf1:\n"
+                     f"          ansible_host: 127.0.0.1\n          ansible_port: {port}\n"
+                     "          ansible_connection: ssh\n")
+        play = head + "  vars:\n" + vars_lines + NETWORK_TASKS
+        self.assertIn("ansible_connection: ansible.netcommon.network_cli", vars_lines)
+        for name, text in (("inv.yml", inventory), ("play.yml", play)):
+            with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        code, out = run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), os.path.join(self.tmp, "play.yml"))
+        self.assertNotEqual(code, 0)
+        self.assertIn("[host_key_changed]", out)
+        self.assertNotIn("TASK [the next task connects]", out)
+        self.assertFalse(os.path.exists(self.log))  # nothing minted
+
     def test_a_port49_name_outside_the_inventory_fails_closed(self):
         # network_cli dials leaf1's address, but the term names another device: nothing says whose key that
         # address must hold, so the lookup refuses before any mint rather than skip the check.
