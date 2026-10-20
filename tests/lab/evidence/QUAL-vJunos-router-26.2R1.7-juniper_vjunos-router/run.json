@@ -1,0 +1,68 @@
+{
+  "platform": "juniper_junos",
+  "lab_platform": "juniper_vjunos-router",
+  "firmware": "vJunos-router 26.2R1.7",
+  "image": "vJunos-router 26.2R1.7",
+  "commit": "ceb68909a8ff",
+  "date": "2026-10-20",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "accounting": "2026-10-20T21:27:35.481539675Z",
+    "single_connection": "2026-10-20T21:27:56.951709474Z",
+    "store_unavailable": "2026-10-20T21:27:46.304328953Z",
+    "tls_store_unavailable": "2026-10-20T21:28:50.020696674Z",
+    "tls_token_login": "2026-10-20T21:28:36.956426378Z",
+    "tls_unknown_ca": "2026-10-20T21:29:07.700523884Z",
+    "token_login": "2026-10-20T21:27:31.827026391Z",
+    "wrong_credential": "2026-10-20T21:27:39.738245643Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "tls_store_unavailable": [
+      "L73"
+    ],
+    "tls_token_login": [
+      "L73"
+    ],
+    "tls_unknown_ca": [
+      "L73"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": true,
+    "tls_store_unavailable": true
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "not_applicable",
+    "command_permitted": "not_applicable",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_token_login": "pass",
+    "tls_unknown_ca": "pass",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  }
+}
