@@ -1,0 +1,36 @@
+# The free-image tier (plan 11b): SR Linux, the one lab image that may run on a hosted runner
+# (vendor images are never redistributed). runs-on is one line; beehive's self-hosted label is
+# the other choice. Triggers per the 2026-10-19 ruling: dispatch and release tags. Moving to
+# path-filtered PRs later is this one change to `on:`:
+#   pull_request: {paths: ['internal/platform/**', 'internal/daemon/**', 'tests/qual/**']}
+name: lab-free
+on:
+  workflow_dispatch:
+  push: {tags: ['v*']}
+permissions: {contents: read}
+jobs:
+  srlinux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - name: Prove the lab harness can run here
+        run: |
+          sudo -n true
+          command -v tcpdump || sudo apt-get install -y tcpdump
+          sudo -n tcpdump --version
+          docker info >/dev/null
+          id -nG | tr ' ' '\n' | grep -qx docker || sudo usermod -aG docker "$USER"
+      - run: bash -c "$(curl -sL https://get.containerlab.dev)" -- -v 0.71.1
+      - run: docker pull ghcr.io/nokia/srlinux:26.7.2-519
+      - run: make build
+      # Two processes, each with its own TestMain teardown: in one, TestL76 leaves srl1 up
+      # and TestQualify's single-occupant docker ps check refuses to run (re-review I-C).
+      - name: L76
+        run: sg docker -c "PORT49_LAB_REMEASURE=L76 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestL76$' -count=1 -v -timeout 40m"
+      - name: The conformance run
+        run: sg docker -c "PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestQualify$' -count=1 -v -timeout 40m"
+      - run: go run ./tests/lab/cmd/notediff -fail-on-change -note tests/lab/results/L76-nokia_srlinux.md
+      - run: go run ./tests/qual/cmd/genprofile -check -evidence tests/lab/evidence/QUAL-SR-Linux-26.7.2-519-nokia_srlinux
