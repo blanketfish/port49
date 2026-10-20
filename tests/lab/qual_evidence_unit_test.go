@@ -424,3 +424,16 @@ func TestQualRecordKeepsItsTimestamp(t *testing.T) {
 		}
 	}
 }
+
+func TestQualRecordMasksALongRunInAnAccountingArgument(t *testing.T) {
+	path := "/components/component/properties/property[name='state']/"
+	out, _ := qualRecord(map[string]any{"event": "account", "record": map[string]any{
+		"raw": []any{"task_id=1", `cmd=set: [x] "` + path + `"<cr>`}}}, "qual01")
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "components/component") || !strings.Contains(string(b), "{long_run}") {
+		t.Fatalf("%s", b)
+	}
+	if bad := qualGate(map[string][]byte{"decisions.jsonl": b}, nil); len(bad) != 0 {
+		t.Fatalf("the gate still refuses it: %v", bad)
+	}
+}

@@ -157,6 +157,11 @@ func templated(v any) any {
 				s = k + "={" + k + "}"
 			}
 		}
+		// A device's own account records carry paths and names longer than the
+		// gate's run length (Junos 23.4's telemetry commit: a gNMI resource path).
+		// Neither a secret nor of use to the generator; the gate stays strict.
+		s = l73LongHex.ReplaceAllString(s, "{long_run}")
+		s = l73LongB64.ReplaceAllString(s, "{long_run}")
 		out = append(out, s)
 	}
 	return out
