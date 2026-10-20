@@ -24,7 +24,11 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -430,7 +434,7 @@ func qualPolicyWith(t *testing.T, role string) string {
 	}
 	pol := strings.Replace(string(raw), "\nsubjects:", role+"subjects:", 1)
 	name := regexp.MustCompile(`name: (\w+)`).FindStringSubmatch(role)[1]
-	out := strings.Replace(pol, "roles: [qual_admin, qual_denies]", "roles: ["+name+"]", 1)
+	out := strings.Replace(pol, "scope: all_devices, roles: [qual_admin]", "scope: all_devices, roles: ["+name+"]", 1)
 	if out == pol {
 		t.Fatal("the qualification policy's grant line moved")
 	}
@@ -644,10 +648,80 @@ func TestQualPolicyProjectsOnEveryPlatform(t *testing.T) {
 				if m.Blob.Body.FailClosed != "" || total > 255 {
 					t.Errorf("%s renders fail_closed=%q, %d attribute bytes", plat, m.Blob.Body.FailClosed, total)
 				}
+				if plat == "juniper_junos" && !slices.ContainsFunc(m.Blob.Body.Attributes, func(a string) bool {
+					return strings.HasPrefix(a, "deny-commands=")
+				}) {
+					t.Error("juniper_junos renders no deny-commands attribute: its deny did not project")
+				}
 			}
 			if !seen {
 				t.Fatal("no blob was logged")
 			}
 		})
+	}
+}
+
+// The per-command platforms ask port49 about each command: the qual policy's
+// deny must hold there (the command_denied probe), and a permitted command pass.
+func TestQualPolicyDeniesTheProbeOnPerCommandPlatforms(t *testing.T) {
+	for _, plat := range []string{"cisco_nxos", "cisco_iosxe", "arista_eos"} {
+		t.Run(plat, func(t *testing.T) {
+			p := qualFixture(t, "fixture_plain.yaml")
+			p.Platform = plat
+			run := qualDaemon(t, p, qualOpts{scale: 0.1})
+			dev := tacacsClient{t: t, addr: run.tcpAddr, key: run.key}
+			if st := dev.login("qual01", string(run.login(0).Credential)); st != wire.AuthenStatusPass {
+				t.Fatalf("login: status %d", st)
+			}
+			// NX-OS has no privilege levels and asks every command at 1; the others ask at 15
+			// once the session reply has granted it.
+			priv := uint8(15)
+			if plat == "cisco_nxos" {
+				priv = 1
+			}
+			dev.authorize("qual01")
+			if dev.permitsAt(priv, "qual01", "show", "users") {
+				t.Error("show users was permitted: the command_denied probe would not hold")
+			}
+			if !dev.permitsAt(priv, "qual01", "show", "version") {
+				t.Error("show version was refused")
+			}
+		})
+	}
+}
+
+// Every platform the qual policy knows is in exactly one deny scope, so one
+// deny reaches it and no other platform's deny does.
+func TestQualPolicyDeniesOncePerPlatform(t *testing.T) {
+	raw, err := os.ReadFile("../../tests/qual/qual-policy.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct {
+		Scopes []struct {
+			Name  string
+			Match map[string]any
+		}
+	}
+	if err := yaml.Unmarshal(raw, &pol); err != nil {
+		t.Fatal(err)
+	}
+	for _, plat := range append(platform.Names(), "cisco_iosxr", "nokia_srlinux") {
+		n := 0
+		for _, sc := range pol.Scopes {
+			switch v := sc.Match["platform"].(type) {
+			case string:
+				if v == plat {
+					n++
+				}
+			case []any:
+				if slices.Contains(v, any(plat)) {
+					n++
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s is in %d platform scopes; want exactly 1", plat, n)
+		}
 	}
 }
