@@ -3,6 +3,7 @@ package devicemock
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/mlkem"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"time"
 )
@@ -45,6 +47,46 @@ func curve(g uint16) ecdh.Curve {
 		return ecdh.P521()
 	}
 	return nil
+}
+
+// hybridMLKEM is X25519MLKEM768 (RFC 9794 / draft-ietf-tls-ecdhe-mlkem): its
+// key share is the ML-KEM-768 encapsulation key then the X25519 public key.
+const hybridMLKEM = 4588
+
+// keyShares is the key_share body for the first offered group the standard
+// library can generate. A device that leads with X25519MLKEM768 also sends an
+// X25519 share, as OpenSSL does; without the hybrid share port49's server would
+// answer with a HelloRetryRequest the device never got.
+func keyShares(groups []uint16) ([]byte, error) {
+	for _, g := range groups {
+		if g == hybridMLKEM {
+			mk, err := mlkem.GenerateKey768()
+			if err != nil {
+				return nil, err
+			}
+			xk, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				return nil, err
+			}
+			share := vec16(u16(nil, g), append(mk.EncapsulationKey().Bytes(), xk.PublicKey().Bytes()...))
+			if slices.Contains(groups, 29) {
+				xk2, err := ecdh.X25519().GenerateKey(rand.Reader)
+				if err != nil {
+					return nil, err
+				}
+				share = append(share, vec16(u16(nil, 29), xk2.PublicKey().Bytes())...)
+			}
+			return share, nil
+		}
+		if c := curve(g); c != nil {
+			k, err := c.GenerateKey(rand.Reader)
+			if err != nil {
+				return nil, err
+			}
+			return vec16(u16(nil, g), k.PublicKey().Bytes()), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: key_share for groups %v", ErrNoBuilder, groups)
 }
 
 // BuildClientHello writes h as one handshake record, extensions in h's order,
@@ -85,19 +127,9 @@ func BuildClientHello(h Hello, serverIP string) ([]byte, error) {
 		case 45:
 			body = vec8(nil, h.PSKModes)
 		case 51:
-			var share []byte
-			for _, g := range h.SupportedGroups {
-				if c := curve(g); c != nil {
-					k, err := c.GenerateKey(rand.Reader)
-					if err != nil {
-						return nil, err
-					}
-					share = vec16(u16(nil, g), k.PublicKey().Bytes())
-					break
-				}
-			}
-			if share == nil {
-				return nil, fmt.Errorf("%w: key_share for groups %v", ErrNoBuilder, h.SupportedGroups)
+			share, err := keyShares(h.SupportedGroups)
+			if err != nil {
+				return nil, err
 			}
 			body = vec16(nil, share)
 		case 65281:

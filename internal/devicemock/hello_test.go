@@ -177,3 +177,30 @@ func TestProbeReadsAGoServersChoice(t *testing.T) {
 		t.Fatalf("%+v", sh)
 	}
 }
+
+// A device that leads with X25519MLKEM768 sends that share, so a Go server,
+// which prefers the hybrid, answers without a HelloRetryRequest.
+func TestProbeOfAHybridFirstOfferGetsNoRetry(t *testing.T) {
+	cert := selfSigned(t)
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			c.(*tls.Conn).Handshake()
+			c.Close()
+		}
+	}()
+	h := nxosHello()
+	h.SupportedGroups = []uint16{4588, 29, 23}
+	sh, err := Probe(t.Context(), &net.Dialer{}, ln.Addr().String(), h, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sh.HelloRetryRequest {
+		t.Fatalf("a hybrid-first offer carried no hybrid share: %+v", sh)
+	}
+}
