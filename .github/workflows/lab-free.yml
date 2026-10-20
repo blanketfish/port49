@@ -33,4 +33,14 @@ jobs:
       - name: The conformance run
         run: sg docker -c "PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestQualify$' -count=1 -v -timeout 40m"
       - run: go run ./tests/lab/cmd/notediff -fail-on-change -note tests/lab/results/L76-nokia_srlinux.md
-      - run: go run ./tests/qual/cmd/genprofile -check -evidence tests/lab/evidence/QUAL-SR-Linux-26.7.2-519-nokia_srlinux
+      # TestQualify names the directory QUAL-<devicemock.Slug(version)>-<platform>; a glob that
+      # must match exactly once survives a version-string change and fails loudly otherwise.
+      - name: The generated stimulus matches the committed profile
+        run: |
+          shopt -s nullglob
+          dirs=(tests/lab/evidence/QUAL-*-nokia_srlinux)
+          if [ "${#dirs[@]}" -ne 1 ]; then
+            echo "expected exactly one tests/lab/evidence/QUAL-*-nokia_srlinux directory, found ${#dirs[@]}: ${dirs[*]}" >&2
+            exit 1
+          fi
+          go run ./tests/qual/cmd/genprofile -check -evidence "${dirs[0]}"
