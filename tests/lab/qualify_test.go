@@ -530,7 +530,11 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.e = e
 	q.guard()
 	e.enrol()
-	e.port = l73TLSPort
+	// EOS defaults to 300 and its running-config omits a port typed as 300
+	// (L73-arista_ceos cell a), so the readback would miss the line.
+	if e.d.Family != "eos" {
+		e.port = l73TLSPort
+	}
 	q.guard()
 	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
 	q.guard()
