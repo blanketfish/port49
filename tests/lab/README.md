@@ -889,7 +889,7 @@ It plays the cells in `qualCells` (`tests/lab/qual_evidence.go`) under `tests/qu
 and `tests/qual/qual-daemon.yaml`, with tokens the broker mints: no seed and no lab instrument can
 answer. Each cell cites the register rows it re-measures and closes none. The denied command is per
 platform (`qualDeniedCommand`): Junos sends no command authorization (L18), so its `command_denied`
-cell is recorded `not_applicable`.
+and `command_permitted` cells are recorded `not_applicable`.
 
 Output, with `<slug>` the firmware's `devicemock.Slug` and `<lp>` the lab platform name:
 
@@ -897,6 +897,9 @@ Output, with `<slug>` the firmware's `devicemock.Slug` and `<lp>` the lab platfo
   `qualRecord`), `<cell>.conns.json` (plain 49) and `<cell>.tls.json`;
 - `tests/lab/evidence/QUAL-<slug>-<lp>.pcap`, beside the directory, redacted like every capture;
 - `tests/lab/results/QUAL-<slug>-<lp>.md`, the note.
+
+`run.json` holds `cells` (the start time of each cell that ran) and `results` (every cell's verdict: `pass`,
+`fail`, `not_applicable` or `not_run`).
 
 Every evidence file passes a leak gate before any is written; a failure names the file and the kind
 of content, never the content.

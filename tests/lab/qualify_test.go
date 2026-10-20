@@ -75,7 +75,8 @@ type qualEnv struct {
 	order    []string
 	tlsFiles map[string][]byte // <cell>.tls.json
 	notes    []string
-	master   string // the run's capture
+	master   string  // the run's capture
+	e        *l73Env // the TLS cells' environment, once there is one
 }
 
 func newQualEnv(t *testing.T, l *lab) *qualEnv {
@@ -137,8 +138,18 @@ func (q *qualEnv) play() {
 	}
 	q.startDaemon(q.cfg)
 	defer q.restoreDaemon()
-	stop := q.l.capture(q.t, "QUAL-"+q.slug)
+	rawStop := q.l.capture(q.t, "QUAL-"+q.slug)
 	q.master = q.l.capAbs
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		q.l.capAbs = q.master // e.capture moved it
+		rawStop()
+	}
+	defer stop() // a Fatal must not leave a root tcpdump running
 	q.start = q.l.mark()
 	q.login()
 	defer func() { q.stopAgent() }()
@@ -158,7 +169,6 @@ func (q *qualEnv) play() {
 			q.verdict(c, "not_run", "this image carries no RFC 9887 client (L71)")
 		}
 	}
-	q.l.capAbs = q.master // e.capture moved it
 	stop()
 	q.l.captureNote = q.l.stoppedCaptureLine(q.t)
 	q.write()
@@ -372,7 +382,7 @@ func (q *qualEnv) check(recs []map[string]any) (denied string, problems []string
 func (q *qualEnv) cellTokenLogin() {
 	off := q.cell("token_login")
 	outs, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, "show version")
-	recs := q.l.waitForRecords(off, 30*time.Second, qualRedeemed)
+	recs := q.waitStop(off)
 	if err != nil {
 		q.t.Fatalf("INVALID: the broker-minted token login failed: %v\nrecords:%s", err, summarize(recs))
 	}
@@ -387,34 +397,30 @@ func (q *qualEnv) cellTokenLogin() {
 func (q *qualEnv) cellCommands() {
 	cmds := qualProbeCommands(q.run.Platform)
 	off := q.cell("command_permitted")
-	outs, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, cmds...)
+	_, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, cmds...)
 	recs := q.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 		return len(qualEvents(rs, "authorize_command", nil)) >= len(cmds) || q.junos() && qualRedeemed(rs)
 	})
 	if err != nil {
 		q.t.Fatalf("INVALID: the commands login failed: %v\nrecords:%s", err, summarize(recs))
 	}
+	permitted, denied, why := qualCommandCells(q.run.Platform, recs)
 	if q.junos() {
-		// No per-command authorization is sent (L18): the permit is the device's own, seen as output.
-		if len(outs) > 0 && strings.TrimSpace(outs[0]) != "" {
-			q.verdict("command_permitted", "pass", "`show version` returned output; "+qualJunosL18+".")
-		} else {
-			q.verdict("command_permitted", "fail", "`show version` returned no output")
-		}
-		q.verdict("command_denied", "not_applicable", qualJunosL18)
+		q.verdict("command_permitted", permitted, why)
+		q.verdict("command_denied", denied, why)
 		return
 	}
-	if err := qualPermitProven(recs, "show version"); err != nil {
-		q.verdict("command_permitted", "fail", err.Error()+":"+summarize(recs))
-	} else {
+	if permitted == "pass" {
 		q.verdict("command_permitted", "pass", "an authorize_command record permits `show version`.")
+	} else {
+		q.verdict("command_permitted", "fail", why+":"+summarize(recs))
 	}
 	q.starts["command_denied"], q.run.Cells["command_denied"] = q.starts["command_permitted"], q.run.Cells["command_permitted"]
 	q.order = append(q.order, "command_denied")
 	q.run.Registers["command_denied"] = qualRows("command_denied")
 	cmd := qualDeniedCommand(q.run.Platform)
-	if err := qualDenyProven(recs, cmd); err != nil {
-		q.verdict("command_denied", "fail", err.Error()+":"+summarize(recs))
+	if denied != "pass" {
+		q.verdict("command_denied", "fail", why+":"+summarize(recs))
 	} else {
 		q.verdict("command_denied", "pass", fmt.Sprintf("`%s` was refused with no_permit_dominates_deny.", cmd))
 	}
@@ -480,12 +486,14 @@ func (q *qualEnv) cellStoreUnavailable() {
 // the image offers it (singleConnection asks `?` first), then plays the TLS
 // cell's sequence: show version, the denied command, the stop record.
 func (q *qualEnv) cellSingleConnection() {
+	q.guard()
 	said := q.l.singleConnection(q.t)
 	if strings.Contains(said, "The phases run on whatever connections the device opens") {
 		q.verdict("single_connection", "not_run", "the image's `?` offers no single-connection form")
 		return
 	}
 	// The admin CLI restarted port49d on the standing config.
+	q.guard()
 	if err := q.l.stopDaemon(); err != nil {
 		q.t.Fatal(err)
 	}
@@ -510,9 +518,13 @@ func (q *qualEnv) cellSingleConnection() {
 // tlsCells reuses L73's machinery with the conformance config as its base.
 func (q *qualEnv) tlsCells(d l73Dialect) {
 	e := newL73Env(q.t, q.l, d)
+	q.e = e
+	q.guard()
 	e.enrol()
 	e.port = l73TLSPort
+	q.guard()
 	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+	q.guard()
 	e.configure(e.base())
 	q.login()
 	e.ready("qual-tls")
@@ -558,6 +570,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	if err := os.WriteFile(qualFaultFile, []byte("store_unavailable\n"), 0o644); err != nil {
 		q.t.Fatal(err)
 	}
+	defer os.Remove(qualFaultFile)
 	tokErr := login(qualUser, tok)
 	start := time.Now()
 	c, bgErr := q.l.dial(breakglassUser, breakglassPassword, 120*time.Second)
@@ -582,6 +595,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	// tls_unknown_ca: port49's client_ca_file is a CA that did not sign the device's leaf.
 	e.guard()
 	e.settle()
+	q.guard()
 	q.tlsDaemon(e, "qual-unknown-ca", l73Daemon{Intermediates: e.files["inter.pem"], ClientCA: e.files["other.pem"]})
 	off = q.cell("tls_unknown_ca")
 	stop = e.capture("tls_unknown_ca")
@@ -687,7 +701,11 @@ func (q *qualEnv) write() {
 	rb, _ := json.MarshalIndent(q.run, "", "  ")
 	files["run.json"] = rb
 
-	if bad := qualGate(files, q.secrets); len(bad) > 0 {
+	secrets := append([]string{breakglassPassword}, q.secrets...)
+	if q.e != nil {
+		secrets = append(secrets, q.e.allSecrets()...)
+	}
+	if bad := qualGate(files, secrets); len(bad) > 0 {
 		sort.Strings(bad)
 		q.t.Fatalf("INVALID: the evidence holds what it must not; nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
@@ -707,5 +725,8 @@ func (q *qualEnv) write() {
 		"tokens the broker minted. Each cell re-measures the register rows it cites and closes none."
 	obs := "Every cell's verdict, with the rows it re-measures:\n\n" + strings.Join(q.notes, "\n") +
 		fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/QUAL-%s-%s/` (whitelisted decision records, connection headers and run.json).", q.slug, q.l.p.name)
+	if bad := qualNoteGate(claim+"\n"+obs, secrets); len(bad) > 0 {
+		q.t.Fatalf("INVALID: %s; nothing written", strings.Join(bad, "; "))
+	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
 }

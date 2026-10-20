@@ -331,3 +331,43 @@ func TestQualTLSDaemonYAMLKeepsTheBroker(t *testing.T) {
 		}
 	}
 }
+
+// The results note is gated like L73's: a planted secret or hash value is refused, and the
+// message names the kind, never the value.
+func TestQualNoteGateRefusesASecretOrAHash(t *testing.T) {
+	const secret = "planted-secret-value-7"
+	hash := strings.Repeat("ab", 32)
+	for name, note := range map[string]string{
+		"secret": "the login used " + secret,
+		"hash":   `{"credential_sha256": "` + hash + `"}`,
+	} {
+		bad := qualNoteGate(note, []string{secret})
+		if len(bad) == 0 {
+			t.Errorf("%s: the note passed the gate", name)
+		}
+		for _, m := range bad {
+			if strings.Contains(m, secret) || strings.Contains(m, hash) {
+				t.Errorf("%s: the message prints the value: %q", name, m)
+			}
+		}
+	}
+	if bad := qualNoteGate("every cell passed", []string{secret}); len(bad) != 0 {
+		t.Fatalf("a clean note was refused: %v", bad)
+	}
+}
+
+// Junos sends no command authorization (L18), so neither command cell can be proven, whatever
+// the output: both are not_applicable. Elsewhere the strict checks decide.
+func TestQualCommandCellsOnJunosAreNotApplicable(t *testing.T) {
+	p, d, _ := qualCommandCells("juniper_junos", nil)
+	if p != "not_applicable" || d != "not_applicable" {
+		t.Fatalf("junos: %s %s", p, d)
+	}
+	good := []map[string]any{denyRec("context_matched", "permit", "show", "version"), denyRec("no_permit_dominates_deny", "deny", "show", "users")}
+	if p, d, _ := qualCommandCells("cisco_nxos", good); p != "pass" || d != "pass" {
+		t.Fatalf("nxos good: %s %s", p, d)
+	}
+	if p, d, _ := qualCommandCells("cisco_nxos", nil); p != "fail" || d != "fail" {
+		t.Fatalf("nxos empty: %s %s", p, d)
+	}
+}

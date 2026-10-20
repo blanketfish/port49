@@ -286,3 +286,33 @@ func qualConfigYAML(lab, broker, fragment, policyPath string) (string, error) {
 
 // qualFaultFile is the file whose content port49d reads as a fault to inject.
 const qualFaultFile = "/tmp/port49-lab-qual-fault"
+
+// qualNoteGate names what the results note holds that it must not: a secret
+// this run used, or a hash value under a *_sha256 key. Kinds only, never values.
+func qualNoteGate(note string, secrets []string) []string {
+	var bad []string
+	if len(labcreds.Contains([]byte(note), secrets)) > 0 {
+		bad = append(bad, "the note holds a credential this run used")
+	}
+	for _, k := range l72HashValueLeaks(note) {
+		bad = append(bad, "the note holds a hash value under "+k)
+	}
+	return bad
+}
+
+// qualCommandCells grades command_permitted and command_denied from one
+// login's records. Junos sends no command authorization (L18), so both are
+// not_applicable: its refusals print text too, so output proves nothing.
+func qualCommandCells(platform string, recs []map[string]any) (permitted, denied, why string) {
+	if platform == "juniper_junos" {
+		return "not_applicable", "not_applicable", qualJunosL18
+	}
+	permitted, denied = "pass", "pass"
+	if err := qualPermitProven(recs, "show version"); err != nil {
+		permitted, why = "fail", err.Error()
+	}
+	if err := qualDenyProven(recs, qualDeniedCommand(platform)); err != nil {
+		denied, why = "fail", strings.TrimSpace(why+" "+err.Error())
+	}
+	return permitted, denied, why
+}
