@@ -152,6 +152,12 @@ func (l *lab) offered(t *testing.T, enter, ask []string, keyword string) (bool, 
 		leave, back = "exit configuration-mode", junosOpPrompt
 	}
 	cfg := []string{l.p.node + "(config", l.p.node + "#", l.p.node + ">"}
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		// Junos names its prompt by host-name, which is srx1 on every Junos image
+		// (configs/vjunos-startup.conf), not by the clab node (vsrx1): wait for the
+		// configuration-mode prompt's ending.
+		cfg = []string{"# "}
+	}
 	var help string
 	// An ask may carry the lab key (TestSingleConnectionSyntax types it to
 	// read the help after it): every error and the help returned have it
