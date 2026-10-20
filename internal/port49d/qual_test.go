@@ -130,8 +130,8 @@ func TestQualAFlightPastTheTimeoutIsHandshakeTimeout(t *testing.T) {
 	p := qualFixture(t, "fixture_nxos_flight.yaml")
 	run := qualDaemon(t, p, qualOpts{scale: 0.5, handshakeTimeout: time.Second}) // 2.5 s against 1 s
 	tr, _ := devicemock.Play(t.Context(), p, "flight_delay", run.target(p, 0), run.login(0))
-	if tr.Outcome != "handshake_refused" || !run.logged(`"tls_outcome":"handshake_timeout"`) ||
-		!run.logged(`"diagnosis":"tls_refused"`) {
+	if tr.Outcome != "handshake_refused" || !run.waitLogged(`"tls_outcome":"handshake_timeout"`, 10*time.Second) ||
+		!run.waitLogged(`"diagnosis":"tls_refused"`, 10*time.Second) {
 		t.Fatalf("a flight past handshake_timeout is refused as handshake_timeout\n%s", tr)
 	}
 	if ev := tr.Steps[len(tr.Steps)-1].Event; ev != "conn_reset" && ev != "conn_closed" {
@@ -393,6 +393,18 @@ func (r *qualRun) fault(code string) error { return os.WriteFile(r.faults, []byt
 func (r *qualRun) logged(s string) bool { return strings.Contains(r.log.String(), s) }
 func (r *qualRun) said(s string) bool   { return strings.Contains(r.stderr.String(), s) }
 
+// waitLogged polls the decision log until it holds s, within d. A device sees
+// port49 end a connection before port49 has written the record that says why,
+// so a record is awaited, never read once.
+func (r *qualRun) waitLogged(s string, d time.Duration) bool {
+	for end := time.Now().Add(d); !r.logged(s); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(end) {
+			return false
+		}
+	}
+	return true
+}
+
 // qualWaitFor polls buf until it holds want, or fails with a message that
 // carries no credential hash.
 func qualWaitFor(t *testing.T, buf *syncBuffer, want string, d time.Duration) {
@@ -488,7 +500,7 @@ func qualProfile(t *testing.T, p *devicemock.Profile, root string) (secrets []st
 			if err != nil {
 				t.Fatalf("%v\n%s", err, tr)
 			}
-			if sc == "tls_unknown_ca" && (!run.logged(`"diagnosis":"tls_refused"`) || !run.logged(`"tls_outcome":"unknown_ca"`)) {
+			if sc == "tls_unknown_ca" && (!run.waitLogged(`"diagnosis":"tls_refused"`, 10*time.Second) || !run.waitLogged(`"tls_outcome":"unknown_ca"`, 10*time.Second)) {
 				t.Errorf("port49 did not log the untrusted device as tls_refused / unknown_ca\n%s", tr)
 			}
 			fails, warns := devicemock.Judge(tr, g.Scenarios[sc])
