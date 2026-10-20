@@ -1,0 +1,54 @@
+{
+  "platform": "juniper_junos",
+  "lab_platform": "juniper_vjunos-router",
+  "firmware": "vJunos-router 23.4R2-S2.1",
+  "image": "vJunos-router 23.4R2-S2.1",
+  "commit": "63db94a8f515",
+  "date": "2026-10-20",
+  "transports": [
+    "tcp"
+  ],
+  "cells": {
+    "accounting": "2026-10-20T21:44:02.475008378Z",
+    "single_connection": "2026-10-20T21:44:23.975108406Z",
+    "store_unavailable": "2026-10-20T21:44:13.637007487Z",
+    "token_login": "2026-10-20T21:43:58.316339981Z",
+    "wrong_credential": "2026-10-20T21:44:07.060652781Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": true
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "not_applicable",
+    "command_permitted": "not_applicable",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_store_unavailable": "not_run",
+    "tls_token_login": "not_run",
+    "tls_unknown_ca": "not_run",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  }
+}
