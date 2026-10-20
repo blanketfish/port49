@@ -878,3 +878,25 @@ from a pinned worktree under `.worktrees/`, after `make build`. Run L76 only wit
   is the redacted capture (`make evidence`).
 - **An INVALID run** writes no note. It keeps the device's own view, filtered and leak-checked, in the
   git-ignored `logs/L76-invalid-<stamp>/` (masked running config, AAA log tail, session table).
+
+## Qualification (plan 11b)
+
+`make lab-qualify P=<selector>` runs `TestQualify`, the conformance run a firmware is vetted by. It
+is opt-in (`PORT49_LAB_QUALIFY=1`, which the target sets), runs one platform at a time, and holds the
+lab lock like every other lab run.
+
+It plays the cells in `qualCells` (`tests/lab/qual_evidence.go`) under `tests/qual/qual-policy.yaml`
+and `tests/qual/qual-daemon.yaml`, with tokens the broker mints: no seed and no lab instrument can
+answer. Each cell cites the register rows it re-measures and closes none. The denied command is per
+platform (`qualDeniedCommand`): Junos sends no command authorization (L18), so its `command_denied`
+cell is recorded `not_applicable`.
+
+Output, with `<slug>` the firmware's `devicemock.Slug` and `<lp>` the lab platform name:
+
+- `tests/lab/evidence/QUAL-<slug>-<lp>/`: `run.json`, `decisions.jsonl` (only whitelisted fields, see
+  `qualRecord`), `<cell>.conns.json` (plain 49) and `<cell>.tls.json`;
+- `tests/lab/evidence/QUAL-<slug>-<lp>.pcap`, beside the directory, redacted like every capture;
+- `tests/lab/results/QUAL-<slug>-<lp>.md`, the note.
+
+Every evidence file passes a leak gate before any is written; a failure names the file and the kind
+of content, never the content.

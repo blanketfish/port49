@@ -1,4 +1,4 @@
-.PHONY: qual qual-update test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: qual qual-update test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -171,6 +171,11 @@ lab-regress:
 # evaluation ISO and PORT49_LAB_L50=1; see tests/lab/README.md, "Directories".
 lab-l50:
 	PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run '^TestL50WorkloadAttributeWriters$$' -count=1 -v -timeout 240m
+
+# The conformance run a firmware is vetted by (plan 11b). One platform selector at a time.
+lab-qualify:
+	@test -n "$(P)" || { echo "usage: make lab-qualify P=<selector, e.g. nxos106>"; exit 2; }
+	PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+
