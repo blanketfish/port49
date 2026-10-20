@@ -12,6 +12,10 @@ jobs:
   srlinux:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      CLAB_VERSION: 0.71.1
+      # From the v0.71.1 release's checksums.txt (containerlab_0.71.1_linux_amd64.deb).
+      CLAB_DEB_SHA256: f6dcdd63a389b4bbaa1d94a2f67c8816b8afdf39ada8146ad0fc800e762719f8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -23,7 +27,12 @@ jobs:
           sudo -n tcpdump --version
           docker info >/dev/null
           id -nG | tr ' ' '\n' | grep -qx docker || sudo usermod -aG docker "$USER"
-      - run: bash -c "$(curl -sL https://get.containerlab.dev)" -- -v 0.71.1
+      - name: Install containerlab, pinned and checksummed
+        run: |
+          deb="containerlab_${CLAB_VERSION}_linux_amd64.deb"
+          curl -fsSLO "https://github.com/srl-labs/containerlab/releases/download/v${CLAB_VERSION}/${deb}"
+          echo "${CLAB_DEB_SHA256}  ${deb}" | sha256sum -c -
+          sudo dpkg -i "${deb}"
       - run: docker pull ghcr.io/nokia/srlinux:26.7.2-519
       - run: make build
       # Two processes, each with its own TestMain teardown: in one, TestL76 leaves srl1 up
