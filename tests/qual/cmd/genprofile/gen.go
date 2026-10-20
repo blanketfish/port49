@@ -694,8 +694,10 @@ func eventOf(x *rec) (string, []string, error) {
 			return "author_fail", nil, nil
 		}
 	case "account":
+		// port49d's account record carries no verdict: a record it spooled is a
+		// record it acknowledged.
 		switch x.Verdict {
-		case "permit":
+		case "permit", "":
 			return "acct_success", nil, nil
 		case "deny":
 			return "acct_error", nil, nil

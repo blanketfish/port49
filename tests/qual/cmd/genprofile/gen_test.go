@@ -677,3 +677,10 @@ func TestACompleteRunCarriesNoCommandAuthorizationGap(t *testing.T) {
 		t.Fatal("command steps were played: no gap")
 	}
 }
+
+func TestAnAccountRecordWithNoVerdictIsASuccess(t *testing.T) {
+	ev, _, err := eventOf(&rec{Event: "account"})
+	if err != nil || ev != "acct_success" {
+		t.Fatalf("got %q, %v; port49d writes no verdict on an account record", ev, err)
+	}
+}
