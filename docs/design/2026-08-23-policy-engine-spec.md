@@ -3777,7 +3777,8 @@ fleet that has renamed it sets the list rather than waiting for a new built-in. 
 list **replaces** the built-in; a fleet that renames some devices and not others lists both
 names.
 
-A name under `platforms:` that port49 ships no adapter for is refused at load, so
+A name under the daemon config's `session_services` `platforms:` that port49 ships no adapter for
+is refused at load (the policy file's `platforms:` block is different: it may add a platform, §8), so
 `platforms: {junos: …}` is a startup error naming the platforms it could have meant rather
 than a block that silently applies to no device. That is the opposite of the *device* case
 above only in appearance: an unmodeled device still logs in, on the fallback; a misspelled

@@ -156,7 +156,7 @@ func (l *lab) offered(t *testing.T, enter, ask []string, keyword string) (bool, 
 		// Junos names its prompt by host-name, which is srx1 on every Junos image
 		// (configs/vjunos-startup.conf), not by the clab node (vsrx1): wait for the
 		// configuration-mode prompt's ending.
-		cfg = []string{"# "}
+		cfg = []string{"@srx1# "}
 	}
 	var help string
 	// An ask may carry the lab key (TestSingleConnectionSyntax types it to
