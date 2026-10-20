@@ -9,7 +9,6 @@ package port49d
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,16 +27,11 @@ func TestQualFleet(t *testing.T) {
 		t.Skip("make qual-fleet")
 	}
 	const n = 500
-	// Task 14 adds the first wave of profiles; until then a fleet-only fixture
-	// stands in, which exercises the same broker, listener and policy path.
-	var p *devicemock.Profile
-	if paths, _ := filepath.Glob("../../tests/qual/profiles/arista_eos/*.yaml"); len(paths) > 0 {
-		var err error
-		if p, err = devicemock.Load(paths[0], qualRoot); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		p = qualFixture(t, "fixture_fleet.yaml")
+	// The fleet plays a vetted profile, so it exercises the broker, listener and
+	// policy path a real device's mock does, store fault included.
+	p, err := devicemock.Load("../../tests/qual/profiles/arista_eos/cEOS-lab-4.36.3M.yaml", qualRoot)
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Logf("profile %s %s", p.Platform, p.Firmware)
 	run := qualDaemon(t, p, qualOpts{scale: 0.1, handshakeTimeout: time.Second, devices: n})
