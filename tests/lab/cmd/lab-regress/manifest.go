@@ -21,7 +21,7 @@ type Entry struct {
 	Rows            []string          `yaml:"rows"`
 	Env             map[string]string `yaml:"env"`
 	Notes           []string          `yaml:"notes"`
-	MeasuredMinutes int               `yaml:"measured_minutes"`
+	MeasuredMinutes float64           `yaml:"measured_minutes"`
 	// TimeoutMinutes is the binary's -test.timeout; zero means 120 minutes a
 	// platform, make lab's budget (timeoutFor).
 	TimeoutMinutes int `yaml:"timeout_minutes"`
@@ -132,4 +132,14 @@ func patternMatches(run string, tests []string) (matched, unmatched []string) {
 		}
 	}
 	return matched, unmatched
+}
+
+// measuredTotal is the entries' last measured wall time, in minutes; an entry
+// that failed its last run has none and counts zero.
+func measuredTotal(entries []Entry) float64 {
+	var total float64
+	for _, e := range entries {
+		total += e.MeasuredMinutes
+	}
+	return total
 }

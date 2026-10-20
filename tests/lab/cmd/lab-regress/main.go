@@ -190,12 +190,10 @@ func run() int {
 	}
 	entries = pick(entries, *only)
 	if *dry {
-		total := 0
 		for _, e := range entries {
-			fmt.Printf("%-16s %-28s %4d min  %s\n", e.ID, e.Platforms, e.MeasuredMinutes, e.Run)
-			total += e.MeasuredMinutes
+			fmt.Printf("%-16s %-28s %5.1f min  %s\n", e.ID, e.Platforms, e.MeasuredMinutes, e.Run)
 		}
-		fmt.Printf("total %d min (last measured)\n", total)
+		fmt.Printf("total %.1f min (last measured)\n", measuredTotal(entries))
 		return 0
 	}
 	lock, err := holdLock(lockPath, "lab-regress pid "+fmt.Sprint(os.Getpid()))
