@@ -1,0 +1,17 @@
+{
+  "platform": "nokia_srlinux",
+  "lab_platform": "nokia_srlinux",
+  "firmware": "SR Linux 26.7.2-519",
+  "image": "SR Linux 26.7.2-519",
+  "commit": "",
+  "date": "2026-10-20",
+  "transports": [
+    "tcp"
+  ],
+  "cells": {},
+  "registers": {},
+  "break_glass": {},
+  "results": {
+    "token_login": "invalid: the device refused the ssh login; port49 permitted the session with no attribute"
+  }
+}

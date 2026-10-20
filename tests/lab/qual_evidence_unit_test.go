@@ -447,3 +447,13 @@ func TestQualSRLinuxSendsNoCommandAuthorizationEither(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// A known secret in an account argument is refused on the raw record, before the
+// {long_run} mask could rewrite the argument and hide it.
+func TestQualRecordsRefuseASecretInAnAccountArgBeforeTheMask(t *testing.T) {
+	const secret = "tok-0123456789abcdef0123456789abcdef0123456789"
+	recs := []map[string]any{{"event": "account", "record": map[string]any{"raw": []any{"task_id=1", "cmd=" + secret}}}}
+	if _, err := qualRecords(recs, "qual01", []string{secret}); err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("want a refusal that does not print the secret: %v", err)
+	}
+}
