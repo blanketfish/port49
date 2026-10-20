@@ -103,21 +103,33 @@ func TestHungLoginBeforeDark(t *testing.T) {
 
 // exchangesIn pairs each device request in the window with the reply on its
 // connection and session at the next seq, and leaves out requests outside it.
+// Sessions differ from ports, so the port and the session are each checked
+// on their own.
 func TestExchangesIn(t *testing.T) {
 	t0 := time.Date(2026, 10, 20, 17, 0, 0, 0, time.UTC)
+	at := func(ms int) time.Time { return t0.Add(time.Duration(ms) * time.Millisecond) }
+	pkt := func(ms int, port uint16, session uint32, seq uint8, fromDevice bool, status string) wirePacket {
+		p := authenPkt(at(ms), port, seq, fromDevice, status)
+		p.Header.SessionID = session
+		return p
+	}
 	pkts := []wirePacket{
-		authenPkt(t0.Add(-time.Second), 1, 1, true, ""), authenPkt(t0.Add(-time.Second), 1, 2, false, "ERROR(7)"),
-		authenPkt(t0.Add(time.Second), 2, 1, true, ""), authenPkt(t0.Add(1500*time.Millisecond), 3, 2, false, "PASS(1)"),
-		authenPkt(t0.Add(2*time.Second), 4, 1, true, ""), authenPkt(t0.Add(2500*time.Millisecond), 4, 2, false, "ERROR(7)"),
+		pkt(-1000, 1, 101, 1, true, ""), pkt(-1000, 1, 101, 2, false, "ERROR(7)"), // before the window
+		pkt(1000, 2, 102, 1, true, ""), pkt(1500, 3, 102, 2, false, "PASS(1)"), // same session, another port
+		pkt(2000, 4, 104, 1, true, ""), pkt(2200, 4, 999, 2, false, "PASS(1)"), // same port, another session
+		pkt(3000, 5, 105, 1, true, ""), pkt(3500, 5, 105, 2, false, "ERROR(7)"),
 	}
 	xs := exchangesIn(pkts, t0, t0.Add(time.Minute))
-	if len(xs) != 2 {
-		t.Fatalf("got %d exchanges, want 2: %+v", len(xs), xs)
+	if len(xs) != 3 {
+		t.Fatalf("got %d exchanges, want 3: %+v", len(xs), xs)
 	}
 	if xs[0].Reply != nil {
-		t.Errorf("a reply on another connection was paired: %+v", xs[0].Reply)
+		t.Errorf("a reply on another connection, same session, was paired: %+v", xs[0].Reply)
 	}
-	if xs[1].Reply == nil || replyStatus(*xs[1].Reply) != "ERROR(7)" {
-		t.Errorf("the second request's reply: %+v", xs[1].Reply)
+	if xs[1].Reply != nil {
+		t.Errorf("a reply in another session, same connection, was paired: %+v", xs[1].Reply)
+	}
+	if xs[2].Reply == nil || replyStatus(*xs[2].Reply) != "ERROR(7)" {
+		t.Errorf("the matching request's reply: %+v", xs[2].Reply)
 	}
 }
