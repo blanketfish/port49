@@ -12,11 +12,14 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,14 +82,23 @@ func TestQualFixtureJunosRuleFailsWhatThePlainFixturePasses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", c.profile, err, tr)
 		}
+		if len(tr.Steps) < 2 {
+			t.Fatalf("%s: the play has no authorize_session step\n%s", c.profile, tr)
+		}
 		total := 0
 		for _, a := range tr.Steps[1].Args {
+			if len(a) >= 255 {
+				t.Fatalf("an attribute is %d bytes; each must stay under 255 (spec §6)", len(a))
+			}
 			total += len(a)
 		}
 		if total <= 255 {
 			t.Fatalf("the fixture policy renders %d bytes; lengthen qualLongJunosRole until it passes 255\n%s", total, tr)
 		}
 		fails, _ := devicemock.Judge(tr, devicemock.GoldenFrom(tr)) // against itself: only gates can fail
+		if c.gated && !slices.ContainsFunc(fails, func(f string) bool { return strings.Contains(f, "junos_reply_total") }) {
+			t.Fatalf("%s: the reply total rule did not gate: %q\n%s", c.profile, fails, tr)
+		}
 		if (len(fails) > 0) != c.gated {
 			t.Fatalf("%s: failures %q, gated want %v\n%s", c.profile, fails, c.gated, tr)
 		}
@@ -112,9 +124,10 @@ func TestQualNXOSRealFlightUnderTheDefault(t *testing.T) {
 
 func TestQualAFlightPastTheTimeoutIsHandshakeTimeout(t *testing.T) {
 	p := qualFixture(t, "fixture_nxos_flight.yaml")
-	run := qualDaemon(t, p, qualOpts{scale: 0.3, handshakeTimeout: time.Second}) // 1.5 s against 1 s
+	run := qualDaemon(t, p, qualOpts{scale: 0.5, handshakeTimeout: time.Second}) // 2.5 s against 1 s
 	tr, _ := devicemock.Play(t.Context(), p, "flight_delay", run.target(p, 0), run.login(0))
-	if tr.Outcome != "handshake_refused" || !run.logged(`"tls_outcome":"handshake_timeout"`) {
+	if tr.Outcome != "handshake_refused" || !run.logged(`"tls_outcome":"handshake_timeout"`) ||
+		!run.logged(`"diagnosis":"tls_refused"`) {
 		t.Fatalf("a flight past handshake_timeout is refused as handshake_timeout\n%s", tr)
 	}
 	if ev := tr.Steps[len(tr.Steps)-1].Event; ev != "conn_reset" && ev != "conn_closed" {
@@ -137,9 +150,18 @@ func TestQualWaitForPrintsNoHash(t *testing.T) {
 func TestQualSharesTheFragmentWithTheLab(t *testing.T) {
 	p := qualFixture(t, "fixture_nxos_flight.yaml")
 	run := qualDaemon(t, p, qualOpts{scale: 0.1, handshakeTimeout: time.Second})
-	frag, _ := os.ReadFile("../../tests/qual/qual-daemon.yaml")
-	cfg, _ := os.ReadFile(run.cfgPath)
-	merged, _ := devicemock.MergeFragment(frag, frag)
+	frag, err := os.ReadFile("../../tests/qual/qual-daemon.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := os.ReadFile(run.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err := devicemock.MergeFragment(frag, frag)
+	if err != nil || len(strings.TrimSpace(string(merged))) == 0 {
+		t.Fatalf("the fragment did not merge: %v", err)
+	}
 	for _, line := range strings.Split(strings.TrimSpace(string(merged)), "\n") {
 		if !strings.Contains(string(cfg), line) {
 			t.Fatalf("the mock's config lacks the shared fragment's %q", line)
@@ -268,6 +290,7 @@ func qualDaemon(t *testing.T, p *devicemock.Profile, o qualOpts) *qualRun {
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
+			t.Error("port49d did not exit within 10s of its context ending")
 		}
 	})
 	qualWaitFor(t, r.stderr, "port49d: broker listening on ", 10*time.Second)
@@ -411,8 +434,7 @@ func qualPolicyWith(t *testing.T, role string) string {
 	if out == pol {
 		t.Fatal("the qualification policy's grant line moved")
 	}
-	// The unpinned set (1.0.0) projects nothing for Junos; the lab's projection runs pin 1.2.0.
-	return "platform_set: 1.2.0\n" + out
+	return out
 }
 
 // qualFixture loads a devicemock test profile.
@@ -431,17 +453,20 @@ func qualFixture(t *testing.T, name string) *devicemock.Profile {
 
 // qualProfile plays each of p's scenarios against its own daemon and judges
 // the replies against the golden.
-func qualProfile(t *testing.T, p *devicemock.Profile, root string) {
+// It returns every credential and key it minted, so a test can check that
+// none reached a golden; nothing prints them.
+func qualProfile(t *testing.T, p *devicemock.Profile, root string) (secrets []string) {
+	t.Helper()
 	update := os.Getenv("PORT49_QUAL_UPDATE") == "1"
+	if p.Golden == "" {
+		t.Fatalf("%s %s names no golden", p.Platform, p.Firmware)
+	}
 	goldenPath := filepath.Join(root, p.Golden)
-	g, err := devicemock.LoadGolden(goldenPath)
+	g, err := loadQualGolden(goldenPath)
 	if err != nil {
-		g = devicemock.Golden{}
+		t.Fatal(err)
 	}
-	if g.Scenarios == nil {
-		g.Scenarios = map[string]devicemock.GoldenScenario{}
-	}
-	var minted []string
+	minted := &secrets
 	changed := false
 	for _, sc := range p.Scenarios {
 		t.Run(sc, func(t *testing.T) {
@@ -453,7 +478,8 @@ func qualProfile(t *testing.T, p *devicemock.Profile, root string) {
 				}
 			}
 			tr, err := devicemock.Play(t.Context(), p, sc, run.target(p, 0), run.login(0))
-			minted = append(minted, run.minted...)
+			*minted = append(*minted, run.minted...)
+			*minted = append(*minted, string(run.key))
 			if err != nil {
 				t.Fatalf("%v\n%s", err, tr)
 			}
@@ -500,10 +526,88 @@ func qualProfile(t *testing.T, p *devicemock.Profile, root string) {
 		if strings.Contains(string(raw), "_sha256") {
 			t.Error("the golden holds a hash")
 		}
-		for _, m := range minted {
-			if strings.Contains(string(raw), m) {
+		for _, m := range *minted {
+			if m != "" && strings.Contains(string(raw), m) {
 				t.Error("the golden holds a minted credential")
 			}
 		}
+	}
+	return secrets
+}
+
+// loadQualGolden reads a golden. Only a missing file is an empty golden: a
+// corrupt one is an error, never a golden to overwrite.
+func loadQualGolden(path string) (devicemock.Golden, error) {
+	g, err := devicemock.LoadGolden(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		g, err = devicemock.Golden{}, nil
+	case err != nil:
+		return devicemock.Golden{}, fmt.Errorf("golden %s: %w", path, err)
+	}
+	if g.Scenarios == nil {
+		g.Scenarios = map[string]devicemock.GoldenScenario{}
+	}
+	return g, nil
+}
+
+// TestQualProfileHarness runs the path TestQual takes for each profile, on
+// fixtures: update writes a golden, verify passes against it. The nxos copy
+// adds tls_unknown_ca, which reaches untrustedClient, and the hello probe;
+// the tcp copy reaches fault through store_unavailable.
+func TestQualProfileHarness(t *testing.T) {
+	for _, c := range []struct {
+		fixture   string
+		scenarios []string
+	}{
+		{"fixture_plain.yaml", nil},
+		{"fixture_nxos_flight.yaml", []string{"flight_delay", "tls_unknown_ca"}},
+	} {
+		t.Run(c.fixture, func(t *testing.T) {
+			p := qualFixture(t, c.fixture)
+			p.Golden = "g.json"
+			if c.scenarios != nil {
+				p.Scenarios = c.scenarios
+			}
+			root := t.TempDir()
+			t.Setenv("PORT49_QUAL_UPDATE", "1")
+			secrets := qualProfile(t, p, root)
+			raw, err := os.ReadFile(filepath.Join(root, "g.json"))
+			if err != nil {
+				t.Fatalf("update wrote no golden: %v", err)
+			}
+			g, err := devicemock.LoadGolden(filepath.Join(root, "g.json"))
+			if err != nil || !g.PendingLab || len(g.Scenarios) != len(p.Scenarios) {
+				t.Fatalf("the written golden: pending_lab %v, %d scenarios, %v", g.PendingLab, len(g.Scenarios), err)
+			}
+			if strings.Contains(string(raw), "_sha256") {
+				t.Error("the golden holds a hash")
+			}
+			if len(secrets) == 0 {
+				t.Fatal("no minted credential was tracked")
+			}
+			for _, s := range secrets {
+				if s != "" && strings.Contains(string(raw), s) {
+					t.Error("the golden holds a minted credential or key")
+				}
+			}
+			t.Setenv("PORT49_QUAL_UPDATE", "")
+			qualProfile(t, p, root) // verify: the golden it just wrote passes
+		})
+	}
+}
+
+func TestQualGoldenOnlyAMissingFileIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	g, err := loadQualGolden(filepath.Join(dir, "none.json"))
+	if err != nil || len(g.Scenarios) != 0 {
+		t.Fatalf("a missing golden is empty: %+v %v", g, err)
+	}
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"scenarios": {`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadQualGolden(bad); err == nil {
+		t.Fatal("a corrupt golden loaded as empty")
 	}
 }
