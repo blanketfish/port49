@@ -18,6 +18,7 @@ type fake struct {
 	key                 []byte
 	mu                  sync.Mutex
 	authen              []uint8 // statuses in turn, e.g. {GetPass, Pass} for ASCII
+	authenRepeat        bool    // keep answering with the last status once the list is down to it (a fleet's many plays)
 	authorArgs          [][]byte
 	echo, singleConnect bool
 	clearReply          bool // reply with the unencrypted flag and a clear body
@@ -103,7 +104,9 @@ func (f *fake) nextAuthen() uint8 {
 		return wire.AuthenStatusError
 	}
 	s := f.authen[0]
-	f.authen = f.authen[1:]
+	if !f.authenRepeat || len(f.authen) > 1 {
+		f.authen = f.authen[1:]
+	}
 	return s
 }
 

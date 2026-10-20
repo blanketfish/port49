@@ -184,28 +184,28 @@ type qualOpts struct {
 }
 
 type qualRun struct {
-	t       *testing.T
-	opts    qualOpts
-	p       *devicemock.Profile
-	cfgPath string
-	log     *syncBuffer // the decision log
-	stderr  *syncBuffer
-	tcpAddr string
-	tlsAddr string
-	broker  string
-	pkiDir  string
-	key     []byte
-	faults  string
-	clients []tls.Certificate
-	pool    *x509.CertPool
-	minted  []string // kept only for the golden check: never printed
+	t          *testing.T
+	opts       qualOpts
+	p          *devicemock.Profile
+	cfgPath    string
+	log        *syncBuffer // the decision log
+	stderr     *syncBuffer
+	tcpAddr    string
+	tlsAddr    string
+	broker     string
+	pkiDir     string
+	key        []byte
+	faults     string
+	policyPath string // the broker's policy file, for touchPolicy
+	policyText string
+	touches    int
+	clients    []tls.Certificate
+	pool       *x509.CertPool
+	minted     []string // kept only for the golden check: never printed
 }
 
 // qualDeviceName is the inventory name of device i.
 func qualDeviceName(i int) string { return fmt.Sprintf("q%04d", i) }
-
-// qualSource is the source address of device i in fleet mode.
-func qualSource(i int) string { return fmt.Sprintf("127.0.%d.%d", 1+i/254, 1+i%254) }
 
 var (
 	qualTCPLine    = regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`)
@@ -235,6 +235,7 @@ func qualDaemon(t *testing.T, p *devicemock.Profile, o qualOpts) *qualRun {
 	}
 	b := brokerConfig(t, policy).Broker
 	r.pkiDir = filepath.Dir(b.TLSCertFile)
+	r.policyPath, r.policyText = b.PolicyFile, policy
 
 	n := max(o.devices, 1)
 	var inv strings.Builder
@@ -242,7 +243,7 @@ func qualDaemon(t *testing.T, p *devicemock.Profile, o qualOpts) *qualRun {
 	for i := range n {
 		addr := "127.0.0.1"
 		if o.devices > 1 {
-			addr = qualSource(i)
+			addr = devicemock.LoopbackSource(i)
 		}
 		fmt.Fprintf(&inv, "  - {name: %s, platform: %s, addresses: [%s]", qualDeviceName(i), p.Platform, addr)
 		if r.opts.transport == "tls" {
@@ -364,7 +365,7 @@ const qualServerName = "tacacs.example.net"
 func (r *qualRun) target(p *devicemock.Profile, i int) devicemock.Target {
 	tg := devicemock.Target{Transport: r.opts.transport, Scale: r.opts.scale}
 	if r.opts.devices > 1 {
-		tg.LocalAddr = qualSource(i)
+		tg.LocalAddr = devicemock.LoopbackSource(i)
 	}
 	switch r.opts.transport {
 	case "tls":
@@ -383,6 +384,21 @@ func (r *qualRun) login(i int) devicemock.Login {
 	tok := mint(r.t, r.broker, r.pkiDir, qualDeviceName(i))
 	r.minted = append(r.minted, tok)
 	return devicemock.Login{User: "qual01", Credential: []byte(tok), RemAddr: "198.51.100.4"}
+}
+
+// touchPolicy rewrites the policy file with one more harmless deny, a real
+// change the broker's policy watch reloads. It calls no t helper: fleet mode
+// calls it from a goroutine, so the error is returned.
+func (r *qualRun) touchPolicy() error {
+	r.touches++
+	cmd := fmt.Sprintf("show qual-reload-%d", r.touches)
+	text := strings.ReplaceAll(r.policyText, `deny: ["show users"]`, `deny: ["show users", "`+cmd+`"]`)
+	text = strings.ReplaceAll(text, `deny: ["show system users"]`, `deny: ["show system users", "`+cmd+`"]`)
+	tmp := r.policyPath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(text), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, r.policyPath)
 }
 
 // fault puts the lab fault in force. It calls no t helper: fleet mode calls it
