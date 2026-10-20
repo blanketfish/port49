@@ -611,3 +611,43 @@ func TestQualGoldenOnlyAMissingFileIsEmpty(t *testing.T) {
 		t.Fatal("a corrupt golden loaded as empty")
 	}
 }
+
+// The qualification policy's deny must project on every platform: a deny that
+// fails closed on one would make its golden vet a login that can run nothing.
+func TestQualPolicyProjectsOnEveryPlatform(t *testing.T) {
+	for _, plat := range []string{"juniper_junos", "cisco_nxos", "cisco_iosxe", "arista_eos"} {
+		t.Run(plat, func(t *testing.T) {
+			p := qualFixture(t, "fixture_plain.yaml")
+			p.Platform = plat
+			run := qualDaemon(t, p, qualOpts{scale: 0.1})
+			run.login(0)
+			seen := false
+			for _, line := range strings.Split(run.log.String(), "\n") {
+				var m struct {
+					Event string
+					Blob  struct {
+						Body struct {
+							Platform   string
+							FailClosed string `json:"fail_closed"`
+							Attributes []string
+						}
+					}
+				}
+				if json.Unmarshal([]byte(line), &m) != nil || m.Event != "blob" {
+					continue
+				}
+				seen = true
+				total := 0
+				for _, a := range m.Blob.Body.Attributes {
+					total += len(a)
+				}
+				if m.Blob.Body.FailClosed != "" || total > 255 {
+					t.Errorf("%s renders fail_closed=%q, %d attribute bytes", plat, m.Blob.Body.FailClosed, total)
+				}
+			}
+			if !seen {
+				t.Fatal("no blob was logged")
+			}
+		})
+	}
+}
