@@ -1,0 +1,46 @@
+{
+  "platform": "juniper_junos",
+  "lab_platform": "fixture_junos",
+  "firmware": "1.0",
+  "image": "fixture 1.0",
+  "commit": "a291b6c52513",
+  "date": "2026-10-20",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "token_login": "2026-10-20T12:00:00.000Z",
+    "command_permitted": "2026-10-20T12:00:10.000Z",
+    "command_denied": "2026-10-20T12:00:10.000Z",
+    "accounting": "2026-10-20T12:00:20.000Z",
+    "wrong_credential": "2026-10-20T12:01:00.000Z",
+    "store_unavailable": "2026-10-20T12:02:00.000Z",
+    "single_connection": "2026-10-20T12:03:00.000Z",
+    "tls_token_login": "2026-10-20T12:04:00.000Z",
+    "tls_store_unavailable": "2026-10-20T12:05:00.000Z",
+    "tls_unknown_ca": "2026-10-20T12:06:00.000Z"
+  },
+  "registers": {
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": true
+  },
+  "results": {
+    "token_login": "pass",
+    "command_permitted": "pass",
+    "command_denied": "pass",
+    "accounting": "pass",
+    "wrong_credential": "pass",
+    "store_unavailable": "pass",
+    "single_connection": "pass",
+    "tls_token_login": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_unknown_ca": "pass"
+  }
+}

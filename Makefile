@@ -107,7 +107,7 @@ lab-l62-up:
 # no captures, any runner. qual-update rewrites the goldens a port49 change moved, marked
 # pending_lab until the next lab run.
 qual:
-	go test ./internal/devicemock/... -count=1
+	go test ./internal/devicemock/... ./tests/qual/... -count=1
 	go test ./internal/port49d/ -run '^TestQual' -count=1 -timeout 20m
 
 qual-update:

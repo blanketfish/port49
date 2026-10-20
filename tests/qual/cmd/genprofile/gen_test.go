@@ -1,0 +1,512 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/devicemock"
+)
+
+const fixture = "testdata/QUAL-1.0-fixture_junos"
+
+func TestGenerateTheFixture(t *testing.T) {
+	p, g, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := p.Stimulus
+	if s.Steps[0].Fields.AuthenType != "pap" || s.Steps[0].MinorVersion != 1 || s.TLS.FlightDelay != 5*time.Second ||
+		s.Connections.Mode != "per_step" || g.Scenarios["token_login"].Outcome != "login_ok" {
+		t.Fatalf("%+v %+v", s, g)
+	}
+	if s.TLS.ClientHello.Extensions[len(s.TLS.ClientHello.Extensions)-1] == 41 {
+		t.Fatal("the hello is a full handshake's (psk_identities 0), never a resumption's")
+	}
+	if err := p.Validate("testdata"); err != nil {
+		t.Fatalf("a generated profile must load: %v", err)
+	}
+}
+
+// Through Load, not only Validate: Load's credential check sees the written
+// YAML, so a 40-hex commit or any hash that slipped in fails here (re-review C-A).
+func TestAGeneratedProfileLoads(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	if err := writeProfile(path, p, fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := devicemock.Load(path, "testdata"); err != nil {
+		t.Fatalf("a generated profile, as written, must load: %v", err)
+	}
+	if len(p.Vetted.Commit) != 12 {
+		t.Fatalf("commits are recorded as 12 hex characters (git rev-parse --short=12): %q", p.Vetted.Commit)
+	}
+}
+
+// The generated golden has every scenario, each in the shape Play plays it,
+// and Judge passes a transcript of exactly that shape: so TestQual's verdict
+// on a generated profile turns on port49's replies, never on a golden built
+// to the wrong scenario (re-review I-G).
+func TestTheGoldenCoversEveryScenarioInPlayedOrder(t *testing.T) {
+	p, g, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"token_login", "wrong_credential", "store_unavailable", "single_connection",
+		"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay"}
+	if !slices.Equal(p.Scenarios, want) {
+		t.Fatalf("scenarios %v, want all eight", p.Scenarios)
+	}
+	for _, sc := range want {
+		gs, ok := g.Scenarios[sc]
+		if !ok || gs.Outcome == "" {
+			t.Fatalf("%s: no golden", sc)
+		}
+		var names []string
+		for _, s := range gs.Steps {
+			names = append(names, s.Step)
+		}
+		// All of them when the play runs to the end; a prefix when a reaction stops it.
+		played := devicemock.PlayedSteps(p, sc)
+		if len(names) > len(played) || !slices.Equal(names, played[:len(names)]) ||
+			(gs.Outcome == "login_ok" && len(names) != len(played)) {
+			t.Fatalf("%s: golden steps %v, Play plays %v", sc, names, played)
+		}
+		tr := devicemock.Transcript{Scenario: sc, Outcome: gs.Outcome}
+		for _, s := range gs.Steps {
+			tr.Steps = append(tr.Steps, devicemock.StepResult{Step: s.Step, Event: s.Event, Args: s.Args})
+		}
+		if fails, _ := devicemock.Judge(tr, gs); len(fails) != 0 {
+			t.Fatalf("%s: %q", sc, fails)
+		}
+	}
+	tl := g.Scenarios["token_login"]
+	if len(tl.Steps) != 6 || tl.Steps[3].Step != "command_denied" || tl.Steps[3].Event != "author_fail" || tl.Steps[5].Event != "acct_success" {
+		t.Fatalf("token_login is the union of four lab cells, in step order: %+v", tl.Steps)
+	}
+	if u := g.Scenarios["tls_unknown_ca"]; u.Outcome != "handshake_refused" || u.Steps[0].Step != "login" || u.Steps[0].Event != "tls_refused" {
+		t.Fatalf("tls_unknown_ca is the class event on the login: %+v", u)
+	}
+	if fd, tls := g.Scenarios["flight_delay"], g.Scenarios["tls_token_login"]; fd.Outcome != tls.Outcome || fd.Steps[0].Event != tls.Steps[0].Event {
+		t.Fatalf("flight_delay copies tls_token_login's login: %+v %+v", fd, tls)
+	}
+	if o := g.Scenarios["store_unavailable"].Outcome; o != "falls_to_local" {
+		t.Fatalf("a break-glass store_unavailable ends falls_to_local: %q", o)
+	}
+	for _, s := range p.Stimulus.Steps {
+		if s.Port == "unknown" {
+			t.Fatal("an account step took another channel's port; steps reads the login's own records")
+		}
+	}
+}
+
+func TestGeneratedReactionsCiteTheRunsOwnNote(t *testing.T) {
+	p, _, _ := Generate(fixture, "testdata")
+	if len(p.Reactions) == 0 {
+		t.Fatal("no reactions pre-filled")
+	}
+	for _, r := range p.Reactions {
+		if r.Status == "measured" && (len(r.Sources) == 0 || !strings.Contains(r.Sources[0].Note, "QUAL-1.0-fixture_junos")) {
+			t.Fatalf("a pre-filled measured reaction cites the run's own note: %+v", r)
+		}
+	}
+}
+
+func copyFixture(t *testing.T) string {
+	t.Helper()
+	dst := filepath.Join(t.TempDir(), "QUAL-1.0-fixture_junos")
+	if err := os.CopyFS(dst, os.DirFS(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// editRecords rewrites decisions.jsonl through f; f returns false to drop a record.
+func editRecords(t *testing.T, dir string, f func(map[string]any) bool) {
+	t.Helper()
+	path := filepath.Join(dir, "decisions.jsonl")
+	in, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	sc := bufio.NewScanner(in)
+	for sc.Scan() {
+		var m map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		if f(m) {
+			b, _ := json.Marshal(m)
+			out = append(out, string(b))
+		}
+	}
+	in.Close()
+	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// editRun rewrites run.json through f.
+func editRun(t *testing.T, dir string, f func(map[string]any)) {
+	t.Helper()
+	path := filepath.Join(dir, "run.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	f(m)
+	b, _ = json.Marshal(m)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func remove(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		if err := os.Remove(filepath.Join(dir, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestGenerateRefusesForbiddenKeys(t *testing.T) {
+	dir := copyFixture(t)
+	f, _ := os.OpenFile(filepath.Join(dir, "decisions.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"event":"redeem","auth":{"credential_sha256":"deadbeefdeadbeefdeadbeef"}}` + "\n")
+	f.Close()
+	_, _, err := Generate(dir, "testdata")
+	if err == nil || !strings.Contains(err.Error(), "credential_sha256") {
+		t.Fatal("evidence holding a credential hash is refused, never filtered quietly")
+	}
+	if strings.Contains(err.Error(), "deadbeef") {
+		t.Fatalf("the refusal names the key, never the value: %v", err)
+	}
+}
+
+func TestGenerateNeverReadsACapture(t *testing.T) {
+	dir := copyFixture(t)
+	os.WriteFile(filepath.Join(dir, "x.pcap"), []byte("not read"), 0o600)
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "x.pcap") {
+		t.Fatal("a capture in the evidence directory is refused: profiles never come from bodies")
+	}
+}
+
+func TestStimulusEqualIgnoresReviewedParts(t *testing.T) {
+	a, _, _ := Generate(fixture, "testdata")
+	b, _, _ := Generate(fixture, "testdata")
+	b.Reactions, b.Acceptance, b.Vetted.Commit = nil, nil, "other"
+	if !StimulusEqual(a, b) {
+		t.Fatal("-check compares the generated stimulus only: reviewed parts and the header may differ")
+	}
+	b.Stimulus.Steps[0].Port = "tty9"
+	if StimulusEqual(a, b) {
+		t.Fatal("a changed stimulus is a difference")
+	}
+}
+
+// (a) command_permitted and command_denied come from one login and share a
+// start time; a window ends at the next strictly later start, so their records
+// are not lost to an empty window and still land in token_login.
+func TestTiedCellsShareAWindowAndTheirRecordsReachTokenLogin(t *testing.T) {
+	var r run
+	if err := readJSON(filepath.Join(fixture, "run.json"), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Cells["command_permitted"] != r.Cells["command_denied"] {
+		t.Fatal("the fixture must tie the two command cells")
+	}
+	win, err := cellWindows(r.Cells)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, cd := win["command_permitted"], win["command_denied"]
+	if cp != cd || cp.end.IsZero() || !cp.end.After(cp.start) {
+		t.Fatalf("tied cells share one non-empty window: %+v %+v", cp, cd)
+	}
+	if !cp.end.Equal(win["accounting"].start) {
+		t.Fatalf("the tied window ends at the next strictly later start: %v", cp.end)
+	}
+	_, g, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range g.Scenarios["token_login"].Steps {
+		got = append(got, s.Step+":"+s.Event)
+	}
+	if !slices.Contains(got, "command_permitted:author_pass_add") || !slices.Contains(got, "command_denied:author_fail") {
+		t.Fatalf("the tied cells' records landed in token_login: %v", got)
+	}
+}
+
+// (b) the connection pattern counts the union of the scenario's cells' files.
+func TestConnPatternCountsTheUnionOfTheScenariosCells(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Stimulus.Connections.Mode != "per_step" || p.Stimulus.Connections.SingleConnectFlag {
+		t.Fatalf("six connections over four cells, none of them past two in token_login alone: %+v", p.Stimulus.Connections)
+	}
+	// Only token_login's two connections remain; the single_connection cell carried every step on one.
+	dir := copyFixture(t)
+	remove(t, dir, "command_permitted.conns.json", "command_denied.conns.json", "accounting.conns.json")
+	p, _, err = Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Stimulus.Connections.Mode != "single_connection" || !p.Stimulus.Connections.SingleConnectFlag {
+		t.Fatalf("a device that reused one connection for all steps: %+v", p.Stimulus.Connections)
+	}
+}
+
+// (c) neither condition met: the mode stays empty and Load fails loudly.
+func TestConnPatternWithNeitherConditionLeavesTheModeEmpty(t *testing.T) {
+	dir := copyFixture(t)
+	remove(t, dir, "command_permitted.conns.json", "command_denied.conns.json", "accounting.conns.json", "single_connection.conns.json")
+	p, _, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Stimulus.Connections.Mode != "" {
+		t.Fatalf("a mode is never guessed: %q", p.Stimulus.Connections.Mode)
+	}
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	if err := writeProfile(path, p, dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := devicemock.Load(path, "testdata"); err == nil || !strings.Contains(err.Error(), "connections.mode") {
+		t.Fatalf("Load must refuse the empty mode, naming it: %v", err)
+	}
+}
+
+// (d) a step's priv_lvl is the validated record's, never a default.
+func TestStepPrivLvlIsTheRecordsOwn(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range p.Stimulus.Steps {
+		if s.Fields.PrivLvl != 1 {
+			t.Fatalf("%s: priv_lvl %d; NX-OS asks at 1 and the record says 1", s.Name, s.Fields.PrivLvl)
+		}
+	}
+	dir := copyFixture(t)
+	editRecords(t, dir, func(m map[string]any) bool {
+		if m["event"] == "authorize_command" && m["verdict"] == "permit" {
+			m["packet_fields"].(map[string]any)["priv_lvl"] = 7
+		}
+		return true
+	})
+	p, _, err = Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]uint8{}
+	for _, s := range p.Stimulus.Steps {
+		got[s.Name] = s.Fields.PrivLvl
+	}
+	if got["command_permitted"] != 7 || got["login"] != 1 || got["command_denied"] != 1 {
+		t.Fatalf("each step carries its own record's priv_lvl: %v", got)
+	}
+}
+
+func TestAStepWithoutPrivLvlIsRefused(t *testing.T) {
+	dir := copyFixture(t)
+	editRecords(t, dir, func(m map[string]any) bool {
+		if m["event"] == "authorize_session" {
+			delete(m["packet_fields"].(map[string]any), "priv_lvl")
+		}
+		return true
+	})
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "authorize_session") {
+		t.Fatalf("a missing priv_lvl is an error naming the step, never a default: %v", err)
+	}
+}
+
+// (e) Junos sends no per-command authorization (L18): the command cells are
+// not_applicable, no authorize_command record exists, and no command step is emitted.
+func TestJunosEvidenceWithoutCommandCellsEmitsNoCommandSteps(t *testing.T) {
+	for _, dropStarts := range []bool{false, true} {
+		dir := copyFixture(t)
+		editRecords(t, dir, func(m map[string]any) bool { return m["event"] != "authorize_command" })
+		editRun(t, dir, func(m map[string]any) {
+			for _, c := range []string{"command_permitted", "command_denied"} {
+				m["results"].(map[string]any)[c] = "not_applicable"
+				if dropStarts {
+					delete(m["cells"].(map[string]any), c)
+				}
+			}
+		})
+		p, g, err := Generate(dir, "testdata")
+		if err != nil {
+			t.Fatalf("dropStarts=%v: %v", dropStarts, err)
+		}
+		var names []string
+		for _, s := range p.Stimulus.Steps {
+			names = append(names, s.Name)
+		}
+		if want := []string{"login", "authorize_session", "account_start", "account_stop"}; !slices.Equal(names, want) {
+			t.Fatalf("dropStarts=%v: steps %v, want %v", dropStarts, names, want)
+		}
+		if tl := g.Scenarios["token_login"]; tl.Outcome != "login_ok" || len(tl.Steps) != 4 {
+			t.Fatalf("dropStarts=%v: %+v", dropStarts, tl)
+		}
+		if err := p.Validate("testdata"); err != nil {
+			t.Fatalf("dropStarts=%v: %v", dropStarts, err)
+		}
+	}
+}
+
+// Without not_applicable, a missing command record is an error naming the step.
+func TestMissingCommandRecordsFailWhenTheCellIsNotNotApplicable(t *testing.T) {
+	dir := copyFixture(t)
+	editRecords(t, dir, func(m map[string]any) bool { return m["event"] != "authorize_command" })
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "command_permitted") {
+		t.Fatalf("expected an error naming command_permitted: %v", err)
+	}
+}
+
+// (f) a rule is measured only when a note for the same firmware measured it;
+// genprofile measures none, so every generated rule is unmeasured and warns, never gates.
+func TestGeneratedAcceptanceRulesAreUnmeasuredAndNeverGate(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Acceptance) == 0 {
+		t.Fatal("the priv_lvl_range rule is pre-filled")
+	}
+	for _, a := range p.Acceptance {
+		if a.Status != "unmeasured" {
+			t.Fatalf("%s: a generated rule is unmeasured until a note for this firmware measures it: %q", a.ID, a.Status)
+		}
+	}
+	gate, warn := devicemock.Check(p.Acceptance, "authorize_session", [][]byte{[]byte("priv-lvl=15")})
+	if len(gate) != 0 || len(warn) != 1 {
+		t.Fatalf("an unmeasured rule warns and never gates: %v %v", gate, warn)
+	}
+}
+
+// (g) a summary from before compress_certificate_algorithms existed means "not
+// offered"; one that has the field carries it into the hello.
+func TestCompressCertificateAlgorithmsMissingMeansNotOffered(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Stimulus.TLS.ClientHello.CompressCertAlgs) != 0 {
+		t.Fatalf("an old summary offers none: %v", p.Stimulus.TLS.ClientHello.CompressCertAlgs)
+	}
+	dir := copyFixture(t)
+	path := filepath.Join(dir, "tls_token_login.tls.json")
+	b, _ := os.ReadFile(path)
+	var cs []map[string]any
+	if err := json.Unmarshal(b, &cs); err != nil {
+		t.Fatal(err)
+	}
+	cs[0]["client_hello"].(map[string]any)["compress_certificate_algorithms"] = []int{2}
+	b, _ = json.Marshal(cs)
+	os.WriteFile(path, b, 0o644)
+	p, _, err = Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Stimulus.TLS.ClientHello.CompressCertAlgs; !slices.Equal(got, []uint16{2}) {
+		t.Fatalf("a present field is carried: %v", got)
+	}
+}
+
+func TestTLSUnknownCARequiresPort49sOwnRecord(t *testing.T) {
+	dir := copyFixture(t)
+	editRecords(t, dir, func(m map[string]any) bool { return m["event"] != "unvalidated" })
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "tls_unknown_ca") {
+		t.Fatalf("expected an error naming the cell: %v", err)
+	}
+}
+
+func TestARecordWithoutATimestampIsRefused(t *testing.T) {
+	dir := copyFixture(t)
+	editRecords(t, dir, func(m map[string]any) bool { delete(m, "ts"); return true })
+	_, _, err := Generate(dir, "testdata")
+	if err == nil || !strings.Contains(err.Error(), "ts") {
+		t.Fatalf("expected a ts error: %v", err)
+	}
+}
+
+func TestAFailedCellRefusesTheRun(t *testing.T) {
+	dir := copyFixture(t)
+	editRun(t, dir, func(m map[string]any) { m["results"].(map[string]any)["accounting"] = "fail" })
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "accounting") {
+		t.Fatalf("expected an error naming accounting: %v", err)
+	}
+}
+
+// Over TLS the header is hidden: an authen step's minor version is inferred
+// (1 for pap) and each inferred step is an engine gap.
+func TestMinorVersionOverTLSIsInferredAndRecordedAsAGap(t *testing.T) {
+	dir := copyFixture(t)
+	remove(t, dir, "token_login.conns.json", "command_permitted.conns.json", "command_denied.conns.json",
+		"accounting.conns.json", "single_connection.conns.json", "wrong_credential.conns.json", "store_unavailable.conns.json")
+	p, _, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.EngineGaps) != 6 || p.EngineGaps[0].ID != "minor_version_inferred_over_tls" {
+		t.Fatalf("one gap per inferred step: %+v", p.EngineGaps)
+	}
+	for _, s := range p.Stimulus.Steps {
+		if want := uint8(map[bool]int{true: 1}[s.Name == "login"]); s.MinorVersion != want {
+			t.Fatalf("%s: minor %d, want %d", s.Name, s.MinorVersion, want)
+		}
+	}
+}
+
+// The command writes the profile and golden, and -check passes on them and
+// fails once the committed stimulus moves.
+func TestCheckComparesTheCommittedStimulus(t *testing.T) {
+	ev, err := filepath.Abs(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note, err := os.ReadFile(filepath.Join(ev, "..", "tests", "lab", "results", "QUAL-1.0-fixture_junos.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	os.MkdirAll("tests/lab/results", 0o755)
+	os.WriteFile("tests/lab/results/QUAL-1.0-fixture_junos.md", note, 0o644)
+	if err := run1(ev, true); err == nil {
+		t.Fatal("-check with no committed profile fails")
+	}
+	if err := run1(ev, false); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("tests", "qual", "profiles", "juniper_junos", "1.0.yaml")
+	if _, err := os.Stat("tests/qual/golden/juniper_junos/1.0.json"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run1(ev, true); err != nil {
+		t.Fatalf("-check on a fresh profile: %v", err)
+	}
+	b, _ := os.ReadFile(path)
+	os.WriteFile(path, []byte(strings.Replace(string(b), "port: \"0\"", "port: tty9", 1)), 0o644)
+	if err := run1(ev, true); err == nil || !strings.Contains(err.Error(), "differs") {
+		t.Fatalf("-check on a moved stimulus: %v", err)
+	}
+}

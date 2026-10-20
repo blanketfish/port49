@@ -1,0 +1,17 @@
+[
+ {
+  "server": "172.100.100.1:49",
+  "device_port": 40003,
+  "syn_at": "2026-10-20T12:00:00Z",
+  "end": "server-fin",
+  "plain_tacacs_from_device": [
+   {
+    "version": 192,
+    "type": 2,
+    "seq_no": 1,
+    "flags": 0,
+    "length": 40
+   }
+  ]
+ }
+]
