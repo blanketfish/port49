@@ -1,0 +1,77 @@
+{
+  "platform": "cisco_nxos",
+  "lab_platform": "cisco_nxos",
+  "firmware": "Nexus 9300v 10.6(2)F",
+  "image": "Nexus 9300v 10.6(2)F",
+  "commit": "26008eed3686",
+  "date": "2026-10-20",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "accounting": "2026-10-20T21:09:55.421415909Z",
+    "command_denied": "2026-10-20T21:09:54.082293409Z",
+    "command_permitted": "2026-10-20T21:09:54.082293409Z",
+    "single_connection": "2026-10-20T21:10:05.199614582Z",
+    "store_unavailable": "2026-10-20T21:09:58.530043499Z",
+    "tls_store_unavailable": "2026-10-20T21:10:57.598837036Z",
+    "tls_token_login": "2026-10-20T21:10:39.02141383Z",
+    "tls_unknown_ca": "2026-10-20T21:11:26.340975782Z",
+    "token_login": "2026-10-20T21:09:52.308259085Z",
+    "wrong_credential": "2026-10-20T21:09:56.606063207Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "command_denied": [
+      "L21"
+    ],
+    "command_permitted": [
+      "L10",
+      "L21"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "tls_store_unavailable": [
+      "L73"
+    ],
+    "tls_token_login": [
+      "L73"
+    ],
+    "tls_unknown_ca": [
+      "L73"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": true,
+    "tls_store_unavailable": true
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "pass",
+    "command_permitted": "pass",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_token_login": "pass",
+    "tls_unknown_ca": "pass",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  }
+}
