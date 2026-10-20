@@ -153,6 +153,17 @@ class RealAnsible(unittest.TestCase):
         self.assertIn("failed=0", leaf)
         self.assertIn("failed=1", denied)
 
+    def test_a_port49_name_outside_the_inventory_mints(self):  # L66 e2's shape: an alias for the inventory name
+        with open(os.path.join(self.tmp, "inv.yml"), "w", encoding="utf-8") as f:
+            f.write("all:\n  hosts:\n    l66a: {ansible_connection: local, p49_name: leaf1}\n")
+        path = os.path.join(self.tmp, "play.yml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(PLAY.format(fake=self.fake, no_log="true").replace("inventory_hostname", "p49_name"))
+        code, out = run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), path)
+        self.assertNotIn("Error while resolving", out)  # ansible-core 2.21: hostvars['leaf1'] was undefined
+        self.assertIn(f"login is {len(LOGIN)} long, user alice", out)
+        self.assertEqual(code, 0, out)
+
 
 # The README's "mint once per host per play" play stands; its tasks are replaced by two that need no
 # device: one that templates the connection variables, and one that connects to a closed port.
@@ -251,6 +262,24 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
                 self.assertNotIn(ENABLE, out)
         with open(self.log, encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 2)  # one mint per run
+
+    def test_a_port49_name_outside_the_inventory_fails_closed(self):
+        # network_cli dials leaf1's address, but the term names another device: nothing says whose key that
+        # address must hold, so the lookup refuses before any mint rather than skip the check.
+        head, vars_lines = readme_play(self.fake)
+        play = head.replace("inventory_hostname", "'srx1'") + "  vars:\n" + vars_lines + NETWORK_TASKS
+        inventory = ("all:\n  children:\n    leaves:\n      hosts:\n        leaf1:\n"
+                     f"          ansible_host: 127.0.0.1\n          ansible_port: {closed_port()}\n")
+        for name, text in (("inv.yml", inventory), ("play.yml", play)):
+            with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        code, out = run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), os.path.join(self.tmp, "play.yml"))
+        self.assertNotEqual(code, 0)
+        self.assertNotIn("hostvars['srx1']", out)  # ansible-core 2.21's undefined marker, the regression
+        self.assertIn("port49: srx1: not a host in Ansible's inventory, and leaf1 connects with network_cli", out)
+        self.assertIn("[host_key_uncheckable]", out)
+        self.assertNotIn("TASK [the next task connects]", out)
+        self.assertFalse(os.path.exists(self.log))  # nothing minted
 
 
 if __name__ == "__main__":
