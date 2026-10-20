@@ -425,7 +425,8 @@ func qualWaitMessage(buf *syncBuffer, want string) string {
 }
 
 // qualPolicyWith is the qualification policy with role (a roles-list entry, in
-// YAML) added and granted to the operator in place of the shared roles.
+// YAML) added and granted to the operator on all_devices in place of qual_admin;
+// the per-platform deny grants stay.
 func qualPolicyWith(t *testing.T, role string) string {
 	t.Helper()
 	raw, err := os.ReadFile("../../tests/qual/qual-policy.yaml")
@@ -682,6 +683,12 @@ func TestQualPolicyDeniesTheProbeOnPerCommandPlatforms(t *testing.T) {
 			dev.authorize("qual01")
 			if dev.permitsAt(priv, "qual01", "show", "users") {
 				t.Error("show users was permitted: the command_denied probe would not hold")
+			}
+			// The refusal is the deny's, on this request: the last authorize_command record.
+			rec := lastCommand(t, run.log)
+			vec, _ := rec["request"].(map[string]any)["vector"].([]any)
+			if rec["reason"] != "no_permit_dominates_deny" || fmt.Sprint(vec) != "[show users]" {
+				t.Errorf("the show users refusal is %v for %v; want no_permit_dominates_deny", rec["reason"], vec)
 			}
 			if !dev.permitsAt(priv, "qual01", "show", "version") {
 				t.Error("show version was refused")
