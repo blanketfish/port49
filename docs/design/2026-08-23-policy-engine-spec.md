@@ -9772,6 +9772,13 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   changes: a device not on `network_cli` is not checked, and `host_key_auto_add` with
   `ssh_type: libssh` is still never recommended, because libssh accepts a key that changes after
   the check (L66 (e3b)); without it, libssh refuses (L66 (e3d)).
+  A port49 name that is no host in Ansible's inventory has no address above (neither `ansible_host`
+  nor an inventory name). Minted on a current host that is on `network_cli`, whose connection would
+  present the token at the current host's address, the lookup refuses `host_key_uncheckable` before
+  any mint rather than skip the check; the current host's address is not taken as the name's, since
+  only a device's own hostvars count for it (fix 2026-10-20: the check indexed `hostvars` with such a
+  name, which ansible-core 2.21.4 answers with an undefined marker, not a `KeyError`, and so failed
+  L66 (e2)'s alias pattern before the mint). On any other connection it mints unchecked, as above.
 - **16. The Netmiko example** is `port49.netmiko.connect`.
 - **17. The lab.** L53 and L54 stay closed, their claims amended; L64, L65 and L66 are this plan's
   rows (§15).
