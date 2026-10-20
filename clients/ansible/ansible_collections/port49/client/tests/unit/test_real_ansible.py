@@ -263,10 +263,10 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
         with open(self.log, encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 2)  # one mint per run
 
-    def test_the_plays_network_cli_over_an_inventory_ssh_is_checked(self):  # review fix round 1, m1
-        # Play vars override inventory host_vars, so Ansible connects with network_cli: the lookup must check
-        # the address's key, refuse the one that differs from the name's, and mint nothing.
-        head, vars_lines = readme_play(self.fake)
+    def mismatched_run(self, host_lines, vars_lines):
+        """Run the README's play against leaf1 at a closed port, with a key filed under leaf1 and another under
+        its address, so a check that runs refuses host_key_changed before any mint."""
+        head, _ = readme_play(self.fake)
         port = closed_port()
         keys = []
         for name in ("name_key", "addr_key"):
@@ -280,17 +280,33 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
             f.write(f"leaf1 {keys[0]}\n[127.0.0.1]:{port} {keys[1]}\n")
         inventory = ("all:\n  children:\n    leaves:\n      hosts:\n        leaf1:\n"
                      f"          ansible_host: 127.0.0.1\n          ansible_port: {port}\n"
-                     "          ansible_connection: ssh\n")
+                     + "".join(f"          {line}\n" for line in host_lines))
         play = head + "  vars:\n" + vars_lines + NETWORK_TASKS
-        self.assertIn("ansible_connection: ansible.netcommon.network_cli", vars_lines)
         for name, text in (("inv.yml", inventory), ("play.yml", play)):
             with open(os.path.join(self.tmp, name), "w", encoding="utf-8") as f:
                 f.write(text)
-        code, out = run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), os.path.join(self.tmp, "play.yml"))
+        return run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), os.path.join(self.tmp, "play.yml"))
+
+    def assert_checked(self, code, out):
         self.assertNotEqual(code, 0)
         self.assertIn("[host_key_changed]", out)
         self.assertNotIn("TASK [the next task connects]", out)
         self.assertFalse(os.path.exists(self.log))  # nothing minted
+
+    def test_the_plays_network_cli_over_an_inventory_ssh_is_checked(self):  # review fix round 1, m1
+        # Play vars override inventory host_vars, so Ansible connects with network_cli: the lookup must check
+        # the address's key, refuse the one that differs from the name's, and mint nothing.
+        _, vars_lines = readme_play(self.fake)
+        self.assertIn("ansible_connection: ansible.netcommon.network_cli", vars_lines)
+        self.assert_checked(*self.mismatched_run(["ansible_connection: ssh"], vars_lines))
+
+    def test_a_templated_play_connection_is_checked(self):  # review fix round 2, r1
+        # ansible-core 2.16 to 2.18 may hand a lookup the play's ansible_connection untemplated ("{{ conn }}").
+        _, vars_lines = readme_play(self.fake)
+        vars_lines = vars_lines.replace("ansible_connection: ansible.netcommon.network_cli",
+                                        'ansible_connection: "{{ conn }}"')
+        self.assertIn("{{ conn }}", vars_lines)
+        self.assert_checked(*self.mismatched_run(["conn: ansible.netcommon.network_cli"], vars_lines))
 
     def test_a_port49_name_outside_the_inventory_fails_closed(self):
         # network_cli dials leaf1's address, but the term names another device: nothing says whose key that
@@ -305,7 +321,9 @@ class RealAnsibleNetworkCLI(unittest.TestCase):
         code, out = run(self.tmp, PLAYBOOK, "-i", os.path.join(self.tmp, "inv.yml"), os.path.join(self.tmp, "play.yml"))
         self.assertNotEqual(code, 0)
         self.assertNotIn("hostvars['srx1']", out)  # ansible-core 2.21's undefined marker, the regression
-        self.assertIn("port49: srx1: not a host in Ansible's inventory, and leaf1 connects with network_cli", out)
+        # 2.16 wraps a warning's lines: compare with whitespace collapsed.
+        self.assertIn("port49: srx1: not a host in Ansible's inventory, and leaf1 connects with network_cli",
+                      " ".join(out.split()))
         self.assertIn("[host_key_uncheckable]", out)
         self.assertNotIn("TASK [the next task connects]", out)
         self.assertFalse(os.path.exists(self.log))  # nothing minted

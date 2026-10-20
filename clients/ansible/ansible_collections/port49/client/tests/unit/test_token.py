@@ -536,6 +536,24 @@ class HostKeys(PluginCase):
                 self.assertIn("[host_key_uncheckable]", said)
         self.assertEqual(self.calls.agent, [])
 
+    def test_an_untemplated_connection_is_checked(self):  # review fix round 2, r1
+        # ansible-core 2.16 to 2.18 may give a lookup "{{ conn }}" unrendered: it might be network_cli, so check.
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\nleaf2 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n10.0.0.12 {other}\n")
+        for raw in ("{{ conn }}", "{%if x%}network_cli{%endif%}", " {{conn}}"):
+            with self.subTest(raw=raw):
+                self.hostvars["leaf1"].pop("ansible_connection", None)
+                WARNINGS.clear()
+                said = self.refused(variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                               "ansible_connection": raw})
+                self.assertIn("[host_key_changed]", said)
+                self.hostvars["leaf2"]["ansible_connection"] = raw  # another device's own, untemplated
+                WARNINGS.clear()
+                self.assertIn("[host_key_changed]", self.refused(("leaf2",)))
+                self.hostvars["leaf1"]["ansible_connection"] = NETWORK_CLI
+        self.assertEqual(self.calls.agent, [])
+
     def test_the_inventorys_network_cli_still_counts_under_a_plays_other_connection(self):  # fail closed
         other = self.newkey("other")
         self.put(self.names, f"leaf1 {ED}\n")

@@ -163,6 +163,7 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
     `ansible_connection: local` does not turn off the check for it. For the current host, its inventory
     `ansible_connection` and its play's `vars:` both count, and either one naming `network_cli` runs the
     check: an inventory `ssh` under a play's `network_cli` is checked, as Ansible connects with `network_cli`.
+    An `ansible_connection` that reaches the lookup still templated (`"{{ conn }}"`) counts as `network_cli`.
   - A port49 name that is not a host in Ansible's inventory (an inventory name `l66a` minting
     `lookup('port49.client.token', p49_name)` for `srx1`) has no address the lookup can check. Minted
     on a host that connects with `network_cli`, it fails with `host_key_uncheckable` and mints nothing:

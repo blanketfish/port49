@@ -178,8 +178,16 @@ def _is_network_cli(variables, device):
         connections.append(variables.get("ansible_connection"))
     connections = [c for c in connections if c]
     if connections:
-        return any(c in NETWORK_CLI for c in connections)
+        return any(_might_be_network_cli(c) for c in connections)
     return bool(_visible(variables, device, "ansible_network_os"))
+
+
+def _might_be_network_cli(connection):
+    """Whether a connection value is, or may render to, network_cli. A lookup can be handed a play's
+    `ansible_connection: "{{ conn }}"` unrendered (measured on ansible-core 2.16.19 and 2.21.4), and what it
+    renders to cannot be known here: a value still holding a Jinja expression or statement counts."""
+    text = str(connection)
+    return text in NETWORK_CLI or "{{" in text or "{%" in text
 
 
 def _check_host_keys(device, variables, known_hosts_file):
