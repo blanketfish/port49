@@ -1,0 +1,77 @@
+{
+  "platform": "cisco_iosxe",
+  "lab_platform": "cisco_iosxe",
+  "firmware": "Catalyst 8000V 17.18.02",
+  "image": "Catalyst 8000V 17.18.02",
+  "commit": "9ef4f6814a1e",
+  "date": "2026-10-20",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "accounting": "2026-10-20T21:21:20.02061435Z",
+    "command_denied": "2026-10-20T21:21:18.985471665Z",
+    "command_permitted": "2026-10-20T21:21:18.985471665Z",
+    "single_connection": "2026-10-20T21:22:13.78848966Z",
+    "store_unavailable": "2026-10-20T21:21:26.517598921Z",
+    "tls_store_unavailable": "2026-10-20T21:23:17.082267717Z",
+    "tls_token_login": "2026-10-20T21:23:03.717151698Z",
+    "tls_unknown_ca": "2026-10-20T21:23:37.764219022Z",
+    "token_login": "2026-10-20T21:21:18.198119253Z",
+    "wrong_credential": "2026-10-20T21:21:20.804873867Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "command_denied": [
+      "L21"
+    ],
+    "command_permitted": [
+      "L10",
+      "L21"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "tls_store_unavailable": [
+      "L73"
+    ],
+    "tls_token_login": [
+      "L73"
+    ],
+    "tls_unknown_ca": [
+      "L73"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": false,
+    "tls_store_unavailable": false
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "pass",
+    "command_permitted": "pass",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_token_login": "pass",
+    "tls_unknown_ca": "pass",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  }
+}
