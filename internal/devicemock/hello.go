@@ -178,7 +178,12 @@ func Probe(ctx context.Context, d *net.Dialer, addr string, h Hello, serverIP st
 		return ServerHello{}, fmt.Errorf("devicemock: no ServerHello: %w", err)
 	}
 	if hdr[0] == 21 {
-		return ServerHello{}, errors.New("devicemock: port49 answered the hello with an alert")
+		// level then description (RFC 8446 §6), in the clear before any key is agreed
+		var alert [2]byte
+		if _, err := io.ReadFull(c, alert[:]); err != nil {
+			return ServerHello{}, errors.New("devicemock: port49 answered the hello with an alert")
+		}
+		return ServerHello{}, fmt.Errorf("devicemock: port49 answered the hello with alert %d", alert[1])
 	}
 	body := make([]byte, binary.BigEndian.Uint16(hdr[3:]))
 	if _, err := io.ReadFull(c, body); err != nil {

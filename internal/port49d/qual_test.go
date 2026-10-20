@@ -183,6 +183,7 @@ type qualOpts struct {
 	devices          int           // admitted devices; 0 and 1 are one
 	transport        string        // devicemock.ScenarioTransport(sc); "" is the profile's first
 	untrustedClient  bool          // tls: the device's leaf is from a CA the daemon does not hold
+	sniLiteral       bool          // tls: the daemon also accepts the literal 127.0.0.1 as an SNI name (hello_probe)
 }
 
 type qualRun struct {
@@ -353,9 +354,15 @@ func (r *qualRun) tlsBlock(t *testing.T, n int) string {
 			t.Fatal(err)
 		}
 	}
+	names := qualServerName
+	if r.opts.sniLiteral {
+		// The hello probe sends the device's IP-literal SNI as written; the mock's own
+		// sessions omit it (crypto/tls drops a literal), so only the probe needs this.
+		names += ", 127.0.0.1"
+	}
 	block := "tls_listener:\n  listen: \"127.0.0.1:0\"\n  cert_file: " + filepath.Join(dir, "srv.crt") +
 		"\n  key_file: " + filepath.Join(dir, "srv.key") + "\n  client_ca_file: " + filepath.Join(dir, "device-ca.pem") +
-		"\n  server_names: [" + qualServerName + "]\n  certificate_status: {disabled: true}\n"
+		"\n  server_names: [" + names + "]\n  certificate_status: {disabled: true}\n"
 	if r.opts.handshakeTimeout != 0 {
 		block += fmt.Sprintf("  handshake_timeout: %s\n", r.opts.handshakeTimeout)
 	}
@@ -587,7 +594,8 @@ func qualProfile(t *testing.T, p *devicemock.Profile, root string) (secrets []st
 	}
 	if p.Stimulus.TLS != nil {
 		t.Run("hello_probe", func(t *testing.T) {
-			run := qualDaemon(t, p, qualOpts{scale: 0.1, handshakeTimeout: time.Second, transport: "tls"})
+			run := qualDaemon(t, p, qualOpts{scale: 0.1, handshakeTimeout: time.Second, transport: "tls",
+				sniLiteral: p.Stimulus.TLS.ClientHello.SNI == "{server_ip}"})
 			got, err := devicemock.Probe(t.Context(), &net.Dialer{}, run.tlsAddr, p.Stimulus.TLS.ClientHello, "127.0.0.1")
 			if err != nil {
 				t.Fatal(err)
