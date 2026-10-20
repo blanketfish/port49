@@ -2,12 +2,14 @@
 # make qual-vet P=<selector>: vet a firmware and generate its mock for review (plan 11b).
 # Commits nothing: the review of the generated profile is a person's.
 set -euo pipefail
-umask 077
 sel="${1:?usage: make qual-vet P=<selector>}"
 [ -e /tmp/port49-STOP-LAB ] && { echo "qual-vet: /tmp/port49-STOP-LAB exists"; exit 1; }
 flock -n /tmp/port49-lab.lock true || { echo "qual-vet: the lab is occupied ($(cat /tmp/port49-lab.lock))"; exit 1; }
 [ -z "$(git status --porcelain -- tests/qual tests/lab/results)" ] || { echo "qual-vet: commit or stash tests/qual and tests/lab/results first"; exit 1; }
 log="/tmp/claude-qual-vet-${sel}-$(date +%s).log"
+# the log may hold what the run printed: owner-only. The umask stays the default, because
+# containerlab's lab directory is read by the node's own uid (SR Linux cannot read a 0600 config).
+(umask 077; : >"$log")
 # the marker predates the run, so the run's evidence directory is newer than it
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 marker="$tmp/start"; touch "$marker"
