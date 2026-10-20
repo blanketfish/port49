@@ -71,23 +71,23 @@ func TestTLSCellNeedsTheTLSLogin(t *testing.T) {
 // when the profile records it, and a profile that merely lacks the steps reads no.
 func TestCommandAuthorizationNotApplicableNeedsTheMarker(t *testing.T) {
 	g := golden(stop)
-	if c := command(g, true); c != "— (L18)" {
+	if c := command(g, true, "L18"); c != "— (L18)" {
 		t.Fatalf("marker and no command steps: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, true); s != "qualified" {
 		t.Fatalf("a recorded not-applicable cell does not count against qualified: %s", s)
 	}
-	if c := command(g, false); c != "no" {
+	if c := command(g, false, ""); c != "no" {
 		t.Fatalf("no marker: absence is never not-applicable: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, false); s != "partial" {
 		t.Fatalf("%s", s)
 	}
 	denyOnly := golden(devicemock.GoldenStep{Step: "command_denied", Event: "author_error"}, stop)
-	if c := command(denyOnly, true); c != "no" {
+	if c := command(denyOnly, true, "L18"); c != "no" {
 		t.Fatalf("a marker does not excuse command steps the golden holds: %s", c)
 	}
-	if c := command(golden(permitted, denied, stop), true); c != "yes" {
+	if c := command(golden(permitted, denied, stop), true, "L18"); c != "yes" {
 		t.Fatalf("measured command steps win over the marker: %s", c)
 	}
 }
@@ -111,7 +111,7 @@ func repoWith(t *testing.T, g devicemock.Golden, gap, withNotes bool, edits ...f
 	}
 	s := strings.Replace(string(raw), `golden: ""`, "golden: tests/qual/golden/juniper_junos/1.0.json", 1)
 	if gap {
-		s = strings.Replace(s, "engine_gaps: []", `engine_gaps: [{id: command_authorization_not_sent, what: "L18", sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}]`, 1)
+		s = strings.Replace(s, "engine_gaps: []", `engine_gaps: [{id: command_authorization_not_sent, what: "the device sends none (L18)", sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}]`, 1)
 	}
 	for _, e := range edits {
 		s = e(s)
@@ -205,5 +205,26 @@ func TestVersionsSortNumerically(t *testing.T) {
 	want := []string{"9.3", "9.3.1", "9.10", "10.1", "23.4R2-S2.1"}
 	if !slices.Equal(vs, want) {
 		t.Fatalf("got %v, want %v", vs, want)
+	}
+}
+
+// The command cell cites the register its own gap names, not Junos's: SR Linux's gap says L76
+// cell b. An operator-facing gap (id operator_...) is printed under the table.
+func TestTheCommandCellCitesItsOwnGapAndOperatorGapsArePrinted(t *testing.T) {
+	edit := func(s string) string {
+		s = strings.Replace(s, "the device sends none (L18)", "the device sends none (L76 cell b)", 1)
+		return strings.Replace(s, "engine_gaps: [{", `engine_gaps: [{id: operator_policy_required, what: "logins need the priv-lvl policy block", sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}, {`, 1)
+	}
+	got, err := Build(repoWith(t, golden(stop), true, true, edit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| yes | — | — (L76 cell b) | yes | yes | qualified |", "## What an operator must do", "- **Juniper 1.0**: logins need the priv-lvl policy block"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("want %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "(L18)") {
+		t.Fatalf("a Junos citation on another platform:\n%s", got)
 	}
 }

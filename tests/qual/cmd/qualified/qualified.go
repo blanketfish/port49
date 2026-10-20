@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -43,6 +44,28 @@ var inventory = map[string]platformName{
 type row struct {
 	vendor, os, version string
 	cells               []string
+	notes               []string // operator-facing engine gaps, "operator_" ids
+}
+
+// operatorGapPrefix marks an engine gap whose text an operator must read: the page
+// prints it under the table.
+const operatorGapPrefix = "operator_"
+
+// reasonRx finds the register a gap's text cites, "(L76 cell b)".
+var reasonRx = regexp.MustCompile(`\((L\d+[^)]*)\)`)
+
+// commandReason is the parenthesised citation in the command gap's text, or "" when the
+// profile records no gap. A gap that cites nothing reads "—".
+func commandReason(gaps []devicemock.EngineGap) (found bool, reason string) {
+	for _, e := range gaps {
+		if e.ID == commandNotSent {
+			if m := reasonRx.FindStringSubmatch(e.What); m != nil {
+				return true, m[1]
+			}
+			return true, ""
+		}
+	}
+	return false, ""
 }
 
 // Build returns the Markdown page. A row exists only where a profile loads, which
@@ -73,8 +96,14 @@ func Build(repoRoot string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", f, err)
 		}
-		gap := slices.ContainsFunc(p.EngineGaps, func(e devicemock.EngineGap) bool { return e.ID == commandNotSent })
-		rows = append(rows, row{name.vendor, name.os, p.Firmware, cells(p.Transports, g, gap)})
+		gap, reason := commandReason(p.EngineGaps)
+		var notes []string
+		for _, e := range p.EngineGaps {
+			if strings.HasPrefix(e.ID, operatorGapPrefix) {
+				notes = append(notes, e.What)
+			}
+		}
+		rows = append(rows, row{name.vendor, name.os, p.Firmware, cells(p.Transports, g, gap, reason), notes})
 	}
 	slices.SortFunc(rows, func(a, b row) int {
 		return cmp.Or(strings.Compare(a.vendor, b.vendor), strings.Compare(a.os, b.os), compareVersions(a.version, b.version))
@@ -89,14 +118,24 @@ func Build(repoRoot string) (string, error) {
 	for _, r := range rows {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", r.vendor, r.os, r.version, strings.Join(r.cells, " | "))
 	}
+	first := true
+	for _, r := range rows {
+		for _, n := range r.notes {
+			if first {
+				b.WriteString("\n## What an operator must do\n\n")
+				first = false
+			}
+			fmt.Fprintf(&b, "- **%s %s**: %s\n", r.vendor, r.version, n)
+		}
+	}
 	return b.String(), nil
 }
 
 // cells are the table's last six columns: 49, 300, command authorization,
 // accounting, mock and status. The command and accounting steps are read from
 // token_login, or from tls_token_login for a TLS-only platform.
-func cells(transports []string, g devicemock.Golden, commandGap bool) []string {
-	return []string{tcp(transports, g), tlsCell(transports, g), command(g, commandGap), accounting(g), "yes", status(transports, g, commandGap)}
+func cells(transports []string, g devicemock.Golden, commandGap bool, reason string) []string {
+	return []string{tcp(transports, g), tlsCell(transports, g), command(g, commandGap, reason), accounting(g), "yes", status(transports, g, commandGap)}
 }
 
 func yn(ok bool) string {
@@ -138,16 +177,20 @@ func hasStepNamed(steps []devicemock.GoldenStep, name string) bool {
 	return slices.ContainsFunc(steps, func(s devicemock.GoldenStep) bool { return s.Step == name })
 }
 
-// command is "yes" when a permitted and a denied command were answered, "— (L18)"
-// when the profile records that the device sends none and the golden holds none,
+// command is "yes" when a permitted and a denied command were answered, "— (reason)"
+// when the profile records that the device sends none and the golden holds none
+// (reason is the register its gap cites: L18 for Junos, L76 cell b for SR Linux),
 // else "no".
-func command(g devicemock.Golden, commandGap bool) string {
+func command(g devicemock.Golden, commandGap bool, reason string) string {
 	steps := loginSteps(g)
 	if hasStep(steps, "command_permitted", "author_pass_add", "author_pass_repl") && hasStep(steps, "command_denied", "author_fail") {
 		return "yes"
 	}
 	if commandGap && !hasStepNamed(steps, "command_permitted") && !hasStepNamed(steps, "command_denied") {
-		return "— (L18)"
+		if reason == "" {
+			return "—"
+		}
+		return "— (" + reason + ")"
 	}
 	return "no"
 }
@@ -162,7 +205,7 @@ func status(transports []string, g devicemock.Golden, commandGap bool) string {
 	if g.PendingLab {
 		return "re-vet pending"
 	}
-	for _, c := range []string{tcp(transports, g), tlsCell(transports, g), command(g, commandGap), accounting(g)} {
+	for _, c := range []string{tcp(transports, g), tlsCell(transports, g), command(g, commandGap, ""), accounting(g)} {
 		if c == "no" {
 			return "partial"
 		}

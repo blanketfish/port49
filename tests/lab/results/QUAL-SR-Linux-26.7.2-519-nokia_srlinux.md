@@ -27,6 +27,17 @@ Every cell's verdict, with the rows it re-measures:
 - `tls_store_unavailable` (re-measures L73): **not_run**. this image carries no RFC 9887 client (L71)
 - `tls_unknown_ca` (re-measures L73): **not_run**. this image carries no RFC 9887 client (L71)
 
-Authorization on this platform: platform_set 1.3.0 ships no `nokia_srlinux` adapter (nor one for `cisco_iosxr`), so port49 serves it with the generic adapter, which renders no attribute. SR Linux refuses a login whose authorization reply carries no `priv-lvl` (`priv-lvl-authorization true`, L76 cells a and h): the first run of this suite, with the qual policy as it was, ended at `token_login` with the device refusing the SSH login. This run therefore uses a `platforms: nokia_srlinux` block in tests/qual/qual-policy.yaml that renders `priv-lvl` alone (readonly 1, operator and admin 15). That block is a policy override local to the qual policy, not a platform-set adapter, and it claims nothing about how SR Linux should be modelled. The golden's authorization (`priv-lvl=15`) is that block's output, not an adapter's.
+Authorization on this platform. platform_set 1.3.0 ships no `nokia_srlinux` adapter (nor one for `cisco_iosxr`), so port49 serves it with the generic adapter, which renders no attribute. SR Linux then refuses every login: the same cell, run without the block below, ended with the device refusing the SSH login after port49 permitted the session with no attribute (`tests/lab/results/QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md`). An operator must therefore add this to the policy file, which the spec lets an operator define without any upstream change (§8, `platforms:`); L76 cells (a) and (h) measured the device's reading of `priv-lvl` 15 and 1 as p49-admin and p49-read:
+
+```yaml
+platforms:
+  nokia_srlinux:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=15"]
+      admin:    ["priv-lvl=15"]
+```
+
+This suite's tests/qual/qual-policy.yaml carries exactly that block, so the golden's authorization (`priv-lvl=15`) is its output, not an adapter's. The device must also run `priv-lvl-authorization true` (as tests/lab/configs/srlinux-startup.cli sets it). Its default is false, and then port49 is never asked to authorize: L76 cell (i) measured 0 authorization requests and an empty Role column, and the YANG (srl_nokia-aaa.yang:254) says authorization is skipped, which is full admin access (YANG-stated, not measured). Port49 command rules (permit and deny lists) are never consulted for SR Linux, because the device sends no per-command authorization (L76 cell b); the session's role, chosen by `priv-lvl`, is the only bound.
 
 Evidence: `tests/lab/evidence/QUAL-SR-Linux-26.7.2-519-nokia_srlinux/` (whitelisted decision records, connection headers and run.json).
