@@ -53,6 +53,18 @@ type qualRun struct {
 // per-command authorization, so there is nothing to measure.
 const qualJunosL18 = "L18: Junos sends no per-command authorization; the deny is enforced by the session reply's deny-commands"
 
+// qualSRLinuxL76 is the note an SR Linux command cell carries (L76 cell b: one
+// authorize_session, no authorize_command; the schema has no TACACS+ authorization method).
+const qualSRLinuxL76 = "L76: SR Linux sends no per-command authorization; the session reply's role bounds the session"
+
+// qualNoCommandAuthWhy is the note for a platform qualNoCommandAuth names.
+func qualNoCommandAuthWhy(platform string) string {
+	if platform == "nokia_srlinux" {
+		return qualSRLinuxL76
+	}
+	return qualJunosL18
+}
+
 // qualDeniedCommand is the command tests/qual/qual-policy.yaml denies on
 // platform (a port49 platform name): Junos matches keywords only and `users`
 // is no keyword under `show` (decision 27), so it denies the keyword path
@@ -65,10 +77,17 @@ func qualDeniedCommand(platform string) string {
 	return "show users"
 }
 
-// qualProbeCommands are the commands a plain or TLS sequence types: on Junos
-// the denied command is not sent, because no authorization of it happens (L18).
+// qualNoCommandAuth is the platforms whose devices send no per-command
+// authorization: Junos (L18) and SR Linux (L76 cell b: no authorize_command).
+func qualNoCommandAuth(platform string) bool {
+	return platform == "juniper_junos" || platform == "nokia_srlinux"
+}
+
+// qualProbeCommands are the commands a plain or TLS sequence types: where the
+// device sends no command authorization the denied command is not sent, because
+// no authorization of it happens.
 func qualProbeCommands(platform string) []string {
-	if platform == "juniper_junos" {
+	if qualNoCommandAuth(platform) {
 		return []string{"show version"}
 	}
 	return []string{"show version", qualDeniedCommand(platform)}
@@ -322,8 +341,8 @@ func qualNoteGate(note string, secrets []string) []string {
 // login's records. Junos sends no command authorization (L18), so both are
 // not_applicable: its refusals print text too, so output proves nothing.
 func qualCommandCells(platform string, recs []map[string]any) (permitted, denied, why string) {
-	if platform == "juniper_junos" {
-		return "not_applicable", "not_applicable", qualJunosL18
+	if qualNoCommandAuth(platform) {
+		return "not_applicable", "not_applicable", qualNoCommandAuthWhy(platform)
 	}
 	permitted, denied = "pass", "pass"
 	if err := qualPermitProven(recs, "show version"); err != nil {

@@ -119,7 +119,7 @@ func qualGitHead(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-func (q *qualEnv) junos() bool { return q.run.Platform == "juniper_junos" }
+func (q *qualEnv) noCommandAuth() bool { return qualNoCommandAuth(q.run.Platform) }
 
 func (q *qualEnv) guard() {
 	q.t.Helper()
@@ -375,8 +375,8 @@ func (q *qualEnv) check(recs []map[string]any) (denied string, problems []string
 	if !qualRedeemed(recs) {
 		problems = append(problems, "no permitted redeem")
 	}
-	if q.junos() {
-		return qualJunosL18, problems
+	if q.noCommandAuth() {
+		return qualNoCommandAuthWhy(q.run.Platform), problems
 	}
 	if err := qualPermitProven(recs, "show version"); err != nil {
 		problems = append(problems, err.Error())
@@ -408,13 +408,13 @@ func (q *qualEnv) cellCommands() {
 	off := q.cell("command_permitted")
 	_, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, cmds...)
 	recs := q.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
-		return len(qualEvents(rs, "authorize_command", nil)) >= len(cmds) || q.junos() && qualRedeemed(rs)
+		return len(qualEvents(rs, "authorize_command", nil)) >= len(cmds) || q.noCommandAuth() && qualRedeemed(rs)
 	})
 	if err != nil {
 		q.t.Fatalf("INVALID: the commands login failed: %v\nrecords:%s", err, summarize(recs))
 	}
 	permitted, denied, why := qualCommandCells(q.run.Platform, recs)
-	if q.junos() {
+	if q.noCommandAuth() {
 		q.verdict("command_permitted", permitted, why)
 		q.verdict("command_denied", denied, why)
 		return

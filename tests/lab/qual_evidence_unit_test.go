@@ -437,3 +437,13 @@ func TestQualRecordMasksALongRunInAnAccountingArgument(t *testing.T) {
 		t.Fatalf("the gate still refuses it: %v", bad)
 	}
 }
+
+func TestQualSRLinuxSendsNoCommandAuthorizationEither(t *testing.T) {
+	p, d, why := qualCommandCells("nokia_srlinux", nil)
+	if p != "not_applicable" || d != "not_applicable" || !strings.Contains(why, "L76") {
+		t.Fatalf("srlinux: %s %s %q", p, d, why)
+	}
+	if got := qualProbeCommands("nokia_srlinux"); !slices.Equal(got, []string{"show version"}) {
+		t.Fatalf("%q", got)
+	}
+}
