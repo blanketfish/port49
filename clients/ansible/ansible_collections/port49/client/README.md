@@ -160,7 +160,15 @@ L66, `tests/lab/results/L66-<platform>.md`). It is the client's behaviour, not t
   - In workload mode every device is checked before the one mint.
   - A device not on `network_cli` is not checked. Use the `HostKeyAlias` setting below there.
     For a device other than the current host, only its own `hostvars` count: a `localhost` play's
-    `ansible_connection: local` does not turn off the check for it.
+    `ansible_connection: local` does not turn off the check for it. For the current host, its inventory
+    `ansible_connection` and its play's `vars:` both count, and either one naming `network_cli` runs the
+    check: an inventory `ssh` under a play's `network_cli` is checked, as Ansible connects with `network_cli`.
+    An `ansible_connection` that reaches the lookup still templated (`"{{ conn }}"`) counts as `network_cli`.
+  - A port49 name that is not a host in Ansible's inventory (an inventory name `l66a` minting
+    `lookup('port49.client.token', p49_name)` for `srx1`) has no address the lookup can check. Minted
+    on a host that connects with `network_cli`, it fails with `host_key_uncheckable` and mints nothing:
+    name the inventory host by its port49 name and mint for `inventory_hostname`, as the play above does.
+    On any other connection it mints, unchecked, as for any device not on `network_cli`.
   - If your ssh_config gives the device a `HostKeyAlias`, the keys filed under the alias count as the
     name's. A key type where the name and the alias disagree fails with `host_key_changed`. A
     `KnownHostsCommand` fails with `host_key_uncheckable`: the lookup cannot run it as ssh does.

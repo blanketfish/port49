@@ -202,6 +202,30 @@ class Plugin(PluginCase):
 
 
 NETWORK_CLI = "ansible.netcommon.network_cli"
+
+
+class Undefined(Exception):
+    """Not a KeyError, TypeError or AttributeError, as ansible-core's undefined-variable errors are not."""
+
+
+class HostVars:
+    """ansible-core 2.21.4's HostVars: `in` asks the inventory, and indexing a host outside it gives an
+    undefined marker, not a KeyError, whose .get fails the template ("hostvars['srx1']")."""
+
+    def __init__(self, hosts):
+        self.hosts = hosts
+
+    def __contains__(self, host):
+        return host in self.hosts
+
+    def __getitem__(self, host):
+        if host in self.hosts:
+            return self.hosts[host]
+        marker = types.SimpleNamespace()
+        marker.get = lambda *a: (_ for _ in ()).throw(Undefined(f"hostvars[{host!r}]"))
+        return marker
+
+
 ED = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
 
 
@@ -492,6 +516,82 @@ class HostKeys(PluginCase):
         self.run_lookup(["leaf1"], variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
                                               "ansible_connection": NETWORK_CLI})
         self.assertEqual(self.read(self.kh), f"10.0.0.11 {ED}\n")
+
+    def test_the_plays_network_cli_beats_the_current_hosts_inventory_connection(self):  # review fix round 1, m1
+        # Ansible's play vars override inventory host_vars: an inventory ssh under a play's network_cli
+        # connects with network_cli, so the check must run. Any source saying network_cli counts (fail closed).
+        other = self.newkey("other")
+        self.hostvars["leaf1"]["ansible_connection"] = "ssh"
+        self.put(self.names, f"leaf1 {ED}\nsrx1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        for hostvars in (self.hostvars, HostVars(self.hostvars)):
+            with self.subTest(stub=isinstance(hostvars, HostVars)):
+                WARNINGS.clear()
+                said = self.refused(variables={"inventory_hostname": "leaf1", "hostvars": hostvars,
+                                               "ansible_connection": NETWORK_CLI})
+                self.assertIn("[host_key_changed]", said)
+                WARNINGS.clear()
+                said = self.refused(("srx1",), variables={"inventory_hostname": "leaf1", "hostvars": hostvars,
+                                                          "ansible_connection": "network_cli"})
+                self.assertIn("[host_key_uncheckable]", said)
+        self.assertEqual(self.calls.agent, [])
+
+    def test_an_untemplated_connection_is_checked(self):  # review fix round 2, r1
+        # ansible-core (seen on 2.16.19 and 2.21.4) may give a lookup "{{ conn }}" unrendered: it might be network_cli, so check.
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\nleaf2 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n10.0.0.12 {other}\n")
+        for raw in ("{{ conn }}", "{%if x%}network_cli{%endif%}", " {{conn}}"):
+            with self.subTest(raw=raw):
+                self.hostvars["leaf1"].pop("ansible_connection", None)
+                WARNINGS.clear()
+                said = self.refused(variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                               "ansible_connection": raw})
+                self.assertIn("[host_key_changed]", said)
+                self.hostvars["leaf2"]["ansible_connection"] = raw  # another device's own, untemplated
+                WARNINGS.clear()
+                self.assertIn("[host_key_changed]", self.refused(("leaf2",)))
+                self.hostvars["leaf1"]["ansible_connection"] = NETWORK_CLI
+        self.assertEqual(self.calls.agent, [])
+
+    def test_the_inventorys_network_cli_still_counts_under_a_plays_other_connection(self):  # fail closed
+        other = self.newkey("other")
+        self.put(self.names, f"leaf1 {ED}\n")
+        self.put(self.kh, f"10.0.0.11 {other}\n")
+        said = self.refused(variables={"inventory_hostname": "leaf1", "hostvars": self.hostvars,
+                                       "ansible_connection": "ssh"})
+        self.assertIn("[host_key_changed]", said)
+        self.assertEqual(self.calls.agent, [])
+
+    def test_a_term_outside_the_inventory_mints_when_the_current_host_is_not_on_network_cli(self):  # L66 e2
+        self.hostvars["l66a"] = {"ansible_connection": "ssh", "ansible_host": "10.0.0.13", "p49_name": "srx1"}
+        self.put(self.names, f"srx1 {ED}\n")
+        for hostvars in (HostVars(self.hostvars), self.hostvars):
+            self.assertEqual(self.run_lookup(["srx1"], variables={"inventory_hostname": "l66a", "hostvars": hostvars,
+                                                                  "ansible_connection": "ssh"}), ["LOGINTOKEN"])
+        self.assertEqual(len(self.minted()), 2)
+        self.assertIsNone(self.read(self.kh))
+
+    def test_a_term_outside_the_inventory_refuses_when_the_current_host_is_on_network_cli(self):
+        # The address network_cli dials is the current host's, but the term is another name: R2's address
+        # (ansible_host, else the inventory name) does not exist for it, and checking nothing would hand
+        # the token to whatever answers. Fail closed, before the mint.
+        self.put(self.names, f"srx1 {ED}\n")
+        for hostvars, play in ((HostVars(self.hostvars), {}), (self.hostvars, {}),
+                               (HostVars({"leaf1": {"ansible_host": "10.0.0.11"}}), {"ansible_connection": NETWORK_CLI}),
+                               (HostVars({"leaf1": {"ansible_host": "10.0.0.11"}}), {"ansible_network_os": "eos"})):
+            with self.subTest(play=play, stub=isinstance(hostvars, HostVars)):
+                WARNINGS.clear()
+                said = self.refused(("srx1",), variables={"inventory_hostname": "leaf1", "hostvars": hostvars, **play})
+                self.assertIn("[host_key_uncheckable]", said)
+                self.assertIn("port49: srx1: not a host in Ansible's inventory, and leaf1 connects with network_cli", said)
+        self.assertEqual(self.calls.agent, [])
+        self.assertIsNone(self.read(self.kh))
+
+    def test_an_inventory_host_is_checked_through_ansibles_hostvars(self):
+        self.put(self.names, f"leaf2 {ED}\n")
+        self.run_lookup(["leaf2"], variables={"inventory_hostname": "leaf1", "hostvars": HostVars(self.hostvars)})
+        self.assertEqual(self.read(self.kh), f"10.0.0.12 {ED}\n")
 
     def test_case_3_without_a_user_known_hosts_file_warns_and_mints(self):  # fix round 1, I2
         self.use_ssh_config(user="none")

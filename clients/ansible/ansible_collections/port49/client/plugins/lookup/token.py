@@ -60,7 +60,10 @@ options:
     description:
       - The file C(network_cli) keeps a device's address in. Only a device whose C(ansible_connection) is
         C(network_cli) or C(ansible.netcommon.network_cli), or that has none visible but an C(ansible_network_os),
-        is checked, before any token is minted.
+        is checked, before any token is minted. For the current host, an C(ansible_connection) of C(network_cli) in
+        either its inventory or its play's vars counts.
+      - A device that is not a host in Ansible's inventory has no address to check, so minting it on a host that
+        connects with C(network_cli) refuses with C(host_key_uncheckable). Name the inventory host by its port49 name.
       - The address (C(ansible_host), else the inventory name; C([address]:port) when C(ansible_port) is not 22)
         is checked against the keys filed under the port49 name in your ssh files. A key the address lacks is
         filed there, and a different key of the same type refuses with C(host_key_changed). When only the address
@@ -135,8 +138,19 @@ def _value(tok, field):
     return value
 
 
+def _in_inventory(variables, device):
+    """Whether device is a host in Ansible's inventory. HostVars answers `in` from the inventory; indexing a
+    host outside it gives an undefined marker in ansible-core 2.21, not a KeyError, so ask this first."""
+    try:
+        return device in variables["hostvars"]
+    except (KeyError, TypeError):
+        return False
+
+
 def _hostvar(variables, device, name):
     """The variable name of device, from its own hostvars only (None if it has none)."""
+    if not _in_inventory(variables, device):
+        return None
     try:
         return variables["hostvars"][device].get(name)
     except (KeyError, TypeError, AttributeError):
@@ -155,11 +169,25 @@ def _visible(variables, device, name):
 def _is_network_cli(variables, device):
     """Whether device connects with network_cli: its ansible_connection, else its play's. A play's `connection:`
     keyword may not reach a lookup as a variable, so with none visible, an ansible_network_os (which network_cli
-    always needs) says so. Checking a device that is not network_cli only files a key the name already trusts."""
-    connection = _visible(variables, device, "ansible_connection")
-    if connection:
-        return connection in NETWORK_CLI
+    always needs) says so. Checking a device that is not network_cli only files a key the name already trusts.
+    For the current host both its hostvars and the lookup's variables (where a play's vars override host_vars, as
+    in Ansible) are read, and either one naming network_cli counts: the check runs whenever Ansible might connect
+    with it."""
+    connections = [_hostvar(variables, device, "ansible_connection")]
+    if device == variables.get("inventory_hostname"):
+        connections.append(variables.get("ansible_connection"))
+    connections = [c for c in connections if c]
+    if connections:
+        return any(_might_be_network_cli(c) for c in connections)
     return bool(_visible(variables, device, "ansible_network_os"))
+
+
+def _might_be_network_cli(connection):
+    """Whether a connection value is, or may render to, network_cli. A lookup can be handed a play's
+    `ansible_connection: "{{ conn }}"` unrendered (measured on ansible-core 2.16.19 and 2.21.4), and what it
+    renders to cannot be known here: a value still holding a Jinja expression or statement counts."""
+    text = str(connection)
+    return text in NETWORK_CLI or "{{" in text or "{%" in text
 
 
 def _check_host_keys(device, variables, known_hosts_file):
@@ -170,6 +198,15 @@ def _check_host_keys(device, variables, known_hosts_file):
     import port49
     from port49 import hostkeys
     if not _is_network_cli(variables, device):
+        current = variables.get("inventory_hostname")
+        # A term that is no inventory host has no address of its own (R2: ansible_host, else the inventory name),
+        # but the current host's network_cli connection will present the token to the current host's address.
+        # Neither the name's address nor the current host's is known to be the device's: refuse, never skip.
+        if device != current and not _in_inventory(variables, device) and _is_network_cli(variables, current):
+            raise port49.HostKeyError(
+                "host_key_uncheckable", f"not a host in Ansible's inventory, and {current} connects with "
+                f"network_cli, so the lookup cannot tell which address's key to check against this name's: "
+                f"name the inventory host by its port49 name and mint for inventory_hostname", device)
         return
     if not hostkeys.valid_name(device):
         raise port49.HostKeyError("device_name", f"{str(device)[:64]!r}: {hostkeys.NAME_RULE}")
