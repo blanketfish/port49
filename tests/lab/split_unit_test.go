@@ -327,7 +327,9 @@ func TestDarkTimesVerdictJudgesDecision37sHealthChecks(t *testing.T) {
 		bad  int
 	}{
 		{"as designed", darkTimes{Checks: 5 * s, Dark: 5 * s}, 0},
-		{"health-check line and no circuit line", darkTimes{Checks: 5300 * time.Millisecond, Dark: 5300 * time.Millisecond}, 0},
+		{"on the bound", darkTimes{Checks: 10500 * time.Millisecond, Dark: 10500 * time.Millisecond}, 0},
+		{"just past the bound", darkTimes{Checks: 10600 * time.Millisecond, Dark: 10600 * time.Millisecond}, 1},
+		{"past the bound with no health-check line", darkTimes{Dark: 12 * s}, 2},
 		{"past the bound", darkTimes{Checks: 12 * s, Dark: 12 * s}, 1},
 		{"never dark", darkTimes{Checks: 5 * s}, 1},
 		{"dark with neither line", darkTimes{Dark: 5 * s}, 1},
@@ -389,6 +391,29 @@ func TestInertWordSaysNotObservedForARowItNeverSaw(t *testing.T) {
 	}{{true, true, "yes"}, {false, true, "no"}, {false, false, "not observed"}} {
 		if got := inertWord(c.inert, c.observed); got != c.want {
 			t.Errorf("inertWord(%v, %v) = %q, want %q", c.inert, c.observed, got, c.want)
+		}
+	}
+}
+
+// waitDark reads port49d's real go-dark line (the shape the L35 notes record),
+// and its two substrings are the ones port49d's source prints.
+func TestDarkLineSubstringsArePort49dsOwn(t *testing.T) {
+	line := "port49d: store: 5 consecutive store health checks failed over 4s (the last: the context pool: store: " +
+		"unavailable: context deadline exceeded); closing every listener so that devices use their local method"
+	dts := waitDark(time.Now(), time.Minute, func(sub string) bool { return strings.Contains(line, sub) })
+	if dts[0].Checks == 0 || dts[0].Dark == 0 {
+		t.Errorf("waitDark did not read the go-dark line: %+v", dts[0])
+	}
+	for file, want := range map[string]string{
+		"health.go": "%d " + darkCauseText,
+		"main.go":   darkCloseText,
+	} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "port49d", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("internal/port49d/%s no longer prints %q: update the harness's substring", file, want)
 		}
 	}
 }

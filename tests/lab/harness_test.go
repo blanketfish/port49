@@ -3272,6 +3272,14 @@ func denialBefore(rs []authorReply, end time.Time, window time.Duration) bool {
 // 37); zero is never.
 type darkTimes struct{ Checks, Dark time.Duration }
 
+// The two substrings of port49d's go-dark line (internal/port49d/health.go
+// says why, main.go closes), which waitDark reads; TestDarkLineSubstringsAre
+// Port49dsOwn pins them to the source.
+const (
+	darkCauseText = "consecutive store health checks failed"
+	darkCloseText = "closing every listener"
+)
+
 // waitDark polls each process (seen answers whether its stderr, since the
 // hang, holds a substring) every 250ms, until every one has closed its
 // listeners or within has passed. The cause is the health-check line that
@@ -3281,10 +3289,10 @@ func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool)
 	for time.Since(hungAt) < within {
 		done := true
 		for i, has := range seen {
-			if out[i].Checks == 0 && has("consecutive store health checks failed") {
+			if out[i].Checks == 0 && has(darkCauseText) {
 				out[i].Checks = time.Since(hungAt)
 			}
-			if out[i].Dark == 0 && has("closing every listener") {
+			if out[i].Dark == 0 && has(darkCloseText) {
 				out[i].Dark = time.Since(hungAt)
 			}
 			done = done && out[i].Dark != 0
