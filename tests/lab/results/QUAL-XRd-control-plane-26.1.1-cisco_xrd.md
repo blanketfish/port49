@@ -29,3 +29,18 @@ Every cell's verdict, with the rows it re-measures:
 - TLS handshake facts: PKI: ecdsa (root, a device intermediate, an untrusted CA); port49d's server certificate subject "CN=port49 L73", issuer "CN=L73 Lab Root", dNSName [tacacs.l73.example], iPAddress [172.100.100.1], EKU [serverAuth], key ECDSA-P-256, valid 2026-10-21T03:26:23Z to 2026-10-22T04:26:23Z; the device's request (`do crypto ca enroll l73-dev`): subject "CN=xrd1,1.2.840.113549.1.9.2=#1314787264312e6c61622e706f727434392e74657374", dNSName [], iPAddress [], email [], key RSA-3072, requested extensions [2.5.29.15 2.5.29.37 2.5.29.19], requested EKU [serverAuth clientAuth]; the lab intermediate issued subject "CN=xrd1", issuer "CN=L73 Lab Device Intermediate", dNSName [xrd1], iPAddress [172.100.100.61], EKU [clientAuth], key RSA-3072, valid 2026-10-21T03:26:41Z to 2026-10-22T04:26:41Z (the request named neither a dNSName nor an iPAddress, so the lab CA added the inventory's)
 
 Evidence: `tests/lab/evidence/QUAL-XRd-control-plane-26.1.1-cisco_xrd/` (whitelisted decision records, connection headers and run.json).
+
+## Operator requirement: port49 must render priv-lvl on XR
+
+This run passes with `platforms: cisco_iosxr` in tests/qual/qual-policy.yaml, which renders `priv-lvl=15` for the admin role. Without it (platform_set 1.3.0 has no cisco_iosxr adapter, so the generic adapter renders no attribute) XRd logs the token user in and then refuses every command locally with `% This command is not authorized`, asking port49 about none (QUAL-XRd-control-plane-26.1.1-cisco_xrd-no-priv-lvl.md). That case fails safe: commands are refused, not allowed. `priv-lvl=15` alone was enough; no other attribute was tried. Add to the policy file:
+
+```yaml
+platforms:
+  cisco_iosxr:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+```
+
+Only level 15 was shown. Levels 1 (readonly, operator) were not measured; they are lower than the measured one, so they can grant XR no more than the role says, but they may refuse more. In this run `command_denied` passes through port49: `show users` has an `authorize_command` record denied with `no_permit_dominates_deny`.
