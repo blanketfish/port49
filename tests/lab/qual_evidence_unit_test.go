@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -746,5 +747,32 @@ func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 	}
 	if _, _, ok := qualL80Note(notes[:2], "x"); ok {
 		t.Error("no tls_denied_command line: no L80 note")
+	}
+}
+
+// The device must not stay in single-connection mode when tls_single_connection
+// stops mid-cell (task 14b review): the undo runs on a Fatal's Goexit, and only
+// once when the cell also undoes it on its normal path.
+func TestQualUndoOnceRunsOnAFatalAndOnlyOnce(t *testing.T) {
+	n := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		undo := qualUndoOnce(func() { n++ })
+		defer undo()
+		runtime.Goexit() // what t.Fatal does in the cell
+	}()
+	<-done
+	if n != 1 {
+		t.Fatalf("after a Fatal mid-cell the undo ran %d times, want 1", n)
+	}
+	n = 0
+	func() {
+		undo := qualUndoOnce(func() { n++ })
+		defer undo()
+		undo() // the cell's own put-back
+	}()
+	if n != 1 {
+		t.Fatalf("the undo ran %d times on the normal path, want 1", n)
 	}
 }

@@ -753,6 +753,12 @@ func (q *qualEnv) tlsSingleConnection(e *l73Env, login func(string, string, ...s
 	single.SingleConnection = true
 	stop := e.capture("tls_single_connection")
 	e.configure(single)
+	// A Fatal from here on must not leave the device in single-connection mode.
+	// A defer, not t.Cleanup: Goexit runs it here, before play's deferred
+	// restoreDaemon, while port49d still runs the TLS config e.cli restarts;
+	// a cleanup would run after restoreDaemon and restart the TLS daemon.
+	perRequest := qualUndoOnce(func() { e.configure(e.base()) })
+	defer perRequest()
 	if e.d.EarlyCapture {
 		_, _, _ = e.breakglassLogin()
 	} else {
@@ -770,7 +776,7 @@ func (q *qualEnv) tlsSingleConnection(e *l73Env, login func(string, string, ...s
 	recs := q.waitStop(off)
 	time.Sleep(l73SettleTail)
 	keep("tls_single_connection", stop())
-	e.configure(e.base())
+	perRequest()
 	mode := qualSingleConnection
 	if attempts > 1 {
 		mode += fmt.Sprintf(" (after port49d restarted the device refused %d login(s) over %s before it reached port49d; no record of them)",

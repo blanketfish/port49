@@ -642,3 +642,15 @@ func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 		"the denied-command login's connections in tls_denied_command.tls.json).", evidence)
 	return claim, obs, true
 }
+
+// qualUndoOnce wraps undo so it runs at most once: a cell defers it, so a Fatal
+// mid-cell still runs it, and calls it on its normal path too.
+func qualUndoOnce(undo func()) func() {
+	done := false
+	return func() {
+		if !done {
+			done = true
+			undo()
+		}
+	}
+}
