@@ -188,9 +188,10 @@ lab-l50:
 	PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run '^TestL50WorkloadAttributeWriters$$' -count=1 -v -timeout 240m
 
 # The conformance run a firmware is vetted by (plan 11b). One platform selector at a time.
+# A re-vet re-measures L80 (closed), so PORT49_LAB_REMEASURE defaults to it.
 lab-qualify:
 	@test -n "$(P)" || { echo "usage: make lab-qualify P=<selector, e.g. nxos106>"; exit 2; }
-	PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
+	PORT49_LAB_QUALIFY=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE:-L80} PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+

@@ -45,6 +45,9 @@ entries:
      notes: [tests/lab/results/L71-cisco_xrd.md]}
   - {id: L76-srlinux, measured_minutes: 3.0, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
      notes: [tests/lab/results/L76-nokia_srlinux.md]}
+  - {id: L80-nxos106, measured_minutes: 7.4, target: lab-qualify, run: '^TestQualify$', platforms: nxos106, rows: [L80],
+     env: {PORT49_LAB_QUALIFY: "1", PORT49_LAB_REMEASURE: L80},
+     notes: [tests/lab/results/L80-cisco_nxos.md, tests/lab/results/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md]}
   - {id: L74-L75-L79, measured_minutes: 18.9, target: lab-regions, run: '^TestRegions$', rows: [L74, L75, L79], env: {PORT49_LAB_REMEASURE: "L74,L75,L79"},
      timeout_minutes: 120, notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md, tests/lab/results/L79-regions.md]}
   - id: L5
@@ -449,8 +452,6 @@ entries:
     env: {PORT49_LAB_REMEASURE: L72}
     notes: [tests/lab/results/L72-reference.md]
 excluded:
-  - rows: [L80]
-    reason: measured by TestQualify's tls_denied_command cell inside `make qual-vet P=nxos106`, which also regenerates the NX-OS 10.6 profile and golden; a rerun is a re-vet, run by hand, not a note diff.
   - rows: [L62]
     reason: needs the real TPM and Ryan present at the machine; no agent or unattended run touches the TPM. Run by hand with `make lab-l62-up` before a release.
   - rows: [L44, L50]
