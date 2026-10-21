@@ -215,8 +215,9 @@ type Broker struct {
 	// last deleted its unspent tokens: an idempotent retry of a mint from
 	// before then is not replayed with a token that no longer exists
 	// (token.Request). It is this process's copy of the store's (plan 7e,
-	// Ruling 9), each entry kept SupersededFor (supersede).
-	superseded map[store.TokenKey]time.Time
+	// Ruling 9), each entry kept SupersededFor from when it was recorded, as
+	// the store keeps its own (supersede).
+	superseded map[store.TokenKey]supersededMark
 	// supersedePruned is when supersede last pruned superseded: at most once
 	// per supersedePruneEvery, so a pass that supersedes n keys scans the
 	// map once, not n times, under mu.
@@ -1135,15 +1136,19 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) {
 	b.mu.Lock()
 	if b.superseded == nil {
-		b.superseded = map[store.TokenKey]time.Time{}
+		b.superseded = map[store.TokenKey]supersededMark{}
 	}
-	if at.After(b.superseded[k]) {
-		b.superseded[k] = at
+	now := b.Now()
+	mark := b.superseded[k]
+	if at.After(mark.at) {
+		mark.at = at
 	}
-	if now := b.Now(); now.Sub(b.supersedePruned) >= supersedePruneEvery {
+	mark.recorded = now
+	b.superseded[k] = mark
+	if now.Sub(b.supersedePruned) >= supersedePruneEvery {
 		b.supersedePruned = now
-		for key, t := range b.superseded {
-			if now.Sub(t) > store.SupersededFor {
+		for key, m := range b.superseded {
+			if now.Sub(m.recorded) > store.SupersededFor {
 				delete(b.superseded, key)
 			}
 		}
@@ -1157,6 +1162,12 @@ func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) 
 	}
 }
 
+// supersededMark is one key's entry in Broker.superseded: at is the instant
+// a replay of a mint from before is minted afresh, and recorded when this
+// process last recorded it, what the entry's life runs from. A refresh's at
+// is a deleted token's MintedAt, which may be older than SupersededFor.
+type supersededMark struct{ at, recorded time.Time }
+
 // supersedePruneEvery bounds how often supersede prunes its local copy: an
 // entry lives at most this long past SupersededFor, which only ever mints
 // a replay afresh.
@@ -1166,7 +1177,7 @@ const supersedePruneEvery = time.Minute
 // store's (every process's, and a start's purge).
 func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time, error) {
 	b.mu.Lock()
-	local := b.superseded[k]
+	local := b.superseded[k].at
 	b.mu.Unlock()
 	at, err := b.Store.SupersededAt(ctx, k)
 	if err != nil {

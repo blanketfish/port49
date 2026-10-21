@@ -242,12 +242,62 @@ func TestAnUnreadableTokenUnderAChangedKeyIsDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.b.Store = crypt.Wrap(f.st, crypt.Keys{Current: ours}, nil)
+	f.advance(time.Second)
+	pass := f.b.Now()
 	rep, err := f.b.Refresh(ctx, f.reload(t, edit(t, aliceGrant, noReload)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ids, _ := f.st.TokenIDs(ctx, aliceOnNX1); len(ids) != 0 || rep.TokenKeys != 1 {
 		t.Fatalf("%d token(s) left that this process cannot open; %d key(s) superseded", len(ids), rep.TokenKeys)
+	}
+	// Its MintedAt cannot be read, so the supersede is stamped at the pass's
+	// now: unstamped, a replay of its mint would answer with a deleted token.
+	local, err := f.b.supersededAt(ctx, aliceOnNX1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := f.st.SupersededAt(ctx, aliceOnNX1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local.Before(pass) || stored.Before(pass) {
+		t.Fatalf("the supersede is stamped %v here and %v in the store; want the pass's now, %v", local, stored, pass)
+	}
+}
+
+// supersedeFails refuses every supersede record, as a store down for the
+// write would.
+type supersedeFails struct{ store.Store }
+
+func (supersedeFails) SupersedeTokens(context.Context, store.TokenKey, time.Time) error {
+	return store.ErrUnavailable
+}
+
+// The local copy of a supersede is the fallback for a store write that
+// failed, so it is kept SupersededFor from when it was recorded, as the
+// store's is, not from the deleted token's MintedAt: a token minted longer
+// ago than that (a long token_ttl) still has its replay minted afresh.
+func TestALocalSupersedeIsKeptFromWhenItWasRecorded(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	f.b.Store = supersedeFails{f.st}
+	minted := f.b.Now().Add(-store.SupersededFor - time.Hour)
+	f.b.supersede(ctx, aliceOnNX1, minted)
+	f.advance(supersedePruneEvery + time.Second)
+	f.b.supersede(ctx, aliceOnCore, f.b.Now()) // a later supersede prunes the copy
+	at, err := f.b.supersededAt(ctx, aliceOnNX1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !at.Equal(minted) {
+		t.Fatalf("the local supersede reads %v; want %v, recorded %v ago", at, minted, supersedePruneEvery+time.Second)
+	}
+	// It goes SupersededFor after it was recorded.
+	f.advance(store.SupersededFor)
+	f.b.supersede(ctx, aliceOnCore, f.b.Now())
+	if at, _ := f.b.supersededAt(ctx, aliceOnNX1); !at.IsZero() {
+		t.Fatalf("the local supersede outlived SupersededFor: %v", at)
 	}
 }
 
