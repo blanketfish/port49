@@ -19,10 +19,20 @@ import (
 	"github.com/rhwendt/port49/internal/devicemock"
 )
 
+// takes is the -take keys.
+var takes map[string]bool
+
 func main() {
 	evidence := flag.String("evidence", "", "a TestQualify evidence directory")
 	check := flag.Bool("check", false, "write nothing; exit 1 when the generated stimulus differs from the committed profile's")
+	take := flag.String("take", "", "comma-separated keys (reaction:step/on, acceptance:id, device_fact:id, engine_gap:id, golden:scenario) where the regenerated value wins over the committed one")
 	flag.Parse()
+	takes = map[string]bool{}
+	for _, k := range strings.Split(*take, ",") {
+		if k != "" {
+			takes[k] = true
+		}
+	}
 	if *evidence == "" {
 		fmt.Fprintln(os.Stderr, "genprofile: -evidence is required")
 		os.Exit(2)
@@ -48,6 +58,16 @@ func run1(evidence string, check bool) error {
 			return fmt.Errorf("the generated stimulus differs from %s", path)
 		}
 		return nil
+	}
+	if old, err := devicemock.Load(path, "."); err == nil {
+		oldG, gerr := devicemock.LoadGolden(p.Golden)
+		var og *devicemock.Golden
+		if gerr == nil {
+			og = &oldG
+		}
+		if err := mergeHand(p, &g, old, og, takes); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
