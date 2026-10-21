@@ -361,3 +361,17 @@ func flowMap(s string) string {
 	}
 	return s
 }
+
+// A Junos firmware L18 never measured cites its own QUAL run (final review M2).
+func TestTheCommandGapReasonReadsAQUALCitation(t *testing.T) {
+	for what, want := range map[string]string{
+		"the device sends no per-command authorization (QUAL; as L18); its command cells are not_applicable": "QUAL; as L18",
+		"the device sends no per-command authorization (L76 cell b); its command cells are not_applicable":   "L76 cell b",
+		"the device sends no per-command authorization (L18); its command cells are not_applicable":          "L18",
+	} {
+		found, got := commandReason([]devicemock.EngineGap{{ID: commandNotSent, What: what}})
+		if !found || got != want {
+			t.Errorf("%q: got %v %q, want %q", what, found, got, want)
+		}
+	}
+}

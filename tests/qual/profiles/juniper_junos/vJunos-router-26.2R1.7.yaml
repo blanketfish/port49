@@ -294,7 +294,7 @@ engine_gaps:
     code: internal/devicemock/hello.go
     sources: []
   - id: command_authorization_not_sent
-    what: the device sends no per-command authorization (L18); its command cells are not_applicable
+    what: the device sends no per-command authorization (QUAL; as L18); its command cells are not_applicable
     code: ""
     sources:
       - note: tests/lab/results/QUAL-vJunos-router-26.2R1.7-juniper_vjunos-router.md

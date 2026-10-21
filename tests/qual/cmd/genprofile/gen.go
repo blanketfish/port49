@@ -208,7 +208,9 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	// The marker is read from run.json, not inferred from steps(): both command cells
 	// must be graded not_applicable (the device sends no per-command authorization).
 	if r.Results["command_permitted"] == "not_applicable" && r.Results["command_denied"] == "not_applicable" {
-		p.EngineGaps = append(p.EngineGaps, noCommandAuthorizationGap(r.Platform, note))
+		// A missing L18 note only means L18 measured no firmware of this lab platform.
+		l18, _ := os.ReadFile(filepath.Join(repoRoot, "tests/lab/results", "L18-"+r.LabPlatform+".md"))
+		p.EngineGaps = append(p.EngineGaps, noCommandAuthorizationGap(r.Platform, r.Firmware, l18, note))
 	}
 	if p.DeviceFacts, err = tlsFacts(&r, note); err != nil {
 		return nil, g, err
@@ -911,14 +913,20 @@ func unknownCA(recs []*rec, win map[string]window, sc string) (devicemock.Golden
 }
 
 // noCommandAuthorizationGap is the engine gap for a device that sends no
-// per-command authorization: Junos's is L18's, SR Linux's is L76 cell b's.
-func noCommandAuthorizationGap(platform string, note devicemock.Source) devicemock.EngineGap {
+// per-command authorization: Junos's is L18's, SR Linux's is L76 cell b's. A
+// Junos firmware L18 did not measure (l18, its note, names no such image) is
+// backed by its own QUAL records, as L18 found: "(QUAL; as L18)".
+func noCommandAuthorizationGap(platform, firmware string, l18 []byte, note devicemock.Source) devicemock.EngineGap {
 	if platform == "nokia_srlinux" {
 		return devicemock.EngineGap{ID: "command_authorization_not_sent",
 			What:    "the device sends no per-command authorization (L76 cell b); its command cells are not_applicable",
 			Sources: []devicemock.Source{note, {Note: "tests/lab/results/L76-nokia_srlinux.md", Register: "L76"}}}
 	}
+	cite := "QUAL; as L18"
+	if devicemock.NoteNamesFirmware(l18, firmware) {
+		cite = "L18"
+	}
 	return devicemock.EngineGap{ID: "command_authorization_not_sent",
-		What:    "the device sends no per-command authorization (L18); its command cells are not_applicable",
+		What:    "the device sends no per-command authorization (" + cite + "); its command cells are not_applicable",
 		Sources: []devicemock.Source{note}}
 }

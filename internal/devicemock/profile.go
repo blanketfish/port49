@@ -330,11 +330,7 @@ func (p *Profile) Validate(repoRoot string) error {
 			return
 		}
 		// A note may hold several sections (addenda), each with its own line.
-		named := false
-		for _, m := range imageLine.FindAllStringSubmatch(string(body), -1) {
-			named = named || namesFirmware(m[1], p.Firmware)
-		}
-		if !named {
+		if !NoteNamesFirmware(body, p.Firmware) {
 			errs = append(errs, fmt.Errorf("%s: %s's Image version line does not name firmware %q; "+
 				"a claim measured on another firmware is unmeasured here", where, s.Note, p.Firmware))
 		}
@@ -442,6 +438,18 @@ func goldenPath(g string) error {
 		return errors.New("golden: must be a clean relative .json path under tests/qual/golden/")
 	}
 	return nil
+}
+
+// NoteNamesFirmware reports whether any Image version line of a results note
+// (one per section, addenda included) names firmware fw as a whole token: the
+// test decision 52 ruling 4 puts a measured citation to.
+func NoteNamesFirmware(note []byte, fw string) bool {
+	for _, m := range imageLine.FindAllStringSubmatch(string(note), -1) {
+		if namesFirmware(m[1], fw) {
+			return true
+		}
+	}
+	return false
 }
 
 // namesFirmware reports whether an Image version line names firmware fw as a

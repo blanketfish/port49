@@ -55,8 +55,9 @@ type row struct {
 // prints it under the table.
 const operatorGapPrefix = "operator_"
 
-// reasonRx finds the register a gap's text cites, "(L76 cell b)".
-var reasonRx = regexp.MustCompile(`\((L\d+[^)]*)\)`)
+// reasonRx finds the register a gap's text cites, "(L76 cell b)", or the QUAL run that
+// stands in for one, "(QUAL; as L18)".
+var reasonRx = regexp.MustCompile(`\(((?:L\d+|QUAL; )[^)]*)\)`)
 
 // factReasonRx finds what a device fact's text cites first: a register row,
 // "(L73 cell a)", or the conformance cell that measured it, "(QUAL tls_token_login)".
