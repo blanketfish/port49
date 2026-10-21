@@ -43,7 +43,11 @@ type l73Dialect struct {
 	// EarlyCapture starts cell h's capture before its configuration: the device
 	// opens its single connection when the commit lands (XR), so a capture
 	// started after it holds no SYN.
-	EarlyCapture   bool
+	EarlyCapture bool
+	// HelpEvidence: a PORT49_L73_DIAG=help run commits its help screens (evidence/L73-<platform>/help-diag.txt).
+	HelpEvidence bool
+	// DiagSub2 is a second submode a help run asks in (XR: the AAA group's).
+	DiagSub2       l73DiagSub
 	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
 	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
 	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
@@ -188,7 +192,7 @@ var l73EOSDialect = l73Dialect{
 // ends every change. The ssh server asks are evidence only: XRd's sshd resets a
 // session over its rate limit, and the harness never configures it.
 var l73XRDialect = l73Dialect{
-	Family: "xr", Vendor: "IOS XR (XRd)", Probe: "cisco_xrd", RetryUnreached: true, EarlyCapture: true,
+	Family: "xr", Vendor: "IOS XR (XRd)", Probe: "cisco_xrd", RetryUnreached: true, EarlyCapture: true, HelpEvidence: true,
 	Enter: []string{"configure"}, Cleanup: []string{"abort"}, CfgMark: "(config",
 	Asks: []l73Ask{
 		{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"},
@@ -217,13 +221,26 @@ var l73XRDialect = l73Dialect{
 		"show tacacs details"},
 	// PORT49_L73_DIAG=help (the run ends INVALID): the enrolment's and the
 	// apply lines' help, then the AAA group's own.
-	DiagOpAsks: []string{"configure ", "crypto key generate rsa ", "crypto ca enroll " + l73CertID + " ", "show logging | ",
-		"show running-config tacacs-server ", "show tacacs details | "},
-	DiagAsks: []string{"commit ", "tacacs-server host 172.100.100.1 port 3049 tls trustpoint " + l73CertID + " ",
-		"no tacacs-server host 172.100.100.1 port 3049 "},
-	DiagSubIn:   []string{"crypto ca trustpoint " + l73CertID},
-	DiagSubAsks: []string{"", "enrollment ", "crl "},
-	DiagSubOut:  []string{"exit"},
+	DiagOpAsks: []string{"configure ", "crypto key generate ", "crypto key generate rsa ", "crypto ca ",
+		"crypto ca authenticate " + l73RootProfile + " ", "crypto ca enroll " + l73CertID + " ", "crypto ca import " + l73CertID + " ",
+		"show logging | ", "show running-config tacacs-server ", "show running-config aaa ",
+		"show crypto ca certificates " + l73CertID + " ", "show tacacs details | ", "show tacacs server-groups "},
+	DiagAsks: []string{"commit ", "crypto ca trustpoint " + l73CertID + " ", "tacacs-server host 172.100.100.1 ", "tacacs-server host 172.100.100.1 port 3049 ",
+		"tacacs-server host 172.100.100.1 tls ", "tacacs-server host 172.100.100.1 key ", "tacacs-server host 172.100.100.1 key 0 ",
+		"tacacs-server host 172.100.100.1 single-connection ",
+		"tacacs-server host 172.100.100.1 tls trustpoint " + l73CertID + " ",
+		"tacacs-server host 172.100.100.1 port 3049 tls trustpoint " + l73CertID + " ",
+		"no tacacs-server host 172.100.100.1 ", "no tacacs-server host 172.100.100.1 port 3049 ",
+		"aaa group server tacacs+ " + l73Group + " ", "aaa group server tacacs+ " + l73Group + " server ", "aaa group server tacacs+ " + l73Group + " server 172.100.100.1 ",
+		"no aaa group server tacacs+ " + l73Group + " server ",
+		"aaa authentication login default group " + l73Group + " ", "aaa authorization exec default group " + l73Group + " local ",
+		"aaa authorization commands default group " + l73Group + " local ",
+		"aaa accounting exec default start-stop group " + l73Group + " ", "aaa accounting commands default start-stop group " + l73Group + " "},
+	DiagSubIn: []string{"crypto ca trustpoint " + l73CertID},
+	DiagSubAsks: []string{"", "enrollment ", "enrollment terminal ", "rsakeypair ", "subject-name ", "serial-number ",
+		"ip-address ", "ip-address none ", "crl ", "crl optional "},
+	DiagSubOut: []string{"exit"},
+	DiagSub2:   l73DiagSub{In: []string{"aaa group server tacacs+ " + l73Group}, Asks: []string{""}, Out: []string{"exit"}},
 }
 
 var l73Dialects = map[string]l73Dialect{
@@ -1061,4 +1078,47 @@ func l73PaceWait(last, now time.Time, pace time.Duration) time.Duration {
 		return 0
 	}
 	return pace - now.Sub(last)
+}
+
+// l73UnreachedWhy is what a family's unreached logins are known to be, in a
+// note's words: IOS XE's are answered locally while its servers are marked
+// Dead; no other family's cause is measured.
+func l73UnreachedWhy(family string) string {
+	if family == "iosxe" {
+		return "IOS XE answered those logins locally while its servers were marked Dead"
+	}
+	return "the device's cause for not connecting is not measured"
+}
+
+// l73DialectFacts are the operator facts one family's note carries, each with
+// the run that showed it. XR's two were seen while the dialect was developed
+// and are not measured by a committed run; the note says so.
+func l73DialectFacts(family string) []string {
+	if family != "xr" {
+		return nil
+	}
+	return []string{
+		"operator fact (XR, seen during development, not measured by a committed run): `crypto ca enroll` fails with " +
+			"\"Failed to enroll: ... Domain name is not configured\" until `domain name` is configured, so tests/lab/configs/xrd-startup.cfg sets one; " +
+			"the committed help for `domain name` is in evidence/L73-cisco_xrd/l71-probe.txt",
+		"operator fact (XR, seen during development, not measured by a committed run): a commit that removes a group member, removes " +
+			"and re-adds the host and moves its port fails with \"Cannot delete this server as it is still referenced in one of the server " +
+			"groups and is the only server with the given IP address\" (read with `show configuration failed`), so the member is removed in its own commit first",
+	}
+}
+
+// l73DiagSub is one submode a help run enters: the lines that enter it, the
+// asks typed inside it, and the lines that leave it.
+type l73DiagSub struct{ In, Asks, Out []string }
+
+// diagSubs lists the dialect's submodes: DiagSubIn/Asks/Out first, then DiagSub2.
+func (d l73Dialect) diagSubs() []l73DiagSub {
+	var subs []l73DiagSub
+	if len(d.DiagSubAsks) > 0 {
+		subs = append(subs, l73DiagSub{d.DiagSubIn, d.DiagSubAsks, d.DiagSubOut})
+	}
+	if len(d.DiagSub2.Asks) > 0 {
+		subs = append(subs, d.DiagSub2)
+	}
+	return subs
 }

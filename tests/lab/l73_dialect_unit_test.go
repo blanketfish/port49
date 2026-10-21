@@ -1357,3 +1357,108 @@ func TestL73PaceWaitSpacesXRdSSHAttempts(t *testing.T) {
 		t.Fatal("the pace is under the one a second the rate limit allows")
 	}
 }
+
+// A note names an XR fact as unmeasured, and does not credit IOS XE's cause to another family.
+func TestL73DialectFactsAreXROnlyAndSayTheyAreUnmeasured(t *testing.T) {
+	facts := l73DialectFacts("xr")
+	if len(facts) != 2 {
+		t.Fatalf("%d facts", len(facts))
+	}
+	for _, f := range facts {
+		if !strings.Contains(f, "not measured by a committed run") {
+			t.Errorf("%q", f)
+		}
+	}
+	if l73DialectFacts("iosxe") != nil || strings.Contains(l73UnreachedWhy("xr"), "IOS XE") || !strings.Contains(l73UnreachedWhy("iosxe"), "IOS XE") {
+		t.Fatal("a family's fact leaked into another's")
+	}
+}
+
+// Help first: every block of the l73XRHelp fixture is backed by a committed help screen
+// (evidence/L73-cisco_xrd/help-diag.txt, from PORT49_L73_DIAG=help), asked at the same line
+// and listing each word the block lists. The screen is masked as the lab masks any screen,
+// so the word after `key` reads <MASKED> in both typed line and answer.
+func TestL73XRHelpFixtureIsBackedByTheCommittedHelpScreens(t *testing.T) {
+	raw, err := os.ReadFile("evidence/L73-cisco_xrd/help-diag.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	screens := map[string]string{} // normalised typed line -> the screen
+	ctx := ""                      // the submode line the asks were typed in, "" at the configuration root
+	for _, blk := range strings.Split("\n"+string(raw), "\n### ")[1:] {
+		head, body, _ := strings.Cut(blk, "\n")
+		if strings.HasPrefix(head, "in `") {
+			ctx = l73XRNormal(strings.TrimSuffix(strings.TrimPrefix(head, "in `"), "`"))
+			continue
+		}
+		// The mask also eats what follows the word after `key`, so a masked heading may lack its `?`.
+		typed, _, _ := strings.Cut(strings.TrimPrefix(head, "typed `"), ", cleared")
+		typed, _, _ = strings.Cut(typed, " cleared")
+		typed = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(typed, "`"), "?"))
+		key := l73XRMaskKey(l73XRNormal(typed))
+		if ctx != "" {
+			if key == "" {
+				key = "?"
+				if ctx != "crypto ca trustpoint VAL" {
+					key = ctx + " ?"
+				} else {
+					key = ctx
+				}
+			} else {
+				key = ctx + " " + key
+			}
+		}
+		if _, have := screens[key]; !have {
+			screens[key] = body
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(l73XRHelp), "\n")
+	for i := 0; i+1 < len(lines); i += 2 {
+		typed, listed := strings.TrimSpace(lines[i]), strings.Fields(lines[i+1])
+		want := typed
+		if typed == "?" { // the AAA group submode's own help
+			want = "aaa group server tacacs+ VAL ?"
+		}
+		screen, ok := screens[l73XRMaskKey(want)]
+		if !ok && strings.Contains(typed, " key") {
+			// The mask hides the word after `key` and what follows it: `key ?` is the heading
+			// `... key <MASKED>` and `key 0 ?` is `... <MASKED>`.
+			base, rest, _ := strings.Cut(typed, " key")
+			if rest == "" {
+				screen, ok = screens[base+" key <MASKED>"]
+			} else {
+				screen, ok = screens[base+" <MASKED>"]
+			}
+		}
+		if !ok {
+			t.Errorf("no committed help screen for %q", typed)
+			continue
+		}
+		first := map[string]bool{}
+		for _, ln := range strings.Split(strings.ReplaceAll(screen, "^M", "\n"), "\n") {
+			if f := strings.Fields(ln); len(f) > 0 {
+				first[f[0]] = true
+			}
+		}
+		for _, w := range listed {
+			if len(w) >= 24 {
+				w = "<LONG>" // the lab's screen mask hides any run of 24 or more characters
+			}
+			if !first[w] {
+				t.Errorf("%q: the committed screen does not list %q", typed, w)
+			}
+		}
+	}
+}
+
+// l73XRMaskKey hides the word after `key` the way the lab's screen mask does, so a fixture
+// key and a masked screen's typed line compare equal; VAL in a key position reads the same.
+func l73XRMaskKey(line string) string {
+	f := strings.Fields(line)
+	for i := 0; i+1 < len(f); i++ {
+		if f[i] == "key" && f[i+1] != "0" && f[i+1] != "<MASKED>" && f[i+1] != "ADDR" {
+			f[i+1] = "<MASKED>"
+		}
+	}
+	return strings.Join(f, " ")
+}

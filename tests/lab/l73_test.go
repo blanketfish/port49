@@ -92,6 +92,7 @@ type l73Env struct {
 	d           l73Dialect
 	opener      func(*lab) (*cliConn, error)
 	cfgScreens  string               // the configure sessions' screens, for an INVALID's diagnosis
+	helpLog     strings.Builder      // PORT49_L73_DIAG=help: every masked help screen, committed as evidence
 	xeChecked   bool                 // IOS XE: the address read-back and the break-glass login are in the facts
 	xeLog       string               // those facts, kept in the INVALID directory as they are made
 	lastDecline time.Time            // when the previous measured login group ended
@@ -228,6 +229,7 @@ func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
 	}
 	e.invTLS, e.invTCP = e.write("inventory-tls.yaml", []byte(tlsInv)), e.write("inventory-tcp.yaml", inv)
 	e.start = l.mark()
+	e.facts = append(e.facts, l73DialectFacts(e.d.Family)...)
 	e.facts = append(e.facts, "PKI: "+alg+" (root, a device intermediate, an untrusted CA); port49d's server certificate "+
 		l73CertFacts(mustCert(t, e.files["server.crt"])))
 	t.Cleanup(func() {
@@ -365,6 +367,9 @@ func (e *l73Env) opMark(c *cliConn) string {
 // invalidScreen keeps a scrubbed device screen for an INVALID run's
 // diagnosis in PORT49_L73_INVALID_DIR (never committed).
 func (e *l73Env) invalidScreen(name, out string) {
+	if strings.HasPrefix(name, "help") {
+		e.helpLog.WriteString(l73MaskAll(l73MaskKeyWords(l73LogScreen(hideKeys(out))), e.invalidSecrets()...) + "\n")
+	}
 	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
 		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
 			[]byte(l73MaskAll(l73MaskKeyWords(l73LogScreen(hideKeys(out))), e.invalidSecrets()...)), 0o600)
@@ -455,18 +460,20 @@ func (e *l73Env) diagHelp() {
 				return err
 			}
 		}
-		if len(e.d.DiagSubAsks) > 0 {
-			for _, ln := range e.d.DiagSubIn {
+		for k, sub := range e.d.diagSubs() {
+			for _, ln := range sub.In {
 				if _, err := c.sendExpect(ln, 60*time.Second, e.d.CfgMark); err != nil {
 					return l71Wrap("INVALID: "+ln, err)
 				}
 			}
-			for i, a := range e.d.DiagSubAsks {
-				if err := ask(fmt.Sprintf("help-sub-%d", i+1), a, e.d.CfgMark, 0, nil); err != nil {
+			// The committed help marks the submode the next asks were typed in.
+			e.helpLog.WriteString("### in `" + strings.Join(sub.In, " ; ") + "`\n")
+			for i, a := range sub.Asks {
+				if err := ask(fmt.Sprintf("help-sub%d-%d", k+1, i+1), a, e.d.CfgMark, 0, nil); err != nil {
 					return err
 				}
 			}
-			for _, ln := range e.d.DiagSubOut {
+			for _, ln := range sub.Out {
 				c.sendExpect(ln, 30*time.Second, e.d.CfgMark)
 			}
 		}
@@ -475,7 +482,30 @@ func (e *l73Env) diagHelp() {
 		}
 		return nil
 	})
+	e.writeHelpEvidence()
 	e.t.Fatalf("INVALID: PORT49_L73_DIAG=help: the help texts are in PORT49_L73_INVALID_DIR; no TLS line was typed")
+}
+
+// writeHelpEvidence commits the help run's screens as evidence/L73-<platform>/help-diag.txt
+// when the dialect asks for it (XRd's fixture is built from them), through the same
+// secret checks as l71-probe.txt. A leak writes nothing.
+func (e *l73Env) writeHelpEvidence() {
+	if !e.d.HelpEvidence {
+		return
+	}
+	body := []byte(e.helpLog.String())
+	if hits := l72TranscriptLeaks(string(body)); len(hits) > 0 || len(labcreds.Contains(body, e.allSecrets())) > 0 {
+		e.t.Logf("INVALID: the help screens carry a secret; no help evidence written")
+		return
+	}
+	dir := filepath.Join(root, "tests", "lab", "evidence", "L73-"+e.l.p.name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "help-diag.txt"), body, 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Logf("wrote %s/help-diag.txt", dir)
 }
 
 // diagDeeper asks the help one keyword further, then (while deep allows) at
@@ -700,7 +730,7 @@ func (e *l73Env) untilReached(id string, run func(cell string) l73Try) l73Try {
 		}
 		e.xeFact(fmt.Sprintf("%s: the device opened no connection to port49d until attempt %d, %s after the previous measured login "+
 			"(the unreached attempts, 10s apart on the same port49d with nothing changed between them, produced no port49d record; "+
-			"IOS XE answered those logins locally while its servers were marked Dead)", id, attempts, since))
+			"%s)", id, attempts, since, l73UnreachedWhy(e.d.Family)))
 	}
 	e.lastDecline = time.Now()
 	return got
