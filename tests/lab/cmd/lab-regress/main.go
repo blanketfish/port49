@@ -136,6 +136,7 @@ func (r *runner) runAll(entries []Entry) report {
 				rep.Skipped = append(rep.Skipped, e.ID)
 				continue
 			}
+			fmt.Fprintf(os.Stderr, "lab-regress: %s FAILED: %v\n", e.ID, err)
 			rep.Failed = e.ID
 			return rep
 		}
@@ -221,6 +222,7 @@ func run() int {
 	}
 	r := &runner{stopPath: stopPath, exec: func(e Entry) error {
 		fmt.Printf("=== lab-regress %s ===\n", e.ID)
+		start := time.Now()
 		sigtermAfter, testTimeout := deadlines(e)
 		ctx, cancel := context.WithTimeout(context.Background(), sigtermAfter)
 		defer cancel()
@@ -240,6 +242,9 @@ func run() int {
 		}
 		if sk := scan.Skipped(); len(sk) > 0 {
 			return &skippedError{Tests: sk}
+		}
+		if err := notesRewritten(e.Notes, start); err != nil {
+			return err
 		}
 		return diffNotes(notediff, e.Notes)
 	}}
@@ -266,6 +271,24 @@ func pick(all []Entry, only string) []Entry {
 		}
 	}
 	return out
+}
+
+// notesRewritten refuses a listed note this run did not write: its mtime is
+// before the entry's start. notediff masks the header lines a rerun changes,
+// so an untouched note compares equal to HEAD and would read "unchanged", a
+// re-measure nobody made (a subtest that skipped, a platform the test
+// filtered out, a listed name the harness never writes).
+func notesRewritten(notes []string, start time.Time) error {
+	for _, n := range notes {
+		st, err := os.Stat(n)
+		if err != nil {
+			return err
+		}
+		if st.ModTime().Before(start) {
+			return fmt.Errorf("%s: not rewritten by this run", n)
+		}
+	}
+	return nil
 }
 
 // diffNotes reports each rewritten note's changed observations (Task 3). It

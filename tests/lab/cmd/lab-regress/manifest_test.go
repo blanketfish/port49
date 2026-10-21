@@ -291,3 +291,33 @@ func TestMeasuredMinutesKeepTheirDecimals(t *testing.T) {
 		t.Errorf("the committed manifest's measured minutes total %.2f, want 733.6", got)
 	}
 }
+
+// A note the run did not rewrite compares equal to HEAD once its header is
+// masked, so notediff would print "unchanged" for a measurement nobody made
+// (final review I3): an entry whose note predates its start fails, naming it.
+func TestNotesRewrittenRefusesANoteOlderThanTheRun(t *testing.T) {
+	dir := t.TempDir()
+	stale, fresh := filepath.Join(dir, "L1-a.md"), filepath.Join(dir, "L1-b.md")
+	for _, p := range []string{stale, fresh} {
+		if err := os.WriteFile(p, []byte("note\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := time.Now()
+	if err := os.Chtimes(stale, start.Add(-time.Hour), start.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(fresh, start.Add(time.Second), start.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := notesRewritten([]string{fresh}, start); err != nil {
+		t.Fatalf("a note the run wrote: %v", err)
+	}
+	err := notesRewritten([]string{fresh, stale}, start)
+	if err == nil || err.Error() != stale+": not rewritten by this run" {
+		t.Fatalf("got %v", err)
+	}
+	if err := notesRewritten([]string{filepath.Join(dir, "missing.md")}, start); err == nil {
+		t.Fatal("a missing note passed")
+	}
+}

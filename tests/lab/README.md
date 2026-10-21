@@ -949,7 +949,10 @@ The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
 
 **L80** (`L80-nxos106`) is a regress entry: it re-measures a security fact (a command port49 denies runs
 over NX-OS 10.6's per-request TLS), and a run that observes nothing is INVALID. A flipped outcome shows as
-changed lines in the note diff. `lab-regress` reports note changes and does not fail on them.
+changed lines in the note diff, and a run that observes nothing writes no L80 note. `lab-regress` reports
+note changes and does not fail on them. It does fail an entry whose listed note the run did not rewrite
+(its mtime is before the entry started): notediff masks the header lines a rerun changes, so an untouched
+note would otherwise read "unchanged".
 
 **NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
 `feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device
