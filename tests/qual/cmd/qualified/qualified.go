@@ -39,6 +39,10 @@ var inventory = map[string]platformName{
 	"juniper_junos":     {"Juniper", "Junos"},
 	"nokia_srlinux":     {"Nokia", "SR Linux"},
 	"generic/cisco_xrd": {"Cisco", "IOS XR (XRd)"},
+	// XRd's qual run gives cisco_iosxr a platform block in tests/qual/qual-policy.yaml (the
+	// generic adapter renders nothing and XR then refuses every command), so its profile's
+	// platform is cisco_iosxr, not generic.
+	"cisco_iosxr": {"Cisco", "IOS XR (XRd)"},
 }
 
 type row struct {

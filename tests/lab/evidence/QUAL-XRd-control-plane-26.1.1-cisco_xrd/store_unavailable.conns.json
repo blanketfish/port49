@@ -1,0 +1,101 @@
+[
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 20342,
+    "syn_at": "2026-10-21T04:25:49.177601Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T04:25:49.182558Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 1,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 37
+      },
+      {
+        "version": 192,
+        "type": 1,
+        "seq_no": 3,
+        "flags": 0,
+        "length": 35
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 64222,
+    "syn_at": "2026-10-21T04:25:49.246403Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T04:25:49.262675Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 1,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 37
+      },
+      {
+        "version": 192,
+        "type": 1,
+        "seq_no": 3,
+        "flags": 0,
+        "length": 35
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 16039,
+    "syn_at": "2026-10-21T04:25:51.191917Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T04:25:51.195199Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 1,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 41
+      },
+      {
+        "version": 192,
+        "type": 1,
+        "seq_no": 3,
+        "flags": 0,
+        "length": 20
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 39451,
+    "syn_at": "2026-10-21T04:25:51.283278Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T04:25:51.285109Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 2,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 66
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 38750,
+    "syn_at": "2026-10-21T04:25:51.338188Z",
+    "end": "server-rst",
+    "end_at": "2026-10-21T04:25:51.338244Z"
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 58630,
+    "syn_at": "2026-10-21T04:25:53.196517Z",
+    "end": "server-rst",
+    "end_at": "2026-10-21T04:25:53.196575Z"
+  }
+]
