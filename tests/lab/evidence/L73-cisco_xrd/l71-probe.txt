@@ -12,6 +12,100 @@ tacacs-server host 192.0.2.71 ?^M
   <cr>                            ^M
 RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 192.0.2.71 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
 
+### typed `tacacs-server host 192.0.2.71 tls ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 tls ?^M
+^M  apply-group            Apply configuration from a group^M
+  exclude-group          Exclude apply-group configuration from a group^M
+  server-name-indicator  SNI extension to include in client hello^M
+  trustpoint             Trustpoint to be used for TACACS over TLS^M
+  <cr>                   ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 192.0.2.71 tls ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                  ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `tacacs-server host 192.0.2.71 tls trustpoint l73-dev ?`, then Ctrl-U
+tacacs-server host 192.0.2.71 tls trustpoint l73-dev ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 192.0.2.71 tls trustpoint l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                     ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `no tacacs-server host 192.0.2.71 ?`, then Ctrl-U
+no tacacs-server host 192.0.2.71 ?^M
+^M  apply-group                     Apply configuration from a group^M
+  exclude-group                   Exclude apply-group configuration from a group^M
+  holddown-time                   Time for which this TACACS server is marked as dead^M
+  key                             per-server encryption key (overrides default)^M
+  port                            TCP port for TACACS+ server (default is 49)^M
+  single-connection               Reuse connection to this server for all requests^M
+  single-connection-idle-timeout  Idle timeout for a single-connection to the server^M
+  timeout                         Time to wait for this TACACS server to reply (overrides default)^M
+  tls                             TLS support for TACACS+^M
+  <cr>                            ^M
+RP/0/RP0/CPU0:xrd1(config)#no tacacs-server host 192.0.2.71 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `aaa group server tacacs+ port49 ?`, then Ctrl-U
+aaa group server tacacs+ port49 ?^M
+^M  apply-group     Apply configuration from a group^M
+  exclude-group   Exclude apply-group configuration from a group^M
+  holddown-time   Time for which TACACS servers of this group is marked as dead^M
+  server          Specify a TACACS+ server (Max 10)^M
+  server-private  Specify a private (to this server group) TACACS+ server (max 10)^M
+  vrf             VRF to which this server group belongs to^M
+  <cr>            ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa group server tacacs+ port49 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `crypto ca trustpoint l73-dev ?`, then Ctrl-U
+crypto ca trustpoint l73-dev ?^M
+^M  apply-group               Apply configuration from a group^M
+  auto-enroll               Set auto-enroll percentage at which renewal will be triggered^M
+  challenge-password        Challenge <MASKED>^M
+  crl                       CRL options^M
+  description               Description for the trustpoint^M
+  enrollment                Enrollment parameters^M
+  exclude-group             Exclude apply-group configuration from a group^M
+  extended-key-usage        Extended Key Usage field for the certificate^M
+  ip-address                include ip address^M
+  message-digest            Certificate message digest^M
+  method                    Indicates mode of enrollment for leaf certificate^M
+  query                     Query parameters^M
+  re-enrollment             Re-enrollment parameters^M
+  renewal-message-type      Set renewal message type for SCEP auto-renewal feature^M
+  rsakeypair                RSA key pair^M
+  serial-number             include serial number^M
+  sftp-password             Secure FTP password^M
+  sftp-username             Secure FTP username^M
+  skip-challenge-password   Skip challenge <MASKED> for manual enrollment request^M
+  ssl-profile               SSL profile parameters used during TLS/mTLS handshake^M
+  subject-alternative-name  Include Subject Alternative Name(SAN) in CSR request^M
+  subject-name              Subject Name^M
+  vrf                       Source interface VRF ^M
+  <cr>                      ^M
+RP/0/RP0/CPU0:xrd1(config)#crypto ca trustpoint l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                             ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `domain ?`, then Ctrl-U
+domain ?^M
+^M  default-flows  default LPTS flows programming^M
+  ipv4           ipv4 hosts^M
+  ipv6           Ipv6 hosts^M
+  list           Domain name to complete unqualified host names^M
+  lookup         Enable Domain Name System hostname translation^M
+  multicast      Define the domain name for multicast address lookups^M
+  name           Define the default domain name^M
+  name-server    Specify address of name server to use^M
+  vrf            VRF name for domain services^M
+RP/0/RP0/CPU0:xrd1(config)#domain ^H^H^H^H^H^H^H       ^H^H^H^H^H^H^H
+
+### typed `do crypto key generate ?`, then Ctrl-U
+do crypto key generate ?^M
+^M  authentication-ssh  Authentication keys per user for passwordless SSH operations^M
+  dsa                 Generate DSA keys^M
+  ecdsa               Generate ECDSA keys^M
+  ed25519             Generate ED25519 keys^M
+  rsa                 Generate RSA keys^M
+RP/0/RP0/CPU0:xrd1(config)#do crypto key generate ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                       ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
+### typed `do crypto ca import l73-dev ?`, then Ctrl-U
+do crypto ca import l73-dev ?^M
+^M  certificate  Import a certificate from a s/tftp server or the terminal^M
+RP/0/RP0/CPU0:xrd1(config)#do crypto ca import l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                            ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+
 ### typed `ssh server ?`, then Ctrl-U
 ssh server ?^M
 ^M  algorithms                 server algorithms^M

@@ -1,0 +1,93 @@
+show running-config tacacs-server^M
+^MWed Oct 21 04:03:27.392 UTC^M
+tacacs-server host 172.100.100.1 port 300^M
+ tls^M
+  trustpoint l73-dev^M
+ !^M
+!^M
+^M
+RP/0/RP0/CPU0:xrd1#
+show running-config aaa^M
+^MWed Oct 21 04:03:27.644 UTC^M
+tacacs-server host 172.100.100.1 port 300^M
+ tls^M
+  trustpoint l73-dev^M
+ !^M
+!^M
+username breakglass^M
+ group root-lr^M
+ group cisco-support^M
+!^M
+aaa accounting exec default start-stop group port49^M
+aaa accounting commands default start-stop group port49^M
+aaa group server tacacs+ port49^M
+ server 172.100.100.1^M
+!^M
+aaa authorization exec default group port49 local^M
+aaa authorization commands default group port49 local^M
+aaa authentication login default group port49 local^M
+^M
+RP/0/RP0/CPU0:xrd1#
+show crypto ca certificates l73-dev^M
+^MWed Oct 21 04:03:27.893 UTC^M
+^M
+Trustpoint       : l73-dev^M
+<LONG>^M
+CA certificate ^M
+  Serial Number  : 39:EE:A7:99:0A:4E:4A:90:CD:9B:58:2E:D6:55:E4:B1^M
+  Subject:^M
+	CN=L73 Lab Device Intermediate^M
+  Issued By      :^M
+	CN=L73 Lab Root^M
+  Validity Start : 02:54:51 UTC Wed Oct 21 2026^M
+  Validity End   : 03:54:51 UTC Fri Oct 23 2026^M
+  SHA1 Fingerprint:^M
+	 <LONG> ^M
+Router certificate^M
+  Key usage      : General Purpose ^M
+  Status         : Available ^M
+  Serial Number  : 04:E4:B1:07:D9:F8:56:4F:4E:18:02:2E:05:7D:81:0F^M
+  Subject:^M
+	CN=xrd1^M
+  Issued By      :^M
+	CN=L73 Lab Device Intermediate^M
+  Validity Start : 02:55:12 UTC Wed Oct 21 2026^M
+  Validity End   : 03:55:12 UTC Thu Oct 22 2026^M
+  SHA1 Fingerprint:^M
+	 <LONG> ^M
+Associated Trustpoint: l73-dev ^M
+RP/0/RP0/CPU0:xrd1#
+show tacacs details^M
+^MWed Oct 21 04:03:28.142 UTC^M
+^M
+TACACS+ Server                                 : 172.100.100.1/300 [Global]^M
+    Family                                     : IPv4^M
+    Timeout(in secs)                           : 5^M
+    Connection Opens                           : 2^M
+    Connection Timeouts                        : 0^M
+    Connection Failures                        : 0^M
+    Connection Disconnects                     : 0^M
+    Connection Closes                          : 2^M
+    Requests sent                              : 0^M
+    Response received                          : 0^M
+    Recieve Errors                             : 0^M
+    Receive Timeouts                           : 0^M
+    Send Timeouts                              : 0^M
+    Packets Abort                              : 2^M
+    Server State                               : Up^M
+    Server On-Hold                             : True^M
+    Tacacs-Single-Connect                      : False^M
+    <LONG>(in secs): 0^M
+    Last Connection Attempted                  : 04:03:26 UTC Wed Oct 21 2026^M
+^M
+^M
+TACACS+ Server-groups:^M
+^M
+Global list of servers^M
+    Server 172.100.100.1/300 family=IPv4^M
+^M
+Server group 'port49' has 1 servers^M
+    Servers in this group are under 'default' vrf^M
+    Server 172.100.100.1 family=IPv4^M
+^M
+RP/0/RP0/CPU0:xrd1#
