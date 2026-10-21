@@ -10604,8 +10604,9 @@ reason and cost.
     before. The flag is kept in `broker.revocations_file` and in the `ds/m/` snapshot records, so a
     put-back keeps it.
   - **The line.** A broker process says a flagged mark once: on the watch put that created it, or
-    on a reload that adds it. It reads the lift's record and compares the mark's time with the
-    lift's:
+    on a reload that adds it. It reads the lift's record off the marks feed's goroutine, within
+    5 s, so a slow directory never stalls the feed; a read that does not answer in time is said in
+    the unreadable form. It compares the mark's time with the lift's:
     - made before the lift: `a revocation of <key> made at <At> before the lift at <T> landed after
       it: a copy sent while its writer was cut off; it stands everywhere`;
     - made at or after it: `a revocation of <key> made at <At> (<origin>) after the lift at <T>, by
@@ -10635,7 +10636,11 @@ reason and cost.
     this port49-broker, reported unrecorded then`. It matches the kind, key and time for an hour,
     whatever lift came between, and its runner says the same in place of "made elsewhere". When
     that mark lands unflagged, the process says `a revocation of <key> made on this port49-broker,
-    reported unrecorded then, landed when the store answered again; it stands everywhere`. A
+    reported unrecorded then, landed when the store answered again; it stands everywhere`. The
+    writer tells the store's mark, its flag with it, even when the feed's put came before its
+    write's error. A revoke that succeeds and lands flagged adds to its own report `this
+    revocation landed over a lift of <key> this process's marks feed had not yet shown: it stands
+    everywhere, and whoever lifted it may not know; port49 revoke --list names the lift`. A
     reload, rescan or restart that finds the flagged mark already standing does not say it again.
     At start, a broker with flagged marks says `N mark(s) stand flagged landed-after-lift;
     port49 revoke --list names them`.
