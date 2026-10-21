@@ -915,3 +915,50 @@ func TestRegionRowWantedFollowsTheOnlySelector(t *testing.T) {
 		t.Fatal("a selector runs its own row alone")
 	}
 }
+
+// Cell (i)'s agreement needs every broker to say the put-back form for
+// alice's mark, and none the cut-off form (task 2 review I1).
+func TestL74CellINeedsThePutBackFormOnEveryBroker(t *testing.T) {
+	put := "port49-broker: broker: a revocation of user:alice@example.com made at T0 was put back after the lift at " +
+		"T1 by a port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift"
+	cut := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed " +
+		"after it: a copy sent while its writer was cut off; it stands everywhere"
+	every := [3]string{put, put, put}
+	if !l74IAgrees(true, 1, every) {
+		t.Fatal("put back, one mark, every broker said the put-back form: cell (i) agrees")
+	}
+	for name, c := range map[string]struct {
+		putBack bool
+		n       int
+		said    [3]string
+	}{
+		"no put-back line":   {false, 1, every},
+		"no mark":            {true, 0, every},
+		"broker 1 silent":    {true, 1, [3]string{"", put, put}},
+		"broker 2 cut form":  {true, 1, [3]string{put, cut, put}},
+		"cut form alongside": {true, 1, [3]string{put + "\n" + cut, put, put}},
+		"another key's line": {true, 1, [3]string{strings.ReplaceAll(put, "alice", "bob"), put, put}},
+	} {
+		if l74IAgrees(c.putBack, c.n, c.said) {
+			t.Errorf("%s: cell (i) agreed", name)
+		}
+	}
+}
+
+// Cell k's region 1 line must be one line naming alice that holds both
+// fragments, never two lines or two keys (task 2 review M4).
+func TestL79CellKNeedsOneLineNamingAlice(t *testing.T) {
+	cli := "port49 revoke: broker: " + l79Unrecorded + " when the directory answers again"
+	b3 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
+		"it: a copy sent while its writer was cut off; it stands everywhere; " + l79Own
+	list := "principal user:alice@example.com since T0 (admin_socket uid 0); landed after the lift at T1 (revision 8)"
+	split := "port49-broker: broker: a revocation of user:bob@example.com made at T0 before the lift at T1 landed\n" +
+		"port49-broker: broker: a revocation of user:alice@example.com made at T2 (x) after the lift at T1: a copy " +
+		"sent " + l79Before
+	if l79KAgrees(1, true, cli, b3, split, list) {
+		t.Fatal("two lines' fragments satisfied region 1's line")
+	}
+	if l79KAgrees(1, true, cli, "a revocation of user:bob@example.com "+l79Own, b3, list) {
+		t.Fatal("another key's own line satisfied broker 3's")
+	}
+}

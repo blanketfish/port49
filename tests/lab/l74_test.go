@@ -962,7 +962,9 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if revokedAt == 0 {
 		w.t.Fatal("INVALID: alice's mark revision could not be read before the cut")
 	}
-	w.brokers[3].mark() // the put-back line is looked for from here
+	for i := 1; i <= 3; i++ {
+		w.brokers[i].mark() // the put-back lines are looked for from here
+	}
 	cut := w.cutRegion3()
 	defer cut.heal()
 	// The lift must reach region 3 as a missed event: until broker 3's marks
@@ -1016,12 +1018,62 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: reading the directory's marks after the heal: %v", kerr)
 	}
 	n := strings.Count(keys, "alice@example.com") // alice's own mark, not every mark under rv/
-	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal",
-		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); broker 3's marks rescans %v before the heal, %v after; put-back line after %v: %s; alice's marks in the directory after: %d",
-			revokedAt, rev, rescansBefore, rescans, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
-		perr == nil && n == 1)
+	// The flagged mark's line is said as each feed delivers the put-back,
+	// well inside a short wait.
+	var said [3]string
+	for i := 1; i <= 3; i++ {
+		w.brokers[i].wait(l74PutBack, 10*time.Second)
+		said[i-1] = w.brokers[i].said()
+	}
+	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal, and what every broker says of it",
+		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); broker 3's marks rescans %v before the heal, %v after; put-back line after %v: %s; alice's marks in the directory after: %d; brokers 1, 2 and 3's lines naming alice since the cut: %s // %s // %s",
+			revokedAt, rev, rescansBefore, rescans, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n,
+			w.l79Lines(said[0], l79Who, 3), w.l79Lines(said[1], l79Who, 3), w.l79Lines(said[2], l79Who, 3)),
+		l74IAgrees(perr == nil, n, said))
 	// Cleanup after the last cell: nothing is measured from it.
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
+}
+
+// What cell (i)'s agreement needs said (task 2 review I1): the mark broker
+// 3's runner put back over region 1's lift is said on every broker as a
+// put-back, never as a copy a cut held back.
+const (
+	l74PutBack = "was put back after the lift at"
+	l74CutOff  = "while its writer was cut off"
+)
+
+// l74IAgrees is cell (i)'s agreement: broker 3 said its put-back, alice's
+// mark is in the directory once, and every broker's log since the cut has
+// the put-back form for alice and no cut-off form.
+func l74IAgrees(putBack bool, n int, said [3]string) bool {
+	if !putBack || n != 1 {
+		return false
+	}
+	for _, s := range said {
+		if !lineNaming(s, l79Principal, l74PutBack) || lineNaming(s, l79Principal, l74CutOff) {
+			return false
+		}
+	}
+	return true
+}
+
+// lineNaming is whether one line of log names who and holds every one of
+// frags: two lines, or two keys' lines, never add up to one (task 2 review
+// M4).
+func lineNaming(log, who string, frags ...string) bool {
+	for _, l := range strings.Split(log, "\n") {
+		if !strings.Contains(l, who) {
+			continue
+		}
+		all := true
+		for _, f := range frags {
+			all = all && strings.Contains(l, f)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // l79Cell is one cell of L79, the row carried from 11a's final review: a write
@@ -1130,9 +1182,8 @@ const (
 // l79KAgrees is cell k's agreement: the revoke failed and said it may still
 // land, the mark came back (fail closed), and each line above was said.
 func l79KAgrees(code int, back bool, cli, broker3, broker1, list string) bool {
-	return code != 0 && back && strings.Contains(cli, l79Unrecorded) && strings.Contains(broker3, l79Own) &&
-		strings.Contains(broker1, "before the lift at") && strings.Contains(broker1, l79Before) &&
-		strings.Contains(list, l79Listed)
+	return code != 0 && back && strings.Contains(cli, l79Unrecorded) && lineNaming(broker3, l79Principal, l79Own) &&
+		lineNaming(broker1, l79Principal, "before the lift at", l79Before) && strings.Contains(list, l79Listed)
 }
 
 // l79Revoked is alice's mark written from region 1 and known to broker 3, the
