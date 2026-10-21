@@ -1,5 +1,5 @@
 {
-  "pending_lab": true,
+  "pending_lab": false,
   "scenarios": {
     "flight_delay": {
       "outcome": "login_ok",
