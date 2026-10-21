@@ -629,7 +629,7 @@ func TestQualTLSCommandsGradesWhatArrived(t *testing.T) {
 // commands never reached port49 says so: not a pass for command authorization.
 func TestQualTLSLoginVerdictNamesItsModeAndWhatArrived(t *testing.T) {
 	result, why := qualTLSLoginVerdict(qualPerRequest, "cisco_nxos", "not_sent", nil, []string{"Cisco Nexus Operating System (NX-OS) Software", "NAME LINE TIME IDLE PID COMMENT"})
-	for _, want := range []string{"per-request (the device default):", "not sent", "not a pass for command authorization over TLS", "L73 cell a",
+	for _, want := range []string{"per-request (the device default): login only:", "not sent", "not a pass for command authorization over TLS", "L73 cell a",
 		"`show version` said \"Cisco Nexus Operating System (NX-OS) Software\"", "`show users` said \"NAME LINE"} {
 		if result != "pass" || !strings.Contains(why, want) {
 			t.Errorf("%s: %q lacks %q", result, why, want)
@@ -669,7 +669,7 @@ func TestQualDeniedCommandCellIsAnObservation(t *testing.T) {
 		mentions []string
 	}{
 		{"ran, port49 not asked", "NAME     LINE         TIME         IDLE          PID COMMENT\nadmin    pts/0", []map[string]any{end}, "observed", true,
-			[]string{"denied command ran; port49 never asked (local fallback)", "0 authorize_command records for `show users`, 1 for other commands", "first line \"NAME"}},
+			[]string{"denied command ran; port49 never asked (the device's local method, presumed)", "0 authorize_command records for `show users`, 1 for other commands", "first line \"NAME"}},
 		{"refused locally, port49 not asked", "% Authorization failed.", nil, "observed", false,
 			[]string{"denied command refused", "0 authorize_command records for `show users`", "first line \"% Authorization failed.\""}},
 		{"port49 asked and denied it", "% Authorization failed.", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "observed", false,
@@ -724,7 +724,7 @@ func TestQualTLSCellsCiteTheirRows(t *testing.T) {
 func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 	notes := []string{"- `token_login` (re-measures L1): **pass**. plain",
 		"- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): not sent",
-		"- `tls_denied_command` (re-measures L80): **observed**. per-request (the device default): **denied command ran; port49 never asked (local fallback)**",
+		"- `tls_denied_command` (re-measures L80): **observed**. per-request (the device default): **denied command ran; port49 never asked (the device's local method, presumed)**",
 		"- `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: sent"}
 	claim, obs, ok := qualL80Note(notes, "QUAL-Nexus-9300v-10.6-2-F-cisco_nxos")
 	if !ok {
@@ -735,7 +735,7 @@ func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 			t.Errorf("claim lacks %q: %s", want, claim)
 		}
 	}
-	for _, want := range []string{"per-request (the device default): not sent", "**denied command ran; port49 never asked (local fallback)**", "tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/"} {
+	for _, want := range []string{"per-request (the device default): not sent", "**denied command ran; port49 never asked (the device's local method, presumed)**", "tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/"} {
 		if !strings.Contains(obs, want) {
 			t.Errorf("observation lacks %q: %s", want, obs)
 		}

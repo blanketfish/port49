@@ -352,7 +352,8 @@ func qualTLSLoginVerdict(mode, platform, state string, problems, firsts []string
 		return "pass", fmt.Sprintf("%s: a token login over RFC 9887; `show version` permitted and `%s` denied by port49 (authorize_command records); the stop record arrived.",
 			mode, qualDeniedCommand(platform))
 	case "not_sent":
-		return "pass", fmt.Sprintf("%s: a token login over RFC 9887 and its stop record arrived; command authorization not sent: port49 received no "+
+		// "login only" first: run.json says pass, and that pass is the login's (review M1).
+		return "pass", fmt.Sprintf("%s: login only: a token login over RFC 9887 and its stop record arrived; command authorization not sent: port49 received no "+
 			"authorize_command for `show version` or `%s` (a device fact, as L73 cell a; not a pass for command authorization over TLS)%s.",
 			mode, qualDeniedCommand(platform), said)
 	}
@@ -401,7 +402,7 @@ func qualDeniedCommandVerdict(denied, out string, recs []map[string]any) (result
 	case len(asked) > 0:
 		return "observed", false, fmt.Sprintf("denied command refused: port49 denied `%s` and the device refused it (first line %q; %s).", denied, says, counts)
 	case ran:
-		return "observed", true, fmt.Sprintf("**denied command ran; port49 never asked (local fallback)**: `%s` ran with no authorization request for it "+
+		return "observed", true, fmt.Sprintf("**denied command ran; port49 never asked (the device's local method, presumed)**: `%s` ran with no authorization request for it "+
 			"reaching port49, so the qual policy's deny was not enforced over per-request TLS (first line %q; %s).", denied, says, counts)
 	}
 	return "observed", false, fmt.Sprintf("denied command refused: the device refused `%s` with no authorization request for it reaching port49 (first line %q; %s).",
