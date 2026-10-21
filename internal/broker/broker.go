@@ -1311,7 +1311,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 			return item, true
 		}
 		perLogin = v.rec
-		cred.MFAMethod, cred.MFAAt, cred.MFAAgentSHA256 = v.method, v.at, v.agent
+		cred.MFAMethod, cred.MFAAt, cred.MFAAgentSHA256, cred.MFAFresh = v.method, v.at, v.agent, v.fresh
 		return api.MintItem{}, false
 	}
 	// Replay-versus-fresh is decided here once. The mint is told, so one

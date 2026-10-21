@@ -316,6 +316,18 @@ func (b *Broker) takeProved(ctx context.Context, c caller, agentSHA256, challeng
 	return &provedChallenge{Method: policy.MFAMethod(rec.Method), At: rec.At}, nil
 }
 
+// proofMeets reports whether a per-login proof by method, made at provedAt,
+// meets req for a mint at at: req accepts the method, a machine's is a touch
+// (ruling 21), and the proof is the mint's own fresh challenge, which covers
+// it once whatever reuse_for is, or a reused one made within req.ReuseFor
+// before at. It is the one reading of a proof the mint (mfaCovers, judgeMFA)
+// and a refresh's judgment of an unspent token (minted.mints) share; at and
+// provedAt are on one minter's clock, so no clock across replicas enters it.
+func proofMeets(req policy.MFARequirement, method policy.MFAMethod, fresh bool, provedAt, at time.Time) bool {
+	return req.Accepts(method) && (!req.Machine || method == policy.HardwareKeyTouch) &&
+		(fresh || (req.ReuseFor > 0 && at.Sub(provedAt) < req.ReuseFor))
+}
+
 // mfaCovers says whether a proof covers req for this caller now: the
 // challenge's own proof named by the mint (once, whatever reuse_for), else
 // a kept proof whose method req accepts, made within req.ReuseFor.
@@ -323,7 +335,7 @@ func (b *Broker) takeProved(ctx context.Context, c caller, agentSHA256, challeng
 // A store error is returned, never read as "not covered".
 func (b *Broker) mfaCovers(ctx context.Context, c caller, agentSHA256 string, req policy.MFARequirement,
 	proved *provedChallenge, now time.Time) (method string, at time.Time, reused bool, err error) {
-	if proved != nil && req.Accepts(proved.Method) {
+	if proved != nil && proofMeets(req, proved.Method, true, proved.At, now) {
 		return string(proved.Method), proved.At, false, nil
 	}
 	if agentSHA256 == "" || req.ReuseFor <= 0 {
@@ -337,7 +349,7 @@ func (b *Broker) mfaCovers(ctx context.Context, c caller, agentSHA256 string, re
 		case err != nil:
 			return "", time.Time{}, false, err
 		}
-		if now.Sub(p.At) < req.ReuseFor && (method == "" || p.At.After(at)) {
+		if proofMeets(req, m, false, p.At, now) && (method == "" || p.At.After(at)) {
 			method, at, reused = string(m), p.At, true
 		}
 	}
@@ -353,10 +365,12 @@ type mfaVerdict struct {
 	detail string
 	item   *api.PerLoginMFA
 	// method and at are the proof that covered it; agent is the request's
-	// agent hash, the binding that proved ("" for a bearer).
+	// agent hash, the binding that proved ("" for a bearer). fresh is a proof
+	// made for the mint's own challenge, not one reused (Credential.MFAFresh).
 	method string
 	at     time.Time
 	agent  string
+	fresh  bool
 }
 
 // mfaUsable is req.Accept narrowed to what this broker verifies now, and a
@@ -404,8 +418,8 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 	if err != nil {
 		return mfaVerdict{rec: rec, reason: decision.StoreUnavailable}
 	}
-	if method == "" && held != nil && slices.Contains(narrowed.Accept, held.Method) && req.ReuseFor > 0 &&
-		now.Sub(held.At) < req.ReuseFor && mf.agentSHA256 != "" && mf.agentSHA256 == held.AgentSHA256 {
+	if method == "" && held != nil && proofMeets(narrowed, held.Method, false, held.At, now) &&
+		mf.agentSHA256 != "" && mf.agentSHA256 == held.AgentSHA256 {
 		method, at, reused = string(held.Method), held.At, true
 	}
 	if method != "" {
@@ -413,7 +427,7 @@ func (b *Broker) judgeMFA(ctx context.Context, c caller, mf *mfaRequest, name st
 		if reused {
 			count(method, "reused")
 		}
-		return mfaVerdict{rec: rec, method: method, at: at, agent: mf.agentSHA256}
+		return mfaVerdict{rec: rec, method: method, at: at, agent: mf.agentSHA256, fresh: !reused}
 	}
 	ch, exp, err := b.requestChallenge(ctx, c, mf)
 	if err != nil {

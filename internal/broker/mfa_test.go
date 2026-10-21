@@ -48,6 +48,7 @@ var (
 
 type mfaOpts struct {
 	reuseZero     bool
+	reuseShort    bool // reuse_for 10s
 	noRoots       bool
 	touchOnlyCore bool
 	machines      bool
@@ -81,6 +82,9 @@ func mfaPolicy(o mfaOpts) string {
 	}
 	if o.reuseZero {
 		reuse = "0m"
+	}
+	if o.reuseShort {
+		reuse = "10s"
 	}
 	if o.machines {
 		machines = ", applies_to_machines: true"
