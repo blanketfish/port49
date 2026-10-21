@@ -442,3 +442,32 @@ func qualDenied(recs []map[string]any) bool {
 	}
 	return false
 }
+
+// qualOperatorSection is what an operator of platform must know that the cells'
+// verdicts alone do not say; "" for a platform with nothing to add. It is
+// written by the harness so a regenerated note keeps it.
+func qualOperatorSection(platform string) string {
+	if platform != "cisco_iosxr" {
+		return ""
+	}
+	return `
+
+## Operator requirements on XR
+
+- **port49 must render priv-lvl.** This run passes with ` + "`platforms: cisco_iosxr`" + ` in tests/qual/qual-policy.yaml, which renders ` + "`priv-lvl=15`" + ` for the admin role. Without it (platform_set 1.3.0 has no cisco_iosxr adapter, so the generic adapter renders no attribute) XRd logs the token user in and then refuses every command locally with ` + "`% This command is not authorized`" + `, asking port49 about none (QUAL-XRd-control-plane-26.1.1-cisco_xrd-no-priv-lvl.md). That case fails safe: commands are refused, not allowed. ` + "`priv-lvl=15`" + ` alone was enough; no other attribute was tried. Add to the policy file:
+
+` + "```yaml" + `
+platforms:
+  cisco_iosxr:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+` + "```" + `
+
+- **Command authorization must be configured on the device**: ` + "`aaa authorization commands default group <port49 group> local`" + `, as tests/lab/configs/xrd-startup.cfg has it. Without that line XR never asks port49 about a command, so no role rule applies and ` + "`priv-lvl`" + ` is the only bound (admin's 15 is whatever XR grants level 15, unmeasured).
+- **Only level 15 was shown.** Level 1 (readonly, operator) was not measured. That it grants no more than the role says is reasoning, not measurement, and holds only with command authorization configured: XR then either refuses locally (fails safe) or asks port49, whose role bounds the command.
+- **Break-glass fails when port49 answers ERROR** (its store is unavailable), over TCP and TLS: the cells ` + "`store_unavailable`" + ` and ` + "`tls_store_unavailable`" + ` record break-glass logged in false (L73 cell i: ok false in 860 ms), as on IOS XE 17.18.02. With the store down nobody logs in to this device by SSH; keep a path that does not depend on port49 answering.
+- In this run ` + "`command_denied`" + ` passes through port49: ` + "`show users`" + ` has an authorize_command record denied with no_permit_dominates_deny.
+`
+}

@@ -301,11 +301,19 @@ acceptance:
     note: the privilege levels the device sent; seeing values measures no limit
 engine_gaps:
   - id: operator_policy_required
-    what: 'On generic XR (platform_set 1.3.0 has no cisco_iosxr adapter, so port49 renders no attribute) every command is refused locally with "% This command is not authorized" and the device asks port49 about none: it fails safe, but nothing works (QUAL note, "without a priv-lvl block"). Add to the policy file: platforms: {cisco_iosxr: {privilege: {readonly: ["priv-lvl=1"], operator: ["priv-lvl=1"], admin: ["priv-lvl=15"]}}}. Only priv-lvl=15 was measured (it alone made XR send command authorization); level 1 was not, so readonly and operator are set to a level lower than the measured one and may refuse more than their roles allow'
+    what: 'On generic XR (platform_set 1.3.0 has no cisco_iosxr adapter, so port49 renders no attribute) every command is refused locally with "% This command is not authorized" and the device asks port49 about none: it fails safe, but nothing works (QUAL note, "without a priv-lvl block"). Add to the policy file: platforms: {cisco_iosxr: {privilege: {readonly: ["priv-lvl=1"], operator: ["priv-lvl=1"], admin: ["priv-lvl=15"]}}}. Configure command authorization on the device too (aaa authorization commands default group <port49 group> local, as tests/lab/configs/xrd-startup.cfg has): without it port49 never sees a command, no role rule applies, and priv-lvl is the only bound. Only priv-lvl=15 was measured (it alone made XR send command authorization); level 1 was not. The claim that level 1 grants no more than the role is reasoning, not measurement, and holds only with command authorization configured'
     code: tests/qual/qual-policy.yaml
     sources:
       - note: tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd-no-priv-lvl.md
         register: QUAL
       - note: tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md
         register: QUAL
+  - id: operator_break_glass_fails_on_error
+    what: 'When port49 answers ERROR (its store is unavailable) XRd does not fall to its local method: the token login is refused and break-glass fails too (QUAL store_unavailable: break-glass logged in false). Keep a path that does not depend on port49 answering (console, or a second reachable server) for the time the store is down'
+    code: ""
+    sources:
+      - note: tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md
+        register: QUAL
+      - note: tests/lab/results/L73-cisco_xrd.md
+        register: L73
 golden: tests/qual/golden/cisco_iosxr/XRd-control-plane-26.1.1.json

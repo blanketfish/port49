@@ -81,6 +81,11 @@ type qualEnv struct {
 
 func newQualEnv(t *testing.T, l *lab) *qualEnv {
 	slug := devicemock.Slug(l.p.version)
+	// A side run (a policy block removed, say) names itself so its capture, evidence and note
+	// never overwrite the standard run's.
+	if v := os.Getenv("PORT49_LAB_QUAL_VARIANT"); v != "" {
+		slug += "-variant-" + v
+	}
 	q := &qualEnv{t: t, l: l, slug: slug, starts: map[string]time.Time{}, ends: map[string]time.Time{}, tlsFiles: map[string][]byte{}}
 	// Firmware is the platform row's version string as the results notes' Image version line
 	// carries it, so the slug is e.g. Nexus-9300v-10.6-2-F.
@@ -782,7 +787,7 @@ func (q *qualEnv) write() {
 	dir := filepath.Join(root, "tests", "lab", "evidence", "QUAL-"+q.slug+"-"+q.l.p.name)
 	claim := "The conformance cells of plan 11b under tests/qual/qual-policy.yaml and tests/qual/qual-daemon.yaml, with " +
 		"tokens the broker minted. Each cell re-measures the register rows it cites and closes none."
-	obs := "Every cell's verdict, with the rows it re-measures:\n\n" + strings.Join(q.notes, "\n") +
+	obs := "Every cell's verdict, with the rows it re-measures:\n\n" + strings.Join(q.notes, "\n") + qualOperatorSection(q.run.Platform) +
 		fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/QUAL-%s-%s/` (whitelisted decision records, connection headers and run.json).", q.slug, q.l.p.name)
 	if bad := qualWriteEvidence(dir, files, claim+"\n"+obs, secrets); len(bad) > 0 {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))

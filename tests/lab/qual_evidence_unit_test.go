@@ -553,3 +553,18 @@ func TestQualRetryUnreachedStopsOnAPort49Deny(t *testing.T) {
 		t.Fatalf("%d attempts, %v: a deny was retried into a pass", n, err)
 	}
 }
+
+// The XR note carries the facts an operator needs at 3am; no other platform gets the section.
+func TestQualOperatorSectionIsXROnlyAndNamesTheTwoFacts(t *testing.T) {
+	got := qualOperatorSection("cisco_iosxr")
+	for _, want := range []string{"priv-lvl", "aaa authorization commands default group", "Break-glass fails", "reasoning, not measurement"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the XR section lacks %q", want)
+		}
+	}
+	for _, p := range []string{"cisco_iosxe", "arista_eos", "nokia_srlinux", "juniper_junos", "cisco_nxos"} {
+		if qualOperatorSection(p) != "" {
+			t.Errorf("%s got an XR section", p)
+		}
+	}
+}
