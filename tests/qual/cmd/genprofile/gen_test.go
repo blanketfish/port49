@@ -900,3 +900,31 @@ func TestTheDeniedCommandCellIsAnObservedDeviceFact(t *testing.T) {
 		t.Fatalf("observed is for an observation cell only: %v", err)
 	}
 }
+
+// The device's key_share groups, when the summary records them (review M4),
+// are carried into the hello the probe builds; an older summary has none.
+func TestKeyShareGroupsAreCarriedWhenRecorded(t *testing.T) {
+	p, _, err := Generate(fixture, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Stimulus.TLS.ClientHello.KeyShareGroups) != 0 {
+		t.Fatalf("an old summary records none: %v", p.Stimulus.TLS.ClientHello.KeyShareGroups)
+	}
+	dir := copyFixture(t)
+	path := filepath.Join(dir, "tls_token_login.tls.json")
+	b, _ := os.ReadFile(path)
+	var cs []map[string]any
+	if err := json.Unmarshal(b, &cs); err != nil {
+		t.Fatal(err)
+	}
+	cs[0]["client_hello"].(map[string]any)["key_share_groups"] = []int{29}
+	b, _ = json.Marshal(cs)
+	os.WriteFile(path, b, 0o644)
+	if p, _, err = Generate(dir, "testdata"); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Stimulus.TLS.ClientHello.KeyShareGroups; !slices.Equal(got, []uint16{29}) {
+		t.Fatalf("a recorded list is carried: %v", got)
+	}
+}

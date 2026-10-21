@@ -278,3 +278,22 @@ func TestProbeOfAHybridFirstOfferGetsNoRetry(t *testing.T) {
 		t.Fatalf("a hybrid-first offer carried no hybrid share: %+v", sh)
 	}
 }
+
+// With the device's key_share groups recorded (task 14b review M4), the probe
+// sends exactly those shares, in its order; a group it cannot build is an
+// engine gap, never dropped.
+func TestBuildClientHelloSendsExactlyTheRecordedKeyShares(t *testing.T) {
+	h := nxosHello()
+	h.KeyShareGroups = []uint16{29, 23}
+	raw, err := BuildClientHello(h, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := keySharesForTest(t, raw); !slices.Equal(got, [][2]int{{29, 32}, {23, 65}}) {
+		t.Fatalf("key_share %v, want [[29 32] [23 65]]", got)
+	}
+	h.KeyShareGroups = []uint16{30}
+	if _, err := BuildClientHello(h, ""); !errors.Is(err, ErrNoBuilder) {
+		t.Fatalf("x448 has no builder: %v", err)
+	}
+}

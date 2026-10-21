@@ -74,6 +74,7 @@ type Hello struct {
 	ALPN                []string `yaml:"alpn"`
 	PSKModes            []uint8  `yaml:"psk_key_exchange_modes"`
 	CompressCertAlgs    []uint16 `yaml:"compress_certificate_algorithms"` // extension 27
+	KeyShareGroups      []uint16 `yaml:"key_share_groups"`                // extension 51's groups; empty in a summary that predates them
 	Extensions          []uint16 `yaml:"extensions"`                      // in the device's order
 }
 

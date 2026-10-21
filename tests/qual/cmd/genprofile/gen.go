@@ -72,6 +72,7 @@ type clientHello struct {
 	PSKIdentities    int      `json:"psk_identities"`
 	PSKModes         []uint8  `json:"psk_key_exchange_modes"`
 	CompressCertAlgs []uint16 `json:"compress_certificate_algorithms"` // absent in older summaries: not offered
+	KeyShareGroups   []uint16 `json:"key_share_groups"`                // absent in older summaries: not recorded
 	Extensions       []uint16 `json:"extensions"`
 }
 
@@ -699,7 +700,7 @@ func tlsStimulus(evDir string, note devicemock.Source) (*devicemock.TLSStimulus,
 		h := c.Hello
 		t.ClientHello = devicemock.Hello{LegacyVersion: h.LegacyVersion, SupportedVersions: h.Versions,
 			CipherSuites: h.Suites, SupportedGroups: h.Groups, SignatureAlgorithms: h.SigAlgs, ALPN: h.ALPN,
-			PSKModes: h.PSKModes, CompressCertAlgs: h.CompressCertAlgs, Extensions: h.Extensions}
+			PSKModes: h.PSKModes, CompressCertAlgs: h.CompressCertAlgs, KeyShareGroups: h.KeyShareGroups, Extensions: h.Extensions}
 		host := c.Server
 		if i := strings.LastIndex(host, ":"); i >= 0 {
 			host = host[:i]

@@ -53,33 +53,60 @@ func curve(g uint16) ecdh.Curve {
 // then the X25519 public key.
 const hybridMLKEM = 4588
 
-// keyShares is the key_share body: one share, for the first offered group the
-// standard library can generate. A device that leads with X25519MLKEM768 sends
-// that share alone (cEOS 4.36.3M: L73-arista_ceos and its QUAL capture), so
-// no X25519 share is added: one would spare port49 a HelloRetryRequest the
-// device itself would get.
-func keyShares(groups []uint16) ([]byte, error) {
-	for _, g := range groups {
-		if g == hybridMLKEM {
-			mk, err := mlkem.GenerateKey768()
-			if err != nil {
-				return nil, err
-			}
-			xk, err := ecdh.X25519().GenerateKey(rand.Reader)
-			if err != nil {
-				return nil, err
-			}
-			return vec16(u16(nil, g), append(mk.EncapsulationKey().Bytes(), xk.PublicKey().Bytes()...)), nil
+// share is one fresh key share for group g, or ok false when the standard
+// library cannot generate g.
+func share(g uint16) (b []byte, ok bool, err error) {
+	if g == hybridMLKEM {
+		mk, err := mlkem.GenerateKey768()
+		if err != nil {
+			return nil, true, err
 		}
-		if c := curve(g); c != nil {
-			k, err := c.GenerateKey(rand.Reader)
+		xk, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, true, err
+		}
+		return vec16(u16(nil, g), append(mk.EncapsulationKey().Bytes(), xk.PublicKey().Bytes()...)), true, nil
+	}
+	c := curve(g)
+	if c == nil {
+		return nil, false, nil
+	}
+	k, err := c.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, true, err
+	}
+	return vec16(u16(nil, g), k.PublicKey().Bytes()), true, nil
+}
+
+// keyShares is the key_share body. With the device's key_share groups recorded,
+// it is exactly those shares in its order, and a group with no builder is an
+// engine gap. Without them (a summary that predates them) it is one share, for
+// the first offered group the standard library can generate. A device that
+// leads with X25519MLKEM768 sends that share alone (cEOS 4.36.3M:
+// L73-arista_ceos and its QUAL capture), so no X25519 share is added: one would
+// spare port49 a HelloRetryRequest the device itself would get.
+func keyShares(h Hello) ([]byte, error) {
+	if len(h.KeyShareGroups) > 0 {
+		var out []byte
+		for _, g := range h.KeyShareGroups {
+			b, ok, err := share(g)
 			if err != nil {
 				return nil, err
 			}
-			return vec16(u16(nil, g), k.PublicKey().Bytes()), nil
+			if !ok {
+				return nil, fmt.Errorf("%w: key_share for group %d", ErrNoBuilder, g)
+			}
+			out = append(out, b...)
+		}
+		return out, nil
+	}
+	for _, g := range h.SupportedGroups {
+		b, ok, err := share(g)
+		if err != nil || ok {
+			return b, err
 		}
 	}
-	return nil, fmt.Errorf("%w: key_share for groups %v", ErrNoBuilder, groups)
+	return nil, fmt.Errorf("%w: key_share for groups %v", ErrNoBuilder, h.SupportedGroups)
 }
 
 // BuildClientHello writes h as one handshake record, extensions in h's order,
@@ -120,11 +147,11 @@ func BuildClientHello(h Hello, serverIP string) ([]byte, error) {
 		case 45:
 			body = vec8(nil, h.PSKModes)
 		case 51:
-			share, err := keyShares(h.SupportedGroups)
+			shares, err := keyShares(h)
 			if err != nil {
 				return nil, err
 			}
-			body = vec16(nil, share)
+			body = vec16(nil, shares)
 		case 65281:
 			body = []byte{0}
 		default:

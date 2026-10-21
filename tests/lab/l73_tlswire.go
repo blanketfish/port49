@@ -40,6 +40,9 @@ type l73Hello struct {
 	Extensions    []uint16 `json:"extensions"`
 	// CompressCertAlgs are compress_certificate's algorithm ids (RFC 8879).
 	CompressCertAlgs []uint16 `json:"compress_certificate_algorithms,omitempty"`
+	// KeyShareGroups are key_share's group ids in the device's order; the keys
+	// themselves are session bytes and are read past.
+	KeyShareGroups []uint16 `json:"key_share_groups,omitempty"`
 }
 
 // l73ServerHello is port49's answer: the version and suite it chose, and
@@ -443,6 +446,16 @@ func l73ParseClientHello(b []byte) (*l73Hello, error) {
 			data.bad = data.bad || ids.bad
 		case 42:
 			h.EarlyData = true
+		case 51: // key_share: the group ids only, never a key
+			shares := &l73Reader{b: data.vec16()}
+			for len(shares.b) > 0 && !shares.bad {
+				g := shares.u16()
+				shares.vec16()
+				if !shares.bad {
+					h.KeyShareGroups = append(h.KeyShareGroups, g)
+				}
+			}
+			data.bad = data.bad || shares.bad
 		case 43:
 			h.Versions = l73U16s(data.vec8())
 		case 45:

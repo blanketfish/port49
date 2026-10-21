@@ -317,6 +317,9 @@ func TestL73SummaryTypesHaveNoRoomForSessionBytes(t *testing.T) {
 		// codes the device offers, the same for every connection; no random,
 		// key or secret can be carried in them (plan 11b, I3).
 		"l73Hello.CompressCertAlgs": "[]uint16",
+		// key_share's group ids (task 14b review M4): two-byte registry codes in
+		// the device's order; each share's key is read past and never kept.
+		"l73Hello.KeyShareGroups": "[]uint16",
 		// The 12-byte header's version octet (major<<4 | minor): one of four
 		// values RFC 8907 defines; it carries no session byte (plan 11b, M4).
 		"l73Plain.Version": "uint8",
@@ -671,5 +674,27 @@ func TestL73ConnsMeasuresTheDevicesDelayAfterTheServersFlight(t *testing.T) {
 	conns, _ = l73Conns(l73FakePcap(40013, 300, none), l73TDevice)
 	if got := l73Describe(conns, at); strings.Contains(got, "server's first data") {
 		t.Errorf("a gap stated with no server data: %s", got)
+	}
+}
+
+// key_share (51) is kept as its group ids alone, in the device's order: never
+// a key byte (task 14b review M4). cEOS 4.36.3M sends [4588] alone.
+func TestL73ClientHelloKeepsKeyShareGroupsOnly(t *testing.T) {
+	key := bytes.Repeat([]byte{0xab}, 32)
+	share := func(g uint16, k []byte) []byte {
+		b := binary.BigEndian.AppendUint16(nil, g)
+		return append(binary.BigEndian.AppendUint16(b, uint16(len(k))), k...)
+	}
+	list := append(share(4588, bytes.Repeat([]byte{0xcd}, 1216)), share(29, key)...)
+	h, err := l73ParseClientHello(l73HelloWith(51, append(binary.BigEndian.AppendUint16(nil, uint16(len(list))), list...)))
+	if err != nil || !slices.Equal(h.KeyShareGroups, []uint16{4588, 29}) {
+		t.Fatalf("%v %v", h.KeyShareGroups, err)
+	}
+	js, _ := json.Marshal(h)
+	if bytes.Contains(js, []byte("q6ur")) || bytes.Contains(js, []byte("171")) {
+		t.Fatalf("a key byte reached the summary: %s", js)
+	}
+	if _, err := l73ParseClientHello(l73HelloWith(51, []byte{0, 6, 0, 29, 0, 32, 1, 2})); err == nil {
+		t.Fatal("a key_share cut inside a key parsed without error")
 	}
 }
