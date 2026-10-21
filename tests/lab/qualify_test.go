@@ -504,12 +504,9 @@ func (q *qualEnv) cellStoreUnavailable() {
 	}
 	q.run.BreakGlass["store_unavailable"] = bgErr == nil
 	recs := q.l.recordsSince(off)
-	switch {
-	case tokErr == nil:
-		q.verdict("store_unavailable", "fail", "a token login succeeded with the store unavailable")
-	case qualRedeemed(recs):
-		q.verdict("store_unavailable", "fail", "a redeem was permitted with the store unavailable:"+summarize(recs))
-	default:
+	if result, why := qualStoreVerdict(tokErr, recs, qualUser); result != "pass" {
+		q.verdict("store_unavailable", result, why+summarize(recs))
+	} else {
 		q.verdict("store_unavailable", "pass", fmt.Sprintf("the token login was refused; break-glass logged in %v after %s.", bgErr == nil, took))
 	}
 }
@@ -627,12 +624,9 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	keep("tls_store_unavailable", stop())
 	q.run.BreakGlass["tls_store_unavailable"] = bgErr == nil
 	recs = q.l.recordsSince(off)
-	switch {
-	case tokErr == nil:
-		q.verdict("tls_store_unavailable", "fail", "a token login succeeded with the store unavailable")
-	case qualRedeemed(recs):
-		q.verdict("tls_store_unavailable", "fail", "a redeem was permitted with the store unavailable:"+summarize(recs))
-	default:
+	if result, why := qualStoreVerdict(tokErr, recs, qualUser); result != "pass" {
+		q.verdict("tls_store_unavailable", result, why+summarize(recs))
+	} else {
 		q.verdict("tls_store_unavailable", "pass", fmt.Sprintf("the token login was refused over TLS; break-glass logged in %v after %s.", bgErr == nil, took))
 	}
 

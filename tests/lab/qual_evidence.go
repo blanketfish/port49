@@ -592,6 +592,35 @@ func qualDenied(recs []map[string]any) bool {
 	return false
 }
 
+// qualStoreVerdict grades a store_unavailable cell (plain or TLS) from the
+// token login's error and the cell's records: "pass" only when the login
+// failed, no redeem was permitted, and port49 logged `redeem deny
+// store_unavailable` for user. A login that failed for any other reason (the
+// fault file not taking, the device never asking) measured nothing about the
+// store (final review M1). why is "" on a pass.
+func qualStoreVerdict(tokErr error, recs []map[string]any, user string) (result, why string) {
+	storeDeny := false
+	for _, r := range recs {
+		if r["event"] != "redeem" {
+			continue
+		}
+		sess, _ := r["session"].(map[string]any)
+		switch {
+		case r["verdict"] == "permit":
+			return "fail", "a redeem was permitted with the store unavailable:"
+		case r["verdict"] == "deny" && r["reason"] == "store_unavailable" && sess["username"] == user:
+			storeDeny = true
+		}
+	}
+	switch {
+	case tokErr == nil:
+		return "fail", "a token login succeeded with the store unavailable"
+	case !storeDeny:
+		return "fail", "the token login failed but port49d logged no redeem deny store_unavailable for it, so the store fault was not what refused it:"
+	}
+	return "pass", ""
+}
+
 // qualOperatorSection is what an operator of platform must know that the cells'
 // verdicts alone do not say; "" for a platform with nothing to add. It is
 // written by the harness so a regenerated note keeps it.

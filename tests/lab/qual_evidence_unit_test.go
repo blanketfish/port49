@@ -890,3 +890,30 @@ func TestQualL80NotMeasuredWritesNoNote(t *testing.T) {
 		t.Fatalf("a gated note: wrote %d notes, %v", wrote, err)
 	}
 }
+
+// A store_unavailable cell passes only on port49's own `redeem deny store_unavailable`
+// for the token user (final review M1): a login that failed for any other reason, the
+// fault file not taking among them, measured nothing about the store.
+func TestQualStoreVerdictNeedsTheStoreUnavailableDeny(t *testing.T) {
+	refused := errors.New("ssh: unable to authenticate")
+	deny := func(user, reason string) map[string]any {
+		return map[string]any{"event": "redeem", "verdict": "deny", "reason": reason, "session": map[string]any{"username": user}}
+	}
+	cases := []struct {
+		err    error
+		recs   []map[string]any
+		result string
+	}{
+		{refused, []map[string]any{deny("qual01", "store_unavailable")}, "pass"},
+		{refused, nil, "fail"},
+		{refused, []map[string]any{deny("qual01", "token_not_found")}, "fail"},
+		{refused, []map[string]any{deny("breakglass", "store_unavailable")}, "fail"},
+		{nil, []map[string]any{deny("qual01", "store_unavailable")}, "fail"},
+		{refused, []map[string]any{deny("qual01", "store_unavailable"), {"event": "redeem", "verdict": "permit", "session": map[string]any{"username": "qual01"}}}, "fail"},
+	}
+	for i, c := range cases {
+		if got, why := qualStoreVerdict(c.err, c.recs, "qual01"); got != c.result || (got == "fail" && why == "") {
+			t.Errorf("case %d: got %s %q, want %s", i, got, why, c.result)
+		}
+	}
+}
