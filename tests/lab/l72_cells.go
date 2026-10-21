@@ -53,7 +53,7 @@ var l72Cells = []l72Cell{
 	{"f", "a leaf naming another device: the alert and identity_mismatch"},
 	{"g", "a leaf the CRL lists: the handshake completes, then a reset (no alert), and certificate_revoked"},
 	{"h", "a CRL source past nextUpdate and unreachable: the handshake completes, then a reset and status_unavailable; the next connection reset at Accept with no strike and no second record"},
-	{"i", "a server name not in server_names: the alert and sni_mismatch"},
+	{"i", "a server name not in server_names: the alert and sni_mismatch; the next connection reset at Accept with no strike and no second record"},
 	{"j", "tickets on: the second connection resumes; one ticket presented twice resumes once"},
 	{"k", "openssl -early_data with a port49 session: whether early data is sent"},
 	{"l", "a packet with the unencrypted flag clear: an ERROR with the flag, then the close"},
