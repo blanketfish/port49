@@ -1,16 +1,16 @@
 port49-broker: metrics on 10.149.0.12:9050
 port49-broker: store: broker.state_dir/marks.json is absent: this replica's copy starts from the store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd restore lost cannot be put back from it)
-port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:15:56Z (0 days)
-port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:15:56Z (0 days)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:52:07Z (0 days)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:52:07Z (0 days)
 port49-broker: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 1
 port49-broker: store: 0 revocation(s) in force from the directory store
 port49-broker: identity: humans: x509 from broker.client_ca_file (no broker.identity is configured); no OIDC verifier
 port49-broker: policy: no bundle has been judged on this keyspace; this start is not judged against one
 port49-broker: policy: mints wait for a takeover to judge bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, which is this start gate and not a store fault: port49 workload retries it, and port49 token (through the agent) exits saying to retry in 5s
 port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
-port49-broker: admin socket on /tmp/p49l74542407967/r2-b.sock (port49 revoke, port49 directory forget)
+port49-broker: admin socket on /tmp/p49l741452195517/r2-b.sock (port49 revoke, port49 directory forget)
 port49-broker: listening on 10.149.0.12:8443, metrics on 10.149.0.12:9050
-port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1203104, since 2026-10-21T07:16:09Z)"): this replica runs the start, the sweep and the policy refresh
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1283717, since 2026-10-21T07:52:21Z)"): this replica runs the start, the sweep and the policy refresh
 port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
 port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the store was restored; going by meta/judged alone
 port49-broker: runner: the bundle in force (sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d) is not the one the last runner judged (none recorded); 0 unspent token(s) purged (run 'port49 token' again)

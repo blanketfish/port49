@@ -1,11 +1,11 @@
 port49d: metrics on 10.149.0.13:9049
-port49d: store: the daemon's etcd certificate (CN=port49-daemon) is valid until 2026-10-22T07:15:56Z (0 days)
+port49d: store: the daemon's etcd certificate (CN=port49-daemon) is valid until 2026-10-22T07:52:07Z (0 days)
 port49d: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 13
-port49d: directory store: the daemon's etcd certificate (CN=port49-daemon) is valid until 2026-10-22T07:15:56Z (0 days)
+port49d: directory store: the daemon's etcd certificate (CN=port49-daemon) is valid until 2026-10-22T07:52:07Z (0 days)
 port49d: store: 0 revocation(s) in force from the directory store
 port49d: store: health checked every 1s; every listener closes after 5 consecutive failed checks and opens again after 3 passes (stores.session.etcd.health)
 port49d: store: the context cache is off (stores.session.etcd.context_cache.ttl is not set)
-port49d: admin socket on /tmp/p49l74542407967/r3-d.sock (port49 keys diagnose, port49 revoke)
+port49d: admin socket on /tmp/p49l741452195517/r3-d.sock (port49 keys diagnose, port49 revoke)
 port49d: listening on 10.149.0.13:4949, metrics on 10.149.0.13:9049, 1 devices admitted
 port49d: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
 port49d: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
@@ -13,5 +13,5 @@ port49d: directory store: answering again; the cache was 23.0s old
 port49d: store: the marks feed follows the store again
 port49d: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
 port49d: store: the marks feed stopped (store: unavailable: etcdserver: no leader); trying again every second
-port49d: directory store: answering again; the cache was 23.2s old
 port49d: store: the marks feed follows the store again
+port49d: directory store: answering again; the cache was 23.2s old
