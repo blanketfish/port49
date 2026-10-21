@@ -304,6 +304,36 @@ func TestAFlaggedMarkIsSaidInTheFormItsTimesCall(t *testing.T) {
 	}
 }
 
+// A refused write on a mark this process already holds says it was
+// refused and that the mark stands, never "may still land": a refused write
+// never lands, and it is not noted as this process's own (task 2 review M2).
+func TestARefusedWriteOnAHeldMarkSaysTheMarkStands(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Proc = "port49-broker"
+	f.b.Marks = store.NewMarks()
+	standing := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: time.Now().Add(-time.Hour)}
+	f.b.Marks.Set(standing, true)
+	f.b.Store = refusingPuts{f.st}
+	_, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err == nil || !errors.Is(err, store.ErrRefused) || strings.Contains(err.Error(), "may not have been recorded") ||
+		!strings.Contains(err.Error(), "broker: the revocation was refused; the revocation of user:alice@example.com "+
+			"this port49-broker already holds stands") {
+		t.Fatalf("%v", err)
+	}
+	if !f.b.Marks.Holds(store.RevocationPrincipal, alice) {
+		t.Fatal("the refusal took the standing mark out")
+	}
+	if f.b.Marks.FailedWrite(store.RevocationPrincipal, alice, f.b.Now()) {
+		t.Fatal("a refused write was noted as one that may land")
+	}
+}
+
+type refusingPuts struct{ store.Store }
+
+func (refusingPuts) PutRevocation(context.Context, store.Revocation) error {
+	return fmt.Errorf("%w: etcdserver: permission denied", store.ErrRefused)
+}
+
 // A flagged mark a runner put back from its marks copy is said as a
 // put-back, never as a copy a cut held back (task 2 review I1): one made
 // before the lift re-created a lifted mark, so the line says how to lift

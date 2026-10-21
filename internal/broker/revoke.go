@@ -257,7 +257,11 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	// delivered: a lift recorded above it is one this process had not seen,
 	// and the store flags the mark landed_after_lift (decision 51).
 	if err := b.Store.PutRevocation(store.WithMarkFloor(ctx, b.Marks.ConfirmedRevision()), mark); err != nil {
-		if !held && (errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused)) {
+		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) {
+			if held { // a refused write never lands: the mark held here stands (task 2 review M2)
+				return RevokeReport{}, fmt.Errorf("broker: the revocation was refused; the revocation of %s this %s "+
+					"already holds stands (%w); "+b.fallback(), printsafe.Line(key, 160), b.proc(), err)
+			}
 			b.Marks.Set(mark, false)
 			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
 				b.fallback(), err)
