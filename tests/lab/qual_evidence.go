@@ -478,10 +478,23 @@ func qualNoteGate(note string, secrets []string) []string {
 }
 
 // qualCommandCells grades command_permitted and command_denied from one
-// login's records. Junos sends no command authorization (L18), so both are
-// not_applicable: its refusals print text too, so output proves nothing.
+// login's records. Junos (L18) and SR Linux (L76 cell b) send no command
+// authorization, so both are not_applicable while the records hold no
+// authorize_command: their refusals print text too, so output proves nothing.
+// One that sends some fails both, so a firmware that starts asking port49 is
+// graded, not hidden (final review M2).
 func qualCommandCells(platform string, recs []map[string]any) (permitted, denied, why string) {
 	if qualNoCommandAuth(platform) {
+		n := 0
+		for _, r := range recs {
+			if r["event"] == "authorize_command" {
+				n++
+			}
+		}
+		if n > 0 {
+			return "fail", "fail", fmt.Sprintf("the device sent %d authorize_command record(s), and %s is graded not_applicable only while it sends none: "+
+				"grade its command cells like any other platform's", n, platform)
+		}
 		return "not_applicable", "not_applicable", qualNoCommandAuthWhy(platform)
 	}
 	permitted, denied = "pass", "pass"

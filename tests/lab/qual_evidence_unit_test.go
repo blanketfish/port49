@@ -374,6 +374,14 @@ func TestQualCommandCellsOnJunosAreNotApplicable(t *testing.T) {
 	if p, d, _ := qualCommandCells("cisco_nxos", nil); p != "fail" || d != "fail" {
 		t.Fatalf("nxos empty: %s %s", p, d)
 	}
+	// not_applicable is what the records show, not a fiat (final review M2): a Junos or
+	// SR Linux firmware that starts sending command authorization fails both cells.
+	for _, plat := range []string{"juniper_junos", "nokia_srlinux"} {
+		p, d, why := qualCommandCells(plat, good)
+		if p != "fail" || d != "fail" || !strings.Contains(why, "2 authorize_command") {
+			t.Errorf("%s with authorize_command records: %s %s %q", plat, p, d, why)
+		}
+	}
 }
 
 // A gate hit, in the files or in the note, leaves what was on disk untouched: nothing new is written.
