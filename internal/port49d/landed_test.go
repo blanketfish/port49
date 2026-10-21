@@ -177,10 +177,11 @@ func TestARunnersPutBackOverALiveLiftIsSaidAsAPutBack(t *testing.T) {
 	if _, ok := store.PutBackOf(got.Origin); !got.LandedAfterLift || !ok {
 		t.Fatalf("the put-back landed as %+v", got)
 	}
-	var said bytes.Buffer
+	var said syncBuffer
 	brk := &broker.Broker{Proc: "port49-broker", Store: region1, Marks: store.NewMarks(),
 		Say: func(format string, args ...any) { fmt.Fprintf(&said, format+"\n", args...) }}
 	brk.MarkChanged(store.MarkChange{Revocation: got, Standing: true})
+	waitWithin(t, &said, "broker: ", 5*time.Second) // said off the feed's goroutine
 	if s := said.String(); !strings.Contains(s, "was put back after the lift at "+now.Format(time.RFC3339)+
 		" by a port49-broker runner from its broker.state_dir/marks.json") || strings.Contains(s, "cut off") {
 		t.Fatalf("the lifter's broker said %q", s)

@@ -1009,7 +1009,7 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 // feed's own to keep (store.FollowMarks).
 //
 // A mark the store flagged landed_after_lift is said once, as it is told
-// Standing (store.MarkChange), whether or not this process runs its
+// Standing (store.MarkChange), off the feed's goroutine, whether or not this process runs its
 // region (decision 51; R-I5): in the form its time against the lift's
 // calls for (landedLine). One this process's own write failed to record
 // is said as its own (Marks.FailedWrite; post-11b, C2).
@@ -1023,11 +1023,17 @@ func (b *Broker) MarkChanged(c store.MarkChange) {
 		own := b.Marks.FailedWrite(c.Kind, c.Key, c.At)
 		switch {
 		case c.LandedAfterLift:
-			line := b.landedLine(c.Revocation)
-			if own {
-				line += "; " + b.ownClause()
-			}
-			b.say("%s", line)
+			// The lift's record is read off the feed's goroutine, so a slow
+			// directory never stalls the marks every login and mint read
+			// (task 2 review M1). Flagged marks are rare: each needs a lift
+			// of its key within the hour.
+			go func(r store.Revocation) {
+				line := b.landedLine(r)
+				if own {
+					line += "; " + b.ownClause()
+				}
+				b.say("%s", line)
+			}(c.Revocation)
 		case own:
 			b.say("broker: a revocation of %s %s, landed when the store answered again; it stands everywhere",
 				printsafe.Line(c.Key, 160), b.ownClause())
@@ -1047,7 +1053,8 @@ func (b *Broker) MarkChanged(c store.MarkChange) {
 }
 
 // landedReadTimeout bounds the read of a lift's record for a flagged mark's
-// line, which runs on the marks feed's goroutine.
+// line, read off the marks feed's goroutine (MarkChanged); one that does not
+// answer in time is said in the unreadable form.
 const landedReadTimeout = 5 * time.Second
 
 // landedLine is the line for r, a mark flagged landed_after_lift (spec §13

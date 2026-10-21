@@ -283,7 +283,7 @@ func TestAFlaggedMarkIsSaidInTheFormItsTimesCall(t *testing.T) {
 			f.b.Say, f.b.Marks, f.b.Conns = said.say, store.NewMarks(), nil
 			f.b.Store = &cutStore{Store: f.st, lift: c.lift}
 			f.b.MarkChanged(store.MarkChange{Revocation: c.mark, Standing: true})
-			all := said.all()
+			all := waitSaid(t, said, "broker: ")
 			if all != c.want {
 				t.Fatalf("said\n%s\nwant\n%s", all, c.want)
 			}
@@ -302,6 +302,74 @@ func TestAFlaggedMarkIsSaidInTheFormItsTimesCall(t *testing.T) {
 	if said.all() != "" {
 		t.Fatalf("an unflagged mark was said: %s", said.all())
 	}
+}
+
+// A revoke the store flagged, made over a lift this process had not yet
+// seen, says so in its own report (task 2 review M5).
+func TestARevokeTheStoreFlaggedSaysSoInItsReport(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Marks = store.NewMarks()
+	f.b.Store = flaggingPuts{f.st}
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := rep.Text(); !strings.Contains(text, "\nthis revocation landed over a lift of "+alice+" this process's "+
+		"marks feed had not yet shown: it stands everywhere, and whoever lifted it may not know; `port49 revoke "+
+		"--list` names the lift") {
+		t.Fatalf("%s", text)
+	}
+}
+
+// flaggingPuts stores every revocation as the store does one put over a
+// lift its writer had not seen.
+type flaggingPuts struct{ store.Store }
+
+func (p flaggingPuts) PutRevocation(ctx context.Context, r store.Revocation) error {
+	r.LandedAfterLift = true
+	return p.Store.PutRevocation(ctx, r)
+}
+
+// When the feed's put of a pending mark came before the write's error, the
+// writer tells the store's mark, flag and all, never its own unflagged copy
+// (task 2 review M5).
+func TestTheUnrecordedPathTellsTheStoresFlag(t *testing.T) {
+	f := newFixture(t, 8)
+	said := &saidLines{}
+	f.b.Proc, f.b.Say, f.b.Marks, f.b.Conns = "port49-broker", said.say, store.NewMarks(), nil
+	feed := &scriptFeed{events: make(chan scriptEvent)}
+	follow(t, f.b, feed)
+	liftAt := f.b.Now().Add(time.Minute)
+	f.b.Store = &feedFirst{cutStore: cutStore{Store: f.st, lift: &store.Lift{At: liftAt, Revision: 6}}, feed: feed,
+		marks: f.b.Marks}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	all := waitSaid(t, said, "landed after it")
+	if !strings.Contains(all, "a copy sent while its writer was cut off") ||
+		!strings.Contains(all, "made on this port49-broker, reported unrecorded then") {
+		t.Fatalf("said:\n%s", all)
+	}
+	if f.b.Marks.Flagged() != 1 {
+		t.Fatalf("flagged %d", f.b.Marks.Flagged())
+	}
+}
+
+// feedFirst is a store whose revocation write lands flagged and is
+// delivered by the marks feed before the write's reply is lost.
+type feedFirst struct {
+	cutStore
+	feed  *scriptFeed
+	marks *store.Marks
+}
+
+func (s *feedFirst) PutRevocation(ctx context.Context, r store.Revocation) error {
+	r.LandedAfterLift = true
+	s.feed.events <- scriptEvent{r: r, rev: 9}
+	for s.marks.ConfirmedRevision() < 9 {
+		time.Sleep(time.Millisecond)
+	}
+	return fmt.Errorf("%w: the reply was lost", store.ErrUnavailable)
 }
 
 // A refused write on a mark this process already holds says it was
@@ -365,7 +433,7 @@ func TestAPutBackOverALiftIsSaidAsAPutBack(t *testing.T) {
 			f.b.Say, f.b.Marks, f.b.Conns = said.say, store.NewMarks(), nil
 			f.b.Store = &cutStore{Store: f.st, lift: &store.Lift{At: liftAt, Revision: 8}}
 			f.b.MarkChanged(store.MarkChange{Revocation: c.mark, Standing: true})
-			all := said.all()
+			all := waitSaid(t, said, "broker: ")
 			if all != c.want {
 				t.Fatalf("said\n%s\nwant\n%s", all, c.want)
 			}
@@ -392,6 +460,50 @@ func TestPutBackOriginKeepsTheOriginAndSaysItOnce(t *testing.T) {
 	}
 }
 
+// A slow lift's record never stalls the marks feed: MarkChanged returns
+// while the read hangs, and the line is said once it answers (task 2
+// review M1).
+func TestAFlaggedMarksLineNeverStallsTheFeed(t *testing.T) {
+	f := newFixture(t, 8)
+	said := &saidLines{}
+	f.b.Say, f.b.Marks, f.b.Conns = said.say, store.NewMarks(), nil
+	release := make(chan struct{})
+	liftAt := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
+	f.b.Store = slowLift{Store: f.st, release: release, lift: store.Lift{At: liftAt, Revision: 8}}
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		f.b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal, Key: alice,
+			At: liftAt.Add(-20 * time.Second), LandedAfterLift: true}, Standing: true})
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("MarkChanged waited on the lift's record, stalling the marks feed")
+	}
+	if all := said.all(); all != "" {
+		t.Fatalf("said before the record answered: %s", all)
+	}
+	close(release)
+	waitSaid(t, said, "a copy sent while its writer was cut off")
+}
+
+type slowLift struct {
+	store.Store
+	release chan struct{}
+	lift    store.Lift
+}
+
+func (s slowLift) GetLift(ctx context.Context, _, _ string) (store.Lift, error) {
+	select {
+	case <-s.release:
+		return s.lift, nil
+	case <-ctx.Done():
+		return store.Lift{}, ctx.Err()
+	}
+}
+
 // A lift's record that cannot be read is said so, with the mark: never a
 // form the record would have chosen.
 func TestAFlaggedMarkWhoseLiftCannotBeReadIsSaidSo(t *testing.T) {
@@ -401,7 +513,7 @@ func TestAFlaggedMarkWhoseLiftCannotBeReadIsSaidSo(t *testing.T) {
 	f.b.Store = liftUnreadable{f.st}
 	f.b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal, Key: alice,
 		At: time.Now(), LandedAfterLift: true}, Standing: true})
-	if all := said.all(); !strings.Contains(all, "landed after a lift; the lift's record could not be read (") ||
+	if all := waitSaid(t, said, "broker: "); !strings.Contains(all, "landed after a lift; the lift's record could not be read (") ||
 		!strings.Contains(all, "port49 revoke --list") {
 		t.Fatalf("said: %s", all)
 	}
