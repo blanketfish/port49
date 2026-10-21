@@ -1,5 +1,5 @@
 {
-  "pending_lab": false,
+  "pending_lab": true,
   "scenarios": {
     "flight_delay": {
       "outcome": "login_ok",
@@ -73,14 +73,6 @@
           "args": [
             "shell:roles*network-admin"
           ]
-        },
-        {
-          "step": "command_permitted",
-          "event": "author_pass_add"
-        },
-        {
-          "step": "command_denied",
-          "event": "author_fail"
         },
         {
           "step": "account_start",

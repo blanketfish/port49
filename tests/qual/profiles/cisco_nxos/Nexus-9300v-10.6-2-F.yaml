@@ -288,11 +288,12 @@ acceptance:
       - note: tests/lab/results/L16-cisco_nxos.md
         register: L16
     note: L16 measured on 10.4(2)F that a role the device lacks is ignored and the session opens as network-operator; not measured on 10.6(2)F
-engine_gaps:
-  - id: tls_command_authorization_needs_single_connection
-    what: the lab's TLS cells ran with single-connection on, because this firmware sends no command authorization on a per-request TLS connection (L73 cell a); the mock plays the TLS steps per_step
-    code: ""
+device_facts:
+  - id: tls_per_request_no_command_authorization
+    what: 'Over per-request TLS (the device default) this firmware sends port49 no command authorization: each per-request token login sent an authorize_command for `end` alone and none for `show version`, which still ran (L73 cell a); with single-connection on, `show version` was authorized (L73 cell h). Whether a command port49''s policy denies runs that way is L80, open. Configure single-connection on the device''s TLS servers, or port49''s command rules never see a command. This run''s TLS cells ran with single-connection on and are re-vetted per-request'
+    status: measured
     sources:
       - note: tests/lab/results/L73-cisco_nxos.md
         register: L73
+engine_gaps: []
 golden: tests/qual/golden/cisco_nxos/Nexus-9300v-10.6-2-F.json
