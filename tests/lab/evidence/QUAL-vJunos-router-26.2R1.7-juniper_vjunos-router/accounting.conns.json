@@ -1,10 +1,10 @@
 [
   {
     "server": "172.100.100.1:49",
-    "device_port": 59350,
-    "syn_at": "2026-10-20T21:27:35.521004Z",
+    "device_port": 34094,
+    "syn_at": "2026-10-21T09:48:40.812335Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:35.522453Z",
+    "end_at": "2026-10-21T09:48:40.813493Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -24,10 +24,10 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 59362,
-    "syn_at": "2026-10-20T21:27:35.522881Z",
+    "device_port": 34100,
+    "syn_at": "2026-10-21T09:48:40.813955Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:35.52335Z",
+    "end_at": "2026-10-21T09:48:40.814473Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -40,42 +40,10 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 44746,
-    "syn_at": "2026-10-20T21:27:39.691736Z",
+    "device_port": 34102,
+    "syn_at": "2026-10-21T09:48:44.942617Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:39.692837Z",
-    "plain_tacacs_from_device": [
-      {
-        "version": 192,
-        "type": 3,
-        "seq_no": 1,
-        "flags": 0,
-        "length": 87
-      }
-    ]
-  },
-  {
-    "server": "172.100.100.1:49",
-    "device_port": 44754,
-    "syn_at": "2026-10-20T21:27:39.693449Z",
-    "end": "server-fin",
-    "end_at": "2026-10-20T21:27:39.694656Z",
-    "plain_tacacs_from_device": [
-      {
-        "version": 192,
-        "type": 3,
-        "seq_no": 1,
-        "flags": 0,
-        "length": 99
-      }
-    ]
-  },
-  {
-    "server": "172.100.100.1:49",
-    "device_port": 44770,
-    "syn_at": "2026-10-20T21:27:39.6955Z",
-    "end": "server-fin",
-    "end_at": "2026-10-20T21:27:39.69613Z",
+    "end_at": "2026-10-21T09:48:44.943822Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -88,10 +56,10 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 44784,
-    "syn_at": "2026-10-20T21:27:39.696809Z",
+    "device_port": 34110,
+    "syn_at": "2026-10-21T09:48:44.944522Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:39.697532Z",
+    "end_at": "2026-10-21T09:48:44.94531Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -104,10 +72,10 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 44792,
-    "syn_at": "2026-10-20T21:27:39.705032Z",
+    "device_port": 34120,
+    "syn_at": "2026-10-21T09:48:44.945918Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:39.706716Z",
+    "end_at": "2026-10-21T09:48:44.946849Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -120,10 +88,10 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 44806,
-    "syn_at": "2026-10-20T21:27:39.707381Z",
+    "device_port": 34126,
+    "syn_at": "2026-10-21T09:48:44.94767Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:39.708139Z",
+    "end_at": "2026-10-21T09:48:44.948292Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -136,10 +104,58 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 44814,
-    "syn_at": "2026-10-20T21:27:39.770028Z",
+    "device_port": 34140,
+    "syn_at": "2026-10-21T09:48:44.94888Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:40.271323Z",
+    "end_at": "2026-10-21T09:48:44.949691Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 3,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 87
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 34156,
+    "syn_at": "2026-10-21T09:48:44.95022Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T09:48:44.951167Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 3,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 99
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 34172,
+    "syn_at": "2026-10-21T09:48:44.951816Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T09:48:44.952722Z",
+    "plain_tacacs_from_device": [
+      {
+        "version": 192,
+        "type": 3,
+        "seq_no": 1,
+        "flags": 0,
+        "length": 107
+      }
+    ]
+  },
+  {
+    "server": "172.100.100.1:49",
+    "device_port": 34178,
+    "syn_at": "2026-10-21T09:48:45.055666Z",
+    "end": "server-fin",
+    "end_at": "2026-10-21T09:48:45.557502Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
@@ -159,10 +175,10 @@
   },
   {
     "server": "172.100.100.1:49",
-    "device_port": 44830,
-    "syn_at": "2026-10-20T21:27:40.287442Z",
+    "device_port": 34184,
+    "syn_at": "2026-10-21T09:48:45.834517Z",
     "end": "server-fin",
-    "end_at": "2026-10-20T21:27:41.2959Z",
+    "end_at": "2026-10-21T09:48:46.839814Z",
     "plain_tacacs_from_device": [
       {
         "version": 192,
