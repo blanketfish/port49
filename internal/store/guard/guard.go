@@ -50,7 +50,7 @@ var pools = map[string]Pool{
 
 	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk,
 
-	"PutToken": Token, "Candidates": Token, "RedeemAndReceipt": Token, "DeleteTokens": Token, "DeleteToken": Token,
+	"PutToken": Token, "Candidates": Token, "TokenIDs": Token, "RedeemAndReceipt": Token, "DeleteTokens": Token, "DeleteToken": Token,
 	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token, "IndexToken": Token,
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
@@ -477,6 +477,11 @@ func (g *guarded) PutToken(ctx context.Context, k store.TokenKey, t store.Token)
 
 func (g *guarded) Candidates(ctx context.Context, k store.TokenKey) (ts []store.Token, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { ts, e = g.inner.Candidates(ctx, k); return })
+	return
+}
+
+func (g *guarded) TokenIDs(ctx context.Context, k store.TokenKey) (ids []string, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { ids, e = g.inner.TokenIDs(ctx, k); return })
 	return
 }
 

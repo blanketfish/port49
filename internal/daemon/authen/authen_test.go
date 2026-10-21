@@ -378,6 +378,9 @@ func (noStore) PutToken(context.Context, store.TokenKey, store.Token) (int, erro
 func (noStore) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
 	panic("store called")
 }
+func (noStore) TokenIDs(context.Context, store.TokenKey) ([]string, error) {
+	panic("store called")
+}
 func (noStore) RedeemAndReceipt(context.Context, store.TokenKey, string, store.ReceiptWrite) error {
 	panic("store called")
 }

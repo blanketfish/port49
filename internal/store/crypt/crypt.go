@@ -447,6 +447,12 @@ func (w *wrapped) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenI
 	return w.inner.RedeemAndReceipt(ctx, k, tokenID, wr)
 }
 
+// TokenIDs carries no sealed field: the IDs are plaintext, so a token this
+// layer cannot open is listed too.
+func (w *wrapped) TokenIDs(ctx context.Context, k store.TokenKey) ([]string, error) {
+	return w.inner.TokenIDs(ctx, k)
+}
+
 // DeleteTokens carries no sealed field: the key alone addresses the records.
 func (w *wrapped) DeleteTokens(ctx context.Context, k store.TokenKey) error {
 	return w.inner.DeleteTokens(ctx, k)

@@ -2211,3 +2211,37 @@ func TestAMembershipCopiedToAnotherPrincipalIsRefused(t *testing.T) {
 		t.Fatalf("forgetting mallory returned alice's record opened: %+v %v", got, err)
 	}
 }
+
+// A token an older port49 sealed, before the credential carried mfa_fresh,
+// opens with MFAFresh false and the rest of its proof intact: a refresh then
+// holds its proof to reuse_for, failing closed (spec §5.1.3; F-I1).
+func TestATokenSealedWithoutMFAFreshReadsNotFresh(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	exp := time.Now().Add(time.Minute).UTC().Truncate(time.Second)
+	proved := exp.Add(-2 * time.Minute)
+	// The sealed body as tokenSecret marshalled it before MFAFresh: the
+	// credential's fields by their Go names, and no MFAFresh among them.
+	body, err := json.Marshal(map[string]any{"secret": []byte("secret-old"), "principal": "user:alice",
+		"username": "alice", "kind": store.KindLogin, "expires_at": exp, "minted_at": exp.Add(-time.Minute),
+		"credential": map[string]any{"Method": "cert", "MFAMethod": "hardware_key_touch", "MFAAt": proved}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := keys().SealBound(body, tokenAAD(k, "old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inner.PutToken(ctx, k, store.Token{ID: "old", ExpiresAt: exp, Sealed: sealed}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("the old token did not open: %d tokens, %v", len(got), err)
+	}
+	if c := got[0].Credential; c.MFAFresh || c.MFAMethod != "hardware_key_touch" || !c.MFAAt.Equal(proved) {
+		t.Fatalf("the old token's proof: MFAFresh %v, method %q, at %v", c.MFAFresh, c.MFAMethod, c.MFAAt)
+	}
+}

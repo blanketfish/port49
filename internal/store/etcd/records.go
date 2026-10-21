@@ -29,6 +29,9 @@ type credRec struct {
 	// omitzero, not omitempty: omitempty never omits a zero time.Time.
 	MFAAt          time.Time `json:"mfa_at,omitzero"`
 	MFAAgentSHA256 string    `json:"mfa_agent_sha256,omitempty"`
+	// Written always, false included; absent reads as false
+	// (store.Credential.MFAFresh).
+	MFAFresh bool `json:"mfa_fresh"`
 }
 
 type tokenRec struct {

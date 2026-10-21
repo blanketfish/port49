@@ -429,6 +429,18 @@ func (s *Store) Candidates(_ context.Context, k store.TokenKey) ([]store.Token, 
 	return result, nil
 }
 
+// TokenIDs is the ID of every live token under k.
+func (s *Store) TokenIDs(_ context.Context, k store.TokenKey) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := s.live(k)
+	ids := make([]string, len(live))
+	for i, t := range live {
+		ids[i] = t.ID
+	}
+	return ids, nil
+}
+
 func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, tokenID string, w store.ReceiptWrite) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

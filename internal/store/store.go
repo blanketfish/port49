@@ -112,6 +112,14 @@ type Credential struct {
 	MFAMethod      string
 	MFAAt          time.Time
 	MFAAgentSHA256 string
+	// MFAFresh is a proof made for the mint's own challenge, which covers
+	// that mint once whatever reuse_for is; false is a kept proof reused,
+	// held to reuse_for from MFAAt. A refresh judges an unspent token's proof
+	// by it (spec §5.1.3). Every encoding writes it, false included, and
+	// every lossy read is false: a record an older port49 wrote, a field an
+	// encoding dropped, a zero value. So a lost true costs one `port49 token`
+	// again, and never keeps a token the policy forbids.
+	MFAFresh bool
 }
 
 type Token struct {
@@ -638,6 +646,12 @@ type Idempotency struct {
 type Store interface {
 	PutToken(ctx context.Context, k TokenKey, t Token) (count int, err error)
 	Candidates(ctx context.Context, k TokenKey) ([]Token, error)
+	// TokenIDs is the ID of every live token under k, one the reader cannot
+	// open included: the IDs are plaintext (Token.ID), so the sealing layer
+	// passes it through. A refresh reads it before Candidates and deletes
+	// an ID that Candidates did not give, which is unreadable or was spent
+	// in between (spec §5.1.3).
+	TokenIDs(ctx context.Context, k TokenKey) ([]string, error)
 	// RedeemAndReceipt removes the token with this ID and writes the receipt in
 	// one atomic operation, indexing the receipt by principal (design §12).
 	RedeemAndReceipt(ctx context.Context, k TokenKey, tokenID string, w ReceiptWrite) error
@@ -1000,11 +1014,13 @@ type Store interface {
 	DeleteRevocation(ctx context.Context, kind, key string) error
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
-	// SupersedeTokens records that k's unspent tokens were deleted at at, by
-	// a refresh or a revocation, keeping the later of at and what stands,
-	// for SupersededFor. An idempotent replay of a mint from before it, on
-	// any broker process, is minted afresh rather than answered with a token
-	// that no longer exists (plan 7e, Ruling 9).
+	// SupersedeTokens records that some of k's unspent tokens were deleted
+	// at at, by a refresh or a revocation, keeping the later of at and what
+	// stands, for SupersededFor. An idempotent replay of a mint from before
+	// it, on any broker process, is minted afresh rather than answered with
+	// a token that no longer exists (plan 7e, Ruling 9). A refresh passes the
+	// latest MintedAt among the tokens it deletes, so a replay of a token it
+	// kept, minted after them, still replays.
 	SupersedeTokens(ctx context.Context, k TokenKey, at time.Time) error
 	// SupersedeAll is SupersedeTokens for every key at once: a start that
 	// purged every unspent token.

@@ -70,6 +70,24 @@ func (s *Store) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token
 	return liveTokens(resp.Kvs, s.now()), nil
 }
 
+// TokenIDs is the ID of every live token under k. A record that does not
+// decode is left out, as Candidates leaves it: its lease reclaims it.
+func (s *Store) TokenIDs(ctx context.Context, k store.TokenKey) ([]string, error) {
+	resp, err := s.tok.Get(ctx, s.k.tokens(k), clientv3.WithPrefix())
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	var ids []string
+	for _, kv := range resp.Kvs {
+		var r tokenRec
+		if json.Unmarshal(kv.Value, &r) != nil || !r.ExpiresAt.After(s.now()) {
+			continue
+		}
+		ids = append(ids, r.ID)
+	}
+	return ids, nil
+}
+
 // liveToken reads one token key: its revision, or found false when it is
 // absent or past its expiry.
 func (s *Store) liveToken(ctx context.Context, k store.TokenKey, id string) (mod int64, found bool, err error) {
