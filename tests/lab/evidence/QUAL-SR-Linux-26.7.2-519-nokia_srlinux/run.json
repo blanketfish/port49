@@ -3,16 +3,16 @@
   "lab_platform": "nokia_srlinux",
   "firmware": "SR Linux 26.7.2-519",
   "image": "SR Linux 26.7.2-519",
-  "commit": "85e6ecdd0fb3",
-  "date": "2026-10-20",
+  "commit": "ae02c4babfd2",
+  "date": "2026-10-21",
   "transports": [
     "tcp"
   ],
   "cells": {
-    "accounting": "2026-10-20T22:22:43.789776016Z",
-    "store_unavailable": "2026-10-20T22:22:45.851236676Z",
-    "token_login": "2026-10-20T22:22:41.724693581Z",
-    "wrong_credential": "2026-10-20T22:22:44.81402671Z"
+    "accounting": "2026-10-21T13:51:26.400318414Z",
+    "store_unavailable": "2026-10-21T13:51:28.407166143Z",
+    "token_login": "2026-10-21T13:51:24.223915826Z",
+    "wrong_credential": "2026-10-21T13:51:27.457275199Z"
   },
   "registers": {
     "accounting": [
@@ -40,10 +40,15 @@
     "command_permitted": "not_applicable",
     "single_connection": "not_run",
     "store_unavailable": "pass",
+    "tls_denied_command": "not_run",
+    "tls_single_connection": "not_run",
     "tls_store_unavailable": "not_run",
     "tls_token_login": "not_run",
     "tls_unknown_ca": "not_run",
     "token_login": "pass",
     "wrong_credential": "pass"
-  }
+  },
+  "command_authorization": null,
+  "denied_command_ran": null,
+  "denied_command_asked": null
 }
