@@ -12,6 +12,10 @@ jobs:
   srlinux:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    # bash -eo pipefail: a step fails on its command, not on the secret filter it is piped through.
+    # The job log is world-readable once the repository is public, so every lab step's output goes
+    # through tests/qual/secret-filter.sh (the filter vet.sh reads lab logs through).
+    defaults: {run: {shell: bash}}
     env:
       CLAB_VERSION: 0.71.1
       # From the v0.71.1 release's checksums.txt (containerlab_0.71.1_linux_amd64.deb).
@@ -38,10 +42,21 @@ jobs:
       # Two processes, each with its own TestMain teardown: in one, TestL76 leaves srl1 up
       # and TestQualify's single-occupant docker ps check refuses to run (re-review I-C).
       - name: L76
-        run: sg docker -c "PORT49_LAB_REMEASURE=L76 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestL76$' -count=1 -v -timeout 40m"
+        run: sg docker -c "PORT49_LAB_REMEASURE=L76 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestL76$' -count=1 -v -timeout 40m" 2>&1 | bash tests/qual/secret-filter.sh
       - name: The conformance run
-        run: sg docker -c "PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestQualify$' -count=1 -v -timeout 40m"
-      - run: go run ./tests/lab/cmd/notediff -fail-on-change -note tests/lab/results/L76-nokia_srlinux.md
+        run: sg docker -c "PORT49_LAB_QUALIFY=1 PORT49_LAB_PLATFORMS=srlinux go test -tags lab ./tests/lab/ -run '^TestQualify$' -count=1 -v -timeout 40m" 2>&1 | bash tests/qual/secret-filter.sh
+      - run: go run ./tests/lab/cmd/notediff -fail-on-change -note tests/lab/results/L76-nokia_srlinux.md 2>&1 | bash tests/qual/secret-filter.sh
+      # The QUAL note holds the golden's outcomes (break-glass under ERROR among them), which the
+      # stimulus check below does not compare; the same exactly-once glob as the evidence directory.
+      - name: The conformance note matches the committed one
+        run: |
+          shopt -s nullglob
+          notes=(tests/lab/results/QUAL-*-nokia_srlinux.md)
+          if [ "${#notes[@]}" -ne 1 ]; then
+            echo "expected exactly one tests/lab/results/QUAL-*-nokia_srlinux.md note, found ${#notes[@]}: ${notes[*]}" >&2
+            exit 1
+          fi
+          go run ./tests/lab/cmd/notediff -fail-on-change -note "${notes[0]}" 2>&1 | bash tests/qual/secret-filter.sh
       # TestQualify names the directory QUAL-<devicemock.Slug(version)>-<platform>; a glob that
       # must match exactly once survives a version-string change and fails loudly otherwise.
       - name: The generated stimulus matches the committed profile
@@ -52,4 +67,4 @@ jobs:
             echo "expected exactly one tests/lab/evidence/QUAL-*-nokia_srlinux directory, found ${#dirs[@]}: ${dirs[*]}" >&2
             exit 1
           fi
-          go run ./tests/qual/cmd/genprofile -check -evidence "${dirs[0]}"
+          go run ./tests/qual/cmd/genprofile -check -evidence "${dirs[0]}" 2>&1 | bash tests/qual/secret-filter.sh

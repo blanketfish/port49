@@ -25,7 +25,7 @@ on_exit() {
 trap on_exit EXIT
 # the marker predates the run, so the run's evidence directory is newer than it
 marker="$tmp/start"; touch "$marker"
-filter() { grep -v -i 'password\|token\|secret\|eyJ' | sed -E 's/[A-Za-z0-9_+\/=.-]{24,}/<LONG>/g'; }
+filter() { bash tests/qual/secret-filter.sh; }
 make lab-qualify P="$sel" >"$log" 2>&1 || { tail -40 "$log" | filter; exit 1; }
 filter <"$log" | grep -E '^(--- |ok |FAIL)' || true
 # the evidence directory this run wrote: the newest QUAL-* directory created since the run began
