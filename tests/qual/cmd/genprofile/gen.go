@@ -40,7 +40,7 @@ type run struct {
 	Transports  []string          `json:"transports"`
 	Cells       map[string]string `json:"cells"` // cell -> start time, RFC 3339
 	BreakGlass  map[string]bool   `json:"break_glass"`
-	Results     map[string]string `json:"results"` // cell -> pass, fail, not_applicable, not_run
+	Results     map[string]string `json:"results"` // cell -> pass, fail, not_applicable, not_run; observed (observationCells)
 	// CommandAuthorization is what a TLS login cell's commands did: sent (port49
 	// decided them) or not_sent (no authorize_command for them arrived). A run
 	// that predates it graded tls_token_login pass only when they were sent.
@@ -246,6 +246,8 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 // from absent records. The per-request fact says what single-connection and
 // L80's cell measured, because an operator acts on them.
 func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
+	// L80's cell writes a note of its own; its fact cites that note.
+	l80 := []devicemock.Source{{Note: fmt.Sprintf("tests/lab/results/L80-%s.md", r.LabPlatform), Register: "L80"}}
 	for cell, v := range r.CommandAuthorization {
 		if v != "sent" && v != "not_sent" {
 			return nil, fmt.Errorf("run.json: command_authorization %s is %q, neither sent nor not_sent", cell, v)
@@ -264,15 +266,19 @@ func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
 			what += "; single-connection was not measured"
 		}
 		ran, measured := r.DeniedCommandRan["tls_denied_command"]
-		switch {
-		case !measured:
+		if !measured {
 			what += "; whether a command port49's policy denies then runs is unmeasured here (L80 is open)"
-		case ran:
-			what += "; a command port49's policy denies ran anyway (QUAL tls_denied_command, L80)"
-		default:
-			what += "; a command port49's policy denies was refused by the device (QUAL tls_denied_command, L80)"
 		}
 		out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestNoCommands, What: what, Status: "measured", Sources: src})
+		switch {
+		case measured && ran:
+			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedRuns, Status: "measured", Sources: l80,
+				What: "Over per-request TLS a command port49's policy denies runs: the device asked port49 nothing and ran it (L80). " +
+					"Port49's command rules do not hold on this device over per-request TLS"})
+		case measured:
+			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedRefused, Status: "measured", Sources: l80,
+				What: "Over per-request TLS a command port49's policy denies was refused by the device itself (L80)"})
+		}
 	}
 	if r.CommandAuthorization["tls_single_connection"] == "not_sent" {
 		out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSSingleNoCommands,
@@ -378,6 +384,10 @@ func readRecords(path string) ([]*rec, error) {
 	return out, sc.Err()
 }
 
+// observationCells are measurement cells, not qualification checks: their
+// verdict is observed, whatever the device did (L80's, ruling 2026-10-21).
+var observationCells = map[string]bool{"tls_denied_command": true}
+
 // checkResults refuses a run with a cell that failed or has no result.
 // not_applicable and not_run pass: TestQualify grades the TLS cells not_run on
 // an image with no RFC 9887 client and single_connection not_run on one with no
@@ -392,9 +402,10 @@ func checkResults(r *run) error {
 		cells[c] = true
 	}
 	for cell := range cells {
-		switch v := r.Results[cell]; v {
-		case "pass", "not_applicable", "not_run":
-		case "":
+		switch v := r.Results[cell]; {
+		case v == "pass" || v == "not_applicable" || v == "not_run":
+		case v == "observed" && observationCells[cell]:
+		case v == "":
 			bad = append(bad, cell+" (no result)")
 		default:
 			bad = append(bad, cell+" ("+v+")")

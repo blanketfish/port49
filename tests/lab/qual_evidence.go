@@ -49,7 +49,7 @@ type qualRun struct {
 	Cells       map[string]string   `json:"cells"`     // cell -> start time, RFC 3339
 	Registers   map[string][]string `json:"registers"` // cell -> rows
 	BreakGlass  map[string]bool     `json:"break_glass"`
-	Results     map[string]string   `json:"results"` // cell -> verdict
+	Results     map[string]string   `json:"results"` // cell -> verdict: pass, fail, not_applicable, not_run; observed for L80's measurement cell
 	// CommandAuthorization is what a TLS login cell's commands did at port49
 	// (qualTLSCommands): sent, not_sent or not_applicable. genprofile reads it.
 	CommandAuthorization map[string]string `json:"command_authorization"`
@@ -358,30 +358,51 @@ func qualTLSLoginVerdict(mode, platform, state string, problems, firsts []string
 
 // qualDeniedCommandVerdict grades L80's cell: denied, the command the qual
 // policy denies, typed alone over per-request TLS. out is its output, recs
-// port49's records for the login. ran is whether its first line shows it ran
-// (qualRan). It fails when port49 permitted it, when it ran although port49
-// denied it, and when there is no output to read; a command that ran with
-// port49 never asked passes as a measurement and says so first.
+// port49's records for the login. The cell is a measurement, not a
+// qualification check, so a measured outcome is "observed", never "pass"
+// (ruling 2026-10-21): a bypass never reads as a pass. The line states the
+// outcome first, then the first output line and the record counts. ran is
+// whether the first line shows the command ran (qualRan). It fails when port49
+// permitted the command, when it ran although port49 denied it, and when there
+// is no output to read.
 func qualDeniedCommandVerdict(denied, out string, recs []map[string]any) (result string, ran bool, why string) {
 	ran, says := qualRan(out)
 	if says == "no output" {
 		return "fail", false, fmt.Sprintf("`%s` gave no output, so whether it ran is unmeasured", denied)
 	}
 	asked := qualCommandRecords(recs, denied)
+	others := -len(asked)
+	for _, r := range recs {
+		if r["event"] == "authorize_command" {
+			others++
+		}
+	}
+	verdicts := ""
+	for _, r := range asked {
+		v, _ := r["verdict"].(string)
+		verdicts += " " + v
+	}
+	counts := fmt.Sprintf("%d authorize_command records for `%s`", len(asked), denied)
+	if verdicts != "" {
+		counts += " (" + strings.TrimSpace(verdicts) + ")"
+	}
+	counts += fmt.Sprintf(", %d for other commands", others)
 	for _, r := range asked {
 		if r["verdict"] == "permit" {
-			return "fail", ran, fmt.Sprintf("port49 permitted `%s`, which the qual policy denies (first line %q)", denied, says)
+			return "fail", ran, fmt.Sprintf("port49 permitted `%s`, which the qual policy denies (first line %q; %s)", denied, says, counts)
 		}
 	}
 	switch {
 	case len(asked) > 0 && ran:
-		return "fail", true, fmt.Sprintf("`%s` ran although port49 denied it (first line %q)", denied, says)
+		return "fail", true, fmt.Sprintf("`%s` ran although port49 denied it (first line %q; %s)", denied, says, counts)
 	case len(asked) > 0:
-		return "pass", false, fmt.Sprintf("port49 denied `%s` and the device refused it (first line %q).", denied, says)
+		return "observed", false, fmt.Sprintf("denied command refused: port49 denied `%s` and the device refused it (first line %q; %s).", denied, says, counts)
 	case ran:
-		return "pass", true, fmt.Sprintf("**`%s` ran**, with no authorization request for it reaching port49: the qual policy's deny was not enforced over per-request TLS (first line %q).", denied, says)
+		return "observed", true, fmt.Sprintf("**denied command ran; port49 never asked (local fallback)**: `%s` ran with no authorization request for it "+
+			"reaching port49, so the qual policy's deny was not enforced over per-request TLS (first line %q; %s).", denied, says, counts)
 	}
-	return "pass", false, fmt.Sprintf("`%s` was refused by the device, with no authorization request for it reaching port49 (first line %q).", denied, says)
+	return "observed", false, fmt.Sprintf("denied command refused: the device refused `%s` with no authorization request for it reaching port49 (first line %q; %s).",
+		denied, says, counts)
 }
 
 // qualPermitProven checks command was permitted by an authorize_command record.

@@ -914,7 +914,11 @@ reached port49 as no `authorize_command` (NX-OS 10.6(2)F, L73 cell a) passes as 
 "command authorization not sent", with each command's first output line: a device fact, never a pass
 for command authorization over TLS. Only then does `tls_denied_command` run: one login typing the
 denied command alone, graded from its first output line and port49's records, which writes
-`tests/lab/results/L80-<lp>.md` beside the QUAL note (spec §15 L80).
+`tests/lab/results/L80-<lp>.md` beside the QUAL note (spec §15 L80). It is a measurement, not a
+qualification check: its verdict is `observed` ("denied command ran; port49 never asked (local
+fallback)" or "denied command refused", with the first line and the record counts), never `pass`,
+and `fail` only when port49 permitted the command, the device ran it after port49 denied it, or
+there was no output to read.
 
 Every evidence file passes a leak gate before any is written; a failure names the file and the kind
 of content, never the content.

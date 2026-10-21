@@ -645,28 +645,43 @@ func TestQualTLSLoginVerdictNamesItsModeAndWhatArrived(t *testing.T) {
 	}
 }
 
-// L80's cell: the command the qual policy denies, typed over per-request TLS
-// that sends port49 no command authorization. Its first output line says
-// whether it ran; port49's records say whether port49 was asked.
-func TestQualDeniedCommandCellGradesTheFirstLineAndTheRecords(t *testing.T) {
+// L80's cell is an observation (ruling 2026-10-21): the command the qual
+// policy denies, typed over per-request TLS that sends port49 no command
+// authorization, is graded observed with its outcome stated, never pass. Its
+// first output line says whether it ran; port49's records, counted on the
+// line, say whether port49 was asked. port49 permitting it, or the device
+// running it after port49 denied it, fails; so does no output.
+func TestQualDeniedCommandCellIsAnObservation(t *testing.T) {
+	end := denyRec("context_matched", "permit", "end")
 	for _, c := range []struct {
-		name    string
-		out     string
-		recs    []map[string]any
-		result  string
-		ran     bool
-		mention string
+		name     string
+		out      string
+		recs     []map[string]any
+		result   string
+		ran      bool
+		mentions []string
 	}{
-		{"ran, port49 not asked", "NAME     LINE         TIME         IDLE          PID COMMENT\nadmin    pts/0", nil, "pass", true, "ran"},
-		{"refused locally, port49 not asked", "% Authorization failed.", nil, "pass", false, "refused by the device"},
-		{"no output", "", nil, "fail", false, "no output"},
-		{"port49 asked and denied it", "% Authorization failed.", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "pass", false, "port49 denied"},
-		{"port49 permitted it", "NAME LINE", []map[string]any{denyRec("context_matched", "permit", "show", "users")}, "fail", true, "permitted"},
-		{"ran although port49 denied it", "NAME LINE", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "fail", true, "although port49 denied"},
+		{"ran, port49 not asked", "NAME     LINE         TIME         IDLE          PID COMMENT\nadmin    pts/0", []map[string]any{end}, "observed", true,
+			[]string{"denied command ran; port49 never asked (local fallback)", "0 authorize_command records for `show users`, 1 for other commands", "first line \"NAME"}},
+		{"refused locally, port49 not asked", "% Authorization failed.", nil, "observed", false,
+			[]string{"denied command refused", "0 authorize_command records for `show users`", "first line \"% Authorization failed.\""}},
+		{"port49 asked and denied it", "% Authorization failed.", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "observed", false,
+			[]string{"denied command refused", "1 authorize_command records for `show users` (deny)"}},
+		{"no output", "", nil, "fail", false, []string{"no output"}},
+		{"port49 permitted it", "NAME LINE", []map[string]any{denyRec("context_matched", "permit", "show", "users")}, "fail", true, []string{"permitted"}},
+		{"ran although port49 denied it", "NAME LINE", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "fail", true, []string{"although port49 denied"}},
 	} {
 		result, ran, why := qualDeniedCommandVerdict("show users", c.out, c.recs)
-		if result != c.result || ran != c.ran || !strings.Contains(why, c.mention) {
-			t.Errorf("%s: %s ran=%v %q, want %s ran=%v mentioning %q", c.name, result, ran, why, c.result, c.ran, c.mention)
+		if result != c.result || ran != c.ran {
+			t.Errorf("%s: %s ran=%v %q, want %s ran=%v", c.name, result, ran, why, c.result, c.ran)
+		}
+		for _, m := range c.mentions {
+			if !strings.Contains(why, m) {
+				t.Errorf("%s: %q lacks %q", c.name, why, m)
+			}
+		}
+		if result == "pass" {
+			t.Errorf("%s: L80's cell never reads pass", c.name)
 		}
 	}
 }
@@ -702,7 +717,7 @@ func TestQualTLSCellsCiteTheirRows(t *testing.T) {
 func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 	notes := []string{"- `token_login` (re-measures L1): **pass**. plain",
 		"- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): not sent",
-		"- `tls_denied_command` (re-measures L80): **pass**. per-request (the device default): **`show users` ran**",
+		"- `tls_denied_command` (re-measures L80): **observed**. per-request (the device default): **denied command ran; port49 never asked (local fallback)**",
 		"- `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: sent"}
 	claim, obs, ok := qualL80Note(notes, "QUAL-Nexus-9300v-10.6-2-F-cisco_nxos")
 	if !ok {
@@ -713,7 +728,7 @@ func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 			t.Errorf("claim lacks %q: %s", want, claim)
 		}
 	}
-	for _, want := range []string{"per-request (the device default): not sent", "**`show users` ran**", "tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/"} {
+	for _, want := range []string{"per-request (the device default): not sent", "**denied command ran; port49 never asked (local fallback)**", "tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/"} {
 		if !strings.Contains(obs, want) {
 			t.Errorf("observation lacks %q: %s", want, obs)
 		}

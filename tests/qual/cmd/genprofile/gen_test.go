@@ -850,28 +850,50 @@ func TestTLSSingleConnectionWithNoCommandsIsAFactToo(t *testing.T) {
 	}
 }
 
-// L80's cell: whether a command port49 denies runs over per-request TLS. The
-// fact says what the cell measured; a run without the cell says L80 is open.
-func TestTheDeniedCommandCellIsCarriedIntoTheFact(t *testing.T) {
-	for ran, want := range map[string]string{"": "L80 is open", "true": "ran anyway (QUAL tls_denied_command, L80)", "false": "refused by the device (QUAL tls_denied_command, L80)"} {
+// L80's cell is an observation, never a pass (ruling 2026-10-21): genprofile
+// accepts its "observed" verdict without refusing the run and records the
+// outcome as a measured device fact citing L80's own note. A run without the
+// cell says L80 is open; "observed" on a conformance cell is refused.
+func TestTheDeniedCommandCellIsAnObservedDeviceFact(t *testing.T) {
+	for ran, want := range map[string]string{"": "", "true": devicemock.FactTLSPerRequestDeniedRuns, "false": devicemock.FactTLSPerRequestDeniedRefused} {
 		dir := copyFixture(t)
 		perRequestNotSent(t, dir)
 		if ran != "" {
 			editRun(t, dir, func(m map[string]any) {
 				m["denied_command_ran"] = map[string]any{"tls_denied_command": ran == "true"}
 				m["cells"].(map[string]any)["tls_denied_command"] = "2026-10-20T12:04:30.000Z"
-				m["results"].(map[string]any)["tls_denied_command"] = "pass"
+				m["results"].(map[string]any)["tls_denied_command"] = "observed"
 			})
 		}
 		p, _, err := Generate(dir, "testdata")
 		if err != nil {
-			t.Fatalf("ran=%q: %v", ran, err)
+			t.Fatalf("ran=%q: an observed cell does not refuse the run: %v", ran, err)
 		}
-		if !strings.Contains(p.DeviceFacts[0].What, want) {
-			t.Errorf("ran=%q: %q lacks %q", ran, p.DeviceFacts[0].What, want)
+		if want == "" {
+			if len(p.DeviceFacts) != 1 || !strings.Contains(p.DeviceFacts[0].What, "L80 is open") {
+				t.Errorf("no L80 cell: %+v", p.DeviceFacts)
+			}
+		} else {
+			i := slices.IndexFunc(p.DeviceFacts, func(f devicemock.DeviceFact) bool { return f.ID == want })
+			if i < 0 {
+				t.Fatalf("ran=%q: no %s fact: %+v", ran, want, p.DeviceFacts)
+			}
+			f := p.DeviceFacts[i]
+			if f.Status != "measured" || len(f.Sources) != 1 || f.Sources[0].Register != "L80" ||
+				f.Sources[0].Note != "tests/lab/results/L80-fixture_junos.md" {
+				t.Errorf("ran=%q: %+v", ran, f)
+			}
+			if err := p.Validate("testdata"); err != nil {
+				t.Errorf("ran=%q: %v", ran, err)
+			}
 		}
 		if slices.Contains(p.Scenarios, "tls_denied_command") {
 			t.Errorf("the L80 cell is a register measurement, not a mock scenario: %v", p.Scenarios)
 		}
+	}
+	dir := copyFixture(t)
+	editRun(t, dir, func(m map[string]any) { m["results"].(map[string]any)["tls_token_login"] = "observed" })
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "tls_token_login") {
+		t.Fatalf("observed is for an observation cell only: %v", err)
 	}
 }

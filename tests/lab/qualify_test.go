@@ -731,7 +731,7 @@ func (q *qualEnv) tlsDeniedCommand(e *l73Env, login func(string, string, ...stri
 	}
 	// The first line, masked like any screen, before it is graded or quoted.
 	result, ran, why := qualDeniedCommandVerdict(denied, oneLine(hideKeys(l73LogScreen(firstLine(qualFirstOut(outs))))), recs)
-	if result == "pass" {
+	if result == "observed" {
 		q.run.DeniedCommandRan["tls_denied_command"] = ran
 	} else {
 		why += summarize(recs)

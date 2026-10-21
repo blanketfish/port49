@@ -131,6 +131,13 @@ func Build(repoRoot string) (string, error) {
 		tlsGap, tlsReason := tlsNoCommands(p.DeviceFacts)
 		c := cells(p.Transports, g, gap, reason)
 		tc := tlsCommand(p.Transports, g, gap, reason, tlsGap, tlsReason)
+		switch {
+		case !slices.Contains(p.Transports, "tls"):
+		case p.HasFact(devicemock.FactTLSPerRequestDeniedRuns):
+			tc = l80Runs
+		case p.HasFact(devicemock.FactTLSPerRequestDeniedRefused):
+			tc = l80Refused
+		}
 		c = slices.Insert(c, 3, tc)
 		c[len(c)-1] = rowStatus(c[len(c)-1], tc)
 		rows = append(rows, row{name.vendor, name.os, p.Firmware, c, notes})
@@ -172,6 +179,14 @@ func cells(transports []string, g devicemock.Golden, commandGap bool, reason str
 	}
 	return []string{tcp(transports, g), tlsCell(transports, g), cmd, accounting(g), "yes", status(transports, g, commandGap)}
 }
+
+// What the TLS column says once L80's cell measured a denied command over
+// per-request TLS (ruling 2026-10-21): the outcome, in words an operator acts
+// on. Either makes the row partial: a bypass never reads as a pass.
+const (
+	l80Runs    = "no: over per-request TLS, a command port49 denies runs (L80)"
+	l80Refused = "no command authorization over per-request TLS; denied commands refused locally (L80)"
+)
 
 // tlsCommand is command authorization over TLS, read from tls_token_login: the
 // per-request login, the device default. A device whose per-request TLS sends

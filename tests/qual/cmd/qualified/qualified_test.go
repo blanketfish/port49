@@ -278,3 +278,24 @@ func TestTheTLSCommandColumnReadsTheTLSCells(t *testing.T) {
 		}
 	}
 }
+
+// Ruling 2026-10-21: L80's outcome is a measured device fact, and the TLS
+// column says it in words an operator acts on; a bypass never reads as a pass.
+func TestTheTLSCommandColumnSaysWhatL80Observed(t *testing.T) {
+	for _, tc := range []struct{ id, cell string }{
+		{"tls_per_request_denied_command_runs", "no: over per-request TLS, a command port49 denies runs (L80)"},
+		{"tls_per_request_denied_command_refused", "no command authorization over per-request TLS; denied commands refused locally (L80)"},
+	} {
+		g := tlsGolden([]devicemock.GoldenStep{stop}, nil)
+		edits := []func(string) string{replace("transports: [tcp]", "transports: [tcp, tls]"),
+			replace("scenarios: [token_login, wrong_credential, store_unavailable]", "scenarios: [token_login, wrong_credential, store_unavailable, tls_token_login]"),
+			replace("engine_gaps: []", `device_facts:
+  - {id: tls_per_request_no_command_authorization, what: "no command authorization (L73 cell a)", status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {id: `+tc.id+`, what: "L80 observed it (L80)", status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+engine_gaps: []`)}
+		got := rowWith(t, g, edits...)
+		if want := "| Juniper | Junos | 1.0 | yes | yes | yes | " + tc.cell + " | yes | yes | partial |\n"; !strings.Contains(got, want) {
+			t.Errorf("%s: want %q in:\n%s", tc.id, want, got)
+		}
+	}
+}
