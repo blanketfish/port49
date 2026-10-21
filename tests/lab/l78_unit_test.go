@@ -13,7 +13,7 @@ import (
 func TestL78StepsRenderTheirTotalWithEveryAttributeUnder255(t *testing.T) {
 	for _, s := range l78Steps {
 		perm, deny, allow := l78Bytes(s.Deny, s.Allow)
-		if !s.Fallback {
+		if !s.FailClosed {
 			if perm > 255 || deny > 255 || allow > 255 {
 				t.Errorf("%d: an attribute over 255 (user-permissions %d, deny-commands %d, allow-commands %d)", s.Target, perm, deny, allow)
 			}
@@ -23,9 +23,9 @@ func TestL78StepsRenderTheirTotalWithEveryAttributeUnder255(t *testing.T) {
 			continue
 		}
 		// A step the projection cannot carry: the deny-commands value passes 255,
-		// so it falls back to the narrow shape (project.go: the budget).
+		// so the projection fails closed (decision 26).
 		if deny <= 255 {
-			t.Errorf("%d: a fallback step whose deny-commands is %d bytes", s.Target, deny)
+			t.Errorf("%d: a fail-closed step whose deny-commands is %d bytes", s.Target, deny)
 		}
 	}
 }
@@ -35,10 +35,10 @@ func TestL78StepsAreOrderedAndReachTheBriefsTotals(t *testing.T) {
 	last := 0
 	for _, s := range l78Steps {
 		targets = append(targets, s.Target)
-		if !s.Fallback && s.Want < last {
+		if !s.FailClosed && s.Want < last {
 			t.Errorf("%d renders %d, below the step before it (%d)", s.Target, s.Want, last)
 		}
-		if !s.Fallback {
+		if !s.FailClosed {
 			last = s.Want
 		}
 	}

@@ -152,7 +152,7 @@ func (q *qualEnv) l78() {
 		if !ran && lerr != nil {
 			row.Login += ": " + q.scrub(oneLine(lerr.Error()))
 		}
-		if !s.Fallback && have && row.Total != s.Want {
+		if !s.FailClosed && have && row.Total != s.Want {
 			q.t.Errorf("step %d: the record's reply is %d bytes, `port49 explain` rendered %d", s.Target, row.Total, s.Want)
 		}
 		// Break-glass is proved after every step; the brief asks for it after the
@@ -265,8 +265,11 @@ func (q *qualEnv) l78Note(rows []l78Row, bgRows []string, stoppedAt string) {
 	b.WriteString("Steps, each a role the projection renders to about the target size, run through a broker-minted token login " +
 		"(`qual01`, `show version`) with break-glass proved before it and after it. \"Reply bytes\" is the sum of the attribute " +
 		"lengths in the `authorize_session` record's `reply.attributes` (user-permissions, deny-commands, allow-commands, each at " +
-		"most 255). \"Target\" is the brief's total; where the projection cannot carry it the deny-commands value would pass 255 " +
-		"and the reply falls back to the narrow shape, so the reply is smaller than the target.\n\n")
+		"most 255). \"Target\" is the brief's total. The 400 and 600 roles' deny-commands would pass 255, so the projection fails " +
+		"closed (decision 26) and `port49 policy test` refuses those policies with exit 1. Those two rows are therefore not a " +
+		"normal grant: the records carry reason `projection_fail_closed` and the reply `user-permissions=network`, " +
+		"`deny-commands=^.*$` and an allow of ping, traceroute, telnet, ssh and mtrace only. The login still ran `show version` " +
+		"with no refusal text in its output; the records do not say why the device let it through, which is unverified here.\n\n")
 	b.WriteString("| target | reply bytes (attributes) | login | break-glass after |\n|---|---|---|---|\n")
 	for _, r := range rows {
 		reply := "no record"

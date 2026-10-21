@@ -4,9 +4,9 @@
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 26.2R1.7 (`vrnetlab/juniper_vjunos-router:26.2R1.7`)
 - **Topology:** `tests/lab/topologies/vjunos26.clab.yml`
-- **Capture:** `tests/lab/evidence/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap` — 1838 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap` — 1842 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `3ecac848e2e07f8e820f18c557976bdda0c42745`, `PORT49_LAB_PLATFORMS=vjunos26`, `-run ^TestL78$`
+- **Run:** commit `2f2cdd1448efb6e027676fa4cf5abaa6fcfee8e4`, `PORT49_LAB_PLATFORMS=vjunos26`, `-run ^TestL78$`
 
 ## Claim
 
@@ -14,7 +14,7 @@ Whether Junos locks a user out when a permit session reply totals more than 255 
 
 ## Observation
 
-Steps, each a role the projection renders to about the target size, run through a broker-minted token login (`qual01`, `show version`) with break-glass proved before it and after it. "Reply bytes" is the sum of the attribute lengths in the `authorize_session` record's `reply.attributes` (user-permissions, deny-commands, allow-commands, each at most 255). "Target" is the brief's total; where the projection cannot carry it the deny-commands value would pass 255 and the reply falls back to the narrow shape, so the reply is smaller than the target.
+Steps, each a role the projection renders to about the target size, run through a broker-minted token login (`qual01`, `show version`) with break-glass proved before it and after it. "Reply bytes" is the sum of the attribute lengths in the `authorize_session` record's `reply.attributes` (user-permissions, deny-commands, allow-commands, each at most 255). "Target" is the brief's total. The 400 and 600 roles' deny-commands would pass 255, so the projection fails closed (decision 26) and `port49 policy test` refuses those policies with exit 1. Those two rows are therefore not a normal grant: the records carry reason `projection_fail_closed` and the reply `user-permissions=network`, `deny-commands=^.*$` and an allow of ping, traceroute, telnet, ssh and mtrace only. The login still ran `show version` with no refusal text in its output; the records do not say why the device let it through, which is unverified here.
 
 | target | reply bytes (attributes) | login | break-glass after |
 |---|---|---|---|

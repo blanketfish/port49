@@ -8,32 +8,33 @@ import (
 // L78 asks whether Junos refuses a login whose permit session reply totals more
 // than 255 bytes with every attribute at most 255. Junos delivers a grant as
 // user-permissions, deny-commands and allow-commands (platforms/1.3.0/
-// juniper_junos.yaml), and the projection keeps each under 255 and falls back
-// to the narrow shape past it, so the reply can only grow by the three
+// juniper_junos.yaml), and the projection keeps each under 255 and fails
+// closed past it (decision 26: deny-all, reason projection_fail_closed, and
+// `port49 policy test` exits 1), so the reply can only grow by the three
 // attributes together. A step is a role the projection renders to about Target
 // bytes, chosen by `port49 explain` against the lab inventory's Junos nodes.
 
 // l78Step is one policy: Deny deny rules and Allow allow rules over the base
-// role. Want is the three attributes' bytes together. A Fallback step is one
-// the projection cannot carry: its deny-commands passes 255 and the reply
-// falls back to the narrow shape, so Want is not asserted.
+// role. Want is the three attributes' bytes together. A FailClosed step is one
+// the projection cannot carry: its deny-commands passes 255 and the session
+// gets the fail-closed reply (124 bytes), so Want is not asserted.
 type l78Step struct {
 	Target, Deny, Allow, Want int
-	Fallback                  bool
+	FailClosed                bool
 }
 
 // l78Steps are the brief's totals where the projection reaches them. 375 is
-// the most it rendered with every attribute at most 255 (a sixth allow root
+// the most this run's roles reached with every attribute at most 255 (a sixth allow root
 // adds the network bit and drops every allow); 400 and 600 ask for more and
-// get the narrow fallback.
+// get the fail-closed reply.
 var l78Steps = []l78Step{
 	{Target: 200, Deny: 0, Allow: 1, Want: 208},
 	{Target: 240, Deny: 0, Allow: 3, Want: 240},
 	{Target: 256, Deny: 1, Allow: 2, Want: 258},
 	{Target: 300, Deny: 2, Allow: 2, Want: 299},
 	{Target: 375, Deny: 3, Allow: 5, Want: 375},
-	{Target: 400, Deny: 4, Allow: 5, Fallback: true},
-	{Target: 600, Deny: 8, Allow: 5, Fallback: true},
+	{Target: 400, Deny: 4, Allow: 5, FailClosed: true},
+	{Target: 600, Deny: 8, Allow: 5, FailClosed: true},
 }
 
 // l78Roots are the commands whose permits the projection sends as
