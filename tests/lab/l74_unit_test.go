@@ -875,6 +875,37 @@ func TestL79MarkStates(t *testing.T) {
 	}
 }
 
+// Cell k agrees only when the mark came back after a failed revoke and
+// every line an operator needs was said: the revoke's "may not have been
+// recorded", broker 3's own-write clause, region 1's before-the-lift line,
+// and the flag in region 1's revoke --list (post-11b, I8).
+func TestL79CellKNeedsEveryLandedLine(t *testing.T) {
+	cli := "port49 revoke: broker: " + l79Unrecorded + " when the directory answers again"
+	b3 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
+		"it: a copy sent while its writer was cut off; it stands everywhere; " + l79Own
+	b1 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
+		"it: a copy sent while its writer was cut off; it stands everywhere"
+	list := "principal user:alice@example.com since T0 (admin_socket uid 0); landed after the lift at T1 (revision 8)"
+	if !l79KAgrees(1, true, cli, b3, b1, list) {
+		t.Fatal("every line said, and the mark back: cell k agrees")
+	}
+	after := "port49-broker: broker: a revocation of user:alice@example.com made at T2 (admin_socket uid 0) after the " +
+		"lift at T1, by a writer whose marks feed had not yet shown the lift; it stands everywhere"
+	for name, c := range map[string][]any{
+		"revoke exited 0":         {0, true, cli, b3, b1, list},
+		"mark never back":         {1, false, cli, b3, b1, list},
+		"old CLI text":            {1, true, "port49 revoke: broker: the revocation could not be recorded", b3, b1, list},
+		"broker 3 says elsewhere": {1, true, cli, "a revocation of user:alice@example.com made elsewhere reached", b1, list},
+		"region 1 silent":         {1, true, cli, b3, "", list},
+		"region 1 after form":     {1, true, cli, b3, after, list},
+		"list unflagged":          {1, true, cli, b3, b1, "principal user:alice@example.com since T0 (admin_socket uid 0)"},
+	} {
+		if l79KAgrees(c[0].(int), c[1].(bool), c[2].(string), c[3].(string), c[4].(string), c[5].(string)) {
+			t.Errorf("%s: cell k agreed", name)
+		}
+	}
+}
+
 // PORT49_LAB_REGIONS_ONLY names the one row a run covers; empty covers every row.
 func TestRegionRowWantedFollowsTheOnlySelector(t *testing.T) {
 	if !regionRowWanted("", "L74") || !regionRowWanted("", "L79") {
