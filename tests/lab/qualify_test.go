@@ -531,7 +531,7 @@ func (q *qualEnv) cellSingleConnection() {
 	attempts, err := qualRetryUnreached(q.l.p.name, func() error {
 		_, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, qualProbeCommands(q.run.Platform)...)
 		return err
-	}, 5*time.Minute, time.Sleep)
+	}, func() bool { return qualDenied(q.l.recordsSince(off)) }, 5*time.Minute, time.Sleep)
 	if err != nil {
 		q.t.Fatalf("INVALID: the single-connection login failed after %d attempt(s): %v\nrecords:%s", attempts, err, summarize(q.l.recordsSince(off)))
 	}

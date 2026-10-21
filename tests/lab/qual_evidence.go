@@ -410,16 +410,20 @@ func qualRan(out string) (ran bool, says string) {
 
 // qualRetryUnreached runs login; on XRd it repeats a login the device refused
 // with an authentication error, no faster than the sshd rate limit allows,
-// until within has passed. XR keeps a server it could not reach marked dead
+// until within has passed, unless refused() says port49 denied one. XR keeps a server it could not reach marked dead
 // for a while, so the first logins after port49d returns are answered locally
 // and never reach it. Every other platform runs login once. It returns the
 // attempts made and the last error.
-func qualRetryUnreached(platform string, login func() error, within time.Duration, sleep func(time.Duration)) (int, error) {
+func qualRetryUnreached(platform string, login func() error, refused func() bool, within time.Duration, sleep func(time.Duration)) (int, error) {
 	attempts := 0
 	var waited time.Duration
 	for {
 		attempts++
 		err := login()
+		if err != nil && refused() {
+			// port49 denied it: a real refusal, never to be retried into a pass.
+			return attempts, fmt.Errorf("port49 denied a login the device sent it (attempt %d): %w", attempts, err)
+		}
 		if err == nil || platform != "cisco_xrd" || !strings.Contains(err.Error(), "unable to authenticate") || waited >= within {
 			return attempts, err
 		}

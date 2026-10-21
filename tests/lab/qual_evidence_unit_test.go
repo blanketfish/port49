@@ -496,25 +496,26 @@ func TestQualRetryUnreachedRepeatsOnlyXRdAuthRefusals(t *testing.T) {
 	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
 	var slept []time.Duration
 	sleep := func(d time.Duration) { slept = append(slept, d) }
+	never := func() bool { return false }
 	calls := 0
 	n, err := qualRetryUnreached("cisco_xrd", func() error {
 		if calls++; calls < 3 {
 			return refused
 		}
 		return nil
-	}, time.Minute, sleep)
+	}, never, time.Minute, sleep)
 	if n != 3 || err != nil || len(slept) != 2 || slept[0] < time.Second {
 		t.Fatalf("xrd: %d attempts, %v, slept %v", n, err, slept)
 	}
-	if n, _ := qualRetryUnreached("cisco_iosxe", func() error { return refused }, time.Minute, sleep); n != 1 {
+	if n, _ := qualRetryUnreached("cisco_iosxe", func() error { return refused }, never, time.Minute, sleep); n != 1 {
 		t.Fatalf("iosxe tried %d times", n)
 	}
 	other := errors.New("dial tcp: i/o timeout")
-	if n, _ := qualRetryUnreached("cisco_xrd", func() error { return other }, time.Minute, sleep); n != 1 {
+	if n, _ := qualRetryUnreached("cisco_xrd", func() error { return other }, never, time.Minute, sleep); n != 1 {
 		t.Fatalf("a non-auth error was retried %d times", n)
 	}
 	slept = nil
-	n, err = qualRetryUnreached("cisco_xrd", func() error { return refused }, 30*time.Second, sleep)
+	n, err = qualRetryUnreached("cisco_xrd", func() error { return refused }, never, 30*time.Second, sleep)
 	if err == nil || len(slept) != 3 {
 		t.Fatalf("the deadline: %d attempts, slept %v", n, slept)
 	}
@@ -531,5 +532,24 @@ func TestQualDeniedNeedsADeniedRedeem(t *testing.T) {
 	}
 	if qualDenied([]map[string]any{acct, permit}) || qualDenied(nil) {
 		t.Fatal("no denied redeem was counted as one")
+	}
+}
+
+// A port49 deny is a real refusal: a deny followed by a success must not be retried into a pass.
+func TestQualRetryUnreachedStopsOnAPort49Deny(t *testing.T) {
+	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
+	calls, denied := 0, false
+	n, err := qualRetryUnreached("cisco_xrd", func() error {
+		calls++
+		if calls == 2 {
+			denied = true // the second login reached port49d and was denied
+		}
+		if calls < 3 {
+			return refused
+		}
+		return nil
+	}, func() bool { return denied }, time.Minute, func(time.Duration) {})
+	if err == nil || n != 2 || !strings.Contains(err.Error(), "port49 denied") {
+		t.Fatalf("%d attempts, %v: a deny was retried into a pass", n, err)
 	}
 }
