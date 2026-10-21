@@ -5,13 +5,25 @@ set -euo pipefail
 sel="${1:?usage: make qual-vet P=<selector>}"
 [ -e /tmp/port49-STOP-LAB ] && { echo "qual-vet: /tmp/port49-STOP-LAB exists"; exit 1; }
 flock -n /tmp/port49-lab.lock true || { echo "qual-vet: the lab is occupied ($(cat /tmp/port49-lab.lock))"; exit 1; }
-[ -z "$(git status --porcelain -- tests/qual tests/lab/results)" ] || { echo "qual-vet: commit or stash tests/qual and tests/lab/results first"; exit 1; }
+# every path a run rewrites: a failed run also replaces its evidence directory (qualWriteEvidence)
+paths=(tests/qual tests/lab/results tests/lab/evidence docs/qualified-platforms.md)
+[ -z "$(git status --porcelain -- "${paths[@]}")" ] || { echo "qual-vet: commit or stash ${paths[*]} first"; exit 1; }
 log="/tmp/claude-qual-vet-${sel}-$(date +%s).log"
 # the log may hold what the run printed: owner-only. The umask stays the default, because
 # containerlab's lab directory is read by the node's own uid (SR Linux cannot read a 0600 config).
 (umask 077; : >"$log")
+tmp=$(mktemp -d)
+# on any failure, say what the run left changed: a later `git add` would commit it
+on_exit() {
+  local rc=$?
+  rm -rf "$tmp"
+  if [ "$rc" -ne 0 ] && [ -n "$(git status --porcelain -- "${paths[@]}")" ]; then
+    echo "qual-vet: FAILED; the run left these paths changed, restore before committing anything:"
+    git status --short -- "${paths[@]}"
+  fi
+}
+trap on_exit EXIT
 # the marker predates the run, so the run's evidence directory is newer than it
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 marker="$tmp/start"; touch "$marker"
 filter() { grep -v -i 'password\|token\|secret\|eyJ' | sed -E 's/[A-Za-z0-9_+\/=.-]{24,}/<LONG>/g'; }
 make lab-qualify P="$sel" >"$log" 2>&1 || { tail -40 "$log" | filter; exit 1; }

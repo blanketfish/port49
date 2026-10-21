@@ -15,9 +15,11 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
 2. Add its `platforms` row in `tests/lab/harness_test.go`: selector, topology, image, version (as
    the device reports it) and a measured `boot`.
 3. Run `make qual-vet P=<sel>`, for example `make qual-vet P=nxos106`. It refuses when
-   `/tmp/port49-STOP-LAB` exists, the lab is occupied, or `tests/qual` or `tests/lab/results` has
-   uncommitted changes. It then runs `make lab-qualify`, `genprofile`, `make qual` and
-   `make qualified-platforms`, and commits nothing.
+   `/tmp/port49-STOP-LAB` exists, the lab is occupied, or `tests/qual`, `tests/lab/results`,
+   `tests/lab/evidence` or `docs/qualified-platforms.md` has uncommitted changes. It then runs
+   `make lab-qualify`, `genprofile`, `make qual` and `make qualified-platforms`, and commits
+   nothing. If any step fails it lists the paths the run left changed: restore them before
+   committing anything, or a failed run's note or evidence goes in with the next commit.
 4. Review the profile against the note. `genprofile` prints a checklist; confirm every line of it
    against `tests/lab/results/QUAL-<slug>-<lp>.md` before you commit:
    - each reaction it pre-filled as `measured`;
