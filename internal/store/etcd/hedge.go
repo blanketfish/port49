@@ -19,10 +19,13 @@ var hedged = map[string]bool{
 }
 
 // idempotentWrites are the write calls hedged only when the store method that
-// makes them says a second copy is harmless (idempotent).
+// makes them says a second copy is harmless (idempotent). A LeaseGrant's
+// second copy grants a lease no key is put on, which etcd reclaims at its
+// TTL; at most two more per grant are sent (task 3 review, the flake).
 var idempotentWrites = map[string]bool{
-	"/etcdserverpb.KV/Txn":         true,
-	"/etcdserverpb.KV/DeleteRange": true,
+	"/etcdserverpb.KV/Txn":           true,
+	"/etcdserverpb.KV/DeleteRange":   true,
+	"/etcdserverpb.Lease/LeaseGrant": true,
 }
 
 // hedgeWrites switches the opt-in off, for a test that shows what it prevents.

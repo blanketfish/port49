@@ -102,7 +102,9 @@ func (s *Store) DeleteRevocation(ctx context.Context, kind, key string, by store
 		return err
 	}
 	for attempt := 0; ; attempt++ {
-		lease, err := s.tokLeases.For(ctx, until)
+		// Hedged: a lift almost always grants afresh, and an unhedged grant
+		// on a dark member's stalled connection fails one lift in three.
+		lease, err := s.tokLeases.For(idempotent(ctx), until)
 		if err != nil {
 			return unavailable(err)
 		}

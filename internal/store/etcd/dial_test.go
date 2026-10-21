@@ -227,6 +227,54 @@ func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 	}
 }
 
+// A lift whose record needs a fresh lease, as almost every production lift
+// does (lifts are rare, a pool lease lives a bucket), is accepted while a
+// member is dark: the grant is hedged, a second copy harmless (task 3
+// review, the flake). The pool is reset before each lift, so every lift
+// grants, and round-robin puts every third grant on the dark connection.
+func TestALiftsLeaseGrantIsAcceptedWhileOneMemberIsDark(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: time.Now()}
+	for i := 0; i < 30; i++ { // round-robin: every connection has carried a grant and a lift
+		if err := s.PutRevocation(context.Background(), bob); err != nil {
+			t.Fatalf("warming revocation %d: %v", i, err)
+		}
+		s.tokLeases.Reset()
+		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key, store.Lift{}); err != nil {
+			t.Fatalf("warming lift %d: %v", i, err)
+		}
+	}
+	ps[2].Hang(true)
+	failed := 0
+	const lifts = 12 // well inside keepalive's 10s + 2s, which would drop the dark connection
+	for i := 0; i < lifts; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		err := s.PutRevocation(ctx, bob)
+		cancel()
+		if err != nil {
+			t.Fatalf("the revocation before lift %d: %v", i, err)
+		}
+		// 0, 1 or 2 reads first, so the grant meets each connection in turn:
+		// a lift's own calls alone can fall into step with round-robin.
+		for range i % 3 {
+			ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+			if _, err := s.tok.Get(ctx, "rotate"); err != nil {
+				t.Fatalf("a hedged read failed: %v", err)
+			}
+			cancel()
+		}
+		s.tokLeases.Reset()
+		ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key, store.Lift{}); err != nil {
+			failed++
+		}
+		cancel()
+	}
+	if failed != 0 {
+		t.Fatalf("%d of %d lifts that granted a lease failed with one of three members dark", failed, lifts)
+	}
+}
+
 // A lift's copy that a stalled connection delivers late, once the member is
 // back, lifts nothing made after it: a principal revoked again while one
 // member was dark stays revoked, and every lift and revocation said so.
