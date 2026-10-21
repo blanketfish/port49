@@ -966,3 +966,55 @@ func TestTheFeedsPutOfAPendingMarkKeepsItsFlag(t *testing.T) {
 		t.Fatalf("after the feed's put: %+v %v, flagged %d", got, ok, m.Flagged())
 	}
 }
+
+// A held, unflagged mark the store now holds flagged at the same time (a
+// runner's own put-back over a lift it missed, task 2 re-review RR-I1)
+// takes the flag and its origin, and is told Standing once: by a load, and
+// by the watch's put.
+func TestAHeldMarkThatGainsTheFlagIsToldOnce(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	back := alice
+	back.Origin, back.LandedAfterLift = PutBackOrigin(""), true
+	f := &markFeed{}
+	f.setMarks([]Revocation{back})
+	m := NewMarks()
+	m.Set(alice, true)
+	var got []MarkChange
+	on := func(c MarkChange) { got = append(got, c) }
+	for range 2 {
+		if _, err := LoadMarks(context.Background(), f, m, on); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 1 || !got[0].Standing || !got[0].LandedAfterLift || got[0].Origin != back.Origin {
+		t.Fatalf("a load told %+v", got)
+	}
+	if cur, _ := m.Get(alice.Kind, alice.Key); !cur.LandedAfterLift || cur.Origin != back.Origin || m.Flagged() != 1 {
+		t.Fatalf("the copy holds %+v, %d flagged", cur, m.Flagged())
+	}
+
+	watched := NewMarks()
+	watched.Set(alice, true)
+	feed := &markFeed{events: make(chan markEvent)}
+	feed.setMarks([]Revocation{alice})
+	var mu sync.Mutex
+	var tells []MarkChange
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		FollowMarks(ctx, feed, watched, 7, func(c MarkChange) { mu.Lock(); tells = append(tells, c); mu.Unlock() },
+			func(bool) {}, func() error { return nil }, t.Logf)
+	}()
+	defer func() { cancel(); <-done }()
+	feed.events <- markEvent{r: back, rev: 8}
+	feed.events <- markEvent{r: back, rev: 9}
+	for watched.ConfirmedRevision() < 9 {
+		time.Sleep(time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tells) != 1 || !tells[0].Standing || !tells[0].LandedAfterLift || watched.Flagged() != 1 {
+		t.Fatalf("the watch told %+v, %d flagged", tells, watched.Flagged())
+	}
+}

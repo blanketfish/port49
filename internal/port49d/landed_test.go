@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
@@ -165,10 +168,38 @@ func TestARunnersPutBackOverALiveLiftIsSaidAsAPutBack(t *testing.T) {
 		Origin: "admin_socket uid 0"}); err != nil {
 		t.Fatal(err)
 	}
-	r := &runner{st: region3, copy: c}
-	put, err := r.putBackMissing(ctx)
-	if err != nil || len(put) != 1 {
-		t.Fatalf("put back %v: %v", put, err)
+	// Broker 3's own path (task 2 re-review RR-I1): its marks feed, holding
+	// alice since it never saw the lift, is compacted; the reload hook puts
+	// her back before the reload, which finds her at the same time, now
+	// flagged, and says the put-back form here too.
+	var said3 syncBuffer
+	marks3 := store.NewMarks()
+	marks3.Set(alice, true)
+	brk3 := &broker.Broker{Proc: "port49-broker", Store: region3, Marks: marks3,
+		Say: func(format string, args ...any) { fmt.Fprintf(&said3, format+"\n", args...) }}
+	r := &runner{st: region3, copy: c, marks: marks3, marksReloaded: make(chan struct{}, 1),
+		cfg: config.Config{Stores: config.StoresConfig{Session: config.StoreConfig{Etcd: &config.EtcdConfig{
+			BulkTimeout: 5 * time.Second}}}}}
+	dctx := context.Background()
+	r.duty.Store(&dctx)
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	feed := &storeFeed{st: region3}
+	feed.compacted.Store(1)
+	fctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		store.FollowMarks(fctx, feed, marks3, 1, brk3.MarkChanged, func(bool) {},
+			r.reloadHook(fctx, prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})), t.Logf)
+	}()
+	defer func() { cancel(); <-done }()
+	waitWithin(t, &said3, "was put back after the lift at "+now.Format(time.RFC3339)+
+		" by a port49-broker runner from its broker.state_dir/marks.json", 10*time.Second)
+	if s := said3.String(); strings.Contains(s, "cut off") || strings.Count(s, "was put back after the lift") != 1 ||
+		marks3.Flagged() != 1 {
+		t.Fatalf("broker 3 said %q, %d flagged", s, marks3.Flagged())
 	}
 	got, err := region1.GetRevocation(ctx, alice.Kind, alice.Key)
 	if err != nil {

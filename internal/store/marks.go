@@ -263,6 +263,29 @@ func (m *Marks) remade(r Revocation) bool {
 	return true
 }
 
+// gainedFlag makes the mark in force for (r.Kind, r.Key) flagged, with r's
+// origin, when it stands here unflagged at r's time and the store's r is
+// flagged: a runner's put-back over a lift this process missed, put back
+// before its reload found the mark it already held (task 2 re-review
+// RR-I1). It reports whether it changed the mark, which the caller tells
+// Standing once: the mark is flagged from then on. An unwritten mark is
+// its Revoke's (stored).
+func (m *Marks) gainedFlag(r Revocation) bool {
+	if !r.LandedAfterLift {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := [2]string{r.Kind, r.Key}
+	at, ok := m.m[k]
+	if !ok || m.unwritten[k] || m.landed[k] || !at.Equal(r.At) {
+		return false
+	}
+	m.origin[k] = r.Origin
+	m.setLanded(k, true)
+	return true
+}
+
 // Holds reports whether a mark for (kind, key) is in force.
 func (m *Marks) Holds(kind, key string) bool {
 	if m == nil {
@@ -469,7 +492,7 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 		// Before stored: a mark this process's Revoke still has in flight
 		// keeps its own time, which that Revoke corrects (Put).
 		remade := m.remade(r)
-		tell := m.stored(r) || remade
+		tell := m.stored(r) || remade || m.gainedFlag(r)
 		if !m.Holds(r.Kind, r.Key) {
 			m.Set(r, true)
 			tell = true
@@ -560,6 +583,12 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			delivered(rev)
 			defer m.confirm(rev) // once applied, and told
 			if !lifted && m.stored(r) {
+				if on != nil {
+					on(MarkChange{Revocation: r, Standing: true})
+				}
+				return
+			}
+			if !lifted && m.gainedFlag(r) {
 				if on != nil {
 					on(MarkChange{Revocation: r, Standing: true})
 				}
