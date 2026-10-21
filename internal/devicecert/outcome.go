@@ -38,12 +38,14 @@ var Outcomes = []Outcome{VersionRefused, NoClientCertificate, UnknownCA, Certifi
 	HandshakeFailed}
 
 // Struck reports whether a refusal counts against its source, as a key
-// miss does. Only status_unavailable does not: the status could not be
-// established, which is port49's fault, so it is a decline (decision 50
-// ruling 8).
+// miss does. Two do not, and are declines: status_unavailable, since the
+// status could not be established, which is port49's fault (decision 50
+// ruling 8); and sni_mismatch, since the device or server_names is
+// misconfigured, not hostile, and the refusal costs port49 no crypto
+// (ruling 10).
 func (o Outcome) Struck() bool {
 	switch o {
-	case OK, Resumed, StatusUnavailable:
+	case OK, Resumed, StatusUnavailable, SNIMismatch:
 		return false
 	}
 	return true

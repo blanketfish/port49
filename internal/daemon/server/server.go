@@ -224,11 +224,12 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 // declining reports whether port49d would decline a connection from dev on
 // this listener as admission and the policy stand now: a source the
 // inventory does not name, a device admission refuses, one of the other
-// transport, a quarantined one, or one whose certificate status could not
-// be established, whose window stands until it lapses (spec §13 decision 50
-// ruling 8). It is asked only at an Accept inside a decline window.
+// transport, a quarantined one, or one whose last decline stands until it
+// lapses (Limiter.DeclineStanding: a certificate status that could not be
+// established, or a server name not in server_names; spec §13 decision 50
+// rulings 8 and 10). It is asked only at an Accept inside a decline window.
 func declining(d Deps, src netip.Addr, dev admission.Resolved, admitted bool, listener string) bool {
-	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedForStatus(src) {
+	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedStanding(src) {
 		return true
 	}
 	if d.TLS != nil {

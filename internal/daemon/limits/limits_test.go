@@ -218,21 +218,21 @@ func TestTheDeclinedMapIsBoundedAndSwept(t *testing.T) {
 	}
 }
 
-func TestDeclineStatusIsMarkedUntilAPlainDecline(t *testing.T) {
+func TestDeclineStandingIsMarkedUntilAPlainDecline(t *testing.T) {
 	now := time.Now()
 	l := New(cfg(), func() time.Time { return now })
 	a := netip.MustParseAddr("10.0.0.1")
-	l.DeclineStatus(a)
-	if !l.Declined(a) || !l.DeclinedForStatus(a) || l.Holding(a) {
-		t.Fatalf("after DeclineStatus: declined %v for_status %v holding %v", l.Declined(a), l.DeclinedForStatus(a), l.Holding(a))
+	l.DeclineStanding(a)
+	if !l.Declined(a) || !l.DeclinedStanding(a) || l.Holding(a) {
+		t.Fatalf("after DeclineStanding: declined %v standing %v holding %v", l.Declined(a), l.DeclinedStanding(a), l.Holding(a))
 	}
 	l.Decline(a)
-	if !l.Declined(a) || l.DeclinedForStatus(a) {
-		t.Fatalf("after Decline: declined %v for_status %v", l.Declined(a), l.DeclinedForStatus(a))
+	if !l.Declined(a) || l.DeclinedStanding(a) {
+		t.Fatalf("after Decline: declined %v standing %v", l.Declined(a), l.DeclinedStanding(a))
 	}
-	l.DeclineStatus(a)
+	l.DeclineStanding(a)
 	now = now.Add(time.Hour)
-	if l.Declined(a) || l.DeclinedForStatus(a) {
+	if l.Declined(a) || l.DeclinedStanding(a) {
 		t.Fatal("the window outlasted its backoff")
 	}
 }

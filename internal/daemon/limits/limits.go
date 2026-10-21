@@ -21,9 +21,9 @@ type Config struct {
 }
 
 type failure struct {
-	count  int
-	last   time.Time
-	status bool // the last decline was DeclineStatus's
+	count    int
+	last     time.Time
+	standing bool // the last decline was DeclineStanding's
 }
 
 type Limiter struct {
@@ -93,32 +93,33 @@ func (l *Limiter) Decline(src netip.Addr) {
 	defer l.mu.Unlock()
 	l.countLocked(l.declined, src)
 	f := l.declined[src]
-	f.status = false
+	f.standing = false
 	l.declined[src] = f
 }
 
-// DeclineStatus is Decline for a device whose certificate status could not
-// be established (spec §13 decision 50 ruling 8): the same window on the same
-// schedule, marked, so the RFC 9887 listener keeps it in force at the next
-// Accept, before any TLS byte, rather than dropping it because the device
-// is still admitted. Nothing at Accept can tell the status is back without
-// the handshake the window exists to spare, so an outage costs each device
-// at most one full handshake per window.
-func (l *Limiter) DeclineStatus(src netip.Addr) {
+// DeclineStanding is Decline for a refusal on the RFC 9887 listener that
+// nothing at Accept can see has ended: a certificate status that could not
+// be established, or a server name not in server_names (spec §13 decision 50
+// rulings 8 and 10). The same window on the same schedule, marked, so the
+// listener keeps it in force at the next Accept, before any TLS byte, rather
+// than dropping it because the device is still admitted. Only the handshake
+// the window exists to spare could tell, so each device costs at most one
+// full handshake per window.
+func (l *Limiter) DeclineStanding(src netip.Addr) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.countLocked(l.declined, src)
 	f := l.declined[src]
-	f.status = true
+	f.standing = true
 	l.declined[src] = f
 }
 
-// DeclinedForStatus reports whether src is inside a window DeclineStatus
+// DeclinedStanding reports whether src is inside a window DeclineStanding
 // opened last.
-func (l *Limiter) DeclinedForStatus(src netip.Addr) bool {
+func (l *Limiter) DeclinedStanding(src netip.Addr) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.inWindowLocked(l.declined, src) && l.declined[src].status
+	return l.inWindowLocked(l.declined, src) && l.declined[src].standing
 }
 
 // Declined reports whether src is inside the window its last decline opened.

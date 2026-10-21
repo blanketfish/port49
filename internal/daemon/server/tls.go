@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -29,7 +30,8 @@ type TLS struct {
 	// connection whose chain no longer verifies (rulings 9, 15).
 	Material func() *Material
 	// ServerNames, when not empty, are the SNI names a ClientHello may ask
-	// for, lower case; an absent SNI is accepted (ruling 10).
+	// for, each as CanonicalServerName gives it; an absent SNI is accepted
+	// (ruling 10).
 	ServerNames      []string
 	HandshakeTimeout time.Duration
 	// Seen notes a device certificate that verified (devicecert.Expiry.Seen);
@@ -252,7 +254,7 @@ func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 			return nil, nil
 		}
 		if name := hi.ServerName; name != "" && len(s.d.TLS.ServerNames) > 0 &&
-			!slices.Contains(s.d.TLS.ServerNames, strings.ToLower(name)) {
+			!serverNameListed(s.d.TLS.ServerNames, name) {
 			v = devicecert.Verdict{Outcome: devicecert.SNIMismatch,
 				Detail: "asked for server name " + printsafe.Line(name, 253)}
 			return nil, &devicecert.Refusal{Verdict: v}
@@ -313,11 +315,33 @@ func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 	return true
 }
 
+// serverNameListed reports whether sni is one of names, which are
+// CanonicalServerName's. An address is compared by address, so any spelling
+// of a listed address matches; anything else, a zoned or bracketed address
+// included, is compared exactly and matches nothing config accepts. There
+// is no trailing-dot trim: crypto/tls refuses a ClientHello whose SNI ends
+// in a dot before this is asked.
+func serverNameListed(names []string, sni string) bool {
+	return slices.Contains(names, CanonicalServerName(sni))
+}
+
+// CanonicalServerName is name as server_names holds it (decision 50 ruling
+// 10): an IP address with no zone in canonical form (IPv4-mapped folded to
+// IPv4, IPv6 as RFC 5952 text), and anything else in lower case.
+func CanonicalServerName(name string) string {
+	name = strings.ToLower(name)
+	if a, err := netip.ParseAddr(name); err == nil && a.Zone() == "" {
+		return a.Unmap().String()
+	}
+	return name
+}
+
 // tlsRefused records a refused handshake and ends the connection: struck
-// and reset, as a key miss is, or for status_unavailable, which is port49's
-// fault, declined under a window that stands until it lapses (ruling 8). An
-// alert crypto/tls wrote before this is best-effort: the reset can discard
-// it before it leaves the host (ruling 16).
+// and reset, as a key miss is, or, for status_unavailable (port49's fault)
+// and sni_mismatch (a misconfiguration, not hostility), declined under a
+// window that stands until it lapses (rulings 8, 10). An alert crypto/tls
+// wrote before this is best-effort: the reset can discard it before it
+// leaves the host (ruling 16).
 func (s *conn) tlsRefused(v devicecert.Verdict) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagTLSRefused),
@@ -329,7 +353,7 @@ func (s *conn) tlsRefused(v devicecert.Verdict) {
 		s.d.TLS.Said(s.dev.Device.Name, s.src.String(), v)
 	}
 	if !v.Outcome.Struck() {
-		s.declineStatus()
+		s.declineStanding()
 		return
 	}
 	s.d.Limits.Malformed(s.src)
@@ -337,12 +361,13 @@ func (s *conn) tlsRefused(v devicecert.Verdict) {
 	s.d.Metrics.ConnectionEvents.WithLabelValues("tls_refused").Inc()
 }
 
-// declineStatus is decline for status_unavailable: the window it opens
-// stands at the next Accept until it lapses, though the device is admitted
-// on this listener, since nothing there can tell the status is back without
-// the handshake the window spares (ruling 8).
-func (s *conn) declineStatus() {
-	s.d.Limits.DeclineStatus(s.src)
+// declineStanding is decline for status_unavailable and sni_mismatch: the
+// window it opens stands at the next Accept until it lapses, though the
+// device is admitted on this listener, since nothing there can tell the
+// status is back, or the server name fixed, without the handshake the window
+// spares (rulings 8, 10).
+func (s *conn) declineStanding() {
+	s.d.Limits.DeclineStanding(s.src)
 	s.reset()
 }
 
@@ -372,8 +397,8 @@ func (s *conn) recheckTLS(h wire.Header) bool {
 }
 
 // tlsPacketRefused records a packet refused on the open connection by
-// recheckTLS and ends it. status_unavailable keeps the window DeclineStatus
-// marks; any other refusal opens a plain decline window. Neither is a
+// recheckTLS and ends it. status_unavailable keeps the window
+// DeclineStanding marks; any other refusal opens a plain decline window. Neither is a
 // strike, and neither is a handshake, so port49_tls_handshakes_total does
 // not count it.
 func (s *conn) tlsPacketRefused(h wire.Header, v devicecert.Verdict) {
@@ -392,7 +417,7 @@ func (s *conn) tlsPacketRefused(h wire.Header, v devicecert.Verdict) {
 	// window to another refusal, and the device is still admitted, so a plain
 	// one would be dropped at the next Accept.
 	if v.Outcome == devicecert.StatusUnavailable {
-		s.declineStatus()
+		s.declineStanding()
 		return
 	}
 	s.reset()
