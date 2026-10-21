@@ -253,8 +253,8 @@ func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
 	// L80's cell writes a note of its own; its fact cites that note.
 	l80 := []devicemock.Source{{Note: fmt.Sprintf("tests/lab/results/L80-%s.md", r.LabPlatform), Register: "L80"}}
 	for cell, v := range r.CommandAuthorization {
-		if v != "sent" && v != "not_sent" {
-			return nil, fmt.Errorf("run.json: command_authorization %s is %q, neither sent nor not_sent", cell, v)
+		if v != "sent" && v != "not_sent" && v != "not_applicable" {
+			return nil, fmt.Errorf("run.json: command_authorization %s is %q, neither sent, not_sent nor not_applicable", cell, v)
 		}
 	}
 	src := []devicemock.Source{note}

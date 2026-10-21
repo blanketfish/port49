@@ -928,3 +928,19 @@ func TestKeyShareGroupsAreCarriedWhenRecorded(t *testing.T) {
 		t.Fatalf("a recorded list is carried: %v", got)
 	}
 }
+
+// An image that sends no command authorization at all (Junos) has both TLS
+// cells not_applicable: that is no refusal and no device fact.
+func TestNotApplicableCommandAuthorizationIsNeitherRefusedNorAFact(t *testing.T) {
+	dir := copyFixture(t)
+	editRun(t, dir, func(m map[string]any) {
+		m["command_authorization"] = map[string]any{"tls_token_login": "not_applicable", "tls_single_connection": "not_applicable"}
+	})
+	p, _, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.DeviceFacts) != 0 {
+		t.Fatalf("a not_applicable cell recorded a fact: %+v", p.DeviceFacts)
+	}
+}
