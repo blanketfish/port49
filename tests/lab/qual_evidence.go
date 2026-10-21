@@ -644,6 +644,16 @@ func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 	return claim, obs, true
 }
 
+// qualSwitchedFor runs body between do and undo with undo already deferred when
+// do starts, so a Fatal inside do, which may have half-applied the switch, still
+// undoes it. body gets the once-only undo to call on its normal path.
+func qualSwitchedFor(do, undo func(), body func(undo func())) {
+	u := qualUndoOnce(undo)
+	defer u()
+	do()
+	body(u)
+}
+
 // qualUndoOnce wraps undo so it runs at most once: a cell defers it, so a Fatal
 // mid-cell still runs it, and calls it on its normal path too.
 func qualUndoOnce(undo func()) func() {

@@ -776,3 +776,23 @@ func TestQualUndoOnceRunsOnAFatalAndOnlyOnce(t *testing.T) {
 		t.Fatalf("the undo ran %d times on the normal path, want 1", n)
 	}
 }
+
+// The undo is registered before the switch is made (task 14b re-review N2): a
+// Fatal inside the switch itself, which may have half-applied it, still undoes.
+func TestQualSwitchedForUndoesAFatalInsideTheSwitch(t *testing.T) {
+	undone := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		qualSwitchedFor(func() { runtime.Goexit() }, func() { undone++ }, func(func()) { t.Error("the body ran after a failed switch") })
+	}()
+	<-done
+	if undone != 1 {
+		t.Fatalf("a Fatal inside the switch undid %d times, want 1", undone)
+	}
+	undone = 0
+	qualSwitchedFor(func() {}, func() { undone++ }, func(undo func()) { undo() })
+	if undone != 1 {
+		t.Fatalf("the body's own undo and the deferred one ran %d times, want 1", undone)
+	}
+}

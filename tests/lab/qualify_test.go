@@ -752,37 +752,37 @@ func (q *qualEnv) tlsSingleConnection(e *l73Env, login func(string, string, ...s
 	single := e.base()
 	single.SingleConnection = true
 	stop := e.capture("tls_single_connection")
-	e.configure(single)
-	// A Fatal from here on must not leave the device in single-connection mode.
-	// A defer, not t.Cleanup: Goexit runs it here, before play's deferred
-	// restoreDaemon, while port49d still runs the TLS config e.cli restarts;
-	// a cleanup would run after restoreDaemon and restart the TLS daemon.
-	perRequest := qualUndoOnce(func() { e.configure(e.base()) })
-	defer perRequest()
-	if e.d.EarlyCapture {
-		_, _, _ = e.breakglassLogin()
-	} else {
-		e.ready("tls_single_connection")
-	}
-	q.login()
-	off := q.cell("tls_single_connection")
-	began := time.Now()
-	var outs []string
-	attempts, err := qualRetryUnreached(q.l.p.name, func() error {
-		var err error
-		outs, err = login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
-		return err
-	}, func() bool { return qualDenied(q.l.recordsSince(off)) }, 5*time.Minute, time.Sleep)
-	recs := q.waitStop(off)
-	time.Sleep(l73SettleTail)
-	keep("tls_single_connection", stop())
-	perRequest()
-	mode := qualSingleConnection
-	if attempts > 1 {
-		mode += fmt.Sprintf(" (after port49d restarted the device refused %d login(s) over %s before it reached port49d; no record of them)",
-			attempts-1, time.Since(began).Round(time.Second))
-	}
-	q.tlsLoginVerdict("tls_single_connection", mode, outs, err, recs)
+	// A Fatal from the configure on must not leave the device in single-connection
+	// mode. qualSwitchedFor defers the undo before the switch: a defer, not
+	// t.Cleanup, because Goexit runs it here, before play's deferred
+	// restoreDaemon, while port49d still runs the TLS config e.cli restarts; a
+	// cleanup would run after restoreDaemon and restart the TLS daemon.
+	qualSwitchedFor(func() { e.configure(single) }, func() { e.configure(e.base()) }, func(perRequest func()) {
+		if e.d.EarlyCapture {
+			_, _, _ = e.breakglassLogin()
+		} else {
+			e.ready("tls_single_connection")
+		}
+		q.login()
+		off := q.cell("tls_single_connection")
+		began := time.Now()
+		var outs []string
+		attempts, err := qualRetryUnreached(q.l.p.name, func() error {
+			var err error
+			outs, err = login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
+			return err
+		}, func() bool { return qualDenied(q.l.recordsSince(off)) }, 5*time.Minute, time.Sleep)
+		recs := q.waitStop(off)
+		time.Sleep(l73SettleTail)
+		keep("tls_single_connection", stop())
+		perRequest()
+		mode := qualSingleConnection
+		if attempts > 1 {
+			mode += fmt.Sprintf(" (after port49d restarted the device refused %d login(s) over %s before it reached port49d; no record of them)",
+				attempts-1, time.Since(began).Round(time.Second))
+		}
+		q.tlsLoginVerdict("tls_single_connection", mode, outs, err, recs)
+	})
 }
 
 // tlsDaemon starts port49d on the conformance config plus a tls_listener.
