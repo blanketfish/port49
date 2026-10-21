@@ -340,7 +340,7 @@ func TestTheDirectorysRoleCheckRefusesABrokerWithoutUnlockRecords(t *testing.T) 
 		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
 	}
 	// The broker reaches every directory family but ul/.
-	for _, fam := range []string{"rv/", "mb/", "mk/", "lo/", "sf/", "meta/"} {
+	for _, fam := range []string{"rv/", "rl/", "mb/", "mk/", "lo/", "sf/", "meta/"} {
 		k := prefix + "v1/" + fam
 		grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k), Write: true})
 	}
