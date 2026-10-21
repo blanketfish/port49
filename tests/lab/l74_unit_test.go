@@ -874,3 +874,13 @@ func TestL79MarkStates(t *testing.T) {
 		t.Fatalf("a mark that stayed lifted: %q", got)
 	}
 }
+
+// PORT49_LAB_REGIONS_ONLY names the one row a run covers; empty covers every row.
+func TestRegionRowWantedFollowsTheOnlySelector(t *testing.T) {
+	if !regionRowWanted("", "L74") || !regionRowWanted("", "L79") {
+		t.Fatal("with no selector every row runs")
+	}
+	if regionRowWanted("L79", "L74") || regionRowWanted("L79", "L75") || !regionRowWanted("L79", "L79") {
+		t.Fatal("a selector runs its own row alone")
+	}
+}
