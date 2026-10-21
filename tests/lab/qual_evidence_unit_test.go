@@ -457,3 +457,20 @@ func TestQualRecordsRefuseASecretInAnAccountArgBeforeTheMask(t *testing.T) {
 		t.Fatalf("want a refusal that does not print the secret: %v", err)
 	}
 }
+
+// A command answered with a refusal ran nothing (the L78 grader once counted
+// any answer as a run).
+func TestQualRanReadsTheFirstLineOfTheOutput(t *testing.T) {
+	for out, want := range map[string]bool{
+		"Cisco IOS XR Software, Version 26.1.1\nCopyright": true,
+		"% This command is not authorized":                 false,
+		"\n% This command is not authorized\nxrd1#":        false,
+		"error: command not allowed":                       false,
+		"":                                                 false,
+		"% Invalid input detected":                         false,
+	} {
+		if got, says := qualRan(out); got != want {
+			t.Errorf("%q: ran %v (%s), want %v", out, got, says, want)
+		}
+	}
+}

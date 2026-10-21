@@ -1030,3 +1030,21 @@ func l73HasWords(have, want []string) bool {
 	}
 	return true
 }
+
+// l73VersionAuths counts the permitted authorize_command records whose command
+// is `show version`: what a note cites to say the device sent command
+// authorization over a TLS connection.
+func l73VersionAuths(recs []map[string]any) int {
+	n := 0
+	for _, r := range recs {
+		if r["event"] != "authorize_command" || r["verdict"] != "permit" {
+			continue
+		}
+		req, _ := r["request"].(map[string]any)
+		vec, _ := req["vector"].([]any)
+		if len(vec) >= 2 && vec[0] == "show" && vec[1] == "version" {
+			n++
+		}
+	}
+	return n
+}

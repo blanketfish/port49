@@ -1319,3 +1319,20 @@ func TestL73OnlyXRCapturesCellHBeforeItConfigures(t *testing.T) {
 		}
 	}
 }
+
+// A note says a device sent command authorization only when a permitted
+// authorize_command record for the version command is in the records.
+func TestL73CommandAuthsCountsPermittedVersionRecordsOnly(t *testing.T) {
+	cmd := func(verdict string, vec ...any) map[string]any {
+		return map[string]any{"event": "authorize_command", "verdict": verdict, "request": map[string]any{"vector": vec}}
+	}
+	recs := []map[string]any{
+		cmd("permit", "show", "version", "|", "include", "Version"),
+		cmd("deny", "show", "version"),
+		cmd("permit", "end"),
+		{"event": "authorize_session", "verdict": "permit"},
+	}
+	if got := l73VersionAuths(recs); got != 1 {
+		t.Fatalf("counted %d, want 1", got)
+	}
+}

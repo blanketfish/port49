@@ -376,3 +376,28 @@ func qualWriteEvidence(dir string, files map[string][]byte, note string, secrets
 	}
 	return nil
 }
+
+// qualRefusedMarks are the device texts, beyond l73RefusalMarks, that say a
+// command was refused: IOS XR prints "% This command is not authorized" when
+// a session's task groups, or its absent attributes, forbid the command
+// (measured in TestQualify on XRd 26.1.1, 2026-10-21), and Junos "error:".
+var qualRefusedMarks = []string{"This command is not authorized", "error:"}
+
+// qualRan is whether a command's output shows the command ran: it is not
+// empty and its first line is no refusal. A login that was answered with a
+// refusal ran nothing, however many records it left.
+func qualRan(out string) (ran bool, says string) {
+	first := ""
+	for _, ln := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
+		if first = strings.TrimSpace(ln); first != "" {
+			break
+		}
+	}
+	if first == "" {
+		return false, "no output"
+	}
+	if r := l73Refusal(first, qualRefusedMarks...); r != "" {
+		return false, r
+	}
+	return true, first
+}

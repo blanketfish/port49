@@ -1792,6 +1792,12 @@ func (e *l73Env) cellA() {
 		configured += "; then port 300"
 		e.first = conns
 	}
+	if opened && port != l73TLSPort {
+		e.facts = append(e.facts, fmt.Sprintf("operator fact (cell a): with no port configured this device dials port %d, not RFC 9887's "+
+			"300; the operator must configure the TLS server's port (here `port %d`) to match port49d's RFC 9887 listener", port, l73TLSPort))
+	}
+	e.facts = append(e.facts, fmt.Sprintf("cell a (a connection per request): permitted authorize_command records for `show version`: %d",
+		l73VersionAuths(recs)))
 	if !ok || !l73Redeemed(recs) {
 		hint := ""
 		if e.pki.Alg == "ecdsa" {
@@ -2108,6 +2114,8 @@ func (e *l73Env) cellH() {
 	conns := stop()
 	// One window helper for h's logins and cell a's control, one tail each:
 	// accounting connections opened after a login returned count with it.
+	e.facts = append(e.facts, fmt.Sprintf("cell h (single-connection): permitted authorize_command records for `show version`: %d (two logins)",
+		l73VersionAuths(e.l.recordsSince(off))))
 	win := l73LoginWindows(conns, l73Server, []l73Span{{s1, e1}, {s2, e2}})
 	w1, w2 := win[0], win[1]
 	held, probeHeld := 0, 0

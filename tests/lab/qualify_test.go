@@ -399,6 +399,10 @@ func (q *qualEnv) cellTokenLogin() {
 		q.verdict("token_login", "fail", "the login ran but no redeem record permitted it:"+summarize(recs))
 		return
 	}
+	if ran, says := qualRan(strings.Join(outs, "\n")); !ran {
+		q.verdict("token_login", "fail", fmt.Sprintf("logged in, but `show version` did not run (%q)", oneLine(hideKeys(l73LogScreen(says))))+summarize(recs))
+		return
+	}
 	q.verdict("token_login", "pass", fmt.Sprintf("a broker-minted token logged in over SSH and ran `show version` (%d bytes of output).", len(strings.Join(outs, ""))))
 }
 
@@ -406,7 +410,7 @@ func (q *qualEnv) cellTokenLogin() {
 func (q *qualEnv) cellCommands() {
 	cmds := qualProbeCommands(q.run.Platform)
 	off := q.cell("command_permitted")
-	_, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, cmds...)
+	outs, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, cmds...)
 	recs := q.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 		return len(qualEvents(rs, "authorize_command", nil)) >= len(cmds) || q.noCommandAuth() && qualRedeemed(rs)
 	})
@@ -419,10 +423,19 @@ func (q *qualEnv) cellCommands() {
 		q.verdict("command_denied", denied, why)
 		return
 	}
+	if ran, says := qualRan(qualFirstOut(outs)); permitted == "pass" && !ran {
+		permitted, why = "fail", fmt.Sprintf("an authorize_command record permits `show version`, but the device printed %q", oneLine(hideKeys(l73LogScreen(says))))
+	}
 	if permitted == "pass" {
 		q.verdict("command_permitted", "pass", "an authorize_command record permits `show version`.")
 	} else {
-		q.verdict("command_permitted", "fail", why+":"+summarize(recs))
+		// What the device printed for each command says whether it ran it, refused it
+		// or never got to it: the first line of each, masked like any screen.
+		said := ""
+		for i, o := range outs {
+			said += fmt.Sprintf(" %q said %q;", cmds[min(i, len(cmds)-1)], oneLine(hideKeys(l73LogScreen(firstLine(o)))))
+		}
+		q.verdict("command_permitted", "fail", why+":"+said+summarize(recs))
 	}
 	q.starts["command_denied"], q.run.Cells["command_denied"] = q.starts["command_permitted"], q.run.Cells["command_permitted"]
 	q.order = append(q.order, "command_denied")
@@ -761,4 +774,12 @@ func (q *qualEnv) write() {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
+}
+
+// qualFirstOut is the first output of a login's commands, "" when it had none.
+func qualFirstOut(outs []string) string {
+	if len(outs) == 0 {
+		return ""
+	}
+	return outs[0]
 }
