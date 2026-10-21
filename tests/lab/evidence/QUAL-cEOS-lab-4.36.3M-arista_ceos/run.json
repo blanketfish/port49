@@ -3,23 +3,24 @@
   "lab_platform": "arista_ceos",
   "firmware": "cEOS-lab 4.36.3M",
   "image": "cEOS-lab 4.36.3M",
-  "commit": "3f4ecc03c96d",
-  "date": "2026-10-20",
+  "commit": "a47b0000df25",
+  "date": "2026-10-21",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-20T20:30:14.458809654Z",
-    "command_denied": "2026-10-20T20:30:12.432162524Z",
-    "command_permitted": "2026-10-20T20:30:12.432162524Z",
-    "single_connection": "2026-10-20T20:30:28.903533688Z",
-    "store_unavailable": "2026-10-20T20:30:17.278568067Z",
-    "tls_store_unavailable": "2026-10-20T20:31:25.61322957Z",
-    "tls_token_login": "2026-10-20T20:31:11.275551055Z",
-    "tls_unknown_ca": "2026-10-20T20:31:40.928592032Z",
-    "token_login": "2026-10-20T20:30:10.494718002Z",
-    "wrong_credential": "2026-10-20T20:30:16.383591114Z"
+    "accounting": "2026-10-21T09:32:29.863856846Z",
+    "command_denied": "2026-10-21T09:32:27.703406749Z",
+    "command_permitted": "2026-10-21T09:32:27.703406749Z",
+    "single_connection": "2026-10-21T09:32:45.268516923Z",
+    "store_unavailable": "2026-10-21T09:32:32.872506343Z",
+    "tls_single_connection": "2026-10-21T09:35:00.533385659Z",
+    "tls_store_unavailable": "2026-10-21T09:33:58.892050706Z",
+    "tls_token_login": "2026-10-21T09:33:44.433502193Z",
+    "tls_unknown_ca": "2026-10-21T09:34:14.47549765Z",
+    "token_login": "2026-10-21T09:32:25.624785143Z",
+    "wrong_credential": "2026-10-21T09:32:31.914514375Z"
   },
   "registers": {
     "accounting": [
@@ -39,6 +40,10 @@
     "store_unavailable": [
       "L4",
       "L28"
+    ],
+    "tls_single_connection": [
+      "L15",
+      "L73"
     ],
     "tls_store_unavailable": [
       "L73"
@@ -68,10 +73,18 @@
     "command_permitted": "pass",
     "single_connection": "pass",
     "store_unavailable": "pass",
+    "tls_denied_command": "not_run",
+    "tls_single_connection": "pass",
     "tls_store_unavailable": "pass",
     "tls_token_login": "pass",
     "tls_unknown_ca": "pass",
     "token_login": "pass",
     "wrong_credential": "pass"
-  }
+  },
+  "command_authorization": {
+    "tls_single_connection": "sent",
+    "tls_token_login": "sent"
+  },
+  "denied_command_ran": {},
+  "denied_command_asked": {}
 }

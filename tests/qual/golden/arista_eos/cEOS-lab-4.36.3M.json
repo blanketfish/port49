@@ -43,6 +43,39 @@
         }
       ]
     },
+    "tls_single_connection": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "priv-lvl=15",
+            "roles=network-admin"
+          ]
+        },
+        {
+          "step": "command_permitted",
+          "event": "author_pass_add"
+        },
+        {
+          "step": "command_denied",
+          "event": "author_fail"
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
     "tls_store_unavailable": {
       "outcome": "falls_to_local",
       "steps": [
