@@ -651,6 +651,24 @@ func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 	return claim, obs, true
 }
 
+// qualL80NotMeasured is L80's note for a run whose denied-command cell was not
+// observed (commands now reach port49, or the device sends none): it says so,
+// with the cell's own verdict line, so a re-measure never leaves the old
+// observation looking confirmed. The caller also grades the run INVALID.
+func qualL80NotMeasured(notes []string, evidence string) (claim, obs string) {
+	why := "the `tls_denied_command` cell gave no verdict"
+	for _, n := range notes {
+		if strings.HasPrefix(n, "- `tls_denied_command` ") {
+			why = n
+		}
+	}
+	claim = "Whether a command port49's policy denies runs over per-request TLS when the device sends port49 no command authorization " +
+		"(policy engine spec §15 L80), re-measured by TestQualify's `tls_denied_command` cell."
+	obs = "Not measured this run: the cell did not observe the denied command's outcome, so the earlier observation is neither confirmed nor withdrawn. " +
+		"The run is INVALID.\n\n" + why + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/`.", evidence)
+	return claim, obs
+}
+
 // qualSwitchedFor runs body between do and undo with undo already deferred when
 // do starts, so a Fatal inside do, which may have half-applied the switch, still
 // undoes it. body gets the once-only undo to call on its normal path.

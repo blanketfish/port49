@@ -825,3 +825,19 @@ func TestQualL80AppliesToNXOS106Only(t *testing.T) {
 		}
 	}
 }
+
+// A re-measure whose denied-command cell was not observed still writes L80's
+// note, saying it was not measured, so the regress diff shows the change.
+func TestQualL80NotMeasuredSaysSo(t *testing.T) {
+	notes := []string{"- `tls_token_login` x", "- `tls_denied_command` **not_run**: per-request TLS sent port49 command authorization"}
+	if _, _, ok := qualL80Note(notes, "x"); ok {
+		t.Fatal("not_run is no observation")
+	}
+	claim, obs := qualL80NotMeasured(notes, "QUAL-x")
+	if claim == "" || !strings.Contains(obs, "Not measured this run") || !strings.Contains(obs, "INVALID") || !strings.Contains(obs, "not_run") {
+		t.Fatalf("%q", obs)
+	}
+	if _, obs := qualL80NotMeasured(nil, "QUAL-x"); !strings.Contains(obs, "no verdict") {
+		t.Fatalf("%q", obs)
+	}
+}
