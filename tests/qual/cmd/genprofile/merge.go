@@ -34,6 +34,7 @@ var goldenReactions = map[string][]string{
 // Merged lists keep the committed order, then the regenerated-only entries.
 func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock.Profile, oldG *devicemock.Golden, take, keep map[string]bool) error {
 	var conflicts []string
+	var stale []string
 	merge := func(key string, same bool, differs bool) (useOld bool) {
 		switch {
 		case !same:
@@ -60,6 +61,9 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 			if !merge(key, true, !sameEntry(o, g)) {
 				use = g
 			}
+		} else if citesQUAL(o.Sources) && !keep[key] {
+			stale = append(stale, key)
+			continue
 		}
 		reactions = append(reactions, use)
 	}
@@ -75,10 +79,18 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 	for _, o := range old.Acceptance {
 		seen[o.ID] = true
 		use := o
+		found := false
 		for _, g := range gen.Acceptance {
-			if g.ID == o.ID && !merge("acceptance:"+o.ID, true, !sameEntry(o, g)) {
-				use = g
+			if g.ID == o.ID {
+				found = true
+				if !merge("acceptance:"+o.ID, true, !sameEntry(o, g)) {
+					use = g
+				}
 			}
+		}
+		if !found && citesQUAL(o.Sources) && !keep["acceptance:"+o.ID] {
+			stale = append(stale, "acceptance:"+o.ID)
+			continue
 		}
 		acceptance = append(acceptance, use)
 	}
@@ -94,10 +106,18 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 	for _, o := range old.DeviceFacts {
 		seen[o.ID] = true
 		use := o
+		found := false
 		for _, g := range gen.DeviceFacts {
-			if g.ID == o.ID && !merge("device_fact:"+o.ID, true, !sameEntry(o, g)) {
-				use = g
+			if g.ID == o.ID {
+				found = true
+				if !merge("device_fact:"+o.ID, true, !sameEntry(o, g)) {
+					use = g
+				}
 			}
+		}
+		if !found && strings.HasPrefix(o.ID, "tls_") && !keep["device_fact:"+o.ID] {
+			stale = append(stale, "device_fact:"+o.ID)
+			continue
 		}
 		facts = append(facts, use)
 	}
@@ -113,10 +133,18 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 	for _, o := range old.EngineGaps {
 		seen[o.ID] = true
 		use := o
+		found := false
 		for _, g := range gen.EngineGaps {
-			if g.ID == o.ID && !merge("engine_gap:"+o.ID, true, !sameEntry(o, g)) {
-				use = g
+			if g.ID == o.ID {
+				found = true
+				if !merge("engine_gap:"+o.ID, true, !sameEntry(o, g)) {
+					use = g
+				}
 			}
+		}
+		if !found && generatedGaps[o.ID] && !keep["engine_gap:"+o.ID] {
+			stale = append(stale, "engine_gap:"+o.ID)
+			continue
 		}
 		gaps = append(gaps, use)
 	}
@@ -139,13 +167,25 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 			case keep[key]:
 				genG.Scenarios[sc] = o
 			case explainedByReaction(sc, o.Outcome, gen.Reactions):
-				genG.Scenarios[sc] = o
+				// Only the outcome is a hand edit: the steps are the run's, and a
+				// changed step list is a conflict the outcome must not hide.
+				if !sameEntry(o.Steps, g.Steps) {
+					conflicts = append(conflicts, key)
+					break
+				}
+				g.Outcome = o.Outcome
+				genG.Scenarios[sc] = g
 			default:
 				conflicts = append(conflicts, key)
 			}
 		}
 	}
 
+	if len(stale) > 0 {
+		sort.Strings(stale)
+		return fmt.Errorf("the committed profile has %s, which the generator wrote and this run no longer yields: it was measured differently, "+
+			"so review it and delete the entry, or pass -keep=<key,...> to keep it", strings.Join(stale, ", ")+" (no longer generated)")
+	}
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)
 		return fmt.Errorf("the regenerated value differs from the committed one for %s: edit the committed entry, or pass -keep=<key,...> to keep the committed one or -take=<key,...> to let the regenerated value win",
@@ -180,4 +220,18 @@ func sameEntry(a, b any) bool {
 	x, _ := yaml.Marshal(a)
 	y, _ := yaml.Marshal(b)
 	return bytes.Equal(x, y)
+}
+
+// generatedGaps are the engine gaps genprofile writes itself; any other gap is a hand entry.
+var generatedGaps = map[string]bool{"command_authorization_not_sent": true, "minor_version_inferred_over_tls": true}
+
+// citesQUAL is whether a reaction or acceptance rule cites a QUAL note: the
+// pre-filled ones cite the run's own, a hand-written one cites a register row.
+func citesQUAL(srcs []devicemock.Source) bool {
+	for _, s := range srcs {
+		if s.Register == "QUAL" {
+			return true
+		}
+	}
+	return false
 }

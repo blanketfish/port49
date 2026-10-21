@@ -86,3 +86,59 @@ func TestRegenerationKeepsTheCommittedEntryWhenKept(t *testing.T) {
 		t.Fatalf("keep: %v %+v", err, gen.DeviceFacts)
 	}
 }
+
+func qualSource() []devicemock.Source {
+	return []devicemock.Source{{Note: "tests/lab/results/QUAL-x.md", Register: "QUAL"}}
+}
+
+// The reviewer's L80 flip: the committed profile says the denied command runs,
+// the new run says it was refused. The old fact is generator-written, so it is
+// not carried: the merge refuses it as no longer generated, unless -keep names it.
+func TestRegenerationRefusesAGeneratedEntryTheRunNoLongerYields(t *testing.T) {
+	old := &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: devicemock.FactTLSPerRequestDeniedRuns, What: "runs", Sources: qualSource()}}}
+	gen := &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: devicemock.FactTLSPerRequestDeniedRefused, What: "refused", Sources: qualSource()}}}
+	err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "device_fact:"+devicemock.FactTLSPerRequestDeniedRuns) || !strings.Contains(err.Error(), "no longer generated") {
+		t.Fatalf("want a refusal naming the stale fact: %v", err)
+	}
+	if len(gen.DeviceFacts) != 1 {
+		t.Fatalf("both facts on the page: %+v", gen.DeviceFacts)
+	}
+	for _, kind := range []struct {
+		name string
+		old  *devicemock.Profile
+	}{
+		{"engine_gap:command_authorization_not_sent", &devicemock.Profile{EngineGaps: []devicemock.EngineGap{{ID: "command_authorization_not_sent"}}}},
+		{"engine_gap:minor_version_inferred_over_tls", &devicemock.Profile{EngineGaps: []devicemock.EngineGap{{ID: "minor_version_inferred_over_tls"}}}},
+		{"reaction:login/authen_error", &devicemock.Profile{Reactions: []devicemock.Reaction{{Step: "login", On: "authen_error", Sources: qualSource()}}}},
+		{"acceptance:priv_lvl_range", &devicemock.Profile{Acceptance: []devicemock.AcceptanceRule{{ID: "priv_lvl_range", Sources: qualSource()}}}},
+	} {
+		err := mergeHand(&devicemock.Profile{}, &devicemock.Golden{}, kind.old, nil, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), kind.name) {
+			t.Errorf("%s: a stale generated entry was carried: %v", kind.name, err)
+		}
+	}
+	gen = &devicemock.Profile{}
+	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil, map[string]bool{"device_fact:" + devicemock.FactTLSPerRequestDeniedRuns: true}); err != nil || len(gen.DeviceFacts) != 1 {
+		t.Fatalf("keep: %v %+v", err, gen.DeviceFacts)
+	}
+}
+
+// Only the outcome a hand reaction explains is carried; a changed step list is a conflict.
+func TestRegenerationCarriesTheGoldenOutcomeNeverItsSteps(t *testing.T) {
+	steps := func(ev string) []devicemock.GoldenStep { return []devicemock.GoldenStep{{Step: "login", Event: ev}} }
+	oldG := &devicemock.Golden{Scenarios: map[string]devicemock.GoldenScenario{"tls_unknown_ca": {Outcome: "falls_to_local", Steps: steps("tls_refused")}}}
+	old := &devicemock.Profile{Reactions: []devicemock.Reaction{handReaction("alert_unknown_ca")}}
+	same := &devicemock.Golden{Scenarios: map[string]devicemock.GoldenScenario{"tls_unknown_ca": {Outcome: "handshake_refused", Steps: steps("tls_refused")}}}
+	if err := mergeHand(&devicemock.Profile{}, same, old, oldG, nil, nil); err != nil || same.Scenarios["tls_unknown_ca"].Outcome != "falls_to_local" {
+		t.Fatalf("%v %+v", err, same.Scenarios)
+	}
+	moved := &devicemock.Golden{Scenarios: map[string]devicemock.GoldenScenario{"tls_unknown_ca": {Outcome: "handshake_refused", Steps: steps("conn_reset")}}}
+	err := mergeHand(&devicemock.Profile{}, moved, old, oldG, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "golden:tls_unknown_ca") {
+		t.Fatalf("changed steps hidden behind a hand outcome: %v", err)
+	}
+	if moved.Scenarios["tls_unknown_ca"].Steps[0].Event != "conn_reset" {
+		t.Fatalf("the old steps replaced the regenerated: %+v", moved.Scenarios)
+	}
+}
