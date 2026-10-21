@@ -1,7 +1,7 @@
 # L49 — cisco_iosxe
 
 - **Date measured:** 2026-10-20
-- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=iosxe`, `-run ^TestL49Oxidized$`
+- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=iosxe`, `-run ^TestL49Oxidized$`
 - **Platform:** cisco_iosxe
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`), Oxidized 0.37.0-101-g65125713 (image `oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc`, oxidized/oxidized@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc)
 - **Capture:** `tests/lab/evidence/L49-oxidized-cisco_iosxe.json`

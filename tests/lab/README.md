@@ -926,11 +926,16 @@ of content, never the content.
 ## Regressions (plan 11b)
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
-notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `30728fa3`,
+notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `2c680dbf`,
 2026-10-19/20, then the L35, L37, L66, L79 and L80 entries): the manifest sums to 733.6 minutes. A clean
 full run is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
 `make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are L34 (103 min), L36 (67) and
 L22 (44).
+
+Runs before the 2026-10-20 rebase name the rebased twin of the commit they ran (`2c680dbf` for the
+first full run); the tree differs by PR #29's client and spec changes only. The vJunos 23.4R2-S2.1
+QUAL run names `73f7a5df`, the commit its amended-away original became: the code is identical, and
+only two stray pcaps were dropped.
 
 The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
 

@@ -6,7 +6,7 @@
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
 - **Capture:** `tests/lab/evidence/L64L65-juniper_vjunos-router.pcap` — 2346 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL64L65$`
+- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL64L65$`
 
 ## Claim
 
@@ -14,7 +14,7 @@ The Python client (`port49.netmiko.connect`) against juniper_vjunos-router (poli
 
 ## Observation
 
-Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 30728fa3429a1beea98251be87a16837056daa55 into the shared lab venv.
+Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 2c680dbfad8fed41de8176383c9e67e2f871d2eb into the shared lab venv.
 
 The 10s before the first cell: 0 decision records and 0 TACACS+ packets to or from the device.
 

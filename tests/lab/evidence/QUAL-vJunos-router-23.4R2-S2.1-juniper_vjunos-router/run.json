@@ -3,7 +3,7 @@
   "lab_platform": "juniper_vjunos-router",
   "firmware": "vJunos-router 23.4R2-S2.1",
   "image": "vJunos-router 23.4R2-S2.1",
-  "commit": "63db94a8f515",
+  "commit": "73f7a5df43fd",
   "date": "2026-10-20",
   "transports": [
     "tcp"

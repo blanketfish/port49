@@ -1,7 +1,7 @@
 # L49 — cisco_nxos
 
 - **Date measured:** 2026-10-20
-- **Run:** commit `30728fa3429a1beea98251be87a16837056daa55`, `PORT49_LAB_PLATFORMS=nxos`, `-run ^TestL49Oxidized$`
+- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=nxos`, `-run ^TestL49Oxidized$`
 - **Platform:** cisco_nxos
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`), Oxidized 0.37.0-101-g65125713 (image `oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc`, oxidized/oxidized@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc)
 - **Capture:** `tests/lab/evidence/L49-oxidized-cisco_nxos.json`

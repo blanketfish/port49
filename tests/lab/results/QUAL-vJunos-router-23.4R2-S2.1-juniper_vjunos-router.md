@@ -6,7 +6,7 @@
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
 - **Capture:** `tests/lab/evidence/QUAL-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.pcap` — 596 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-vJunos-router-23.4R2-S2.1-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `63db94a8f5153680af02a34cb00e7a51026ce92d`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestQualify$`
+- **Run:** commit `73f7a5df43fd80f66f6d1508c22d4d08bd2798f4`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestQualify$`
 
 ## Claim
 
