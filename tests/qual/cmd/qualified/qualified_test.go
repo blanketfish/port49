@@ -285,6 +285,8 @@ func TestTheTLSCommandColumnSaysWhatL80Observed(t *testing.T) {
 	for _, tc := range []struct{ id, cell string }{
 		{"tls_per_request_denied_command_runs", "no: over per-request TLS, a command port49 denies runs (L80)"},
 		{"tls_per_request_denied_command_refused", "no command authorization over per-request TLS; denied commands refused locally (L80)"},
+		// Review M2: port49 asked and denied it, so "refused locally" would be false.
+		{"tls_per_request_denied_command_denied_by_port49", "no: per-request TLS sent no command authorization for the login; the denied command was denied by port49 (L80)"},
 	} {
 		g := tlsGolden([]devicemock.GoldenStep{stop}, nil)
 		edits := []func(string) string{replace("transports: [tcp]", "transports: [tcp, tls]"),

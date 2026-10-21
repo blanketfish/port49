@@ -151,12 +151,16 @@ const (
 	// FactTLSPerRequestDeniedRuns: over per-request TLS that sends no command
 	// authorization, a command port49's policy denies ran anyway (L80's cell).
 	FactTLSPerRequestDeniedRuns = "tls_per_request_denied_command_runs"
-	// FactTLSPerRequestDeniedRefused: the same command was refused (L80's cell).
+	// FactTLSPerRequestDeniedRefused: the same command was refused by the device,
+	// port49 never asked (L80's cell).
 	FactTLSPerRequestDeniedRefused = "tls_per_request_denied_command_refused"
+	// FactTLSPerRequestDeniedByPort49: the device asked port49 about the same
+	// command, and port49 denied it (L80's cell).
+	FactTLSPerRequestDeniedByPort49 = "tls_per_request_denied_command_denied_by_port49"
 )
 
 var deviceFacts = map[string]string{FactTLSPerRequestNoCommands: "tls", FactTLSSingleNoCommands: "tls",
-	FactTLSPerRequestDeniedRuns: "tls", FactTLSPerRequestDeniedRefused: "tls"}
+	FactTLSPerRequestDeniedRuns: "tls", FactTLSPerRequestDeniedRefused: "tls", FactTLSPerRequestDeniedByPort49: "tls"}
 
 // noCommandFact is the fact under which a scenario plays no command step.
 var noCommandFact = map[string]string{"tls_token_login": FactTLSPerRequestNoCommands, "tls_single_connection": FactTLSSingleNoCommands}

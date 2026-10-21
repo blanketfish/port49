@@ -48,6 +48,9 @@ type run struct {
 	// DeniedCommandRan is L80's cell: whether a command port49's policy denies
 	// ran over per-request TLS that sent port49 no command authorization.
 	DeniedCommandRan map[string]bool `json:"denied_command_ran"`
+	// DeniedCommandAsked is whether that command reached port49 as an
+	// authorize_command: refused by port49, not by the device (review M2).
+	DeniedCommandAsked map[string]bool `json:"denied_command_asked"`
 }
 
 type plainHeader struct {
@@ -275,9 +278,12 @@ func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
 			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedRuns, Status: "measured", Sources: l80,
 				What: "Over per-request TLS a command port49's policy denies runs: the device asked port49 nothing and ran it (L80). " +
 					"Port49's command rules do not hold on this device over per-request TLS"})
+		case measured && r.DeniedCommandAsked["tls_denied_command"]:
+			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedByPort49, Status: "measured", Sources: l80,
+				What: "Over per-request TLS the device asked port49 about a command port49's policy denies, and port49 denied it (L80)"})
 		case measured:
 			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedRefused, Status: "measured", Sources: l80,
-				What: "Over per-request TLS a command port49's policy denies was refused by the device itself (L80)"})
+				What: "Over per-request TLS a command port49's policy denies was refused by the device itself, port49 never asked (L80)"})
 		}
 	}
 	if r.CommandAuthorization["tls_single_connection"] == "not_sent" {

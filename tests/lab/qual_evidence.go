@@ -55,6 +55,9 @@ type qualRun struct {
 	CommandAuthorization map[string]string `json:"command_authorization"`
 	// DeniedCommandRan is L80's cell: whether the denied command ran.
 	DeniedCommandRan map[string]bool `json:"denied_command_ran"`
+	// DeniedCommandAsked is whether that command reached port49 as an
+	// authorize_command, so the page says who refused it (review M2).
+	DeniedCommandAsked map[string]bool `json:"denied_command_asked"`
 }
 
 // qualJunosL18 is the note a Junos command cell carries: the device sends no

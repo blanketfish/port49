@@ -855,12 +855,15 @@ func TestTLSSingleConnectionWithNoCommandsIsAFactToo(t *testing.T) {
 // outcome as a measured device fact citing L80's own note. A run without the
 // cell says L80 is open; "observed" on a conformance cell is refused.
 func TestTheDeniedCommandCellIsAnObservedDeviceFact(t *testing.T) {
-	for ran, want := range map[string]string{"": "", "true": devicemock.FactTLSPerRequestDeniedRuns, "false": devicemock.FactTLSPerRequestDeniedRefused} {
+	// ran and asked: whether the denied command ran, and whether port49 was asked (review M2).
+	for ran, want := range map[string]string{"": "", "true": devicemock.FactTLSPerRequestDeniedRuns, "false": devicemock.FactTLSPerRequestDeniedRefused,
+		"false,asked": devicemock.FactTLSPerRequestDeniedByPort49} {
 		dir := copyFixture(t)
 		perRequestNotSent(t, dir)
 		if ran != "" {
 			editRun(t, dir, func(m map[string]any) {
 				m["denied_command_ran"] = map[string]any{"tls_denied_command": ran == "true"}
+				m["denied_command_asked"] = map[string]any{"tls_denied_command": strings.HasSuffix(ran, ",asked")}
 				m["cells"].(map[string]any)["tls_denied_command"] = "2026-10-20T12:04:30.000Z"
 				m["results"].(map[string]any)["tls_denied_command"] = "observed"
 			})

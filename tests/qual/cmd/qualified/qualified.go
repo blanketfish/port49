@@ -137,6 +137,8 @@ func Build(repoRoot string) (string, error) {
 			tc = l80Runs
 		case p.HasFact(devicemock.FactTLSPerRequestDeniedRefused):
 			tc = l80Refused
+		case p.HasFact(devicemock.FactTLSPerRequestDeniedByPort49):
+			tc = l80DeniedByPort49
 		}
 		c = slices.Insert(c, 3, tc)
 		c[len(c)-1] = rowStatus(c[len(c)-1], tc)
@@ -186,6 +188,8 @@ func cells(transports []string, g devicemock.Golden, commandGap bool, reason str
 const (
 	l80Runs    = "no: over per-request TLS, a command port49 denies runs (L80)"
 	l80Refused = "no command authorization over per-request TLS; denied commands refused locally (L80)"
+	// port49 was asked about the denied command and denied it: not a local refusal (review M2).
+	l80DeniedByPort49 = "no: per-request TLS sent no command authorization for the login; the denied command was denied by port49 (L80)"
 )
 
 // tlsCommand is command authorization over TLS, read from tls_token_login: the

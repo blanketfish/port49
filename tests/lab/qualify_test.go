@@ -591,7 +591,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	keep := func(cell string, _ []l73Conn) {
 		q.tlsFiles[cell+".tls.json"] = e.evidence[cell+".tls.json"]
 	}
-	q.run.CommandAuthorization, q.run.DeniedCommandRan = map[string]string{}, map[string]bool{}
+	q.run.CommandAuthorization, q.run.DeniedCommandRan, q.run.DeniedCommandAsked = map[string]string{}, map[string]bool{}, map[string]bool{}
 
 	// tls_token_login: the plain token_login, command_permitted, command_denied and
 	// accounting cells together, per-request.
@@ -733,6 +733,7 @@ func (q *qualEnv) tlsDeniedCommand(e *l73Env, login func(string, string, ...stri
 	result, ran, why := qualDeniedCommandVerdict(denied, oneLine(hideKeys(l73LogScreen(firstLine(qualFirstOut(outs))))), recs)
 	if result == "observed" {
 		q.run.DeniedCommandRan["tls_denied_command"] = ran
+		q.run.DeniedCommandAsked["tls_denied_command"] = len(qualCommandRecords(recs, denied)) > 0
 	} else {
 		why += summarize(recs)
 	}
