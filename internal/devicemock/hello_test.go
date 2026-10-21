@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,6 +215,40 @@ func TestProbeReadsAGoServersChoice(t *testing.T) {
 	}
 	if sh.SelectedVersion != 772 || sh.CipherSuite != 4865 || sh.HelloRetryRequest {
 		t.Fatalf("%+v", sh)
+	}
+}
+
+// alertServer answers any hello with one plaintext alert record.
+func alertServer(t *testing.T, level, desc byte) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.Read(make([]byte, 4096))
+		c.Write([]byte{21, 3, 3, 0, 2, level, desc})
+	}()
+	return ln.Addr().String()
+}
+
+// port49 refuses an SNI it does not serve with a fatal alert before any key is
+// agreed (Junos, L73 cell c: description 80); the probe names its number. A
+// warning-level alert is not a refusal, and the probe says which it got.
+func TestProbeNamesTheAlertPort49Answered(t *testing.T) {
+	_, err := Probe(t.Context(), &net.Dialer{}, alertServer(t, 2, 80), nxosHello(), "127.0.0.1")
+	if err == nil || !strings.Contains(err.Error(), "fatal alert 80") {
+		t.Fatalf("got %v, want the fatal alert's number, 80", err)
+	}
+	_, err = Probe(t.Context(), &net.Dialer{}, alertServer(t, 1, 112), nxosHello(), "127.0.0.1")
+	if err == nil || !strings.Contains(err.Error(), "warning alert 112") {
+		t.Fatalf("got %v, want a warning alert named as one", err)
 	}
 }
 

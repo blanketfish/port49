@@ -176,7 +176,12 @@ func Probe(ctx context.Context, d *net.Dialer, addr string, h Hello, serverIP st
 		if _, err := io.ReadFull(c, alert[:]); err != nil {
 			return ServerHello{}, errors.New("devicemock: port49 answered the hello with an alert")
 		}
-		return ServerHello{}, fmt.Errorf("devicemock: port49 answered the hello with alert %d", alert[1])
+		level := "fatal"
+		if alert[0] != 2 {
+			// TLS 1.3 sends no warning here; one is reported as what it is, not as a refusal.
+			level = "warning"
+		}
+		return ServerHello{}, fmt.Errorf("devicemock: port49 answered the hello with %s alert %d", level, alert[1])
 	}
 	body := make([]byte, binary.BigEndian.Uint16(hdr[3:]))
 	if _, err := io.ReadFull(c, body); err != nil {
