@@ -162,7 +162,7 @@ acceptance:
     sources:
       - note: tests/lab/results/L2-juniper_vjunos-router.md
         register: L2
-    note: Ryan's production prior from hardware Junos; L2 measured only long deny messages, on vJunos-router; L78 measures it
+    note: Ryan's production prior from hardware Junos; L2 measured only long deny messages, on vJunos-router; L78 found no lockout up to 375 bytes on vJunos 23.4R2-S2.1 and 26.2R1.7 and has not measured this image
 engine_gaps:
   - id: command_authorization_not_sent
     what: the device sends no per-command authorization (L18); its command cells are not_applicable

@@ -279,7 +279,9 @@ acceptance:
     sources:
       - note: tests/lab/results/L2-juniper_vjunos-router.md
         register: L2
-    note: Ryan's production prior from hardware Junos; L2 measured only long deny messages; L78 measures it
+      - note: tests/lab/results/L78-vJunos-router-26.2R1.7-juniper_vjunos-router.md
+        register: L78
+    note: no lockout up to 375 bytes on vJunos 26.2R1.7; open for hardware Junos (Ryan's production prior is a lockout over 255 bytes; L2 measured only long deny messages)
 engine_gaps:
   - id: sni_ip_literal_in_session
     what: crypto/tls omits an IP-literal SNI; the hello probe sends it
