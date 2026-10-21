@@ -6428,7 +6428,9 @@ lowercase hex and 64 characters or fewer passes the shape.
 principal or one certificate, to lift a revocation, or to list those in force (§5.1.4). `--list`
 names each mark, since when and its origin; a mark flagged `landed_after_lift` (decision 51, the
 cache) adds `landed after the lift at <T> (revision <R>)`, read from the lift's record, or, once
-that record has expired, `landed after a lift; the lift's record has expired`. The
+that record has expired, `landed after a lift; the lift's record has expired`, or, when it
+cannot be read, `landed after a lift; the lift's record could not be read (<error>)`. A mark a
+runner put back shows `put back from broker.state_dir/marks.json` in its origin. The
 socket answers port49d's user and root alone, the people who can already rewrite the policy. A
 revocation prints what it reached and names each live context on a platform it cannot reach;
 `--cert` reads the issuer and serial from the certificate itself, in the spelling the broker
@@ -10581,7 +10583,10 @@ reason and cost.
     that deletes the mark. It holds the lift's time and origin, and lives an hour, on a lease from
     the shared pool. It is a directory family in `rv/`'s keyspace, so a revoke's transaction
     compares both on one cluster, and every region sees it. The broker's grant on the keyspace
-    covers it; the daemon has no grant on it, and the session store holds none. A lease that
+    covers it; the daemon has no grant on it, and the session store holds none. A broker whose
+    role lacks readwrite on `rl/` (one granted family by family before this fix) is refused at
+    start, and the refusal names the grant as an `etcdctl role grant-permission … readwrite
+    --prefix=true …/rl/` line; grant it before upgrading a broker. A lease that
     cannot be had fails the lift as "the revocation could not be lifted, and stands". That fails
     closed, but it is new: a slow store can now fail a lift that would have landed before. The
     memory store writes no lift record and never sets the flag.
@@ -10606,12 +10611,30 @@ reason and cost.
       a writer whose marks feed had not yet shown the lift; it stands everywhere; check with
       whoever revoked before lifting`;
     - with the record gone: `a revocation of <key> landed after a lift; the lift's record has
-      expired`.
+      expired`;
+    - with the record unreadable: `a revocation of <key> landed after a lift; the lift's record
+      could not be read (<error>): port49 revoke --list names it`. A form chosen without the
+      record would be a guess.
 
-    No form tells anyone to lift again: whether the revoke should stand is the operators' call,
-    and the line gives its cause. The process whose own write of that mark failed adds `made on
+    A port49-broker runner's put-back from `broker.state_dir/marks.json` (plan 7e, Ruling 12) is
+    put with its origin ending `put back from broker.state_dir/marks.json`, and a flagged
+    put-back is said as one, never as a cut (task 2 review I1). The form is still chosen by the
+    mark's time against the lift's:
+    - made before the lift: `a revocation of <key> made at <At> was put back after the lift at <T>
+      by a port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered
+      the lift, which it cannot tell from a mark an etcd restore lost; it stands everywhere; lift
+      it again with port49 revoke --lift if it was lifted on purpose`. The put-back re-created a
+      lifted mark, and the runner's own put-back line says the same;
+    - made at or after it: `a revocation of <key> made at <At> after the lift at <T> was put back
+      by a port49-broker runner from its broker.state_dir/marks.json: the store had lost it (an
+      etcd restore); it stands everywhere`. That was a deliberate revoke, and no lift is offered.
+
+    No other form tells anyone to lift again: whether the revoke should stand is the operators'
+    call, and the line gives its cause. The process whose own write of that mark failed adds `made on
     this port49-broker, reported unrecorded then`. It matches the kind, key and time for an hour,
-    whatever lift came between, and its runner says the same in place of "made elsewhere". A
+    whatever lift came between, and its runner says the same in place of "made elsewhere". When
+    that mark lands unflagged, the process says `a revocation of <key> made on this port49-broker,
+    reported unrecorded then, landed when the store answered again; it stands everywhere`. A
     reload, rescan or restart that finds the flagged mark already standing does not say it again.
     At start, a broker with flagged marks says `N mark(s) stand flagged landed-after-lift;
     port49 revoke --list names them`.
