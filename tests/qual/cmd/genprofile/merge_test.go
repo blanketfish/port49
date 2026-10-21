@@ -67,3 +67,13 @@ func TestRegenerationCarriesAGoldenOutcomeAReactionExplains(t *testing.T) {
 		t.Fatalf("an unexplained golden edit must be refused: %v", err)
 	}
 }
+
+// A committed profile is read back with empty lists where the generator has
+// nil ones: that is no conflict.
+func TestRegenerationTreatsAnEmptyListAndNilAsEqual(t *testing.T) {
+	old := &devicemock.Profile{Acceptance: []devicemock.AcceptanceRule{{ID: "priv_lvl_range", Kind: "priv_lvl_range", Names: []string{}}}}
+	gen := &devicemock.Profile{Acceptance: []devicemock.AcceptanceRule{{ID: "priv_lvl_range", Kind: "priv_lvl_range"}}}
+	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil); err != nil {
+		t.Fatalf("nil against an empty list is a conflict: %v", err)
+	}
+}

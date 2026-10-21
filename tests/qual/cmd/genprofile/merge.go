@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/devicemock"
 )
@@ -52,7 +54,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		seen[key] = true
 		use := o
 		if g, ok := findReaction(gen.Reactions, o); ok {
-			if !merge(key, true, !reflect.DeepEqual(o, g)) {
+			if !merge(key, true, !sameEntry(o, g)) {
 				use = g
 			}
 		}
@@ -71,7 +73,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		seen[o.ID] = true
 		use := o
 		for _, g := range gen.Acceptance {
-			if g.ID == o.ID && !merge("acceptance:"+o.ID, true, !reflect.DeepEqual(o, g)) {
+			if g.ID == o.ID && !merge("acceptance:"+o.ID, true, !sameEntry(o, g)) {
 				use = g
 			}
 		}
@@ -90,7 +92,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		seen[o.ID] = true
 		use := o
 		for _, g := range gen.DeviceFacts {
-			if g.ID == o.ID && !merge("device_fact:"+o.ID, true, !reflect.DeepEqual(o, g)) {
+			if g.ID == o.ID && !merge("device_fact:"+o.ID, true, !sameEntry(o, g)) {
 				use = g
 			}
 		}
@@ -109,7 +111,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		seen[o.ID] = true
 		use := o
 		for _, g := range gen.EngineGaps {
-			if g.ID == o.ID && !merge("engine_gap:"+o.ID, true, !reflect.DeepEqual(o, g)) {
+			if g.ID == o.ID && !merge("engine_gap:"+o.ID, true, !sameEntry(o, g)) {
 				use = g
 			}
 		}
@@ -125,7 +127,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 	if oldG != nil {
 		for sc, o := range oldG.Scenarios {
 			g, ok := genG.Scenarios[sc]
-			if !ok || reflect.DeepEqual(o, g) {
+			if !ok || sameEntry(o, g) {
 				continue
 			}
 			key := "golden:" + sc
@@ -165,4 +167,12 @@ func explainedByReaction(sc, outcome string, rs []devicemock.Reaction) bool {
 		}
 	}
 	return false
+}
+
+// sameEntry compares two entries as the YAML they are written as: a list read
+// back empty and the generator's nil list are the same entry.
+func sameEntry(a, b any) bool {
+	x, _ := yaml.Marshal(a)
+	y, _ := yaml.Marshal(b)
+	return bytes.Equal(x, y)
 }
