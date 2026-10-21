@@ -624,13 +624,13 @@ platforms:
 // qualL80Note is the results note for spec §15 L80 from a TestQualify run's
 // verdict lines: the per-request login's and the denied-command cell's, so
 // the row can be closed on a note the harness wrote. ok is false when the
-// cell did not run (no line for it).
+// cell did not run or was not measured (no observed line for it).
 func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 	var lines []string
 	for _, n := range notes {
 		if strings.HasPrefix(n, "- `tls_token_login` ") || strings.HasPrefix(n, "- `tls_denied_command` ") {
 			lines = append(lines, n)
-			ok = ok || strings.HasPrefix(n, "- `tls_denied_command` ")
+			ok = ok || (strings.HasPrefix(n, "- `tls_denied_command` ") && strings.Contains(n, "**observed**"))
 		}
 	}
 	if !ok {

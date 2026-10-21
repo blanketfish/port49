@@ -796,3 +796,19 @@ func TestQualSwitchedForUndoesAFatalInsideTheSwitch(t *testing.T) {
 		t.Fatalf("the body's own undo and the deferred one ran %d times, want 1", undone)
 	}
 }
+
+// L80 names NX-OS 10.6(2)F alone: an image whose denied-command cell did not
+// run (command authorization was sent, so port49 decided) writes no L80 note.
+func TestQualL80NoteIsWrittenOnlyForAMeasuredCell(t *testing.T) {
+	notes := []string{
+		"- `tls_token_login` (re-measures L73): **pass**. per-request: a token login over RFC 9887",
+		"- `tls_denied_command` (re-measures L80): **not_run**. per-request TLS sent port49 command authorization, so port49 decided the denied command there",
+	}
+	if _, _, ok := qualL80Note(notes, "x"); ok {
+		t.Fatal("a not_run cell wrote an L80 note")
+	}
+	notes[1] = "- `tls_denied_command` (re-measures L80): **observed**. denied command refused"
+	if _, _, ok := qualL80Note(notes, "x"); !ok {
+		t.Fatal("an observed cell wrote no L80 note")
+	}
+}
