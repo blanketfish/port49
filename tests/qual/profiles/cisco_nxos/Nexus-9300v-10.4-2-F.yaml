@@ -212,5 +212,6 @@ acceptance:
       - note: tests/lab/results/L16-cisco_nxos.md
         register: L16
     note: L16 on this image (10.4(2)F) found a role the device lacks ignored and the session opened as network-operator; the three names are the roles it honoured
+device_facts: []
 engine_gaps: []
 golden: tests/qual/golden/cisco_nxos/Nexus-9300v-10.4-2-F.json

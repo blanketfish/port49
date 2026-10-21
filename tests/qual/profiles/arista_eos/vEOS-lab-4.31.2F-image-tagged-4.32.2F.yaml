@@ -217,5 +217,6 @@ acceptance:
       - note: tests/lab/results/L18-arista_eos.md
         register: L18
     note: L18 variant 4 on this image (vEOS-lab 4.31.2F) refused the session for a mandatory shell:roles; the optional spelling was ignored; the rule cannot tell = from *
+device_facts: []
 engine_gaps: []
 golden: tests/qual/golden/arista_eos/vEOS-lab-4.31.2F-image-tagged-4.32.2F.json
