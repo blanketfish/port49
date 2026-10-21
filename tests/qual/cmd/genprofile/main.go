@@ -20,14 +20,20 @@ import (
 )
 
 // takes is the -take keys.
-var takes map[string]bool
+var takes, keeps map[string]bool
 
 func main() {
 	evidence := flag.String("evidence", "", "a TestQualify evidence directory")
 	check := flag.Bool("check", false, "write nothing; exit 1 when the generated stimulus differs from the committed profile's")
 	take := flag.String("take", "", "comma-separated keys (reaction:step/on, acceptance:id, device_fact:id, engine_gap:id, golden:scenario) where the regenerated value wins over the committed one")
+	keep := flag.String("keep", "", "comma-separated keys where the committed entry wins over a differing regenerated one")
 	flag.Parse()
-	takes = map[string]bool{}
+	takes, keeps = map[string]bool{}, map[string]bool{}
+	for _, k := range strings.Split(*keep, ",") {
+		if k != "" {
+			keeps[k] = true
+		}
+	}
 	for _, k := range strings.Split(*take, ",") {
 		if k != "" {
 			takes[k] = true
@@ -65,7 +71,7 @@ func run1(evidence string, check bool) error {
 		if gerr == nil {
 			og = &oldG
 		}
-		if err := mergeHand(p, &g, old, og, takes); err != nil {
+		if err := mergeHand(p, &g, old, og, takes, keeps); err != nil {
 			return err
 		}
 	}

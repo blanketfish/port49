@@ -26,18 +26,21 @@ var goldenReactions = map[string][]string{
 //     is carried forward, in the committed order;
 //   - an entry both have, equal, is kept;
 //   - an entry both have, different, is a conflict: it is refused, naming its key,
-//     unless take names the key (the regenerated value wins);
+//     unless take names the key (the regenerated value wins) or keep names it (the
+//     committed one wins, a hand refinement the generator cannot know);
 //   - a golden scenario that differs is carried when a carried reaction explains
 //     it (goldenReactions), and a conflict otherwise.
 //
 // Merged lists keep the committed order, then the regenerated-only entries.
-func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock.Profile, oldG *devicemock.Golden, take map[string]bool) error {
+func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock.Profile, oldG *devicemock.Golden, take, keep map[string]bool) error {
 	var conflicts []string
 	merge := func(key string, same bool, differs bool) (useOld bool) {
 		switch {
 		case !same:
 			return true // only in the committed profile: carried
 		case !differs:
+			return true
+		case keep[key]:
 			return true
 		case take[key]:
 			return false
@@ -133,6 +136,8 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 			key := "golden:" + sc
 			switch {
 			case take[key]:
+			case keep[key]:
+				genG.Scenarios[sc] = o
 			case explainedByReaction(sc, o.Outcome, gen.Reactions):
 				genG.Scenarios[sc] = o
 			default:
@@ -143,7 +148,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)
-		return fmt.Errorf("the regenerated value differs from the committed one for %s: edit the committed entry, or pass -take=<key,...> to let the regenerated value win",
+		return fmt.Errorf("the regenerated value differs from the committed one for %s: edit the committed entry, or pass -keep=<key,...> to keep the committed one or -take=<key,...> to let the regenerated value win",
 			strings.Join(conflicts, ", "))
 	}
 	return nil

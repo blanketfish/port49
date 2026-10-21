@@ -155,6 +155,7 @@ acceptance:
       - note: tests/lab/results/QUAL-SR-Linux-26.7.2-519-nokia_srlinux.md
         register: QUAL
     note: the privilege levels the device sent; seeing values measures no limit
+device_facts: []
 engine_gaps:
   - id: command_authorization_not_sent
     what: the device sends no per-command authorization (L76 cell b); its command cells are not_applicable

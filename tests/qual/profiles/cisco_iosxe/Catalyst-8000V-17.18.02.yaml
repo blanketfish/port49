@@ -296,6 +296,7 @@ acceptance:
       - note: tests/lab/results/L18-cisco_iosxe.md
         register: L18
     note: L18 killed the session on 17.13.01a for either spelling, optional or mandatory; not measured on 17.18.02
+device_facts: []
 engine_gaps:
   - id: operator_break_glass_fails_on_error
     what: 'When port49 answers ERROR (its store is unavailable) this device does not fall to its local method: the token login is refused and break-glass fails too (QUAL store_unavailable: break-glass logged in false). Keep a path that does not depend on port49 answering (console, or a second reachable server) for the time the store is down'

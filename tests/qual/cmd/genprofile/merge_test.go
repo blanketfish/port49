@@ -22,7 +22,7 @@ func TestRegenerationCarriesHandWrittenEntriesForward(t *testing.T) {
 		EngineGaps:  []devicemock.EngineGap{{ID: "operator_x", What: "y"}},
 	}
 	gen := &devicemock.Profile{Acceptance: []devicemock.AcceptanceRule{{ID: "priv_lvl_range", Kind: "priv_lvl_range"}}}
-	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil); err != nil {
+	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(gen.Reactions) != 1 || len(gen.DeviceFacts) != 1 || len(gen.EngineGaps) != 1 || len(gen.Acceptance) != 2 {
@@ -30,7 +30,7 @@ func TestRegenerationCarriesHandWrittenEntriesForward(t *testing.T) {
 	}
 	// Idempotent: carrying the carried profile changes nothing.
 	again := &devicemock.Profile{Acceptance: gen.Acceptance[1:]}
-	if err := mergeHand(again, &devicemock.Golden{}, gen, nil, nil); err != nil || len(again.Acceptance) != 2 {
+	if err := mergeHand(again, &devicemock.Golden{}, gen, nil, nil, nil); err != nil || len(again.Acceptance) != 2 {
 		t.Fatalf("%v %+v", err, again.Acceptance)
 	}
 }
@@ -40,12 +40,12 @@ func TestRegenerationCarriesHandWrittenEntriesForward(t *testing.T) {
 func TestRegenerationRefusesAConflictWithAHandEntryUnlessTaken(t *testing.T) {
 	old := &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: "f1", What: "hand text"}}}
 	gen := &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: "f1", What: "generated text"}}}
-	err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil)
+	err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "device_fact:f1") {
 		t.Fatalf("want a refusal naming device_fact:f1: %v", err)
 	}
 	gen = &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: "f1", What: "generated text"}}}
-	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, map[string]bool{"device_fact:f1": true}); err != nil || gen.DeviceFacts[0].What != "generated text" {
+	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, map[string]bool{"device_fact:f1": true}, nil); err != nil || gen.DeviceFacts[0].What != "generated text" {
 		t.Fatalf("take: %v %+v", err, gen.DeviceFacts)
 	}
 }
@@ -59,10 +59,10 @@ func TestRegenerationCarriesAGoldenOutcomeAReactionExplains(t *testing.T) {
 	}
 	old := &devicemock.Profile{Reactions: []devicemock.Reaction{handReaction("alert_unknown_ca")}}
 	g := genG()
-	if err := mergeHand(&devicemock.Profile{}, g, old, oldG, nil); err != nil || g.Scenarios["tls_unknown_ca"].Outcome != "falls_to_local" {
+	if err := mergeHand(&devicemock.Profile{}, g, old, oldG, nil, nil); err != nil || g.Scenarios["tls_unknown_ca"].Outcome != "falls_to_local" {
 		t.Fatalf("%v %+v", err, g.Scenarios)
 	}
-	err := mergeHand(&devicemock.Profile{}, genG(), &devicemock.Profile{}, oldG, nil)
+	err := mergeHand(&devicemock.Profile{}, genG(), &devicemock.Profile{}, oldG, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "golden:tls_unknown_ca") {
 		t.Fatalf("an unexplained golden edit must be refused: %v", err)
 	}
@@ -73,7 +73,16 @@ func TestRegenerationCarriesAGoldenOutcomeAReactionExplains(t *testing.T) {
 func TestRegenerationTreatsAnEmptyListAndNilAsEqual(t *testing.T) {
 	old := &devicemock.Profile{Acceptance: []devicemock.AcceptanceRule{{ID: "priv_lvl_range", Kind: "priv_lvl_range", Names: []string{}}}}
 	gen := &devicemock.Profile{Acceptance: []devicemock.AcceptanceRule{{ID: "priv_lvl_range", Kind: "priv_lvl_range"}}}
-	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil); err != nil {
+	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil, nil); err != nil {
 		t.Fatalf("nil against an empty list is a conflict: %v", err)
+	}
+}
+
+// -keep names the keys where the committed entry wins over a differing regenerated one.
+func TestRegenerationKeepsTheCommittedEntryWhenKept(t *testing.T) {
+	old := &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: "f1", What: "hand text"}}}
+	gen := &devicemock.Profile{DeviceFacts: []devicemock.DeviceFact{{ID: "f1", What: "generated text"}}}
+	if err := mergeHand(gen, &devicemock.Golden{}, old, nil, nil, map[string]bool{"device_fact:f1": true}); err != nil || gen.DeviceFacts[0].What != "hand text" {
+		t.Fatalf("keep: %v %+v", err, gen.DeviceFacts)
 	}
 }
