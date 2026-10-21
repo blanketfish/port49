@@ -189,6 +189,26 @@ func (s *Store) probeWrite(ctx context.Context, fam string) error {
 	return unavailable(err)
 }
 
+// ErrMissingGrant is a broker's start refused for one grant its role
+// lacks, which the refusal names as an etcdctl line: an upgrade's new
+// family on a role granted family by family (task 2 review I2).
+var ErrMissingGrant = errors.New("the broker's role lacks a grant")
+
+// liftGrant is do, a probe of the lift records (rl/, post-11b), whose
+// refusal names the grant: readwrite, whichever of the two was refused, so
+// one restart after it is enough (task 2 review I2).
+func (s *Store) liftGrant(do func() error) func() error {
+	return func() error {
+		err := do()
+		if errors.Is(err, ErrRefused) {
+			fam := s.k.family(famLift)
+			return fmt.Errorf("%w; %w: readwrite on %s, the lift records: etcdctl role grant-permission %s readwrite "+
+				"--prefix=true %s ('port49d store-roles' output grants it)", err, ErrMissingGrant, fam, RoleBroker, fam)
+		}
+		return err
+	}
+}
+
 // judgeProbes runs probes: the broker's must answer, the daemon's must be
 // refused.
 func judgeProbes(broker bool, probes []probe) error {
@@ -227,8 +247,8 @@ func (s *Store) checkIdentityWith(ctx context.Context, broker bool, need, judged
 		{"reading " + s.k.family(famIdem), func() error { return s.probeRead(ctx, famIdem) }},
 		{"writing " + s.k.family(famIdem), func() error { return s.probeWrite(ctx, famIdem) }},
 		{"writing " + s.k.family(famMark), func() error { return s.probeWrite(ctx, famMark) }},
-		{"reading " + s.k.family(famLift), func() error { return s.probeRead(ctx, famLift) }},
-		{"writing " + s.k.family(famLift), func() error { return s.probeWrite(ctx, famLift) }},
+		{"writing " + s.k.family(famLift), s.liftGrant(func() error { return s.probeWrite(ctx, famLift) })},
+		{"reading " + s.k.family(famLift), s.liftGrant(func() error { return s.probeRead(ctx, famLift) })},
 		{"writing " + s.k.family(famTokByPrin), func() error { return s.probeWrite(ctx, famTokByPrin) }},
 		{"writing " + s.k.family(famTokByCert), func() error { return s.probeWrite(ctx, famTokByCert) }},
 		{"reading " + s.k.family(famSuperseded), func() error { return s.probeRead(ctx, famSuperseded) }},
@@ -372,8 +392,8 @@ func (s *Store) CheckIdentityAt(ctx context.Context, broker bool, scope Scope) e
 	}
 	probes := []probe{
 		{"writing " + s.k.family(famMark), func() error { return s.probeWrite(ctx, famMark) }},
-		{"reading " + s.k.family(famLift), func() error { return s.probeRead(ctx, famLift) }},
-		{"writing " + s.k.family(famLift), func() error { return s.probeWrite(ctx, famLift) }},
+		{"writing " + s.k.family(famLift), s.liftGrant(func() error { return s.probeWrite(ctx, famLift) })},
+		{"reading " + s.k.family(famLift), s.liftGrant(func() error { return s.probeRead(ctx, famLift) })},
 		{"reading " + s.k.family(famMembership), func() error { return s.probeRead(ctx, famMembership) }},
 		{"writing " + s.k.family(famMembership), func() error { return s.probeWrite(ctx, famMembership) }},
 		{"reading " + s.k.family(famMembershipK), func() error { return s.probeRead(ctx, famMembershipK) }},

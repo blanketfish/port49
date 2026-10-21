@@ -363,6 +363,56 @@ func TestTheDirectorysRoleCheckRefusesABrokerWithoutUnlockRecords(t *testing.T) 
 	}
 }
 
+// A broker role without readwrite on rl/, the lift records (post-11b), is
+// refused at the start by the exact grant it lacks, readwrite, whether it
+// has no grant there or a read one, so one restart after the grant is
+// enough; it is not told to get an etcd user of its own (task 2 review I2).
+func TestTheRoleCheckNamesTheLiftRecordsGrant(t *testing.T) {
+	const prefix = "/port49/"
+	const want = "etcdctl role grant-permission port49_broker readwrite --prefix=true /port49/v1/rl/"
+	for _, readable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("readable=%v", readable), func(t *testing.T) {
+			srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+			var grants []etcdtest.Grant
+			for _, g := range etcd.RolesFor(prefix, etcd.ScopeDirectory) {
+				if g.Role == etcd.RoleBroker {
+					continue
+				}
+				grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+			}
+			fams := []string{"rv/", "mb/", "mk/", "lo/", "sf/", "ul/", "meta/"}
+			for _, fam := range fams {
+				k := prefix + "v1/" + fam
+				grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k),
+					Write: true})
+			}
+			if readable {
+				k := prefix + "v1/rl/"
+				grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k)})
+			}
+			srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon},
+				"port49-broker": {etcd.RoleBroker}})
+			tc := srv.TLS(t, "port49-broker")
+			b, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, TLS: tc, Prefix: prefix})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { b.Close() })
+			leaf, err := x509.ParseCertificate(tc.Certificates[0].Certificate[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := &config.EtcdConfig{CallTimeout: 2 * time.Second, Roles: config.RolesEnforced}
+			ref := storeRef{at: "stores.directory", scope: etcd.ScopeDirectory, dir: true}
+			err = checkRoles(context.Background(), nil, b, e, map[string]*x509.Certificate{"broker": leaf}, ref)
+			if err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.broker") ||
+				!strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "etcd user of its own") {
+				t.Fatalf("the refusal does not name the rl/ grant, or gives the wrong advice: %v", err)
+			}
+		})
+	}
+}
+
 // An operator at 3am is not told a broker is serving when it is not: on one
 // store the outage line says the broker refuses requests, not that it serves
 // from a cache; on a split the cache wording stays. Both are pinned.
