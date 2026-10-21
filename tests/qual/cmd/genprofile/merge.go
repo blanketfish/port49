@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -58,7 +59,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		seen[key] = true
 		use := o
 		if g, ok := findReaction(gen.Reactions, o); ok {
-			if !merge(key, true, !sameEntry(o, g)) {
+			if !merge(key, true, !sameUpToSources(o, g)) {
 				use = g
 			}
 		} else if citesQUAL(o.Sources) && !keep[key] {
@@ -83,7 +84,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		for _, g := range gen.Acceptance {
 			if g.ID == o.ID {
 				found = true
-				if !merge("acceptance:"+o.ID, true, !sameEntry(o, g)) {
+				if !merge("acceptance:"+o.ID, true, !sameUpToSources(o, g)) {
 					use = g
 				}
 			}
@@ -110,7 +111,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		for _, g := range gen.DeviceFacts {
 			if g.ID == o.ID {
 				found = true
-				if !merge("device_fact:"+o.ID, true, !sameEntry(o, g)) {
+				if !merge("device_fact:"+o.ID, true, !sameUpToSources(o, g)) {
 					use = g
 				}
 			}
@@ -137,7 +138,7 @@ func mergeHand(gen *devicemock.Profile, genG *devicemock.Golden, old *devicemock
 		for _, g := range gen.EngineGaps {
 			if g.ID == o.ID {
 				found = true
-				if !merge("engine_gap:"+o.ID, true, !sameEntry(o, g)) {
+				if !merge("engine_gap:"+o.ID, true, !sameUpToSources(o, g)) {
 					use = g
 				}
 			}
@@ -234,4 +235,40 @@ func citesQUAL(srcs []devicemock.Source) bool {
 		}
 	}
 	return false
+}
+
+// sourcesOf points at an entry's sources, for the four entry kinds.
+func sourcesOf(e any) *[]devicemock.Source {
+	switch v := e.(type) {
+	case *devicemock.Reaction:
+		return &v.Sources
+	case *devicemock.AcceptanceRule:
+		return &v.Sources
+	case *devicemock.DeviceFact:
+		return &v.Sources
+	case *devicemock.EngineGap:
+		return &v.Sources
+	}
+	return nil
+}
+
+// sameUpToSources is whether the committed entry o is the regenerated g, or g
+// with more sources: a hand refinement that cites a further register row. The
+// values (outcome, text, names) must still be equal.
+func sameUpToSources[T any](o, g T) bool {
+	if sameEntry(o, g) {
+		return true
+	}
+	os, gs := sourcesOf(&o), sourcesOf(&g)
+	if os == nil || gs == nil || len(*os) <= len(*gs) {
+		return false
+	}
+	for _, want := range *gs {
+		if !slices.Contains(*os, want) {
+			return false
+		}
+	}
+	trimmed := o
+	*sourcesOf(&trimmed) = *gs
+	return sameEntry(trimmed, g)
 }
