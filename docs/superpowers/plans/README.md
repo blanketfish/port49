@@ -7483,16 +7483,22 @@ when Task 14's review found a security-relevant device fact.
     - **An XR `platform_set` adapter:** generic XR is unusable without an operator block.
   - **Plan 12:** the hand-offs under "Plan 12", below.
   - **Plan 13:** the hand-offs under "Plan 13", below.
-  - **Final review (whole-branch, before the PR):**
-    - Loop `TestTLSDecidesAtAcceptBeforeAnyTLSByte` and `TestTLSNilMaterialDeclinesWithoutAStrike` under
-      load (each flaked once, plan 11 code); L74 cell (i), "marks feed rescan, 1 vs 1", flaked once.
-    - Grep every harness "ran <cmd>" grade for the L78 flaw (an answer counted as success with no
-      refusal marker), Junos first. Task 16's re-grade of the ten earlier platforms rests on committed
-      evidence (a permitted `authorize_command` and output bytes), not first lines; the TLS re-vet
-      regraded five.
+  - **Final review (whole-branch, done 2026-10-21; its fix wave landed on this branch):**
+    - `TestTLSDecidesAtAcceptBeforeAnyTLSByte` and `TestTLSNilMaterialDeclinesWithoutAStrike` ran
+      `-count=100` under load with 0 failures. The flake is not reproduced, likely only under full-suite
+      load, so it stays a carry. L74 cell (i), "marks feed rescan, 1 vs 1", flaked once (lab).
+    - Fixed: the harness "ran <cmd>" grep found L78's grader reading only an `error:` prefix (I4; it now
+      grades through `qualRan` and knows fail-closed steps, and the committed vJunos rows grade the same).
+      Task 16's re-grade of the ten earlier platforms rests on committed evidence (a permitted
+      `authorize_command` and output bytes), not first lines; the TLS re-vet regraded five.
+    - Fixed: a not-measured L80 run no longer writes an L80 note (I2), and `lab-regress` fails an entry
+      whose note the run did not rewrite (I3).
+    - Fixed: SR Linux `operator` renders `priv-lvl=1`, read-only until a middle level is measured (I1).
+      The QUAL SR Linux note is rewritten by an SR Linux re-vet, not by hand.
+    - **Pre-beta review:** `0eee340`, `20fb9fa`, `2a74f88` and `79812ef`, cited in the L35 and L37 §15
+      rows, are not ancestors of main (an earlier history rewrite; M5).
     - The key share is exact for cEOS and read from the ClientHello's group ids for the rest.
-    - A not-measured L80 note keeps its "Date measured" header, and a source the generator drops survives as
-      an extra citation.
+    - A source the generator drops survives as an extra citation.
     - The per-request TLS login cell grades login, so its `run.json` can read "pass" with no command
       authorization; the verdict and the page say so.
     - Confirm L35's iosxe `token_not_found` records (a spent token after the store came back) with a
