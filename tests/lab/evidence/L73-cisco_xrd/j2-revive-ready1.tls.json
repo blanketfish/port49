@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 27272,
-    "syn_at": "2026-10-21T04:02:28.249912Z",
+    "device_port": 23553,
+    "syn_at": "2026-10-21T06:04:45.966524Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -10,12 +10,25 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T04:02:28.251341Z"
+    "end_at": "2026-10-21T06:04:45.967768Z"
+  },
+  {
+    "server": "172.100.100.2:49",
+    "device_port": 53217,
+    "syn_at": "2026-10-21T06:04:46.031473Z",
+    "answer": "rst",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-21T06:04:46.031541Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 57777,
-    "syn_at": "2026-10-21T04:02:28.315824Z",
+    "device_port": 33836,
+    "syn_at": "2026-10-21T06:04:46.033193Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -23,12 +36,12 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T04:02:28.317268Z"
+    "end_at": "2026-10-21T06:04:46.034067Z"
   },
   {
     "server": "172.100.100.2:49",
-    "device_port": 20068,
-    "syn_at": "2026-10-21T04:02:28.315935Z",
+    "device_port": 41803,
+    "syn_at": "2026-10-21T06:04:49.671968Z",
     "answer": "rst",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -36,19 +49,6 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T04:02:28.315961Z"
-  },
-  {
-    "server": "172.100.100.2:49",
-    "device_port": 34046,
-    "syn_at": "2026-10-21T04:02:31.957422Z",
-    "answer": "rst",
-    "device_tls_records": 0,
-    "server_tls_records": 0,
-    "device_payload_bytes": 0,
-    "server_payload_bytes": 0,
-    "incomplete": false,
-    "end": "server-rst",
-    "end_at": "2026-10-21T04:02:31.957488Z"
+    "end_at": "2026-10-21T06:04:49.672035Z"
   }
 ]

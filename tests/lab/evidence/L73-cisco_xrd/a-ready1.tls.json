@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:49",
-    "device_port": 55761,
-    "syn_at": "2026-10-21T03:55:19.723027Z",
+    "device_port": 15933,
+    "syn_at": "2026-10-21T05:57:33.191648Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -10,6 +10,6 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T03:55:19.723832Z"
+    "end_at": "2026-10-21T05:57:33.192499Z"
   }
 ]

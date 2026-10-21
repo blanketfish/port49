@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 52392,
-    "syn_at": "2026-10-21T03:59:50.044727Z",
+    "device_port": 25914,
+    "syn_at": "2026-10-21T06:02:25.995976Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -98,46 +98,20 @@
       "psk_selected": false,
       "hello_retry_request": false
     },
-    "device_tls_records": 5,
+    "device_tls_records": 6,
     "server_tls_records": 8,
-    "device_payload_bytes": 1960,
-    "server_payload_bytes": 877,
-    "server_flight_at": "2026-10-21T03:59:50.058559Z",
-    "device_reply_at": "2026-10-21T03:59:50.323619Z",
+    "device_payload_bytes": 2034,
+    "server_payload_bytes": 878,
+    "server_flight_at": "2026-10-21T06:02:26.009929Z",
+    "device_reply_at": "2026-10-21T06:02:26.279456Z",
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T03:59:50.324096Z"
-  },
-  {
-    "server": "172.100.100.2:300",
-    "device_port": 36571,
-    "syn_at": "2026-10-21T03:59:50.376271Z",
-    "answer": "rst",
-    "device_tls_records": 0,
-    "server_tls_records": 0,
-    "device_payload_bytes": 0,
-    "server_payload_bytes": 0,
-    "incomplete": false,
-    "end": "server-rst",
-    "end_at": "2026-10-21T03:59:50.376301Z"
-  },
-  {
-    "server": "172.100.100.2:300",
-    "device_port": 42228,
-    "syn_at": "2026-10-21T03:59:50.44019Z",
-    "answer": "rst",
-    "device_tls_records": 0,
-    "server_tls_records": 0,
-    "device_payload_bytes": 0,
-    "server_payload_bytes": 0,
-    "incomplete": false,
-    "end": "server-rst",
-    "end_at": "2026-10-21T03:59:50.440228Z"
+    "end_at": "2026-10-21T06:02:26.279899Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 57854,
-    "syn_at": "2026-10-21T03:59:50.450426Z",
+    "device_port": 58734,
+    "syn_at": "2026-10-21T06:02:26.332046Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -145,12 +119,52 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T03:59:50.451131Z"
+    "end_at": "2026-10-21T06:02:26.333567Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 60274,
-    "syn_at": "2026-10-21T03:59:50.512201Z",
+    "device_port": 64124,
+    "syn_at": "2026-10-21T06:02:31.333285Z",
+    "answer": "syn-ack",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "device_fin_at": "2026-10-21T06:02:31.345528Z",
+    "incomplete": false,
+    "end": "device-fin",
+    "end_at": "2026-10-21T06:02:31.345528Z"
+  },
+  {
+    "server": "172.100.100.2:300",
+    "device_port": 45963,
+    "syn_at": "2026-10-21T06:02:31.43541Z",
+    "answer": "rst",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-21T06:02:31.43547Z"
+  },
+  {
+    "server": "172.100.100.2:300",
+    "device_port": 45880,
+    "syn_at": "2026-10-21T06:02:31.499552Z",
+    "answer": "rst",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-21T06:02:31.499626Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 43250,
+    "syn_at": "2026-10-21T06:02:31.503398Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -158,6 +172,19 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T03:59:50.512819Z"
+    "end_at": "2026-10-21T06:02:31.50478Z"
+  },
+  {
+    "server": "172.100.100.1:300",
+    "device_port": 64954,
+    "syn_at": "2026-10-21T06:02:31.568591Z",
+    "answer": "syn-ack",
+    "device_tls_records": 0,
+    "server_tls_records": 0,
+    "device_payload_bytes": 0,
+    "server_payload_bytes": 0,
+    "incomplete": false,
+    "end": "server-rst",
+    "end_at": "2026-10-21T06:02:31.569871Z"
   }
 ]

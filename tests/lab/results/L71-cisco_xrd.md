@@ -85,7 +85,7 @@ Measured in the two XRd runs of 2026-10-18 before this one (not part of this run
 
 ## Addendum: TestL73 probe
 
-Measured 2026-10-21 on XRd control plane 26.1.1 (`port49lab/xrd-control-plane:26.1.1`). Probed by TestL73 (commit `44049955e4da07f4b30e419652708c775a2429d4`, `PORT49_LAB_PLATFORMS=xrd261`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-cisco_xrd/l71-probe.txt`.
+Measured 2026-10-21 on XRd control plane 26.1.1 (`port49lab/xrd-control-plane:26.1.1`). Probed by TestL73 (commit `67fd821d38f8fa70ad28f2ec4ea215ef6ddddc80`, `PORT49_LAB_PLATFORMS=xrd261`, `-run ^TestL73$`); the exchange is `tests/lab/evidence/L73-cisco_xrd/l71-probe.txt`.
 
 **Has a client.** Typed `tacacs-server host 192.0.2.71 ?`; the help lists:
 
