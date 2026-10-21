@@ -554,6 +554,26 @@ func TestQualRetryUnreachedStopsOnAPort49Deny(t *testing.T) {
 	}
 }
 
+// A deny whose record lands after the failed attempt was checked, followed by a
+// success, is still a deny: the whole retry window is checked once the loop ends.
+func TestQualRetryUnreachedChecksTheWholeWindowAfterASuccess(t *testing.T) {
+	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
+	calls, checks := 0, 0
+	n, err := qualRetryUnreached("cisco_xrd", func() error {
+		if calls++; calls < 3 {
+			return refused
+		}
+		return nil
+	}, func() bool {
+		// The deny record is only readable from the third look on, after the success.
+		checks++
+		return checks >= 3
+	}, time.Minute, func(time.Duration) {})
+	if err == nil || n != 3 || !strings.Contains(err.Error(), "port49 denied") {
+		t.Fatalf("%d attempts, %v: a late deny was passed", n, err)
+	}
+}
+
 // The XR note carries the facts an operator needs at 3am; no other platform gets the section.
 func TestQualOperatorSectionIsXROnlyAndNamesTheTwoFacts(t *testing.T) {
 	got := qualOperatorSection("cisco_iosxr")

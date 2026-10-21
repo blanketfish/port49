@@ -425,6 +425,11 @@ func qualRetryUnreached(platform string, login func() error, refused func() bool
 			return attempts, fmt.Errorf("port49 denied a login the device sent it (attempt %d): %w", attempts, err)
 		}
 		if err == nil || platform != "cisco_xrd" || !strings.Contains(err.Error(), "unable to authenticate") || waited >= within {
+			// A deny record can land after the attempt it answered was checked:
+			// look once more over the whole window before a success stands.
+			if err == nil && attempts > 1 && refused() {
+				return attempts, fmt.Errorf("port49 denied a login the device sent it, and a later attempt (%d) succeeded", attempts)
+			}
 			return attempts, err
 		}
 		sleep(l73UnreachedEvery)
