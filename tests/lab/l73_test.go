@@ -92,6 +92,7 @@ type l73Env struct {
 	d           l73Dialect
 	opener      func(*lab) (*cliConn, error)
 	cfgScreens  string               // the configure sessions' screens, for an INVALID's diagnosis
+	helpLog     strings.Builder      // PORT49_L73_DIAG=help: every masked help screen, committed as evidence
 	xeChecked   bool                 // IOS XE: the address read-back and the break-glass login are in the facts
 	xeLog       string               // those facts, kept in the INVALID directory as they are made
 	lastDecline time.Time            // when the previous measured login group ended
@@ -162,6 +163,9 @@ func TestL73(t *testing.T) {
 			t.Fatalf("L73 not measured on %s (%s): its CLI offers no RFC 9887 client; the L71 addendum is written",
 				l.p.name, l.p.version)
 		}
+		// The help comes before anything is typed, enrolment included: a dialect's
+		// enrolment words are the ones its help has to list first.
+		e.diagHelp()
 		e.enrol()
 		e.cellA()
 		e.cellC()
@@ -225,6 +229,7 @@ func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
 	}
 	e.invTLS, e.invTCP = e.write("inventory-tls.yaml", []byte(tlsInv)), e.write("inventory-tcp.yaml", inv)
 	e.start = l.mark()
+	e.facts = append(e.facts, l73DialectFacts(e.d.Family)...)
 	e.facts = append(e.facts, "PKI: "+alg+" (root, a device intermediate, an untrusted CA); port49d's server certificate "+
 		l73CertFacts(mustCert(t, e.files["server.crt"])))
 	t.Cleanup(func() {
@@ -362,6 +367,9 @@ func (e *l73Env) opMark(c *cliConn) string {
 // invalidScreen keeps a scrubbed device screen for an INVALID run's
 // diagnosis in PORT49_L73_INVALID_DIR (never committed).
 func (e *l73Env) invalidScreen(name, out string) {
+	if strings.HasPrefix(name, "help") {
+		e.helpLog.WriteString(l73MaskAll(l73MaskKeyWords(l73LogScreen(hideKeys(out))), e.invalidSecrets()...) + "\n")
+	}
 	if d := os.Getenv("PORT49_L73_INVALID_DIR"); d != "" {
 		_ = os.WriteFile(filepath.Join(d, "l73-invalid-"+e.l.p.name+"-"+name+".txt"),
 			[]byte(l73MaskAll(l73MaskKeyWords(l73LogScreen(hideKeys(out))), e.invalidSecrets()...)), 0o600)
@@ -452,18 +460,20 @@ func (e *l73Env) diagHelp() {
 				return err
 			}
 		}
-		if len(e.d.DiagSubAsks) > 0 {
-			for _, ln := range e.d.DiagSubIn {
+		for k, sub := range e.d.diagSubs() {
+			for _, ln := range sub.In {
 				if _, err := c.sendExpect(ln, 60*time.Second, e.d.CfgMark); err != nil {
 					return l71Wrap("INVALID: "+ln, err)
 				}
 			}
-			for i, a := range e.d.DiagSubAsks {
-				if err := ask(fmt.Sprintf("help-sub-%d", i+1), a, e.d.CfgMark, 0, nil); err != nil {
+			// The committed help marks the submode the next asks were typed in.
+			e.helpLog.WriteString("### in `" + strings.Join(sub.In, " ; ") + "`\n")
+			for i, a := range sub.Asks {
+				if err := ask(fmt.Sprintf("help-sub%d-%d", k+1, i+1), a, e.d.CfgMark, 0, nil); err != nil {
 					return err
 				}
 			}
-			for _, ln := range e.d.DiagSubOut {
+			for _, ln := range sub.Out {
 				c.sendExpect(ln, 30*time.Second, e.d.CfgMark)
 			}
 		}
@@ -472,7 +482,30 @@ func (e *l73Env) diagHelp() {
 		}
 		return nil
 	})
+	e.writeHelpEvidence()
 	e.t.Fatalf("INVALID: PORT49_L73_DIAG=help: the help texts are in PORT49_L73_INVALID_DIR; no TLS line was typed")
+}
+
+// writeHelpEvidence commits the help run's screens as evidence/L73-<platform>/help-diag.txt
+// when the dialect asks for it (XRd's fixture is built from them), through the same
+// secret checks as l71-probe.txt. A leak writes nothing.
+func (e *l73Env) writeHelpEvidence() {
+	if !e.d.HelpEvidence {
+		return
+	}
+	body := []byte(e.helpLog.String())
+	if hits := l72TranscriptLeaks(string(body)); len(hits) > 0 || len(labcreds.Contains(body, e.allSecrets())) > 0 {
+		e.t.Logf("INVALID: the help screens carry a secret; no help evidence written")
+		return
+	}
+	dir := filepath.Join(root, "tests", "lab", "evidence", "L73-"+e.l.p.name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "help-diag.txt"), body, 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	e.t.Logf("wrote %s/help-diag.txt", dir)
 }
 
 // diagDeeper asks the help one keyword further, then (while deep allows) at
@@ -631,7 +664,7 @@ func (e *l73Env) ready(cell string) []l73Conn {
 				"The likely cause is the device's dead-server memory outlasting 3 minutes after a refusal or a "+
 				"stopped port49d (IOS XE: look at its deadtime and server state), not the TLS configuration", cell, l73Server)
 		}
-		time.Sleep(10 * time.Second)
+		time.Sleep(l73ReadyEvery)
 	}
 }
 
@@ -685,7 +718,7 @@ func (e *l73Env) untilReached(id string, run func(cell string) l73Try) l73Try {
 			return true, 0
 		}
 		return false, len(e.l.recordsSince(got.Off))
-	}, sleep, time.Now, 10*time.Second, max)
+	}, sleep, time.Now, l73UnreachedEvery, max)
 	if err != nil {
 		e.noConnectionLogs()
 		e.t.Fatalf("INVALID: %s: %v, so the cell measured nothing", id, err)
@@ -697,7 +730,7 @@ func (e *l73Env) untilReached(id string, run func(cell string) l73Try) l73Try {
 		}
 		e.xeFact(fmt.Sprintf("%s: the device opened no connection to port49d until attempt %d, %s after the previous measured login "+
 			"(the unreached attempts, 10s apart on the same port49d with nothing changed between them, produced no port49d record; "+
-			"IOS XE answered those logins locally while its servers were marked Dead)", id, attempts, since))
+			"%s)", id, attempts, since, l73UnreachedWhy(e.d.Family)))
 	}
 	e.lastDecline = time.Now()
 	return got
@@ -1332,7 +1365,57 @@ func (e *l73Env) helpProbe() bool {
 	return hasClient
 }
 
-// writeL71 appends the addendum to this platform's L71 note, or writes the
+// l71AddendumHeading keys TestL73's section of an L71 note: a rerun replaces
+// it in place, so the note does not grow by one addendum a run.
+const l71AddendumHeading = "## Addendum: TestL73 probe"
+
+// upsertL71Addendum puts section, which starts with l71AddendumHeading, into
+// doc: in the place of the section TestL73 wrote before (this heading, or the
+// older "## Addendum <date>: ..." form whose text opens "Probed by TestL73"),
+// else at the end. A section runs to the next "## " heading. Any other
+// addendum is left as it is.
+func upsertL71Addendum(doc, section string) string {
+	lines := strings.Split(strings.TrimRight(doc, "\n"), "\n")
+	var out []string
+	placed := false
+	for i := 0; i < len(lines); {
+		j := i + 1
+		for j < len(lines) && !strings.HasPrefix(lines[j], "## ") {
+			j++
+		}
+		if l71OwnAddendum(lines[i:j]) {
+			if !placed {
+				out = append(out, strings.Split(strings.TrimRight(section, "\n"), "\n")...)
+				out = append(out, "")
+				placed = true
+			}
+		} else {
+			out = append(out, lines[i:j]...)
+		}
+		i = j
+	}
+	if !placed {
+		out = append(out, "", section)
+	}
+	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+}
+
+func l71OwnAddendum(sec []string) bool {
+	if sec[0] == l71AddendumHeading {
+		return true
+	}
+	if !strings.HasPrefix(sec[0], "## Addendum ") {
+		return false
+	}
+	for _, ln := range sec[1:] {
+		if strings.TrimSpace(ln) != "" {
+			return strings.HasPrefix(ln, "Probed by TestL73")
+		}
+	}
+	return false
+}
+
+// writeL71 puts the addendum to this platform's L71 note, or writes the
 // note when there is none (vJunos-switch, IOL-XE and XRd were never
 // probed). Its evidence is the masked help exchange.
 func (e *l73Env) writeL71() {
@@ -1350,9 +1433,15 @@ func (e *l73Env) writeL71() {
 	if err := os.WriteFile(filepath.Join(root, ev), body, 0o644); err != nil {
 		e.t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", "L71-"+e.l.p.name+".md")); err == nil {
-		e.l.appendNote(e.t, "L71", fmt.Sprintf("## Addendum %s: %s (`%s`)\n\nProbed by TestL73 (%s); the exchange is `%s`.\n\n%s",
-			time.Now().UTC().Format("2006-01-02"), e.l.p.version, e.l.p.image, runLine(), ev, e.l71Obs))
+	notePath := filepath.Join(root, "tests", "lab", "results", "L71-"+e.l.p.name+".md")
+	if doc, err := os.ReadFile(notePath); err == nil {
+		section := fmt.Sprintf("%s\n\nMeasured %s on %s (`%s`). Probed by TestL73 (%s); the exchange is `%s`.\n\n%s",
+			l71AddendumHeading, time.Now().UTC().Format("2006-01-02"), e.l.p.version, e.l.p.image, runLine(), ev, e.l71Obs)
+		out := upsertL71Addendum(string(doc), labcreds.RedactNote(section))
+		if err := os.WriteFile(notePath, []byte(out), 0o644); err != nil {
+			e.t.Fatalf("write %s: %v", notePath, err)
+		}
+		e.t.Logf("wrote the L71 addendum in %s", notePath)
 		return
 	}
 	e.l.captureNote = fmt.Sprintf("`%s` — the CLI exchange from the help request to the empty-line check, credentials "+
@@ -1692,7 +1781,6 @@ func (e *l73Env) confirmNXOSTrust() {
 
 func (e *l73Env) cellA() {
 	e.guard()
-	e.diagHelp()
 	e.daemon("a", l73Daemon{Intermediates: e.files["inter.pem"]})
 	e.configure(l73DeviceTLS{Server: l73Server})
 	probe := e.ready("a")
@@ -1734,6 +1822,12 @@ func (e *l73Env) cellA() {
 		configured += "; then port 300"
 		e.first = conns
 	}
+	if opened && port != l73TLSPort {
+		e.facts = append(e.facts, fmt.Sprintf("operator fact (cell a): with no port configured this device dials port %d, not RFC 9887's "+
+			"300; the operator must configure the TLS server's port (here `port %d`) to match port49d's RFC 9887 listener", port, l73TLSPort))
+	}
+	e.facts = append(e.facts, fmt.Sprintf("cell a (a connection per request): permitted authorize_command records for `show version`: %d",
+		l73VersionAuths(recs)))
 	if !ok || !l73Redeemed(recs) {
 		hint := ""
 		if e.pki.Alg == "ecdsa" {
@@ -2020,12 +2114,24 @@ func (e *l73Env) cellH() {
 	e.daemon("h", l73Daemon{Intermediates: e.files["inter.pem"]})
 	d := e.base()
 	d.SingleConnection = true
-	e.configure(d)
-	// Captured from before the readiness probe: with single-connection the
-	// probe's connection may be the one both logins reuse, and a connection
-	// is counted only from its SYN.
-	stop := e.capture("h")
-	e.ready("h")
+	var stop func() []l73Conn
+	if e.d.EarlyCapture {
+		// XR opens its one connection when the commit lands, so it is captured
+		// from before the configuration, and the readiness loop (which counts
+		// new connections) is replaced by one break-glass login.
+		stop = e.capture("h")
+		e.configure(d)
+		_, _, _ = e.breakglassLogin()
+		e.facts = append(e.facts, "cell h: this device opens its single connection when the configuration is committed, "+
+			"so the capture starts before the configuration and no readiness loop runs")
+	} else {
+		e.configure(d)
+		// Captured from before the readiness probe: with single-connection the
+		// probe's connection may be the one both logins reuse, and a connection
+		// is counted only from its SYN.
+		stop = e.capture("h")
+		e.ready("h")
+	}
 	off := e.l.mark()
 	s1 := time.Now()
 	u1, ok1, _, _, err1 := e.tokenLogin()
@@ -2038,6 +2144,8 @@ func (e *l73Env) cellH() {
 	conns := stop()
 	// One window helper for h's logins and cell a's control, one tail each:
 	// accounting connections opened after a login returned count with it.
+	e.facts = append(e.facts, fmt.Sprintf("cell h (single-connection): permitted authorize_command records for `show version`: %d (two logins)",
+		l73VersionAuths(e.l.recordsSince(off))))
 	win := l73LoginWindows(conns, l73Server, []l73Span{{s1, e1}, {s2, e2}})
 	w1, w2 := win[0], win[1]
 	held, probeHeld := 0, 0
@@ -2422,11 +2530,16 @@ func (e *l73Env) note() {
 	if len(labcreds.Contains([]byte(note), secrets)) > 0 {
 		e.t.Fatal("INVALID: the note holds a secret; nothing written")
 	}
+	// help-diag.txt comes from a PORT49_L73_DIAG=help run, not this one: it survives the rewrite.
+	helpDiag, helpErr := os.ReadFile(filepath.Join(e.evDir, "help-diag.txt"))
 	if err := os.RemoveAll(e.evDir); err != nil {
 		e.t.Fatal(err)
 	}
 	if err := os.MkdirAll(e.evDir, 0o755); err != nil {
 		e.t.Fatal(err)
+	}
+	if helpErr == nil {
+		e.evidence["help-diag.txt"] = helpDiag
 	}
 	for name, body := range e.evidence {
 		if err := os.WriteFile(filepath.Join(e.evDir, name), body, 0o644); err != nil {

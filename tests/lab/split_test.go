@@ -21,8 +21,8 @@ const splitClaim = "On the split deployment (port49-broker and two port49d repli
 	"listing both replicas as TACACS+ servers): a session opened through one replica has its next command " +
 	"answered by the other once the first stops; with the broker stopped an open session runs on and a token " +
 	"minted before the stop logs in; a revocation made on port49-broker denies the session's next command on " +
-	"either replica; and a port49d with no hold closes its listeners within darkBound (125.5s at the lab's hold_ttl 60s) of its store hanging, " +
-	"after which the device takes break-glass (plan 7e; spec §13 decision 36)."
+	"either replica; and a port49d with no hold closes its listeners within healthDarkBound (10.5s at the lab's 1s health checks, close_after 5) of its store hanging, " +
+	"after which the device takes break-glass (plan 7e; spec §13 decisions 36 and 37)."
 
 const iosxeOpenClaim = "On IOS-XE, an open session's `show privilege` and `show version`, typed once both port49d " +
 	"replicas are unreachable, are answered as L4's reading 3 says (the device's local method) whether or not " +
@@ -428,8 +428,8 @@ func TestSplitEndToEnd(t *testing.T) {
 			fail("B closed its listeners during cells 1 to 4: %s", lines[0])
 		}
 
-		// 5. Lift; the store hangs. Neither port49d holds a hold, so each goes
-		// dark on its own probe. Break-glass logs in once both are.
+		// 5. Lift; the store hangs. Each port49d goes dark on its own store
+		// health checks (decision 37). Break-glass logs in once both are.
 		liftText, liftOK := revokeCLI(s.AdminBroker, "--lift", "--principal", slicePrincipal)
 		if !liftOK {
 			fail("port49 revoke --lift: %s", liftText)
@@ -439,12 +439,12 @@ func TestSplitEndToEnd(t *testing.T) {
 		hungAt := time.Now()
 		// The wait runs to 180s so the observed time is always written; each
 		// port49d's go-dark is judged against the configuration's bound
-		// (darkBound, 125.5s at 5 pings, 60s, 500ms).
+		// (healthDarkBound, 10.5s at 5 checks, 1s apart, 500ms).
 		dts := waitDark(hungAt, 180*time.Second,
 			func(sub string) bool { return len(l.errLinesSince(errA, sub)) > 0 },
 			func(sub string) bool { return len(s.B.errLinesSince(errB, sub)) > 0 })
-		wide("5. the store hangs: when each port49d's circuit opened and it closed its listeners", fmt.Sprintf("A: %s; B: %s; bound %s",
-			dts[0].describe(), dts[1].describe(), darkBound(labHoldTTL, labCallTimeout, labBreakerFailures)))
+		wide("5. the store hangs: when each port49d's health checks failed and it closed its listeners", fmt.Sprintf("A: %s; B: %s; bound %s",
+			dts[0].describe(), dts[1].describe(), healthDarkBound(labHealthInterval, labCallTimeout, labCloseAfter)))
 		failed = append(failed, dts[0].verdict("A")...)
 		failed = append(failed, dts[1].verdict("B")...)
 		time.Sleep(5 * time.Second) // the drain

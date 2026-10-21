@@ -1,0 +1,90 @@
+{
+  "platform": "cisco_iosxr",
+  "lab_platform": "cisco_xrd",
+  "firmware": "XRd control plane 26.1.1",
+  "image": "XRd control plane 26.1.1",
+  "commit": "e1ce27da0c4e",
+  "date": "2026-10-21",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "accounting": "2026-10-21T09:53:26.136372166Z",
+    "command_denied": "2026-10-21T09:53:24.300058592Z",
+    "command_permitted": "2026-10-21T09:53:24.300058592Z",
+    "single_connection": "2026-10-21T09:53:44.377904366Z",
+    "store_unavailable": "2026-10-21T09:53:31.247608666Z",
+    "tls_single_connection": "2026-10-21T09:55:32.552179217Z",
+    "tls_store_unavailable": "2026-10-21T09:54:48.359028577Z",
+    "tls_token_login": "2026-10-21T09:54:32.772914565Z",
+    "tls_unknown_ca": "2026-10-21T09:55:03.868799833Z",
+    "token_login": "2026-10-21T09:53:23.054466049Z",
+    "wrong_credential": "2026-10-21T09:53:27.785460773Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "command_denied": [
+      "L21"
+    ],
+    "command_permitted": [
+      "L10",
+      "L21"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "tls_single_connection": [
+      "L15",
+      "L73"
+    ],
+    "tls_store_unavailable": [
+      "L73"
+    ],
+    "tls_token_login": [
+      "L73"
+    ],
+    "tls_unknown_ca": [
+      "L73"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": false,
+    "tls_store_unavailable": false
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "pass",
+    "command_permitted": "pass",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_denied_command": "not_run",
+    "tls_single_connection": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_token_login": "pass",
+    "tls_unknown_ca": "pass",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  },
+  "command_authorization": {
+    "tls_single_connection": "sent",
+    "tls_token_login": "sent"
+  },
+  "denied_command_ran": {},
+  "denied_command_asked": {}
+}

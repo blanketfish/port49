@@ -431,108 +431,238 @@ Then add every other closed row that has a harness test. Read each closed row in
 - [ ] **Step 2: Write the failing tests** (`tests/lab/cmd/lab-regress/manifest_test.go`):
 
 ```go
-package main
+package devicemock
 
 import (
+	"crypto/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
 
-const specPath = "../../../../docs/design/2026-08-23-policy-engine-spec.md"
+const root = "testdata"
 
-func TestLoadManifestRefusesAnUnknownKey(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "m.yaml")
-	os.WriteFile(p, []byte("entries:\n  - {id: L10, run: x, notez: []}\n"), 0o600)
-	if _, err := loadManifest(p, specPath); err == nil || !strings.Contains(err.Error(), "notez") {
-		t.Fatalf("an unknown key must be refused by name: %v", err)
-	}
-}
-
-func TestLoadManifestRefusesAClosedRowWithoutRemeasure(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "m.yaml")
-	os.WriteFile(p, []byte("entries:\n  - {id: L10, run: '^TestL10ServiceAndAttributeSpellings$', rows: [L10]}\n"), 0o600)
-	if _, err := loadManifest(p, specPath); err == nil || !strings.Contains(err.Error(), "PORT49_LAB_REMEASURE") {
-		t.Fatalf("a closed row with no PORT49_LAB_REMEASURE fails at guardClosed; refuse it here: %v", err)
-	}
-}
-
-func TestTheCommittedManifestLoads(t *testing.T) {
-	if _, err := loadManifest("../../regress.yaml", specPath); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// Every alternative of every pattern names at least one test, and no
-// pattern matches a test its alternatives do not name exactly.
-func TestEveryManifestPatternMatchesATest(t *testing.T) {
-	entries, err := loadManifest("../../regress.yaml", specPath)
+func TestLoadAFixture(t *testing.T) {
+	p, err := Load("testdata/profiles/fixture_junos.yaml", root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var tests []string
-	files, _ := filepath.Glob("../../*.go")
-	re := regexp.MustCompile(`(?m)^func (Test[A-Za-z0-9_]*)\(`)
-	for _, f := range files {
-		b, _ := os.ReadFile(f)
-		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
-			tests = append(tests, m[1])
-		}
+	if p.Platform != "juniper_junos" || len(p.Stimulus.Steps) != 3 || p.Acceptance[0].Max != 255 {
+		t.Fatalf("%+v", p)
 	}
-	for _, e := range entries {
-		matched, empty := patternMatches(e.Run, tests)
-		if len(empty) > 0 {
-			t.Errorf("%s: alternative(s) %v match no test", e.ID, empty)
-		}
-		for _, m := range matched {
-			if !strings.Contains(e.Run, m) {
-				t.Errorf("%s: %q also matches %s, which it does not name", e.ID, e.Run, m)
-			}
+}
+
+func TestLoadAcceptsTheWholeReactionVocabulary(t *testing.T) {
+	if _, err := Load("testdata/profiles/fixture_vocabulary.yaml", root); err != nil {
+		t.Fatalf("every on and then value must load (send_credential included): %v", err)
+	}
+}
+
+func refused(t *testing.T, edit func(string) string, want string) {
+	t.Helper()
+	_, err := loadEdited(t, edit)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("want an error naming %q, got %v", want, err)
+	}
+}
+
+// loadEdited loads fixture_junos.yaml after edit, failing if the edit
+// changed nothing so a stale Replace cannot make a test vacuous.
+func loadEdited(t *testing.T, edit func(string) string) (*Profile, error) {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/profiles/fixture_junos.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := edit(string(raw))
+	if s == string(raw) {
+		t.Fatal("the edit changed nothing")
+	}
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	if err := os.WriteFile(path, []byte(s), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Load(path, root)
+}
+
+func randBase62(t *testing.T, n int) string {
+	t.Helper()
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatal(err)
+	}
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	return string(b)
+}
+
+func TestNamesFirmware(t *testing.T) {
+	for _, c := range []struct {
+		line, fw string
+		want     bool
+	}{
+		{"vJunos-router 23.4R2", "23.4R2", true},
+		{"vJunos-router 23.4R2-S2.1", "23.4R2", false},
+		{"vJunos-router 23.4R2.1", "23.4R2", false},
+		{"vJunos-router 123.4R2", "23.4R2", false},
+		{"fixture 1.0", "1.0", true},
+		{"image 10.6(2)F, lab", "10.6(2)F", true},
+		{"Nexus 9300v 10.6(2)F", "10.6", false},
+		{"Nexus 9300v 10.6(2)F", "10.6(2)F", true},
+		{"image 10.6(2)F.", "10.6(2)F", true},
+		{"anything", "", false},
+	} {
+		if got := namesFirmware(c.line, c.fw); got != c.want {
+			t.Errorf("namesFirmware(%q, %q) = %v, want %v", c.line, c.fw, got, c.want)
 		}
 	}
 }
 
-func TestTheStopSentinelStopsBeforeTheNextEntry(t *testing.T) {
-	dir := t.TempDir()
-	stop := filepath.Join(dir, "STOP")
-	var ran []string
-	r := &runner{stopPath: stop, exec: func(e Entry) error {
-		ran = append(ran, e.ID)
-		os.WriteFile(stop, nil, 0o600) // the operator asks to stop during the first entry
-		return nil
-	}}
-	rep := r.runAll([]Entry{{ID: "a"}, {ID: "b"}})
-	if len(ran) != 1 || ran[0] != "a" || rep.Stopped != "b" {
-		t.Fatalf("ran %v, stopped before %q; the running entry finishes and the next never starts", ran, rep.Stopped)
+func TestLoadRefuses(t *testing.T) {
+	t.Run("an unknown key", func(t *testing.T) {
+		refused(t, func(s string) string { return s + "camelCase: 1\n" }, "camelCase")
+	})
+	t.Run("a missing note", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L98-gone.md, register: L98}]\n    note:", 1)
+		}, "L98-gone.md")
+	})
+	t.Run("a measured rule with no source", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "    sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "    note:", 1)
+		}, "junos_reply_total")
+	})
+	t.Run("a measured claim citing another firmware's note", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L99-fixture_junos-2.md, register: L99}]\n    note:", 1)
+		}, "Image version")
+	})
+	t.Run("an unknown reaction", func(t *testing.T) {
+		refused(t, func(s string) string { return strings.Replace(s, "then: stop", "then: shrug", 1) }, "shrug")
+	})
+	t.Run("a credential-shaped key", func(t *testing.T) {
+		refused(t, func(s string) string { return s + "token_sha256: x\n" }, "named like credential material")
+	})
+	t.Run("a credential hash value", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, `"service=junos-exec"`, `"credential_sha256=x"`, 1)
+		}, "a credential hash")
+	})
+	t.Run("a long hex value", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, `"service=junos-exec"`, `"service=`+strings.Repeat("ab", 32)+`"`, 1)
+		}, "long hex")
+	})
+	t.Run("a base64 value", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, `"service=junos-exec"`, `"service=`+strings.Repeat("A", 20)+"+"+strings.Repeat("B", 24)+`"`, 1)
+		}, "long base64")
+	})
+	t.Run("a token-shaped value", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, `"service=junos-exec"`, `"`+randBase62(t, 30)+`"`, 1)
+		}, "port49 token shape")
+	})
+	t.Run("a secret used as a key is refused without echoing it", func(t *testing.T) {
+		key := randBase62(t, 30)
+		_, err := loadEdited(t, func(s string) string { return s + key + ": 1\n" })
+		if err == nil || !strings.Contains(err.Error(), "a key shaped like credential material") {
+			t.Fatalf("got %v", err)
+		}
+		if strings.Contains(err.Error(), key) {
+			t.Fatal("the error echoes the key")
+		}
+	})
+	t.Run("a schema version this engine does not read", func(t *testing.T) {
+		refused(t, func(s string) string { return strings.Replace(s, "schema_version: 1", "schema_version: 2", 1) }, "schema_version")
+	})
+	t.Run("an empty firmware", func(t *testing.T) {
+		refused(t, func(s string) string { return strings.Replace(s, `firmware: "1.0"`, `firmware: ""`, 1) }, "firmware is empty")
+	})
+	t.Run("a firmware only a longer version names", func(t *testing.T) {
+		refused(t, func(s string) string { return strings.Replace(s, `firmware: "1.0"`, `firmware: "fixture 1"`, 1) }, "Image version")
+	})
+	t.Run("a typo in a reaction step", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "step: login, on: authen_pass", "step: logn, on: authen_pass", 1)
+		}, "logn")
+	})
+	t.Run("an unknown connection mode", func(t *testing.T) {
+		refused(t, func(s string) string { return strings.Replace(s, "mode: per_step", "mode: per_stp", 1) }, "per_stp")
+	})
+	t.Run("an unknown acceptance effect", func(t *testing.T) {
+		refused(t, func(s string) string { return strings.Replace(s, "effect: lockout", "effect: lockuot", 1) }, "lockuot")
+	})
+	t.Run("a note outside tests/lab/results", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "note: tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "note: tests/lab/results/../../../../profiles/fixture_plain.yaml, register: L99}]\n    note:", 1)
+		}, "must be a clean .md path")
+	})
+	t.Run("a clean note path outside tests/lab/results", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "note: tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "note: docs/design/other.md, register: L99}]\n    note:", 1)
+		}, "must be a clean .md path")
+	})
+	t.Run("a vetted note that is missing", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "notes: [tests/lab/results/L99-fixture_junos.md]", "notes: [tests/lab/results/L98-gone.md]", 1)
+		}, "L98-gone.md")
+	})
+	t.Run("an engine gap citing a missing note", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "engine_gaps: []", "engine_gaps: [{id: g1, what: x, sources: [{note: tests/lab/results/L98-gone.md, register: L98}]}]", 1)
+		}, "L98-gone.md")
+	})
+	t.Run("a PEM block", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "image: fixture 1.0", "image: \"-----BEGIN PRIVATE KEY-----\"", 1)
+		}, "BEGIN")
+	})
+	t.Run("a field the engine cannot send", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, "authen_type: pap, service: login, priv_lvl: 1", "authen_type: mschap, service: login, priv_lvl: 1", 1)
+		}, "mschap")
+	})
+	t.Run("a full 40-hex commit", func(t *testing.T) {
+		refused(t, func(s string) string {
+			return strings.Replace(s, `commit: "000000000000"`, `commit: "`+strings.Repeat("a1", 20)+`"`, 1)
+		}, "credential")
+	})
+	t.Run("a commit that is not exactly 12 hex", func(t *testing.T) {
+		for _, c := range []string{"main", "0000000", "0000000000000"} {
+			refused(t, func(s string) string { return strings.Replace(s, `commit: "000000000000"`, `commit: "`+c+`"`, 1) }, "vetted.commit")
+		}
+	})
+}
+
+func TestAnUnmeasuredRuleMayCiteAnotherFirmwaresNote(t *testing.T) {
+	_, err := loadEdited(t, func(s string) string {
+		return strings.Replace(s, "    status: measured\n    sources: [{note: tests/lab/results/L99-fixture_junos.md", "    status: unmeasured\n    sources: [{note: tests/lab/results/L99-fixture_junos-2.md", 1)
+	})
+	if err != nil {
+		t.Fatalf("an unmeasured claim may cite the note that left it open: %v", err)
 	}
 }
 
-func TestAFailedEntryStopsTheRun(t *testing.T) {
-	r := &runner{stopPath: filepath.Join(t.TempDir(), "none"), exec: func(e Entry) error {
-		if e.ID == "a" {
-			return os.ErrDeadlineExceeded
+func TestSlug(t *testing.T) {
+	for in, want := range map[string]string{"10.6(2)F": "10.6-2-F", "26.2R1.7": "26.2R1.7", "4.36.3M": "4.36.3M", "26.7.2-519": "26.7.2-519"} {
+		if got := Slug(in); got != want {
+			t.Errorf("Slug(%q) = %q, want %q", in, got, want)
 		}
-		return nil
-	}}
-	rep := r.runAll([]Entry{{ID: "a"}, {ID: "b"}})
-	if len(rep.Done) != 0 || rep.Failed != "a" {
-		t.Fatalf("a failed entry ends the run, as make lab does: %+v", rep)
 	}
 }
 
-func TestTheChildEnvironmentCarriesTheLockAndNoSecretVariable(t *testing.T) {
-	t.Setenv("PORT49_LAB_TOKEN_DUMP", "x")
-	env := childEnv(Entry{Platforms: "eos", Env: map[string]string{"PORT49_LAB_REMEASURE": "L10"}}, 3)
-	joined := strings.Join(env, "\n")
-	for _, want := range []string{"PORT49_LAB_LOCK_FD=3", "PORT49_LAB_PLATFORMS=eos", "PORT49_LAB_REMEASURE=L10"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("child env lacks %s", want)
+func TestScenarioTransport(t *testing.T) {
+	for sc, want := range map[string]string{"tls_token_login": "tls", "flight_delay": "tls", "token_login": "tcp", "single_connection": "tcp"} {
+		if got := ScenarioTransport(sc); got != want {
+			t.Errorf("ScenarioTransport(%q) = %q, want %q", sc, got, want)
 		}
 	}
-	if strings.Contains(joined, "TOKEN_DUMP") {
-		t.Fatal("a variable naming a token reached the child")
+	if BaseScenario("tls_unknown_ca") != "unknown_ca" || BaseScenario("token_login") != "token_login" {
+		t.Error("BaseScenario")
 	}
 }
 ```
@@ -1449,7 +1579,7 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 
 **Files:**
 - Create: `internal/devicemock/profile.go`, `internal/devicemock/forbidden.go`, `internal/devicemock/profile_test.go`
-- Create, in `internal/devicemock/testdata/`: `notes/L99-fixture_junos.md`, `notes/L99-fixture_junos-2.md`, `profiles/fixture_junos.yaml`, `profiles/fixture_plain.yaml`, `profiles/fixture_vocabulary.yaml`
+- Create, in `internal/devicemock/testdata/`: `tests/lab/results/L99-fixture_junos.md`, `tests/lab/results/L99-fixture_junos-2.md`, `profiles/fixture_junos.yaml`, `profiles/fixture_plain.yaml`, `profiles/fixture_vocabulary.yaml`
 
 **Interfaces:**
 - Produces (every later task uses these names):
@@ -1568,7 +1698,7 @@ var Codes map[string]map[string]uint8 // the wire values the engine can send, by
 
 - [ ] **Step 1: Write the fixtures.** Paths in a fixture are relative to `internal/devicemock/testdata`, which the tests pass as `repoRoot`.
 
-`testdata/notes/L99-fixture_junos.md`:
+`testdata/tests/lab/results/L99-fixture_junos.md`:
 
 ```markdown
 # L99 — fixture_junos
@@ -1578,7 +1708,7 @@ var Codes map[string]map[string]uint8 // the wire values the engine can send, by
 - **Image version:** fixture 1.0
 ```
 
-`testdata/notes/L99-fixture_junos-2.md` is the same, with `- **Image version:** fixture 2.0`.
+`testdata/tests/lab/results/L99-fixture_junos-2.md` is the same, with `- **Image version:** fixture 2.0`.
 
 `testdata/profiles/fixture_plain.yaml`:
 
@@ -1588,12 +1718,12 @@ platform: juniper_junos
 lab_platform: fixture_junos
 firmware: "1.0"
 image: fixture 1.0
-vetted: {date: 2026-10-19, commit: "0000000", evidence: "", notes: [notes/L99-fixture_junos.md]}
+vetted: {date: 2026-10-19, commit: "000000000000", evidence: "", notes: [tests/lab/results/L99-fixture_junos.md]}
 transports: [tcp]
 scenarios: [token_login, wrong_credential, store_unavailable]
 stimulus:
   connections: {mode: per_step, single_connect_flag: false}
-  sources: [{note: notes/L99-fixture_junos.md, register: L99}]
+  sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]
   steps:
     - {name: login, type: authen, minor_version: 1, fields: {action: login, authen_type: pap, service: login, priv_lvl: 1}, port: "0"}
     - {name: authorize_session, type: author, minor_version: 0,
@@ -1602,12 +1732,12 @@ stimulus:
        fields: {authen_type: pap, service: login, authen_method: tacacsplus, priv_lvl: 1}, port: "0",
        args: ["task_id={task_id}", "start_time={start_time}", "service=shell"]}
 reactions:
-  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: login, on: authen_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
-  - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: notes/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_fail, then: stop, outcome: login_refused, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: login, on: authen_error, then: failover_local, outcome: falls_to_local, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: author_pass_add, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: author_pass_repl, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
+  - {step: "*", on: acct_success, then: next_step, status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}
 acceptance: []
 engine_gaps: []
 golden: ""
@@ -1623,7 +1753,7 @@ acceptance:
     max: 255
     effect: lockout
     status: measured
-    sources: [{note: notes/L99-fixture_junos.md, register: L99}]
+    sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]
     note: a fixture of L78's claim, marked measured here so the gate itself can be tested
 ```
 
@@ -1676,17 +1806,17 @@ func TestLoadRefuses(t *testing.T) {
 	})
 	t.Run("a missing note", func(t *testing.T) {
 		refused(t, func(s string) string {
-			return strings.Replace(s, "notes/L99-fixture_junos.md, register: L99}]\n    note:", "notes/L98-gone.md, register: L98}]\n    note:", 1)
+			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L98-gone.md, register: L98}]\n    note:", 1)
 		}, "L98-gone.md")
 	})
 	t.Run("a measured rule with no source", func(t *testing.T) {
 		refused(t, func(s string) string {
-			return strings.Replace(s, "    sources: [{note: notes/L99-fixture_junos.md, register: L99}]\n    note:", "    note:", 1)
+			return strings.Replace(s, "    sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "    note:", 1)
 		}, "junos_reply_total")
 	})
 	t.Run("a measured claim citing another firmware's note", func(t *testing.T) {
 		refused(t, func(s string) string {
-			return strings.Replace(s, "notes/L99-fixture_junos.md, register: L99}]\n    note:", "notes/L99-fixture_junos-2.md, register: L99}]\n    note:", 1)
+			return strings.Replace(s, "tests/lab/results/L99-fixture_junos.md, register: L99}]\n    note:", "tests/lab/results/L99-fixture_junos-2.md, register: L99}]\n    note:", 1)
 		}, "Image version")
 	})
 	t.Run("an unknown reaction", func(t *testing.T) {
@@ -1710,7 +1840,7 @@ func TestLoadRefuses(t *testing.T) {
 
 func TestAnUnmeasuredRuleMayCiteAnotherFirmwaresNote(t *testing.T) {
 	raw, _ := os.ReadFile("testdata/profiles/fixture_junos.yaml")
-	s := strings.Replace(string(raw), "    status: measured\n    sources: [{note: notes/L99-fixture_junos.md", "    status: unmeasured\n    sources: [{note: notes/L99-fixture_junos-2.md", 1)
+	s := strings.Replace(string(raw), "    status: measured\n    sources: [{note: tests/lab/results/L99-fixture_junos.md", "    status: unmeasured\n    sources: [{note: tests/lab/results/L99-fixture_junos-2.md", 1)
 	path := filepath.Join(t.TempDir(), "p.yaml")
 	os.WriteFile(path, []byte(s), 0o600)
 	if _, err := Load(path, root); err != nil {
@@ -1972,7 +2102,7 @@ func statusErr(where, status string, src []Source) []error {
 }
 ```
 
-Imports: `bytes`, `errors`, `fmt`, `os`, `path/filepath`, `regexp`, `slices`, `strings`, `time`, `gopkg.in/yaml.v3`, `github.com/rhwendt/port49/internal/tacacs/wire`.
+Imports: `bytes`, `errors`, `fmt`, `os`, `path`, `path/filepath`, `regexp`, `slices`, `strings`, `time`, `gopkg.in/yaml.v3`, `github.com/rhwendt/port49/internal/tacacs/wire`.
 
 - [ ] **Step 6: Run the tests**
 
@@ -2271,9 +2401,10 @@ Co-Authored-By: Claude <model name> <noreply@anthropic.com>"
 func BuildClientHello(h Hello, serverIP string) ([]byte, error) // one TLS record; fresh random, session id, key share
 func Probe(ctx context.Context, d *net.Dialer, addr string, h Hello, serverIP string) (ServerHello, error)
 type TLSMaterial struct {
-	Client    tls.Certificate // generated per test
-	ServerCAs *x509.CertPool
-	ServerIP  string
+	Client     tls.Certificate // generated per test
+	ServerCAs  *x509.CertPool  // nil fails closed (never the system roots)
+	ServerIP   string          // checked for server_identity ip
+	ServerName string          // checked for server_identity dns; empty is an error
 }
 func SessionConfig(s *TLSStimulus, m TLSMaterial) *tls.Config
 func DelayFlight(c net.Conn, d time.Duration, sleep func(time.Duration)) net.Conn
@@ -2454,6 +2585,8 @@ import (
 	"time"
 )
 
+// ErrNoBuilder marks a ClientHello extension the engine cannot build: an
+// engine gap to list in the profile, never skipped silently.
 var ErrNoBuilder = errors.New("devicemock: no builder for this extension")
 
 // hrrRandom is RFC 8446 §4.1.3's HelloRetryRequest random.
@@ -2637,10 +2770,15 @@ import (
 	"time"
 )
 
+// TLSMaterial is what a test generates for one session: the device's client
+// certificate, the CAs it trusts for port49's certificate, and the address
+// (server_identity ip) and DNS name (server_identity dns) it checks that
+// certificate against. Nothing in it is read from or written to disk.
 type TLSMaterial struct {
-	Client    tls.Certificate
-	ServerCAs *x509.CertPool
-	ServerIP  string
+	Client     tls.Certificate
+	ServerCAs  *x509.CertPool
+	ServerIP   string
+	ServerName string
 }
 
 var goCurves = map[uint16]tls.CurveID{29: tls.X25519, 23: tls.CurveP256, 24: tls.CurveP384, 25: tls.CurveP521}
@@ -2653,11 +2791,20 @@ var goCurves = map[uint16]tls.CurveID{29: tls.X25519, 23: tls.CurveP256, 24: tls
 // sent here (crypto/tls omits it), only by the probe: an engine gap each
 // profile that has one lists.
 func SessionConfig(s *TLSStimulus, m TLSMaterial) *tls.Config {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS13,
-		Certificates: []tls.Certificate{m.Client}, NextProtos: s.ClientHello.ALPN}
-	if len(s.ClientHello.SupportedVersions) == 1 && s.ClientHello.SupportedVersions[0] == 772 {
-		cfg.MinVersion = tls.VersionTLS13
+	cfg := &tls.Config{Certificates: []tls.Certificate{m.Client}, NextProtos: s.ClientHello.ALPN}
+	// The versions the device offers bound the session: extension 43's list,
+	// or the legacy version when it sends none (a 1.2-only device). crypto/tls
+	// floors at 1.2, so an offer of 1.1 or 1.0 is raised to it.
+	versions := s.ClientHello.SupportedVersions
+	if len(versions) == 0 {
+		versions = []uint16{s.ClientHello.LegacyVersion}
 	}
+	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS13, tls.VersionTLS12
+	for _, v := range versions {
+		v = max(v, tls.VersionTLS12)
+		cfg.MinVersion, cfg.MaxVersion = min(cfg.MinVersion, v), max(cfg.MaxVersion, v)
+	}
+	cfg.MaxVersion = min(cfg.MaxVersion, tls.VersionTLS13)
 	for _, g := range s.ClientHello.SupportedGroups {
 		if c, ok := goCurves[g]; ok {
 			cfg.CurvePreferences = append(cfg.CurvePreferences, c)
@@ -2668,12 +2815,21 @@ func SessionConfig(s *TLSStimulus, m TLSMaterial) *tls.Config {
 		if len(cs.PeerCertificates) == 0 {
 			return errors.New("devicemock: no server certificate")
 		}
+		if m.ServerCAs == nil {
+			return errors.New("devicemock: no server CAs; refusing to fall back to the system roots")
+		}
 		opts := x509.VerifyOptions{Roots: m.ServerCAs, Intermediates: x509.NewCertPool()}
 		for _, c := range cs.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(c)
 		}
-		if s.ServerIdentity == "ip" || s.ServerIdentity == "dns" {
-			opts.DNSName = m.ServerIP
+		switch s.ServerIdentity {
+		case "ip":
+			opts.DNSName = m.ServerIP // an IP literal matches iPAddress SANs only
+		case "dns":
+			if m.ServerName == "" {
+				return errors.New("devicemock: server_identity dns needs TLSMaterial.ServerName")
+			}
+			opts.DNSName = m.ServerName
 		}
 		_, err := cs.PeerCertificates[0].Verify(opts)
 		return err
@@ -5158,7 +5314,7 @@ func TestARowNeedsItsNotes(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "tests/qual/profiles/x"), 0o755)
 	raw, _ := os.ReadFile("../../../../internal/devicemock/testdata/profiles/fixture_plain.yaml")
-	os.WriteFile(filepath.Join(dir, "tests/qual/profiles/x/1.0.yaml"), raw, 0o600) // its notes/ are absent here
+	os.WriteFile(filepath.Join(dir, "tests/qual/profiles/x/1.0.yaml"), raw, 0o600) // its tests/lab/results notes are absent here
 	if _, err := Build(dir); err == nil || !strings.Contains(err.Error(), "L99-fixture_junos.md") {
 		t.Fatal("a profile whose note is missing makes no row: the build fails naming it")
 	}

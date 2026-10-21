@@ -132,6 +132,12 @@ func singleConnectionPlaces(platform string) []scPlace {
 		return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
 			lines: []string{"tacacs-server host 172.100.100.1 key 0 " + labKeyDefault + " single-connection"},
 			said:  "`tacacs-server host 172.100.100.1 key 0 <key> single-connection`"}}
+	case platform == "cisco_xrd":
+		// XR applies nothing before `commit`, and its host line takes `single-connection` as
+		// a line of its own (the image's help: only <cr> follows it).
+		return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
+			lines: []string{"tacacs-server host 172.100.100.1 single-connection", "commit"},
+			said:  "`tacacs-server host 172.100.100.1 single-connection`, committed"}}
 	}
 	return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
 		lines: []string{"tacacs-server host 172.100.100.1 single-connection key 0 " + labKeyDefault},
@@ -152,6 +158,12 @@ func (l *lab) offered(t *testing.T, enter, ask []string, keyword string) (bool, 
 		leave, back = "exit configuration-mode", junosOpPrompt
 	}
 	cfg := []string{l.p.node + "(config", l.p.node + "#", l.p.node + ">"}
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		// Junos names its prompt by host-name, which is srx1 on every Junos image
+		// (configs/vjunos-startup.conf), not by the clab node (vsrx1): wait for the
+		// configuration-mode prompt's ending.
+		cfg = []string{"@srx1# "}
+	}
 	var help string
 	// An ask may carry the lab key (TestSingleConnectionSyntax types it to
 	// read the help after it): every error and the help returned have it

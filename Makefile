@@ -1,4 +1,4 @@
-.PHONY: test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -103,6 +103,31 @@ lab-unit:
 lab-l62-up:
 	PORT49_L62_UP=1 go test -tags lab ./tests/lab/l62/ -run '^TestL62Up$$' -count=1 -v -timeout 10h
 
+# The mock tier (plan 11b): every profile against a real in-process port49d. No images,
+# no captures, any runner. qual-update rewrites the goldens a port49 change moved, marked
+# pending_lab until the next lab run.
+qual:
+	go test ./internal/devicemock/... ./tests/qual/... -count=1
+	go test ./internal/port49d/ -run '^TestQual' -count=1 -timeout 20m
+
+# Fleet mode (plan 11b): N mock devices from N loopback addresses against one port49d.
+# Linux. Plan 12's load validation drives it at the §5 target rate.
+qual-fleet:
+	PORT49_QUAL_FLEET=1 go test ./internal/port49d/ -run '^TestQualFleet$$' -count=1 -v -timeout 30m
+
+# docs/qualified-platforms.md, generated from the profiles, goldens and notes; a test fails
+# while the committed page is stale.
+qualified-platforms:
+	go run ./tests/qual/cmd/qualified > docs/qualified-platforms.md
+
+# Vet a firmware and generate its mock for review (tests/qual/README.md). Commits nothing.
+qual-vet:
+	@test -n "$(P)" || { echo "usage: make qual-vet P=<selector>"; exit 2; }
+	bash tests/qual/vet.sh $(P)
+
+qual-update:
+	PORT49_QUAL_UPDATE=1 go test ./internal/port49d/ -run '^TestQual$$' -count=1 -timeout 20m
+
 vet:
 # gofmt lists every unformatted file and fails if there is one. No tee to
 # /dev/stderr: that reopens stderr with O_TRUNC, which empties a log that
@@ -151,11 +176,22 @@ lab-directory:
 lab-regions:
 	go test -tags lab ./tests/lab/ -run '^TestRegions$$' -count=1 -timeout 120m -v
 
+# The closed lab entries, rerun under the lab lock and diffed against their notes
+# (plan 11b). Beehive only. LAB_REGRESS_ARGS passes -only=<ids> or -dry-run.
+lab-regress: build
+	go run ./tests/lab/cmd/lab-regress -manifest tests/lab/regress.yaml $(LAB_REGRESS_ARGS)
+
 # L50 (plan 8b): who can write a workload mapping's attribute, on Samba AD and
 # the Windows Server DC. Needs Docker with Compose v2.24.4+, KVM, the cached
 # evaluation ISO and PORT49_LAB_L50=1; see tests/lab/README.md, "Directories".
 lab-l50:
 	PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run '^TestL50WorkloadAttributeWriters$$' -count=1 -v -timeout 240m
+
+# The conformance run a firmware is vetted by (plan 11b). One platform selector at a time.
+# A re-vet of nxos106 re-measures L80 (closed), so PORT49_LAB_REMEASURE defaults to it there and nowhere else.
+lab-qualify:
+	@test -n "$(P)" || { echo "usage: make lab-qualify P=<selector, e.g. nxos106>"; exit 2; }
+	PORT49_LAB_QUALIFY=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE:-$(if $(filter nxos106,$(P)),L80)} PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+

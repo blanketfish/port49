@@ -121,6 +121,10 @@ func TestPAPRedeemsAndCreatesContext(t *testing.T) {
 	if r[0]["session"].(map[string]any)["username"] != "alice" {
 		t.Fatalf("session.username: %v", r[0]["session"])
 	}
+	if pf, _ := r[0]["packet_fields"].(map[string]any); len(pf) != 4 || pf["action"] != "login" || pf["authen_type"] != "pap" ||
+		pf["service"] != "login" || pf["priv_lvl"] != float64(1) {
+		t.Fatalf("redeem record's packet_fields: %v", r[0]["packet_fields"])
+	}
 	if strings.Contains(f.log.String(), f.tag()+"tok1tok1tok1tok1tok1tok1") {
 		t.Fatal("token leaked into the log")
 	}
@@ -1600,6 +1604,9 @@ func TestEnableUpdatesPrivilegeInPlaceAndKeepsCtxID(t *testing.T) {
 	last := f.records(t)[len(f.records(t))-1]
 	if last["event"] != "escalate" || last["reason"] != "escalation_granted" || last["principal"] != "user:alice@example.com" {
 		t.Fatalf("%v", last)
+	}
+	if pf, _ := last["packet_fields"].(map[string]any); pf["service"] != "enable" || pf["action"] != "login" || pf["authen_type"] == nil {
+		t.Fatalf("escalate record's packet_fields: %v", last["packet_fields"])
 	}
 	// The escalation's OWN record must name the context it raised: that id is
 	// the join from the login through the escalation to every later command.

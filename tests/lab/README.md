@@ -45,9 +45,10 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
      - Nexus 9300v 10.6.2.F (`nxos106`): copy `nexus9300v64.10.6.2.F.qcow2` into
        `vrnetlab/cisco/n9kv` as `n9kv-9300v64-10.6.2.F.qcow2`, then
        `make IMAGE=n9kv-9300v64-10.6.2.F.qcow2 docker-build`.
-     - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): `make IMAGE=iol-xe-17-18-02.tar.gz
-       docker-build` in `vrnetlab/cisco/iol`.
-     - XRd control plane 26.1.1 (`xrd261`, L71 help cell only): `docker load -i
+     - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): copy `iol-xe-17-18-02.tar.gz` into
+       `vrnetlab/cisco/iol` first (an `IMAGE=/mnt/images/...` path fails the Makefile's version
+       regex), then `make IMAGE=iol-xe-17-18-02.tar.gz docker-build` there.
+     - XRd control plane 26.1.1 (`xrd261`, a full L73 row): `docker load -i
        ios-xrd-control-plane-26-1-1.tar.gz`, tagged `port49lab/xrd-control-plane:26.1.1`. XRd
        needs `fs.inotify.max_user_instances` >= 4000 (`sudo sysctl -w`, not persisted).
 
@@ -831,7 +832,7 @@ client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
 ## L73: device RFC 9887 clients against port49
 
 `PORT49_LAB_PLATFORMS=<selector> go test -tags lab ./tests/lab/ -run '^TestL73$' -count=1 -v -timeout 3h`,
-one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`; help cells `iolxe1718`, `xrd261`;
+one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`, `xrd261`; help cell `iolxe1718`;
 `vjunosswitch26`), from a pinned worktree under `.worktrees/`, after `make build`.
 
 - **Opt-in selectors.** A run that names no platform never deploys them.
@@ -878,3 +879,92 @@ from a pinned worktree under `.worktrees/`, after `make build`. Run L76 only wit
   is the redacted capture (`make evidence`).
 - **An INVALID run** writes no note. It keeps the device's own view, filtered and leak-checked, in the
   git-ignored `logs/L76-invalid-<stamp>/` (masked running config, AAA log tail, session table).
+
+## Qualification (plan 11b)
+
+`make lab-qualify P=<selector>` runs `TestQualify`, the conformance run a firmware is vetted by. It
+is opt-in (`PORT49_LAB_QUALIFY=1`, which the target sets), runs one platform at a time, and holds the
+lab lock like every other lab run.
+
+It plays the cells in `qualCells` (`tests/lab/qual_evidence.go`) under `tests/qual/qual-policy.yaml`
+and `tests/qual/qual-daemon.yaml`, with tokens the broker mints: no seed and no lab instrument can
+answer. Each cell cites the register rows it re-measures and closes none. The denied command is per
+platform (`qualDeniedCommand`): Junos sends no command authorization (L18), so its `command_denied`
+and `command_permitted` cells are recorded `not_applicable`.
+
+Output, with `<slug>` the firmware's `devicemock.Slug` and `<lp>` the lab platform name:
+
+- `tests/lab/evidence/QUAL-<slug>-<lp>/`: `run.json`, `decisions.jsonl` (only whitelisted fields, see
+  `qualRecord`), `<cell>.conns.json` (plain 49) and `<cell>.tls.json`;
+- `tests/lab/evidence/QUAL-<slug>-<lp>.pcap`, beside the directory, redacted like every capture;
+- `tests/lab/results/QUAL-<slug>-<lp>.md`, the note.
+
+To vet a firmware and add its mock in one command, use `make qual-vet P=<selector>`; the
+procedures are in `tests/qual/README.md`.
+
+`run.json` holds `cells` (the start time of each cell that ran) and `results` (every cell's verdict: `pass`,
+`fail`, `not_applicable` or `not_run`). `command_authorization` says, for each TLS login cell, what its
+commands did at port49 (`sent`, `not_sent` or `not_applicable`), graded from port49's records alone;
+`denied_command_ran` is L80's cell.
+
+The TLS login cells grade what the operator configured. `tls_token_login` runs per-request, the
+device default; `tls_single_connection` runs last with single-connection on the TLS server, then
+puts the device back. Each verdict line starts with its mode. A per-request login whose commands
+reached port49 as no `authorize_command` (NX-OS 10.6(2)F, L73 cell a) passes as a login and says
+"command authorization not sent", with each command's first output line: a device fact, never a pass
+for command authorization over TLS. Only then does `tls_denied_command` run: one login typing the
+denied command alone, graded from its first output line and port49's records, which writes
+`tests/lab/results/L80-<lp>.md` beside the QUAL note (spec §15 L80). It is a measurement, not a
+qualification check: its verdict is `observed` ("denied command ran; port49 never asked (the device's
+local method, presumed)" or "denied command refused", with the first line and the record counts), never `pass`,
+and `fail` only when port49 permitted the command, the device ran it after port49 denied it, or
+there was no output to read.
+
+Every evidence file passes a leak gate before any is written; a failure names the file and the kind
+of content, never the content.
+
+## Regressions (plan 11b)
+
+`make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
+notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `2c680dbf`,
+2026-10-19/20, then the L35, L37, L66, L79 and L80 entries): the manifest sums to 733.6 minutes. A clean
+full run is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
+`make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are L34 (103 min), L36 (67) and
+L22 (44).
+
+Runs before the 2026-10-20 rebase name the rebased twin of the commit they ran (`2c680dbf` for the
+first full run); the tree differs by PR #29's client and spec changes only. The vJunos 23.4R2-S2.1
+QUAL run names `73f7a5df`, the commit its amended-away original became: the code is identical, and
+only two stray pcaps were dropped.
+
+The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
+
+- **L35, L37**: the test expected plan 7e's circuit-open line; port49d now goes dark on decision 37's
+  health checks (about 5 s). The verdict was fixed and both passed on the rerun.
+- **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29, and L66
+  passed on the rerun.
+- **L29-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
+  phase. Junos sends nothing on a held connection, so the phase can fail its premise; a device
+  flake, so retry the entry.
+
+**L80** (`L80-nxos106`) is a regress entry: it re-measures a security fact (a command port49 denies runs
+over NX-OS 10.6's per-request TLS), and a run that observes nothing is INVALID. A flipped outcome shows as
+changed lines in the note diff, and a run that observes nothing writes no L80 note. `lab-regress` reports
+note changes and does not fail on them. It does fail an entry whose listed note the run did not rewrite
+(its mtime is before the entry started): notediff masks the header lines a rerun changes, so an untouched
+note would otherwise read "unchanged".
+
+**NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
+`feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device
+appears to hang while the launcher applies its startup config. Retry the entry.
+
+**What a run needs beyond the base setup:**
+
+- `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
+  (on beehive, `/mnt/images/etcd-v3.6.15`). L35-restore needs `etcdutl`.
+- L66 needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
+  with `/home/rwendt/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
+  the L66 preflight prints the exact command with the collection names.
+- Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
+  IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.
+- cEOS 4.36.3M must be docker-imported from its tarball (`docker import ... ceos:4.36.3M`).

@@ -4,6 +4,7 @@ devices:
   - {name: vsrx1, platform: juniper_junos, addresses: [172.100.100.22]}
   - {name: nx1,   platform: cisco_nxos,    addresses: [172.100.100.31]}
   - {name: xe1,   platform: cisco_iosxe,   addresses: [172.100.100.41]}
+  - {name: xrd1, platform: cisco_iosxr,   addresses: [172.100.100.61]}
   - {name: srl1, platform: nokia_srlinux, addresses: [172.100.100.71]}
 key_groups:
   - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}

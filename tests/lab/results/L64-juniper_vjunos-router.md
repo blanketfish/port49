@@ -1,12 +1,12 @@
 # L64 — juniper_vjunos-router
 
-- **Date measured:** 2026-10-14
+- **Date measured:** 2026-10-20
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L64L65-juniper_vjunos-router.pcap` — 3226 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L64L65-juniper_vjunos-router.pcap` — 2346 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L64L65-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `bd3a4b91e356c3a015bfc78a4493ff1f797e48c4`, `PORT49_LAB_PLATFORMS=vjunos`, `-run TestL64L65`
+- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=vjunos`, `-run ^TestL64L65$`
 
 ## Claim
 
@@ -14,9 +14,9 @@
 
 ## Observation
 
-Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.0.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.6, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit bd3a4b91e356c3a015bfc78a4493ff1f797e48c4 into the shared lab venv.
+Client versions in this run: Python 3.14.4 netmiko 4.8.0 paramiko 5.1.0 port49 0.1.0; OpenSSH_10.2p1 Ubuntu-2ubuntu3.8, OpenSSL 3.5.5 27 Jan 2026; installed from clients/python at commit 2c680dbfad8fed41de8176383c9e67e2f871d2eb into the shared lab venv.
 
-The 10s before the first cell: 35 decision records and 700 TACACS+ packets to or from the device.
+The 10s before the first cell: 0 decision records and 0 TACACS+ packets to or from the device.
 
 | cell | outcome | elapsed |
 |---|---|---|
@@ -37,7 +37,7 @@ Authenticated to 172.100.100.21 ([172.100.100.21]:22) using "keyboard-interactiv
 
 ### L64b: PASS
 
-The device rebooted: true (System booted 2026-10-14 03:30:01 UTC, then 2026-10-14 03:31:59 UTC). The scan's key is the same after the reload (SHA256:H/tC8Mxxy6L2pnATScoGGMZJ46uhDq3QWbBuEzLFFE4).
+The device rebooted: true (System booted 2026-10-20 11:40:37 UTC, then 2026-10-20 11:42:46 UTC). The scan's key is the same after the reload (SHA256:H/tC8Mxxy6L2pnATScoGGMZJ46uhDq3QWbBuEzLFFE4).
 
 The filed lines (type and key, compared with the host field left out) before the reload: 1; after: 4; added by the login: ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, ecdsa-sha2-nistp521; gone after it: none.
 
@@ -55,21 +55,21 @@ System going down IMMEDIATELY
 
                                                                                
 Shutdown NOW!
-[pid 14935]
+[pid 14933]
 
 breakglass@srx1> 
-The reload command was sent at 03:31:30; the device was seen down (no SSH banner on two connections in a row) at 03:31:35, and was serving SSH authentication again no later than 1m28s after that.
-Before the reload, `show system uptime` says: ["show system uptime \r" "System booted: 2026-10-14 03:30:01 UTC (00:01:27 ago)\r"]. After: ["show system uptime \r" "System booted: 2026-10-14 03:31:59 UTC (00:01:02 ago)\r"].
+The reload command was sent at 11:42:14; the device was seen down (no SSH banner on two connections in a row) at 11:42:18, and was serving SSH authentication again no later than 1m28s after that.
+Before the reload, `show system uptime` says: ["show system uptime \r" "System booted: 2026-10-20 11:40:37 UTC (00:01:35 ago)\r"]. After: ["show system uptime \r" "System booted: 2026-10-20 11:42:46 UTC (00:00:59 ago)\r"].
 ```
 
-The 10s before the first cell: 35 decision records and 700 TACACS+ packets to or from the device.
+The 10s before the first cell: 0 decision records and 0 TACACS+ packets to or from the device.
 
-After it, `port49 ssh -v srx1 -- show version`: exit 0; 91 lines of output; 184 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account]; ssh: clean; the warning banner is present: false.
+After it, `port49 ssh -v srx1 -- show version`: exit 0; 91 lines of output; 624 TACACS+ packets, 1 redeem records, records other than mint and blob: [redeem authorize_session account account account account account account account account account account account account account account account account account account account account account account account account account account account account account]; ssh: clean; the warning banner is present: false.
 
 ```
 debug1: Next authentication method: keyboard-interactive
 Authenticated to 172.100.100.21 ([172.100.100.21]:22) using "keyboard-interactive".
-debug1: client_input_hostkeys: searching /tmp/p49l64home3737360460/.ssh/known_hosts for srx1 / (none)
+debug1: client_input_hostkeys: searching /tmp/p49l64home316647081/.ssh/known_hosts for srx1 / (none)
 Learned new hostkey: ECDSA SHA256:nkmJy0ygYhdKpYOz9P2E0QXa/2+XYSf2mTq6t52ZNig
 Learned new hostkey: ECDSA SHA256:qMyY0hXuejsmToBhRtUv6Rwd4W+5cSN6VdXoYVp5cNg
 Learned new hostkey: ECDSA SHA256:0E3Qg1PEERghWq3gDAx2OSGPvBrYQyHARg9Uft3R+04
@@ -82,11 +82,11 @@ Learned new hostkey: ECDSA SHA256:0E3Qg1PEERghWq3gDAx2OSGPvBrYQyHARg9Uft3R+04
 ```
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
 The fingerprint for the ED25519 key sent by the remote host is
-Offending ED25519 key in /tmp/p49l64home3737360460/.ssh/known_hosts:1
-  ssh-keygen -f '/tmp/p49l64home3737360460/.ssh/known_hosts' -R 'srx1'
+Offending ED25519 key in /tmp/p49l64home316647081/.ssh/known_hosts:1
+  ssh-keygen -f '/tmp/p49l64home316647081/.ssh/known_hosts' -R 'srx1'
 Host key for srx1 has changed and you have requested strict checking.
 Host key verification failed.
-port49 ssh: ssh stopped before srx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under srx1 is not the one 172.100.100.21 presents: either the device's key changed, or the address inventory gives for srx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3737360460/.ssh/known_hosts -R srx1 and connect again
+port49 ssh: ssh stopped before srx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under srx1 is not the one 172.100.100.21 presents: either the device's key changed, or the address inventory gives for srx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home316647081/.ssh/known_hosts -R srx1 and connect again
 ``` a window of 10s with no decision record and no TACACS+ packet preceded it.
 
 ### L64d: PASS
@@ -96,10 +96,10 @@ port49 ssh: ssh stopped before srx1 asked for the token, so it was never sent (s
 ```
 @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
 The fingerprint for the RSA key sent by the remote host is
-Offending RSA key in /tmp/p49l64home3737360460/.ssh/known_hosts:1
-  ssh-keygen -f '/tmp/p49l64home3737360460/.ssh/known_hosts' -R 'srx1'
+Offending RSA key in /tmp/p49l64home316647081/.ssh/known_hosts:1
+  ssh-keygen -f '/tmp/p49l64home316647081/.ssh/known_hosts' -R 'srx1'
 Host key for srx1 has changed and you have requested strict checking.
 Host key verification failed.
-port49 ssh: ssh stopped before srx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under srx1 is not the one 172.100.100.21 presents: either the device's key changed, or the address inventory gives for srx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home3737360460/.ssh/known_hosts -R srx1 and connect again
+port49 ssh: ssh stopped before srx1 asked for the token, so it was never sent (ssh exit 255, its message is above). If it says Host key verification failed, the key your known_hosts files under srx1 is not the one 172.100.100.21 presents: either the device's key changed, or the address inventory gives for srx1 is not the device. Verify the key on its console, then run ssh-keygen -f /tmp/p49l64home316647081/.ssh/known_hosts -R srx1 and connect again
 ``` a window of 10s with no decision record and no TACACS+ packet preceded it.
 

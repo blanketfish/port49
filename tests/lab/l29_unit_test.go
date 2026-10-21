@@ -64,8 +64,8 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 	if refused := base.AdmissionRefusals(); len(refused) != 0 {
 		t.Fatalf("the lab source under l29/policy.yaml refuses %d device(s): %+v", len(refused), refused)
 	}
-	if got := len(labLine.FindAllString(src, -1)); got != 16 {
-		t.Fatalf("labLine finds %d devices in the lab source, want the 5 lab devices, L76's srl1 and 10 dummies", got)
+	if got := len(labLine.FindAllString(src, -1)); got != 17 {
+		t.Fatalf("labLine finds %d devices in the lab source, want the 5 lab devices, L76's srl1, L73's xrd1 and 10 dummies", got)
 	}
 	for node, platform := range l29Nodes {
 		if got := labPlatformOf(src, node); got != platform {

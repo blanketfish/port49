@@ -250,17 +250,6 @@ func TestSplitAttemptsReadsWhichServerRefusedAndWhichAnswered(t *testing.T) {
 	}
 }
 
-func TestDarkBoundAtTheLabsValues(t *testing.T) {
-	// 5 failed pings 10s apart, hold_ttl for the open circuit, a sixth more
-	// for the next call, the call's own timeout, and 5s of slack.
-	if got, want := darkBound(60*time.Second, 500*time.Millisecond, 5), 125500*time.Millisecond; got != want {
-		t.Fatalf("darkBound = %s, want %s", got, want)
-	}
-	if darkBound(15*time.Second, 500*time.Millisecond, 5) >= darkBound(60*time.Second, 500*time.Millisecond, 5) {
-		t.Error("the bound does not grow with hold_ttl")
-	}
-}
-
 func TestServerListedReadsTheGroupBack(t *testing.T) {
 	both := map[string]string{
 		"arista_eos":  "aaa group server tacacs+ port49\n   server 172.100.100.1\n   server 172.100.100.2\n",
@@ -330,18 +319,20 @@ func TestDenialBeforeAttributesASessionEnd(t *testing.T) {
 	}
 }
 
-func TestDarkTimesVerdictJudgesBothSpans(t *testing.T) {
+func TestDarkTimesVerdictJudgesDecision37sHealthChecks(t *testing.T) {
 	s := time.Second
 	for _, c := range []struct {
 		name string
 		d    darkTimes
 		bad  int
 	}{
-		{"as designed", darkTimes{Open: 50 * s, Dark: 112 * s}, 0},
-		{"past the bound", darkTimes{Open: 100 * s, Dark: 170 * s}, 1},
-		{"never dark", darkTimes{Open: 50 * s}, 1},
-		{"dark with no circuit line", darkTimes{Dark: 100 * s}, 1},
-		{"dark too soon after opening", darkTimes{Open: 50 * s, Dark: 70 * s}, 1},
+		{"as designed", darkTimes{Checks: 5 * s, Dark: 5 * s}, 0},
+		{"on the bound", darkTimes{Checks: 10500 * time.Millisecond, Dark: 10500 * time.Millisecond}, 0},
+		{"just past the bound", darkTimes{Checks: 10600 * time.Millisecond, Dark: 10600 * time.Millisecond}, 1},
+		{"past the bound with no health-check line", darkTimes{Dark: 12 * s}, 2},
+		{"past the bound", darkTimes{Checks: 12 * s, Dark: 12 * s}, 1},
+		{"never dark", darkTimes{Checks: 5 * s}, 1},
+		{"dark with neither line", darkTimes{Dark: 5 * s}, 1},
 	} {
 		if got := c.d.verdict("port49d"); len(got) != c.bad {
 			t.Errorf("%s: %d findings %v, want %d", c.name, len(got), got, c.bad)
@@ -389,6 +380,59 @@ func TestGuardClosedRefusesAClosedEntryWithANote(t *testing.T) {
 		t.Setenv("PORT49_LAB_REMEASURE", c.remeasure)
 		if got := l.guardRefusal(c.entry) != ""; got != c.refused {
 			t.Errorf("%s with REMEASURE=%q: refused %v, want %v", c.entry, c.remeasure, got, c.refused)
+		}
+	}
+}
+
+func TestInertWordSaysNotObservedForARowItNeverSaw(t *testing.T) {
+	for _, c := range []struct {
+		inert, observed bool
+		want            string
+	}{{true, true, "yes"}, {false, true, "no"}, {false, false, "not observed"}} {
+		if got := inertWord(c.inert, c.observed); got != c.want {
+			t.Errorf("inertWord(%v, %v) = %q, want %q", c.inert, c.observed, got, c.want)
+		}
+	}
+}
+
+// waitDark reads port49d's real go-dark line (the shape the L35 notes record),
+// and its two substrings are the ones port49d's source prints.
+func TestDarkLineSubstringsArePort49dsOwn(t *testing.T) {
+	line := "port49d: store: 5 consecutive store health checks failed over 4s (the last: the context pool: store: " +
+		"unavailable: context deadline exceeded); closing every listener so that devices use their local method"
+	dts := waitDark(time.Now(), time.Minute, func(sub string) bool { return strings.Contains(line, sub) })
+	if dts[0].Checks == 0 || dts[0].Dark == 0 {
+		t.Errorf("waitDark did not read the go-dark line: %+v", dts[0])
+	}
+	for file, want := range map[string]string{
+		"health.go": "%d " + darkCauseText,
+		"main.go":   darkCloseText,
+	} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "port49d", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("internal/port49d/%s no longer prints %q: update the harness's substring", file, want)
+		}
+	}
+}
+
+func TestInertColumnSaysNoForARefusedRow(t *testing.T) {
+	for _, c := range []struct {
+		name                          string
+		refused, rowUnobs, adminUnobs bool
+		want                          string
+	}{
+		{"refused session", true, false, false, "no"},
+		{"refused, its commands never ran", true, true, false, "no"},
+		{"row command unfinished", false, true, false, "not observed"},
+		{"admin control unfinished", false, false, true, "not observed"},
+		{"opened and the same as admin", false, false, false, "yes"},
+	} {
+		inert := !c.refused // the session opened and nothing moved
+		if got := inertWord(inert && !c.refused, inertObserved(c.refused, c.rowUnobs, c.adminUnobs)); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 }

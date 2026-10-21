@@ -1,0 +1,90 @@
+{
+  "platform": "cisco_iosxe",
+  "lab_platform": "cisco_iosxe",
+  "firmware": "Catalyst 8000V 17.18.02",
+  "image": "Catalyst 8000V 17.18.02",
+  "commit": "f83de037a88c",
+  "date": "2026-10-21",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "accounting": "2026-10-21T09:41:34.251974792Z",
+    "command_denied": "2026-10-21T09:41:33.21961401Z",
+    "command_permitted": "2026-10-21T09:41:33.21961401Z",
+    "single_connection": "2026-10-21T09:42:28.782722127Z",
+    "store_unavailable": "2026-10-21T09:41:40.944400634Z",
+    "tls_single_connection": "2026-10-21T09:44:26.830001871Z",
+    "tls_store_unavailable": "2026-10-21T09:43:32.042884943Z",
+    "tls_token_login": "2026-10-21T09:43:18.70716108Z",
+    "tls_unknown_ca": "2026-10-21T09:43:52.739604596Z",
+    "token_login": "2026-10-21T09:41:32.42919506Z",
+    "wrong_credential": "2026-10-21T09:41:35.035082699Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "command_denied": [
+      "L21"
+    ],
+    "command_permitted": [
+      "L10",
+      "L21"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "tls_single_connection": [
+      "L15",
+      "L73"
+    ],
+    "tls_store_unavailable": [
+      "L73"
+    ],
+    "tls_token_login": [
+      "L73"
+    ],
+    "tls_unknown_ca": [
+      "L73"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": false,
+    "tls_store_unavailable": false
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "pass",
+    "command_permitted": "pass",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_denied_command": "not_run",
+    "tls_single_connection": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_token_login": "pass",
+    "tls_unknown_ca": "pass",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  },
+  "command_authorization": {
+    "tls_single_connection": "sent",
+    "tls_token_login": "sent"
+  },
+  "denied_command_ran": {},
+  "denied_command_asked": {}
+}

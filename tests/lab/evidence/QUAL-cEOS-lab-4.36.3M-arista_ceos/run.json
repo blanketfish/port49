@@ -1,0 +1,90 @@
+{
+  "platform": "arista_eos",
+  "lab_platform": "arista_ceos",
+  "firmware": "cEOS-lab 4.36.3M",
+  "image": "cEOS-lab 4.36.3M",
+  "commit": "a47b0000df25",
+  "date": "2026-10-21",
+  "transports": [
+    "tcp",
+    "tls"
+  ],
+  "cells": {
+    "accounting": "2026-10-21T09:32:29.863856846Z",
+    "command_denied": "2026-10-21T09:32:27.703406749Z",
+    "command_permitted": "2026-10-21T09:32:27.703406749Z",
+    "single_connection": "2026-10-21T09:32:45.268516923Z",
+    "store_unavailable": "2026-10-21T09:32:32.872506343Z",
+    "tls_single_connection": "2026-10-21T09:35:00.533385659Z",
+    "tls_store_unavailable": "2026-10-21T09:33:58.892050706Z",
+    "tls_token_login": "2026-10-21T09:33:44.433502193Z",
+    "tls_unknown_ca": "2026-10-21T09:34:14.47549765Z",
+    "token_login": "2026-10-21T09:32:25.624785143Z",
+    "wrong_credential": "2026-10-21T09:32:31.914514375Z"
+  },
+  "registers": {
+    "accounting": [
+      "L6"
+    ],
+    "command_denied": [
+      "L21"
+    ],
+    "command_permitted": [
+      "L10",
+      "L21"
+    ],
+    "single_connection": [
+      "L15",
+      "L73"
+    ],
+    "store_unavailable": [
+      "L4",
+      "L28"
+    ],
+    "tls_single_connection": [
+      "L15",
+      "L73"
+    ],
+    "tls_store_unavailable": [
+      "L73"
+    ],
+    "tls_token_login": [
+      "L73"
+    ],
+    "tls_unknown_ca": [
+      "L73"
+    ],
+    "token_login": [
+      "L1",
+      "L15",
+      "L19"
+    ],
+    "wrong_credential": [
+      "L13"
+    ]
+  },
+  "break_glass": {
+    "store_unavailable": true,
+    "tls_store_unavailable": true
+  },
+  "results": {
+    "accounting": "pass",
+    "command_denied": "pass",
+    "command_permitted": "pass",
+    "single_connection": "pass",
+    "store_unavailable": "pass",
+    "tls_denied_command": "not_run",
+    "tls_single_connection": "pass",
+    "tls_store_unavailable": "pass",
+    "tls_token_login": "pass",
+    "tls_unknown_ca": "pass",
+    "token_login": "pass",
+    "wrong_credential": "pass"
+  },
+  "command_authorization": {
+    "tls_single_connection": "sent",
+    "tls_token_login": "sent"
+  },
+  "denied_command_ran": {},
+  "denied_command_asked": {}
+}

@@ -1,11 +1,12 @@
 # L12-netconf — juniper_vjunos-router
 
-- **Date measured:** 2026-09-25
+- **Date measured:** 2026-10-20
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap` — 1435 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap` — 1506 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L12-netconf-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `2c680dbfad8fed41de8176383c9e67e2f871d2eb`, `PORT49_LAB_PLATFORMS=vjunos,vsrx`, `-run ^TestL12JunosNetconf$`
 
 ## Claim
 
@@ -39,7 +40,7 @@ set system login user p49-nc-none class p49-nc-none
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790312052" junos:changed-localtime="2026-09-25 04:54:12 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
     <version>23.4R2-S2.1</version>
     <system>
         <host-name>srx1</host-name>
@@ -68,14 +69,14 @@ set system login user p49-nc-none class p49-nc-none
                 <authentication>
                     <encrypted-password>/* SECRET-DATA */</encrypted-password>
                 </authentication>
-… (183 more lines)
+… (202 more lines)
 ```
 
 `<get-configuration><configuration><system/></configuration></get-configuration>`:
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790312052" junos:changed-localtime="2026-09-25 04:54:12 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
@@ -104,7 +105,7 @@ set system login user p49-nc-none class p49-nc-none
                     <encrypted-password>/* SECRET-DATA */</encrypted-password>
                 </authentication>
             </user>
-… (131 more lines)
+… (150 more lines)
 ```
 
 `<command>show configuration</command>`:
@@ -113,7 +114,7 @@ set system login user p49-nc-none class p49-nc-none
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="3">
 <configuration-information>
 <configuration-output>
-## Last commit: 2026-09-25 04:54:12 UTC by breakglass
+## Last commit: 2026-10-20 00:10:39 UTC by breakglass
 version 23.4R2-S2.1;
 system {
     host-name srx1;
@@ -140,7 +141,7 @@ system {
         user breakglass {
             uid 2002;
             class super-user;
-… (158 more lines)
+… (170 more lines)
 ```
 
 `<get-software-information/>`:
@@ -185,7 +186,7 @@ system {
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790312052" junos:changed-localtime="2026-09-25 04:54:12 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
     <version>23.4R2-S2.1</version>
     <system>
         <host-name>srx1</host-name>
@@ -214,14 +215,14 @@ system {
                 <authentication>
                     <encrypted-password>/* SECRET-DATA */</encrypted-password>
                 </authentication>
-… (183 more lines)
+… (202 more lines)
 ```
 
 `<get-configuration><configuration><system/></configuration></get-configuration>`:
 
 ```
 <rpc-reply xmlns:junos="http://xml.juniper.net/junos/23.4R2-S2.1/junos" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
-<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1790312052" junos:changed-localtime="2026-09-25 04:54:12 UTC">
+<configuration xmlns="http://xml.juniper.net/xnm/1.1/xnm" junos:changed-seconds="1792455039" junos:changed-localtime="2026-10-20 00:10:39 UTC">
     <system>
         <host-name>srx1</host-name>
         <root-authentication>
@@ -250,7 +251,7 @@ system {
                     <encrypted-password>/* SECRET-DATA */</encrypted-password>
                 </authentication>
             </user>
-… (131 more lines)
+… (150 more lines)
 ```
 
 `<command>show configuration</command>`:
@@ -307,589 +308,21 @@ system {
 
 ### fail-closed, local_user_name
 
-`<get-configuration/>`:
+Every RPC:
 
 ```
-no session: alice04: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
+no session: alice04: the device sent no NETCONF hello (sent "error: unknown command: xml-mode\n\nerror: permission denied: netconf"): the NETCONF channel closed: EOF (); port49d recorded [redeem permit token_redeemed authorize_session permit context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
 paired control before (`[]`): hello (1543 bytes)
 paired control after (`[]`): hello (1543 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
-```
-
-`<get-configuration><configuration><system/></configuration></get-configuration>`:
-
-```
-no session: alice04: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
-paired control before (`[]`): hello (1543 bytes)
-paired control after (`[]`): hello (1543 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
-```
-
-`<command>show configuration</command>`:
-
-```
-no session: alice04: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
-paired control before (`[]`): hello (1543 bytes)
-paired control after (`[]`): hello (1543 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
-```
-
-`<get-software-information/>`:
-
-```
-no session: alice04: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account   account  ]
-paired control before (`[]`): hello (1543 bytes)
-paired control after (`[]`): hello (1543 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
 ```
 
 ### fail-closed, user_permissions
 
-`<get-configuration/>`:
+Every RPC:
 
 ```
-no session: alice07: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account  ]
+no session: alice07: the device sent no NETCONF hello (sent "error: unknown command: xml-mode\n\nerror: permission denied: netconf"): the NETCONF channel closed: EOF (); port49d recorded [redeem permit token_redeemed authorize_session permit context_matched account   account   account   account   account   account   account   account   account   account   account   account   account  ]
 paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
 paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
-```
-
-`<get-configuration><configuration><system/></configuration></get-configuration>`:
-
-```
-no session: alice07: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account  ]
-paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
-```
-
-`<command>show configuration</command>`:
-
-```
-no session: alice07: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account  ]
-paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
-```
-
-`<get-software-information/>`:
-
-```
-no session: alice07: the device sent no NETCONF hello: the NETCONF channel closed: EOF (); port49d recorded [redeem  token_redeemed authorize_session  context_matched account   account   account  ]
-paired control before (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-paired control after (`["local-user-name=p49-nc-none", "user-permissions=view view-configuration"]`): hello (1547 bytes)
-
-the device's log:
-show log messages | last 60 | no-more 
-Aug 21 12:16:59   jlaunchd[29682]: process-monitor (PID 29847) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: smg-service (PID 29850) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: up-smg-service (PID 29854) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: application-identification (PID 29864) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: charged (PID 29868) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: kernel-health-monitoring (PID 29869) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: system-monitor (PID 29872) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: dot1x-protocol (PID 29881) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: bbe-stats-daemon (PID 29887) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-client-service (PID 29890) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: replication-server-service (PID 29894) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: license-service (PID 29900) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: aaasd (PID 29902) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: na-mqttd (PID 29908) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: mgd-api (PID 29911) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: jsqlsync (PID 29913) terminate signal 15 sent
-Aug 21 12:16:59   jlaunchd[29682]: cron (PID 30751) terminate signal 15 sent
-Aug 21 12:17:03   jlaunchd[29682]: cron (PID 30751) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: jsqlsync (PID 29913) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mgd-api (PID 29911) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: na-mqttd (PID 29908) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: aaasd (PID 29902) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: license-service (PID 29900) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: bbe-stats-daemon (PID 29887) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: dot1x-protocol (PID 29881) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: system-monitor (PID 29872) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: kernel-health-monitoring (PID 29869) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: charged (PID 29868) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: application-identification (PID 29864) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: up-smg-service (PID 29854) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: smg-service (PID 29850) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: process-monitor (PID 29847) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mountd-service (PID 29841) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-management (PID 29839) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: pmcd (PID 29828) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: rpcbind-service (PID 29825) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: SDN-Telemetry (PID 29816) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: transport-control (PID 29815) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: gstatd (PID 29814) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: shm-rtsdbd (PID 29810) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: stats-agent (PID 29809) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: subscriber-management (PID 29808) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: ethernet-link-fault-management (PID 29807) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: clksyncd-service (PID 29806) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: neighbor-liveness (PID 29805) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: internal-routing-service (PID 29802) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: firewall (PID 29792) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: periodic-packet-services (PID 29784) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: statistics-service (PID 29781) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntpsync (PID 29780) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: sntp (PID 29779) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: inet-process (PID 29773) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: mib-process (PID 29771) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: snmp (PID 29770) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: management (PID 29769) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: craft-control (PID 29768) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: alarm-control (PID 29767) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: interface-control (PID 29738) exited with status=0 Normal Exit
-Aug 21 12:17:03   jlaunchd[29682]: tnp-process (PID 29737) exited with status=0 Normal Exit
----(more 100%)---                                        Aug 21 12:17:03   jlaunchd[29682]: bslockd (PID 29736) exited with status=0 Normal Exit
-
-breakglass@srx1> 
 ```
 

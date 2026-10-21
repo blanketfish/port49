@@ -123,7 +123,7 @@ var platforms = []platform{
 	// selector per run: labs are cached by platform name. The full rows sit on
 	// the older rows' node and address, so the inventory, the seeds and the
 	// startup configs are unchanged; only one platform is ever up. The boot
-	// budgets of vjunosswitch26, iolxe1718 and xrd261 are placeholders: no run
+	// budgets of vjunosswitch26 and iolxe1718 are placeholders: no run
 	// has booted them on this host. Every other row carries its measured boot
 	// time in its own comment.
 	// vjunos26 booted on this host in 2m12s (2026-10-18, TestL73); the budget is that x3.
@@ -141,12 +141,14 @@ var platforms = []platform{
 	// Ready after 23 to 28s in the 2026-10-18 L73 runs; the budget is 3x.
 	{"ceos436", "arista_ceos", "topologies/ceos436.clab.yml", "172.100.100.11", "leaf1",
 		"ceos:4.36.3M", "cEOS-lab 4.36.3M", 90 * time.Second},
+	// xrd261 was ready 1m8s to 1m10s after deploy on this host (2026-10-21, TestL73, the
+	// TACACS+ gate included); the budget is that x4. Its address is the inventory's xrd1.
+	{"xrd261", "cisco_xrd", "topologies/xrd261.clab.yml", "172.100.100.61", "xrd1",
+		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 5 * time.Minute},
 	// Help-only rows (helpOnlyPlatforms): an L71 help cell and nothing else,
 	// on addresses no inventory names.
 	{"iolxe1718", "cisco_iol-xe", "topologies/iolxe1718.clab.yml", "172.100.100.51", "iol1",
 		"vrnetlab/cisco_iol:17.18.02", "IOL-XE 17.18.02", 5 * time.Minute},
-	{"xrd261", "cisco_xrd", "topologies/xrd261.clab.yml", "172.100.100.61", "xrd1",
-		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 10 * time.Minute},
 	{"vjunosswitch26", "juniper_vjunos-switch", "topologies/vjunos-switch26.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-switch:26.2R1.7", "vJunos-switch 26.2R1.7", 15 * time.Minute},
 	// SR Linux is a container, not a VM: containerlab starts sr_linux directly
@@ -164,7 +166,7 @@ var optInPlatforms = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos1
 
 // helpOnlyPlatforms come up with a break-glass account and no TACACS+: up()
 // starts no port49d for them, and TestL73 asks their CLI help only.
-var helpOnlyPlatforms = map[string]bool{"iolxe1718": true, "xrd261": true}
+var helpOnlyPlatforms = map[string]bool{"iolxe1718": true}
 
 // defaultPlatforms is the selection when PORT49_LAB_PLATFORMS is empty.
 func defaultPlatforms(ps []platform) []platform {
@@ -1651,7 +1653,19 @@ func (l *lab) dial(user, password string, timeout time.Duration) (*ssh.Client, e
 // they need the same deliberately wide algorithm lists — a handshake refused
 // for want of a 2016 cipher would look exactly like a device that has not
 // enabled NETCONF at all.
+// xrSSHLast is when the last SSH attempt to XRd began; xrSSHMu serialises the spacing.
+var (
+	xrSSHMu   sync.Mutex
+	xrSSHLast time.Time
+)
+
 func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duration) (*ssh.Client, error) {
+	if l.p.name == "cisco_xrd" && strings.HasSuffix(hostport, ":22") {
+		xrSSHMu.Lock()
+		time.Sleep(l73PaceWait(xrSSHLast, time.Now(), l73XRSSHPace))
+		xrSSHLast = time.Now()
+		xrSSHMu.Unlock()
+	}
 	nc, err := net.DialTimeout("tcp", hostport, timeout)
 	if err != nil {
 		return nil, err
@@ -3143,23 +3157,9 @@ func splitSent(path, addr string, from, to time.Time) (syns, data int, err error
 	return syns, data, nil
 }
 
-// The lab's store timings, which the dark bound is computed from: every
-// config the harness writes sets hold_ttl 60s, and call_timeout and
-// breaker.failures are the defaults (internal/config).
-const (
-	labHoldTTL         = 60 * time.Second
-	labCallTimeout     = 500 * time.Millisecond
-	labBreakerFailures = 5
-)
-
-// darkBound is the longest an idle port49d on a hung store takes to close its
-// listeners (Task 17 review I-8): its probe pings every hold_ttl/6, failures
-// failed pings open the context pool's circuit, the circuit must have been
-// open hold_ttl, and the next call after that (up to another hold_ttl/6, plus
-// the call's own timeout) tells Unhealthy. 5s is slack for the process.
-func darkBound(holdTTL, callTimeout time.Duration, failures int) time.Duration {
-	return time.Duration(failures)*(holdTTL/6) + holdTTL + holdTTL/6 + callTimeout + 5*time.Second
-}
+// labCallTimeout is the store call timeout every config the harness writes
+// leaves at its default (internal/config); healthDarkBound adds it.
+const labCallTimeout = 500 * time.Millisecond
 
 // serverListed checks a configuration read back from the device: with add,
 // the second server is listed in the group after the first (and the first is
@@ -3281,23 +3281,36 @@ func denialBefore(rs []authorReply, end time.Time, window time.Duration) bool {
 	return false
 }
 
-// darkTimes is when, after a hang began, a port49d said its context pool's
-// circuit is open and when it closed its listeners; zero is never.
-type darkTimes struct{ Open, Dark time.Duration }
+// darkTimes is when, after a hang began, a port49d said its store health checks
+// failed close_after times in a row and when it closed its listeners (decision
+// 37); zero is never.
+type darkTimes struct{ Checks, Dark time.Duration }
+
+// The two substrings of port49d's go-dark line (internal/port49d/health.go
+// says why, main.go closes), which waitDark reads; TestDarkLineSubstringsAre
+// Port49dsOwn pins them to the source.
+const (
+	darkCauseText = "consecutive store health checks failed"
+	darkCloseText = "closing every listener"
+)
+
+// darkPoll is how often waitDark and darkWatch read port49d's stderr, so a
+// dark time they read is up to darkPoll late.
+const darkPoll = 250 * time.Millisecond
 
 // waitDark polls each process (seen answers whether its stderr, since the
-// hang, holds a substring; the token pool's circuit or the context pool's
-// opening counts, the bulk pool's does not) every 250ms, until every one has closed its
-// listeners or within has passed.
+// hang, holds a substring) every darkPoll, until every one has closed its
+// listeners or within has passed. The cause is the health-check line that
+// says why, not a circuit: the check runs below the guard and trips none.
 func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool) []darkTimes {
 	out := make([]darkTimes, len(seen))
 	for time.Since(hungAt) < within {
 		done := true
 		for i, has := range seen {
-			if out[i].Open == 0 && (has("token pool's circuit is open") || has("context pool's circuit is open")) {
-				out[i].Open = time.Since(hungAt)
+			if out[i].Checks == 0 && has(darkCauseText) {
+				out[i].Checks = time.Since(hungAt)
 			}
-			if out[i].Dark == 0 && has("closing every listener") {
+			if out[i].Dark == 0 && has(darkCloseText) {
 				out[i].Dark = time.Since(hungAt)
 			}
 			done = done && out[i].Dark != 0
@@ -3305,45 +3318,61 @@ func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool)
 		if done {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(darkPoll)
 	}
 	return out
 }
 
-// describe says both times and the span between them.
+// darkWatch polls closed (whether port49d has said it closes its listeners)
+// every darkPoll until stop is closed, and sends on the channel it returns
+// when it first had, the zero time when it never did.
+func darkWatch(stop <-chan struct{}, closed func() bool) <-chan time.Time {
+	at := make(chan time.Time, 1)
+	go func() {
+		for {
+			if closed() {
+				at <- time.Now()
+				return
+			}
+			select {
+			case <-stop:
+				at <- time.Time{}
+				return
+			case <-time.After(darkPoll):
+			}
+		}
+	}()
+	return at
+}
+
+// describe says both times.
 func (d darkTimes) describe() string {
 	r := func(x time.Duration) time.Duration { return x.Round(100 * time.Millisecond) }
 	switch {
-	case d.Open == 0 && d.Dark == 0:
-		return "the circuit never opened and the listeners never closed"
+	case d.Checks == 0 && d.Dark == 0:
+		return "the health checks never failed close_after times and the listeners never closed"
 	case d.Dark == 0:
-		return fmt.Sprintf("circuit open at %s, listeners never closed", r(d.Open))
-	case d.Open == 0:
-		return fmt.Sprintf("listeners closed at %s, no circuit-open line before them", r(d.Dark))
+		return fmt.Sprintf("health checks failed at %s, listeners never closed", r(d.Checks))
+	case d.Checks == 0:
+		return fmt.Sprintf("listeners closed at %s, no health-check line before them", r(d.Dark))
 	}
-	return fmt.Sprintf("circuit open at %s, listeners closed at %s (open to dark %s)", r(d.Open), r(d.Dark), r(d.Dark-d.Open))
+	return fmt.Sprintf("health checks failed at %s, listeners closed at %s", r(d.Checks), r(d.Dark))
 }
 
-// verdict is what the times say against the configuration: dark within
-// darkBound of the hang, and, from the circuit opening, between hold_ttl and
-// hold_ttl + hold_ttl/6 + call_timeout (decision 35), with 5s for the
-// 250ms poll and the process.
+// verdict is what the times say against the configuration (decision 37): the
+// listeners close within healthDarkBound of the hang, and on the health
+// checks' line, not for some other reason.
 func (d darkTimes) verdict(who string) []string {
 	var out []string
-	bound := darkBound(labHoldTTL, labCallTimeout, labBreakerFailures)
+	bound := healthDarkBound(labHealthInterval, labCallTimeout, labCloseAfter)
 	if d.Dark == 0 {
 		return []string{who + " did not close its listeners within the wait"}
 	}
 	if d.Dark > bound {
 		out = append(out, fmt.Sprintf("%s closed its listeners %s after the hang, past the bound %s", who, d.Dark.Round(100*time.Millisecond), bound))
 	}
-	if d.Open == 0 {
-		out = append(out, who+" closed its listeners with no circuit-open line before them")
-		return out
-	}
-	if span, lo, hi := d.Dark-d.Open, labHoldTTL-5*time.Second, labHoldTTL+labHoldTTL/6+labCallTimeout+5*time.Second; span < lo || span > hi {
-		out = append(out, fmt.Sprintf("%s went dark %s after its circuit opened, outside hold_ttl to hold_ttl/6 later (%s to %s)",
-			who, span.Round(100*time.Millisecond), lo, hi))
+	if d.Checks == 0 {
+		out = append(out, who+" closed its listeners with no store-health-check line before them")
 	}
 	return out
 }

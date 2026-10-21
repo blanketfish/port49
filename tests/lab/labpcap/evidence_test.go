@@ -95,8 +95,22 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 			t.Errorf("%s: evidence is %d bytes, the capture is %d", base, len(out), len(in))
 			continue
 		}
+		// A patched record's TCP checksum is recomputed when the capture's was
+		// correct (a capture taken without offload, such as SR Linux's). Verify
+		// above has already checked those bytes are a correct checksum and that
+		// no other byte moved, so they are not credential bytes and not counted.
+		inFile, err := Parse(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cksum := map[int]bool{}
+		for _, r := range inFile.Records {
+			if fl, ok := FlowOf(inFile.Link, inFile.Bytes(r)); ok {
+				cksum[r.DataOff+fl.TCPOff+16], cksum[r.DataOff+fl.TCPOff+17] = true, true
+			}
+		}
 		for i := range in {
-			if in[i] != out[i] {
+			if in[i] != out[i] && !cksum[i] {
 				diff++
 			}
 		}

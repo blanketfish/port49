@@ -1,0 +1,16 @@
+# The mock tier (plan 11b): every vetted platform and firmware as a mock device against a
+# real in-process port49d. Go only: no Docker, no images, no lab captures.
+name: qual
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  mocks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: make qual

@@ -1,0 +1,56 @@
+# The qualification policy (plan 11b, decision 52 ruling 5): the broker's policy in every lab
+# conformance run (TestQualify) and every mock (TestQual), so a golden from the lab is the mock's
+# expectation. Changing it changes every golden: run `make qual-update`, review the diff; the next
+# release tag's lab run re-vets.
+platform_set: 1.3.0
+# nokia_srlinux has no platform_set 1.3.0 adapter: its devices are served by the generic adapter,
+# which renders no attribute, and SR Linux refuses a login whose authorization carries no priv-lvl
+# (priv-lvl-authorization true; tests/lab/results/L76-nokia_srlinux.md cells a and h). This block is a
+# policy override local to the qual policy, not an adapter: it renders only priv-lvl, as L76 measured
+# the device reads it (1 -> p49-read, 15 -> p49-admin). operator renders 1, not admin's 15: SR Linux
+# sends no per-command authorization (L76 cell b), so no port49 rule would narrow an operator at 15,
+# who would be device admin. operator stays read-only until a level between 1 and 15 is measured
+# (fails restrictive, as on XR; final review I1).
+# cisco_iosxr is the same case, with a different failure: XRd 26.1.1 logs a token user in on an empty
+# authorization reply and then answers every command "% This command is not authorized" without asking
+# port49d, so nothing is allowed (fails safe) and no command authorization is ever measured
+# (tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd-no-priv-lvl.md). `priv-lvl=15` alone is
+# the attribute that made it send command authorization: the same run passes every cell with only that
+# attribute rendered (tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md). Only admin was shown
+# (the one role the qual policy grants a login, `qual_admin`); readonly and operator map to the lower
+# level 1, which no run showed, so they can only grant XR less than the role says (spec §8, "User-editable,
+# day one": a `platforms:` block in the policy file).
+platforms:
+  cisco_iosxr:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+  nokia_srlinux:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+scopes:
+  - {name: all_devices, match: {}}
+  # Each platform is in exactly one of the next two (TestQualPolicyDeniesOncePerPlatform): a new
+  # platform goes in qual_other_platforms unless it is Junos. on_missing: include is what a scope
+  # carrying a deny must declare; the inventory always gives a platform.
+  - {name: qual_junos, match: {platform: juniper_junos}, on_missing: include}
+  - {name: qual_other_platforms, match: {platform: [arista_eos, cisco_iosxe, cisco_iosxr, cisco_nxos, nokia_srlinux]}, on_missing: include}
+roles:
+  - {name: qual_admin, privilege: admin, permit: ["**"]}
+  # The denied command is read-only everywhere, and the command_denied probe sends it. Junos
+  # matches keywords only (decision 27; platforms/keywords/1.3.0/juniper_junos.yaml): `show users`
+  # is no Junos keyword and would fail the whole reply closed (argument_deny), so Junos denies the
+  # keyword path `show system users`. Every other platform denies `show users`, the plan's cell.
+  - {name: qual_denies_junos, deny: ["show system users"]}
+  - {name: qual_denies_other, deny: ["show users"]}
+subjects:
+  # Both identities: the mock's broker issues alice@example.com (testpki.WriteLabWith), the lab's
+  # slice PKI alice@slice.port49.test (tests/lab/slice_test.go).
+  - {name: qual_operator, identity: ["user:alice@example.com", "user:alice@slice.port49.test"], username: qual01, token_ttl: 60s}
+grants:
+  - {subject: qual_operator, scope: all_devices, roles: [qual_admin], max_privilege: admin}
+  - {subject: qual_operator, scope: qual_junos, roles: [qual_denies_junos], max_privilege: admin}
+  - {subject: qual_operator, scope: qual_other_platforms, roles: [qual_denies_other], max_privilege: admin}

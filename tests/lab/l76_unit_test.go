@@ -1498,3 +1498,22 @@ func TestL76WriteTextEveryPairButAbsentAbsentIsASecurityFinding(t *testing.T) {
 		}
 	}
 }
+
+func TestL76WriteTextNeverSaysRefusedForAnUnknownChannel(t *testing.T) {
+	for _, c := range []struct{ first, second, want string }{
+		{l76WriteExists, l76WriteUnknown, "whether the second exec channel wrote could not be determined"},
+		{l76WriteUnknown, l76WriteExists, "whether the first exec channel wrote could not be determined"},
+	} {
+		got := l76WriteText(l76Write{Name: "first", State: c.first}, l76Write{Name: "second", State: c.second})
+		if strings.Contains(got, "refused the same write") {
+			t.Fatalf("%s/%s says refused for a channel whose state is unknown: %q", c.first, c.second, got)
+		}
+		if !strings.Contains(got, c.want) || !strings.Contains(got, "**Security finding:**") {
+			t.Fatalf("%s/%s: the finding is raised and names the undetermined channel: %q", c.first, c.second, got)
+		}
+	}
+	got := l76WriteText(l76Write{Name: "first", State: l76WriteExists}, l76Write{Name: "second", State: l76WriteAbsent})
+	if !strings.Contains(got, "the second exec channel refused the same write") {
+		t.Fatalf("(exists, absent) keeps its measured wording: %q", got)
+	}
+}

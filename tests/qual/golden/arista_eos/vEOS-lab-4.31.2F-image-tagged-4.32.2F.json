@@ -1,0 +1,89 @@
+{
+  "pending_lab": false,
+  "scenarios": {
+    "single_connection": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "priv-lvl=15",
+            "roles=network-admin"
+          ]
+        },
+        {
+          "step": "command_permitted",
+          "event": "author_pass_add"
+        },
+        {
+          "step": "command_denied",
+          "event": "author_fail"
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
+    "store_unavailable": {
+      "outcome": "falls_to_local",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_error"
+        }
+      ]
+    },
+    "token_login": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "priv-lvl=15",
+            "roles=network-admin"
+          ]
+        },
+        {
+          "step": "command_permitted",
+          "event": "author_pass_add"
+        },
+        {
+          "step": "command_denied",
+          "event": "author_fail"
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
+    "wrong_credential": {
+      "outcome": "login_refused",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_fail"
+        }
+      ]
+    }
+  }
+}

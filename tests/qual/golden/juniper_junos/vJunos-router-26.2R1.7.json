@@ -1,0 +1,141 @@
+{
+  "pending_lab": false,
+  "scenarios": {
+    "single_connection": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "user-permissions=clear network trace view view-configuration",
+            "deny-commands=^( *show +system +users *(\\|.*)?| *(junoscript|op)( .*)? *(\\|.*)?)$"
+          ]
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
+    "store_unavailable": {
+      "outcome": "falls_to_local",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_error"
+        }
+      ]
+    },
+    "tls_single_connection": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "user-permissions=clear network trace view view-configuration",
+            "deny-commands=^( *show +system +users *(\\|.*)?| *(junoscript|op)( .*)? *(\\|.*)?)$"
+          ]
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
+    "tls_store_unavailable": {
+      "outcome": "falls_to_local",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_error"
+        }
+      ]
+    },
+    "tls_token_login": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "user-permissions=clear network trace view view-configuration",
+            "deny-commands=^( *show +system +users *(\\|.*)?| *(junoscript|op)( .*)? *(\\|.*)?)$"
+          ]
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
+    "tls_unknown_ca": {
+      "outcome": "falls_to_local",
+      "steps": [
+        {
+          "step": "login",
+          "event": "tls_refused"
+        }
+      ]
+    },
+    "token_login": {
+      "outcome": "login_ok",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_pass"
+        },
+        {
+          "step": "authorize_session",
+          "event": "author_pass_add",
+          "args": [
+            "user-permissions=clear network trace view view-configuration",
+            "deny-commands=^( *show +system +users *(\\|.*)?| *(junoscript|op)( .*)? *(\\|.*)?)$"
+          ]
+        },
+        {
+          "step": "account_start",
+          "event": "acct_success"
+        },
+        {
+          "step": "account_stop",
+          "event": "acct_success"
+        }
+      ]
+    },
+    "wrong_credential": {
+      "outcome": "login_refused",
+      "steps": [
+        {
+          "step": "login",
+          "event": "authen_fail"
+        }
+      ]
+    }
+  }
+}

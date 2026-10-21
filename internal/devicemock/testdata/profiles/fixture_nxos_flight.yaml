@@ -1,0 +1,31 @@
+schema_version: 1
+platform: cisco_nxos
+lab_platform: cisco_nxos
+firmware: "Nexus 9300v 10.6(2)F"
+image: vrnetlab/cisco_n9kv:9300v64-10.6.2.F
+vetted: {date: 2026-10-19, commit: "000000000000", evidence: "", notes: [tests/lab/results/L73-cisco_nxos.md]}
+transports: [tls]
+scenarios: [flight_delay]
+stimulus:
+  connections: {mode: per_step, single_connect_flag: false}
+  tls:
+    client_hello:
+      legacy_version: 771
+      supported_versions: [772]
+      cipher_suites: [4866, 4867, 4865, 255]
+      supported_groups: [29, 23, 30, 25, 24]
+      signature_algorithms: [1027, 1283, 1539, 2055, 2056, 2057, 2058, 2059, 2052, 2053, 2054, 1025, 1281, 1537]
+      psk_key_exchange_modes: [1]
+      extensions: [11, 10, 35, 22, 23, 13, 43, 45, 51]
+    server_hello: {selected_version: 772, cipher_suite: 4865, hello_retry_request: false}
+    flight_delay: 5s
+    server_identity: chain_only
+    sources: [{note: tests/lab/results/L73-cisco_nxos.md, register: L73}]
+  sources: [{note: tests/lab/results/L73-cisco_nxos.md, register: L73}]
+  steps:
+    - {name: login, type: authen, minor_version: 1, fields: {action: login, authen_type: pap, service: login, priv_lvl: 1}, port: "0"}
+reactions:
+  - {step: login, on: authen_pass, then: next_step, status: measured, sources: [{note: tests/lab/results/L73-cisco_nxos.md, register: L73}]}
+acceptance: []
+engine_gaps: []
+golden: ""

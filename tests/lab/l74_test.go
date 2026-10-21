@@ -473,28 +473,52 @@ func TestRegions(t *testing.T) {
 	row := func(id, claim, observed string, agrees bool) {
 		rows = append(rows, regionRow{ID: id, Claim: claim, Observed: observed, Agrees: agrees})
 	}
+	only := os.Getenv("PORT49_LAB_REGIONS_ONLY")
+	var disagree []string
+	if regionRowWanted(only, "L74") {
+		guard()
+		l74CellA(w, row)
+		guard()
+		l74CellB(w, row)
+		guard()
+		l74CellsCToG(w, row)
+		guard()
+		l74CellH(w, row)
+		guard()
+		l74CellI(w, row)
+		sortRows(rows)
+		writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
+		// L74's disagreements do not stop L75: both notes are written, then the test fails.
+		disagree = disagreeingCells(rows)
+	}
+	// L79 is its own row on this harness (the 11a M4 carry-in): its note is written before L75 starts.
+	if regionRowWanted(only, "L79") {
+		guard()
+		var rows79 []regionRow
+		l79(w, func(id, claim, observed string, agrees bool) {
+			rows79 = append(rows79, regionRow{ID: id, Claim: claim, Observed: observed, Agrees: agrees})
+		})
+		sortRows(rows79)
+		writeRegionNote(t, w, "L79", l79Claim, rows79, nil, append(w.brokers[1:], w.daemons[1:]...))
+		if d79 := disagreeingCells(rows79); len(d79) > 0 {
+			disagree = append(disagree, "L79:"+strings.Join(d79, ",L79:"))
+		}
+	}
 	guard()
-	l74CellA(w, row)
-	guard()
-	l74CellB(w, row)
-	guard()
-	l74CellsCToG(w, row)
-	guard()
-	l74CellH(w, row)
-	guard()
-	l74CellI(w, row)
-	sortRows(rows)
-	writeRegionNote(t, w, "L74", l74Claim, rows, missed, append(w.brokers[1:], w.daemons[1:]...))
-	// L74's disagreements do not stop L75: both notes are written, then the test fails.
-	disagree := disagreeingCells(rows)
-	guard()
-	if d75 := l75(t, w); len(d75) > 0 {
-		disagree = append(disagree, "L75:"+strings.Join(d75, ",L75:"))
+	if regionRowWanted(only, "L75") {
+		if d75 := l75(t, w); len(d75) > 0 {
+			disagree = append(disagree, "L75:"+strings.Join(d75, ",L75:"))
+		}
 	}
 	if len(disagree) > 0 {
 		t.Fatalf("cells %v disagree with decision 51: the note records what was observed", disagree)
 	}
 }
+
+// regionRowWanted is whether the run covers row: all of them unless
+// PORT49_LAB_REGIONS_ONLY names one, so a rerun of L79 leaves L74's and L75's
+// notes and evidence as they were measured.
+func regionRowWanted(only, row string) bool { return only == "" || only == row }
 
 // sortRows orders rows by cell id.
 func sortRows(rows []regionRow) {
@@ -998,6 +1022,229 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		perr == nil && n == 1)
 	// Cleanup after the last cell: nothing is measured from it.
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
+}
+
+// l79Cell is one cell of L79, the row carried from 11a's final review: a write
+// from a region whose link is cut, delivered after the heal.
+type l79Cell struct {
+	ID, Row, Claim string
+	Cut            string
+	Heal           time.Duration
+}
+
+const l79Claim = "spec §15 L79 (decision 51's provisional ruling): whether a directory write sent from region 3 while its link is cut " +
+	"(iptables DROP, so the kernel keeps retransmitting) is delivered after the heal at 20s, inside the retransmission window."
+
+var l79Cells = []l79Cell{
+	{ID: "j", Row: "L79", Cut: "iptables", Heal: 20 * time.Second,
+		Claim: "a lift sent from region 3 during the cut, reported \"could not be lifted, and stands\": whether the mark is deleted after the heal; what port49 store status and the logs say"},
+	{ID: "k", Row: "L79", Cut: "iptables", Heal: 20 * time.Second,
+		Claim: "a revoke sent from region 3 during the cut, reported failed, with the mark lifted in region 1 meanwhile: whether the mark reappears after the heal (expected: it fails closed); what an operator sees"},
+}
+
+const (
+	l79Principal = "user:alice@example.com"
+	l79Who       = "alice@example.com"
+	l79Poll      = 250 * time.Millisecond
+	l79Window    = 60 * time.Second
+)
+
+// l79MarkIn is whether keys, a key-only listing of the marks, holds who's mark.
+func l79MarkIn(keys, who string) bool { return strings.Contains(keys, who) }
+
+// l79Timeline says what the polls after the heal saw, each taken every apart
+// from the heal: before is whether the mark stood when the heal came.
+func l79Timeline(before bool, polls []bool, every time.Duration) string {
+	for i, in := range polls {
+		if in != before {
+			if before {
+				return fmt.Sprintf("the mark was there at the heal and gone after %v", time.Duration(i)*every)
+			}
+			return fmt.Sprintf("the mark was absent at the heal and back after %v", time.Duration(i)*every)
+		}
+	}
+	if before {
+		return fmt.Sprintf("the mark was there at the heal and still there for %v", time.Duration(len(polls))*every)
+	}
+	return fmt.Sprintf("the mark was absent at the heal and never came back in %v", time.Duration(len(polls))*every)
+}
+
+// l79Marks is whether alice's mark is in the directory, read through the
+// members of regions 1 and 2 (during the cut) or all three.
+func (w *regionWorld) l79Marks(endpoints string) (bool, error) {
+	in, _, err := w.l79MarkRev(endpoints)
+	return in, err
+}
+
+// l79MarkRev is l79Marks with the mark's mod_revision (0 when absent).
+func (w *regionWorld) l79MarkRev(endpoints string) (bool, int64, error) {
+	js, err := w.dirMembers[1].ctl(endpoints, "get", "/port49/v1/rv/", "--prefix", "-w", "json")
+	if err != nil {
+		return false, 0, fmt.Errorf("%v: %s", err, w.leakless(js))
+	}
+	rev := markRevisionOf(js, l79Who)
+	return rev != 0, rev, nil
+}
+
+// l79PollAfterHeal reads the mark once a second for l79Window, from the heal.
+func (w *regionWorld) l79PollAfterHeal(healed time.Time) []bool {
+	var polls []bool
+	prev := false
+	for i := 0; time.Duration(i)*l79Poll < l79Window; i++ {
+		time.Sleep(time.Until(healed.Add(time.Duration(i) * l79Poll)))
+		if in, err := w.l79Marks(w.dirEndpoints()); err == nil {
+			prev = in
+		}
+		polls = append(polls, prev)
+	}
+	return polls
+}
+
+// l79Lines is up to n log lines of s naming sub, without a leaky line, each cut to 240 bytes.
+func (w *regionWorld) l79Lines(s, sub string, n int) string {
+	var out []string
+	for _, l := range strings.Split(w.leakless(s), "\n") {
+		if strings.Contains(l, sub) && len(out) < n {
+			out = append(out, l[:min(len(l), 240)])
+		}
+	}
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, " // ")
+}
+
+func oneLineOf(s string) string { return strings.ReplaceAll(s, "\n", " / ") }
+
+// l79Revoked is alice's mark written from region 1 and known to broker 3, the
+// state both cells start from. It is INVALID when it cannot be set up.
+func (w *regionWorld) l79Revoked() {
+	w.brokers[3].mark()
+	if out, code, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal); code != 0 {
+		w.t.Fatalf("INVALID: the revocation from region 1 before the cut: exit %d: %s", code, w.leakless(out))
+	}
+	if _, err := w.brokers[3].wait("a revocation of user:alice@example.com made elsewhere reached", 30*time.Second); err != nil {
+		w.t.Fatalf("INVALID: broker 3 never learned the mark before the cut: %v", err)
+	}
+	if in, err := w.l79Marks(w.dirEndpoints()); err != nil || !in {
+		w.t.Fatalf("INVALID: alice's mark is not in the directory before the cut (%v, %v)", in, err)
+	}
+}
+
+// l79Clean lifts alice's mark from region 3's broker (its own copy) and from
+// region 1, so the next cell starts clean; INVALID if the mark is still in the directory.
+func (w *regionWorld) l79Clean() {
+	w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", l79Principal, "--lift")
+	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal, "--lift")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		in, err := w.l79Marks(w.dirEndpoints())
+		if err == nil && !in {
+			return
+		}
+		if time.Now().After(deadline) {
+			w.t.Fatalf("INVALID: alice's mark could not be cleared after the cell (%v, %v)", in, err)
+		}
+		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal, "--lift")
+		time.Sleep(time.Second)
+	}
+}
+
+// l79 runs cells j and k. Every cut is healed by its deferred heal however a cell ends.
+func l79(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
+	w.guard()
+	l79CellJ(w, row)
+	w.guard()
+	l79CellK(w, row)
+}
+
+// healAt waits until cut + after, then heals.
+func (c *regionCutState) healAt(cutAt time.Time, after time.Duration) (time.Time, error) {
+	time.Sleep(time.Until(cutAt.Add(after)))
+	c.w.guard()
+	if err := c.healNow(); err != nil {
+		return time.Time{}, err
+	}
+	return time.Now(), nil
+}
+
+func l79CellJ(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
+	w.l79Revoked()
+	_, revBefore, _ := w.l79MarkRev(w.dirEndpoints())
+	cut := w.cutRegion3()
+	defer cut.heal()
+	cutAt := time.Now()
+	out, code, took := w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", l79Principal, "--lift")
+	inDuring, derr := w.l79Marks("https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379")
+	if derr != nil {
+		w.t.Fatalf("INVALID: reading the mark during the cut: %v", derr)
+	}
+	status, scode, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	w.brokers[3].mark()
+	w.daemons[3].mark()
+	healed, err := cut.healAt(cutAt, l79Cells[0].Heal)
+	if err != nil {
+		w.t.Fatalf("INVALID: the heal: %v", err)
+	}
+	polls := w.l79PollAfterHeal(healed)
+	after, _, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	_, markRev, _ := w.l79MarkRev(w.dirEndpoints())
+	stands := len(polls) > 0 && polls[len(polls)-1]
+	said := strings.Contains(out, "could not be lifted")
+	row("j", l79Cells[0].Claim,
+		fmt.Sprintf("lift from region 3 exit %d in %v: %s; the mark in the directory during the cut: %v; %s; store status in region 3 during the cut (exit %d): %s; after the heal: %s; broker 3's lines naming alice since the heal: %s; port49d 3's lines naming the directory since the heal: %s",
+			code, took.Round(time.Millisecond), w.leakless(oneLineOf(out)), inDuring, l79Timeline(true, polls, l79Poll),
+			scode, w.leakless(oneLineOf(status)), w.leakless(oneLineOf(after)),
+			w.l79Lines(w.brokers[3].said(), l79Who, 3), w.l79Lines(w.daemons[3].said(), "directory", 3))+
+			fmt.Sprintf("; the mark's revision before the cut %d and after the heal %d; \"are put back\" lines in broker 3's log since the heal: %d",
+				revBefore, markRev, strings.Count(w.brokers[3].said(), "are put back")),
+		code != 0 && said && inDuring && stands)
+	cut.heal()
+	w.l79Clean()
+}
+
+func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
+	w.l79Revoked()
+	cut := w.cutRegion3()
+	defer cut.heal()
+	cutAt := time.Now()
+	out, code, took := w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", l79Principal)
+	st1, _ := w.dirMembers[1].ctl("https://"+regionIP(1)+":2379,https://"+regionIP(2)+":2379", "endpoint", "status", "-w", "json")
+	revAtCut := revisionOf(st1)
+	_, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal, "--lift")
+	inDuring, derr := w.l79Marks("https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379")
+	if derr != nil {
+		w.t.Fatalf("INVALID: reading the mark during the cut: %v", derr)
+	}
+	st2, _ := w.dirMembers[1].ctl("https://"+regionIP(1)+":2379,https://"+regionIP(2)+":2379", "endpoint", "status", "-w", "json")
+	revAfterLift := revisionOf(st2)
+	if lcode != 0 || inDuring {
+		w.t.Fatalf("INVALID: the lift in region 1 left the mark (exit %d, mark %v)", lcode, inDuring)
+	}
+	status, scode, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	w.brokers[3].mark()
+	w.daemons[3].mark()
+	healed, err := cut.healAt(cutAt, l79Cells[1].Heal)
+	if err != nil {
+		w.t.Fatalf("INVALID: the heal: %v", err)
+	}
+	polls := w.l79PollAfterHeal(healed)
+	after, _, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	_, markRev, _ := w.l79MarkRev(w.dirEndpoints())
+	back := false
+	for _, in := range polls {
+		back = back || in
+	}
+	row("k", l79Cells[1].Claim,
+		fmt.Sprintf("revoke from region 3 exit %d in %v: %s; the lift in region 1 exit %d; the mark during the cut after the lift: %v; %s; store status in region 3 during the cut (exit %d): %s; after the heal: %s; broker 3's lines naming alice since the heal: %s; port49d 3's lines naming the directory since the heal: %s",
+			code, took.Round(time.Millisecond), w.leakless(oneLineOf(out)), lcode, inDuring, l79Timeline(false, polls, l79Poll),
+			scode, w.leakless(oneLineOf(status)), w.leakless(oneLineOf(after)),
+			w.l79Lines(w.brokers[3].said(), l79Who, 3), w.l79Lines(w.daemons[3].said(), "directory", 3))+
+			fmt.Sprintf("; the directory's revision at the cut %d, after the lift %d, and the mark's after the heal %d; \"are put back\" lines in broker 3's log since the heal: %d",
+				revAtCut, revAfterLift, markRev, strings.Count(w.brokers[3].said(), "are put back")),
+		code != 0 && back)
+	cut.heal()
+	w.l79Clean()
 }
 
 // regionEvidenceLog is a process's log as evidence: every line leaky names is

@@ -40,6 +40,14 @@ type l73Dialect struct {
 	// IOS XE marks a server Dead after a reset or a decline and answers logins
 	// locally, without a packet, until its dead time runs out.
 	RetryUnreached bool
+	// EarlyCapture starts cell h's capture before its configuration: the device
+	// opens its single connection when the commit lands (XR), so a capture
+	// started after it holds no SYN.
+	EarlyCapture bool
+	// HelpEvidence: a PORT49_L73_DIAG=help run commits its help screens (evidence/L73-<platform>/help-diag.txt).
+	HelpEvidence bool
+	// DiagSub2 is a second submode a help run asks in (XR: the AAA group's).
+	DiagSub2       l73DiagSub
 	InvalidCmds    []string // read into PORT49_L73_INVALID_DIR when the control login fails
 	RefusalCmds    []string // read into the INVALID dir when configuring the TLS client is refused
 	DiagOpAsks     []string // DiagAsks' operational-mode counterpart
@@ -173,6 +181,68 @@ var l73EOSDialect = l73Dialect{
 		"show management security ssl profile " + l73EOSProfile, "show tacacs"},
 }
 
+// l73XRDialect is XRd 26.1.1's, filled from the image's own help (Task 16): no
+// line is typed that its help has not listed. What the help showed that the
+// other families' did not: after `tacacs-server host A` the options come in
+// the order port, key, single-connection, timeout, tls; `key` and
+// `single-connection` end the line (only <cr> follows) and so does
+// `tls trustpoint <name>`, so each is its own line for the same host; the
+// trustpoint has `rsakeypair` and no EC key word, so the device key is RSA;
+// the AAA group's member is one address, `server A`, with no port; `commit`
+// ends every change. The ssh server asks are evidence only: XRd's sshd resets a
+// session over its rate limit, and the harness never configures it.
+var l73XRDialect = l73Dialect{
+	Family: "xr", Vendor: "IOS XR (XRd)", Probe: "cisco_xrd", RetryUnreached: true, EarlyCapture: true, HelpEvidence: true,
+	Enter: []string{"configure"}, Cleanup: []string{"abort"}, CfgMark: "(config",
+	Asks: []l73Ask{
+		{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"},
+			Need: []string{"tls", "port", "single-connection", "key"}},
+		{Ask: "tacacs-server host 192.0.2.71 tls ", Control: []string{"apply-group", "trustpoint"},
+			Need: []string{"trustpoint"}, Want: []string{"server-name-indicator"}},
+		{Ask: "tacacs-server host 192.0.2.71 tls trustpoint " + l73CertID + " ", Control: []string{"<cr>"}, Need: []string{"<cr>"}},
+		{Ask: "no tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "tls"}, Need: []string{"port", "tls"}},
+		{Ask: "aaa group server tacacs+ " + l73Group + " ", Control: []string{"server"}, Need: []string{"server"}},
+		{Ask: "crypto ca trustpoint " + l73CertID + " ", Control: []string{"enrollment", "rsakeypair"},
+			Need: []string{"enrollment", "rsakeypair", "subject-name", "crl", "serial-number", "ip-address"}},
+		{Ask: "domain ", Control: []string{"name", "lookup"}, Need: []string{"name"}},
+		{Ask: "do crypto key generate ", Control: []string{"rsa", "ecdsa"}, Need: []string{"rsa"}},
+		{Ask: "do crypto ca import " + l73CertID + " ", Control: []string{"certificate"}, Need: []string{"certificate"}},
+		{Ask: "ssh server ", Control: []string{"v2", "rate-limit"}, Evidence: true},
+		{Ask: "ssh server rate-limit ", Control: []string{"<"}, Evidence: true}},
+	VersionCmd: "show version | include Version", VersionHas: "26.1.1",
+	Enrol: "XR's terminal enrolment (`crypto key generate rsa`, `crypto ca authenticate`, `crypto ca enroll`, the request " +
+		"read off the screen, the lab CA's answer pasted at `crypto ca import ... certificate`; the trustpoint names the key by `rsakeypair`)",
+	Fallback:   "`aaa authentication login default group port49 local` (configs/xrd-startup.cfg)",
+	Revocation: "`crl optional` on both trustpoints",
+	LogCmd:     "show logging | include TACACS",
+	InvalidCmds: []string{"show running-config tacacs-server", "show tacacs details", "show tacacs server-groups",
+		"show running-config aaa", "show logging | include TACACS"},
+	ShowCmds: []string{"show running-config tacacs-server", "show running-config aaa", "show crypto ca certificates " + l73CertID,
+		"show tacacs details"},
+	// PORT49_L73_DIAG=help (the run ends INVALID): the enrolment's and the
+	// apply lines' help, then the AAA group's own.
+	DiagOpAsks: []string{"configure ", "crypto key generate ", "crypto key generate rsa ", "crypto ca ",
+		"crypto ca authenticate " + l73RootProfile + " ", "crypto ca enroll " + l73CertID + " ", "crypto ca import " + l73CertID + " ",
+		"show logging | ", "show running-config tacacs-server ", "show running-config aaa ",
+		"show crypto ca certificates " + l73CertID + " ", "show tacacs details | ", "show tacacs server-groups "},
+	DiagAsks: []string{"commit ", "crypto ca trustpoint " + l73CertID + " ", "tacacs-server host 172.100.100.1 ", "tacacs-server host 172.100.100.1 port 3049 ",
+		"tacacs-server host 172.100.100.1 tls ", "tacacs-server host 172.100.100.1 key ", "tacacs-server host 172.100.100.1 key 0 ",
+		"tacacs-server host 172.100.100.1 single-connection ",
+		"tacacs-server host 172.100.100.1 tls trustpoint " + l73CertID + " ",
+		"tacacs-server host 172.100.100.1 port 3049 tls trustpoint " + l73CertID + " ",
+		"no tacacs-server host 172.100.100.1 ", "no tacacs-server host 172.100.100.1 port 3049 ",
+		"aaa group server tacacs+ " + l73Group + " ", "aaa group server tacacs+ " + l73Group + " server ", "aaa group server tacacs+ " + l73Group + " server 172.100.100.1 ",
+		"no aaa group server tacacs+ " + l73Group + " server ",
+		"aaa authentication login default group " + l73Group + " ", "aaa authorization exec default group " + l73Group + " local ",
+		"aaa authorization commands default group " + l73Group + " local ",
+		"aaa accounting exec default start-stop group " + l73Group + " ", "aaa accounting commands default start-stop group " + l73Group + " "},
+	DiagSubIn: []string{"crypto ca trustpoint " + l73CertID},
+	DiagSubAsks: []string{"", "enrollment ", "enrollment terminal ", "rsakeypair ", "subject-name ", "serial-number ",
+		"ip-address ", "ip-address none ", "crl ", "crl optional "},
+	DiagSubOut: []string{"exit"},
+	DiagSub2:   l73DiagSub{In: []string{"aaa group server tacacs+ " + l73Group}, Asks: []string{""}, Out: []string{"exit"}},
+}
+
 var l73Dialects = map[string]l73Dialect{
 	"juniper_vjunos-router": l73JunosDialect,
 	"arista_ceos":           l73EOSDialect,
@@ -213,15 +283,7 @@ var l73Dialects = map[string]l73Dialect{
 			{Ask: l73IOLHost + "tls ", Control: []string{"port", "vrf", "single-connection", "timeout", "key"}, Need: []string{"port"},
 				Only: l73Ask{Ask: l73IOLHost}.listed("tls")},
 		}},
-	"cisco_xrd": {Family: "xr", Vendor: "IOS XR (XRd)", Probe: "cisco_xrd", HelpOnly: true,
-		Enter: []string{"configure"}, Cleanup: []string{"abort"}, CfgMark: "(config",
-		// The SSH server's rate limit is asked, never configured: XRd's sshd resets a
-		// session over its limit (L73's first run), so the image's own help for the
-		// option is recorded beside the measurement. "<" is what a range or <cr>
-		// line starts with; the whole help is kept either way.
-		Asks: []l73Ask{{Ask: "tacacs-server host 192.0.2.71 ", Control: []string{"key", "port", "timeout"}, Need: []string{"tls"}},
-			{Ask: "ssh server ", Control: []string{"v2", "rate-limit"}, Evidence: true},
-			{Ask: "ssh server rate-limit ", Control: []string{"<"}, Evidence: true}}},
+	"cisco_xrd": l73XRDialect,
 }
 
 // l73IOLHost is the IOL-XE host ask: the legacy `tacacs-server host`, with an
@@ -275,6 +337,8 @@ func l73CiscoLines(family string, prev *l73DeviceTLS, d l73DeviceTLS, has map[st
 		return append(out, l73NXOSApply(d, has)...)
 	case "eos":
 		return append(out, l73EOSApply(d)...)
+	case "xr":
+		return append(out, l73XRApply(d)...)
 	}
 	return nil
 }
@@ -282,6 +346,8 @@ func l73CiscoLines(family string, prev *l73DeviceTLS, d l73DeviceTLS, has map[st
 // l73CiscoUndo takes d's servers away and puts the startup config's back.
 func l73CiscoUndo(family string, d l73DeviceTLS, has map[string]bool) []string {
 	switch family {
+	case "xr":
+		return l73XRUndo(d)
 	case "iosxe":
 		// The L73 objects go first: 17.18.02 keeps one server object per address,
 		// so port49-host cannot take 172.100.100.1 back while l73-tls holds it.
@@ -660,7 +726,102 @@ func l73CiscoEnrol(family, node string) (prep []l73Dialog, enroll, load l73Dialo
 			Done: "END CERTIFICATE REQUEST"}
 		load = l73Dialog{Cmd: "crypto ca import " + l73CertID + " certificate",
 			Steps: []l73Step{{"certificate in PEM format:", "{LEAF}"}}}
+	case "xr":
+		return l73XREnrol(node)
 	}
+	return prep, enroll, load
+}
+
+// l73XRHost is one RFC 9887 or plain server on XR. Every option past `port`
+// ends the line it is on (the image's help offers only <cr> after `key`,
+// `single-connection` and `tls trustpoint <name>`), so each is a line of its
+// own for the same host, which the device merges.
+func l73XRHost(addr string, tls bool, port int, single, secret bool) []string {
+	h := "tacacs-server host " + addr
+	if port != 0 {
+		h += " port " + strconv.Itoa(port)
+	}
+	var out []string
+	if tls {
+		out = append(out, h+" tls trustpoint "+l73CertID)
+	}
+	if secret {
+		out = append(out, h+" key 0 "+labcreds.Key)
+	}
+	if single {
+		out = append(out, h+" single-connection")
+	}
+	return out
+}
+
+// l73XRNoHost removes a host: by address, and by address and port when the
+// run gave it one (the help of `no tacacs-server host A` lists `port`).
+func l73XRNoHost(addr string, port int) []string {
+	out := []string{"no tacacs-server host " + addr}
+	if port != 0 {
+		out = append(out, "no tacacs-server host "+addr+" port "+strconv.Itoa(port))
+	}
+	return out
+}
+
+// l73XRApply replaces the startup config's plain server with the RFC 9887 one
+// and puts it in the AAA group. The group's member goes in its own commit:
+// XR refuses to delete a server "still referenced in one of the server groups
+// and is the only server with the given IP address" when the same commit takes
+// the member out and puts it back (Task 16 run 4, a TLS host on port 300 in
+// place of the plain one on 49). The list ends in `commit`: XR applies nothing
+// before it.
+func l73XRApply(d l73DeviceTLS) []string {
+	out := []string{"aaa group server tacacs+ " + l73Group, "no server " + l73Server, "exit", "commit"}
+	out = append(out, l73XRNoHost(l73Server, 0)...)
+	out = append(out, l73XRHost(d.Server, true, d.Port, d.SingleConnection, d.Secret)...)
+	if d.Second != "" {
+		out = append(out, l73XRHost(d.Second, d.SecondTLS, d.SecondPort, false, d.Secret || !d.SecondTLS)...)
+	}
+	out = append(out, "aaa group server tacacs+ "+l73Group, "server "+d.Server)
+	if d.Second != "" {
+		out = append(out, "server "+d.Second)
+	}
+	return append(out, "exit", "commit")
+}
+
+// l73XRUndo takes the run's servers away and types the startup config's own
+// lines back (configs/xrd-startup.cfg), the members out in a commit of their
+// own as in l73XRApply.
+func l73XRUndo(d l73DeviceTLS) []string {
+	out := []string{"aaa group server tacacs+ " + l73Group, "no server " + d.Server}
+	if d.Second != "" {
+		out = append(out, "no server "+d.Second)
+	}
+	out = append(out, "exit", "commit")
+	out = append(out, l73XRNoHost(d.Server, d.Port)...)
+	if d.Second != "" {
+		out = append(out, l73XRNoHost(d.Second, d.SecondPort)...)
+	}
+	return append(out, "tacacs-server host "+l73Server+" key 0 "+labcreds.Key,
+		"aaa group server tacacs+ "+l73Group, "server "+l73Server, "exit", "commit")
+}
+
+// l73XREnrol is XR's terminal enrolment: two trustpoints (the lab root, and
+// the device's own, whose CA is the lab intermediate), an RSA key (the
+// trustpoint's only key word is `rsakeypair`), a request read off the screen,
+// the lab CA's answer pasted back. The exec commands are typed with `do`.
+// Only public certificates are typed.
+func l73XREnrol(node string) (prep []l73Dialog, enroll, load l73Dialog) {
+	paste := func(pem string) []l73Step {
+		return []l73Step{{"on a line by itself", pem + "quit"}, {"accept this certificate", "yes"}}
+	}
+	prep = l73Lines("crypto ca trustpoint "+l73RootProfile, "enrollment terminal", "crl optional", "exit",
+		"crypto ca trustpoint "+l73CertID, "enrollment terminal", "rsakeypair "+l73CiscoKey, "subject-name CN="+node,
+		"serial-number none", "ip-address none", "crl optional", "exit", "commit")
+	prep = append(prep,
+		l73Dialog{Cmd: "do crypto key generate rsa " + l73CiscoKey, Steps: []l73Step{{"replace them", "yes"}, {"modulus", ""}}},
+		l73Dialog{Cmd: "do crypto ca authenticate " + l73RootProfile, Steps: paste("{ROOT}")},
+		l73Dialog{Cmd: "do crypto ca authenticate " + l73CertID, Steps: paste("{INTER}")})
+	enroll = l73Dialog{Cmd: "do crypto ca enroll " + l73CertID, Steps: []l73Step{{"Password:", ""}, {"Re-enter Password:", ""},
+		{"Display Certificate Request to terminal", "yes"}, {"Redisplay enrollment request", "no"}},
+		Done: "END CERTIFICATE REQUEST"}
+	load = l73Dialog{Cmd: "do crypto ca import " + l73CertID + " certificate", Steps: []l73Step{{"on a line by itself", "{LEAF}quit"}}}
 	return prep, enroll, load
 }
 
@@ -700,11 +861,24 @@ var l73RefusalMarks = []string{"% Invalid", "% Incomplete", "% Unrecognized", "%
 // "Warning: Address not yet configured." on leaving a server object whose
 // `address ipv4` it silently dropped; a Warning is no refusal anywhere else.
 func l73ExtraMarks(family string) []string {
-	if family == "iosxe" {
+	switch family {
+	case "iosxe":
 		return []string{"Warning: Address not yet configured"}
+	case "xr":
+		// A failed commit reverts the whole change and leaves the session in
+		// configuration mode with it pending (Task 16 run 4).
+		return []string{"Failed to commit"}
 	}
 	return nil
 }
+
+// The waits between sessions of the loops that log in to a device again: XRd's
+// sshd resets a session past 60 a minute (L71-cisco_xrd.md), so no loop here
+// goes faster than one a second.
+const (
+	l73ReadyEvery     = 10 * time.Second // ready(): break-glass logins until the device is seen connecting
+	l73UnreachedEvery = 10 * time.Second // untilReached(): the measured login again while the capture holds no connection
+)
 
 // l73Retry runs attempt until it reaches a server, waiting `every` between
 // attempts for at most max by now's clock. An unreached attempt that port49d
@@ -872,4 +1046,79 @@ func l73HasWords(have, want []string) bool {
 		}
 	}
 	return true
+}
+
+// l73VersionAuths counts the permitted authorize_command records whose command
+// is `show version`: what a note cites to say the device sent command
+// authorization over a TLS connection.
+func l73VersionAuths(recs []map[string]any) int {
+	n := 0
+	for _, r := range recs {
+		if r["event"] != "authorize_command" || r["verdict"] != "permit" {
+			continue
+		}
+		req, _ := r["request"].(map[string]any)
+		vec, _ := req["vector"].([]any)
+		if len(vec) >= 2 && vec[0] == "show" && vec[1] == "version" {
+			n++
+		}
+	}
+	return n
+}
+
+// l73XRSSHPace is the least time between two SSH connection attempts to XRd:
+// its sshd resets a session over its rate limit, and two attempts 0.7 s apart
+// were reset in TestQualify on 2026-10-21 (the limit is 60 a minute, L71).
+const l73XRSSHPace = 2 * time.Second
+
+// l73PaceWait is how long to wait before an attempt at now when the last one
+// was at last (the zero time when there was none).
+func l73PaceWait(last, now time.Time, pace time.Duration) time.Duration {
+	if last.IsZero() || now.Sub(last) >= pace {
+		return 0
+	}
+	return pace - now.Sub(last)
+}
+
+// l73UnreachedWhy is what a family's unreached logins are known to be, in a
+// note's words: IOS XE's are answered locally while its servers are marked
+// Dead; no other family's cause is measured.
+func l73UnreachedWhy(family string) string {
+	if family == "iosxe" {
+		return "IOS XE answered those logins locally while its servers were marked Dead"
+	}
+	return "the device's cause for not connecting is not measured"
+}
+
+// l73DialectFacts are the operator facts one family's note carries, each with
+// the run that showed it. XR's two were seen while the dialect was developed
+// and are not measured by a committed run; the note says so.
+func l73DialectFacts(family string) []string {
+	if family != "xr" {
+		return nil
+	}
+	return []string{
+		"operator fact (XR, seen during development, not measured by a committed run): `crypto ca enroll` fails with " +
+			"\"Failed to enroll: ... Domain name is not configured\" until `domain name` is configured, so tests/lab/configs/xrd-startup.cfg sets one; " +
+			"the committed help for `domain name` is in evidence/L73-cisco_xrd/l71-probe.txt",
+		"operator fact (XR, seen during development, not measured by a committed run): a commit that removes a group member, removes " +
+			"and re-adds the host and moves its port fails with \"Cannot delete this server as it is still referenced in one of the server " +
+			"groups and is the only server with the given IP address\" (read with `show configuration failed`), so the member is removed in its own commit first",
+	}
+}
+
+// l73DiagSub is one submode a help run enters: the lines that enter it, the
+// asks typed inside it, and the lines that leave it.
+type l73DiagSub struct{ In, Asks, Out []string }
+
+// diagSubs lists the dialect's submodes: DiagSubIn/Asks/Out first, then DiagSub2.
+func (d l73Dialect) diagSubs() []l73DiagSub {
+	var subs []l73DiagSub
+	if len(d.DiagSubAsks) > 0 {
+		subs = append(subs, l73DiagSub{d.DiagSubIn, d.DiagSubAsks, d.DiagSubOut})
+	}
+	if len(d.DiagSub2.Asks) > 0 {
+		subs = append(subs, d.DiagSub2)
+	}
+	return subs
 }

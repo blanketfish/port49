@@ -1,0 +1,927 @@
+//go:build lab
+
+package lab
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+func TestQualRecordKeepsOnlyTheWhitelist(t *testing.T) {
+	in := map[string]any{"event": "redeem", "verdict": "permit", "reason": "context_matched",
+		"auth":          map[string]any{"method": "token", "credential_sha256": "ab12"},
+		"device":        map[string]any{"name": "nx1", "platform": "cisco_nxos", "transport": "tls", "cert_sha256": "cd34"},
+		"session":       map[string]any{"username": "qual01", "port": "0", "rem_addr": "172.100.100.1", "privilege": 1.0, "ctx_id": "x"},
+		"packet_fields": map[string]any{"action": "login", "authen_type": "pap", "service": "login", "priv_lvl": 1.0},
+		"server_msg":    "anything"}
+	out, ok := qualRecord(in, "qual01")
+	if !ok {
+		t.Fatal("a redeem record is kept")
+	}
+	b, _ := json.Marshal(out)
+	for _, never := range []string{"credential_sha256", "cert_sha256", "ab12", "cd34", "ctx_id", "server_msg", "qual01"} {
+		if strings.Contains(string(b), never) {
+			t.Fatalf("kept %q: %s", never, b)
+		}
+	}
+	for _, want := range []string{`"authen_type":"pap"`, `"port":"0"`, `"username":"{user}"`, `"rem_addr":"{rem_addr}"`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("lacks %s: %s", want, b)
+		}
+	}
+}
+
+// Whatever key carries a hash or a secret is dropped wherever it sits, top level or nested in a
+// kept block; only the key names are in the failure.
+func TestQualRecordNeverPassesAHashOrASecret(t *testing.T) {
+	leaky := []string{"credential_sha256", "token_sha256", "body_sha256", "token", "password", "response", "challenge", "body"}
+	in := map[string]any{"event": "authorize_session", "verdict": "permit"}
+	pf := map[string]any{"authen_type": "pap"}
+	for _, k := range leaky {
+		in[k] = "VALUE-" + k
+		pf[k] = "VALUE-" + k
+	}
+	in["packet_fields"] = pf
+	in["auth"] = map[string]any{"credential_sha256": "VALUE-auth"}
+	in["request"] = map[string]any{"service": "shell", "raw": []any{"service=shell"}, "token_sha256": "VALUE-req"}
+	in["record"] = map[string]any{"raw": []any{"task_id=7"}, "body_sha256": "VALUE-rec"}
+	in["reply"] = map[string]any{"attributes": []any{"priv-lvl=15"}, "password": "VALUE-reply"}
+	out, ok := qualRecord(in, "qual01")
+	if !ok {
+		t.Fatal("an authorize_session record is kept")
+	}
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "VALUE-") {
+		for _, k := range append(leaky, "auth", "req", "rec", "reply") {
+			if strings.Contains(string(b), "VALUE-"+k) {
+				t.Errorf("key %q passed the filter", k)
+			}
+		}
+		t.FailNow()
+	}
+}
+
+// An unvalidated record's body hash and source never pass, whichever diagnosis.
+func TestQualRecordDropsAnUnvalidatedBody(t *testing.T) {
+	out, ok := qualRecord(map[string]any{"event": "unvalidated", "unvalidated": map[string]any{
+		"diagnosis": "tls_refused", "transport": "tls", "tls_outcome": "unknown_ca",
+		"body_sha256": "VALUE-b", "source": "VALUE-s", "cert_sha256": "VALUE-c", "detail": "VALUE-d"}}, "qual01")
+	b, _ := json.Marshal(out)
+	if !ok || strings.Contains(string(b), "VALUE-") {
+		t.Fatalf("%v %s", ok, b)
+	}
+}
+
+func TestQualRecordKeepsEscalateAndDropsTheRest(t *testing.T) {
+	if _, ok := qualRecord(map[string]any{"event": "escalate"}, "qual01"); !ok {
+		t.Fatal("escalate is a validated request record")
+	}
+	// A bare unvalidated record is dropped; only the tls_refused diagnosis is
+	// kept (TestQualRecordKeepsATLSRefusalsOutcomeOnly below).
+	for _, ev := range []string{"mint", "unvalidated", "issue", "revoke", "authenticate"} {
+		if _, ok := qualRecord(map[string]any{"event": ev}, "qual01"); ok {
+			t.Fatalf("%s is not stimulus evidence", ev)
+		}
+	}
+}
+
+// Only the minted user becomes {user}: a device's own account (SR Linux's root,
+// on port unknown) keeps its name, so genprofile can tell the login's records
+// from the device's (re-review 3 Minor). A lab system account is no secret.
+func TestQualRecordTemplatesOnlyTheMintedUser(t *testing.T) {
+	out, _ := qualRecord(map[string]any{"event": "account", "session": map[string]any{"username": "root", "port": "unknown"}}, "qual01")
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"username":"root"`) {
+		t.Fatalf("%s", b)
+	}
+}
+
+// port49's own tls_refused record is kept as diagnosis, transport and
+// tls_outcome only: never its source, detail or cert_sha256 (re-review I-H).
+func TestQualRecordKeepsATLSRefusalsOutcomeOnly(t *testing.T) {
+	out, ok := qualRecord(map[string]any{"event": "unvalidated", "unvalidated": map[string]any{
+		"source": "172.100.100.31:40001", "diagnosis": "tls_refused", "transport": "tls", "tls_outcome": "unknown_ca",
+		"detail": "x509: certificate signed by unknown authority", "cert_sha256": strings.Repeat("c", 64)}}, "qual01")
+	b, _ := json.Marshal(out)
+	if !ok || string(b) != `{"diagnosis":"tls_refused","event":"unvalidated","tls_outcome":"unknown_ca","transport":"tls"}` {
+		t.Fatalf("%v %s", ok, b)
+	}
+	if _, ok := qualRecord(map[string]any{"event": "unvalidated", "unvalidated": map[string]any{"diagnosis": "bad_key"}}, "qual01"); ok {
+		t.Fatal("any other unvalidated record is dropped")
+	}
+}
+
+// A record holding a credential this run used is refused, and the message names the event, not the credential.
+func TestQualRecordsRefuseARecordHoldingASecret(t *testing.T) {
+	const secret = "s3cr3t-not-in-any-real-log"
+	recs := []map[string]any{{"event": "authorize_session", "verdict": "permit", "server_msg": "hi " + secret}}
+	_, err := qualRecords(recs, "qual01", []string{secret})
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("want a refusal that does not print the secret: %v", err)
+	}
+	if _, err := qualRecords(recs, "qual01", []string{"another"}); err != nil {
+		t.Fatalf("a clean record is kept: %v", err)
+	}
+}
+
+func TestQualRecordsRefuseASeedAnswer(t *testing.T) {
+	recs := []map[string]any{{"event": "redeem", "auth": map[string]any{"method": "lab"}}}
+	if _, err := qualRecords(recs, "qual01", nil); err == nil {
+		t.Fatal("a redeem a lab seed answered makes the run invalid")
+	}
+}
+
+func TestQualGateRefusesWhatEvidenceMustNotHold(t *testing.T) {
+	const secret = "tok-0123456789"
+	cases := map[string]string{
+		"secret.json":     `{"a":"` + secret + `"}`,
+		"hash.json":       `{"credential_sha256":"ab"}`,
+		"bodyhash.json":   `{"body_sha256":"ab"}`,
+		"password.json":   `{"password":"x"}`,
+		"pem.json":        `-----BEGIN CERTIFICATE-----`,
+		"longhex.json":    `{"a":"` + strings.Repeat("ab", 40) + `"}`,
+		"longbase64.json": `{"a":"` + strings.Repeat("Ab", 30) + `"}`,
+	}
+	for name, body := range cases {
+		bad := qualGate(map[string][]byte{name: []byte(body)}, []string{secret})
+		if len(bad) == 0 {
+			t.Errorf("%s passed the gate", name)
+		}
+		for _, m := range bad {
+			if strings.Contains(m, secret) {
+				t.Errorf("%s: the message prints the secret", name)
+			}
+		}
+	}
+	if bad := qualGate(map[string][]byte{"ok.json": []byte(`{"event":"redeem","reason":"context_matched"}`)}, []string{secret}); len(bad) != 0 {
+		t.Fatalf("clean evidence refused: %v", bad)
+	}
+}
+
+// qualRoot is the repository root; a pure test runs with the harness's root unset.
+func qualRoot(t *testing.T) string {
+	t.Helper()
+	r, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func denyRec(reason string, verdict string, vector ...string) map[string]any {
+	v := make([]any, len(vector))
+	for i, w := range vector {
+		v[i] = w
+	}
+	return map[string]any{"event": "authorize_command", "verdict": verdict, "reason": reason, "request": map[string]any{"vector": v}}
+}
+
+// command_denied proves the policy's deny: any other refusal of the command, or a refusal of another command, fails.
+func TestQualDenyProvenIsStrict(t *testing.T) {
+	good := denyRec("no_permit_dominates_deny", "deny", "show", "users")
+	if err := qualDenyProven([]map[string]any{good}, "show users"); err != nil {
+		t.Fatal(err)
+	}
+	for name, recs := range map[string][]map[string]any{
+		"privilege_exceeded":  {denyRec("privilege_exceeded", "deny", "show", "users")},
+		"no_rule_matched":     {denyRec("no_rule_matched", "deny", "show", "users")},
+		"another command":     {denyRec("no_permit_dominates_deny", "deny", "show", "clock")},
+		"permitted":           {denyRec("context_matched", "permit", "show", "users")},
+		"no record":           nil,
+		"mixed, one unproven": {good, denyRec("privilege_exceeded", "deny", "show", "users")},
+	} {
+		if err := qualDenyProven(recs, "show users"); err == nil {
+			t.Errorf("%s: the cell passed", name)
+		}
+	}
+}
+
+func TestQualPermitProven(t *testing.T) {
+	if err := qualPermitProven([]map[string]any{denyRec("context_matched", "permit", "show", "version")}, "show version"); err != nil {
+		t.Fatal(err)
+	}
+	if err := qualPermitProven([]map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "version")}, "show version"); err == nil {
+		t.Fatal("a denied command is not a permit")
+	}
+}
+
+// The command the cells send is the one tests/qual/qual-policy.yaml denies on that platform. Both
+// are read from the file: if the policy and the helper drift, this fails.
+func TestQualDeniedCommandMatchesThePolicy(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(qualRoot(t), "tests", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct {
+		Scopes []struct {
+			Name  string
+			Match struct {
+				Platform any
+			}
+		}
+		Roles []struct {
+			Name string
+			Deny []string
+		}
+		Grants []struct {
+			Scope string
+			Roles []string
+		}
+	}
+	if err := yaml.Unmarshal(raw, &pol); err != nil {
+		t.Fatal(err)
+	}
+	deny := map[string][]string{}
+	for _, r := range pol.Roles {
+		deny[r.Name] = r.Deny
+	}
+	// platform -> the commands the grants of scopes naming it deny
+	denied := map[string][]string{}
+	for _, g := range pol.Grants {
+		for _, s := range pol.Scopes {
+			if s.Name != g.Scope {
+				continue
+			}
+			var plats []string
+			switch p := s.Match.Platform.(type) {
+			case string:
+				plats = []string{p}
+			case []any:
+				for _, x := range p {
+					plats = append(plats, x.(string))
+				}
+			}
+			for _, p := range plats {
+				for _, r := range g.Roles {
+					denied[p] = append(denied[p], deny[r]...)
+				}
+			}
+		}
+	}
+	platforms := []string{"arista_eos", "cisco_iosxe", "cisco_iosxr", "cisco_nxos", "nokia_srlinux", "juniper_junos"}
+	for _, p := range platforms {
+		if got := denied[p]; !slices.Equal(got, []string{qualDeniedCommand(p)}) {
+			t.Errorf("%s: the policy denies %q, qualDeniedCommand says %q", p, got, qualDeniedCommand(p))
+		}
+	}
+	if len(denied) != len(platforms) {
+		t.Errorf("the policy scopes %d platforms, the test knows %d", len(denied), len(platforms))
+	}
+}
+
+func TestQualProbeCommandsSkipTheDenyOnJunos(t *testing.T) {
+	if got := qualProbeCommands("juniper_junos"); !slices.Equal(got, []string{"show version"}) {
+		t.Fatalf("%q", got)
+	}
+	if got := qualProbeCommands("cisco_nxos"); !slices.Equal(got, []string{"show version", "show users"}) {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestQualConfigAnswersFromThePolicyAlone(t *testing.T) {
+	lab, _ := os.ReadFile(filepath.Join(qualRoot(t), "tests", "lab", "port49d-lab.yaml"))
+	broker, _ := os.ReadFile(filepath.Join(qualRoot(t), "tests", "lab", "slice", "broker.yaml"))
+	frag, _ := os.ReadFile(filepath.Join(qualRoot(t), "tests", "qual", "qual-daemon.yaml"))
+	out, err := qualConfigYAML(string(lab), string(broker), string(frag), "/x/qual-policy.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, never := range []string{"session_attributes", "command_attributes", "deny_prefixes", "seed_token", "slice/policy.yaml"} {
+		if strings.Contains(out, never) {
+			t.Fatalf("the conformance config keeps %q: a seed or the lab instrument could answer", never)
+		}
+	}
+	for _, want := range []string{"policy_file: /x/qual-policy.yaml", "fault_file:", "staleness_ceiling: 0s"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("lacks %q", want)
+		}
+	}
+}
+
+func TestQualCellsCiteRows(t *testing.T) {
+	for _, c := range qualCells {
+		if len(c.Rows) == 0 {
+			t.Errorf("%s cites no register row", c.Name)
+		}
+	}
+}
+
+// The TLS cells' daemon keeps the conformance config's broker block (and so its policy_file) and adds tls_listener.
+func TestQualTLSDaemonYAMLKeepsTheBroker(t *testing.T) {
+	lab, _ := os.ReadFile(filepath.Join(qualRoot(t), "tests", "lab", "port49d-lab.yaml"))
+	broker, _ := os.ReadFile(filepath.Join(qualRoot(t), "tests", "lab", "slice", "broker.yaml"))
+	frag, _ := os.ReadFile(filepath.Join(qualRoot(t), "tests", "qual", "qual-daemon.yaml"))
+	base, err := qualConfigYAML(string(lab), string(broker), string(frag), "/x/qual-policy.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := l73DaemonYAML(base, l73Daemon{Inventory: "/x/inv.yaml", TLSListen: "172.100.100.1:300",
+		Cert: "/x/c", Key: "/x/k", ClientCA: "/x/ca", StateDir: "/x/s", Status: "{disabled: true}"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"policy_file: /x/qual-policy.yaml", "tls_listener:", "fault_file:"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// The results note is gated like L73's: a planted secret or hash value is refused, and the
+// message names the kind, never the value.
+func TestQualNoteGateRefusesASecretOrAHash(t *testing.T) {
+	const secret = "planted-secret-value-7"
+	hash := strings.Repeat("ab", 32)
+	for name, note := range map[string]string{
+		"secret": "the login used " + secret,
+		"hash":   `{"credential_sha256": "` + hash + `"}`,
+	} {
+		bad := qualNoteGate(note, []string{secret})
+		if len(bad) == 0 {
+			t.Errorf("%s: the note passed the gate", name)
+		}
+		for _, m := range bad {
+			if strings.Contains(m, secret) || strings.Contains(m, hash) {
+				t.Errorf("%s: the message prints the value: %q", name, m)
+			}
+		}
+	}
+	if bad := qualNoteGate("every cell passed", []string{secret}); len(bad) != 0 {
+		t.Fatalf("a clean note was refused: %v", bad)
+	}
+}
+
+// Junos sends no command authorization (L18), so neither command cell can be proven, whatever
+// the output: both are not_applicable. Elsewhere the strict checks decide.
+func TestQualCommandCellsOnJunosAreNotApplicable(t *testing.T) {
+	p, d, _ := qualCommandCells("juniper_junos", nil)
+	if p != "not_applicable" || d != "not_applicable" {
+		t.Fatalf("junos: %s %s", p, d)
+	}
+	good := []map[string]any{denyRec("context_matched", "permit", "show", "version"), denyRec("no_permit_dominates_deny", "deny", "show", "users")}
+	if p, d, _ := qualCommandCells("cisco_nxos", good); p != "pass" || d != "pass" {
+		t.Fatalf("nxos good: %s %s", p, d)
+	}
+	if p, d, _ := qualCommandCells("cisco_nxos", nil); p != "fail" || d != "fail" {
+		t.Fatalf("nxos empty: %s %s", p, d)
+	}
+	// not_applicable is what the records show, not a fiat (final review M2): a Junos or
+	// SR Linux firmware that starts sending command authorization fails both cells.
+	for _, plat := range []string{"juniper_junos", "nokia_srlinux"} {
+		p, d, why := qualCommandCells(plat, good)
+		if p != "fail" || d != "fail" || !strings.Contains(why, "2 authorize_command") {
+			t.Errorf("%s with authorize_command records: %s %s %q", plat, p, d, why)
+		}
+	}
+}
+
+// A gate hit, in the files or in the note, leaves what was on disk untouched: nothing new is written.
+func TestQualWriteEvidenceWritesNothingOnAHit(t *testing.T) {
+	const secret = "planted-secret-value-9"
+	dir := filepath.Join(t.TempDir(), "QUAL-x")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "old.json")
+	if err := os.WriteFile(old, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	clean := map[string][]byte{"run.json": []byte(`{"a":1}`)}
+	for name, c := range map[string]struct {
+		files map[string][]byte
+		note  string
+	}{
+		"note hit":  {clean, "mentions " + secret},
+		"files hit": {map[string][]byte{"run.json": []byte(secret)}, "fine"},
+	} {
+		bad := qualWriteEvidence(dir, c.files, c.note, []string{secret})
+		if len(bad) == 0 {
+			t.Fatalf("%s: not refused", name)
+		}
+		if _, err := os.Stat(old); err != nil {
+			t.Fatalf("%s: the old evidence was removed", name)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "run.json")); err == nil {
+			t.Fatalf("%s: new evidence was written", name)
+		}
+	}
+	if bad := qualWriteEvidence(dir, clean, "fine", []string{secret}); len(bad) != 0 {
+		t.Fatal(bad)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {
+		t.Fatal("a clean run writes its evidence")
+	}
+}
+
+// genprofile cuts the records into cells by their time, so every kept record
+// carries its ts, tls_refused ones included.
+func TestQualRecordKeepsItsTimestamp(t *testing.T) {
+	const at = "2026-10-20T12:00:01.000Z"
+	for _, in := range []map[string]any{
+		{"ts": at, "event": "redeem", "verdict": "permit"},
+		{"ts": at, "event": "unvalidated", "unvalidated": map[string]any{"diagnosis": "tls_refused", "tls_outcome": "unknown_ca"}},
+	} {
+		out, ok := qualRecord(in, "qual01")
+		if !ok || out["ts"] != at {
+			t.Fatalf("%v: kept %v with ts %v", in["event"], ok, out["ts"])
+		}
+	}
+}
+
+func TestQualRecordMasksALongRunInAnAccountingArgument(t *testing.T) {
+	path := "/components/component/properties/property[name='state']/"
+	out, _ := qualRecord(map[string]any{"event": "account", "record": map[string]any{
+		"raw": []any{"task_id=1", `cmd=set: [x] "` + path + `"<cr>`}}}, "qual01")
+	b, _ := json.Marshal(out)
+	if strings.Contains(string(b), "components/component") || !strings.Contains(string(b), "{long_run}") {
+		t.Fatalf("%s", b)
+	}
+	if bad := qualGate(map[string][]byte{"decisions.jsonl": b}, nil); len(bad) != 0 {
+		t.Fatalf("the gate still refuses it: %v", bad)
+	}
+}
+
+func TestQualSRLinuxSendsNoCommandAuthorizationEither(t *testing.T) {
+	p, d, why := qualCommandCells("nokia_srlinux", nil)
+	if p != "not_applicable" || d != "not_applicable" || !strings.Contains(why, "L76") {
+		t.Fatalf("srlinux: %s %s %q", p, d, why)
+	}
+	if got := qualProbeCommands("nokia_srlinux"); !slices.Equal(got, []string{"show version"}) {
+		t.Fatalf("%q", got)
+	}
+}
+
+// A known secret in an account argument is refused on the raw record, before the
+// {long_run} mask could rewrite the argument and hide it.
+func TestQualRecordsRefuseASecretInAnAccountArgBeforeTheMask(t *testing.T) {
+	const secret = "tok-0123456789abcdef0123456789abcdef0123456789"
+	recs := []map[string]any{{"event": "account", "record": map[string]any{"raw": []any{"task_id=1", "cmd=" + secret}}}}
+	if _, err := qualRecords(recs, "qual01", []string{secret}); err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("want a refusal that does not print the secret: %v", err)
+	}
+}
+
+// A command answered with a refusal ran nothing (the L78 grader once counted
+// any answer as a run).
+func TestQualRanReadsTheFirstLineOfTheOutput(t *testing.T) {
+	for out, want := range map[string]bool{
+		"Cisco IOS XR Software, Version 26.1.1\nCopyright":                       true,
+		"% This command is not authorized":                                       false,
+		"\n% This command is not authorized\nxrd1#":                              false,
+		"error: command not allowed":                                             false,
+		"":                                                                       false,
+		"% Invalid input detected":                                               false,
+		"% Authorization failed.":                                                false, // IOS XE
+		"% Authorization denied for command 'show version'":                      false, // EOS
+		"Error: No authorization to execute command show version":                false, // SR Linux
+		"Error: AAA authorization failed":                                        false, // NX-OS
+		"% Permission denied for the role":                                       false, // NX-OS's own role refusal (L80 must not read it as ran)
+		"error: permission denied":                                               false, // Junos
+		"                ^\nunknown command.":                                    false, // Junos without error: (caret line first)
+		"syntax error.":                                                          false, // Junos
+		"% Unavailable command (not supported on this hardware platform)":        false, // EOS
+		"% Unknown command or computer name, or unable to find computer address": false, // IOS XE
+	} {
+		if got, says := qualRan(out); got != want {
+			t.Errorf("%q: ran %v (%s), want %v", out, got, says, want)
+		}
+	}
+}
+
+// The plain single-connection cell on XRd types the keyword on its own line and commits it: the
+// image's help lists nothing after `single-connection`, and XR applies nothing before `commit`.
+func TestSingleConnectionOnXRdIsALineOfItsOwnAndCommitted(t *testing.T) {
+	ps := singleConnectionPlaces("cisco_xrd")
+	if len(ps) != 1 || !slices.Equal(ps[0].lines, []string{"tacacs-server host 172.100.100.1 single-connection", "commit"}) {
+		t.Fatalf("%+v", ps)
+	}
+}
+
+// XRd repeats a login it answered locally, no faster than once a second and
+// only for an authentication error; every other platform logs in once.
+func TestQualRetryUnreachedRepeatsOnlyXRdAuthRefusals(t *testing.T) {
+	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+	never := func() bool { return false }
+	calls := 0
+	n, err := qualRetryUnreached("cisco_xrd", func() error {
+		if calls++; calls < 3 {
+			return refused
+		}
+		return nil
+	}, never, time.Minute, sleep)
+	if n != 3 || err != nil || len(slept) != 2 || slept[0] < time.Second {
+		t.Fatalf("xrd: %d attempts, %v, slept %v", n, err, slept)
+	}
+	if n, _ := qualRetryUnreached("cisco_iosxe", func() error { return refused }, never, time.Minute, sleep); n != 1 {
+		t.Fatalf("iosxe tried %d times", n)
+	}
+	other := errors.New("dial tcp: i/o timeout")
+	if n, _ := qualRetryUnreached("cisco_xrd", func() error { return other }, never, time.Minute, sleep); n != 1 {
+		t.Fatalf("a non-auth error was retried %d times", n)
+	}
+	slept = nil
+	n, err = qualRetryUnreached("cisco_xrd", func() error { return refused }, never, 30*time.Second, sleep)
+	if err == nil || len(slept) != 3 {
+		t.Fatalf("the deadline: %d attempts, slept %v", n, slept)
+	}
+}
+
+// A wrong-credential login that never reached port49d proves nothing: only a
+// denied redeem record does.
+func TestQualDeniedNeedsADeniedRedeem(t *testing.T) {
+	deny := map[string]any{"event": "redeem", "verdict": "deny", "reason": "token_not_found"}
+	permit := map[string]any{"event": "redeem", "verdict": "permit"}
+	acct := map[string]any{"event": "account"}
+	if !qualDenied([]map[string]any{acct, deny}) {
+		t.Fatal("a denied redeem was not counted")
+	}
+	if qualDenied([]map[string]any{acct, permit}) || qualDenied(nil) {
+		t.Fatal("no denied redeem was counted as one")
+	}
+}
+
+// A port49 deny is a real refusal: a deny followed by a success must not be retried into a pass.
+func TestQualRetryUnreachedStopsOnAPort49Deny(t *testing.T) {
+	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
+	calls, denied := 0, false
+	n, err := qualRetryUnreached("cisco_xrd", func() error {
+		calls++
+		if calls == 2 {
+			denied = true // the second login reached port49d and was denied
+		}
+		if calls < 3 {
+			return refused
+		}
+		return nil
+	}, func() bool { return denied }, time.Minute, func(time.Duration) {})
+	if err == nil || n != 2 || !strings.Contains(err.Error(), "port49 denied") {
+		t.Fatalf("%d attempts, %v: a deny was retried into a pass", n, err)
+	}
+}
+
+// A deny whose record lands after the failed attempt was checked, followed by a
+// success, is still a deny: the whole retry window is checked once the loop ends.
+func TestQualRetryUnreachedChecksTheWholeWindowAfterASuccess(t *testing.T) {
+	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
+	calls, checks := 0, 0
+	n, err := qualRetryUnreached("cisco_xrd", func() error {
+		if calls++; calls < 3 {
+			return refused
+		}
+		return nil
+	}, func() bool {
+		// The deny record is only readable from the third look on, after the success.
+		checks++
+		return checks >= 3
+	}, time.Minute, func(time.Duration) {})
+	if err == nil || n != 3 || !strings.Contains(err.Error(), "port49 denied") {
+		t.Fatalf("%d attempts, %v: a late deny was passed", n, err)
+	}
+}
+
+// The XR and SR Linux notes carry the facts an operator needs at 3am; no other platform gets the section.
+func TestQualOperatorSectionNamesEachPlatformsFacts(t *testing.T) {
+	got := qualOperatorSection("cisco_iosxr")
+	for _, want := range []string{"priv-lvl", "aaa authorization commands default group", "Break-glass fails", "reasoning, not measurement"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the XR section lacks %q", want)
+		}
+	}
+	// SR Linux has no command fence (L76 cell b), so operator at 15 would be device admin (final review I1).
+	got = qualOperatorSection("nokia_srlinux")
+	for _, want := range []string{"priv-lvl-authorization true", "L76 cell b", "operator is read-only on SR Linux until a level between 1 and 15 is measured"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the SR Linux section lacks %q", want)
+		}
+	}
+	for _, p := range []string{"cisco_iosxe", "arista_eos", "juniper_junos", "cisco_nxos"} {
+		if qualOperatorSection(p) != "" {
+			t.Errorf("%s got an operator section", p)
+		}
+	}
+}
+
+// The block an operator section tells an operator to add is the one the run used:
+// tests/qual/qual-policy.yaml's platforms entry, read from the file.
+func TestQualOperatorSectionBlockIsThePolicys(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(qualRoot(t), "tests", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct {
+		Platforms map[string]any
+	}
+	if err := yaml.Unmarshal(raw, &pol); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"cisco_iosxr", "nokia_srlinux"} {
+		s := qualOperatorSection(p)
+		_, block, ok := strings.Cut(s, "```yaml\n")
+		block, _, ok2 := strings.Cut(block, "```")
+		if !ok || !ok2 {
+			t.Fatalf("%s: the section holds no yaml block", p)
+		}
+		var shown struct {
+			Platforms map[string]any
+		}
+		if err := yaml.Unmarshal([]byte(block), &shown); err != nil {
+			t.Fatal(err)
+		}
+		if a, b := fmt.Sprint(shown.Platforms[p]), fmt.Sprint(pol.Platforms[p]); a != b || len(shown.Platforms) != 1 {
+			t.Errorf("%s: the section shows %s, the qual policy has %s", p, a, b)
+		}
+	}
+}
+
+// A TLS login cell is graded on what arrived at port49 (review batch 2 C1, I1):
+// both commands decided is sent; neither asked is not_sent, NX-OS 10.6(2)F's
+// per-request TLS (L73 cell a), whose one authorize_command is for `end`; one
+// without the other, or a wrong verdict, is a problem.
+func TestQualTLSCommandsGradesWhatArrived(t *testing.T) {
+	permit := denyRec("context_matched", "permit", "show", "version")
+	deny := denyRec("no_permit_dominates_deny", "deny", "show", "users")
+	end := denyRec("context_matched", "permit", "end")
+	for _, c := range []struct {
+		name, platform string
+		recs           []map[string]any
+		state          string
+		problems       bool
+	}{
+		{"both decided", "cisco_nxos", []map[string]any{permit, deny, end}, "sent", false},
+		{"only end", "cisco_nxos", []map[string]any{end}, "not_sent", false},
+		{"nothing", "cisco_nxos", nil, "not_sent", false},
+		{"the permit alone", "cisco_nxos", []map[string]any{permit, end}, "sent", true},
+		{"the deny alone", "cisco_nxos", []map[string]any{deny}, "sent", true},
+		{"the denied command permitted", "cisco_nxos", []map[string]any{permit, denyRec("context_matched", "permit", "show", "users")}, "sent", true},
+		{"junos", "juniper_junos", nil, "not_applicable", false},
+	} {
+		state, problems := qualTLSCommands(c.platform, c.recs)
+		if state != c.state || (len(problems) > 0) != c.problems {
+			t.Errorf("%s: %s %q, want %s, problems %v", c.name, state, problems, c.state, c.problems)
+		}
+	}
+}
+
+// Every TLS login verdict names its connection mode first, and a login whose
+// commands never reached port49 says so: not a pass for command authorization.
+func TestQualTLSLoginVerdictNamesItsModeAndWhatArrived(t *testing.T) {
+	result, why := qualTLSLoginVerdict(qualPerRequest, "cisco_nxos", "not_sent", nil, []string{"Cisco Nexus Operating System (NX-OS) Software", "NAME LINE TIME IDLE PID COMMENT"})
+	for _, want := range []string{"per-request (the device default): login only:", "not sent", "not a pass for command authorization over TLS", "L73 cell a",
+		"`show version` said \"Cisco Nexus Operating System (NX-OS) Software\"", "`show users` said \"NAME LINE"} {
+		if result != "pass" || !strings.Contains(why, want) {
+			t.Errorf("%s: %q lacks %q", result, why, want)
+		}
+	}
+	if !strings.HasPrefix(why, "per-request (the device default):") {
+		t.Errorf("the mode is not named first: %q", why)
+	}
+	result, why = qualTLSLoginVerdict(qualSingleConnection, "cisco_nxos", "sent", nil, nil)
+	if result != "pass" || !strings.HasPrefix(why, "single-connection on:") || !strings.Contains(why, "`show users` denied") {
+		t.Errorf("%s %q", result, why)
+	}
+	result, why = qualTLSLoginVerdict(qualPerRequest, "cisco_nxos", "sent", []string{"no stop record"}, nil)
+	if result != "fail" || !strings.HasPrefix(why, "per-request (the device default):") || !strings.Contains(why, "no stop record") {
+		t.Errorf("%s %q", result, why)
+	}
+	result, why = qualTLSLoginVerdict(qualPerRequest, "juniper_junos", "not_applicable", nil, nil)
+	if result != "pass" || !strings.Contains(why, "L18") {
+		t.Errorf("%s %q", result, why)
+	}
+}
+
+// L80's cell is an observation (ruling 2026-10-21): the command the qual
+// policy denies, typed over per-request TLS that sends port49 no command
+// authorization, is graded observed with its outcome stated, never pass. Its
+// first output line says whether it ran; port49's records, counted on the
+// line, say whether port49 was asked. port49 permitting it, or the device
+// running it after port49 denied it, fails; so does no output.
+func TestQualDeniedCommandCellIsAnObservation(t *testing.T) {
+	end := denyRec("context_matched", "permit", "end")
+	for _, c := range []struct {
+		name     string
+		out      string
+		recs     []map[string]any
+		result   string
+		ran      bool
+		mentions []string
+	}{
+		{"ran, port49 not asked", "NAME     LINE         TIME         IDLE          PID COMMENT\nadmin    pts/0", []map[string]any{end}, "observed", true,
+			[]string{"denied command ran; port49 never asked (the device's local method, presumed)", "0 authorize_command records for `show users`, 1 for other commands", "first line \"NAME"}},
+		{"refused locally, port49 not asked", "% Authorization failed.", nil, "observed", false,
+			[]string{"denied command refused", "0 authorize_command records for `show users`", "first line \"% Authorization failed.\""}},
+		{"port49 asked and denied it", "% Authorization failed.", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "observed", false,
+			[]string{"denied command refused", "1 authorize_command records for `show users` (deny)"}},
+		{"no output", "", nil, "fail", false, []string{"no output"}},
+		{"port49 permitted it", "NAME LINE", []map[string]any{denyRec("context_matched", "permit", "show", "users")}, "fail", true, []string{"permitted"}},
+		{"ran although port49 denied it", "NAME LINE", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "fail", true, []string{"although port49 denied"}},
+	} {
+		result, ran, why := qualDeniedCommandVerdict("show users", c.out, c.recs)
+		if result != c.result || ran != c.ran {
+			t.Errorf("%s: %s ran=%v %q, want %s ran=%v", c.name, result, ran, why, c.result, c.ran)
+		}
+		for _, m := range c.mentions {
+			if !strings.Contains(why, m) {
+				t.Errorf("%s: %q lacks %q", c.name, why, m)
+			}
+		}
+		if result == "pass" {
+			t.Errorf("%s: L80's cell never reads pass", c.name)
+		}
+	}
+}
+
+// Review M10: a TLS cell logs in through loginWithin, which already types IOS
+// XE's commands at one pty, unless the dialect widens the dial; IOS XE's pty
+// path cannot honour a wider dial, so that pair is refused, never ignored.
+func TestQualTLSLoginHonoursTheDialOrRefuses(t *testing.T) {
+	if _, err := qualTLSLogin(&lab{p: platform{name: "cisco_iosxe"}}, l73Dialect{}); err != nil {
+		t.Fatalf("IOS XE at the default dial: %v", err)
+	}
+	if _, err := qualTLSLogin(&lab{p: platform{name: "cisco_nxos"}}, l73Dialects["cisco_nxos"]); err != nil {
+		t.Fatalf("NX-OS's widened dial: %v", err)
+	}
+	if _, err := qualTLSLogin(&lab{p: platform{name: "cisco_iosxe"}}, l73Dialect{LoginDial: 90 * time.Second}); err == nil ||
+		!strings.Contains(err.Error(), "1m30s") {
+		t.Fatalf("a widened IOS XE dial is refused, naming it: %v", err)
+	}
+}
+
+func TestQualTLSCellsCiteTheirRows(t *testing.T) {
+	if got := qualRows("tls_single_connection"); !slices.Equal(got, []string{"L15", "L73"}) {
+		t.Errorf("tls_single_connection cites %v", got)
+	}
+	if got := qualRows("tls_denied_command"); !slices.Equal(got, []string{"L80"}) {
+		t.Errorf("tls_denied_command cites %v", got)
+	}
+}
+
+// L80's note is the harness's own: the claim names the row and its cell, and
+// the observation is the per-request login's and the denied-command cell's
+// verdict lines, nothing of the other cells.
+func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
+	notes := []string{"- `token_login` (re-measures L1): **pass**. plain",
+		"- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): not sent",
+		"- `tls_denied_command` (re-measures L80): **observed**. per-request (the device default): **denied command ran; port49 never asked (the device's local method, presumed)**",
+		"- `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: sent"}
+	claim, obs, ok := qualL80Note(notes, "QUAL-Nexus-9300v-10.6-2-F-cisco_nxos")
+	if !ok {
+		t.Fatal("the cell ran: a note is written")
+	}
+	for _, want := range []string{"§15 L80", "`tls_denied_command`"} {
+		if !strings.Contains(claim, want) {
+			t.Errorf("claim lacks %q: %s", want, claim)
+		}
+	}
+	for _, want := range []string{"per-request (the device default): not sent", "**denied command ran; port49 never asked (the device's local method, presumed)**", "tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/"} {
+		if !strings.Contains(obs, want) {
+			t.Errorf("observation lacks %q: %s", want, obs)
+		}
+	}
+	for _, never := range []string{"plain", "single-connection on: sent"} {
+		if strings.Contains(obs, never) {
+			t.Errorf("observation carries another cell's line %q", never)
+		}
+	}
+	if _, _, ok := qualL80Note(notes[:2], "x"); ok {
+		t.Error("no tls_denied_command line: no L80 note")
+	}
+}
+
+// The device must not stay in single-connection mode when tls_single_connection
+// stops mid-cell (task 14b review): the undo runs on a Fatal's Goexit, and only
+// once when the cell also undoes it on its normal path.
+func TestQualUndoOnceRunsOnAFatalAndOnlyOnce(t *testing.T) {
+	n := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		undo := qualUndoOnce(func() { n++ })
+		defer undo()
+		runtime.Goexit() // what t.Fatal does in the cell
+	}()
+	<-done
+	if n != 1 {
+		t.Fatalf("after a Fatal mid-cell the undo ran %d times, want 1", n)
+	}
+	n = 0
+	func() {
+		undo := qualUndoOnce(func() { n++ })
+		defer undo()
+		undo() // the cell's own put-back
+	}()
+	if n != 1 {
+		t.Fatalf("the undo ran %d times on the normal path, want 1", n)
+	}
+}
+
+// The undo is registered before the switch is made (task 14b re-review N2): a
+// Fatal inside the switch itself, which may have half-applied it, still undoes.
+func TestQualSwitchedForUndoesAFatalInsideTheSwitch(t *testing.T) {
+	undone := 0
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		qualSwitchedFor(func() { runtime.Goexit() }, func() { undone++ }, func(func()) { t.Error("the body ran after a failed switch") })
+	}()
+	<-done
+	if undone != 1 {
+		t.Fatalf("a Fatal inside the switch undid %d times, want 1", undone)
+	}
+	undone = 0
+	qualSwitchedFor(func() {}, func() { undone++ }, func(undo func()) { undo() })
+	if undone != 1 {
+		t.Fatalf("the body's own undo and the deferred one ran %d times, want 1", undone)
+	}
+}
+
+// L80 names NX-OS 10.6(2)F alone: an image whose denied-command cell did not
+// run (command authorization was sent, so port49 decided) writes no L80 note.
+func TestQualL80NoteIsWrittenOnlyForAMeasuredCell(t *testing.T) {
+	notes := []string{
+		"- `tls_token_login` (re-measures L73): **pass**. per-request: a token login over RFC 9887",
+		"- `tls_denied_command` (re-measures L80): **not_run**. per-request TLS sent port49 command authorization, so port49 decided the denied command there",
+	}
+	if _, _, ok := qualL80Note(notes, "x"); ok {
+		t.Fatal("a not_run cell wrote an L80 note")
+	}
+	notes[1] = "- `tls_denied_command` (re-measures L80): **observed**. denied command refused"
+	if _, _, ok := qualL80Note(notes, "x"); !ok {
+		t.Fatal("an observed cell wrote no L80 note")
+	}
+}
+
+// L80 names NX-OS 10.6(2)F alone: no other image, and no other NX-OS firmware,
+// writes or overwrites L80's note.
+func TestQualL80AppliesToNXOS106Only(t *testing.T) {
+	if !qualL80Applies("cisco_nxos", "Nexus 9300v 10.6(2)F") {
+		t.Fatal("the row's own image")
+	}
+	for _, c := range [][2]string{{"cisco_nxos", "Nexus 9300v 10.7(1)F"}, {"cisco_nxos", "Nexus 9300v 10.4(2)F"}, {"arista_ceos", "Nexus 9300v 10.6(2)F"}, {"cisco_iosxe", "Catalyst 8000V 17.18.02"}} {
+		if qualL80Applies(c[0], c[1]) {
+			t.Errorf("%v wrote an L80 note", c)
+		}
+	}
+}
+
+// A re-measure whose denied-command cell was not observed writes no L80 note
+// (final review I2): the committed note, the closed row's measurement, stays
+// as it is, and the run is INVALID. Only an observed cell writes one.
+func TestQualL80NotMeasuredWritesNoNote(t *testing.T) {
+	notes := []string{"- `tls_token_login` x", "- `tls_denied_command` **not_run**: per-request TLS sent port49 command authorization"}
+	wrote := 0
+	write := func(claim, obs string) { wrote++ }
+	err := qualWriteL80(notes, "QUAL-x", nil, write)
+	want := "INVALID: L80 was re-measured and the denied-command cell was not observed (see the QUAL note's tls_denied_command line); tests/lab/results/L80-cisco_nxos.md is left as committed"
+	if wrote != 0 || err == nil || err.Error() != want {
+		t.Fatalf("wrote %d notes, %v", wrote, err)
+	}
+	if err := qualWriteL80(nil, "QUAL-x", nil, write); wrote != 0 || err == nil {
+		t.Fatalf("no verdict: wrote %d notes, %v", wrote, err)
+	}
+	notes[1] = "- `tls_denied_command` (re-measures L80): **observed**. denied command ran"
+	if err := qualWriteL80(notes, "QUAL-x", nil, write); err != nil || wrote != 1 {
+		t.Fatalf("an observed cell: wrote %d notes, %v", wrote, err)
+	}
+	// A note holding a run secret is not written either.
+	if err := qualWriteL80(notes, "QUAL-x", []string{"denied command ran"}, write); err == nil || wrote != 1 {
+		t.Fatalf("a gated note: wrote %d notes, %v", wrote, err)
+	}
+}
+
+// A store_unavailable cell passes only on port49's own `redeem deny store_unavailable`
+// for the token user (final review M1): a login that failed for any other reason, the
+// fault file not taking among them, measured nothing about the store.
+func TestQualStoreVerdictNeedsTheStoreUnavailableDeny(t *testing.T) {
+	refused := errors.New("ssh: unable to authenticate")
+	deny := func(user, reason string) map[string]any {
+		return map[string]any{"event": "redeem", "verdict": "deny", "reason": reason, "session": map[string]any{"username": user}}
+	}
+	cases := []struct {
+		err    error
+		recs   []map[string]any
+		result string
+	}{
+		{refused, []map[string]any{deny("qual01", "store_unavailable")}, "pass"},
+		{refused, nil, "fail"},
+		{refused, []map[string]any{deny("qual01", "token_not_found")}, "fail"},
+		{refused, []map[string]any{deny("breakglass", "store_unavailable")}, "fail"},
+		{nil, []map[string]any{deny("qual01", "store_unavailable")}, "fail"},
+		{refused, []map[string]any{deny("qual01", "store_unavailable"), {"event": "redeem", "verdict": "permit", "session": map[string]any{"username": "qual01"}}}, "fail"},
+	}
+	for i, c := range cases {
+		if got, why := qualStoreVerdict(c.err, c.recs, "qual01"); got != c.result || (got == "fail" && why == "") {
+			t.Errorf("case %d: got %s %q, want %s", i, got, why, c.result)
+		}
+	}
+}

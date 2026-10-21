@@ -73,6 +73,10 @@ func TestCommandStopIsResolvedAndCRStripped(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := m["record"].(map[string]any)
+	if pf, _ := m["packet_fields"].(map[string]any); len(pf) != 4 || pf["authen_method"] != "tacacsplus" || pf["authen_type"] != "ascii" ||
+		pf["service"] != "login" || pf["priv_lvl"] != float64(15) {
+		t.Fatalf("account record's packet_fields: %v", m["packet_fields"])
+	}
 	if m["event"] != "account" || m["flags"] != "stop" || m["attribution"] != "resolved" || m["task_id"] != "43" ||
 		m["principal"] != "user:alice@example.com" || m["session"].(map[string]any)["ctx_id"] != "ctx1" {
 		t.Fatalf("%v", m)
