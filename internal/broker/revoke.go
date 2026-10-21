@@ -89,6 +89,10 @@ type RevokeReport struct {
 	// decimal is set when the serial was typed in decimal digits alone,
 	// which is read as hex: openssl prints a small serial in decimal (M1).
 	decimal bool
+	// landedHere is set when this call's own write created a mark the store
+	// flagged landed_after_lift; a flagged mark that already stood is not
+	// this call's (task 2 re-review RR-M1).
+	landedHere bool
 	// workload is set when a certificate revocation's issuer is a workload's
 	// (Workload.Issued): the workload renews under a new serial (decision 40
 	// ruling 8).
@@ -291,6 +295,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	if got, err := b.readMark(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
+	rep.landedHere = rep.Mark.LandedAfterLift && rep.Mark.At.Equal(mark.At)
 	// A correction only: a lift the feed brought since the write is not
 	// undone, and the listener is not marked for it (review M2).
 	stands := b.Marks == nil || b.Marks.Put(rep.Mark)
@@ -716,9 +721,13 @@ func (r RevokeReport) markText() string {
 	fmt.Fprintf(&b, "revoked %s at %s: %d live context(s) marked, the unspent tokens under %d (device, username) "+
 		"key(s) deleted, %d held broker connection(s) closed; every mint %s is refused until `port49 revoke --lift %s`",
 		r.what(), r.Mark.At.UTC().Format(time.RFC3339), len(r.Contexts), r.TokenKeys, r.Connections, mints, r.flags())
-	if r.Mark.LandedAfterLift { // decision 51; task 2 review M5
+	switch { // decision 51; task 2 review M5, re-review RR-M1
+	case r.landedHere:
 		fmt.Fprintf(&b, "\nthis revocation landed over a lift of %s this process's marks feed had not yet shown: it "+
 			"stands everywhere, and whoever lifted it may not know; `port49 revoke --list` names the lift", r.what())
+	case r.Mark.LandedAfterLift:
+		fmt.Fprintf(&b, "\nan earlier revocation of %s, flagged landed_after_lift, stands; `port49 revoke --list` "+
+			"names its lift", r.what())
 	}
 	if r.Mark.Kind == store.RevocationPrincipal && strings.HasPrefix(r.Request.Principal, k8sid.Prefix) {
 		b.WriteString("\na token its cluster issued stays valid at port49 until its exp, or max_token_age after it was " +

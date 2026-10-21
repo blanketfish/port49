@@ -321,6 +321,29 @@ func TestARevokeTheStoreFlaggedSaysSoInItsReport(t *testing.T) {
 	}
 }
 
+// A revoke that changed nothing, a flagged mark already standing, never
+// claims this call landed over a lift: it says the earlier one stands
+// flagged (task 2 re-review RR-M1).
+func TestARevokeOverAnEarlierFlaggedMarkClaimsNoLanding(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Marks = store.NewMarks()
+	earlier := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.b.Now().Add(-time.Hour).Round(0),
+		Origin: "admin_socket uid 0", LandedAfterLift: true}
+	if err := f.st.PutRevocation(context.Background(), earlier); err != nil {
+		t.Fatal(err)
+	}
+	f.b.Marks.Set(earlier, true)
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := rep.Text()
+	if strings.Contains(text, "this revocation landed over a lift") || !strings.Contains(text, "\nan earlier "+
+		"revocation of "+alice+", flagged landed_after_lift, stands; `port49 revoke --list` names its lift") {
+		t.Fatalf("%s", text)
+	}
+}
+
 // flaggingPuts stores every revocation as the store does one put over a
 // lift its writer had not seen.
 type flaggingPuts struct{ store.Store }
