@@ -1272,12 +1272,17 @@ func (r *reloader) refresh(ctx context.Context) {
 	if err != nil {
 		r.stopped = true
 		r.metrics.PolicyRefreshPending.Set(1)
-		if errors.Is(err, store.ErrConflict) {
+		switch {
+		case errors.Is(err, broker.ErrPolicySwapped):
+			// A guard: swaps and passes both run on this goroutine.
+			r.sayf("policy refresh: the policy in force changed during the pass (%s so far); the next pass "+
+				"judges the rest; trying again in %s\n", summary(rep), refreshRetry)
+		case errors.Is(err, store.ErrConflict):
 			// Every context was visited and the store answered: only the busy
 			// ones, counted failed, are left.
 			r.sayf("policy refresh: %d context(s) still changing after every attempt keep "+
 				"their previous policy (%s); trying them again in %s\n", rep.Failed, summary(rep), refreshRetry)
-		} else {
+		default:
 			r.sayf("policy refresh stopped (%s so far): %v; the contexts not reached keep "+
 				"their previous policy; trying again in %s\n", summary(rep), err, refreshRetry)
 		}
@@ -1356,7 +1361,7 @@ func summary(rep broker.RefreshReport) string {
 		s += fmt.Sprintf("; %d of them on platforms that do not authorize commands keep their live session until "+
 			"logout (spec §13 decision 21)", rep.Unreached)
 	}
-	return s + fmt.Sprintf("; unspent tokens superseded on %d (device, username) key(s), %d token(s) kept",
+	return s + fmt.Sprintf("; unspent tokens superseded on %d (device, username) key(s), %d token(s) on changed keys kept",
 		rep.TokenKeys, rep.TokensKept)
 }
 

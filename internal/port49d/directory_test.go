@@ -199,7 +199,7 @@ func TestTheScheduledLoop(t *testing.T) {
 	}
 	// A pass that ends on busy contexts is not a broken refresh.
 	if !strings.Contains(out.String(), "context(s) still changing keep their last stamp; the next pass runs in 20ms") ||
-		strings.Contains(out.String(), "stopped (0 live context(s) updated, 0 revoked, 0 unchanged, 0 left on quarantined devices, 0 failed; unspent tokens superseded on 0 (device, username) key(s), 0 token(s) kept so far): the scheduled refresh: "+store.ErrConflict.Error()) {
+		strings.Contains(out.String(), "stopped (0 live context(s) updated, 0 revoked, 0 unchanged, 0 left on quarantined devices, 0 failed; unspent tokens superseded on 0 (device, username) key(s), 0 token(s) on changed keys kept so far): the scheduled refresh: "+store.ErrConflict.Error()) {
 		t.Fatalf("a busy pass is not said as busy: %q", out.String())
 	}
 	cancel()

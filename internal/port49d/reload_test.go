@@ -545,6 +545,22 @@ func TestABusyContextIsSaidAsBusyNotAsAStop(t *testing.T) {
 	}
 }
 
+// A token pass that met a policy swapped in after it began is said as that,
+// not as busy contexts that do not exist.
+func TestASwapDuringThePassIsSaidAsASwap(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.pass = func(context.Context, []broker.Prior) (broker.RefreshReport, error) {
+		return broker.RefreshReport{}, fmt.Errorf("deleting superseded tokens: %w", broker.ErrPolicySwapped)
+	}
+	rig.write(t, showOnly)
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := rig.out.String()
+	if strings.Contains(out, "still changing") || !strings.Contains(out, "the policy in force changed during the pass") ||
+		!strings.Contains(out, "trying again in 30s") || !rig.r.due.Equal(rig.now.Add(refreshRetry)) {
+		t.Fatalf("due %v, stderr %q", rig.r.due, out)
+	}
+}
+
 // A pass cut short because port49d is shutting down says nothing: "trying
 // again in 30s" from a process that is exiting is a line to chase for nothing.
 func TestAPassCancelledAtShutdownSaysNothing(t *testing.T) {

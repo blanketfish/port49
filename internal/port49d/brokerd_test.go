@@ -624,7 +624,7 @@ func TestTheSettlePassKeepsATokenMintedUnderThePolicyInForce(t *testing.T) {
 	if tokenStillRedeemable(t, rig, late) {
 		t.Fatal("the settle pass kept a token minted under the replaced policy")
 	}
-	if !strings.Contains(rig.out.String(), "key(s), 1 token(s) kept") {
+	if !strings.Contains(rig.out.String(), "key(s), 1 token(s) on changed keys kept") {
 		t.Fatalf("no line says the token kept:\n%s", rig.out.String())
 	}
 }
