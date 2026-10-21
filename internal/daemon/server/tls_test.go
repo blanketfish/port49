@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -416,10 +417,15 @@ func TestTLSAllowUnknownAdmits(t *testing.T) {
 }
 
 // acceptRefused dials raw TCP and wants the connection ended with no byte
-// from the server: nothing TLS was exchanged.
+// from the server: nothing TLS was exchanged. The server's reset can reach
+// the dialer before connect returns (about 1 run in 300), and that is the
+// same refusal.
 func acceptRefused(t *testing.T, addr string) {
 	t.Helper()
 	conn, err := net.Dial("tcp", addr)
+	if errors.Is(err, syscall.ECONNRESET) {
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
