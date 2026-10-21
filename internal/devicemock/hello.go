@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"slices"
 	"strings"
 	"time"
 )
@@ -49,14 +48,16 @@ func curve(g uint16) ecdh.Curve {
 	return nil
 }
 
-// hybridMLKEM is X25519MLKEM768 (RFC 9794 / draft-ietf-tls-ecdhe-mlkem): its
-// key share is the ML-KEM-768 encapsulation key then the X25519 public key.
+// hybridMLKEM is X25519MLKEM768 (draft-ietf-tls-ecdhe-mlkem; IANA TLS
+// Supported Groups 4588): its key share is the ML-KEM-768 encapsulation key
+// then the X25519 public key.
 const hybridMLKEM = 4588
 
-// keyShares is the key_share body for the first offered group the standard
-// library can generate. A device that leads with X25519MLKEM768 also sends an
-// X25519 share, as OpenSSL does; without the hybrid share port49's server would
-// answer with a HelloRetryRequest the device never got.
+// keyShares is the key_share body: one share, for the first offered group the
+// standard library can generate. A device that leads with X25519MLKEM768 sends
+// that share alone (cEOS 4.36.3M: L73-arista_ceos and its QUAL capture), so
+// no X25519 share is added: one would spare port49 a HelloRetryRequest the
+// device itself would get.
 func keyShares(groups []uint16) ([]byte, error) {
 	for _, g := range groups {
 		if g == hybridMLKEM {
@@ -68,15 +69,7 @@ func keyShares(groups []uint16) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			share := vec16(u16(nil, g), append(mk.EncapsulationKey().Bytes(), xk.PublicKey().Bytes()...))
-			if slices.Contains(groups, 29) {
-				xk2, err := ecdh.X25519().GenerateKey(rand.Reader)
-				if err != nil {
-					return nil, err
-				}
-				share = append(share, vec16(u16(nil, 29), xk2.PublicKey().Bytes())...)
-			}
-			return share, nil
+			return vec16(u16(nil, g), append(mk.EncapsulationKey().Bytes(), xk.PublicKey().Bytes()...)), nil
 		}
 		if c := curve(g); c != nil {
 			k, err := c.GenerateKey(rand.Reader)

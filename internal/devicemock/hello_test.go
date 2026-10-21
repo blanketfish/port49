@@ -97,6 +97,45 @@ func parseClientHelloForTest(raw []byte) (Hello, error) {
 	return h, nil
 }
 
+// keySharesForTest is extension 51's list as (group, key length) pairs.
+func keySharesForTest(t *testing.T, raw []byte) [][2]int {
+	t.Helper()
+	p := raw[5+4+2+32:]
+	p = p[1+int(p[0]):] // session id
+	p = p[2+int(binary.BigEndian.Uint16(p)):]
+	p = p[1+int(p[0]):] // compression
+	for e := p[2:]; len(e) >= 4; {
+		id, l := binary.BigEndian.Uint16(e), int(binary.BigEndian.Uint16(e[2:]))
+		if id == 51 {
+			var out [][2]int
+			for s := e[4+2 : 4+l]; len(s) >= 4; {
+				g, n := binary.BigEndian.Uint16(s), int(binary.BigEndian.Uint16(s[2:]))
+				out = append(out, [2]int{int(g), n})
+				s = s[4+n:]
+			}
+			return out
+		}
+		e = e[4+l:]
+	}
+	t.Fatal("no key_share extension")
+	return nil
+}
+
+// cEOS 4.36.3M leads with X25519MLKEM768 and sends that one share and no other
+// (L73-arista_ceos a.pcap and the QUAL capture: key_share [(4588, 1216)]). An
+// extra X25519 share would let port49 skip a HelloRetryRequest the device gets.
+func TestBuildClientHelloSendsOnlyTheHybridShareAHybridFirstDeviceSends(t *testing.T) {
+	h := nxosHello()
+	h.SupportedGroups = []uint16{4588, 29, 23}
+	raw, err := BuildClientHello(h, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := keySharesForTest(t, raw); !slices.Equal(got, [][2]int{{4588, 1216}}) {
+		t.Fatalf("key_share %v, want [[4588 1216]]: the device's shares, no invented one", got)
+	}
+}
+
 func TestBuildClientHelloKeepsTheDevicesOrderAndIsFreshEachTime(t *testing.T) {
 	a, err := BuildClientHello(nxosHello(), "127.0.0.1")
 	if err != nil {
