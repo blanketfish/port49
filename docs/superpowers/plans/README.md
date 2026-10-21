@@ -7456,7 +7456,8 @@ when Task 14's review found a security-relevant device fact.
     never asked about it (0 `authorize_command` records for it). With single-connection on, port49 was
     asked and denied it. The cause, the device's local fallback, is presumed and not measured. The page row
     reads "partial". `tests/lab/regress.yaml` has an entry, `L80-nxos106`, and a run that observes nothing
-    is INVALID and writes a not-measured note (`0f6febe6`). Other NX-OS images do not overwrite the note.
+    is INVALID and writes no L80 note, so the committed one stands (final review I2). Other NX-OS images do
+    not overwrite the note.
   - L35, L37 and L66 passed on the rerun (L35 at `fee22706`, judging a dark port49d by decision 37).
     L29-reload's vJunos refused phase is a device flake, retry it.
 - **Decision pending (Ryan): NX-OS 10.6 over per-request TLS.** A port49 deny does not hold. The controller

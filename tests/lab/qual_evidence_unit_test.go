@@ -866,18 +866,27 @@ func TestQualL80AppliesToNXOS106Only(t *testing.T) {
 	}
 }
 
-// A re-measure whose denied-command cell was not observed still writes L80's
-// note, saying it was not measured, so the regress diff shows the change.
-func TestQualL80NotMeasuredSaysSo(t *testing.T) {
+// A re-measure whose denied-command cell was not observed writes no L80 note
+// (final review I2): the committed note, the closed row's measurement, stays
+// as it is, and the run is INVALID. Only an observed cell writes one.
+func TestQualL80NotMeasuredWritesNoNote(t *testing.T) {
 	notes := []string{"- `tls_token_login` x", "- `tls_denied_command` **not_run**: per-request TLS sent port49 command authorization"}
-	if _, _, ok := qualL80Note(notes, "x"); ok {
-		t.Fatal("not_run is no observation")
+	wrote := 0
+	write := func(claim, obs string) { wrote++ }
+	err := qualWriteL80(notes, "QUAL-x", nil, write)
+	want := "INVALID: L80 was re-measured and the denied-command cell was not observed (see the QUAL note's tls_denied_command line); tests/lab/results/L80-cisco_nxos.md is left as committed"
+	if wrote != 0 || err == nil || err.Error() != want {
+		t.Fatalf("wrote %d notes, %v", wrote, err)
 	}
-	claim, obs := qualL80NotMeasured(notes, "QUAL-x")
-	if claim == "" || !strings.Contains(obs, "Not measured this run") || !strings.Contains(obs, "INVALID") || !strings.Contains(obs, "not_run") {
-		t.Fatalf("%q", obs)
+	if err := qualWriteL80(nil, "QUAL-x", nil, write); wrote != 0 || err == nil {
+		t.Fatalf("no verdict: wrote %d notes, %v", wrote, err)
 	}
-	if _, obs := qualL80NotMeasured(nil, "QUAL-x"); !strings.Contains(obs, "no verdict") {
-		t.Fatalf("%q", obs)
+	notes[1] = "- `tls_denied_command` (re-measures L80): **observed**. denied command ran"
+	if err := qualWriteL80(notes, "QUAL-x", nil, write); err != nil || wrote != 1 {
+		t.Fatalf("an observed cell: wrote %d notes, %v", wrote, err)
+	}
+	// A note holding a run secret is not written either.
+	if err := qualWriteL80(notes, "QUAL-x", []string{"denied command ran"}, write); err == nil || wrote != 1 {
+		t.Fatalf("a gated note: wrote %d notes, %v", wrote, err)
 	}
 }

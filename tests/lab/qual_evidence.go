@@ -680,22 +680,21 @@ func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 	return claim, obs, true
 }
 
-// qualL80NotMeasured is L80's note for a run whose denied-command cell was not
-// observed (commands now reach port49, or the device sends none): it says so,
-// with the cell's own verdict line, so a re-measure never leaves the old
-// observation looking confirmed. The caller also grades the run INVALID.
-func qualL80NotMeasured(notes []string, evidence string) (claim, obs string) {
-	why := "the `tls_denied_command` cell gave no verdict"
-	for _, n := range notes {
-		if strings.HasPrefix(n, "- `tls_denied_command` ") {
-			why = n
-		}
+// qualWriteL80 writes L80's note through write when the run observed the
+// denied-command cell. Otherwise it writes nothing and returns the INVALID
+// error: a re-measure that observed nothing must never replace the closed
+// row's note, which a later commit would then carry (final review I2).
+func qualWriteL80(notes []string, evidence string, secrets []string, write func(claim, obs string)) error {
+	claim, obs, ok := qualL80Note(notes, evidence)
+	if !ok {
+		return errors.New("INVALID: L80 was re-measured and the denied-command cell was not observed " +
+			"(see the QUAL note's tls_denied_command line); tests/lab/results/L80-cisco_nxos.md is left as committed")
 	}
-	claim = "Whether a command port49's policy denies runs over per-request TLS when the device sends port49 no command authorization " +
-		"(policy engine spec §15 L80), re-measured by TestQualify's `tls_denied_command` cell."
-	obs = "Not measured this run: the cell did not observe the denied command's outcome, so the earlier observation is neither confirmed nor withdrawn. " +
-		"The run is INVALID.\n\n" + why + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/`.", evidence)
-	return claim, obs
+	if bad := qualNoteGate(claim+"\n"+obs, secrets); len(bad) > 0 {
+		return fmt.Errorf("INVALID: the L80 note was not written:\n  %s", strings.Join(bad, "\n  "))
+	}
+	write(claim, obs)
+	return nil
 }
 
 // qualSwitchedFor runs body between do and undo with undo already deferred when

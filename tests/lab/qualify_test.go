@@ -880,17 +880,11 @@ func (q *qualEnv) write() {
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
 	if qualL80Applies(q.run.Platform, q.run.Firmware) {
-		ev := "QUAL-" + q.slug + "-" + q.l.p.name
-		claim, obs, ok := qualL80Note(q.notes, ev)
-		if !ok {
-			claim, obs = qualL80NotMeasured(q.notes, ev)
-		}
-		if bad := qualNoteGate(claim+"\n"+obs, secrets); len(bad) > 0 {
-			q.t.Fatalf("INVALID: the L80 note was not written:\n  %s", strings.Join(bad, "\n  "))
-		}
-		q.l.result(q.t, "L80", claim, obs)
-		if !ok {
-			q.t.Fatalf("INVALID: L80 was re-measured and the denied-command cell was not observed; the note says so")
+		err := qualWriteL80(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name, secrets, func(claim, obs string) {
+			q.l.result(q.t, "L80", claim, obs)
+		})
+		if err != nil {
+			q.t.Fatal(err)
 		}
 	}
 }
