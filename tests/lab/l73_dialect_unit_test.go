@@ -966,8 +966,8 @@ func TestL73XRdAsksTheSSHRateLimitHelpAndConfiguresNothing(t *testing.T) {
 			t.Errorf("%q must be recorded as evidence, not graded", a.Ask)
 		}
 	}
-	if !d.HelpOnly {
-		t.Error("the XRd row is help only")
+	if d.HelpOnly {
+		t.Error("the XRd row is a full L73 row (Task 16)")
 	}
 }
 
@@ -1027,8 +1027,295 @@ func TestL73IOSXERetriesUnreachedLogins(t *testing.T) {
 		t.Error("IOS XE does not retry an unreached login")
 	}
 	for name, d := range l73Dialects {
-		if d.Family != "iosxe" && d.RetryUnreached {
+		// XR holds a TACACS+ server down too (`holddown-time` in its help).
+		if d.Family != "iosxe" && d.Family != "xr" && d.RetryUnreached {
 			t.Errorf("%s retries", name)
+		}
+	}
+}
+
+// l73XRHelp holds the words XRd 26.1.1's own help listed, in the Task 16 help
+// runs (PORT49_L73_DIAG=help, 2026-10-21; the full answers are in the L73 note's
+// evidence). Each block is the line typed with `?` after it, addresses and
+// numbers written ADDR and NUM, and the words the answer listed. The scrub
+// that hides a secret's value also hides the word after `key` in a transcript,
+// so the blocks for `crypto key generate` are written from the visible answer.
+const l73XRHelp = `
+tacacs-server host ADDR
+  apply-group exclude-group holddown-time key port single-connection single-connection-idle-timeout timeout tls <cr>
+tacacs-server host ADDR port NUM
+  apply-group exclude-group holddown-time key single-connection single-connection-idle-timeout timeout tls <cr>
+tacacs-server host ADDR tls
+  apply-group exclude-group server-name-indicator trustpoint <cr>
+tacacs-server host ADDR tls trustpoint VAL
+  <cr>
+tacacs-server host ADDR port NUM tls trustpoint VAL
+  <cr>
+tacacs-server host ADDR key
+  0 6 7 Encrypt6 LINE clear encrypted
+tacacs-server host ADDR key 0
+  LINE
+tacacs-server host ADDR single-connection
+  <cr>
+no tacacs-server host ADDR
+  apply-group exclude-group holddown-time key port single-connection single-connection-idle-timeout timeout tls <cr>
+no tacacs-server host ADDR port NUM
+  apply-group exclude-group holddown-time key single-connection single-connection-idle-timeout timeout tls <cr>
+aaa group server tacacs+ VAL
+  apply-group exclude-group holddown-time server server-private vrf <cr>
+aaa group server tacacs+ VAL server ADDR
+  <cr>
+no aaa group server tacacs+ VAL server
+  A.B.C.D
+crypto ca trustpoint VAL
+  apply-group auto-enroll crl description enrollment exclude-group extended-key-usage ip-address message-digest method query re-enrollment renewal-message-type rsakeypair serial-number sftp-username ssl-profile subject-name vrf <cr>
+crypto ca trustpoint VAL enrollment
+  authentication-profile local retry terminal url
+crypto ca trustpoint VAL enrollment terminal
+  <cr>
+crypto ca trustpoint VAL rsakeypair
+  WORD
+crypto ca trustpoint VAL subject-name
+  LINE
+crypto ca trustpoint VAL serial-number
+  none <cr>
+crypto ca trustpoint VAL ip-address none
+  <cr>
+crypto ca trustpoint VAL crl
+  optional
+crypto ca trustpoint VAL crl optional
+  <cr>
+crypto key generate
+  dsa ecdsa ed25519 rsa
+crypto key generate rsa
+  WORD general-keys system-enroll-key system-root-key usage-keys <cr>
+crypto ca
+  authenticate cancel-enroll crl enroll import openssh trustpool
+crypto ca authenticate VAL
+  WORD <cr>
+crypto ca enroll VAL
+  WORD <cr>
+crypto ca import VAL
+  certificate
+configure
+  exclusive terminal <cr>
+commit
+  best-effort comment confirmed force label replace save-running script-verification show-error <cr>
+aaa authentication login default group VAL
+  group line local <cr>
+aaa authorization exec default group VAL local
+  group none <cr>
+aaa authorization commands default group VAL local
+  group none <cr>
+aaa accounting exec default start-stop group VAL
+  group none <cr>
+aaa accounting commands default start-stop group VAL
+  group local none <cr>
+?
+  commit do exit no server
+`
+
+// l73XRHelpEntries parses l73XRHelp: the typed prefix of each block and the
+// set of words its answer listed.
+func l73XRHelpEntries(t *testing.T) (answers map[string]map[string]bool, words map[string]bool) {
+	t.Helper()
+	answers, words = map[string]map[string]bool{}, map[string]bool{}
+	lines := strings.Split(strings.TrimSpace(l73XRHelp), "\n")
+	for i := 0; i+1 < len(lines); i += 2 {
+		typed, listed := strings.TrimSpace(lines[i]), strings.Fields(lines[i+1])
+		answers[typed] = map[string]bool{}
+		for _, w := range strings.Fields(typed) {
+			words[w] = true
+		}
+		for _, w := range listed {
+			answers[typed][w] = true
+			words[w] = true
+		}
+	}
+	return answers, words
+}
+
+var (
+	l73XRIP  = regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`)
+	l73XRNum = regexp.MustCompile(`^\d+$`)
+)
+
+// l73XRValue reports whether a typed token is a value the lab chooses and not
+// a keyword: an address, a number, one of the lab's own names, or the subject.
+func l73XRValue(tok string) bool {
+	switch tok {
+	case l73Group, l73CertID, l73RootProfile, l73CiscoKey, labcreds.Key:
+		return true
+	}
+	return l73XRIP.MatchString(tok) || l73XRNum.MatchString(tok) || strings.HasPrefix(tok, "CN=")
+}
+
+// l73XRNormal writes a typed line the way l73XRHelp's blocks are keyed.
+func l73XRNormal(line string) string {
+	var out []string
+	for _, tok := range strings.Fields(line) {
+		switch {
+		case l73XRIP.MatchString(tok):
+			out = append(out, "ADDR")
+		case l73XRNum.MatchString(tok):
+			out = append(out, "NUM")
+		case tok == l73Group || tok == l73CertID || tok == l73RootProfile || tok == l73CiscoKey:
+			out = append(out, "VAL")
+		default:
+			out = append(out, tok)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func l73XRTypedLines() []string {
+	var lines []string
+	for _, d := range l73TypedDevices() {
+		lines = append(lines, l73XRApply(d)...)
+		lines = append(lines, l73XRUndo(d)...)
+	}
+	prep, enroll, load := l73XREnrol("xrd1")
+	for _, it := range append(prep, enroll, load) {
+		lines = append(lines, strings.TrimPrefix(it.Cmd, "do "))
+	}
+	return lines
+}
+
+// Every keyword the XR builders type was listed by the image's own help, and a
+// line whose whole text the help answered with <cr> is one the image accepted.
+func TestL73XRApplyUsesOnlyListedWords(t *testing.T) {
+	answers, words := l73XRHelpEntries(t)
+	for _, ln := range l73XRTypedLines() {
+		for _, tok := range strings.Fields(ln) {
+			if !l73XRValue(tok) && !words[tok] {
+				t.Errorf("%q: the keyword %q was never listed by the image's help", maskKey(ln), tok)
+			}
+		}
+	}
+	// The lines whose complete text the help answered <cr> to.
+	for _, d := range []l73DeviceTLS{{Server: l73Server}, {Server: l73Server, Port: 3049}} {
+		for _, ln := range l73XRApply(d) {
+			if strings.HasPrefix(ln, "server ") { // a member of the group, typed inside it
+				ln = "aaa group server tacacs+ " + l73Group + " " + ln
+			} else if !strings.Contains(ln, " tls trustpoint ") {
+				continue
+			}
+			if !answers[l73XRNormal(ln)]["<cr>"] {
+				t.Errorf("%q: no recorded help answered <cr> to this whole line", ln)
+			}
+		}
+	}
+}
+
+// The undo's last lines are the startup config's own, and every host the apply
+// adds, the undo removes.
+func TestL73XRUndoIsTheStartupConfig(t *testing.T) {
+	b, err := os.ReadFile("configs/xrd-startup.cfg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	startup := map[string]bool{}
+	for _, ln := range strings.Split(string(b), "\n") {
+		startup[strings.TrimSpace(ln)] = true
+	}
+	for _, d := range l73TypedDevices() {
+		undo := l73XRUndo(d)
+		for _, ln := range undo {
+			if strings.HasPrefix(ln, "no ") || ln == "exit" || ln == "commit" {
+				continue
+			}
+			if !startup[ln] {
+				t.Errorf("the undo types %q, which configs/xrd-startup.cfg does not hold", maskKey(ln))
+			}
+		}
+		for _, ln := range l73XRApply(d) {
+			if f := strings.Fields(ln); strings.HasPrefix(ln, "tacacs-server host ") && !slices.Contains(undo, "no "+strings.Join(f[:3], " ")) {
+				t.Errorf("%q is never removed", maskKey(ln))
+			}
+		}
+	}
+	for _, want := range []string{"aaa authentication login default group port49 local", "aaa group server tacacs+ port49",
+		"server " + l73Server, "tacacs-server host " + l73Server + " key 0 " + labcreds.Key} {
+		if !startup[want] {
+			t.Errorf("configs/xrd-startup.cfg has no line %q", maskKey(want))
+		}
+	}
+}
+
+// XR applies nothing before `commit`, and `end` on an uncommitted change asks a question.
+func TestL73XRCommitsEachChange(t *testing.T) {
+	for _, d := range l73TypedDevices() {
+		for name, lines := range map[string][]string{"apply": l73XRApply(d), "undo": l73XRUndo(d)} {
+			if len(lines) == 0 || lines[len(lines)-1] != "commit" {
+				t.Errorf("%s ends in %q, not commit", name, lines[len(lines)-1])
+			}
+		}
+	}
+	prep, _, _ := l73XREnrol("xrd1")
+	var firstDo int
+	for i, it := range prep {
+		if strings.HasPrefix(it.Cmd, "do ") {
+			firstDo = i
+			break
+		}
+	}
+	if firstDo == 0 || prep[firstDo-1].Cmd != "commit" {
+		t.Errorf("the trustpoints are committed before the first exec command: %q", prep[firstDo-1].Cmd)
+	}
+}
+
+func TestL73XRRetriesUnreachedLoginsNoFasterThanOnceASecond(t *testing.T) {
+	d := l73Dialects["cisco_xrd"]
+	if !d.RetryUnreached {
+		t.Fatal("XRd does not retry an unreached login")
+	}
+	// XRd's sshd resets sessions past 60 a minute (L71-cisco_xrd.md).
+	if l73UnreachedEvery < time.Second || l73ReadyEvery < time.Second {
+		t.Errorf("the retry loops wait %s and %s", l73UnreachedEvery, l73ReadyEvery)
+	}
+	var slept []time.Duration
+	now := time.Unix(0, 0)
+	_, _ = l73Retry(func(int) (bool, int) { return false, 0 }, func(d time.Duration) { slept = append(slept, d); now = now.Add(d) },
+		func() time.Time { return now }, l73UnreachedEvery, 5*time.Minute)
+	if len(slept) < 2 {
+		t.Fatalf("slept %v", slept)
+	}
+	for _, s := range slept {
+		if s < time.Second {
+			t.Errorf("slept %s between sessions", s)
+		}
+	}
+}
+
+// XR reverts a failed commit and says so on one line; the change is then
+// pending, and `end` asks a question instead of leaving. That line is a
+// refusal for the XR dialect alone, and XR's parser error is already one.
+func TestL73XRRefusesAFailedCommitAndItsParserErrors(t *testing.T) {
+	failed := "xrd1(config)#commit\r\n\r\n% Failed to commit one or more configuration items during a pseudo-atomic operation. " +
+		"All changes made have been reverted. Please issue 'show configuration failed [inheritance]' from this session to view the errors\r\nxrd1(config)#"
+	if got := l73Refusal(failed, l73ExtraMarks("xr")...); !strings.HasPrefix(got, "% Failed to commit") {
+		t.Errorf("a failed commit is not a refusal: %q", got)
+	}
+	for _, fam := range []string{"", "iosxe", "nxos", "eos", "junos"} {
+		if got := l73Refusal(failed, l73ExtraMarks(fam)...); got != "" {
+			t.Errorf("%s: the XR commit failure refused: %q", fam, got)
+		}
+	}
+	bad := "xrd1(config)#tacacs-server host 1.2.3.4 port 3049 tls trustpoints x\r\n                          ^\r\n% Invalid input detected at '^' marker.\r\n"
+	if got := l73Refusal(bad, l73ExtraMarks("xr")...); got != "% Invalid input detected at '^' marker." {
+		t.Errorf("%q", got)
+	}
+	if got := l73Refusal("xrd1(config)#commit\r\nWed Oct 21 03:06:08.271 UTC\r\nxrd1(config)#", l73ExtraMarks("xr")...); got != "" {
+		t.Errorf("a clean commit refused: %q", got)
+	}
+}
+
+// Cell h's capture starts before the configuration only where the device opens
+// its single connection at commit: XR, and no other dialect.
+func TestL73OnlyXRCapturesCellHBeforeItConfigures(t *testing.T) {
+	for name, d := range l73Dialects {
+		if d.EarlyCapture != (d.Family == "xr") {
+			t.Errorf("%s: EarlyCapture %v", name, d.EarlyCapture)
 		}
 	}
 }

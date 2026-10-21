@@ -114,6 +114,11 @@ func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient 
 		}
 		said := c.transcript()[at:]
 		if r := l73Refusal(said, extra...); r != "" {
+			// XR reverts a failed commit and names the command that says why;
+			// it is a per-session view, so it is read here and kept in the screen.
+			if strings.Contains(r, "Failed to commit") {
+				_, _ = c.sendExpect("show configuration failed", 45*time.Second, mark)
+			}
 			if !lenient {
 				return c.transcript()[from:], fmt.Errorf("%q was refused: %s", hideKeys(it.Cmd), hideKeys(r))
 			}

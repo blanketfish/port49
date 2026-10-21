@@ -162,6 +162,9 @@ func TestL73(t *testing.T) {
 			t.Fatalf("L73 not measured on %s (%s): its CLI offers no RFC 9887 client; the L71 addendum is written",
 				l.p.name, l.p.version)
 		}
+		// The help comes before anything is typed, enrolment included: a dialect's
+		// enrolment words are the ones its help has to list first.
+		e.diagHelp()
 		e.enrol()
 		e.cellA()
 		e.cellC()
@@ -631,7 +634,7 @@ func (e *l73Env) ready(cell string) []l73Conn {
 				"The likely cause is the device's dead-server memory outlasting 3 minutes after a refusal or a "+
 				"stopped port49d (IOS XE: look at its deadtime and server state), not the TLS configuration", cell, l73Server)
 		}
-		time.Sleep(10 * time.Second)
+		time.Sleep(l73ReadyEvery)
 	}
 }
 
@@ -685,7 +688,7 @@ func (e *l73Env) untilReached(id string, run func(cell string) l73Try) l73Try {
 			return true, 0
 		}
 		return false, len(e.l.recordsSince(got.Off))
-	}, sleep, time.Now, 10*time.Second, max)
+	}, sleep, time.Now, l73UnreachedEvery, max)
 	if err != nil {
 		e.noConnectionLogs()
 		e.t.Fatalf("INVALID: %s: %v, so the cell measured nothing", id, err)
@@ -1748,7 +1751,6 @@ func (e *l73Env) confirmNXOSTrust() {
 
 func (e *l73Env) cellA() {
 	e.guard()
-	e.diagHelp()
 	e.daemon("a", l73Daemon{Intermediates: e.files["inter.pem"]})
 	e.configure(l73DeviceTLS{Server: l73Server})
 	probe := e.ready("a")
@@ -2076,12 +2078,24 @@ func (e *l73Env) cellH() {
 	e.daemon("h", l73Daemon{Intermediates: e.files["inter.pem"]})
 	d := e.base()
 	d.SingleConnection = true
-	e.configure(d)
-	// Captured from before the readiness probe: with single-connection the
-	// probe's connection may be the one both logins reuse, and a connection
-	// is counted only from its SYN.
-	stop := e.capture("h")
-	e.ready("h")
+	var stop func() []l73Conn
+	if e.d.EarlyCapture {
+		// XR opens its one connection when the commit lands, so it is captured
+		// from before the configuration, and the readiness loop (which counts
+		// new connections) is replaced by one break-glass login.
+		stop = e.capture("h")
+		e.configure(d)
+		_, _, _ = e.breakglassLogin()
+		e.facts = append(e.facts, "cell h: this device opens its single connection when the configuration is committed, "+
+			"so the capture starts before the configuration and no readiness loop runs")
+	} else {
+		e.configure(d)
+		// Captured from before the readiness probe: with single-connection the
+		// probe's connection may be the one both logins reuse, and a connection
+		// is counted only from its SYN.
+		stop = e.capture("h")
+		e.ready("h")
+	}
 	off := e.l.mark()
 	s1 := time.Now()
 	u1, ok1, _, _, err1 := e.tokenLogin()

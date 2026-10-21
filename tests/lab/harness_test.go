@@ -123,7 +123,7 @@ var platforms = []platform{
 	// selector per run: labs are cached by platform name. The full rows sit on
 	// the older rows' node and address, so the inventory, the seeds and the
 	// startup configs are unchanged; only one platform is ever up. The boot
-	// budgets of vjunosswitch26, iolxe1718 and xrd261 are placeholders: no run
+	// budgets of vjunosswitch26 and iolxe1718 are placeholders: no run
 	// has booted them on this host. Every other row carries its measured boot
 	// time in its own comment.
 	// vjunos26 booted on this host in 2m12s (2026-10-18, TestL73); the budget is that x3.
@@ -141,12 +141,14 @@ var platforms = []platform{
 	// Ready after 23 to 28s in the 2026-10-18 L73 runs; the budget is 3x.
 	{"ceos436", "arista_ceos", "topologies/ceos436.clab.yml", "172.100.100.11", "leaf1",
 		"ceos:4.36.3M", "cEOS-lab 4.36.3M", 90 * time.Second},
+	// xrd261 was ready 1m8s to 1m10s after deploy on this host (2026-10-21, TestL73, the
+	// TACACS+ gate included); the budget is that x4. Its address is the inventory's xrd1.
+	{"xrd261", "cisco_xrd", "topologies/xrd261.clab.yml", "172.100.100.61", "xrd1",
+		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 5 * time.Minute},
 	// Help-only rows (helpOnlyPlatforms): an L71 help cell and nothing else,
 	// on addresses no inventory names.
 	{"iolxe1718", "cisco_iol-xe", "topologies/iolxe1718.clab.yml", "172.100.100.51", "iol1",
 		"vrnetlab/cisco_iol:17.18.02", "IOL-XE 17.18.02", 5 * time.Minute},
-	{"xrd261", "cisco_xrd", "topologies/xrd261.clab.yml", "172.100.100.61", "xrd1",
-		"port49lab/xrd-control-plane:26.1.1", "XRd control plane 26.1.1", 10 * time.Minute},
 	{"vjunosswitch26", "juniper_vjunos-switch", "topologies/vjunos-switch26.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-switch:26.2R1.7", "vJunos-switch 26.2R1.7", 15 * time.Minute},
 	// SR Linux is a container, not a VM: containerlab starts sr_linux directly
@@ -164,7 +166,7 @@ var optInPlatforms = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos1
 
 // helpOnlyPlatforms come up with a break-glass account and no TACACS+: up()
 // starts no port49d for them, and TestL73 asks their CLI help only.
-var helpOnlyPlatforms = map[string]bool{"iolxe1718": true, "xrd261": true}
+var helpOnlyPlatforms = map[string]bool{"iolxe1718": true}
 
 // defaultPlatforms is the selection when PORT49_LAB_PLATFORMS is empty.
 func defaultPlatforms(ps []platform) []platform {

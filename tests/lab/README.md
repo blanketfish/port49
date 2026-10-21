@@ -48,7 +48,7 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
      - IOL-XE 17.18.02 (`iolxe1718`, L71 help cell only): copy `iol-xe-17-18-02.tar.gz` into
        `vrnetlab/cisco/iol` first (an `IMAGE=/mnt/images/...` path fails the Makefile's version
        regex), then `make IMAGE=iol-xe-17-18-02.tar.gz docker-build` there.
-     - XRd control plane 26.1.1 (`xrd261`, L71 help cell only): `docker load -i
+     - XRd control plane 26.1.1 (`xrd261`, a full L73 row): `docker load -i
        ios-xrd-control-plane-26-1-1.tar.gz`, tagged `port49lab/xrd-control-plane:26.1.1`. XRd
        needs `fs.inotify.max_user_instances` >= 4000 (`sudo sysctl -w`, not persisted).
 
@@ -832,7 +832,7 @@ client is the harness, on the host, as the device `l74-client` at 10.149.0.1.
 ## L73: device RFC 9887 clients against port49
 
 `PORT49_LAB_PLATFORMS=<selector> go test -tags lab ./tests/lab/ -run '^TestL73$' -count=1 -v -timeout 3h`,
-one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`; help cells `iolxe1718`, `xrd261`;
+one selector per run (`vjunos26`, `iosxe1718`, `nxos106`, `ceos436`, `xrd261`; help cell `iolxe1718`;
 `vjunosswitch26`), from a pinned worktree under `.worktrees/`, after `make build`.
 
 - **Opt-in selectors.** A run that names no platform never deploys them.

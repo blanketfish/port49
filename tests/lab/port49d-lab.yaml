@@ -403,3 +403,44 @@ lab:
     - {nas: srl1, username: alice14}
     - {nas: srl1, username: alice15}
     - {nas: srl1, username: alice16}
+    # XRd: the L73 full row and the conformance run (Task 16) take the same pools as the other L73 rows.
+    - {nas: xrd1, username: alice01}
+    - {nas: xrd1, username: alice02}
+    - {nas: xrd1, username: alice03}
+    - {nas: xrd1, username: alice04}
+    - {nas: xrd1, username: alice05}
+    - {nas: xrd1, username: alice06}
+    - {nas: xrd1, username: alice07}
+    - {nas: xrd1, username: alice08}
+    - {nas: xrd1, username: alice09}
+    - {nas: xrd1, username: alice10}
+    - {nas: xrd1, username: alice11}
+    - {nas: xrd1, username: alice12}
+    - {nas: xrd1, username: alice13}
+    - {nas: xrd1, username: alice14}
+    - {nas: xrd1, username: alice15}
+    - {nas: xrd1, username: alice16}
+    - {nas: xrd1, username: l73u01}
+    - {nas: xrd1, username: l73u02}
+    - {nas: xrd1, username: l73u03}
+    - {nas: xrd1, username: l73u04}
+    - {nas: xrd1, username: l73u05}
+    - {nas: xrd1, username: l73u06}
+    - {nas: xrd1, username: l73u07}
+    - {nas: xrd1, username: l73u08}
+    - {nas: xrd1, username: l73u09}
+    - {nas: xrd1, username: l73u10}
+    - {nas: xrd1, username: l73u11}
+    - {nas: xrd1, username: l73u12}
+    - {nas: xrd1, username: l73u13}
+    - {nas: xrd1, username: l73u14}
+    - {nas: xrd1, username: l73u15}
+    - {nas: xrd1, username: l73u16}
+    - {nas: xrd1, username: l73u17}
+    - {nas: xrd1, username: l73u18}
+    - {nas: xrd1, username: l73u19}
+    - {nas: xrd1, username: l73u20}
+    - {nas: xrd1, username: l73u21}
+    - {nas: xrd1, username: l73u22}
+    - {nas: xrd1, username: l73u23}
+    - {nas: xrd1, username: l73u24}

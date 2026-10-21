@@ -1,5 +1,5 @@
-# L71 help cell only (selector xrd261, opt-in). Help-only row: break-glass CLI,
-# no TACACS+, no inventory entry.
+# L73 and the conformance run (selector xrd261, opt-in). The startup config
+# carries the TACACS+ client; the inventory names the node xrd1.
 name: port49-xrd261
 topology:
   nodes:
