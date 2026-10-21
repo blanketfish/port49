@@ -3,23 +3,23 @@
   "lab_platform": "cisco_xrd",
   "firmware": "XRd control plane 26.1.1",
   "image": "XRd control plane 26.1.1",
-  "commit": "c756f2ad039e",
+  "commit": "a536adf70ff2",
   "date": "2026-10-21",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-21T04:25:43.774959239Z",
-    "command_denied": "2026-10-21T04:25:41.948123641Z",
-    "command_permitted": "2026-10-21T04:25:41.948123641Z",
-    "single_connection": "2026-10-21T04:26:02.130318987Z",
-    "store_unavailable": "2026-10-21T04:25:49.006991869Z",
-    "tls_store_unavailable": "2026-10-21T04:27:07.219625147Z",
-    "tls_token_login": "2026-10-21T04:26:51.565520196Z",
-    "tls_unknown_ca": "2026-10-21T04:27:22.573149193Z",
-    "token_login": "2026-10-21T04:25:40.732795471Z",
-    "wrong_credential": "2026-10-21T04:25:45.461025158Z"
+    "accounting": "2026-10-21T06:07:31.341042319Z",
+    "command_denied": "2026-10-21T06:07:29.476418194Z",
+    "command_permitted": "2026-10-21T06:07:29.476418194Z",
+    "single_connection": "2026-10-21T06:07:49.35793289Z",
+    "store_unavailable": "2026-10-21T06:07:36.121250756Z",
+    "tls_store_unavailable": "2026-10-21T06:08:59.449804418Z",
+    "tls_token_login": "2026-10-21T06:08:43.308929513Z",
+    "tls_unknown_ca": "2026-10-21T06:09:15.070943382Z",
+    "token_login": "2026-10-21T06:07:28.220148315Z",
+    "wrong_credential": "2026-10-21T06:07:33.017188337Z"
   },
   "registers": {
     "accounting": [
