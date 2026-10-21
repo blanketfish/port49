@@ -1653,7 +1653,19 @@ func (l *lab) dial(user, password string, timeout time.Duration) (*ssh.Client, e
 // they need the same deliberately wide algorithm lists — a handshake refused
 // for want of a 2016 cipher would look exactly like a device that has not
 // enabled NETCONF at all.
+// xrSSHLast is when the last SSH attempt to XRd began; xrSSHMu serialises the spacing.
+var (
+	xrSSHMu   sync.Mutex
+	xrSSHLast time.Time
+)
+
 func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duration) (*ssh.Client, error) {
+	if l.p.name == "cisco_xrd" && strings.HasSuffix(hostport, ":22") {
+		xrSSHMu.Lock()
+		time.Sleep(l73PaceWait(xrSSHLast, time.Now(), l73XRSSHPace))
+		xrSSHLast = time.Now()
+		xrSSHMu.Unlock()
+	}
 	nc, err := net.DialTimeout("tcp", hostport, timeout)
 	if err != nil {
 		return nil, err

@@ -515,3 +515,17 @@ func TestQualRetryUnreachedRepeatsOnlyXRdAuthRefusals(t *testing.T) {
 		t.Fatalf("the deadline: %d attempts, slept %v", n, slept)
 	}
 }
+
+// A wrong-credential login that never reached port49d proves nothing: only a
+// denied redeem record does.
+func TestQualDeniedNeedsADeniedRedeem(t *testing.T) {
+	deny := map[string]any{"event": "redeem", "verdict": "deny", "reason": "token_not_found"}
+	permit := map[string]any{"event": "redeem", "verdict": "permit"}
+	acct := map[string]any{"event": "account"}
+	if !qualDenied([]map[string]any{acct, deny}) {
+		t.Fatal("a denied redeem was not counted")
+	}
+	if qualDenied([]map[string]any{acct, permit}) || qualDenied(nil) {
+		t.Fatal("no denied redeem was counted as one")
+	}
+}

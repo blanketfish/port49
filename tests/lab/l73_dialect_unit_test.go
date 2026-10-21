@@ -1336,3 +1336,24 @@ func TestL73CommandAuthsCountsPermittedVersionRecordsOnly(t *testing.T) {
 		t.Fatalf("counted %d, want 1", got)
 	}
 }
+
+// XRd's SSH attempts are spaced at least l73XRSSHPace apart.
+func TestL73PaceWaitSpacesXRdSSHAttempts(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, c := range []struct {
+		last time.Time
+		want time.Duration
+	}{
+		{time.Time{}, 0},
+		{now.Add(-700 * time.Millisecond), l73XRSSHPace - 700*time.Millisecond},
+		{now.Add(-l73XRSSHPace), 0},
+		{now.Add(-time.Minute), 0},
+	} {
+		if got := l73PaceWait(c.last, now, l73XRSSHPace); got != c.want {
+			t.Errorf("last %v: waits %v, want %v", c.last, got, c.want)
+		}
+	}
+	if l73XRSSHPace < time.Second {
+		t.Fatal("the pace is under the one a second the rate limit allows")
+	}
+}

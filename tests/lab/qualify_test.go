@@ -473,8 +473,13 @@ func (q *qualEnv) cellWrongCredential() {
 		q.verdict("wrong_credential", "fail", "a random string logged in")
 	case qualRedeemed(recs):
 		q.verdict("wrong_credential", "fail", "the login failed but a redeem was permitted:"+summarize(recs))
+	case !qualDenied(recs):
+		// A login that failed before the device asked port49d anything proves nothing about
+		// the credential: XRd's sshd resets a session over its rate limit.
+		q.verdict("wrong_credential", "fail", fmt.Sprintf("the login failed (%s) but port49d logged no denied redeem, so the device never sent it the credential:%s",
+			oneLine(hideKeys(l73LogScreen(l73Err(err)))), summarize(recs)))
 	default:
-		q.verdict("wrong_credential", "pass", "a random string as password was refused.")
+		q.verdict("wrong_credential", "pass", "a random string as password was refused, and port49d denied its redeem.")
 	}
 }
 

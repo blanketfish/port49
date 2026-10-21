@@ -422,3 +422,14 @@ func qualRetryUnreached(platform string, login func() error, within time.Duratio
 		waited += l73UnreachedEvery
 	}
 }
+
+// qualDenied is whether recs hold a denied redeem: the proof a device sent
+// port49d a credential, and port49d refused it.
+func qualDenied(recs []map[string]any) bool {
+	for _, r := range recs {
+		if r["event"] == "redeem" && r["verdict"] == "deny" {
+			return true
+		}
+	}
+	return false
+}

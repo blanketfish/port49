@@ -1048,3 +1048,17 @@ func l73VersionAuths(recs []map[string]any) int {
 	}
 	return n
 }
+
+// l73XRSSHPace is the least time between two SSH connection attempts to XRd:
+// its sshd resets a session over its rate limit, and two attempts 0.7 s apart
+// were reset in TestQualify on 2026-10-21 (the limit is 60 a minute, L71).
+const l73XRSSHPace = 2 * time.Second
+
+// l73PaceWait is how long to wait before an attempt at now when the last one
+// was at last (the zero time when there was none).
+func l73PaceWait(last, now time.Time, pace time.Duration) time.Duration {
+	if last.IsZero() || now.Sub(last) >= pace {
+		return 0
+	}
+	return pace - now.Sub(last)
+}
