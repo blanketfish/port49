@@ -812,3 +812,16 @@ func TestQualL80NoteIsWrittenOnlyForAMeasuredCell(t *testing.T) {
 		t.Fatal("an observed cell wrote no L80 note")
 	}
 }
+
+// L80 names NX-OS 10.6(2)F alone: no other image, and no other NX-OS firmware,
+// writes or overwrites L80's note.
+func TestQualL80AppliesToNXOS106Only(t *testing.T) {
+	if !qualL80Applies("cisco_nxos", "Nexus 9300v 10.6(2)F") {
+		t.Fatal("the row's own image")
+	}
+	for _, c := range [][2]string{{"cisco_nxos", "Nexus 9300v 10.7(1)F"}, {"cisco_nxos", "Nexus 9300v 10.4(2)F"}, {"arista_ceos", "Nexus 9300v 10.6(2)F"}, {"cisco_iosxe", "Catalyst 8000V 17.18.02"}} {
+		if qualL80Applies(c[0], c[1]) {
+			t.Errorf("%v wrote an L80 note", c)
+		}
+	}
+}

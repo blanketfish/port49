@@ -621,6 +621,13 @@ platforms:
 `
 }
 
+// qualL80Applies is whether platform's firmware is the image spec §15 L80
+// names: NX-OS 10.6(2)F. Any other image's denied-command cell is recorded in
+// its QUAL note alone, never in an L80 note, and never over the closed one.
+func qualL80Applies(platform, firmware string) bool {
+	return platform == "cisco_nxos" && firmware == "Nexus 9300v 10.6(2)F"
+}
+
 // qualL80Note is the results note for spec §15 L80 from a TestQualify run's
 // verdict lines: the per-request login's and the denied-command cell's, so
 // the row can be closed on a note the harness wrote. ok is false when the

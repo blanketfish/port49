@@ -716,6 +716,12 @@ func (q *qualEnv) tlsDeniedCommand(e *l73Env, login func(string, string, ...stri
 		q.verdict("tls_denied_command", "not_run", "per-request TLS sent port49 command authorization (tls_token_login), so port49 decided the denied command there")
 		return
 	}
+	// The closed L80 note is refused before the device time is spent, not after.
+	if qualL80Applies(q.run.Platform, q.run.Firmware) {
+		if why := q.l.guardRefusal("L80"); why != "" {
+			q.t.Fatalf("INVALID: %s", why)
+		}
+	}
 	e.guard()
 	e.settle()
 	denied := qualDeniedCommand(q.run.Platform)
@@ -873,7 +879,7 @@ func (q *qualEnv) write() {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
-	if claim, obs, ok := qualL80Note(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name); ok {
+	if claim, obs, ok := qualL80Note(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name); ok && qualL80Applies(q.run.Platform, q.run.Firmware) {
 		if bad := qualNoteGate(claim+"\n"+obs, secrets); len(bad) > 0 {
 			q.t.Fatalf("INVALID: the L80 note was not written:\n  %s", strings.Join(bad, "\n  "))
 		}
