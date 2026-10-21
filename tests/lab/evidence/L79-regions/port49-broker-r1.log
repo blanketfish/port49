@@ -1,0 +1,28 @@
+port49-broker: metrics on 10.149.0.11:9050
+port49-broker: store: broker.state_dir/marks.json is absent: this replica's copy starts from the store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd restore lost cannot be put back from it)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:15:56Z (0 days)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:15:56Z (0 days)
+port49-broker: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 1
+port49-broker: store: 0 revocation(s) in force from the directory store
+port49-broker: identity: humans: x509 from broker.client_ca_file (no broker.identity is configured); no OIDC verifier
+port49-broker: policy: no bundle has been judged on this keyspace; this start is not judged against one
+port49-broker: policy: mints wait for a takeover to judge bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, which is this start gate and not a store fault: port49 workload retries it, and port49 token (through the agent) exits saying to retry in 5s
+port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
+port49-broker: admin socket on /tmp/p49l74542407967/r1-b.sock (port49 revoke, port49 directory forget)
+port49-broker: listening on 10.149.0.11:8443, metrics on 10.149.0.11:9050
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1203017, since 2026-10-21T07:16:06Z)"): this replica runs the start, the sweep and the policy refresh
+port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
+port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the store was restored; going by meta/judged alone
+port49-broker: runner: the bundle in force (sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d) is not the one the last runner judged (none recorded); 0 unspent token(s) purged (run 'port49 token' again)
+port49-broker: runner: 0 live context(s) carried onto the policy in force (bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d)
+port49-broker: runner: recorded bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d as judged (the takeover's carry left nothing owed)
+port49-broker: policy: mints open: this replica's takeover is done (bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d)
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
+port49-broker: runner: 0 standing revocation(s) applied to the live contexts after a put-back (0 context(s) marked revoked)
+{"ts":"2026-10-21T07:16:20.767Z","event":"revoke","verdict":"deny","reason":"credential_revoked","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-10-21T07:16:20.767Z","origin":"admin_socket uid 1000","saved":false}}
+port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
+port49-broker: directory store: answering again; the cache was 2.0s old
+{"ts":"2026-10-21T07:17:41.968Z","event":"revoke","verdict":"deny","reason":"credential_revoked","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-10-21T07:17:41.968Z","origin":"admin_socket uid 1000","saved":false}}
+{"ts":"2026-10-21T07:17:43.079Z","event":"revoke","verdict":"permit","reason":"revocation_lifted","principal":"user:alice@example.com","revocation":{"by":"principal","at":"2026-10-21T07:17:41.968Z","origin":"admin_socket uid 1000","saved":false}}
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 0 context(s) here
