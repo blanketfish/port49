@@ -903,7 +903,18 @@ To vet a firmware and add its mock in one command, use `make qual-vet P=<selecto
 procedures are in `tests/qual/README.md`.
 
 `run.json` holds `cells` (the start time of each cell that ran) and `results` (every cell's verdict: `pass`,
-`fail`, `not_applicable` or `not_run`).
+`fail`, `not_applicable` or `not_run`). `command_authorization` says, for each TLS login cell, what its
+commands did at port49 (`sent`, `not_sent` or `not_applicable`), graded from port49's records alone;
+`denied_command_ran` is L80's cell.
+
+The TLS login cells grade what the operator configured. `tls_token_login` runs per-request, the
+device default; `tls_single_connection` runs last with single-connection on the TLS server, then
+puts the device back. Each verdict line starts with its mode. A per-request login whose commands
+reached port49 as no `authorize_command` (NX-OS 10.6(2)F, L73 cell a) passes as a login and says
+"command authorization not sent", with each command's first output line: a device fact, never a pass
+for command authorization over TLS. Only then does `tls_denied_command` run: one login typing the
+denied command alone, graded from its first output line and port49's records, which writes
+`tests/lab/results/L80-<lp>.md` beside the QUAL note (spec §15 L80).
 
 Every evidence file passes a leak gate before any is written; a failure names the file and the kind
 of content, never the content.

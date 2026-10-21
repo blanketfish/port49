@@ -588,3 +588,142 @@ func TestQualOperatorSectionIsXROnlyAndNamesTheTwoFacts(t *testing.T) {
 		}
 	}
 }
+
+// A TLS login cell is graded on what arrived at port49 (review batch 2 C1, I1):
+// both commands decided is sent; neither asked is not_sent, NX-OS 10.6(2)F's
+// per-request TLS (L73 cell a), whose one authorize_command is for `end`; one
+// without the other, or a wrong verdict, is a problem.
+func TestQualTLSCommandsGradesWhatArrived(t *testing.T) {
+	permit := denyRec("context_matched", "permit", "show", "version")
+	deny := denyRec("no_permit_dominates_deny", "deny", "show", "users")
+	end := denyRec("context_matched", "permit", "end")
+	for _, c := range []struct {
+		name, platform string
+		recs           []map[string]any
+		state          string
+		problems       bool
+	}{
+		{"both decided", "cisco_nxos", []map[string]any{permit, deny, end}, "sent", false},
+		{"only end", "cisco_nxos", []map[string]any{end}, "not_sent", false},
+		{"nothing", "cisco_nxos", nil, "not_sent", false},
+		{"the permit alone", "cisco_nxos", []map[string]any{permit, end}, "sent", true},
+		{"the deny alone", "cisco_nxos", []map[string]any{deny}, "sent", true},
+		{"the denied command permitted", "cisco_nxos", []map[string]any{permit, denyRec("context_matched", "permit", "show", "users")}, "sent", true},
+		{"junos", "juniper_junos", nil, "not_applicable", false},
+	} {
+		state, problems := qualTLSCommands(c.platform, c.recs)
+		if state != c.state || (len(problems) > 0) != c.problems {
+			t.Errorf("%s: %s %q, want %s, problems %v", c.name, state, problems, c.state, c.problems)
+		}
+	}
+}
+
+// Every TLS login verdict names its connection mode first, and a login whose
+// commands never reached port49 says so: not a pass for command authorization.
+func TestQualTLSLoginVerdictNamesItsModeAndWhatArrived(t *testing.T) {
+	result, why := qualTLSLoginVerdict(qualPerRequest, "cisco_nxos", "not_sent", nil, []string{"Cisco Nexus Operating System (NX-OS) Software", "NAME LINE TIME IDLE PID COMMENT"})
+	for _, want := range []string{"per-request (the device default):", "not sent", "not a pass for command authorization over TLS", "L73 cell a",
+		"`show version` said \"Cisco Nexus Operating System (NX-OS) Software\"", "`show users` said \"NAME LINE"} {
+		if result != "pass" || !strings.Contains(why, want) {
+			t.Errorf("%s: %q lacks %q", result, why, want)
+		}
+	}
+	if !strings.HasPrefix(why, "per-request (the device default):") {
+		t.Errorf("the mode is not named first: %q", why)
+	}
+	result, why = qualTLSLoginVerdict(qualSingleConnection, "cisco_nxos", "sent", nil, nil)
+	if result != "pass" || !strings.HasPrefix(why, "single-connection on:") || !strings.Contains(why, "`show users` denied") {
+		t.Errorf("%s %q", result, why)
+	}
+	result, why = qualTLSLoginVerdict(qualPerRequest, "cisco_nxos", "sent", []string{"no stop record"}, nil)
+	if result != "fail" || !strings.HasPrefix(why, "per-request (the device default):") || !strings.Contains(why, "no stop record") {
+		t.Errorf("%s %q", result, why)
+	}
+	result, why = qualTLSLoginVerdict(qualPerRequest, "juniper_junos", "not_applicable", nil, nil)
+	if result != "pass" || !strings.Contains(why, "L18") {
+		t.Errorf("%s %q", result, why)
+	}
+}
+
+// L80's cell: the command the qual policy denies, typed over per-request TLS
+// that sends port49 no command authorization. Its first output line says
+// whether it ran; port49's records say whether port49 was asked.
+func TestQualDeniedCommandCellGradesTheFirstLineAndTheRecords(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		out     string
+		recs    []map[string]any
+		result  string
+		ran     bool
+		mention string
+	}{
+		{"ran, port49 not asked", "NAME     LINE         TIME         IDLE          PID COMMENT\nadmin    pts/0", nil, "pass", true, "ran"},
+		{"refused locally, port49 not asked", "% Authorization failed.", nil, "pass", false, "refused by the device"},
+		{"no output", "", nil, "fail", false, "no output"},
+		{"port49 asked and denied it", "% Authorization failed.", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "pass", false, "port49 denied"},
+		{"port49 permitted it", "NAME LINE", []map[string]any{denyRec("context_matched", "permit", "show", "users")}, "fail", true, "permitted"},
+		{"ran although port49 denied it", "NAME LINE", []map[string]any{denyRec("no_permit_dominates_deny", "deny", "show", "users")}, "fail", true, "although port49 denied"},
+	} {
+		result, ran, why := qualDeniedCommandVerdict("show users", c.out, c.recs)
+		if result != c.result || ran != c.ran || !strings.Contains(why, c.mention) {
+			t.Errorf("%s: %s ran=%v %q, want %s ran=%v mentioning %q", c.name, result, ran, why, c.result, c.ran, c.mention)
+		}
+	}
+}
+
+// Review M10: a TLS cell logs in through loginWithin, which already types IOS
+// XE's commands at one pty, unless the dialect widens the dial; IOS XE's pty
+// path cannot honour a wider dial, so that pair is refused, never ignored.
+func TestQualTLSLoginHonoursTheDialOrRefuses(t *testing.T) {
+	if _, err := qualTLSLogin(&lab{p: platform{name: "cisco_iosxe"}}, l73Dialect{}); err != nil {
+		t.Fatalf("IOS XE at the default dial: %v", err)
+	}
+	if _, err := qualTLSLogin(&lab{p: platform{name: "cisco_nxos"}}, l73Dialects["cisco_nxos"]); err != nil {
+		t.Fatalf("NX-OS's widened dial: %v", err)
+	}
+	if _, err := qualTLSLogin(&lab{p: platform{name: "cisco_iosxe"}}, l73Dialect{LoginDial: 90 * time.Second}); err == nil ||
+		!strings.Contains(err.Error(), "1m30s") {
+		t.Fatalf("a widened IOS XE dial is refused, naming it: %v", err)
+	}
+}
+
+func TestQualTLSCellsCiteTheirRows(t *testing.T) {
+	if got := qualRows("tls_single_connection"); !slices.Equal(got, []string{"L15", "L73"}) {
+		t.Errorf("tls_single_connection cites %v", got)
+	}
+	if got := qualRows("tls_denied_command"); !slices.Equal(got, []string{"L80"}) {
+		t.Errorf("tls_denied_command cites %v", got)
+	}
+}
+
+// L80's note is the harness's own: the claim names the row and its cell, and
+// the observation is the per-request login's and the denied-command cell's
+// verdict lines, nothing of the other cells.
+func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
+	notes := []string{"- `token_login` (re-measures L1): **pass**. plain",
+		"- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): not sent",
+		"- `tls_denied_command` (re-measures L80): **pass**. per-request (the device default): **`show users` ran**",
+		"- `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: sent"}
+	claim, obs, ok := qualL80Note(notes, "QUAL-Nexus-9300v-10.6-2-F-cisco_nxos")
+	if !ok {
+		t.Fatal("the cell ran: a note is written")
+	}
+	for _, want := range []string{"§15 L80", "`tls_denied_command`"} {
+		if !strings.Contains(claim, want) {
+			t.Errorf("claim lacks %q: %s", want, claim)
+		}
+	}
+	for _, want := range []string{"per-request (the device default): not sent", "**`show users` ran**", "tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/"} {
+		if !strings.Contains(obs, want) {
+			t.Errorf("observation lacks %q: %s", want, obs)
+		}
+	}
+	for _, never := range []string{"plain", "single-connection on: sent"} {
+		if strings.Contains(obs, never) {
+			t.Errorf("observation carries another cell's line %q", never)
+		}
+	}
+	if _, _, ok := qualL80Note(notes[:2], "x"); ok {
+		t.Error("no tls_denied_command line: no L80 note")
+	}
+}

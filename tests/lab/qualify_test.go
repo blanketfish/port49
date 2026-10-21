@@ -176,7 +176,7 @@ func (q *qualEnv) play() {
 		q.tlsCells(d)
 		q.run.Transports = append(q.run.Transports, "tls")
 	} else {
-		for _, c := range []string{"tls_token_login", "tls_store_unavailable", "tls_unknown_ca"} {
+		for _, c := range []string{"tls_token_login", "tls_denied_command", "tls_store_unavailable", "tls_unknown_ca", "tls_single_connection"} {
 			q.verdict(c, "not_run", "this image carries no RFC 9887 client (L71)")
 		}
 	}
@@ -556,7 +556,11 @@ func (q *qualEnv) cellSingleConnection() {
 	q.verdict("single_connection", "pass", "single-connection on: "+oneLine(said)+".")
 }
 
-// tlsCells reuses L73's machinery with the conformance config as its base.
+// tlsCells reuses L73's machinery with the conformance config as its base. The
+// login cells grade what arrived at port49 in the mode the device ran
+// (review batch 2 C1, I1): tls_token_login per-request, the device default,
+// and tls_single_connection with single-connection on, last. The harness never
+// turns single-connection on to make a per-request cell pass.
 func (q *qualEnv) tlsCells(d l73Dialect) {
 	e := newL73Env(q.t, q.l, d)
 	q.e = e
@@ -576,69 +580,30 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.guard()
 	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
 	q.guard()
-	base := e.base()
-	if e.d.Family == "nxos" {
-		// NX-OS 10.6 sends no command authorization on a per-request TLS connection
-		// (L73-cisco_nxos.md: cell a's logins show only `end`, cell h's single-connection
-		// logins show `show version`), so the TLS cells run with single-connection on.
-		base.SingleConnection = true
-		e.facts = append(e.facts, "NX-OS sends no command authorization on a per-request TLS connection (L73 cells a and h); the TLS cells run with single-connection on")
-	}
-	e.configure(base)
-	if base.SingleConnection {
-		// The device may open its one connection as soon as the line is typed, before any
-		// readiness capture runs, and then reuse it for every request: restart port49d so
-		// the first login opens a connection the probe's capture sees.
-		q.guard()
-		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
-	}
+	e.configure(e.base())
 	q.login()
 	e.ready("qual-tls")
-	if base.SingleConnection {
-		// The probe's connection would carry the cell's login, so the cell's capture would
-		// hold no handshake; a restart ends it and the login opens its own.
-		q.guard()
-		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
-		q.login()
-	}
 
-	dial := d.LoginDial
-	if dial == 0 {
-		dial = 45 * time.Second
-	}
-	login := func(user, secret string, cmds ...string) error {
-		if q.l.p.name == "cisco_iosxe" {
-			// IOS XE answers a second exec channel on one SSH connection with EOF:
-			// loginWithin types each command at one pty's prompt instead.
-			_, err := q.l.loginWithin(user, secret, 150*time.Second, cmds...)
-			return err
-		}
-		_, err := q.l.loginWithinDial(q.l.p.addr+":22", user, secret, dial, 150*time.Second, cmds...)
-		return err
+	login, err := qualTLSLogin(q.l, d)
+	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
 	}
 	keep := func(cell string, _ []l73Conn) {
 		q.tlsFiles[cell+".tls.json"] = e.evidence[cell+".tls.json"]
 	}
+	q.run.CommandAuthorization, q.run.DeniedCommandRan = map[string]string{}, map[string]bool{}
 
-	// tls_token_login: the plain token_login, command_permitted, command_denied and accounting cells together.
+	// tls_token_login: the plain token_login, command_permitted, command_denied and
+	// accounting cells together, per-request.
 	off := q.cell("tls_token_login")
 	stop := e.capture("tls_token_login")
-	err := login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
+	outs, err := login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
 	recs := q.waitStop(off)
 	time.Sleep(l73SettleTail)
 	keep("tls_token_login", stop())
-	_, problems := q.check(recs)
-	if !qualHasStop(recs) {
-		problems = append(problems, "no stop record")
-	}
-	if err != nil {
-		problems = append(problems, "the login failed: "+l73Err(err))
-	}
-	if len(problems) > 0 {
-		q.verdict("tls_token_login", "fail", strings.Join(problems, "; ")+summarize(recs))
-	} else {
-		q.verdict("tls_token_login", "pass", "a token login over RFC 9887, show version, the denied command, and the stop record.")
-	}
+	q.tlsLoginVerdict("tls_token_login", qualPerRequest, outs, err, recs)
+
+	q.tlsDeniedCommand(e, login, keep)
 
 	// tls_store_unavailable: the plain cell, over TLS.
 	e.guard()
@@ -650,7 +615,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 		q.t.Fatal(err)
 	}
 	defer os.Remove(qualFaultFile)
-	tokErr := login(qualUser, tok)
+	_, tokErr := login(qualUser, tok)
 	start := time.Now()
 	c, bgErr := q.l.dial(breakglassUser, breakglassPassword, 120*time.Second)
 	took := time.Since(start).Round(time.Millisecond)
@@ -702,7 +667,115 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	default:
 		q.verdict("tls_unknown_ca", "pass", "the handshake was refused as unknown_ca and no token was redeemed.")
 	}
+
+	q.tlsSingleConnection(e, login, keep)
 	q.notes = append(q.notes, "- TLS handshake facts: "+strings.Join(e.facts, "; "))
+}
+
+// tlsLoginVerdict grades a TLS login cell from its records (qualTLSCommands)
+// and the first line of each command's output, and records what its commands
+// did in run.json for genprofile.
+func (q *qualEnv) tlsLoginVerdict(cell, mode string, outs []string, err error, recs []map[string]any) {
+	var problems []string
+	if !qualRedeemed(recs) {
+		problems = append(problems, "no permitted redeem")
+	}
+	if !qualHasStop(recs) {
+		problems = append(problems, "no stop record")
+	}
+	if err != nil {
+		problems = append(problems, "the login failed: "+l73Err(err))
+	}
+	state, cmdProblems := qualTLSCommands(q.run.Platform, recs)
+	problems = append(problems, cmdProblems...)
+	var firsts []string
+	for _, o := range outs {
+		firsts = append(firsts, oneLine(hideKeys(l73LogScreen(firstLine(o)))))
+	}
+	if ran, says := qualRan(qualFirstOut(outs)); err == nil && state != "not_sent" && !ran {
+		// Where port49 decided the commands (or the device sends none), show version must have run.
+		problems = append(problems, fmt.Sprintf("`show version` did not run (%q)", oneLine(hideKeys(l73LogScreen(says)))))
+	}
+	q.run.CommandAuthorization[cell] = state
+	result, why := qualTLSLoginVerdict(mode, q.run.Platform, state, problems, firsts)
+	if result == "fail" {
+		why += summarize(recs)
+	}
+	q.verdict(cell, result, why)
+}
+
+// tlsDeniedCommand is L80's cell: where per-request TLS sent port49 no command
+// authorization (tls_token_login), a login typing only the command the qual
+// policy denies, graded from its first output line and port49's records.
+func (q *qualEnv) tlsDeniedCommand(e *l73Env, login func(string, string, ...string) ([]string, error), keep func(string, []l73Conn)) {
+	switch q.run.CommandAuthorization["tls_token_login"] {
+	case "not_applicable":
+		q.verdict("tls_denied_command", "not_applicable", qualNoCommandAuthWhy(q.run.Platform))
+		return
+	case "sent":
+		q.verdict("tls_denied_command", "not_run", "per-request TLS sent port49 command authorization (tls_token_login), so port49 decided the denied command there")
+		return
+	}
+	e.guard()
+	e.settle()
+	denied := qualDeniedCommand(q.run.Platform)
+	off := q.cell("tls_denied_command")
+	stop := e.capture("tls_denied_command")
+	outs, err := login(qualUser, q.mint(), denied)
+	recs := q.waitStop(off)
+	time.Sleep(l73SettleTail)
+	keep("tls_denied_command", stop())
+	if err != nil {
+		q.verdict("tls_denied_command", "fail", qualPerRequest+": the login failed: "+l73Err(err)+summarize(recs))
+		return
+	}
+	// The first line, masked like any screen, before it is graded or quoted.
+	result, ran, why := qualDeniedCommandVerdict(denied, oneLine(hideKeys(l73LogScreen(firstLine(qualFirstOut(outs))))), recs)
+	if result == "pass" {
+		q.run.DeniedCommandRan["tls_denied_command"] = ran
+	} else {
+		why += summarize(recs)
+	}
+	q.verdict("tls_denied_command", result, qualPerRequest+": "+why)
+}
+
+// tlsSingleConnection is the TLS twin of single_connection: single-connection
+// on the TLS server (as L73 cell h), the tls_token_login sequence, then the
+// device back to per-request. The capture starts before the configuration:
+// the device may open its one connection at the commit (XR) or at once.
+func (q *qualEnv) tlsSingleConnection(e *l73Env, login func(string, string, ...string) ([]string, error), keep func(string, []l73Conn)) {
+	e.guard()
+	e.settle()
+	q.guard()
+	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+	single := e.base()
+	single.SingleConnection = true
+	stop := e.capture("tls_single_connection")
+	e.configure(single)
+	if e.d.EarlyCapture {
+		_, _, _ = e.breakglassLogin()
+	} else {
+		e.ready("tls_single_connection")
+	}
+	q.login()
+	off := q.cell("tls_single_connection")
+	began := time.Now()
+	var outs []string
+	attempts, err := qualRetryUnreached(q.l.p.name, func() error {
+		var err error
+		outs, err = login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
+		return err
+	}, func() bool { return qualDenied(q.l.recordsSince(off)) }, 5*time.Minute, time.Sleep)
+	recs := q.waitStop(off)
+	time.Sleep(l73SettleTail)
+	keep("tls_single_connection", stop())
+	e.configure(e.base())
+	mode := qualSingleConnection
+	if attempts > 1 {
+		mode += fmt.Sprintf(" (after port49d restarted the device refused %d login(s) over %s before it reached port49d; no record of them)",
+			attempts-1, time.Since(began).Round(time.Second))
+	}
+	q.tlsLoginVerdict("tls_single_connection", mode, outs, err, recs)
 }
 
 // tlsDaemon starts port49d on the conformance config plus a tls_listener.
@@ -793,6 +866,12 @@ func (q *qualEnv) write() {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
+	if claim, obs, ok := qualL80Note(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name); ok {
+		if bad := qualNoteGate(claim+"\n"+obs, secrets); len(bad) > 0 {
+			q.t.Fatalf("INVALID: the L80 note was not written:\n  %s", strings.Join(bad, "\n  "))
+		}
+		q.l.result(q.t, "L80", claim, obs)
+	}
 }
 
 // qualFirstOut is the first output of a login's commands, "" when it had none.
@@ -801,4 +880,24 @@ func qualFirstOut(outs []string) string {
 		return ""
 	}
 	return outs[0]
+}
+
+// qualTLSLogin is how a TLS cell logs in: loginWithin, which types IOS XE's
+// commands at one pty (it answers a second exec channel with EOF), when the
+// dialect keeps the default dial, else loginWithinDial with the dialect's
+// (NX-OS 10.6 needs 90 s: five 5.00 s waits). loginWithin's pty path cannot
+// widen the dial, so a pty platform whose dialect widens it is refused, never
+// cut back to the default in silence (review M10).
+func qualTLSLogin(l *lab, d l73Dialect) (func(user, secret string, cmds ...string) ([]string, error), error) {
+	if d.LoginDial == 0 {
+		return func(user, secret string, cmds ...string) ([]string, error) {
+			return l.loginWithin(user, secret, 150*time.Second, cmds...)
+		}, nil
+	}
+	if l.p.name == "cisco_iosxe" {
+		return nil, fmt.Errorf("the %s dialect widens the login dial to %s, which loginWithin's pty path cannot honour", l.p.name, d.LoginDial)
+	}
+	return func(user, secret string, cmds ...string) ([]string, error) {
+		return l.loginWithinDial(l.p.addr+":22", user, secret, d.LoginDial, 150*time.Second, cmds...)
+	}, nil
 }

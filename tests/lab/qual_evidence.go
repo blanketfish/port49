@@ -32,6 +32,8 @@ var qualCells = []qualCell{
 	{"tls_token_login", []string{"L73"}},
 	{"tls_store_unavailable", []string{"L73"}},
 	{"tls_unknown_ca", []string{"L73"}},
+	{"tls_single_connection", []string{"L15", "L73"}},
+	{"tls_denied_command", []string{"L80"}},
 }
 
 // qualRun is run.json. Cells holds the start time of every cell that ran;
@@ -48,6 +50,11 @@ type qualRun struct {
 	Registers   map[string][]string `json:"registers"` // cell -> rows
 	BreakGlass  map[string]bool     `json:"break_glass"`
 	Results     map[string]string   `json:"results"` // cell -> verdict
+	// CommandAuthorization is what a TLS login cell's commands did at port49
+	// (qualTLSCommands): sent, not_sent or not_applicable. genprofile reads it.
+	CommandAuthorization map[string]string `json:"command_authorization"`
+	// DeniedCommandRan is L80's cell: whether the denied command ran.
+	DeniedCommandRan map[string]bool `json:"denied_command_ran"`
 }
 
 // qualJunosL18 is the note a Junos command cell carries: the device sends no
@@ -270,6 +277,113 @@ func qualDenyProven(recs []map[string]any, denied string) error {
 	return nil
 }
 
+// qualVector is an authorize_command record's request vector as one command line.
+func qualVector(r map[string]any) string {
+	q, _ := r["request"].(map[string]any)
+	vec, _ := q["vector"].([]any)
+	words := make([]string, 0, len(vec))
+	for _, w := range vec {
+		s, _ := w.(string)
+		words = append(words, s)
+	}
+	return strings.Join(words, " ")
+}
+
+// qualCommandRecords are recs' authorize_command records for command.
+func qualCommandRecords(recs []map[string]any, command string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if r["event"] == "authorize_command" && qualVector(r) == command {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// The connection modes a TLS login verdict names first.
+const (
+	qualPerRequest       = "per-request (the device default)"
+	qualSingleConnection = "single-connection on"
+)
+
+// qualTLSCommands is what a TLS login cell's commands did at port49, from its
+// records alone: sent when the permitted and the denied command each have an
+// authorize_command record (and then each must be proven), not_sent when
+// neither has one (NX-OS 10.6(2)F over per-request TLS, L73 cell a, whose one
+// authorize_command is for `end`), not_applicable where the device sends no
+// per-command authorization (qualNoCommandAuth). One without the other is sent
+// with a problem: never not_sent.
+func qualTLSCommands(platform string, recs []map[string]any) (state string, problems []string) {
+	if qualNoCommandAuth(platform) {
+		return "not_applicable", nil
+	}
+	denied := qualDeniedCommand(platform)
+	if len(qualCommandRecords(recs, "show version")) == 0 && len(qualCommandRecords(recs, denied)) == 0 {
+		return "not_sent", nil
+	}
+	if err := qualPermitProven(recs, "show version"); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if err := qualDenyProven(recs, denied); err != nil {
+		problems = append(problems, err.Error())
+	}
+	return "sent", problems
+}
+
+// qualTLSLoginVerdict grades a TLS login cell (a token login typing
+// qualProbeCommands) on what arrived at port49, naming its connection mode
+// first. firsts are each command's first output line, masked. A login whose
+// commands never reached port49 passes as a login and says plainly that
+// command authorization was not sent: a device fact, not a pass for it.
+func qualTLSLoginVerdict(mode, platform, state string, problems, firsts []string) (result, why string) {
+	if len(problems) > 0 {
+		return "fail", mode + ": " + strings.Join(problems, "; ")
+	}
+	cmds := qualProbeCommands(platform)
+	said := ""
+	for i, f := range firsts {
+		said += fmt.Sprintf("; `%s` said %q", cmds[min(i, len(cmds)-1)], f)
+	}
+	switch state {
+	case "sent":
+		return "pass", fmt.Sprintf("%s: a token login over RFC 9887; `show version` permitted and `%s` denied by port49 (authorize_command records); the stop record arrived.",
+			mode, qualDeniedCommand(platform))
+	case "not_sent":
+		return "pass", fmt.Sprintf("%s: a token login over RFC 9887 and its stop record arrived; command authorization not sent: port49 received no "+
+			"authorize_command for `show version` or `%s` (a device fact, as L73 cell a; not a pass for command authorization over TLS)%s.",
+			mode, qualDeniedCommand(platform), said)
+	}
+	return "pass", fmt.Sprintf("%s: a token login over RFC 9887 ran `show version`, and its stop record arrived; %s.", mode, qualNoCommandAuthWhy(platform))
+}
+
+// qualDeniedCommandVerdict grades L80's cell: denied, the command the qual
+// policy denies, typed alone over per-request TLS. out is its output, recs
+// port49's records for the login. ran is whether its first line shows it ran
+// (qualRan). It fails when port49 permitted it, when it ran although port49
+// denied it, and when there is no output to read; a command that ran with
+// port49 never asked passes as a measurement and says so first.
+func qualDeniedCommandVerdict(denied, out string, recs []map[string]any) (result string, ran bool, why string) {
+	ran, says := qualRan(out)
+	if says == "no output" {
+		return "fail", false, fmt.Sprintf("`%s` gave no output, so whether it ran is unmeasured", denied)
+	}
+	asked := qualCommandRecords(recs, denied)
+	for _, r := range asked {
+		if r["verdict"] == "permit" {
+			return "fail", ran, fmt.Sprintf("port49 permitted `%s`, which the qual policy denies (first line %q)", denied, says)
+		}
+	}
+	switch {
+	case len(asked) > 0 && ran:
+		return "fail", true, fmt.Sprintf("`%s` ran although port49 denied it (first line %q)", denied, says)
+	case len(asked) > 0:
+		return "pass", false, fmt.Sprintf("port49 denied `%s` and the device refused it (first line %q).", denied, says)
+	case ran:
+		return "pass", true, fmt.Sprintf("**`%s` ran**, with no authorization request for it reaching port49: the qual policy's deny was not enforced over per-request TLS (first line %q).", denied, says)
+	}
+	return "pass", false, fmt.Sprintf("`%s` was refused by the device, with no authorization request for it reaching port49 (first line %q).", denied, says)
+}
+
 // qualPermitProven checks command was permitted by an authorize_command record.
 func qualPermitProven(recs []map[string]any, command string) error {
 	for _, r := range recs {
@@ -475,4 +589,27 @@ platforms:
 - **Break-glass fails when port49 answers ERROR** (its store is unavailable), over TCP and TLS: the cells ` + "`store_unavailable`" + ` and ` + "`tls_store_unavailable`" + ` record break-glass logged in false (L73 cell i: ok false in 860 ms), as on IOS XE 17.18.02. With the store down nobody logs in to this device by SSH; keep a path that does not depend on port49 answering.
 - In this run ` + "`command_denied`" + ` passes through port49: ` + "`show users`" + ` has an authorize_command record denied with no_permit_dominates_deny.
 `
+}
+
+// qualL80Note is the results note for spec §15 L80 from a TestQualify run's
+// verdict lines: the per-request login's and the denied-command cell's, so
+// the row can be closed on a note the harness wrote. ok is false when the
+// cell did not run (no line for it).
+func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
+	var lines []string
+	for _, n := range notes {
+		if strings.HasPrefix(n, "- `tls_token_login` ") || strings.HasPrefix(n, "- `tls_denied_command` ") {
+			lines = append(lines, n)
+			ok = ok || strings.HasPrefix(n, "- `tls_denied_command` ")
+		}
+	}
+	if !ok {
+		return "", "", false
+	}
+	claim = "Whether a command port49's policy denies runs over per-request TLS (RFC 9887 with no single-connection, the device default) " +
+		"when the device sends port49 no command authorization (policy engine spec §15 L80), measured by TestQualify's `tls_denied_command` " +
+		"cell under tests/qual/qual-policy.yaml: one login typing only the denied command, graded from its first output line and port49's records."
+	obs = strings.Join(lines, "\n") + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/` (the cells' whitelisted records in decisions.jsonl; "+
+		"the denied-command login's connections in tls_denied_command.tls.json).", evidence)
+	return claim, obs, true
 }
