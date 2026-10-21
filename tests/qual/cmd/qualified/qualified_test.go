@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/devicemock"
 )
@@ -300,4 +303,61 @@ engine_gaps: []`)}
 			t.Errorf("%s: want %q in:\n%s", tc.id, want, got)
 		}
 	}
+}
+
+// The policy block an operator gap tells an operator to add is the one the qual
+// policy ran with (final review I1: a page that printed operator at admin's level
+// on SR Linux, where no command rule narrows it, would grant device admin).
+func TestOperatorGapBlocksAreTheQualPolicys(t *testing.T) {
+	raw, err := os.ReadFile("../../../../tests/qual/qual-policy.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct{ Platforms map[string]any }
+	if err := yaml.Unmarshal(raw, &pol); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := filepath.Glob("../../../../tests/qual/profiles/*/*.yaml")
+	seen := 0
+	for _, f := range files {
+		p, err := devicemock.Load(f, "../../../..")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range p.EngineGaps {
+			_, after, ok := strings.Cut(e.What, "platforms: ")
+			if !strings.HasPrefix(e.ID, operatorGapPrefix) || !ok {
+				continue
+			}
+			var shown map[string]any
+			if err := yaml.Unmarshal([]byte(flowMap(after)), &shown); err != nil {
+				t.Fatalf("%s: %v", f, err)
+			}
+			for name, v := range shown {
+				seen++
+				if a, b := fmt.Sprint(v), fmt.Sprint(pol.Platforms[name]); a != b {
+					t.Errorf("%s: the page tells an operator %s: %s; the qual policy has %s", f, name, a, b)
+				}
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no operator gap printed a policy block")
+	}
+}
+
+// flowMap is the balanced {...} at the start of s.
+func flowMap(s string) string {
+	depth := 0
+	for i, c := range s {
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			if depth--; depth == 0 {
+				return s[:i+1]
+			}
+		}
+	}
+	return s
 }

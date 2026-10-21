@@ -5,6 +5,7 @@ package lab
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -581,17 +582,56 @@ func TestQualRetryUnreachedChecksTheWholeWindowAfterASuccess(t *testing.T) {
 	}
 }
 
-// The XR note carries the facts an operator needs at 3am; no other platform gets the section.
-func TestQualOperatorSectionIsXROnlyAndNamesTheTwoFacts(t *testing.T) {
+// The XR and SR Linux notes carry the facts an operator needs at 3am; no other platform gets the section.
+func TestQualOperatorSectionNamesEachPlatformsFacts(t *testing.T) {
 	got := qualOperatorSection("cisco_iosxr")
 	for _, want := range []string{"priv-lvl", "aaa authorization commands default group", "Break-glass fails", "reasoning, not measurement"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the XR section lacks %q", want)
 		}
 	}
-	for _, p := range []string{"cisco_iosxe", "arista_eos", "nokia_srlinux", "juniper_junos", "cisco_nxos"} {
+	// SR Linux has no command fence (L76 cell b), so operator at 15 would be device admin (final review I1).
+	got = qualOperatorSection("nokia_srlinux")
+	for _, want := range []string{"priv-lvl-authorization true", "L76 cell b", "operator is read-only on SR Linux until a level between 1 and 15 is measured"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the SR Linux section lacks %q", want)
+		}
+	}
+	for _, p := range []string{"cisco_iosxe", "arista_eos", "juniper_junos", "cisco_nxos"} {
 		if qualOperatorSection(p) != "" {
-			t.Errorf("%s got an XR section", p)
+			t.Errorf("%s got an operator section", p)
+		}
+	}
+}
+
+// The block an operator section tells an operator to add is the one the run used:
+// tests/qual/qual-policy.yaml's platforms entry, read from the file.
+func TestQualOperatorSectionBlockIsThePolicys(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(qualRoot(t), "tests", "qual", "qual-policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pol struct {
+		Platforms map[string]any
+	}
+	if err := yaml.Unmarshal(raw, &pol); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"cisco_iosxr", "nokia_srlinux"} {
+		s := qualOperatorSection(p)
+		_, block, ok := strings.Cut(s, "```yaml\n")
+		block, _, ok2 := strings.Cut(block, "```")
+		if !ok || !ok2 {
+			t.Fatalf("%s: the section holds no yaml block", p)
+		}
+		var shown struct {
+			Platforms map[string]any
+		}
+		if err := yaml.Unmarshal([]byte(block), &shown); err != nil {
+			t.Fatal(err)
+		}
+		if a, b := fmt.Sprint(shown.Platforms[p]), fmt.Sprint(pol.Platforms[p]); a != b || len(shown.Platforms) != 1 {
+			t.Errorf("%s: the section shows %s, the qual policy has %s", p, a, b)
 		}
 	}
 }

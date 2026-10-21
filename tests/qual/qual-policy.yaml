@@ -7,7 +7,10 @@ platform_set: 1.3.0
 # which renders no attribute, and SR Linux refuses a login whose authorization carries no priv-lvl
 # (priv-lvl-authorization true; tests/lab/results/L76-nokia_srlinux.md cells a and h). This block is a
 # policy override local to the qual policy, not an adapter: it renders only priv-lvl, as L76 measured
-# the device reads it (1 -> p49-read, 15 -> p49-admin).
+# the device reads it (1 -> p49-read, 15 -> p49-admin). operator renders 1, not admin's 15: SR Linux
+# sends no per-command authorization (L76 cell b), so no port49 rule would narrow an operator at 15,
+# who would be device admin. operator stays read-only until a level between 1 and 15 is measured
+# (fails restrictive, as on XR; final review I1).
 # cisco_iosxr is the same case, with a different failure: XRd 26.1.1 logs a token user in on an empty
 # authorization reply and then answers every command "% This command is not authorized" without asking
 # port49d, so nothing is allowed (fails safe) and no command authorization is ever measured
@@ -26,7 +29,7 @@ platforms:
   nokia_srlinux:
     privilege:
       readonly: ["priv-lvl=1"]
-      operator: ["priv-lvl=15"]
+      operator: ["priv-lvl=1"]
       admin: ["priv-lvl=15"]
 scopes:
   - {name: all_devices, match: {}}

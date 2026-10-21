@@ -596,10 +596,40 @@ func qualDenied(recs []map[string]any) bool {
 // verdicts alone do not say; "" for a platform with nothing to add. It is
 // written by the harness so a regenerated note keeps it.
 func qualOperatorSection(platform string) string {
-	if platform != "cisco_iosxr" {
-		return ""
+	switch platform {
+	case "cisco_iosxr":
+		return qualOperatorXR
+	case "nokia_srlinux":
+		return qualOperatorSRLinux
 	}
-	return `
+	return ""
+}
+
+// qualOperatorSRLinux is SR Linux's section. The device sends no per-command
+// authorization (L76 cell b), so no port49 rule narrows a session: operator
+// renders readonly's level, not admin's, until a level between 1 and 15 is
+// measured (final review I1; fails restrictive, as on XR).
+const qualOperatorSRLinux = `
+
+## Operator requirements on SR Linux
+
+- **port49 must render priv-lvl.** platform_set 1.3.0 has no ` + "`nokia_srlinux`" + ` adapter, so the generic adapter serves it and renders no attribute, and SR Linux then refuses every login: port49 permits the session and the device refuses the SSH login (QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md). This run passes with ` + "`platforms: nokia_srlinux`" + ` in tests/qual/qual-policy.yaml; L76 cells (a) and (h) measured the device reading ` + "`priv-lvl`" + ` 15 and 1 as p49-admin and p49-read. Add to the policy file:
+
+` + "```yaml" + `
+platforms:
+  nokia_srlinux:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+` + "```" + `
+
+- **operator is read-only on SR Linux until a level between 1 and 15 is measured.** Port49 command permit and deny rules never apply on SR Linux, because the device sends no per-command authorization (L76 cell b): the session role, chosen by ` + "`priv-lvl`" + `, is the only bound. At 15 an operator would be device admin with nothing to narrow it, so operator renders level 1 (p49-read), as readonly does.
+- **Set ` + "`priv-lvl-authorization true`" + ` on the device.** Its default is false, and then port49 is never asked to authorize (L76 cell i: 0 authorization requests); the YANG says the session then gets full admin access (srl_nokia-aaa.yang:254; YANG-stated, not measured).
+`
+
+// qualOperatorXR is XR's section.
+const qualOperatorXR = `
 
 ## Operator requirements on XR
 
@@ -619,7 +649,6 @@ platforms:
 - **Break-glass fails when port49 answers ERROR** (its store is unavailable), over TCP and TLS: the cells ` + "`store_unavailable`" + ` and ` + "`tls_store_unavailable`" + ` record break-glass logged in false (L73 cell i: ok false in 860 ms), as on IOS XE 17.18.02. With the store down nobody logs in to this device by SSH; keep a path that does not depend on port49 answering.
 - In this run ` + "`command_denied`" + ` passes through port49: ` + "`show users`" + ` has an authorize_command record denied with no_permit_dominates_deny.
 `
-}
 
 // qualL80Applies is whether platform's firmware is the image spec §15 L80
 // names: NX-OS 10.6(2)F. Any other image's denied-command cell is recorded in
