@@ -328,6 +328,8 @@ Important, 14 Minor) is applied as revision 1 the same day. The team lead ruled 
 dispatch and release tags) and Q2 (an L78 result showing no lockout on vJunos leaves the Junos rule
 unmeasured and L78 open for hardware Junos; decision 48 ruling 4 is provisional on L78). It builds mock
 devices from closed lab evidence, `make lab-regress` and `make qual-vet` (Plan 11b, below).
+**11b executed 2026-10-21** on `feature/qualification-suite` (Plan 11b — As built, below): eleven
+platforms vetted, L79 closed, L80 opened and closed, L78 measured and still open for hardware Junos.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7254,7 +7256,7 @@ then two re-reviews) was applied before Task 1.
 
 Status: **written 2026-10-19** (`2026-10-19-11b-qualification-suite.md`, branch
 `feature/qualification-suite`; twenty-three tasks; decision 52; opens L78 and L79; revision 1 applies the
-pre-flight review). Numbered 11b, not 12: it
+pre-flight review; **executed 2026-10-21**, Plan 11b — As built, below). Numbered 11b, not 12: it
 needs 11a's stores in the conformance runs, and plan 12 consumes its fleet mode for the load test, so it
 lands between them (the 05b and 06b1 precedent; nothing is renumbered).
 
@@ -7332,6 +7334,170 @@ The tooling around it:
 - 11a's **M4**: a lift or revoke delivered after the heal, and its reverse stray revoke, as row L79,
   cells (j) and (k) on L74's harness (Task 17).
 - L76's **R3-M1**: `l76WriteText`'s mixed-pair wording, no rerun (Task 18).
+
+### Plan 11b — As built
+
+Executed from `2026-10-19-11b-qualification-suite.md` on `feature/qualification-suite` (base `cbc795de`;
+rebased onto main at `800e8d2f`, PR #29, mid-run), each task reviewed, most through one to four fix rounds.
+The ledger is `.superpowers/sdd/2026-10-19-11b-qualification-suite/progress.md`, with each task's brief,
+report and review beside it. The Opus pre-flight (5 Critical, 14 Important, 14 Minor, then four scoped
+re-reviews) was applied before Task 1. The plan grew one task, **14b** (below), which the controller added
+when Task 14's review found a security-relevant device fact.
+
+- **Built, with the task commits** (fixes follow the task's own commit):
+  - Task 1, spec: decision 52, `packet_fields`, L78 and L79 opened (`545a0813`).
+  - Task 2, `make lab-regress`: one held lab lock, the STOP sentinel, SIGTERM at the budget
+    (`110ca2b2`, `6941bf44`, `7d9b0cd9`).
+  - Task 3, `notediff`: a rerun's changed observations, timings kept (`d086f6ef`, `2c680dbf`).
+  - Task 4, the first full `lab-regress` run and its fixes (`aeab4cad`, then `c0f53abf`, `afb5b36a`;
+    notes `f4a9bed4`..`ce71c448`).
+  - Task 5, `packet_fields` on validated request records (`1473b479`).
+  - Task 6, `internal/devicemock`: the profile, loaded strictly (`90c45402`, `de420bcd`, `d293c1c6`).
+  - Task 7, acceptance rules and the reaction table (`95c1ac19`, `05c99f48`).
+  - Task 8, the hello probe and the flight delay (`4a01d4f6`, `7f6f7e9f`).
+  - Task 9, the engine, `Judge` and the golden format (`3907232c`, `3ae17d68`, `850103b3`).
+  - Task 10, `TestQual` and the shared policy and daemon fragment (`373c30ef`, `0c1b975c`, `c8e2582b`,
+    `0e5d8b77`, `8d896ebb`).
+  - Task 11, the mock tier in CI on every PR (`a860d936`).
+  - Task 12, `TestQualify`, the lab conformance run with whitelisted evidence (`a7c94524`, `1cab078b`,
+    `e486c565`, `c85e39eb`).
+  - Task 13, `genprofile` (`5e7b4e44`, `b0a097d4`, `30dfc2fe`).
+  - Task 14, ten platforms vetted, mock and golden each (`06279069`, `cf3404b8`, `ceb68909`, `be8862a1`,
+    `3bf7cc40`, `68a04fe0`, `fd181ad5`, `1170bd92`, `857b62f1`, `2e43cea9`, with the harness fixes
+    between them).
+  - Task 14b, the TLS grading rework (below).
+  - Task 15, L78 measured on vJunos 23.4 and 26.2 (`96a06528`, `33bdc8dc`, `4e549560`).
+  - Task 16, XRd 26.1.1: an XR dialect, the full L73 row, the eleventh platform (`f1044cde`, `eade4fce`,
+    `dd3b60fc`, `0d985aaf`, `00692cfe`, `452a3741`).
+  - Task 17, L79 closed (`aa3685b3`, `870cd264`, `3d5f615a`, `33edde39`, `51161553`).
+  - Task 18, L76's R3-M1 wording (`e7ff23d7`).
+  - Task 19, fleet mode, `make qual-fleet` (`5b06903b`, `b15f4793`, `e47313d4`).
+  - Task 20, the free-image tier for SR Linux (`2d23b712`, `5c912421`, `5f507862`).
+  - Task 21, `docs/qualified-platforms.md` and its drift test (`b15cbef7`, `aec3ea98`).
+  - Task 22, `make qual-vet` and the two procedures (`1d7b93b2`, `a82d766c`).
+  - Task 23, this record.
+- **Task 14b, the TLS grading rework** (`e60e7126`..`ec966feb`, then `7e4db36a`..`069d98f9`, a lab re-vet of
+  the five TLS images, and `7cb1941f`..`0f6febe6`). Task 14's review found that NX-OS 10.6 over default
+  per-request TLS never reached port49 with a command authorization, so a golden claiming "command
+  authorization yes" was false.
+  - TestQualify grades two TLS cells apart: per-request (the device default) and `tls_single_connection`.
+    Each starts its verdict with the mode it ran in. A TLS cell that is not sent a command
+    authorization is a recorded device fact, not an engine gap.
+  - The hello probe records and sends the device's `key_share` groups, nothing it did not send
+    (cEOS 4588, IOS XE 25, NX-OS, vJunos and XRd 29).
+  - A command counts as run only when its output is no refusal (`qualRan`); the survey added the refusal
+    text of every platform, NX-OS's role refusal among them.
+  - `genprofile` carries hand-written entries forward, refuses a conflict, and refuses a generator-owned
+    entry that a new run no longer yields. `-keep` and `-take` are per key. All eleven profiles regenerate
+    with no flags.
+  - The page has a column for command authorization over TLS.
+- **Found by the lab or a review, fixed in 11b:**
+  - L35 and L37 judged a dark port49d by plan 7e's circuit-open line. Decision 37's health checks make it
+    dark at about 5 s, so the verdict was stale since 7f, not a regression (`c0f53abf`, `97c27bfb`).
+  - The Ansible lookup failed for a name outside the inventory (L66, five entries). Fixed on main by
+    PR #29 before the rerun.
+  - The L78 grader counted any answer as a command run; Junos has no refusal marker, and a fail-closed
+    reply answered `error: unknown command: show` (`4e549560`).
+  - A wrong credential counted as refused on a reset with no record; it now needs a denied redeem
+    (`c756f2ad`). The evidence audit no longer counts a recomputed TCP checksum as a rewritten byte
+    (`8fe0bc32`).
+- **Rulings, as recorded, and what a review or a lab result changed:**
+  - **Q1** (the SR Linux job runs on dispatch and release tags) and **Q2** (an L78 result with no lockout
+    on vJunos leaves the Junos rule `unmeasured`, decision 48's budget stands, ruling 4 provisional on
+    L78) stand as ruled before Task 1.
+  - L62, the Windows-VM and many-hour rows, and the hand-measured L11, L21 and L51 are excluded from the
+    default `lab-regress` run, each with its reason in `tests/lab/regress.yaml`.
+  - A rerun's rewritten notes are not committed wholesale: the Run line, dates and ids churn, and the L73
+    rewrite drops hand-written operator facts. Only the changes a classified investigation called real
+    were refreshed (L10 Junos, L49, L64 and L65, L22's wording).
+  - `qual-policy.yaml` is one file for lab and mock (decision 52 ruling 5), scoped per platform for the
+    denied command; platforms with no `platform_set` 1.3.0 adapter (SR Linux, XRd) carry an operator
+    `platforms:` privilege block, measured, shown in the profile and printed on the page.
+  - Junos's and SR Linux's command cells grade `not_applicable`: neither sends per-command authorization
+    (L18, L76 cell b), and the page reads "— (L18)" or "— (L76 cell b)", never "no", only when that marker
+    is recorded.
+  - Golden paths are confined to `tests/qual/golden/` in `devicemock.Validate`, so every consumer gets it.
+  - A refusal (alert, reset, close) resolves as one class per step: the alert and the reset race on the
+    port49 side, so keying on the exact event made goldens flap.
+  - The free-image job installs a pinned, checksummed containerlab `.deb`, not `curl | bash`.
+  - Fleet mode: a reload that changes the answer clears only the changed keys (§5.1.3), which is why the
+    fleet asserts no `projection_fail_closed` in any phase.
+- **Lab.**
+  - **`make lab-regress` in full: 733.6 minutes** (the sum of the 59 `measured_minutes` in
+    `tests/lab/regress.yaml`, Task 4's first run plus the L35, L37, L66, L79 and L80 entries; the first
+    full run took 723.5 minutes of passing entries and about 18 h 45 min of wall time with NX-OS boot
+    retries). Slowest: L34 (103), L36 (67), L22 (44). Routine use needs `-only=` subsets.
+  - **`TestQual`'s wall time: 11.1 s** (Task 14's final run, all ten platforms then vetted); `make qual`
+    23.9 s, `make qual-fleet` 68.6 s. `make test` took about 948 s, of which `internal/port49d` was 910 to
+    914 s of its 1200 s timeout, so `TestQual` stays inside `make test` with about 4.8 minutes of headroom.
+    A package past about 1100 s needs the timeout raised or the package split.
+  - **L78 measured, still open.** vJunos-router 23.4R2-S2.1 and 26.2R1.7: no lockout at any step up to a
+    375-byte permit reply (break-glass logged in before and after every step;
+    `tests/lab/results/L78-vJunos-router-*-juniper_vjunos-router.md`). Totals 400 and 600 cannot be
+    rendered with every attribute at most 255: a deny list past 255 makes the projection fail closed
+    (decision 26, `projection_fail_closed`), and on both versions that reply refused `show version`.
+    Per Q2 the Junos profiles keep `junos_reply_total` `unmeasured`; the row stays open for hardware
+    Junos and decision 48's 255-byte budget stands.
+  - **XRd 26.1.1 and L73** (`tests/lab/results/L73-cisco_xrd.md`, row stays closed). The full row through
+    a new XR dialect: XR's TLS server defaults to port 49, not 300, without `port`; it opens its single
+    connection at commit; it needs `domain name` before enrolment; a group member and its host are
+    removed in separate commits. Generic XR (no `platform_set` adapter) answers every command "not
+    authorized" without asking port49, so it fails safe and is unusable: the profile carries an operator
+    privilege block (readonly priv-lvl 1, operator and admin 15). After an ERROR reply break-glass fails
+    on XRd over both transports, as on IOS XE 17.18.02.
+  - **L79 closed** (`tests/lab/results/L79-regions.md`, `3d5f615a`, rerun at `33edde39`). (j) A lift under a
+    cut exits 1 and says "could not be lifted, and stands": true, the mark is unchanged after the heal.
+    (k) A revoke under a cut reports "could not be recorded", yet the hedged create-if-absent was
+    delivered about 250 ms after the heal and re-created the mark after an operator's lift elsewhere. It
+    fails closed (a denial, never a grant), but the message is false and the re-revoke is not logged.
+    Decision 51's "provisional on L79" is resolved.
+  - **L80 opened and closed 2026-10-21** (`tests/lab/results/L80-cisco_nxos.md`, `33fd31e9`). On NX-OS
+    10.6(2)F over per-request TLS, `show users`, which port49's qual policy denies, ran, and port49 was
+    never asked about it (0 `authorize_command` records for it). With single-connection on, port49 was
+    asked and denied it. The cause, the device's local fallback, is presumed and not measured. The page row
+    reads "partial". `tests/lab/regress.yaml` has an entry, `L80-nxos106`, and a run that observes nothing
+    is INVALID and writes a not-measured note (`0f6febe6`). Other NX-OS images do not overwrite the note.
+  - L35, L37 and L66 passed on the rerun (L35 at `fee22706`, judging a dark port49d by decision 37).
+    L29-reload's vJunos refused phase is a device flake, retry it.
+- **Decision pending (Ryan): NX-OS 10.6 over per-request TLS.** A port49 deny does not hold. The controller
+  recommends a docs warning plus a §12 log warning when a `cisco_nxos` device uses per-request TLS; the
+  alternative is refusing those logins. Not decided, and no warning is added in 11b (no new warnings
+  here).
+- **Carried forward.**
+  - **A post-11b fix PR** (port49 code, not 11b scope; Opus implementer, with P-1 first):
+    - **P-1:** the settle pass keeps the old policy among priors and `supersedeTokens` clears each key
+      whole, so tokens minted under the policy in force are deleted for about 30 s after an
+      answer-changing edit (`token_not_found`); judge each unspent token by its own blob. Spec §5.1.3
+      does not license that loss.
+    - **SNI:** an IPv6 literal fails `server_names`' `dnsShape` check, so IPv6 Junos cannot be listed;
+      and `sni_mismatch` counts a strike, so a wrong `server_names` puts every Junos into malformed
+      back-off. Trace the 3am case and decide whether a config error should strike devices.
+    - **Fail-closed reload (L78):** a reload that turns a subject's grant fail-closed must say so in the
+      reload line, not only "0 device(s) quarantined". Spec §12 warning row first.
+    - **Revoke text (L79 k):** "could not be recorded" should say it may still land when the link heals;
+      the late write is logged and attributed. Consider a guard so a stale copy cannot re-create after a
+      lift (a tombstone or revision floor).
+    - **NX-OS 10.6 per-request TLS:** the §12 warning, if Ryan takes it.
+    - **Concurrent mints from one principal** under fleet load.
+    - **An XR `platform_set` adapter:** generic XR is unusable without an operator block.
+  - **Plan 12:** the hand-offs under "Plan 12", below.
+  - **Plan 13:** the hand-offs under "Plan 13", below.
+  - **Final review (whole-branch, before the PR):**
+    - Loop `TestTLSDecidesAtAcceptBeforeAnyTLSByte` and `TestTLSNilMaterialDeclinesWithoutAStrike` under
+      load (each flaked once, plan 11 code); L74 cell (i), "marks feed rescan, 1 vs 1", flaked once.
+    - Grep every harness "ran <cmd>" grade for the L78 flaw (an answer counted as success with no
+      refusal marker), Junos first. Task 16's re-grade of the ten earlier platforms rests on committed
+      evidence (a permitted `authorize_command` and output bytes), not first lines; the TLS re-vet
+      regraded five.
+    - The key share is exact for cEOS and read from the ClientHello's group ids for the rest.
+    - A not-measured L80 note keeps its "Date measured" header, and a source the generator drops survives as
+      an extra citation.
+    - The per-request TLS login cell grades login, so its `run.json` can read "pass" with no command
+      authorization; the verdict and the page say so.
+    - Confirm L35's iosxe `token_not_found` records (a spent token after the store came back) with a
+      kept decision log on the next run.
+    - Parked minors: Task 3's `-run-<12hex>` and `KEY=value` masks; Task 13's sub-5 ms delay rounding to
+      0; Task 8's DelayFlight on a second ClientHello after an HRR.
 
 ## Plan 12 — Deployment (§19 step 12)
 
@@ -7496,6 +7662,24 @@ reference config waits on the measurement.
 - The load test includes full TLS 1.3 handshakes per connection (tickets off, the default) at the
   §5 target rate. Whether tickets should default on is that number's to decide.
 
+**Carried from plan 11b** (Plan 11b — As built, above):
+- The load test drives `make qual-fleet` at the §5 rate. Fleet mode plays N mock devices from N loopback
+  addresses against one port49d, and one run holds a reload and a store fault mid-run (68.6 s at its
+  default size). Concurrent mints from one principal under fleet load are unmeasured.
+- A deployment shape's smoke test may use a mock device (`internal/devicemock`, a profile under
+  `tests/qual/profiles/`) in place of vEOS: a login through the shape, then the state surviving a restart.
+- Decision 48's 255-byte budget is provisional on L78. vJunos-router 23.4 and 26.2 showed no lockout up to
+  375 bytes; hardware Junos is unmeasured, so ship the budget as it stands.
+- Alarm for the fail-closed projection: a reload that turns a grant fail-closed today shows only
+  "0 device(s) quarantined" (the post-11b fix PR adds the reload line; the alarm waits for it).
+- The XR reference configuration needs an operator `platforms: cisco_iosxr:` block until a `platform_set`
+  adapter lands (readonly priv-lvl 1, operator and admin 15; `tests/lab/results/QUAL-XRd-*.md`). SR Linux
+  needs its block too.
+- **NX-OS 10.6(2)F over TLS:** its reference configuration sets single-connection on the TLS server
+  (L80: over per-request TLS a command port49 denies ran, and port49 was never asked). Ryan's decision on
+  a §12 warning or refusing those logins is pending.
+- The pre-beta review runs `make lab-regress` in full (733.6 minutes).
+
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
 required. Supporting every shape well matters for adoption. So "supported" means each shape has:
 
@@ -7623,6 +7807,31 @@ reference. The page also carries, each as what an operator sees and the fix:
 - **Config changes.** An edit to a `tls_listener:` key needs a restart (said once at SIGHUP).
   The certificate, key, CA and CRL files reload live every `reload_interval` and at SIGHUP, and a
   CA rotation needs no restart.
+
+From plan 11b (Plan 11b — As built, above):
+- **The qualified-platforms page,** published from `docs/qualified-platforms.md` (generated by
+  `make qualified-platforms`; a drift test fails when it is stale). Keep its "What an operator must do"
+  list beside the table, and its status column's `partial` and "re-vet pending" meanings.
+- **The contributor guide,** from `tests/qual/README.md`: vetting a firmware, adding a platform, `make
+  qual`, `make qual-vet`, `make qual-fleet`, and what a golden and an `engine_gaps` entry are. Vendor
+  images are never hosted.
+- **`packet_fields`** in the decision-log reference: the header fields of a validated request record as
+  enum names, absent on an unvalidated record.
+- **Per-platform device pages,** the traps the lab measured:
+  - **Junos** sends the server's IP as the SNI, so `server_names` must list every address or stay unset.
+    The device sees alert 80 (`internal_error`) while port49d logs `tls_refused` / `sni_mismatch`, so
+    "the device logs `internal_error` at the handshake" maps to "check `server_names`".
+  - **IOS XR (XRd 26.1.1)** dials TLS port 49, not 300, unless the server sets `port`; it needs `domain
+    name` before enrolment, and group member and host leave in separate commits. Without a `platforms:`
+    privilege block (or an adapter) every command is refused locally.
+  - **SR Linux** setup leads with `priv-lvl-authorization true`: the default false sends port49 no
+    authorization, and the YANG says that is full admin. Each local role also needs `services [ cli ]`.
+  - **NX-OS 10.6(2)F over TLS** needs single-connection; over per-request TLS port49's command rules do
+    not hold (L80).
+  - **IOS XE and XR** do not fall to the local method on an ERROR reply, so break-glass fails with the
+    store down (3am-table warning).
+- The `lab-regress` operator environment (the README section "Regressions (plan 11b)") and the NX-OS boot
+  hang's `-only=` workaround belong in the contributor guide.
 
 **Leaves for later:** nothing. **Lab:** none.
 

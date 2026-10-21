@@ -926,22 +926,25 @@ of content, never the content.
 ## Regressions (plan 11b)
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
-notes. Each entry's `measured_minutes` is its wall time in the first full run (commit `30728fa3`,
-2026-10-19/20): 58 of 66 entries ok, 8 FAIL, 723.5 minutes for the passing entries. A clean full run
-is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
-`make lab-regress LAB_REGRESS_ARGS=-only=L73-nxos106`. The slowest are L34 (103 min), L36 (67) and
-L22 (44). Entries that failed carry no `measured_minutes`.
+notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `30728fa3`,
+2026-10-19/20, then the L35, L37, L66, L79 and L80 entries): the manifest sums to 733.6 minutes. A clean
+full run is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
+`make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are L34 (103 min), L36 (67) and
+L22 (44).
 
-The runner stops at the first failure. Of the 8:
+The first run passed 58 of 66 entries. Of the 8 that failed, all are resolved:
 
-- **L35, L37**: the test still expected plan 7e's circuit-open line. port49d now goes dark on
-  decision 37's health checks (about 5 s), so the verdict was stale, not the device. The verdict is
-  fixed, but L35 and L37 have not passed under it yet: rerun them (`-only=L35,L37`) and expect their
-  notes to change.
-- **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29.
+- **L35, L37**: the test expected plan 7e's circuit-open line; port49d now goes dark on decision 37's
+  health checks (about 5 s). The verdict was fixed and both passed on the rerun.
+- **L66 (five entries)**: the lookup failed for a name outside the inventory; fixed by PR #29, and L66
+  passed on the rerun.
 - **L29-reload on vjunos**: no connection open across the change was reset in the refused/rekeyed
   phase. Junos sends nothing on a held connection, so the phase can fail its premise; a device
   flake, so retry the entry.
+
+**L80** (`L80-nxos106`) is a regress entry: it re-measures a security fact (a command port49 denies runs
+over NX-OS 10.6's per-request TLS), and a run that observes nothing is INVALID. A flipped outcome shows as
+changed lines in the note diff. `lab-regress` reports note changes and does not fail on them.
 
 **NX-OS boot hang.** 11 of 39 NX-OS deployments never booted: the container log stops after
 `feature netconf` and port49d sees no packet within 8 min. The cause is not yet known; the device
