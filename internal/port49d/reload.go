@@ -1305,7 +1305,7 @@ func (r *reloader) refresh(ctx context.Context) {
 	case r.stopped:
 		r.stopped = false
 		r.sayf("policy refresh finished: %s\n", summary(rep))
-	case rep.Updated+rep.Revoked+rep.Quarantined+rep.Failed+rep.TokenKeys > 0:
+	case rep.Updated+rep.Revoked+rep.Quarantined+rep.Failed+rep.TokenKeys+rep.TokensKept > 0:
 		r.sayf("policy refresh: %s\n", summary(rep))
 	}
 	r.reschedule()
@@ -1346,7 +1346,9 @@ func (r *reloader) reschedule() {
 // summary is what a refresh did, in one clause per count. A context updated or
 // revoked on a platform that never asks about a command is counted, and said:
 // its live session keeps what it had at login until logout, and the broker's
-// process log names each one's ctx_id.
+// process log names each one's ctx_id. The tokens kept under keys whose answer
+// changed are said beside the keys superseded, so an operator who ran `port49
+// token` again after an edit reads that their token survived.
 func summary(rep broker.RefreshReport) string {
 	s := fmt.Sprintf("%d live context(s) updated, %d revoked, %d unchanged, %d left on quarantined devices, "+
 		"%d failed", rep.Updated, rep.Revoked, rep.Unchanged, rep.Quarantined, rep.Failed)
@@ -1354,7 +1356,8 @@ func summary(rep broker.RefreshReport) string {
 		s += fmt.Sprintf("; %d of them on platforms that do not authorize commands keep their live session until "+
 			"logout (spec §13 decision 21)", rep.Unreached)
 	}
-	return s + fmt.Sprintf("; unspent tokens superseded on %d (device, username) key(s)", rep.TokenKeys)
+	return s + fmt.Sprintf("; unspent tokens superseded on %d (device, username) key(s), %d token(s) kept",
+		rep.TokenKeys, rep.TokensKept)
 }
 
 // refusalLine is a refused reload's error on one line for stderr, a log:

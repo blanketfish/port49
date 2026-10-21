@@ -28,6 +28,8 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
@@ -602,6 +604,79 @@ func TestTheSettlePassJudgesALateReplicasTokens(t *testing.T) {
 	runSettlePass(t, rig)
 	if tokenStillRedeemable(t, rig, tok) {
 		t.Fatal("the settle pass kept a token minted under the replaced policy after the first pass")
+	}
+}
+
+// P-1: an edit that changes alice's answer, then her `port49 token` again
+// under it. The settle pass keeps that token, and still deletes a late
+// replica's minted into the same key under the replaced policy; the line
+// says both.
+func TestTheSettlePassKeepsATokenMintedUnderThePolicyInForce(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	swapTo(t, rig, showOnly)                 // the edit that narrows alice's grant
+	fresh := mintUnder(t, rig, showOnly)     // her token under the policy in force
+	late := mintUnder(t, rig, minimalPolicy) // another replica, still on the old policy
+	runFirstPass(t, rig)
+	runSettlePass(t, rig)
+	if !tokenStillRedeemable(t, rig, fresh) {
+		t.Fatal("the settle pass deleted the token minted under the policy in force")
+	}
+	if tokenStillRedeemable(t, rig, late) {
+		t.Fatal("the settle pass kept a token minted under the replaced policy")
+	}
+	if !strings.Contains(rig.out.String(), "key(s), 1 token(s) kept") {
+		t.Fatalf("no line says the token kept:\n%s", rig.out.String())
+	}
+}
+
+// showOnlyTouch is showOnly under a per-login touch with reuse_for 0: an edit
+// that adds a requirement as it narrows.
+const showOnlyTouch = `
+scopes: [{name: all_devices, match: {}, per_login_mfa: {accept: [hardware_key_touch], reuse_for: 0m}}]
+roles: [{name: r, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`
+
+// P-1 under a per-login requirement the edit adds (R-C1): a token minted on
+// a fresh challenge 30s after the touch survives the settle pass under
+// reuse_for 0. This rig has no attestation PKI to prove a touch through
+// (the broker's tests mint one for real, TestAFreshProofKeepsItsTokenWhateverReuseFor),
+// so the token is written as the mint writes it on a fresh challenge.
+func TestTheSettlePassKeepsAFreshProofsTokenUnderAnAddedRequirement(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	swapTo(t, rig, showOnlyTouch)
+	pol := rig.b.Policy.Load()
+	d, ok := pol.Device("leaf1")
+	if !ok {
+		t.Fatal("leaf1 is not in the rig's inventory")
+	}
+	const alice = "user:alice@example.com"
+	res, err := pol.ResolveMember(policy.MemberOf(alice), d, rig.now)
+	if err != nil || !res.PerLoginMFA.Required() {
+		t.Fatalf("alice on leaf1 under the edit: %v, requirement %v", err, res.PerLoginMFA)
+	}
+	_, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const fresh = "fresh-proof-token"
+	if _, err := rig.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}, store.Token{
+		ID: "fresh", Secret: []byte(fresh), Kind: store.KindLogin, ExpiresAt: rig.now.Add(res.TokenTTL),
+		Principal: alice, Username: res.Username, BlobHash: hash, MaxSessionAge: res.SessionAge.Of(rig.b.MaxSessionAge),
+		Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, AuthTime: rig.now, MintedAt: rig.now,
+		Credential: store.Credential{Method: "cert", MFAMethod: "hardware_key_touch",
+			MFAAt: rig.now.Add(-30 * time.Second), MFAFresh: true}}); err != nil {
+		t.Fatal(err)
+	}
+	late := mintUnder(t, rig, minimalPolicy)
+	runFirstPass(t, rig)
+	runSettlePass(t, rig)
+	if !tokenStillRedeemable(t, rig, fresh) {
+		t.Fatal("the settle pass deleted a token minted on a fresh challenge under the requirement in force")
+	}
+	if tokenStillRedeemable(t, rig, late) {
+		t.Fatal("the settle pass kept a token minted with no proof under the replaced policy")
 	}
 }
 
