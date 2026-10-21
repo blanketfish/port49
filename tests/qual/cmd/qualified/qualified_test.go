@@ -71,23 +71,23 @@ func TestTLSCellNeedsTheTLSLogin(t *testing.T) {
 // when the profile records it, and a profile that merely lacks the steps reads no.
 func TestCommandAuthorizationNotApplicableNeedsTheMarker(t *testing.T) {
 	g := golden(stop)
-	if c := command(g, true, "L18"); c != "— (L18)" {
+	if c := command(g.Scenarios["token_login"].Steps, true, "L18"); c != "— (L18)" {
 		t.Fatalf("marker and no command steps: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, true); s != "qualified" {
 		t.Fatalf("a recorded not-applicable cell does not count against qualified: %s", s)
 	}
-	if c := command(g, false, ""); c != "no" {
+	if c := command(g.Scenarios["token_login"].Steps, false, ""); c != "no" {
 		t.Fatalf("no marker: absence is never not-applicable: %s", c)
 	}
 	if s := status([]string{"tcp"}, g, false); s != "partial" {
 		t.Fatalf("%s", s)
 	}
 	denyOnly := golden(devicemock.GoldenStep{Step: "command_denied", Event: "author_error"}, stop)
-	if c := command(denyOnly, true, "L18"); c != "no" {
+	if c := command(denyOnly.Scenarios["token_login"].Steps, true, "L18"); c != "no" {
 		t.Fatalf("a marker does not excuse command steps the golden holds: %s", c)
 	}
-	if c := command(golden(permitted, denied, stop), true, "L18"); c != "yes" {
+	if c := command([]devicemock.GoldenStep{permitted, denied, stop}, true, "L18"); c != "yes" {
 		t.Fatalf("measured command steps win over the marker: %s", c)
 	}
 }
@@ -136,7 +136,7 @@ func TestARowForJunosReadsQualifiedOnlyWithTheMarker(t *testing.T) {
 	for _, tc := range []struct {
 		gap  bool
 		want string
-	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18) | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | yes | yes | partial |"}} {
+	}{{true, "| Juniper | Junos | 1.0 | yes | — | — (L18) | — | yes | yes | qualified |"}, {false, "| Juniper | Junos | 1.0 | yes | — | no | — | yes | yes | partial |"}} {
 		got, err := Build(repoWith(t, golden(stop), tc.gap, true))
 		if err != nil {
 			t.Fatal(err)
@@ -173,13 +173,13 @@ func replace(old, new string) func(string) string {
 	}
 }
 
-// A TLS-only platform has no 49 cell, and its command and accounting cells read
-// from tls_token_login.
+// A TLS-only platform has no 49 cells, and its TLS command and accounting cells
+// read from tls_token_login.
 func TestATLSOnlyRowReadsTheTLSLogin(t *testing.T) {
 	g := devicemock.Golden{Scenarios: map[string]devicemock.GoldenScenario{
 		"tls_token_login": {Outcome: "login_ok", Steps: []devicemock.GoldenStep{permitted, denied, stop}}}}
 	got := rowWith(t, g, replace("transports: [tcp]", "transports: [tls]"), replace("scenarios: [token_login, wrong_credential, store_unavailable]", "scenarios: [tls_token_login]"))
-	want := "| Juniper | Junos | 1.0 | — | yes | yes | yes | yes | qualified |\n"
+	want := "| Juniper | Junos | 1.0 | — | yes | — | yes | yes | yes | qualified |\n"
 	if !strings.Contains(got, want) {
 		t.Fatalf("want %q in:\n%s", want, got)
 	}
@@ -219,12 +219,62 @@ func TestTheCommandCellCitesItsOwnGapAndOperatorGapsArePrinted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"| yes | — | — (L76 cell b) | yes | yes | qualified |", "## What an operator must do", "- **Juniper 1.0**: logins need the priv-lvl policy block"} {
+	for _, want := range []string{"| yes | — | — (L76 cell b) | — | yes | yes | qualified |", "## What an operator must do", "- **Juniper 1.0**: logins need the priv-lvl policy block"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("want %q in:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "(L18)") {
 		t.Fatalf("a Junos citation on another platform:\n%s", got)
+	}
+}
+
+// tlsRow is fixture_junos over TCP and TLS with g, and the per-request fact
+// when fact is true. The fact cites L73 cell a as the NX-OS 10.6 profile does.
+func tlsRow(t *testing.T, g devicemock.Golden, fact bool, scenarios string) string {
+	t.Helper()
+	edits := []func(string) string{replace("transports: [tcp]", "transports: [tcp, tls]"),
+		replace("scenarios: [token_login, wrong_credential, store_unavailable]", "scenarios: [token_login, wrong_credential, store_unavailable, "+scenarios+"]")}
+	if fact {
+		edits = append(edits, replace("engine_gaps: []", `device_facts: [{id: tls_per_request_no_command_authorization, what: "Over per-request TLS this device sends port49 no command authorization (L73 cell a)", status: measured, sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}]
+engine_gaps: []`))
+	}
+	return rowWith(t, g, edits...)
+}
+
+func tlsGolden(tls, single []devicemock.GoldenStep) devicemock.Golden {
+	g := golden(permitted, denied, stop)
+	g.Scenarios["tls_token_login"] = devicemock.GoldenScenario{Outcome: "login_ok", Steps: tls}
+	if single != nil {
+		g.Scenarios["tls_single_connection"] = devicemock.GoldenScenario{Outcome: "login_ok", Steps: single}
+	}
+	return g
+}
+
+// Review batch 2 C1/I3: command authorization over TLS is its own column. A
+// platform whose per-request TLS sends none reads "no (per-request; <its
+// citation>)", or "single-connection only" when tls_single_connection measured
+// it; either is partial, never qualified, and the fact is printed for the operator.
+func TestTheTLSCommandColumnReadsTheTLSCells(t *testing.T) {
+	all := []devicemock.GoldenStep{permitted, denied, stop}
+	for _, tc := range []struct {
+		name      string
+		g         devicemock.Golden
+		fact      bool
+		scenarios string
+		row       string
+	}{
+		{"sent per-request", tlsGolden(all, nil), false, "tls_token_login", "| yes | yes | yes | yes | yes | yes | qualified |"},
+		{"not sent, fact", tlsGolden([]devicemock.GoldenStep{stop}, nil), true, "tls_token_login", "| yes | yes | yes | no (per-request; L73 cell a) | yes | yes | partial |"},
+		{"single-connection only", tlsGolden([]devicemock.GoldenStep{stop}, all), true, "tls_token_login, tls_single_connection", "| yes | yes | yes | single-connection only (per-request: L73 cell a) | yes | yes | partial |"},
+		{"not sent, no fact", tlsGolden([]devicemock.GoldenStep{stop}, nil), false, "tls_token_login", "| yes | yes | yes | no | yes | yes | partial |"},
+	} {
+		got := tlsRow(t, tc.g, tc.fact, tc.scenarios)
+		if !strings.Contains(got, "| Juniper | Junos | 1.0 "+tc.row+"\n") {
+			t.Errorf("%s: want row %q in:\n%s", tc.name, tc.row, got)
+		}
+		if note := "- **Juniper 1.0**: Over per-request TLS this device sends port49 no command authorization (L73 cell a)"; tc.fact != strings.Contains(got, note) {
+			t.Errorf("%s: the fact is printed for the operator exactly when the profile records it:\n%s", tc.name, got)
+		}
 	}
 }

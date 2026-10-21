@@ -254,7 +254,7 @@ func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
 	src := []devicemock.Source{note}
 	var out []devicemock.DeviceFact
 	if r.CommandAuthorization["tls_token_login"] == "not_sent" {
-		what := "over per-request TLS (the device default) the device sent port49 no command authorization for the commands typed (QUAL tls_token_login)"
+		what := "Over per-request TLS (the device default) the device sent port49 no command authorization for the commands typed (QUAL tls_token_login)"
 		switch r.CommandAuthorization["tls_single_connection"] {
 		case "sent":
 			what += "; with single-connection on it did (QUAL tls_single_connection): configure single-connection on its TLS servers, or port49's command rules never see a command"
@@ -276,7 +276,7 @@ func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
 	}
 	if r.CommandAuthorization["tls_single_connection"] == "not_sent" {
 		out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSSingleNoCommands,
-			What:   "with single-connection on, over TLS the device sent port49 no command authorization for the commands typed (QUAL tls_single_connection)",
+			What:   "With single-connection on, over TLS the device sent port49 no command authorization for the commands typed (QUAL tls_single_connection)",
 			Status: "measured", Sources: src})
 	}
 	return out, nil
