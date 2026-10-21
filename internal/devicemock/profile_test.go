@@ -251,7 +251,8 @@ func TestSlug(t *testing.T) {
 }
 
 func TestScenarioTransport(t *testing.T) {
-	for sc, want := range map[string]string{"tls_token_login": "tls", "flight_delay": "tls", "token_login": "tcp", "single_connection": "tcp"} {
+	for sc, want := range map[string]string{"tls_token_login": "tls", "flight_delay": "tls", "token_login": "tcp", "single_connection": "tcp",
+		"tls_single_connection": "tls"} {
 		if got := ScenarioTransport(sc); got != want {
 			t.Errorf("ScenarioTransport(%q) = %q, want %q", sc, got, want)
 		}
@@ -259,4 +260,31 @@ func TestScenarioTransport(t *testing.T) {
 	if BaseScenario("tls_unknown_ca") != "unknown_ca" || BaseScenario("token_login") != "token_login" {
 		t.Error("BaseScenario")
 	}
+}
+
+// tlsFact adds a device fact to fixture_junos, which lists tcp alone unless
+// tls is true.
+func tlsFact(id, status string, tls bool) func(string) string {
+	return func(s string) string {
+		if tls {
+			s = strings.Replace(s, "transports: [tcp]", "transports: [tcp, tls]", 1)
+		}
+		return strings.Replace(s, "engine_gaps: []", "device_facts:\n  - {id: "+id+", what: a fact, status: "+status+
+			", sources: [{note: tests/lab/results/L99-fixture_junos.md, register: L99}]}\nengine_gaps: []", 1)
+	}
+}
+
+// A device fact (decision 52: a claim, not an engine gap) is measured, cites a
+// note naming the firmware, and comes from a closed vocabulary.
+func TestADeviceFactIsAMeasuredClaimFromAClosedVocabulary(t *testing.T) {
+	p, err := loadEdited(t, tlsFact("tls_per_request_no_command_authorization", "measured", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.HasFact("tls_per_request_no_command_authorization") || p.HasFact("tls_single_connection_no_command_authorization") {
+		t.Fatalf("%+v", p.DeviceFacts)
+	}
+	refused(t, tlsFact("tls_sometimes_sends_commands", "measured", true), "tls_sometimes_sends_commands")
+	refused(t, tlsFact("tls_per_request_no_command_authorization", "unmeasured", true), "a device fact is measured")
+	refused(t, tlsFact("tls_per_request_no_command_authorization", "measured", false), "needs transport tls")
 }

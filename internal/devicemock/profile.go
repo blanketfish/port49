@@ -31,6 +31,7 @@ type Profile struct {
 	Stimulus      Stimulus         `yaml:"stimulus"`
 	Reactions     []Reaction       `yaml:"reactions"`
 	Acceptance    []AcceptanceRule `yaml:"acceptance"`
+	DeviceFacts   []DeviceFact     `yaml:"device_facts"`
 	EngineGaps    []EngineGap      `yaml:"engine_gaps"`
 	Golden        string           `yaml:"golden"` // relative to the repository root; "" for a fixture with none
 }
@@ -127,6 +128,38 @@ type AcceptanceRule struct {
 	Note    string   `yaml:"note"`
 }
 
+// DeviceFact is a measured claim about what the device does that no reaction
+// or acceptance rule says: a device fact, never an engine gap (decision 52
+// ruling 1 keeps those for what a profile cannot say and Go must do). Its id
+// is from deviceFacts, and the mock and the qualified-platforms page read it.
+type DeviceFact struct {
+	ID      string   `yaml:"id"`
+	What    string   `yaml:"what"`
+	Status  string   `yaml:"status"` // measured: an unmeasured fact is not listed
+	Sources []Source `yaml:"sources"`
+}
+
+// Device facts. Each names the transport it holds on.
+const (
+	// FactTLSPerRequestNoCommands: over per-request TLS (the device default) the
+	// device sends no command authorization, so tls_token_login plays no command
+	// step (NX-OS 10.6(2)F, L73 cell a).
+	FactTLSPerRequestNoCommands = "tls_per_request_no_command_authorization"
+	// FactTLSSingleNoCommands: the same with single-connection on, for
+	// tls_single_connection.
+	FactTLSSingleNoCommands = "tls_single_connection_no_command_authorization"
+)
+
+var deviceFacts = map[string]string{FactTLSPerRequestNoCommands: "tls", FactTLSSingleNoCommands: "tls"}
+
+// noCommandFact is the fact under which a scenario plays no command step.
+var noCommandFact = map[string]string{"tls_token_login": FactTLSPerRequestNoCommands, "tls_single_connection": FactTLSSingleNoCommands}
+
+// HasFact reports whether the profile records device fact id.
+func (p *Profile) HasFact(id string) bool {
+	return slices.ContainsFunc(p.DeviceFacts, func(f DeviceFact) bool { return f.ID == id })
+}
+
 type EngineGap struct {
 	ID      string   `yaml:"id"`
 	What    string   `yaml:"what"`
@@ -140,7 +173,7 @@ var (
 	// A scenario's transport is its prefix: tls_* and flight_delay over RFC 9887,
 	// the rest over 49 (ScenarioTransport).
 	scenarios = set("token_login", "wrong_credential", "store_unavailable", "single_connection",
-		"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay")
+		"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay", "tls_single_connection")
 	reactOn = set("authen_pass", "authen_fail", "authen_getpass", "authen_getuser", "authen_getdata", "authen_error",
 		"author_pass_add", "author_pass_repl", "author_fail", "author_error", "acct_success", "acct_error",
 		"conn_reset", "conn_closed", "reply_single_connect", "alert_unknown_ca", "alert_bad_certificate",
@@ -352,6 +385,20 @@ func (p *Profile) Validate(repoRoot string) error {
 		errs = append(errs, statusErr("acceptance "+a.ID, a.Status, a.Sources)...)
 		for _, s := range a.Sources {
 			cite("acceptance "+a.ID, s, a.Status == "measured")
+		}
+	}
+	for _, f := range p.DeviceFacts {
+		where := "device_facts " + f.ID
+		if tr, ok := deviceFacts[f.ID]; !ok {
+			errs = append(errs, fmt.Errorf("%s: not in the closed vocabulary", where))
+		} else if !slices.Contains(p.Transports, tr) {
+			errs = append(errs, fmt.Errorf("%s needs transport %s, which the profile does not list", where, tr))
+		}
+		if f.Status != "measured" || len(f.Sources) == 0 {
+			errs = append(errs, fmt.Errorf("%s: a device fact is measured, with a source, or not listed", where))
+		}
+		for _, s := range f.Sources {
+			cite(where, s, true)
 		}
 	}
 	for _, g := range p.EngineGaps {

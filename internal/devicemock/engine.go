@@ -91,7 +91,14 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 	pl := &player{p: p, t: t, l: l, now: time.Now()}
 	pl.tr.Scenario = scenario
 	defer pl.closeConn()
-	steps := p.Stimulus.Steps[:len(PlayedSteps(p, scenario))]
+	var steps []Step
+	for _, name := range PlayedSteps(p, scenario) {
+		for _, s := range p.Stimulus.Steps {
+			if s.Name == name {
+				steps = append(steps, s)
+			}
+		}
+	}
 	switch BaseScenario(scenario) {
 	case "wrong_credential":
 		bogus := make([]byte, 24)
@@ -171,10 +178,12 @@ func (pl *player) end(outcome string, extra ...StepResult) Transcript {
 }
 
 // PlayedSteps is the step names Play plays for a scenario, in order:
-// token_login, tls_token_login and single_connection play every stimulus
-// step; wrong_credential, store_unavailable, tls_store_unavailable,
-// flight_delay and tls_unknown_ca play login alone. Play uses it, and
-// genprofile builds goldens to it, so the two cannot disagree.
+// token_login, tls_token_login, single_connection and tls_single_connection
+// play every stimulus step, but a TLS one plays no command step where a device
+// fact says the device sends none on that connection mode (noCommandFact);
+// wrong_credential, store_unavailable, tls_store_unavailable, flight_delay and
+// tls_unknown_ca play login alone. Play uses it, and genprofile builds goldens
+// to it, so the two cannot disagree.
 func PlayedSteps(p *Profile, scenario string) []string {
 	if len(p.Stimulus.Steps) == 0 {
 		return nil
@@ -183,9 +192,13 @@ func PlayedSteps(p *Profile, scenario string) []string {
 	case "wrong_credential", "store_unavailable", "flight_delay", "unknown_ca":
 		return []string{p.Stimulus.Steps[0].Name}
 	}
-	names := make([]string, len(p.Stimulus.Steps))
-	for i, s := range p.Stimulus.Steps {
-		names[i] = s.Name
+	noCommands := noCommandFact[scenario] != "" && p.HasFact(noCommandFact[scenario])
+	var names []string
+	for _, s := range p.Stimulus.Steps {
+		if noCommands && strings.HasPrefix(s.Name, "command_") {
+			continue
+		}
+		names = append(names, s.Name)
 	}
 	return names
 }

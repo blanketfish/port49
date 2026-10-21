@@ -510,3 +510,68 @@ func TestValidateRefusesRefusalReactionsThatDisagree(t *testing.T) {
 		t.Fatalf("agreeing reactions are fine: %v", err)
 	}
 }
+
+// withCommandSteps is p with command_permitted and command_denied after
+// authorize_session, as a per-command device's stimulus has them.
+func withCommandSteps(p *Profile) {
+	cmd := p.Stimulus.Steps[1]
+	permitted, denied := cmd, cmd
+	permitted.Name, denied.Name = "command_permitted", "command_denied"
+	p.Stimulus.Steps = append(p.Stimulus.Steps[:2:2], append([]Step{permitted, denied}, p.Stimulus.Steps[2:]...)...)
+}
+
+// NX-OS 10.6(2)F sends no command authorization over per-request TLS (L73
+// cell a): a profile that records it plays tls_token_login with no command
+// step, never with steps the device never sent. token_login and
+// tls_single_connection still play them.
+func TestPerRequestTLSPlaysNoCommandStepWhereTheDeviceSendsNone(t *testing.T) {
+	p, ca, f := tlsFakeProfile(t)
+	withCommandSteps(p)
+	all := []string{"login", "authorize_session", "command_permitted", "command_denied", "account_start"}
+	if got := PlayedSteps(p, "tls_token_login"); !slices.Equal(got, all) {
+		t.Fatalf("with no fact: %v", got)
+	}
+	p.DeviceFacts = []DeviceFact{{ID: "tls_per_request_no_command_authorization", Status: "measured"}}
+	none := []string{"login", "authorize_session", "account_start"}
+	if got := PlayedSteps(p, "tls_token_login"); !slices.Equal(got, none) {
+		t.Fatalf("tls_token_login: %v, want %v", got, none)
+	}
+	for _, sc := range []string{"token_login", "tls_single_connection"} {
+		if got := PlayedSteps(p, sc); !slices.Equal(got, all) {
+			t.Fatalf("%s: %v, want %v", sc, got, all)
+		}
+	}
+	f.authen = []uint8{wire.AuthenStatusPass}
+	tr, err := Play(t.Context(), p, "tls_token_login", Target{Addr: f.ln.Addr().String(), Transport: "tls", Scale: 0,
+		Sleep: func(time.Duration) {}, TLS: &TLSMaterial{Client: issue(t, ca, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}},
+		Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "login_ok" {
+		t.Fatalf("%v\n%s", err, tr)
+	}
+	var played []string
+	for _, s := range tr.Steps {
+		played = append(played, s.Step)
+	}
+	if !slices.Equal(played, none) || len(f.seen()) != 3 {
+		t.Fatalf("played %v, the server saw %d requests\n%s", played, len(f.seen()), tr)
+	}
+}
+
+// tls_single_connection is single_connection over TLS: every request carries
+// the single-connect flag.
+func TestTLSSingleConnectionSetsTheFlag(t *testing.T) {
+	p, ca, f := tlsFakeProfile(t)
+	p.Scenarios = append(p.Scenarios, "tls_single_connection")
+	f.authen = []uint8{wire.AuthenStatusPass}
+	tr, err := Play(t.Context(), p, "tls_single_connection", Target{Addr: f.ln.Addr().String(), Transport: "tls", Scale: 0,
+		Sleep: func(time.Duration) {}, TLS: &TLSMaterial{Client: issue(t, ca, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}},
+		Login{User: "q", Credential: freshCredential(t)})
+	if err != nil || tr.Outcome != "login_ok" {
+		t.Fatalf("%v\n%s", err, tr)
+	}
+	for _, s := range f.seen() {
+		if s.Flags&wire.FlagSingleConnect == 0 {
+			t.Fatalf("a type %d request without the single-connect flag (flags %#x)", s.Type, s.Flags)
+		}
+	}
+}
