@@ -1,0 +1,385 @@
+### typed `configure ?`, cleared true, finished true
+configure ?^M
+^M  exclusive  Configure exclusively from this terminal^M
+  terminal   Configure from the terminal^M
+  <cr>       ^M
+RP/0/RP0/CPU0:xrd1#configure ^H^H^H^H^H^H^H^H^H^H          ^H^H^H^H^H^H^H^H^H^H
+### typed `crypto key <MASKED> ?`, cleared true, finished true
+crypto key <MASKED> ?^M
+  dsa                 Generate DSA keys^M
+  ecdsa               Generate ECDSA keys^M
+  ed25519             Generate ED25519 keys^M
+  rsa                 Generate RSA keys^M
+RP/0/RP0/CPU0:xrd1#crypto key <MASKED> ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                    ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `crypto key <MASKED> rsa ?`, cleared true, finished true
+crypto key <MASKED> rsa ?^M
+^M  WORD               RSA keypair label^M
+  general-keys       Generate a general purpose RSA key <MASKED> for signing and              encryption^M
+  system-enroll-key  Generate a general purpose system enroll key <MASKED> system certificate^M
+  system-root-key    Generate a general purpose system root key <MASKED> system root certificate^M
+  usage-keys         Generate seperate RSA key <MASKED> for signing and encryption^M
+  <cr>               ^M
+RP/0/RP0/CPU0:xrd1#crypto key <MASKED> rsa ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `crypto ca ?`, cleared true, finished true
+crypto ca ?^M
+^M  authenticate   Get the CA certificate^M
+  cancel-enroll  Cancel enrollment from a CA^M
+  crl            Actions on certificate revocation lists^M
+  enroll         Request a certificate from a CA^M
+  import         Import certificate^M
+  openssh        Openssh certificates^M
+  trustpool      Managing trustpool certificates^M
+RP/0/RP0/CPU0:xrd1#crypto ca ^H^H^H^H^H^H^H^H^H^H          ^H^H^H^H^H^H^H^H^H^H
+### typed `crypto ca authenticate l73-root ?`, cleared true, finished true
+crypto ca authenticate l73-root ?^M
+^M  WORD  Path to file containing CA certificate(s).^M
+  <cr>  Press Enter and continue as per enrollment URL configured for this trustpoint.^M
+RP/0/RP0/CPU0:xrd1#crypto ca authenticate l73-root ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `crypto ca enroll l73-dev ?`, cleared true, finished true
+crypto ca enroll l73-dev ?^M
+^M  WORD  Path to file where CSR(s) request will be copied.^M
+  <cr>  Press Enter and continue as per enrollment URL configured for this trustpoint.^M
+RP/0/RP0/CPU0:xrd1#crypto ca enroll l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                         ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `crypto ca import l73-dev ?`, cleared true, finished true
+crypto ca import l73-dev ?^M
+^M  certificate  Import a certificate from a s/tftp server or the terminal^M
+RP/0/RP0/CPU0:xrd1#crypto ca import l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                         ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `show logging | ?`, cleared true, finished true
+show logging | ?^M
+^M  begin    Begin with the line that matches^M
+  exclude  Exclude lines that match^M
+  file     Save the configuration^M
+  include  Include lines that match^M
+  utility  A set of common unix utilities^M
+  <cr>     ^M
+RP/0/RP0/CPU0:xrd1#show logging | ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H               ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `show running-config tacacs-server ?`, cleared true, finished true
+show running-config tacacs-server ?^M
+^M  holddown-time  Time for which a TACACS server is marked as dead^M
+  host           Specify a TACACS+ server^M
+  inheritance    Display the inheritance view^M
+  ipv4           Mark the dscp bit for ipv4 packets^M
+  ipv6           Mark the dscp bit for ipv6 packets^M
+  key            Set TACACS+ encryption key^M
+  timeout        Time to wait for a TACACS server to reply^M
+  |              Output Modifiers^M
+  <cr>           Shows current operating configuration^M
+RP/0/RP0/CPU0:xrd1#show running-config tacacs-server ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                  ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `show running-config aaa ?`, cleared true, finished true
+show running-config aaa ?^M
+^M  accounting                  AAA Accounting data^M
+  admin-accounting            Admin Accounting Enable/Disable^M
+  authentication              AAA Authentication data^M
+  authorization               AAA Authorization data^M
+  banner                      AAA banner^M
+  <LONG>    Config deprecated. Will be removed in 7.7.1. Specify 'default-taskgroup' instead.^M
+  default-taskgroup           Default taskgroup to be used for remote authentication^M
+  <LONG>  Enable to display login failed usernames in syslog after failure attempt^M
+  <LONG>  Enables OpenSSH Certificate based authentication for TACACS+ users. Mandates exec authorization configuration with TACACS+^M
+  group                       AAA group definitions^M
+  inheritance                 Display the inheritance view^M
+  logging                     AAA logging^M
+  map-to                      AAA username map-to SPIFFE ID^M
+  server                      AAA Server ^M
+  |                           Output Modifiers^M
+  <cr>                        Shows current operating configuration^M
+RP/0/RP0/CPU0:xrd1#show running-config aaa ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `show crypto ca certificates l73-dev ?`, cleared true, finished true
+show crypto ca certificates l73-dev ?^M
+^M  detail  with detail^M
+  pem     In Pem format^M
+  |       Output Modifiers^M
+  <cr>    ^M
+RP/0/RP0/CPU0:xrd1#show crypto ca certificates l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                    ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `show tacacs details | ?`, cleared true, finished true
+show tacacs details | ?^M
+^M  begin    Begin with the line that matches^M
+  exclude  Exclude lines that match^M
+  file     Save the configuration^M
+  include  Include lines that match^M
+  utility  A set of common unix utilities^M
+  <cr>     ^M
+RP/0/RP0/CPU0:xrd1#show tacacs details | ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                      ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `show tacacs server-groups ?`, cleared true, finished true
+show tacacs server-groups ?^M
+^M  |     Output Modifiers^M
+  <cr>  ^M
+RP/0/RP0/CPU0:xrd1#show tacacs server-groups ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                          ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `commit ?`, cleared true, finished true
+commit ?^M
+^M  best-effort          Commit the configuration changes via best-effort operation^M
+  comment              Assign a comment to this commit^M
+  confirmed            Rollback this commit unless there is a confirming commit^M
+  force                Override the memory checks^M
+  label                Assign a label to this commit^M
+  replace              Replace the contents of running configuration^M
+  save-running         Save running configuration to a file^M
+  script-verification  Precommit script options^M
+  show-error           Displays commit failures immediately^M
+  <cr>                 Commit the configuration changes via pseudo-atomic operation^M
+RP/0/RP0/CPU0:xrd1(config)#commit ^H^H^H^H^H^H^H       ^H^H^H^H^H^H^H
+### typed `crypto ca trustpoint l73-dev ?`, cleared true, finished true
+crypto ca trustpoint l73-dev ?^M
+^M  apply-group               Apply configuration from a group^M
+  auto-enroll               Set auto-enroll percentage at which renewal will be triggered^M
+  crl                       CRL options^M
+  description               Description for the trustpoint^M
+  enrollment                Enrollment parameters^M
+  exclude-group             Exclude apply-group configuration from a group^M
+  extended-key-usage        Extended Key Usage field for the certificate^M
+  ip-address                include ip address^M
+  message-digest            Certificate message digest^M
+  method                    Indicates mode of enrollment for leaf certificate^M
+  query                     Query parameters^M
+  re-enrollment             Re-enrollment parameters^M
+  renewal-message-type      Set renewal message type for SCEP auto-renewal feature^M
+  rsakeypair                RSA key <MASKED>
+  serial-number             include serial number^M
+  sftp-username             Secure FTP username^M
+  ssl-profile               SSL profile parameters used during TLS/mTLS handshake^M
+  <LONG>  Include Subject Alternative Name(SAN) in CSR request^M
+  subject-name              Subject Name^M
+  vrf                       Source interface VRF ^M
+  <cr>                      ^M
+RP/0/RP0/CPU0:xrd1(config)#crypto ca trustpoint l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                             ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 ?`, cleared true, finished true
+tacacs-server host 172.100.100.1 ?^M
+^M  apply-group                     Apply configuration from a group^M
+  exclude-group                   Exclude apply-group configuration from a group^M
+  holddown-time                   Time for which this TACACS server is marked as dead^M
+  key                             per-server encryption key <MASKED> default)^M
+  port                            TCP port for TACACS+ server (default is 49)^M
+  single-connection               Reuse connection to this server for all requests^M
+  <LONG>  Idle timeout for a single-connection to the server^M
+  timeout                         Time to wait for this TACACS server to reply (overrides default)^M
+  tls                             TLS support for TACACS+^M
+  <cr>                            ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 port 3049 ?`, cleared true, finished true
+tacacs-server host 172.100.100.1 port 3049 ?^M
+^M  apply-group                     Apply configuration from a group^M
+  exclude-group                   Exclude apply-group configuration from a group^M
+  holddown-time                   Time for which this TACACS server is marked as dead^M
+  key                             per-server encryption key <MASKED> default)^M
+  single-connection               Reuse connection to this server for all requests^M
+  <LONG>  Idle timeout for a single-connection to the server^M
+  timeout                         Time to wait for this TACACS server to reply (overrides default)^M
+  tls                             TLS support for TACACS+^M
+  <cr>                            ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 port 3049 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                           ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 tls ?`, cleared true, finished true
+tacacs-server host 172.100.100.1 tls ?^M
+^M  apply-group            Apply configuration from a group^M
+  exclude-group          Exclude apply-group configuration from a group^M
+  server-name-indicator  SNI extension to include in client hello^M
+  trustpoint             Trustpoint to be used for TACACS over TLS^M
+  <cr>                   ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 tls ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                     ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 key <MASKED> cleared true, finished true
+tacacs-server host 172.100.100.1 key <MASKED>
+^M  0          Specifies that an UNENCRYPTED key <MASKED> follow^M
+  6          Specifies that an encrypted type 6 key <MASKED> follow^M
+  7          Specifies that an encrypted key <MASKED> follow^M
+  Encrypt6   Specifies that an clear text key <MASKED> follow^M
+  LINE       The UNENCRYPTED (cleartext) key^M
+  clear      Config deprecated from 7.4.1. Use '0' instead.^M
+  encrypted  Config deprecated from 7.4.1. Use '7' instead.^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 key <MASKED>                                     ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 <MASKED> cleared true, finished true
+tacacs-server host 172.100.100.1 <MASKED>^M
+^MLINE^M
+  LINE  The UNENCRYPTED key^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 <MASKED>                                       ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 single-connection ?`, cleared true, finished true
+tacacs-server host 172.100.100.1 single-connection ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 single-connection ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                   ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 tls trustpoint l73-dev ?`, cleared true, finished true
+tacacs-server host 172.100.100.1 tls trustpoint l73-dev ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 tls trustpoint l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `tacacs-server host 172.100.100.1 port 3049 tls trustpoint l73-dev ?`, cleared true, finished true
+tacacs-server host 172.100.100.1 port 3049 tls trustpoint l73-dev ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config)#tacacs-server host 172.100.100.1 port 3049 tls trustpoint l73-dev ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                                  ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `no tacacs-server host 172.100.100.1 ?`, cleared true, finished true
+no tacacs-server host 172.100.100.1 ?^M
+^M  apply-group                     Apply configuration from a group^M
+  exclude-group                   Exclude apply-group configuration from a group^M
+  holddown-time                   Time for which this TACACS server is marked as dead^M
+  key                             per-server encryption key <MASKED> default)^M
+  port                            TCP port for TACACS+ server (default is 49)^M
+  single-connection               Reuse connection to this server for all requests^M
+  <LONG>  Idle timeout for a single-connection to the server^M
+  timeout                         Time to wait for this TACACS server to reply (overrides default)^M
+  tls                             TLS support for TACACS+^M
+  <cr>                            ^M
+RP/0/RP0/CPU0:xrd1(config)#no tacacs-server host 172.100.100.1 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                    ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `no tacacs-server host 172.100.100.1 port 3049 ?`, cleared true, finished true
+no tacacs-server host 172.100.100.1 port 3049 ?^M
+^M  apply-group                     Apply configuration from a group^M
+  exclude-group                   Exclude apply-group configuration from a group^M
+  holddown-time                   Time for which this TACACS server is marked as dead^M
+  key                             per-server encryption key <MASKED> default)^M
+  single-connection               Reuse connection to this server for all requests^M
+  <LONG>  Idle timeout for a single-connection to the server^M
+  timeout                         Time to wait for this TACACS server to reply (overrides default)^M
+  tls                             TLS support for TACACS+^M
+  <cr>                            ^M
+RP/0/RP0/CPU0:xrd1(config)#no tacacs-server host 172.100.100.1 port 3049 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa group server tacacs+ port49 ?`, cleared true, finished true
+aaa group server tacacs+ port49 ?^M
+^M  apply-group     Apply configuration from a group^M
+  exclude-group   Exclude apply-group configuration from a group^M
+  holddown-time   Time for which TACACS servers of this group is marked as dead^M
+  server          Specify a TACACS+ server (Max 10)^M
+  server-private  Specify a private (to this server group) TACACS+ server (max 10)^M
+  vrf             VRF to which this server group belongs to^M
+  <cr>            ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa group server tacacs+ port49 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa group server tacacs+ port49 server ?`, cleared true, finished true
+aaa group server tacacs+ port49 server ?^M
+^M  A.B.C.D or X:X::X  IPv4/IPv6 address of TACACS+ server^M
+RP/0/RP0/CPU0:xrd1(config)#aaa group server tacacs+ port49 server ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                       ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa group server tacacs+ port49 server 172.100.100.1 ?`, cleared true, finished true
+aaa group server tacacs+ port49 server 172.100.100.1 ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa group server tacacs+ port49 server 172.100.100.1 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                     ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `no aaa group server tacacs+ port49 server ?`, cleared true, finished true
+no aaa group server tacacs+ port49 server ?^M
+^M  A.B.C.D or X:X::X  IPv4/IPv6 address of TACACS+ server^M
+RP/0/RP0/CPU0:xrd1(config)#no aaa group server tacacs+ port49 server ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                          ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa authentication login default group port49 ?`, cleared true, finished true
+aaa authentication login default group port49 ?^M
+^M  group  Use Server-group^M
+  line   Use line <MASKED> authentication^M
+  local  Use local username authentication^M
+  <cr>   ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa authentication login default group port49 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa authorization exec default group port49 local ?`, cleared true, finished true
+aaa authorization exec default group port49 local ?^M
+^M  group  Use Server-group^M
+  none   no authorization^M
+  <cr>   ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa authorization exec default group port49 local ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                  ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa authorization commands default group port49 local ?`, cleared true, finished true
+aaa authorization commands default group port49 local ?^M
+^M  group  Use Server-group^M
+  none   no authorization^M
+  <cr>   ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa authorization commands default group port49 local ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                      ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa accounting exec default start-stop group port49 ?`, cleared true, finished true
+aaa accounting exec default start-stop group port49 ?^M
+^M  group  Use Server-group^M
+  none   No accounting^M
+  <cr>   ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa accounting exec default start-stop group port49 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                    ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `aaa accounting commands default start-stop group port49 ?`, cleared true, finished true
+aaa accounting commands default start-stop group port49 ?^M
+^M  group  Use Server-group^M
+  local  Local command accounting using syslog^M
+  none   No accounting^M
+  <cr>   ^M
+RP/0/RP0/CPU0:xrd1(config)#aaa accounting commands default start-stop group port49 ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                                                        ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### in `crypto ca trustpoint l73-dev`
+### typed `?`, cleared true, finished false
+?^M
+^M  apply-group               Apply configuration from a group^M
+  apply-group-append        Append apply-group configuration from a group^M
+  apply-group-remove        Remove a group from apply-group configuration^M
+  auto-enroll               Set auto-enroll percentage at which renewal will be triggered^M
+  clear                     Clear the uncommitted configuration^M
+  commit                    Commit the configuration changes via pseudo-atomic operation^M
+  crl                       CRL options^M
+  describe                  Describe a command without taking real actions^M
+  description               Description for the trustpoint^M
+  do                        Run an exec command^M
+  end                       Exit from configure mode^M
+  enrollment                Enrollment parameters^M
+  exclude-group             Exclude apply-group configuration from a group^M
+  exclude-item              Negate a command or set its defaults^M
+  exit                      Exit from this submode^M
+  extended-key-usage        Extended Key Usage field for the certificate^M
+  ip-address                include ip address^M
+  message-digest            Certificate message digest^M
+  method                    Indicates mode of enrollment for leaf certificate^M
+  no                        Negate a command or set its defaults^M
+  pwd                       Commands used to reach current submode^M
+  query                     Query parameters^M
+  re-enrollment             Re-enrollment parameters^M
+  renewal-message-type      Set renewal message type for SCEP auto-renewal feature^M
+  root                      Exit to the global configuration mode^M
+  rsakeypair                RSA key <MASKED>
+  serial-number             include serial number^M
+  sftp-username             Secure FTP username^M
+  show                      Show contents of configuration^M
+  ssl-profile               SSL profile parameters used during TLS/mTLS handshake^M
+  <LONG>  Include Subject Alternative Name(SAN) in CSR request^M
+  subject-name              Subject Name^M
+  vrf                       Source interface VRF ^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#
+### typed `enrollment ?`, cleared true, finished true
+enrollment ?^M
+^M  authentication-profile  Authentication profile used during certificate enrollment^M
+  local                   Enroll via file present on local filesystem^M
+  retry                   Polling parameters^M
+  terminal                Enroll via the terminal (cut-and-paste)^M
+  url                     CA server enrollment URL^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#enrollment ^H^H^H^H^H^H^H^H^H^H^H           ^H^H^H^H^H^H^H^H^H^H^H
+### typed `enrollment terminal ?`, cleared true, finished true
+enrollment terminal ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#enrollment terminal ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                    ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `rsakeypair ?`, cleared true, finished true
+rsakeypair ?^M
+^M  WORD  Key pair label^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#rsakeypair ^H^H^H^H^H^H^H^H^H^H^H           ^H^H^H^H^H^H^H^H^H^H^H
+### typed `subject-name ?`, cleared true, finished true
+subject-name ?^M
+^M  LINE  Subject Name^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#subject-name ^H^H^H^H^H^H^H^H^H^H^H^H^H             ^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `serial-number ?`, cleared true, finished true
+serial-number ?^M
+^M  none  do not include serial number^M
+  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#serial-number ^H^H^H^H^H^H^H^H^H^H^H^H^H^H              ^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `ip-address ?`, cleared true, finished true
+ip-address ?^M
+^M  A.B.C.D  ip address^M
+  none     do not include ip address^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#ip-address ^H^H^H^H^H^H^H^H^H^H^H           ^H^H^H^H^H^H^H^H^H^H^H
+### typed `ip-address none ?`, cleared true, finished true
+ip-address none ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#ip-address none ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H                ^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H^H
+### typed `crl ?`, cleared true, finished true
+crl ?^M
+^M  optional  CRL verification as optional^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#crl ^H^H^H^H    ^H^H^H^H
+### typed `crl optional ?`, cleared true, finished true
+crl optional ?^M
+^M  <cr>  ^M
+RP/0/RP0/CPU0:xrd1(config-trustp)#crl optional ^H^H^H^H^H^H^H^H^H^H^H^H^H             ^H^H^H^H^H^H^H^H^H^H^H^H^H
+### in `aaa group server tacacs+ port49`
+### typed `?`, cleared true, finished false
+?^M
+^M  apply-group         Apply configuration from a group^M
+  apply-group-append  Append apply-group configuration from a group^M
+  apply-group-remove  Remove a group from apply-group configuration^M
+  clear               Clear the uncommitted configuration^M
+  commit              Commit the configuration changes via pseudo-atomic operation^M
+  describe            Describe a command without taking real actions^M
+  do                  Run an exec command^M
+  end                 Exit from configure mode^M
+  exclude-group       Exclude apply-group configuration from a group^M
+  exclude-item        Negate a command or set its defaults^M
+  exit                Exit from this submode^M
+  holddown-time       Time for which TACACS servers of this group is marked as dead^M
+  no                  Negate a command or set its defaults^M
+  pwd                 Commands used to reach current submode^M
+  root                Exit to the global configuration mode^M
+  server              Specify a TACACS+ server (Max 10)^M
+  server-private      Specify a private (to this server group) TACACS+ server (max 10)^M
+  show                Show contents of configuration^M
+  vrf                 VRF to which this server group belongs to^M
+RP/0/RP0/CPU0:xrd1(config-sg-tacacs)#

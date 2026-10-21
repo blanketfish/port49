@@ -2530,11 +2530,16 @@ func (e *l73Env) note() {
 	if len(labcreds.Contains([]byte(note), secrets)) > 0 {
 		e.t.Fatal("INVALID: the note holds a secret; nothing written")
 	}
+	// help-diag.txt comes from a PORT49_L73_DIAG=help run, not this one: it survives the rewrite.
+	helpDiag, helpErr := os.ReadFile(filepath.Join(e.evDir, "help-diag.txt"))
 	if err := os.RemoveAll(e.evDir); err != nil {
 		e.t.Fatal(err)
 	}
 	if err := os.MkdirAll(e.evDir, 0o755); err != nil {
 		e.t.Fatal(err)
+	}
+	if helpErr == nil {
+		e.evidence["help-diag.txt"] = helpDiag
 	}
 	for name, body := range e.evidence {
 		if err := os.WriteFile(filepath.Join(e.evDir, name), body, 0o644); err != nil {
