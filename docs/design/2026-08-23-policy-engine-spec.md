@@ -10578,7 +10578,8 @@ reason and cost.
     recorded. A copy already sent can still land when the directory answers again, and it then
     stands everywhere, even over a lift made meanwhile. Until then the process denies what the
     revoke names, until a lift on that process or its restart. After the heal, check
-    `port49 revoke --list`.
+    `port49 revoke --list`. A write the store refused never lands: the revoke says it was
+    refused, and a mark the process already held still stands (task 2 review M2).
   - **The lift's record.** On etcd every lift also writes `rl/<kind>/<key>`, in the transaction
     that deletes the mark. It holds the lift's time and origin, and lives an hour, on a lease from
     the shared pool. It is a directory family in `rv/`'s keyspace, so a revoke's transaction
