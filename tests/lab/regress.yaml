@@ -449,6 +449,8 @@ entries:
     env: {PORT49_LAB_REMEASURE: L72}
     notes: [tests/lab/results/L72-reference.md]
 excluded:
+  - rows: [L80]
+    reason: measured by TestQualify's tls_denied_command cell inside `make qual-vet P=nxos106`, which also regenerates the NX-OS 10.6 profile and golden; a rerun is a re-vet, run by hand, not a note diff.
   - rows: [L62]
     reason: needs the real TPM and Ryan present at the machine; no agent or unattended run touches the TPM. Run by hand with `make lab-l62-up` before a release.
   - rows: [L44, L50]
