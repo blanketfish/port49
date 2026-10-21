@@ -944,3 +944,27 @@ func TestNotApplicableCommandAuthorizationIsNeitherRefusedNorAFact(t *testing.T)
 		t.Fatalf("a not_applicable cell recorded a fact: %+v", p.DeviceFacts)
 	}
 }
+
+// The device did ask port49, about `end`: the fact says it was never asked about the denied command (review M1).
+func TestTheDeniedRunsFactSaysPort49WasNeverAskedAboutTheCommand(t *testing.T) {
+	dir := copyFixture(t)
+	perRequestNotSent(t, dir)
+	editRun(t, dir, func(m map[string]any) {
+		m["denied_command_ran"] = map[string]any{"tls_denied_command": true}
+		m["denied_command_asked"] = map[string]any{"tls_denied_command": false}
+		m["cells"].(map[string]any)["tls_denied_command"] = "2026-10-20T12:04:30.000Z"
+		m["results"].(map[string]any)["tls_denied_command"] = "observed"
+	})
+	p, _, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(p.DeviceFacts, func(f devicemock.DeviceFact) bool { return f.ID == devicemock.FactTLSPerRequestDeniedRuns })
+	if i < 0 {
+		t.Fatalf("%+v", p.DeviceFacts)
+	}
+	w := p.DeviceFacts[i].What
+	if strings.Contains(w, "asked port49 nothing") || !strings.Contains(w, "port49 was never asked about the denied command") {
+		t.Fatalf("%s", w)
+	}
+}

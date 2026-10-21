@@ -277,7 +277,7 @@ func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
 		switch {
 		case measured && ran:
 			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedRuns, Status: "measured", Sources: l80,
-				What: "Over per-request TLS a command port49's policy denies runs: the device asked port49 nothing and ran it (L80). " +
+				What: "Over per-request TLS a command port49's policy denies runs: port49 was never asked about the denied command, and the device ran it (L80). " +
 					"Port49's command rules do not hold on this device over per-request TLS"})
 		case measured && r.DeniedCommandAsked["tls_denied_command"]:
 			out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestDeniedByPort49, Status: "measured", Sources: l80,
