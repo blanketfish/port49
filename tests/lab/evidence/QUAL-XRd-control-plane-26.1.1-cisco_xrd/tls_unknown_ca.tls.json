@@ -1,8 +1,8 @@
 [
   {
     "server": "172.100.100.1:300",
-    "device_port": 51389,
-    "syn_at": "2026-10-21T06:09:16.239342Z",
+    "device_port": 40286,
+    "syn_at": "2026-10-21T09:55:05.038102Z",
     "answer": "syn-ack",
     "client_hello": {
       "legacy_version": 771,
@@ -90,6 +90,9 @@
         43,
         45,
         51
+      ],
+      "key_share_groups": [
+        29
       ]
     },
     "server_hello": {
@@ -98,20 +101,20 @@
       "psk_selected": false,
       "hello_retry_request": false
     },
-    "device_tls_records": 6,
+    "device_tls_records": 5,
     "server_tls_records": 8,
-    "device_payload_bytes": 2037,
-    "server_payload_bytes": 876,
-    "server_flight_at": "2026-10-21T06:09:16.253965Z",
-    "device_reply_at": "2026-10-21T06:09:16.521738Z",
+    "device_payload_bytes": 1959,
+    "server_payload_bytes": 877,
+    "server_flight_at": "2026-10-21T09:55:05.053703Z",
+    "device_reply_at": "2026-10-21T09:55:05.321815Z",
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T06:09:16.52266Z"
+    "end_at": "2026-10-21T09:55:05.322444Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 15519,
-    "syn_at": "2026-10-21T06:09:16.574272Z",
+    "device_port": 26423,
+    "syn_at": "2026-10-21T09:55:05.532735Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -119,26 +122,12 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T06:09:16.575572Z"
+    "end_at": "2026-10-21T09:55:05.533978Z"
   },
   {
     "server": "172.100.100.1:300",
-    "device_port": 60319,
-    "syn_at": "2026-10-21T06:09:21.576416Z",
-    "answer": "syn-ack",
-    "device_tls_records": 0,
-    "server_tls_records": 0,
-    "device_payload_bytes": 0,
-    "server_payload_bytes": 0,
-    "device_fin_at": "2026-10-21T06:09:21.588017Z",
-    "incomplete": false,
-    "end": "device-fin",
-    "end_at": "2026-10-21T06:09:21.588017Z"
-  },
-  {
-    "server": "172.100.100.1:300",
-    "device_port": 59179,
-    "syn_at": "2026-10-21T06:09:21.685149Z",
+    "device_port": 28971,
+    "syn_at": "2026-10-21T09:55:05.597323Z",
     "answer": "syn-ack",
     "device_tls_records": 0,
     "server_tls_records": 0,
@@ -146,19 +135,6 @@
     "server_payload_bytes": 0,
     "incomplete": false,
     "end": "server-rst",
-    "end_at": "2026-10-21T06:09:21.68648Z"
-  },
-  {
-    "server": "172.100.100.1:300",
-    "device_port": 60864,
-    "syn_at": "2026-10-21T06:09:21.748455Z",
-    "answer": "syn-ack",
-    "device_tls_records": 0,
-    "server_tls_records": 0,
-    "device_payload_bytes": 0,
-    "server_payload_bytes": 0,
-    "incomplete": false,
-    "end": "server-rst",
-    "end_at": "2026-10-21T06:09:21.749245Z"
+    "end_at": "2026-10-21T09:55:05.598065Z"
   }
 ]
