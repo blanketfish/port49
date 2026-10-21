@@ -1473,12 +1473,12 @@ func TestALiftLeavesAMarkMadeAfterItsRead(t *testing.T) {
 		stands  bool
 	}{
 		{"revoked again", func() error {
-			if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
+			if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key, store.Lift{}); err != nil {
 				return err
 			}
 			return s.PutRevocation(ctx, bob)
 		}, store.ErrConflict, true},
-		{"lifted", func() error { return s.DeleteRevocation(ctx, bob.Kind, bob.Key) }, nil, false},
+		{"lifted", func() error { return s.DeleteRevocation(ctx, bob.Kind, bob.Key, store.Lift{}) }, nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if err := s.PutRevocation(ctx, bob); err != nil {
@@ -1490,7 +1490,7 @@ func TestALiftLeavesAMarkMadeAfterItsRead(t *testing.T) {
 				inner = c.between()
 			}
 			t.Cleanup(func() { afterLiftRead = nil })
-			err := s.DeleteRevocation(ctx, bob.Kind, bob.Key)
+			err := s.DeleteRevocation(ctx, bob.Kind, bob.Key, store.Lift{})
 			if inner != nil {
 				t.Fatal(inner)
 			}

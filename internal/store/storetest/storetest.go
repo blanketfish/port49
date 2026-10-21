@@ -865,13 +865,13 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		list[2].Key != bob.Key {
 		t.Fatalf("list: %+v %v", list, err)
 	}
-	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a lifted mark stands: %v", err)
 	}
-	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
 		t.Fatalf("lifting a mark twice: %v", err)
 	}
 	if got, err := s.GetRevocation(ctx, cert.Kind, cert.Key); err != nil || !got.At.Equal(cert.At) {

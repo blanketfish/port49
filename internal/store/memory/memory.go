@@ -1467,11 +1467,20 @@ func (s *Store) GetRevocation(_ context.Context, kind, key string) (store.Revoca
 	return store.Revocation{}, store.ErrNotFound
 }
 
-func (s *Store) DeleteRevocation(_ context.Context, kind, key string) error {
+// DeleteRevocation lifts the mark, and keeps no lift record: the memory
+// store is one process's, whose marks feed is the store itself, so no mark
+// can land over a lift its writer had not seen, and none is flagged
+// (decision 51; final check F-M1).
+func (s *Store) DeleteRevocation(_ context.Context, kind, key string, _ store.Lift) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.revocations, [2]string{kind, key})
 	return nil
+}
+
+// GetLift is always ErrNotFound: the memory store keeps no lift record.
+func (s *Store) GetLift(context.Context, string, string) (store.Lift, error) {
+	return store.Lift{}, store.ErrNotFound
 }
 
 func (s *Store) ListRevocations(_ context.Context) ([]store.Revocation, error) {

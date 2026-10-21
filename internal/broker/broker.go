@@ -1007,11 +1007,31 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 // found (Reloaded) is said, never silent: it may be a mark an etcd restore
 // lost (final review 7e-1 C-1). The daemon's marks (b.Marks) are the
 // feed's own to keep (store.FollowMarks).
+//
+// A mark the store flagged landed_after_lift is said once, as it is told
+// Standing (store.MarkChange), whether or not this process runs its
+// region (decision 51; R-I5): in the form its time against the lift's
+// calls for (landedLine). One this process's own write failed to record
+// is said as its own (Marks.FailedWrite; post-11b, C2).
 func (b *Broker) MarkChanged(c store.MarkChange) {
 	if c.Reloaded && !c.Standing {
 		b.say("broker: a reload of the marks found the revocation of %s lifted: lifted on a broker process "+
 			"while the marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted "+
 			"on purpose", printsafe.Line(c.Key, 160))
+	}
+	if c.Standing {
+		own := b.Marks.FailedWrite(c.Kind, c.Key, c.At)
+		switch {
+		case c.LandedAfterLift:
+			line := b.landedLine(c.Revocation)
+			if own {
+				line += "; " + b.ownClause()
+			}
+			b.say("%s", line)
+		case own:
+			b.say("broker: a revocation of %s %s, landed when the store answered again; it stands everywhere",
+				printsafe.Line(c.Key, 160), b.ownClause())
+		}
 	}
 	if b.Conns == nil {
 		return
@@ -1024,6 +1044,42 @@ func (b *Broker) MarkChanged(c store.MarkChange) {
 		b.say("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
 			printsafe.Line(c.Key, 160), n)
 	}
+}
+
+// landedReadTimeout bounds the read of a lift's record for a flagged mark's
+// line, which runs on the marks feed's goroutine.
+const landedReadTimeout = 5 * time.Second
+
+// landedLine is the line for r, a mark flagged landed_after_lift (spec §13
+// decision 51; re-review R-I2): r's time against the lift's, read from its
+// record, says whether it was a copy sent before the lift and held back by
+// a cut, or a revoke made after it by a writer that had not yet seen it.
+// Clocks are NTP-close and a cut lasts seconds. No form tells anyone to
+// lift again: whether the mark should stand is the operators' call.
+func (b *Broker) landedLine(r store.Revocation) string {
+	ctx, cancel := context.WithTimeout(context.Background(), landedReadTimeout)
+	defer cancel()
+	l, err := b.Store.GetLift(ctx, r.Kind, r.Key)
+	key := printsafe.Line(r.Key, 160)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return fmt.Sprintf("broker: a revocation of %s landed after a lift; the lift's record has expired", key)
+	case err != nil:
+		return fmt.Sprintf("broker: a revocation of %s landed after a lift; the lift's record could not be read "+
+			"(%s): `port49 revoke --list` names it", key, printsafe.Line(err.Error(), 300))
+	case r.At.Before(l.At):
+		return fmt.Sprintf("broker: a revocation of %s made at %s before the lift at %s landed after it: a copy "+
+			"sent while its writer was cut off; it stands everywhere", key, r.At.UTC().Format(time.RFC3339),
+			l.At.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("broker: a revocation of %s made at %s (%s) after the lift at %s, by a writer whose marks "+
+		"feed had not yet shown the lift; it stands everywhere; check with whoever revoked before lifting", key,
+		r.At.UTC().Format(time.RFC3339), printsafe.Line(r.Origin, 160), l.At.UTC().Format(time.RFC3339))
+}
+
+// ownClause says a mark was this process's own write, reported failed.
+func (b *Broker) ownClause() string {
+	return "made on this " + b.proc() + ", reported unrecorded then"
 }
 
 // RefusedAtBind records a request the broker's listener refused as its

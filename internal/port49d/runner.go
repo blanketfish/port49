@@ -1063,9 +1063,9 @@ func (r *runner) follow(c store.MarkChange) {
 	select {
 	case r.followed <- c.Revocation:
 	default:
-		fmt.Fprintf(stderr, "port49-broker: runner: a revocation of %s made elsewhere was not queued to reach this "+
+		fmt.Fprintf(stderr, "port49-broker: runner: a revocation of %s %s was not queued to reach this "+
 			"region's tokens (the queue is full); the marks deny it on every request, and the next takeover "+
-			"applies it\n", printsafe.Line(c.Key, 160))
+			"applies it\n", printsafe.Line(c.Key, 160), r.madeBy(c.Revocation))
 	}
 }
 
@@ -1100,8 +1100,8 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			return
 		case mark := <-r.followed:
 			n, refs, err := r.brk.ReachMark(ctx, mark)
-			line := fmt.Sprintf("port49-broker: runner: a revocation of %s made elsewhere reached %d token "+
-				"key(s) and %d context(s) here", printsafe.Line(mark.Key, 160), n, len(refs))
+			line := fmt.Sprintf("port49-broker: runner: a revocation of %s %s reached %d token "+
+				"key(s) and %d context(s) here", printsafe.Line(mark.Key, 160), r.madeBy(mark), n, len(refs))
 			if err != nil {
 				line += fmt.Sprintf("; not every step finished (%s): the marks deny it on every request, and the "+
 					"next takeover applies it again", printsafe.Line(err.Error(), 300))
@@ -1131,6 +1131,16 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			fmt.Fprintln(stderr, line)
 		}
 	}
+}
+
+// madeBy says where mark was made, for the runner's lines: "made
+// elsewhere", or, when it is this broker's own write that it reported
+// unrecorded and that landed late (Marks.FailedWrite), so (post-11b, C2).
+func (r *runner) madeBy(mark store.Revocation) string {
+	if r.brk != nil && r.brk.Marks.FailedWrite(mark.Kind, mark.Key, mark.At) {
+		return "made on this port49-broker, reported unrecorded then,"
+	}
+	return "made elsewhere"
 }
 
 // logoutRetryFirst is the wait before a failed logout reach is tried again;

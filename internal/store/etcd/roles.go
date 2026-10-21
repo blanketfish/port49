@@ -45,7 +45,7 @@ var (
 		famBySid, famByCert, famBlob}
 	daemonReads = []string{famMark, famLedger}
 	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded, famMembership, famMembershipK,
-		famOnce, famOIDCOwner, famLogout, famMFAProof, famSecondFactor, famSignInAttempts, famUnlock}
+		famOnce, famOIDCOwner, famLogout, famMFAProof, famSecondFactor, famSignInAttempts, famUnlock, famLift}
 	// daemonMetaReads are the keys of meta/ port49d's code reads, each
 	// granted by itself: seal_keys at a start, witness and purged by the
 	// restore guard, judged_bundle by the skew gauge (the bundle's name
@@ -61,8 +61,10 @@ type Scope int
 const (
 	// ScopeShared is a single site's one store: every family.
 	ScopeShared Scope = iota
-	// ScopeDirectory holds the directory's families alone (R11): rv/, sf/,
-	// ul/, mb/, mk/, lo/, meta/enrollments, meta/seal_keys and meta/ping.
+	// ScopeDirectory holds the directory's families alone (R11): rv/, rl/
+	// (a lift's record, beside the marks it is compared with: decision 51),
+	// sf/, ul/, mb/, mk/, lo/, meta/enrollments, meta/seal_keys and
+	// meta/ping.
 	ScopeDirectory
 	// ScopeSession holds every other family.
 	ScopeSession
@@ -141,7 +143,8 @@ var ErrNotSeparated = errors.New("etcd: a store identity reaches past its role")
 // superseded record, and writing a mark, the token indexes, an
 // idempotency record, a superseded instant, the ledger record and meta/,
 // one key in each; and both reading and writing each of the broker's own
-// families, ul/ (a person's unlock, plan 11a) among them. A write is probed by a transaction whose compare can never hold,
+// families, ul/ (a person's unlock, plan 11a) and rl/ (a lift's record,
+// decision 51) among them. A write is probed by a transaction whose compare can never hold,
 // so it writes nothing; etcd checks the permissions of both branches
 // before it evaluates the compare, so a missing grant is still refused
 // (pre-flight M32; measured on v3.6 by
@@ -224,6 +227,8 @@ func (s *Store) checkIdentityWith(ctx context.Context, broker bool, need, judged
 		{"reading " + s.k.family(famIdem), func() error { return s.probeRead(ctx, famIdem) }},
 		{"writing " + s.k.family(famIdem), func() error { return s.probeWrite(ctx, famIdem) }},
 		{"writing " + s.k.family(famMark), func() error { return s.probeWrite(ctx, famMark) }},
+		{"reading " + s.k.family(famLift), func() error { return s.probeRead(ctx, famLift) }},
+		{"writing " + s.k.family(famLift), func() error { return s.probeWrite(ctx, famLift) }},
 		{"writing " + s.k.family(famTokByPrin), func() error { return s.probeWrite(ctx, famTokByPrin) }},
 		{"writing " + s.k.family(famTokByCert), func() error { return s.probeWrite(ctx, famTokByCert) }},
 		{"reading " + s.k.family(famSuperseded), func() error { return s.probeRead(ctx, famSuperseded) }},
@@ -336,9 +341,10 @@ func (k keys) beyondDaemon(key, end string, write bool) string {
 // write port49d's own, and the daemon's is refused writing another's or
 // reading a broker's (R19; N1, N4). On a
 // directory keyspace both identities read the marks and meta/seal_keys; the
-// daemon's is refused writing a mark, meta/, a second factor, an unlock, a
-// pin, a map key or a logout, and reading a second factor, an unlock, a
-// pin, a map key, a logout or meta/enrollments; and its grants reach rv/,
+// daemon's is refused writing a mark, a lift's record, meta/, a second
+// factor, an unlock, a pin, a map key or a logout, and reading a lift's
+// record, a second factor, an unlock, a pin, a map key, a logout or
+// meta/enrollments; and its grants reach rv/,
 // meta/ping and meta/seal_keys alone (beyondDirectoryDaemon).
 func (s *Store) CheckIdentityAt(ctx context.Context, broker bool, scope Scope) error {
 	switch scope {
@@ -366,6 +372,8 @@ func (s *Store) CheckIdentityAt(ctx context.Context, broker bool, scope Scope) e
 	}
 	probes := []probe{
 		{"writing " + s.k.family(famMark), func() error { return s.probeWrite(ctx, famMark) }},
+		{"reading " + s.k.family(famLift), func() error { return s.probeRead(ctx, famLift) }},
+		{"writing " + s.k.family(famLift), func() error { return s.probeWrite(ctx, famLift) }},
 		{"reading " + s.k.family(famMembership), func() error { return s.probeRead(ctx, famMembership) }},
 		{"writing " + s.k.family(famMembership), func() error { return s.probeWrite(ctx, famMembership) }},
 		{"reading " + s.k.family(famMembershipK), func() error { return s.probeRead(ctx, famMembershipK) }},

@@ -233,7 +233,7 @@ func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error
 }
 
 // A revocation that waits out its bound behind another revocation or lift
-// is 503 revocation_busy, nothing revoked, never "could not be recorded"
+// is 503 revocation_busy, nothing revoked, never "may not have been recorded"
 // (pre-flight M18).
 func TestABusyRevocationIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
@@ -366,7 +366,7 @@ func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 		f.b.Store = putRevocationFails{f.st}
 		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
 		if err == nil || !strings.HasSuffix(err.Error(), c.stop) || strings.Contains(err.Error(), c.wrong) ||
-			!strings.Contains(err.Error(), "this "+f.b.proc()+" denies what it names until a lift on this "+f.b.proc()) {
+			!strings.Contains(err.Error(), "this "+f.b.proc()+" denies what it names, until a lift on this "+f.b.proc()) {
 			t.Errorf("proc %q unrecorded: %v", c.proc, err)
 		}
 	}

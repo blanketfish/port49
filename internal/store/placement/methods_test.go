@@ -12,7 +12,7 @@ import (
 // method fails TestEveryStoreMethodIsPlaced until it is listed in one table
 // (decision 51).
 var directoryMethods = set(`
-	PutRevocation GetRevocation DeleteRevocation ListRevocations
+	PutRevocation GetRevocation DeleteRevocation ListRevocations GetLift
 	PutMembership PutPin RefuseMapKeys GetMembership MembershipByKey DeleteMembership
 	PutLogout GetLogout
 `)

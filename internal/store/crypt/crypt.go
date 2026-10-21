@@ -994,8 +994,13 @@ func (w *wrapped) GetRevocation(ctx context.Context, kind, key string) (store.Re
 	return w.inner.GetRevocation(ctx, kind, key)
 }
 
-func (w *wrapped) DeleteRevocation(ctx context.Context, kind, key string) error {
-	return w.inner.DeleteRevocation(ctx, kind, key)
+func (w *wrapped) DeleteRevocation(ctx context.Context, kind, key string, by store.Lift) error {
+	return w.inner.DeleteRevocation(ctx, kind, key, by)
+}
+
+// GetLift passes through: a lift's record names identity alone, as a mark.
+func (w *wrapped) GetLift(ctx context.Context, kind, key string) (store.Lift, error) {
+	return w.inner.GetLift(ctx, kind, key)
 }
 
 func (w *wrapped) ListRevocations(ctx context.Context) ([]store.Revocation, error) {

@@ -109,18 +109,28 @@ type expiryRec struct {
 }
 
 type markRec struct {
-	Kind   string    `json:"kind"`
-	Key    string    `json:"key"`
-	At     time.Time `json:"at"`
-	Origin string    `json:"origin,omitempty"`
+	Kind            string    `json:"kind"`
+	Key             string    `json:"key"`
+	At              time.Time `json:"at"`
+	Origin          string    `json:"origin,omitempty"`
+	LandedAfterLift bool      `json:"landed_after_lift,omitempty"`
 }
 
 func markRecOf(r store.Revocation) markRec {
-	return markRec{Kind: r.Kind, Key: r.Key, At: r.At, Origin: r.Origin}
+	return markRec{Kind: r.Kind, Key: r.Key, At: r.At, Origin: r.Origin, LandedAfterLift: r.LandedAfterLift}
 }
 
 func (r markRec) revocation() store.Revocation {
-	return store.Revocation{Kind: r.Kind, Key: r.Key, At: r.At, Origin: r.Origin}
+	return store.Revocation{Kind: r.Kind, Key: r.Key, At: r.At, Origin: r.Origin, LandedAfterLift: r.LandedAfterLift}
+}
+
+// liftRec is a lift's record (rl/; decision 51): when the lift was made and
+// who asked, and until when the record is live on the store's clock; its
+// lease only reclaims it.
+type liftRec struct {
+	At     time.Time `json:"at"`
+	Origin string    `json:"origin,omitempty"`
+	Until  time.Time `json:"until"`
 }
 
 // ctxRec is a login context as stored. PolicyRev is store.Context's

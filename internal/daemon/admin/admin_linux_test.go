@@ -282,7 +282,7 @@ func TestARevocationGivesUpAtTheDeadlineAndSaysSo(t *testing.T) {
 	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now, OpTimeout: 100 * time.Millisecond,
 		Revoke: func(ctx context.Context, op RevokeOp) (string, bool, error) {
 			<-ctx.Done() // a hung store gives up only with its ctx
-			return "", false, fmt.Errorf("broker: the revocation could not be recorded (%w)", ctx.Err())
+			return "", false, fmt.Errorf("broker: the revocation may not have been recorded (%w)", ctx.Err())
 		},
 		Revocations: func(context.Context) (string, error) { return "", nil }})
 	c, err := net.Dial("unix", p)

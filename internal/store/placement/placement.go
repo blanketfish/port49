@@ -27,8 +27,9 @@ import (
 type Directory interface {
 	PutRevocation(ctx context.Context, r store.Revocation) error
 	GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error)
-	DeleteRevocation(ctx context.Context, kind, key string) error
+	DeleteRevocation(ctx context.Context, kind, key string, by store.Lift) error
 	ListRevocations(ctx context.Context) ([]store.Revocation, error)
+	GetLift(ctx context.Context, kind, key string) (store.Lift, error)
 }
 
 // Members is the directory store's membership half (R13): the pin, the map
@@ -108,10 +109,21 @@ func (p *placed) PutRevocation(ctx context.Context, r store.Revocation) error {
 	return bounded(ctx, p.c.CallTimeout, func(ctx context.Context) error { return p.c.Directory.PutRevocation(ctx, r) })
 }
 
-func (p *placed) DeleteRevocation(ctx context.Context, kind, key string) error {
+func (p *placed) DeleteRevocation(ctx context.Context, kind, key string, by store.Lift) error {
 	return bounded(ctx, p.c.CallTimeout, func(ctx context.Context) error {
-		return p.c.Directory.DeleteRevocation(ctx, kind, key)
+		return p.c.Directory.DeleteRevocation(ctx, kind, key, by)
 	})
+}
+
+// GetLift is the directory's record of a lift, never a copy's, within
+// CallTimeout: only `port49 revoke --list` and a flagged mark's line read
+// it (decision 51).
+func (p *placed) GetLift(ctx context.Context, kind, key string) (l store.Lift, err error) {
+	err = bounded(ctx, p.c.CallTimeout, func(ctx context.Context) (x error) {
+		l, x = p.c.Directory.GetLift(ctx, kind, key)
+		return
+	})
+	return l, err
 }
 
 func (p *placed) ListRevocations(ctx context.Context) (rs []store.Revocation, err error) {

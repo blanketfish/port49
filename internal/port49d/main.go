@@ -1072,6 +1072,13 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
+		flagged := 0
+		for _, r := range marks {
+			if r.LandedAfterLift {
+				flagged++
+			}
+		}
+		sayFlagged(stderr, "port49d", flagged)
 	}
 	// The ledger's marks past their keep are pruned here, joined as every
 	// run-scoped goroutine is: the memory store has no sweep, and on etcd

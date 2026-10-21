@@ -97,13 +97,27 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 		State: store.SecondFactorActive}, 0); err != nil {
 		t.Fatalf("the broker writes a second factor: %v", err)
 	}
+	if err := b.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:lifted", At: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DeleteRevocation(ctx, store.RevocationPrincipal, "user:lifted", store.Lift{At: t0}); err != nil {
+		t.Fatalf("the broker lifts, writing the lift's record (rl/): %v", err)
+	}
+	if _, err := b.GetLift(ctx, store.RevocationPrincipal, "user:lifted"); err != nil {
+		t.Fatalf("the broker reads a lift's record: %v", err)
+	}
 	for name, err := range map[string]error{
+		"read a lift's record": func() error { _, err := d.GetLift(ctx, store.RevocationPrincipal, "user:lifted"); return err }(),
+		"write a lift's record": func() error {
+			_, err := d.tok.Put(ctx, d.k.lift(store.RevocationPrincipal, "user:lifted"), "{}")
+			return unavailable(err)
+		}(),
 		"write a mark": d.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:x", At: t0}),
 		"overwrite a mark": func() error {
 			_, err := d.tok.Put(ctx, d.k.mark(store.RevocationPrincipal, "user:bob"), "{}")
 			return unavailable(err)
 		}(),
-		"lift a mark":           d.DeleteRevocation(ctx, store.RevocationPrincipal, "user:bob"),
+		"lift a mark":           d.DeleteRevocation(ctx, store.RevocationPrincipal, "user:bob", store.Lift{}),
 		"write the token index": d.IndexToken(ctx, "user:alice", "", k, time.Minute),
 		"read the token index":  func() error { _, err := d.TokensByPrincipal(ctx, "user:alice"); return err }(),
 		"write meta/":           func() error { _, err := d.ctx.Put(ctx, d.k.meta("hold"), "x"); return unavailable(err) }(),

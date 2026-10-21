@@ -292,7 +292,7 @@ func TestAMarkThatCannotBeWrittenRevokesNothing(t *testing.T) {
 	f.b.Marks = store.NewMarks()
 	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
 	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil ||
-		!strings.Contains(err.Error(), "nothing else was revoked") {
+		!strings.Contains(err.Error(), "the revocation may not have been recorded") {
 		t.Fatalf("%v", err)
 	}
 	if !f.b.Marks.Holds(store.RevocationPrincipal, alice) {
@@ -772,16 +772,20 @@ func TestARevocationSupersedesTheKeysItEmptied(t *testing.T) {
 // or a certificate's issuer and serial.
 func TestRevocationsTextNamesEachMark(t *testing.T) {
 	at := time.Date(2026, 10, 1, 3, 0, 0, 0, time.UTC)
+	noLift := func(string, string) (store.Lift, error) {
+		t.Error("an unflagged mark's lift was read")
+		return store.Lift{}, store.ErrNotFound
+	}
 	text := RevocationsText([]store.Revocation{
 		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at, Origin: "admin_socket uid 0"},
-		{Kind: store.RevocationPrincipal, Key: alice, At: at, Origin: "admin_socket uid 0"}})
+		{Kind: store.RevocationPrincipal, Key: alice, At: at, Origin: "admin_socket uid 0"}}, noLift)
 	want := `certificate issuer="CN=Corp CA,O=Example" serial=3f9a01 since 2026-10-01T03:00:00Z (admin_socket uid 0)` +
 		"\nprincipal user:alice@example.com since 2026-10-01T03:00:00Z (admin_socket uid 0)"
 	if text != want {
 		t.Fatalf("got\n%s\nwant\n%s", text, want)
 	}
-	if RevocationsText(nil) != "no revocation is in force" {
-		t.Fatal(RevocationsText(nil))
+	if RevocationsText(nil, noLift) != "no revocation is in force" {
+		t.Fatal(RevocationsText(nil, noLift))
 	}
 }
 
@@ -1317,7 +1321,9 @@ type deleteRevocationFails struct {
 	err error
 }
 
-func (s deleteRevocationFails) DeleteRevocation(context.Context, string, string) error { return s.err }
+func (s deleteRevocationFails) DeleteRevocation(context.Context, string, string, store.Lift) error {
+	return s.err
+}
 
 // A lift whose mark was revoked again while it ran lifts nothing, and says
 // so in the operator's words, never the store's "context changed" (dial fix

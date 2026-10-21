@@ -202,7 +202,7 @@ func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 		if err := s.PutRevocation(context.Background(), bob); err != nil {
 			t.Fatalf("warming revocation %d: %v", i, err)
 		}
-		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key); err != nil {
+		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key, store.Lift{}); err != nil {
 			t.Fatalf("warming lift %d: %v", i, err)
 		}
 	}
@@ -216,7 +216,7 @@ func TestALiftIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 			t.Fatalf("the revocation before lift %d: %v", total, err)
 		}
 		ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
-		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
+		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key, store.Lift{}); err != nil {
 			failed++
 		}
 		total++
@@ -240,7 +240,7 @@ func TestALateLiftLeavesALaterRevocationStanding(t *testing.T) {
 		if err := s.PutRevocation(context.Background(), bob); err != nil {
 			t.Fatalf("warming revocation %d: %v", i, err)
 		}
-		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key); err != nil {
+		if err := s.DeleteRevocation(context.Background(), bob.Kind, bob.Key, store.Lift{}); err != nil {
 			t.Fatalf("warming lift %d: %v", i, err)
 		}
 	}
@@ -262,7 +262,7 @@ func TestALateLiftLeavesALaterRevocationStanding(t *testing.T) {
 			cancel()
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key); err != nil {
+		if err := s.DeleteRevocation(ctx, bob.Kind, bob.Key, store.Lift{}); err != nil {
 			t.Fatalf("lift %d: %v", i, err)
 		}
 		cancel()

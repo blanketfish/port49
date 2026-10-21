@@ -38,7 +38,7 @@ func TestTheMarksAreTheDirectorys(t *testing.T) {
 	if rs, err := s.ListRevocations(ctx); err != nil || len(rs) != 1 {
 		t.Fatalf("%v %v", rs, err)
 	}
-	if err := s.DeleteRevocation(ctx, r.Kind, r.Key); err != nil {
+	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{}); err != nil {
 		t.Fatal(err)
 	}
 	if rs, _ := directory.ListRevocations(ctx); len(rs) != 0 {
@@ -109,10 +109,17 @@ func (hung) GetRevocation(ctx context.Context, _, _ string) (store.Revocation, e
 	<-ctx.Done()
 	return store.Revocation{}, ctx.Err()
 }
-func (hung) DeleteRevocation(ctx context.Context, _, _ string) error { <-ctx.Done(); return ctx.Err() }
+func (hung) DeleteRevocation(ctx context.Context, _, _ string, _ store.Lift) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
 func (hung) ListRevocations(ctx context.Context) ([]store.Revocation, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+func (hung) GetLift(ctx context.Context, _, _ string) (store.Lift, error) {
+	<-ctx.Done()
+	return store.Lift{}, ctx.Err()
 }
 
 // Review Focus 5: a directory write in a cut region fails within the

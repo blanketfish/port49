@@ -53,7 +53,7 @@ var pools = map[string]Pool{
 	"PutToken": Token, "Candidates": Token, "TokenIDs": Token, "RedeemAndReceipt": Token, "DeleteTokens": Token, "DeleteToken": Token,
 	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token, "IndexToken": Token,
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
-	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
+	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token, "GetLift": Token,
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
 	"PutMembership": Token, "PutPin": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
 	"MembershipPrincipals": Token, "DeleteMembership": Token,
@@ -665,8 +665,13 @@ func (g *guarded) GetRevocation(ctx context.Context, kind string, key string) (r
 	return
 }
 
-func (g *guarded) DeleteRevocation(ctx context.Context, kind string, key string) error {
-	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.DeleteRevocation(ctx, kind, key) })
+func (g *guarded) DeleteRevocation(ctx context.Context, kind string, key string, by store.Lift) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.DeleteRevocation(ctx, kind, key, by) })
+}
+
+func (g *guarded) GetLift(ctx context.Context, kind string, key string) (l store.Lift, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { l, e = g.inner.GetLift(ctx, kind, key); return })
+	return
 }
 
 func (g *guarded) ListRevocations(ctx context.Context) (rs []store.Revocation, err error) {

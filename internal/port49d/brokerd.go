@@ -246,6 +246,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		from = "the directory store"
 	}
 	fmt.Fprintf(out, "port49-broker: store: %d revocation(s) in force from %s\n", marks.Len(), from)
+	sayFlagged(out, "port49-broker", marks.Flagged())
 	gc := guardConfig(procOf(cfg), "broker", cfg.Stores.SessionPath(), e, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	bs.raw = b

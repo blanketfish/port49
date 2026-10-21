@@ -162,7 +162,7 @@ func TestABrokerOnTwoStoresMarksInTheDirectory(t *testing.T) {
 }
 
 // Review Focus 5: with the directory cut, a revocation is refused within the
-// directory's call_timeout, saying it could not be recorded, and the
+// directory's call_timeout, saying it may not have been recorded, and the
 // broker says the directory is not answering.
 func TestARevocationWithTheDirectoryCutFailsPromptly(t *testing.T) {
 	var out syncBuffer
@@ -176,7 +176,7 @@ func TestARevocationWithTheDirectoryCutFailsPromptly(t *testing.T) {
 	f.dproxy.Hang(true)
 	start := time.Now()
 	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	if err != nil || !strings.Contains(r.Error, "could not be recorded") || time.Since(start) > 5*time.Second {
+	if err != nil || !strings.Contains(r.Error, "may not have been recorded") || time.Since(start) > 5*time.Second {
 		t.Fatalf("%+v %v after %v", r, err, time.Since(start))
 	}
 	waitWithin(t, &out, "port49-broker: directory store: not answering", 10*time.Second)

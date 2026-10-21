@@ -1010,8 +1010,15 @@ type Store interface {
 	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)
 	// DeleteRevocation lifts the mark for (kind, key); none is not an error.
 	// It lifts only the mark it read: one made again while it ran stands,
-	// and the lift returns ErrConflict.
-	DeleteRevocation(ctx context.Context, kind, key string) error
+	// and the lift returns ErrConflict. A backend that flags a late mark
+	// (decision 51; etcd) writes by, the lift's time and origin, as the
+	// lift's record in the same write, for LiftTTL; one that cannot write it
+	// lifts nothing. by.Revision is not read.
+	DeleteRevocation(ctx context.Context, kind, key string, by Lift) error
+	// GetLift is the record of the last lift of (kind, key) within
+	// LiftTTL, with the revision it was written at, or ErrNotFound: none,
+	// or expired, or a backend that keeps none (memory).
+	GetLift(ctx context.Context, kind, key string) (Lift, error)
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
 	// SupersedeTokens records that some of k's unspent tokens were deleted
@@ -1403,6 +1410,44 @@ type Revocation struct {
 	At time.Time
 	// Origin says who asked: "admin_socket uid 0".
 	Origin string
+	// LandedAfterLift is set by the store when the mark was created over a
+	// lift of its key that its writer's marks feed had not delivered (spec
+	// §13 decision 51, the cache): a copy a cut held back, or a revoke made
+	// before the lift reached its writer. The mark stands like any other.
+	LandedAfterLift bool
+}
+
+// Lift is the record a lift leaves (spec §13 decision 51, the cache):
+// when it was made and who asked, and, as read back, the store revision it
+// was written at, which a later put of the mark compares with its writer's
+// floor (WithMarkFloor).
+type Lift struct {
+	At       time.Time
+	Origin   string
+	Revision uint64
+}
+
+// LiftTTL is how long a lift's record lives, and how long a process
+// remembers its own lift of a key and its own failed revocation writes
+// (Marks.FailedWrite): past the kernel giving up on a cut link, about 15
+// minutes.
+const LiftTTL = time.Hour
+
+type markFloorKey struct{}
+
+// WithMarkFloor is ctx carrying rev as its PutRevocation's floor: the
+// revision up to which the writer's marks feed has delivered every mark
+// event (Marks.ConfirmedRevision). A lift recorded above it is one the
+// writer had not seen, and the mark is put flagged LandedAfterLift.
+func WithMarkFloor(ctx context.Context, rev uint64) context.Context {
+	return context.WithValue(ctx, markFloorKey{}, rev)
+}
+
+// MarkFloor is ctx's floor (WithMarkFloor), 0 when it carries none: every
+// lift recorded is then one the writer had not seen.
+func MarkFloor(ctx context.Context) uint64 {
+	rev, _ := ctx.Value(markFloorKey{}).(uint64)
+	return rev
 }
 
 // OIDCOwner is every principal minting under an OIDC sid or sub (plan 7h,

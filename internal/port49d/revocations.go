@@ -38,6 +38,9 @@ type revocationEntry struct {
 	Key    string `json:"key"`
 	At     string `json:"at"`
 	Origin string `json:"origin"`
+	// LandedAfterLift is the store's flag (decision 51), kept so a
+	// restart's put-back keeps it (re-review R-M5).
+	LandedAfterLift bool `json:"landed_after_lift,omitempty"`
 }
 
 const maxRevocationsFile = 1 << 20
@@ -97,7 +100,8 @@ func readRevocations(path string) ([]store.Revocation, error) {
 		case err != nil:
 			return nil, fmt.Errorf("revocation %d: at is not an RFC 3339 time", i)
 		}
-		out = append(out, store.Revocation{Kind: e.Kind, Key: e.Key, At: at, Origin: e.Origin})
+		out = append(out, store.Revocation{Kind: e.Kind, Key: e.Key, At: at, Origin: e.Origin,
+			LandedAfterLift: e.LandedAfterLift})
 	}
 	return out, nil
 }
@@ -143,7 +147,7 @@ func encodeRevocations(rs []store.Revocation) ([]byte, error) {
 	f := revocationsFile{Revocations: []revocationEntry{}}
 	for _, r := range rs {
 		f.Revocations = append(f.Revocations, revocationEntry{Kind: r.Kind, Key: r.Key,
-			At: decision.FormatTime(r.At), Origin: r.Origin})
+			At: decision.FormatTime(r.At), Origin: r.Origin, LandedAfterLift: r.LandedAfterLift})
 	}
 	body, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -606,6 +610,16 @@ func adminRevocations(st store.Store) func(context.Context) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("broker: the revocations in force could not be read (%w)", err)
 		}
-		return broker.RevocationsText(rs), nil
+		return broker.RevocationsText(rs, func(kind, key string) (store.Lift, error) { return st.GetLift(ctx, kind, key) }), nil
+	}
+}
+
+// sayFlagged is a start's one line for the n marks standing flagged
+// landed_after_lift, none for none: each mark's own line was said when it
+// landed, and is not said again (decision 51; re-review R-I5).
+func sayFlagged(out io.Writer, proc string, n int) {
+	if n > 0 {
+		fmt.Fprintf(out, "%s: store: %d mark(s) stand flagged landed-after-lift; `port49 revoke --list` names them\n",
+			proc, n)
 	}
 }

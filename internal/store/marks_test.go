@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -753,4 +754,200 @@ func TestFollowMarksFromZeroLoadsFirst(t *testing.T) {
 	if len(logs) != 2 || logs[0] != want[0] || logs[1] != want[1] {
 		t.Fatalf("log %q, want %q", logs, want)
 	}
+}
+
+// The floor W is the highest revision up to which the feed has delivered
+// every mark event (decision 51, the cache; re-review R-M2): the load's
+// revision, then each event applied, then each progress notification. It
+// never goes down, and nothing but the feed raises it.
+func TestTheFloorIsWhatTheMarksFeedDelivered(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	f := &markFeed{events: make(chan markEvent), progressed: make(chan uint64)}
+	m := NewMarks()
+	if m.ConfirmedRevision() != 0 {
+		t.Fatal("a feed never read has a floor")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowMarks(ctx, f, m, 0, nil, func(bool) {}, func() error { return nil }, t.Logf)
+	waitFor(t, func() bool { return m.ConfirmedRevision() == 7 }) // the load's
+	f.events <- markEvent{r: alice, rev: 12}
+	waitFor(t, func() bool { return m.ConfirmedRevision() == 12 && m.Holds(alice.Kind, alice.Key) })
+	f.progressed <- 15
+	waitFor(t, func() bool { return m.ConfirmedRevision() == 15 })
+	f.progressed <- 9 // a late notification never lowers it
+	f.events <- markEvent{r: alice, lifted: true, rev: 16}
+	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })
+	if w := m.ConfirmedRevision(); w != 16 {
+		t.Fatalf("the floor is %d, want 16", w)
+	}
+	var none *Marks
+	if none.ConfirmedRevision() != 0 {
+		t.Fatal("a nil Marks has a floor")
+	}
+}
+
+// A follow begun at a load's revision starts its floor there.
+func TestAFollowFromALoadStartsItsFloorThere(t *testing.T) {
+	f := &markFeed{events: make(chan markEvent)}
+	m := NewMarks()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowMarks(ctx, f, m, 31, nil, func(bool) {}, func() error { return nil }, t.Logf)
+	waitFor(t, func() bool { return m.ConfirmedRevision() == 31 })
+}
+
+// A write this process saw fail is matched by kind, key and time, the time
+// as a JSON round trip leaves it, for LiftTTL, whatever lift came between:
+// the writer's own late mark is said as its own, and another process's
+// mark of the same key is not (post-11b, C2; R-M1).
+func TestAFailedWriteIsMatchedByKindKeyAndTime(t *testing.T) {
+	now := time.Now()
+	m := NewMarks()
+	m.now = func() time.Time { return now }
+	mine := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Now(), Origin: "admin_socket uid 0"}
+	m.Set(mine, true)
+	m.NoteFailedWrite(mine)
+	m.Set(mine, false) // a lift the feed brought between the failure and the late put
+	var back Revocation
+	raw, _ := json.Marshal(mine)
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !m.FailedWrite(back.Kind, back.Key, back.At) {
+		t.Fatal("the writer's own mark, after a lift and a JSON round trip, is not its failed write")
+	}
+	if m.FailedWrite(mine.Kind, mine.Key, mine.At.Add(time.Millisecond)) {
+		t.Fatal("another process's mark of the same key, at another time, matched")
+	}
+	if m.FailedWrite(RevocationCert, mine.Key, mine.At) || m.FailedWrite(mine.Kind, "user:bob@example.com", mine.At) {
+		t.Fatal("another kind or key matched")
+	}
+	now = now.Add(LiftTTL + time.Second)
+	if m.FailedWrite(back.Kind, back.Key, back.At) {
+		t.Fatal("a failed write is remembered past LiftTTL")
+	}
+	var none *Marks
+	none.NoteFailedWrite(mine)
+	if none.FailedWrite(mine.Kind, mine.Key, mine.At) {
+		t.Fatal("a nil Marks remembered a write")
+	}
+}
+
+// The flag rides with the mark: Get, All and Flagged carry it, a lift
+// drops it, and a repeat put keeps the first mark's.
+func TestTheLandedAfterLiftFlagRidesWithTheMark(t *testing.T) {
+	m := NewMarks()
+	r := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0), LandedAfterLift: true}
+	m.Set(r, true)
+	m.Set(Revocation{Kind: r.Kind, Key: "user:bob@example.com", At: time.Unix(11, 0)}, true)
+	if got, _ := m.Get(r.Kind, r.Key); !got.LandedAfterLift || m.Flagged() != 1 {
+		t.Fatalf("got %+v, %d flagged", got, m.Flagged())
+	}
+	if all := m.All(); !all[0].LandedAfterLift || all[1].LandedAfterLift {
+		t.Fatalf("all: %+v", all)
+	}
+	m.Set(Revocation{Kind: r.Kind, Key: r.Key, At: time.Unix(12, 0)}, true)
+	if got, _ := m.Get(r.Kind, r.Key); !got.LandedAfterLift {
+		t.Fatal("a repeat put dropped the first mark's flag")
+	}
+	m.Set(r, false)
+	m.Set(Revocation{Kind: r.Kind, Key: r.Key, At: time.Unix(13, 0)}, true)
+	if got, _ := m.Get(r.Kind, r.Key); got.LandedAfterLift || m.Flagged() != 0 {
+		t.Fatal("a lift kept the flag for the next mark")
+	}
+}
+
+// A reload that finds a key standing at another time than the copy's is a
+// mark lifted and made again while the feed was away: it is applied, and
+// told Standing as an add, so its lines fire (post-11b, C2). One the
+// reload finds standing as the copy holds it, flagged or not, is told
+// nothing: the line prints once (R-I5), and a restart's load counts it.
+func TestAReloadTellsAMarkMadeAgainAndNothingElse(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	bob := Revocation{Kind: RevocationPrincipal, Key: "user:bob@example.com", At: time.Unix(11, 0), LandedAfterLift: true}
+	f := &markFeed{}
+	m := NewMarks()
+	m.Set(alice, true)
+	m.Set(bob, true)
+	again := alice
+	again.At, again.Origin, again.LandedAfterLift = time.Unix(20, 0), "admin_socket uid 0", true
+	f.setMarks([]Revocation{again, bob})
+	var got []MarkChange
+	if _, err := LoadMarks(context.Background(), f, m, func(c MarkChange) { got = append(got, c) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Key != alice.Key || !got[0].Standing || !got[0].Reloaded || !got[0].LandedAfterLift ||
+		!got[0].At.Equal(again.At) {
+		t.Fatalf("told %+v", got)
+	}
+	if cur, _ := m.Get(alice.Kind, alice.Key); !cur.At.Equal(again.At) || cur.Origin != again.Origin ||
+		!cur.LandedAfterLift {
+		t.Fatalf("the copy holds %+v", cur)
+	}
+	got = nil
+	if _, err := LoadMarks(context.Background(), f, m, func(c MarkChange) { got = append(got, c) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a reload retold marks already standing: %+v", got)
+	}
+	fresh := NewMarks() // a restart
+	if _, err := LoadMarks(context.Background(), f, fresh, nil); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Flagged() != 2 {
+		t.Fatalf("a restart's load counts %d flagged marks, want 2", fresh.Flagged())
+	}
+}
+
+// A mark this process put in force before the store held it (Pend) keeps
+// its own time through a reload that finds another time: its Revoke is
+// still in flight and corrects it (Put), and the reload tells nothing.
+func TestAReloadLeavesAnUnwrittenMarksTimeToItsRevoke(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	f := &markFeed{}
+	f.setMarks([]Revocation{{Kind: alice.Kind, Key: alice.Key, At: time.Unix(5, 0)}})
+	m := NewMarks()
+	m.Pend(alice)
+	if _, err := LoadMarks(context.Background(), f, m, func(c MarkChange) { t.Fatalf("told %+v", c) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The floor, the failed writes and the flag are read and written from the
+// feed's goroutine and from revocations at once (run under -race).
+func TestTheLandedStateIsSafeForConcurrentUse(t *testing.T) {
+	f := &markFeed{events: make(chan markEvent), progressed: make(chan uint64)}
+	m := NewMarks()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowMarks(ctx, f, m, 1, func(MarkChange) {}, func(bool) {}, func() error { return nil }, t.Logf)
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				r := Revocation{Kind: RevocationPrincipal, Key: fmt.Sprintf("user:%d@example.com", i%7),
+					At: time.Unix(int64(i), 0), LandedAfterLift: i%2 == 0}
+				m.NoteFailedWrite(r)
+				_ = m.FailedWrite(r.Kind, r.Key, r.At)
+				_ = m.ConfirmedRevision()
+				_ = m.Flagged()
+				m.Set(r, g%2 == 0)
+				_, _ = m.Get(r.Kind, r.Key)
+			}
+		}(g)
+	}
+	for i := 0; i < 200; i++ {
+		r := Revocation{Kind: RevocationPrincipal, Key: fmt.Sprintf("user:%d@example.com", i%7), At: time.Unix(int64(i), 0),
+			LandedAfterLift: true}
+		f.events <- markEvent{r: r, lifted: i%3 == 0, rev: uint64(i + 2)}
+		if i%10 == 0 {
+			f.progressed <- uint64(i + 2)
+		}
+	}
+	wg.Wait()
+	waitFor(t, func() bool { return m.ConfirmedRevision() == 201 })
 }

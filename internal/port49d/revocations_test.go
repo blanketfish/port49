@@ -130,7 +130,7 @@ func TestAPersistBeforeTheReloadKeepsAMarkARestoreLost(t *testing.T) {
 
 	// Lifted here: the next persist drops it, and a reload puts nothing back.
 	enforced.Set(lost, false)
-	if err := st.DeleteRevocation(ctx, lost.Kind, lost.Key); err != nil {
+	if err := st.DeleteRevocation(ctx, lost.Kind, lost.Key, store.Lift{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := persister(st, path, rs, enforced, newMetrics())(ctx); err != nil {
@@ -172,7 +172,7 @@ func TestAPersistKeepsAMarkMadeSinceTheStartThatARestoreLost(t *testing.T) {
 	if err := persist(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DeleteRevocation(ctx, z.Kind, z.Key); err != nil { // the restore loses it
+	if err := st.DeleteRevocation(ctx, z.Kind, z.Key, store.Lift{}); err != nil { // the restore loses it
 		t.Fatal(err)
 	}
 	if err := persist(ctx); err != nil { // another revoke or lift here, before the reload

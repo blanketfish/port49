@@ -45,6 +45,7 @@ const (
 	famTokByCert      = "tc/"           // tc/<cert key>/<nas>/<user>
 	famIdem           = "id/"           // id/<principal>/<key>: an idempotency record
 	famMark           = "rv/"           // rv/<kind>/<key>: a revocation mark
+	famLift           = "rl/"           // rl/<kind>/<key>: a lift's record, leased LiftTTL (decision 51), the broker's alone
 	famSuperseded     = "sp/"           // sp/<nas>/<user>: when its tokens were last superseded
 	famLedger         = "lw/"           // lw/<nas>/<user>: the ledger record (plan 7e)
 	famMembership     = "mb/"           // mb/<principal>: a directory membership (plan 7g), the broker's alone
@@ -101,6 +102,7 @@ func (k keys) tokenIndexed(fam, key string, t store.TokenKey) string {
 
 func (k keys) idem(principal, key string) string  { return k.root + famIdem + esc(principal, key) }
 func (k keys) mark(kind, key string) string       { return k.root + famMark + esc(kind, key) }
+func (k keys) lift(kind, key string) string       { return k.root + famLift + esc(kind, key) }
 func (k keys) meta(name string) string            { return k.root + famMeta + name }
 func (k keys) ledgerOf(c store.ContextKey) string { return k.root + famLedger + esc(c.NAS, c.Username) }
 func (k keys) superseded(t store.TokenKey) string {
