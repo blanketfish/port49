@@ -1,12 +1,12 @@
 # QUAL-Nexus-9300v-10.6-2-F — cisco_nxos
 
-- **Date measured:** 2026-10-20
+- **Date measured:** 2026-10-21
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.6(2)F (`vrnetlab/cisco_n9kv:9300v64-10.6.2.F`)
 - **Topology:** `tests/lab/topologies/nxos106.clab.yml`
-- **Capture:** `tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap` — 1152 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap` — 1196 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `26008eed3686b99f1d459fe833bfe8c2bc8ff36e`, `PORT49_LAB_PLATFORMS=nxos106`, `-run ^TestQualify$`
+- **Run:** commit `069d98f9c24de2a49439143a16608c263e2550d5`, `PORT49_LAB_PLATFORMS=nxos106`, `-run ^TestQualify$`
 
 ## Claim
 
@@ -20,12 +20,14 @@ Every cell's verdict, with the rows it re-measures:
 - `command_permitted` (re-measures L10, L21): **pass**. an authorize_command record permits `show version`.
 - `command_denied` (re-measures L21): **pass**. `show users` was refused with no_permit_dominates_deny.
 - `accounting` (re-measures L6): **pass**. the login's start and stop records arrived.
-- `wrong_credential` (re-measures L13): **pass**. a random string as password was refused.
-- `store_unavailable` (re-measures L4, L28): **pass**. the token login was refused; break-glass logged in true after 179ms.
+- `wrong_credential` (re-measures L13): **pass**. a random string as password was refused, and port49d denied its redeem.
+- `store_unavailable` (re-measures L4, L28): **pass**. the token login was refused; break-glass logged in true after 183ms.
 - `single_connection` (re-measures L15, L73): **pass**. single-connection on: on: `tacacs-server host 172.100.100.1 key 0 <key> single-connection`.
-- `tls_token_login` (re-measures L73): **pass**. a token login over RFC 9887, show version, the denied command, and the stop record.
-- `tls_store_unavailable` (re-measures L73): **pass**. the token login was refused over TLS; break-glass logged in true after 7.726s.
+- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): login only: a token login over RFC 9887 and its stop record arrived; command authorization not sent: port49 received no authorize_command for `show version` or `show users` (a device fact, as L73 cell a; not a pass for command authorization over TLS); `show version` said "Cisco Nexus Operating System (NX-OS) Software"; `show users` said "NAME LINE TIME IDLE PID COMMENT".
+- `tls_denied_command` (re-measures L80): **observed**. per-request (the device default): **denied command ran; port49 never asked (the device's local method, presumed)**: `show users` ran with no authorization request for it reaching port49, so the qual policy's deny was not enforced over per-request TLS (first line "NAME LINE TIME IDLE PID COMMENT"; 0 authorize_command records for `show users`, 1 for other commands).
+- `tls_store_unavailable` (re-measures L73): **pass**. the token login was refused over TLS; break-glass logged in true after 7.649s.
 - `tls_unknown_ca` (re-measures L73): **pass**. the handshake was refused as unknown_ca and no token was redeemed.
-- TLS handshake facts: PKI: ecdsa (root, a device intermediate, an untrusted CA); port49d's server certificate subject "CN=port49 L73", issuer "CN=L73 Lab Root", dNSName [tacacs.l73.example], iPAddress [172.100.100.1], EKU [serverAuth], key ECDSA-P-256, valid 2026-10-20T20:10:06Z to 2026-10-21T21:10:06Z; the device's request (`crypto ca enroll l73-dev`): subject "CN=nx1", dNSName [nx1], iPAddress [172.100.100.31], email [], key RSA-2048, requested extensions [2.5.29.17], requested EKU []; the lab intermediate issued subject "CN=nx1", issuer "CN=L73 Lab Device Intermediate", dNSName [nx1], iPAddress [172.100.100.31], EKU [clientAuth], key RSA-2048, valid 2026-10-20T20:10:19Z to 2026-10-21T21:10:19Z; NX-OS sends no command authorization on a per-request TLS connection (L73 cells a and h); the TLS cells run with single-connection on
+- `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: a token login over RFC 9887; `show version` permitted and `show users` denied by port49 (authorize_command records); the stop record arrived.
+- TLS handshake facts: PKI: ecdsa (root, a device intermediate, an untrusted CA); port49d's server certificate subject "CN=port49 L73", issuer "CN=L73 Lab Root", dNSName [tacacs.l73.example], iPAddress [172.100.100.1], EKU [serverAuth], key ECDSA-P-256, valid 2026-10-21T08:23:48Z to 2026-10-22T09:23:48Z; the device's request (`crypto ca enroll l73-dev`): subject "CN=nx1", dNSName [nx1], iPAddress [172.100.100.31], email [], key RSA-2048, requested extensions [2.5.29.17], requested EKU []; the lab intermediate issued subject "CN=nx1", issuer "CN=L73 Lab Device Intermediate", dNSName [nx1], iPAddress [172.100.100.31], EKU [clientAuth], key RSA-2048, valid 2026-10-21T08:24:01Z to 2026-10-22T09:24:01Z
 
 Evidence: `tests/lab/evidence/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos/` (whitelisted decision records, connection headers and run.json).

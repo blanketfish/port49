@@ -3,23 +3,25 @@
   "lab_platform": "cisco_nxos",
   "firmware": "Nexus 9300v 10.6(2)F",
   "image": "Nexus 9300v 10.6(2)F",
-  "commit": "26008eed3686",
-  "date": "2026-10-20",
+  "commit": "069d98f9c24d",
+  "date": "2026-10-21",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-20T21:09:55.421415909Z",
-    "command_denied": "2026-10-20T21:09:54.082293409Z",
-    "command_permitted": "2026-10-20T21:09:54.082293409Z",
-    "single_connection": "2026-10-20T21:10:05.199614582Z",
-    "store_unavailable": "2026-10-20T21:09:58.530043499Z",
-    "tls_store_unavailable": "2026-10-20T21:10:57.598837036Z",
-    "tls_token_login": "2026-10-20T21:10:39.02141383Z",
-    "tls_unknown_ca": "2026-10-20T21:11:26.340975782Z",
-    "token_login": "2026-10-20T21:09:52.308259085Z",
-    "wrong_credential": "2026-10-20T21:09:56.606063207Z"
+    "accounting": "2026-10-21T09:23:34.115490976Z",
+    "command_denied": "2026-10-21T09:23:32.816488513Z",
+    "command_permitted": "2026-10-21T09:23:32.816488513Z",
+    "single_connection": "2026-10-21T09:23:47.282471353Z",
+    "store_unavailable": "2026-10-21T09:23:36.986257999Z",
+    "tls_denied_command": "2026-10-21T09:25:24.95361959Z",
+    "tls_single_connection": "2026-10-21T09:27:11.022735892Z",
+    "tls_store_unavailable": "2026-10-21T09:26:03.203803172Z",
+    "tls_token_login": "2026-10-21T09:24:36.364834967Z",
+    "tls_unknown_ca": "2026-10-21T09:26:38.050471379Z",
+    "token_login": "2026-10-21T09:23:31.093797957Z",
+    "wrong_credential": "2026-10-21T09:23:35.260177478Z"
   },
   "registers": {
     "accounting": [
@@ -39,6 +41,13 @@
     "store_unavailable": [
       "L4",
       "L28"
+    ],
+    "tls_denied_command": [
+      "L80"
+    ],
+    "tls_single_connection": [
+      "L15",
+      "L73"
     ],
     "tls_store_unavailable": [
       "L73"
@@ -68,10 +77,22 @@
     "command_permitted": "pass",
     "single_connection": "pass",
     "store_unavailable": "pass",
+    "tls_denied_command": "observed",
+    "tls_single_connection": "pass",
     "tls_store_unavailable": "pass",
     "tls_token_login": "pass",
     "tls_unknown_ca": "pass",
     "token_login": "pass",
     "wrong_credential": "pass"
+  },
+  "command_authorization": {
+    "tls_single_connection": "sent",
+    "tls_token_login": "not_sent"
+  },
+  "denied_command_ran": {
+    "tls_denied_command": true
+  },
+  "denied_command_asked": {
+    "tls_denied_command": false
   }
 }
