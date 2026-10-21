@@ -6425,7 +6425,10 @@ lowercase hex and 64 characters or fewer passes the shape.
 
 **`port49 revoke (--principal <principal> | --cert <file> | --cert-issuer <dn> --cert-serial
 <hex>) [--lift]`** and **`port49 revoke --list`** ask port49d, over `admin_socket`, to revoke a
-principal or one certificate, to lift a revocation, or to list those in force (§5.1.4). The
+principal or one certificate, to lift a revocation, or to list those in force (§5.1.4). `--list`
+names each mark, since when and its origin; a mark flagged `landed_after_lift` (decision 51, the
+cache) adds `landed after the lift at <T> (revision <R>)`, read from the lift's record, or, once
+that record has expired, `landed after a lift; the lift's record has expired`. The
 socket answers port49d's user and root alone, the people who can already rewrite the policy. A
 revocation prints what it reached and names each live context on a platform it cannot reach;
 `--cert` reads the issuer and serial from the certificate itself, in the spelling the broker
@@ -6492,7 +6495,8 @@ at different keyspaces are refused.
   gauge reads; the runner writes it beside `meta/judged`) and `ping` (the store probe). It has
   no read on `meta/judged`, which holds the policy file, or on `meta/holder`, `meta/bundles/`
   or `meta/refresh_owed`. Nothing on the token indexes (`tp/`, `tc/`), the idempotency records
-  (`id/`) or the superseded record (`sp/`). `CheckIdentity` probes a refused read of `meta/judged`.
+  (`id/`), the superseded record (`sp/`) or the lift records (`rl/`, decision 51).
+  `CheckIdentity` probes a refused read of `meta/judged`.
 - **`port49_broker`.** Read-write on the whole keyspace.
 
 **`port49 store status [--socket PATH]`** asks a process's admin socket (port49d's by default,
@@ -10517,7 +10521,8 @@ reason and cost.
 
 - **The two stores (R1, R2, R11).** `stores.directory` and `stores.session`, each today's store
   shape (`backend: memory | etcd`, `packet_deadline`, `etcd:`). The directory holds exactly `rv/`
-  (the revocation marks), `sf/` (second factors, which carry the TOTP used step),
+  (the revocation marks), `rl/` (each lift's record, leased an hour: the cache, below), `sf/`
+  (second factors, which carry the TOTP used step),
   `meta/enrollments` (the enrollment mark), `ul/` (unlocks), `mb/` and `mk/` (directory
   membership's pin record and map-key index), `lo/` (back-channel logout records), and its own
   `meta/seal_keys` and `meta/ping`. The session store holds every other family, the directory
@@ -10563,6 +10568,55 @@ reason and cost.
   lifted, and stands" did not land after a heal at 20s: the mark was still in the directory 60s
   later, at its old revision. A revoke reported failed, made during the same cut while the mark
   was lifted in region 1, did land after the heal: the mark was back within 250ms (fail closed).
+
+  *Landed after a lift (post-11b fix, 2026-10-21).* A revoke's write that a cut held back can land
+  after a lift made meanwhile. It stands, so the system fails closed, and nothing refuses it. The
+  mark is flagged so that every operator is told why the person is denied again.
+  - **The revoke's text.** A revoke whose write fails says the revocation may not have been
+    recorded. A copy already sent can still land when the directory answers again, and it then
+    stands everywhere, even over a lift made meanwhile. Until then the process denies what the
+    revoke names, until a lift on that process or its restart. After the heal, check
+    `port49 revoke --list`.
+  - **The lift's record.** On etcd every lift also writes `rl/<kind>/<key>`, in the transaction
+    that deletes the mark. It holds the lift's time and origin, and lives an hour, on a lease from
+    the shared pool. It is a directory family in `rv/`'s keyspace, so a revoke's transaction
+    compares both on one cluster, and every region sees it. The broker's grant on the keyspace
+    covers it; the daemon has no grant on it, and the session store holds none. A lease that
+    cannot be had fails the lift as "the revocation could not be lifted, and stands". That fails
+    closed, but it is new: a slow store can now fail a lift that would have landed before. The
+    memory store writes no lift record and never sets the flag.
+  - **The floor.** A process's floor W is the highest revision up to which its marks feed has
+    delivered every `rv/` event: its load's revision, a progress notification's header revision,
+    or the revision of the last event it applied. W never comes from another call's header, which
+    can be above a lift not yet delivered. A process's own lift of a key raises the floor for that
+    key alone, to the lift's revision, for an hour: the compare for key k uses W_k = max(W, the
+    process's own lift of k). The feed's W is never raised. A process with no marks feed has
+    W = 0, so a revoke it makes after another process's lift is flagged.
+  - **The flag.** A revoke's put is still create-if-absent. Inside it, if k's lift record is above
+    W_k, the mark is put with `landed_after_lift: true`, and otherwise without. Both branches put,
+    so the mark always lands. Once the lift record has expired, a late put lands unflagged, as
+    before. The flag is kept in `broker.revocations_file` and in the `ds/m/` snapshot records, so a
+    put-back keeps it.
+  - **The line.** A broker process says a flagged mark once: on the watch put that created it, or
+    on a reload that adds it. It reads the lift's record and compares the mark's time with the
+    lift's:
+    - made before the lift: `a revocation of <key> made at <At> before the lift at <T> landed after
+      it: a copy sent while its writer was cut off; it stands everywhere`;
+    - made at or after it: `a revocation of <key> made at <At> (<origin>) after the lift at <T>, by
+      a writer whose marks feed had not yet shown the lift; it stands everywhere; check with
+      whoever revoked before lifting`;
+    - with the record gone: `a revocation of <key> landed after a lift; the lift's record has
+      expired`.
+
+    No form tells anyone to lift again: whether the revoke should stand is the operators' call,
+    and the line gives its cause. The process whose own write of that mark failed adds `made on
+    this port49-broker, reported unrecorded then`. It matches the kind, key and time for an hour,
+    whatever lift came between, and its runner says the same in place of "made elsewhere". A
+    reload, rescan or restart that finds the flagged mark already standing does not say it again.
+    At start, a broker with flagged marks says `N mark(s) stand flagged landed-after-lift;
+    port49 revoke --list names them`.
+  - The hour bounds how late a copy is flagged. L79 measured a copy landing 250 ms after a 20 s
+    heal. A later one, up to the kernel giving up (about 15 minutes), is unmeasured.
 - **The snapshot (R19).** In a split every process writes its directory cache to its session store
   every 60s while the cache is confirmed, sealed: a marks record (`ds/m/<proc>@<host>`) from every
   process, and a broker record of logouts and pins (`ds/b/…`) that the daemon's role cannot read.
