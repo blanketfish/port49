@@ -1,6 +1,10 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -90,36 +94,100 @@ func TestL78ReplyBytesSumsTheAttributesOfAPermit(t *testing.T) {
 
 func TestL78GradeNeedsAPermitRecordBeforeItNamesALockout(t *testing.T) {
 	cases := []struct {
-		ran, record bool
-		total       int
-		shown       string
-		lockout     bool
-		says        string
+		loggedIn, record, failClosed bool
+		total                        int
+		out                          string
+		lockout, counts, ok          bool
+		says, shown                  string
 	}{
-		{true, true, 375, "Hostname: srx1", false, "logged in and ran"},
-		{false, true, 375, "", true, "refused after a permit reply of 375 bytes"},
-		{false, false, 0, "", false, "not observed"},
-		{true, false, 0, "Hostname: srx1", false, "no authorize_session record"},
+		{true, true, false, 375, "Hostname: srx1\nModel: vmx", false, true, true, "logged in and ran", "Hostname: srx1"},
+		{false, true, false, 375, "", true, false, true, "refused after a permit reply of 375 bytes", ""},
+		{false, false, false, 0, "", false, false, true, "not observed", ""},
+		{true, false, false, 0, "Hostname: srx1", false, false, true, "no authorize_session record", "Hostname: srx1"},
 		// The 400 and 600 rows: the login worked and the device refused the command.
-		{true, true, 124, "error: unknown command: show", false, "`show version` refused (deny-all)"},
+		{true, true, true, 124, "error: unknown command: show", false, false, true, "`show version` refused (deny-all)", "error: unknown command: show"},
+		// Final review I4 (a): a permit reply whose command the device refused is a
+		// partial failure, not a pass, and never counts toward "no lockout up to".
+		{true, true, false, 299, "error: permission denied", false, false, false, "refused `show version` under a permit reply of 299 bytes", "error: permission denied"},
+		// I4 (b): Junos's caret line is no answer; the refusal under it is.
+		{true, true, false, 299, "\n          ^\nunknown command.", false, false, false, "refused `show version` under a permit reply of 299 bytes", "unknown command."},
+		{true, true, true, 124, "          ^\nunknown command.", false, false, true, "`show version` refused (deny-all)", "unknown command."},
+		// A fail-closed reply under which the command ran: deny-all did not hold.
+		{true, true, true, 124, "Hostname: srx1", false, false, false, "ran `show version` under the fail-closed reply of 124 bytes", "Hostname: srx1"},
+		// Logged in under a permit reply and answered nothing: the command did not run.
+		{true, true, false, 208, "", false, false, false, "refused `show version` under a permit reply of 208 bytes", ""},
 	}
 	for _, c := range cases {
-		lockout, says := l78Grade(c.ran, c.record, c.total, c.shown)
-		if lockout != c.lockout || !strings.Contains(says, c.says) {
-			t.Errorf("ran=%v record=%v: got %v %q, want %v containing %q", c.ran, c.record, lockout, says, c.lockout, c.says)
+		g := l78Grade(c.loggedIn, c.record, c.failClosed, c.total, c.out)
+		if g.Lockout != c.lockout || g.Counts != c.counts || g.OK != c.ok || !strings.Contains(g.Says, c.says) || g.Shown != c.shown {
+			t.Errorf("%+v: got %+v", c, g)
 		}
 	}
 }
 
 func TestL78ConclusionNamesTheLargestLoginAndKeepsTheRowOpen(t *testing.T) {
-	rows := []l78Row{{Target: 200, Total: 208, LoggedIn: true}, {Target: 375, Total: 375, LoggedIn: true}, {Target: 400, Total: 124, LoggedIn: true}}
+	rows := []l78Row{{Target: 200, Total: 208, LoggedIn: true, Counts: true}, {Target: 375, Total: 375, LoggedIn: true, Counts: true},
+		{Target: 400, Total: 124, LoggedIn: true}}
 	got := l78Conclusion(rows, "vJunos-router 23.4R2-S2.1")
 	want := "no lockout up to 375 bytes on vJunos-router 23.4R2-S2.1; open for hardware Junos"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+	// A refused show version under a bigger permit reply is not "no lockout" there (final review I4).
+	refused := append(rows, l78Row{Target: 450, Total: 450, LoggedIn: true})
+	if got := l78Conclusion(refused, "vJunos-router 23.4R2-S2.1"); got != want {
+		t.Fatalf("a refused step counted: %q", got)
+	}
 	rows = append(rows, l78Row{Target: 600, Total: 380, Lockout: true})
 	if got := l78Conclusion(rows, "x"); !strings.Contains(got, "lockout at 380 bytes") {
 		t.Fatalf("a lockout was not named: %q", got)
+	}
+}
+
+// The committed vJunos rows read the same under the new grader (final review I4):
+// each row's login column and the note's result are rebuilt from the row's
+// target, reply bytes and the device's first line, and must match byte for byte.
+func TestL78CommittedRowsGradeTheSame(t *testing.T) {
+	notes, _ := filepath.Glob("results/L78-*.md")
+	if len(notes) != 2 {
+		t.Fatalf("want the two vJunos L78 notes, found %v", notes)
+	}
+	rowRx := regexp.MustCompile("^\\| (\\d+) \\| (\\d+) \\([^)]*\\) \\| (.*); the device's first line: `([^`]*)` \\| ")
+	resultRx := regexp.MustCompile(`\*\*Result: (.*) on (.*); open for hardware Junos\.\*\*`)
+	for _, n := range notes {
+		b, err := os.ReadFile(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rows []l78Row
+		for _, ln := range strings.Split(string(b), "\n") {
+			m := rowRx.FindStringSubmatch(ln)
+			if m == nil {
+				continue
+			}
+			target, _ := strconv.Atoi(m[1])
+			total, _ := strconv.Atoi(m[2])
+			failClosed := false
+			for _, s := range l78Steps {
+				if s.Target == target {
+					failClosed = s.FailClosed
+				}
+			}
+			g := l78Grade(true, true, failClosed, total, m[4])
+			if !g.OK || g.Says != m[3] || g.Shown != m[4] {
+				t.Errorf("%s step %d: committed %q (%q), graded now %+v", n, target, m[3], m[4], g)
+			}
+			rows = append(rows, l78Row{Target: target, Total: total, LoggedIn: true, Counts: g.Counts, Lockout: g.Lockout})
+		}
+		if len(rows) != len(l78Steps) {
+			t.Fatalf("%s: %d rows parsed, want %d", n, len(rows), len(l78Steps))
+		}
+		m := resultRx.FindStringSubmatch(string(b))
+		if m == nil {
+			t.Fatalf("%s: no result line", n)
+		}
+		if got := l78Conclusion(rows, m[2]); got != m[1]+" on "+m[2]+"; open for hardware Junos" {
+			t.Errorf("%s: committed %q, concluded now %q", n, m[1], got)
+		}
 	}
 }

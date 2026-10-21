@@ -110,9 +110,10 @@ type l78Row struct {
 	Total      int    // their sum, from the authorize_session record
 	Refused    string // the process log's line when the policy was refused at load
 	LoggedIn   bool
+	Counts     bool // `show version` ran under a permit reply (l78Grading.Counts)
 	Lockout    bool
 	Login      string
-	Shown      string // the first line of the device's answer to `show version`
+	Shown      string // the first line of the device's answer to `show version`, a Junos caret line skipped
 	BreakGlass string // break-glass after the step
 }
 
@@ -138,36 +139,59 @@ func l78Reply(rec map[string]any) (parts []int, total int, ok bool) {
 	return parts, total, true
 }
 
-// l78Grade reads one token login: ran is whether a session answered
-// `show version`, record whether a permitting authorize_session record shows
-// the reply port49 sent, shown the first line of the device's answer. A
-// refusal to log in is a lockout only after a permit reply; with none logged,
-// the run did not observe what the device was sent. A session that logged in
-// and was answered `error: ...` is not a lockout and did not run the command:
-// the fail-closed reply (deny-all) refuses it.
-func l78Grade(ran, record bool, total int, shown string) (lockout bool, says string) {
-	switch {
-	case ran && strings.HasPrefix(shown, "error:"):
-		return false, fmt.Sprintf("logged in; `show version` refused (deny-all) after a %d-byte reply", total)
-	case ran && record:
-		return false, fmt.Sprintf("logged in and ran `show version` after a %d-byte reply", total)
-	case ran:
-		return false, "logged in; no authorize_session record showed the reply"
-	case record:
-		return true, fmt.Sprintf("refused after a permit reply of %d bytes", total)
+// l78Grading is one token login's grade.
+type l78Grading struct {
+	Lockout bool   // refused to log in after a permit reply
+	Counts  bool   // `show version` ran under a permit reply: what "no lockout up to" may cite
+	OK      bool   // false when the step contradicts its reply: a refused permit, or a command run under deny-all
+	Shown   string // the device's first answer line (qualRan's: a Junos caret line is skipped)
+	Says    string
+}
+
+// l78Grade reads one token login: loggedIn is whether a session opened,
+// record whether a permitting authorize_session record shows the reply port49
+// sent, failClosed whether the step's reply is the fail-closed one (deny-all),
+// out the device's answer to `show version`. A refusal to log in is a lockout
+// only after a permit reply; with none logged, the run did not observe what
+// the device was sent. Whether the command ran is qualRan's reading, so a
+// refusal under a permit reply (a Junos that drops attributes past 255 bytes
+// and refuses with `error: ...`) is a failed step, never a login that counts
+// (final review I4).
+func l78Grade(loggedIn, record, failClosed bool, total int, out string) l78Grading {
+	ran, first := qualRan(out)
+	if !ran && first == "no output" {
+		first = ""
 	}
-	return false, "not observed (no authorize_session record)"
+	g := l78Grading{Shown: first, OK: true}
+	switch {
+	case loggedIn && record && failClosed && !ran:
+		g.Says = fmt.Sprintf("logged in; `show version` refused (deny-all) after a %d-byte reply", total)
+	case loggedIn && record && failClosed:
+		g.OK, g.Says = false, fmt.Sprintf("logged in and ran `show version` under the fail-closed reply of %d bytes", total)
+	case loggedIn && record && ran:
+		g.Counts, g.Says = true, fmt.Sprintf("logged in and ran `show version` after a %d-byte reply", total)
+	case loggedIn && record:
+		g.OK, g.Says = false, fmt.Sprintf("logged in; refused `show version` under a permit reply of %d bytes", total)
+	case loggedIn:
+		g.Says = "logged in; no authorize_session record showed the reply"
+	case record:
+		g.Lockout, g.Says = true, fmt.Sprintf("refused after a permit reply of %d bytes", total)
+	default:
+		g.Says = "not observed (no authorize_session record)"
+	}
+	return g
 }
 
 // l78Conclusion is the note's one-line result, in Q2's words when nothing
-// locked a user out.
+// locked a user out. Only a step whose permit reply let `show version` run
+// counts toward the "no lockout up to" maximum.
 func l78Conclusion(rows []l78Row, version string) string {
 	most := 0
 	for _, r := range rows {
 		if r.Lockout {
 			return fmt.Sprintf("lockout at %d bytes on %s", r.Total, version)
 		}
-		if r.LoggedIn && r.Total > most {
+		if r.Counts && r.Total > most {
 			most = r.Total
 		}
 	}

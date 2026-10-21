@@ -148,15 +148,21 @@ func (q *qualEnv) l78() {
 			}
 		}
 		row.LoggedIn = ran
+		out := ""
 		if len(outs) > 0 {
-			// What the device answered, first line only: a refusal and the version
-			// text read differently, and the record cannot show which.
-			row.Shown = q.scrub(oneLine(firstLine(outs[0])))
-			if len(row.Shown) > 80 {
-				row.Shown = row.Shown[:80]
-			}
+			out = outs[0]
 		}
-		row.Lockout, row.Login = l78Grade(ran, have, row.Total, row.Shown)
+		g := l78Grade(ran, have, s.FailClosed, row.Total, out)
+		row.Lockout, row.Counts, row.Login = g.Lockout, g.Counts, g.Says
+		// What the device answered, first line only: a refusal and the version
+		// text read differently, and the record cannot show which.
+		row.Shown = q.scrub(oneLine(g.Shown))
+		if len(row.Shown) > 80 {
+			row.Shown = row.Shown[:80]
+		}
+		if !g.OK {
+			q.t.Errorf("step %d: %s; the device's first line: %q", s.Target, g.Says, row.Shown)
+		}
 		if !ran && lerr != nil {
 			row.Login += ": " + q.scrub(oneLine(lerr.Error()))
 		}
