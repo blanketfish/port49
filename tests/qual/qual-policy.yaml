@@ -8,7 +8,16 @@ platform_set: 1.3.0
 # (priv-lvl-authorization true; tests/lab/results/L76-nokia_srlinux.md cells a and h). This block is a
 # policy override local to the qual policy, not an adapter: it renders only priv-lvl, as L76 measured
 # the device reads it (1 -> p49-read, 15 -> p49-admin).
+# cisco_iosxr is the same case: XRd 26.1.1 logs a token user in on an empty authorization reply and
+# then answers every command "% This command is not authorized" without asking port49d
+# (tests/lab/results/QUAL-*-cisco_xrd.md); the L73 policy's `priv-lvl=15` reply is what made it send
+# command authorization (tests/lab/results/L73-cisco_xrd.md cells a and h).
 platforms:
+  cisco_iosxr:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=15"]
+      admin: ["priv-lvl=15"]
   nokia_srlinux:
     privilege:
       readonly: ["priv-lvl=1"]

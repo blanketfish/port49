@@ -132,6 +132,12 @@ func singleConnectionPlaces(platform string) []scPlace {
 		return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
 			lines: []string{"tacacs-server host 172.100.100.1 key 0 " + labKeyDefault + " single-connection"},
 			said:  "`tacacs-server host 172.100.100.1 key 0 <key> single-connection`"}}
+	case platform == "cisco_xrd":
+		// XR applies nothing before `commit`, and its host line takes `single-connection` as
+		// a line of its own (the image's help: only <cr> follows it).
+		return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
+			lines: []string{"tacacs-server host 172.100.100.1 single-connection", "commit"},
+			said:  "`tacacs-server host 172.100.100.1 single-connection`, committed"}}
 	}
 	return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
 		lines: []string{"tacacs-server host 172.100.100.1 single-connection key 0 " + labKeyDefault},

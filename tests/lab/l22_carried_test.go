@@ -127,6 +127,8 @@ func adminCLI(l *lab) (*cliConn, error) {
 		return l.nxosCLI(breakglassUser, breakglassPassword)
 	case "cisco_iosxe":
 		return l.iosxeCLI(breakglassUser, breakglassPassword)
+	case "cisco_xrd":
+		return l73Opener("cisco_xrd")(l) // retries a login XRd's sshd resets over its rate limit
 	}
 	return l.eosCLI(breakglassUser, breakglassPassword)
 }

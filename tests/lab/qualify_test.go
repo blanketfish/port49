@@ -522,8 +522,17 @@ func (q *qualEnv) cellSingleConnection() {
 	q.startDaemon(q.cfg)
 	q.login()
 	off := q.cell("single_connection")
-	if _, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, qualProbeCommands(q.run.Platform)...); err != nil {
-		q.t.Fatalf("INVALID: the single-connection login failed: %v\nrecords:%s", err, summarize(q.l.recordsSince(off)))
+	began := time.Now()
+	attempts, err := qualRetryUnreached(q.l.p.name, func() error {
+		_, err := q.l.loginWithin(qualUser, q.mint(), 150*time.Second, qualProbeCommands(q.run.Platform)...)
+		return err
+	}, 5*time.Minute, time.Sleep)
+	if err != nil {
+		q.t.Fatalf("INVALID: the single-connection login failed after %d attempt(s): %v\nrecords:%s", attempts, err, summarize(q.l.recordsSince(off)))
+	}
+	if attempts > 1 {
+		said += fmt.Sprintf("; after port49d restarted the device refused %d login(s) over %s before it reached port49d (no record of them)",
+			attempts-1, time.Since(began).Round(time.Second))
 	}
 	recs := q.waitStop(off)
 	_, problems := q.check(recs)

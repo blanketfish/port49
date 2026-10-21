@@ -4,11 +4,13 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -472,5 +474,44 @@ func TestQualRanReadsTheFirstLineOfTheOutput(t *testing.T) {
 		if got, says := qualRan(out); got != want {
 			t.Errorf("%q: ran %v (%s), want %v", out, got, says, want)
 		}
+	}
+}
+
+// The plain single-connection cell on XRd types the keyword on its own line and commits it: the
+// image's help lists nothing after `single-connection`, and XR applies nothing before `commit`.
+func TestSingleConnectionOnXRdIsALineOfItsOwnAndCommitted(t *testing.T) {
+	ps := singleConnectionPlaces("cisco_xrd")
+	if len(ps) != 1 || !slices.Equal(ps[0].lines, []string{"tacacs-server host 172.100.100.1 single-connection", "commit"}) {
+		t.Fatalf("%+v", ps)
+	}
+}
+
+// XRd repeats a login it answered locally, no faster than once a second and
+// only for an authentication error; every other platform logs in once.
+func TestQualRetryUnreachedRepeatsOnlyXRdAuthRefusals(t *testing.T) {
+	refused := errors.New("ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password]")
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+	calls := 0
+	n, err := qualRetryUnreached("cisco_xrd", func() error {
+		if calls++; calls < 3 {
+			return refused
+		}
+		return nil
+	}, time.Minute, sleep)
+	if n != 3 || err != nil || len(slept) != 2 || slept[0] < time.Second {
+		t.Fatalf("xrd: %d attempts, %v, slept %v", n, err, slept)
+	}
+	if n, _ := qualRetryUnreached("cisco_iosxe", func() error { return refused }, time.Minute, sleep); n != 1 {
+		t.Fatalf("iosxe tried %d times", n)
+	}
+	other := errors.New("dial tcp: i/o timeout")
+	if n, _ := qualRetryUnreached("cisco_xrd", func() error { return other }, time.Minute, sleep); n != 1 {
+		t.Fatalf("a non-auth error was retried %d times", n)
+	}
+	slept = nil
+	n, err = qualRetryUnreached("cisco_xrd", func() error { return refused }, 30*time.Second, sleep)
+	if err == nil || len(slept) != 3 {
+		t.Fatalf("the deadline: %d attempts, slept %v", n, slept)
 	}
 }
