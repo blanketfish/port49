@@ -358,7 +358,10 @@ func (r *runner) reapplying(ctx context.Context) {
 // copy missed. Both deny more, and the line says how to lift. A lift made
 // here between its delete's commit and marksCopy.Lifted can be put back
 // too, when the list above falls after the delete and the copy is read
-// before Lifted: the same, fail-closed.
+// before Lifted: the same, fail-closed. Each is put with its origin saying
+// so (store.PutBackOrigin), so a put-back over a lift's record is said as a
+// put-back on every broker, never as a copy a cut held back (task 2 review
+// I1).
 func (r *runner) putBackMissing(ctx context.Context) ([]store.Revocation, error) {
 	stored, err := r.st.ListRevocations(ctx)
 	if err != nil {
@@ -366,6 +369,7 @@ func (r *runner) putBackMissing(ctx context.Context) ([]store.Revocation, error)
 	}
 	missing := r.copy.Missing(stored)
 	for i, m := range missing {
+		m.Origin = store.PutBackOrigin(m.Origin)
 		if err := r.st.PutRevocation(ctx, m); err != nil {
 			return missing[:i], err
 		}

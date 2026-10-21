@@ -304,6 +304,64 @@ func TestAFlaggedMarkIsSaidInTheFormItsTimesCall(t *testing.T) {
 	}
 }
 
+// A flagged mark a runner put back from its marks copy is said as a
+// put-back, never as a copy a cut held back (task 2 review I1): one made
+// before the lift re-created a lifted mark, so the line says how to lift
+// it again, as sayPutBack does; one made after it was a revoke the store
+// had lost, and the line offers no lift.
+func TestAPutBackOverALiftIsSaidAsAPutBack(t *testing.T) {
+	liftAt := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
+	before := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: liftAt.Add(-20 * time.Second),
+		Origin: store.PutBackOrigin("admin_socket uid 0"), LandedAfterLift: true}
+	after := before
+	after.At, after.Origin = liftAt.Add(2*time.Second), store.PutBackOrigin("") // the copy keeps no origin
+	for _, c := range []struct {
+		name, want string
+		mark       store.Revocation
+		lift       bool
+	}{
+		{"before", "broker: a revocation of user:alice@example.com made at 2026-10-21T02:59:40Z was put back after " +
+			"the lift at 2026-10-21T03:00:00Z by a port49-broker runner from its broker.state_dir/marks.json: its " +
+			"watch had not delivered the lift, which it cannot tell from a mark an etcd restore lost; it stands " +
+			"everywhere; lift it again with port49 revoke --lift if it was lifted on purpose", before, true},
+		{"after", "broker: a revocation of user:alice@example.com made at 2026-10-21T03:00:02Z after the lift at " +
+			"2026-10-21T03:00:00Z was put back by a port49-broker runner from its broker.state_dir/marks.json: the " +
+			"store had lost it (an etcd restore); it stands everywhere",
+			after, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			said := &saidLines{}
+			f.b.Say, f.b.Marks, f.b.Conns = said.say, store.NewMarks(), nil
+			f.b.Store = &cutStore{Store: f.st, lift: &store.Lift{At: liftAt, Revision: 8}}
+			f.b.MarkChanged(store.MarkChange{Revocation: c.mark, Standing: true})
+			all := said.all()
+			if all != c.want {
+				t.Fatalf("said\n%s\nwant\n%s", all, c.want)
+			}
+			if strings.Contains(all, "cut off") || strings.Contains(all, "lift it again") != c.lift {
+				t.Fatalf("the line names a cut, or offers a lift where it should not: %s", all)
+			}
+		})
+	}
+}
+
+// PutBackOrigin keeps the mark's own origin first, so a CA's mark stays a
+// CA's (revokedError), and says a put-back once however often it is put
+// back.
+func TestPutBackOriginKeepsTheOriginAndSaysItOnce(t *testing.T) {
+	once := store.PutBackOrigin("crl corp-ca")
+	if !strings.HasPrefix(once, "crl corp-ca") || store.PutBackOrigin(once) != once {
+		t.Fatalf("%q, again %q", once, store.PutBackOrigin(once))
+	}
+	if orig, ok := store.PutBackOf(once); !ok || orig != "crl corp-ca" {
+		t.Fatalf("%q %v", orig, ok)
+	}
+	if _, ok := store.PutBackOf("admin_socket uid 0"); ok {
+		t.Fatal("a revoke's own origin read as a put-back")
+	}
+}
+
 // A lift's record that cannot be read is said so, with the mark: never a
 // form the record would have chosen.
 func TestAFlaggedMarkWhoseLiftCannotBeReadIsSaidSo(t *testing.T) {

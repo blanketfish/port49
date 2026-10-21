@@ -1433,6 +1433,34 @@ type Lift struct {
 // minutes.
 const LiftTTL = time.Hour
 
+// putBack is what a port49-broker runner's put-back adds to a mark's
+// origin (task 2 review I1).
+const putBack = "put back from broker.state_dir/marks.json"
+
+// PutBackOrigin is origin as a runner's put-back from its marks copy writes
+// it: the mark's own origin first, so a CA's mark stays a CA's, then that it
+// was put back, said once however often it is (task 2 review I1). A flagged
+// mark's line says the put-back as its cause, never a cut.
+func PutBackOrigin(origin string) string {
+	if _, ok := PutBackOf(origin); ok {
+		return origin
+	}
+	if origin == "" {
+		return putBack
+	}
+	return origin + "; " + putBack
+}
+
+// PutBackOf is the mark's own origin and true when origin is a put-back's
+// (PutBackOrigin).
+func PutBackOf(origin string) (string, bool) {
+	if origin == putBack {
+		return "", true
+	}
+	orig, ok := strings.CutSuffix(origin, "; "+putBack)
+	return orig, ok
+}
+
 type markFloorKey struct{}
 
 // WithMarkFloor is ctx carrying rev as its PutRevocation's floor: the

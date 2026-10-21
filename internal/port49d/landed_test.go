@@ -3,6 +3,7 @@ package port49d
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
@@ -129,5 +131,58 @@ func TestTheRunnerSaysAMarkThisBrokerFailedToRecordAsItsOwn(t *testing.T) {
 	waitWithin(t, &out, "a revocation of user:alice@example.com made elsewhere reached", 5*time.Second)
 	if strings.Count(out.String(), "made on this port49-broker") != 1 {
 		t.Fatalf("said:\n%s", out.String())
+	}
+}
+
+// L74 cell (i) on one etcd (task 2 review I1): region 1 lifts alice, and
+// region 3's runner, whose watch never delivered the lift, puts her mark
+// back from its marks copy. The mark lands flagged, saying it was put back,
+// and the lifter's broker says the put-back form, never a copy a cut held
+// back.
+func TestARunnersPutBackOverALiveLiftIsSaidAsAPutBack(t *testing.T) {
+	ctx := context.Background()
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	prefix := etcdtest.Prefix()
+	open := func() *etcdstore.Store {
+		s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}, Prefix: prefix})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		return s
+	}
+	region1, region3 := open(), open()
+	now := time.Now().UTC().Round(0)
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com",
+		At: now.Add(-20 * time.Second).Truncate(time.Second), Origin: "admin_socket uid 0"}
+	if err := region1.PutRevocation(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	c := openMarksCopy(filepath.Join(safeStateDir(t), "marks.json"), &out)
+	c.Apply(store.MarkChange{Revocation: alice, Standing: true}) // region 3 saw the mark, never its lift
+	if err := region1.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now,
+		Origin: "admin_socket uid 0"}); err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{st: region3, copy: c}
+	put, err := r.putBackMissing(ctx)
+	if err != nil || len(put) != 1 {
+		t.Fatalf("put back %v: %v", put, err)
+	}
+	got, err := region1.GetRevocation(ctx, alice.Kind, alice.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.PutBackOf(got.Origin); !got.LandedAfterLift || !ok {
+		t.Fatalf("the put-back landed as %+v", got)
+	}
+	var said bytes.Buffer
+	brk := &broker.Broker{Proc: "port49-broker", Store: region1, Marks: store.NewMarks(),
+		Say: func(format string, args ...any) { fmt.Fprintf(&said, format+"\n", args...) }}
+	brk.MarkChanged(store.MarkChange{Revocation: got, Standing: true})
+	if s := said.String(); !strings.Contains(s, "was put back after the lift at "+now.Format(time.RFC3339)+
+		" by a port49-broker runner from its broker.state_dir/marks.json") || strings.Contains(s, "cut off") {
+		t.Fatalf("the lifter's broker said %q", s)
 	}
 }

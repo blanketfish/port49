@@ -1055,13 +1055,26 @@ const landedReadTimeout = 5 * time.Second
 // record, says whether it was a copy sent before the lift and held back by
 // a cut, or a revoke made after it by a writer that had not yet seen it.
 // Clocks are NTP-close and a cut lasts seconds. No form tells anyone to
-// lift again: whether the mark should stand is the operators' call.
+// lift again but a runner's put-back of a mark made before the lift
+// (store.PutBackOrigin; task 2 review I1), which re-created a lifted mark,
+// as sayPutBack says: a put-back made after it was a revoke the store had
+// lost.
 func (b *Broker) landedLine(r store.Revocation) string {
 	ctx, cancel := context.WithTimeout(context.Background(), landedReadTimeout)
 	defer cancel()
 	l, err := b.Store.GetLift(ctx, r.Kind, r.Key)
 	key := printsafe.Line(r.Key, 160)
+	_, putBack := store.PutBackOf(r.Origin)
 	switch {
+	case err == nil && putBack && r.At.Before(l.At):
+		return fmt.Sprintf("broker: a revocation of %s made at %s was put back after the lift at %s by a "+
+			"port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift, which "+
+			"it cannot tell from a mark an etcd restore lost; it stands everywhere; lift it again with port49 revoke "+
+			"--lift if it was lifted on purpose", key, r.At.UTC().Format(time.RFC3339), l.At.UTC().Format(time.RFC3339))
+	case err == nil && putBack:
+		return fmt.Sprintf("broker: a revocation of %s made at %s after the lift at %s was put back by a "+
+			"port49-broker runner from its broker.state_dir/marks.json: the store had lost it (an etcd restore); it "+
+			"stands everywhere", key, r.At.UTC().Format(time.RFC3339), l.At.UTC().Format(time.RFC3339))
 	case errors.Is(err, store.ErrNotFound):
 		return fmt.Sprintf("broker: a revocation of %s landed after a lift; the lift's record has expired", key)
 	case err != nil:
