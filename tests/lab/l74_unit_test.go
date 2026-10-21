@@ -834,3 +834,43 @@ func TestL74RegionEvidenceLogRedactsTheHashes(t *testing.T) {
 		t.Fatalf("leaky line kept or field lost:\n%s", got)
 	}
 }
+
+// L79 is its own row on L74's harness: its cells heal at 20 s, inside TCP's
+// retransmission window (about 15 minutes at tcp_retries2=15), through regionCut.
+func TestL79CellsAreTheirOwnRow(t *testing.T) {
+	for _, c := range l79Cells {
+		if c.Row != "L79" || c.Heal != 20*time.Second || c.Cut != "iptables" {
+			t.Fatalf("%+v: L79's cells heal at 20s inside TCP's retransmission window, through regionCut", c)
+		}
+	}
+	if len(l79Cells) != 2 || l79Cells[0].ID != "j" || l79Cells[1].ID != "k" {
+		t.Fatal("cells j and k")
+	}
+	// The cut is iptables DROP, never REJECT, so the kernel keeps retransmitting.
+	for _, c := range regionCut(3, true) {
+		if !strings.Contains(strings.Join(c, " "), "-j DROP") {
+			t.Fatalf("%v: the cut must DROP", c)
+		}
+	}
+}
+
+// A late lift is a lift that lands after the CLI said it could not; a mark that
+// is back is the runner's or a late revoke's, and either way it is there.
+func TestL79MarkStates(t *testing.T) {
+	keys := "/port49/v1/rv/user:alice@example.com\n"
+	if l79MarkIn(keys, "alice@example.com") != true || l79MarkIn("", "alice@example.com") {
+		t.Fatal("a mark is in the directory when its key is listed")
+	}
+	if got := l79Timeline(true, []bool{true, true, false, false}, time.Second); !strings.Contains(got, "gone after 2s") {
+		t.Fatalf("a deleted mark: %q", got)
+	}
+	if got := l79Timeline(true, []bool{true, true}, time.Second); !strings.Contains(got, "still there") {
+		t.Fatalf("a standing mark: %q", got)
+	}
+	if got := l79Timeline(false, []bool{false, true}, time.Second); !strings.Contains(got, "back after 1s") {
+		t.Fatalf("a mark that reappeared: %q", got)
+	}
+	if got := l79Timeline(false, []bool{false, false}, time.Second); !strings.Contains(got, "never came back") {
+		t.Fatalf("a mark that stayed lifted: %q", got)
+	}
+}
