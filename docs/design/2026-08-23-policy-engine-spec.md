@@ -820,11 +820,13 @@ the rule above: every live context takes the new bundle's blob.
 
 **Unspent tokens are the other half.** A token carries the blob, ceiling and `enable`
 mechanism of the policy that minted it, and a redemption writes them into the context it
-creates or joins. So the refresh also deletes, per `(device, username)`, the unspent tokens a
-superseded policy minted and the policy in force would not mint identically — otherwise a grant
-removed at 10:00 returns at 10:05 on a device where the operator had no context yet, from a
-token minted at 09:58. A token whose answer is unchanged, the bundle aside, is kept: a reload is
-not a reason to make everyone mint again. A shortened `token_ttl` is a changed answer, since
+creates or joins. So the refresh also judges, per `(device, username)`, whether a superseded
+policy minted anything the policy in force would not mint identically, the bundle aside. That is
+the key's test: otherwise a grant removed at 10:00 returns at 10:05 on a device where the
+operator had no context yet, from a token minted at 09:58. A key whose answers are unchanged,
+the bundle aside, keeps every token: a reload is not a reason to make everyone mint again. A key
+whose answer changed has its tokens judged one by one, as below (§5.1.3, the last paragraph).
+A shortened `token_ttl` is a changed answer, since
 those tokens would outlive what the policy now allows; a lengthened one is not. An idempotent
 retry of a mint whose tokens were deleted this way is not replayed, because the replay would
 hand back a token that no longer exists. It is minted afresh under the policy in force, and the
@@ -905,7 +907,16 @@ and the session in progress keeps its access until logout.
 **A superseded policy's tokens are judged across the whole time it was in force.** A token
 it minted carries the answer at the instant of the mint, and that answer changes at each grant
 expiry inside the span, so the comparison is made at the start of the span and at every expiry
-within it; a key is cleared if any of those answers differs from the policy in force.
+within it. Where any of those answers differs from the policy in force, each of the key's unspent
+tokens is kept only if the policy in force would mint it now as it is:
+- the same blob, bundle included;
+- the same ceiling and `enable`;
+- a life no longer than it allows;
+- a second-factor proof, the token's own method and age at mint, that meets the requirement now.
+
+Every other token under the key is deleted, including one this process cannot open. A token
+minted under the policy in force since the swap, on any process, survives the first pass and the
+settle pass alike.
 
 ### 5.1.4 Credential identity and revocation
 
@@ -10864,6 +10875,8 @@ Beyond those already listed in the design document's §14:
   or the old one is put back.
 - **Superseded tokens are deleted and unchanged ones kept**: after an edit, an unspent token
   whose answer changed no longer redeems, and one whose answer did not still does.
+- **A token minted under the policy in force after an answer-changing edit still redeems after
+  the settle pass.**
 - **A refresh loses a race safely**: a write landing on a context between the refresh's read
   and its write is kept, and the refresh reads again and writes the new policy beside it.
 - **A grant's expiry reaches a live context** at the expiry instant, with no edit.
