@@ -112,6 +112,7 @@ type l78Row struct {
 	LoggedIn   bool
 	Lockout    bool
 	Login      string
+	Shown      string // the first line of the device's answer to `show version`
 	BreakGlass string // break-glass after the step
 }
 
@@ -137,12 +138,17 @@ func l78Reply(rec map[string]any) (parts []int, total int, ok bool) {
 	return parts, total, true
 }
 
-// l78Grade reads one token login: ran is whether `show version` answered,
-// record whether a permitting authorize_session record shows the reply port49
-// sent. A refusal is a lockout only after a permit reply; with none logged, the
-// run did not observe what the device was sent.
-func l78Grade(ran, record bool, total int) (lockout bool, says string) {
+// l78Grade reads one token login: ran is whether a session answered
+// `show version`, record whether a permitting authorize_session record shows
+// the reply port49 sent, shown the first line of the device's answer. A
+// refusal to log in is a lockout only after a permit reply; with none logged,
+// the run did not observe what the device was sent. A session that logged in
+// and was answered `error: ...` is not a lockout and did not run the command:
+// the fail-closed reply (deny-all) refuses it.
+func l78Grade(ran, record bool, total int, shown string) (lockout bool, says string) {
 	switch {
+	case ran && strings.HasPrefix(shown, "error:"):
+		return false, fmt.Sprintf("logged in; `show version` refused (deny-all) after a %d-byte reply", total)
 	case ran && record:
 		return false, fmt.Sprintf("logged in and ran `show version` after a %d-byte reply", total)
 	case ran:

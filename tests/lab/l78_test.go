@@ -148,7 +148,15 @@ func (q *qualEnv) l78() {
 			}
 		}
 		row.LoggedIn = ran
-		row.Lockout, row.Login = l78Grade(ran, have, row.Total)
+		if len(outs) > 0 {
+			// What the device answered, first line only: a refusal and the version
+			// text read differently, and the record cannot show which.
+			row.Shown = q.scrub(oneLine(firstLine(outs[0])))
+			if len(row.Shown) > 80 {
+				row.Shown = row.Shown[:80]
+			}
+		}
+		row.Lockout, row.Login = l78Grade(ran, have, row.Total, row.Shown)
 		if !ran && lerr != nil {
 			row.Login += ": " + q.scrub(oneLine(lerr.Error()))
 		}
@@ -268,8 +276,8 @@ func (q *qualEnv) l78Note(rows []l78Row, bgRows []string, stoppedAt string) {
 		"most 255). \"Target\" is the brief's total. The 400 and 600 roles' deny-commands would pass 255, so the projection fails " +
 		"closed (decision 26) and `port49 policy test` refuses those policies with exit 1. Those two rows are therefore not a " +
 		"normal grant: the records carry reason `projection_fail_closed` and the reply `user-permissions=network`, " +
-		"`deny-commands=^.*$` and an allow of ping, traceroute, telnet, ssh and mtrace only. The login still ran `show version` " +
-		"with no refusal text in its output; the records do not say why the device let it through, which is unverified here.\n\n")
+		"`deny-commands=^.*$` and an allow of ping, traceroute, telnet, ssh and mtrace only. The login worked, and the device " +
+		"refused `show version` (its first line is in the login column): deny-all stopped the command.\n\n")
 	b.WriteString("| target | reply bytes (attributes) | login | break-glass after |\n|---|---|---|---|\n")
 	for _, r := range rows {
 		reply := "no record"
@@ -281,6 +289,9 @@ func (q *qualEnv) l78Note(rows []l78Row, bgRows []string, stoppedAt string) {
 			reply = fmt.Sprintf("%d (%s)", r.Total, strings.Join(parts, " + "))
 		}
 		login := r.Login
+		if r.Shown != "" {
+			login += "; the device's first line: `" + r.Shown + "`"
+		}
 		if r.Refused != "" {
 			login = "refused at load: `" + r.Refused + "`"
 		}

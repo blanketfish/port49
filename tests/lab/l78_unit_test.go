@@ -92,16 +92,19 @@ func TestL78GradeNeedsAPermitRecordBeforeItNamesALockout(t *testing.T) {
 	cases := []struct {
 		ran, record bool
 		total       int
+		shown       string
 		lockout     bool
 		says        string
 	}{
-		{true, true, 375, false, "logged in"},
-		{false, true, 375, true, "refused after a permit reply of 375 bytes"},
-		{false, false, 0, false, "not observed"},
-		{true, false, 0, false, "no authorize_session record"},
+		{true, true, 375, "Hostname: srx1", false, "logged in and ran"},
+		{false, true, 375, "", true, "refused after a permit reply of 375 bytes"},
+		{false, false, 0, "", false, "not observed"},
+		{true, false, 0, "Hostname: srx1", false, "no authorize_session record"},
+		// The 400 and 600 rows: the login worked and the device refused the command.
+		{true, true, 124, "error: unknown command: show", false, "`show version` refused (deny-all)"},
 	}
 	for _, c := range cases {
-		lockout, says := l78Grade(c.ran, c.record, c.total)
+		lockout, says := l78Grade(c.ran, c.record, c.total, c.shown)
 		if lockout != c.lockout || !strings.Contains(says, c.says) {
 			t.Errorf("ran=%v record=%v: got %v %q, want %v containing %q", c.ran, c.record, lockout, says, c.lockout, c.says)
 		}
