@@ -10641,6 +10641,11 @@ reason and cost.
     write's error. A revoke that succeeds and lands flagged adds to its own report `this
     revocation landed over a lift of <key> this process's marks feed had not yet shown: it stands
     everywhere, and whoever lifted it may not know; port49 revoke --list names the lift`. A
+    revoke that finds a flagged mark already standing wrote nothing, and says `an earlier
+    revocation of <key>, flagged landed_after_lift, stands; port49 revoke --list names its lift`.
+    A mark a process holds unflagged that the store now holds flagged at the same time (the
+    runner's own put-back, made before its reload finds the mark it held) takes the flag and is
+    said once, on that load or watch put; it is counted at start and kept in `ds/m/`. A
     reload, rescan or restart that finds the flagged mark already standing does not say it again.
     At start, a broker with flagged marks says `N mark(s) stand flagged landed-after-lift;
     port49 revoke --list names them`.
