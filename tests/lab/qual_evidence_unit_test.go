@@ -464,16 +464,22 @@ func TestQualRecordsRefuseASecretInAnAccountArgBeforeTheMask(t *testing.T) {
 // any answer as a run).
 func TestQualRanReadsTheFirstLineOfTheOutput(t *testing.T) {
 	for out, want := range map[string]bool{
-		"Cisco IOS XR Software, Version 26.1.1\nCopyright":        true,
-		"% This command is not authorized":                        false,
-		"\n% This command is not authorized\nxrd1#":               false,
-		"error: command not allowed":                              false,
-		"":                                                        false,
-		"% Invalid input detected":                                false,
-		"% Authorization failed.":                                 false, // IOS XE
-		"% Authorization denied for command 'show version'":       false, // EOS
-		"Error: No authorization to execute command show version": false, // SR Linux
-		"Error: AAA authorization failed":                         false, // NX-OS
+		"Cisco IOS XR Software, Version 26.1.1\nCopyright":                       true,
+		"% This command is not authorized":                                       false,
+		"\n% This command is not authorized\nxrd1#":                              false,
+		"error: command not allowed":                                             false,
+		"":                                                                       false,
+		"% Invalid input detected":                                               false,
+		"% Authorization failed.":                                                false, // IOS XE
+		"% Authorization denied for command 'show version'":                      false, // EOS
+		"Error: No authorization to execute command show version":                false, // SR Linux
+		"Error: AAA authorization failed":                                        false, // NX-OS
+		"% Permission denied for the role":                                       false, // NX-OS's own role refusal (L80 must not read it as ran)
+		"error: permission denied":                                               false, // Junos
+		"                ^\nunknown command.":                                    false, // Junos without error: (caret line first)
+		"syntax error.":                                                          false, // Junos
+		"% Unavailable command (not supported on this hardware platform)":        false, // EOS
+		"% Unknown command or computer name, or unable to find computer address": false, // IOS XE
 	} {
 		if got, says := qualRan(out); got != want {
 			t.Errorf("%q: ran %v (%s), want %v", out, got, says, want)

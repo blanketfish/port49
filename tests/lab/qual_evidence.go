@@ -517,8 +517,12 @@ func qualWriteEvidence(dir string, files map[string][]byte, note string, secrets
 // command was refused: IOS XR prints "% This command is not authorized" when
 // a session's task groups, or its absent attributes, forbid the command
 // (measured in TestQualify on XRd 26.1.1, 2026-10-21), Junos "error:", IOS XE "% Authorization failed.", EOS "% Authorization denied for command" and SR Linux "Error: No authorization to execute command" (the texts in tests/lab/results).
+// NX-OS's own role refuses with "% Permission denied for the role" (Junos says "error: permission
+// denied"), Junos also prints "unknown command." and "syntax error." under a caret line, EOS
+// "% Unavailable command" and IOS XE "% Unknown command or computer name": without them L80's cell
+// would read a local refusal as a denied command that ran (task 14b review I1).
 var qualRefusedMarks = []string{"This command is not authorized", "error:", "Authorization denied", "Authorization failed",
-	"No authorization to execute"}
+	"No authorization to execute", "Permission denied", "unknown command", "syntax error", "Unavailable command"}
 
 // qualRan is whether a command's output shows the command ran: it is not
 // empty and its first line is no refusal. A login that was answered with a
@@ -526,7 +530,8 @@ var qualRefusedMarks = []string{"This command is not authorized", "error:", "Aut
 func qualRan(out string) (ran bool, says string) {
 	first := ""
 	for _, ln := range strings.Split(strings.ReplaceAll(out, "\r", ""), "\n") {
-		if first = strings.TrimSpace(ln); first != "" {
+		// Junos points a caret at the bad word on a line of its own, above the refusal.
+		if first = strings.TrimSpace(ln); first != "" && first != "^" {
 			break
 		}
 	}
