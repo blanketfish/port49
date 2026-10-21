@@ -951,3 +951,18 @@ func TestTheLandedStateIsSafeForConcurrentUse(t *testing.T) {
 	wg.Wait()
 	waitFor(t, func() bool { return m.ConfirmedRevision() == 201 })
 }
+
+// The feed's put of a mark this process's revoke has pending carries the
+// store's flag into Marks, so Flagged and the ds/m/ snapshot see it before
+// a reload (task 2 review M5).
+func TestTheFeedsPutOfAPendingMarkKeepsItsFlag(t *testing.T) {
+	m := NewMarks()
+	r := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	m.Pend(r)
+	flagged := r
+	flagged.LandedAfterLift = true
+	m.stored(flagged)
+	if got, ok := m.Get(r.Kind, r.Key); !ok || !got.LandedAfterLift || m.Flagged() != 1 {
+		t.Fatalf("after the feed's put: %+v %v, flagged %d", got, ok, m.Flagged())
+	}
+}

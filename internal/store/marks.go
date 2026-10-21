@@ -188,17 +188,22 @@ func (m *Marks) Unrecorded(r Revocation) bool {
 	return false
 }
 
-// stored says the store holds the mark for (kind, key): it is unwritten
-// no longer. It reports whether the mark stands and was unrecorded, which
-// the caller tells Standing. A mark Pended and not Unrecorded has its
-// Revoke still in flight, which applies it itself, and is told nothing.
-func (m *Marks) stored(kind, key string) bool {
+// stored says the store holds r, the mark for its kind and key: it is
+// unwritten no longer, and a mark in force here takes the store's flag
+// (task 2 review M5). It reports whether the mark stands and was
+// unrecorded, which the caller tells Standing. A mark Pended and not
+// Unrecorded has its Revoke still in flight, which applies it itself, and
+// is told nothing.
+func (m *Marks) stored(r Revocation) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	k := [2]string{kind, key}
+	k := [2]string{r.Kind, r.Key}
+	if _, ok := m.m[k]; ok && m.unwritten[k] {
+		m.setLanded(k, r.LandedAfterLift)
+	}
 	delete(m.unwritten, k)
 	if !m.unrecorded[k] {
 		return false
@@ -464,7 +469,7 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 		// Before stored: a mark this process's Revoke still has in flight
 		// keeps its own time, which that Revoke corrects (Put).
 		remade := m.remade(r)
-		tell := m.stored(r.Kind, r.Key) || remade
+		tell := m.stored(r) || remade
 		if !m.Holds(r.Kind, r.Key) {
 			m.Set(r, true)
 			tell = true
@@ -554,7 +559,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 		err := feed.WatchRevocations(ctx, from, func(r Revocation, lifted bool, rev uint64) {
 			delivered(rev)
 			defer m.confirm(rev) // once applied, and told
-			if !lifted && m.stored(r.Kind, r.Key) {
+			if !lifted && m.stored(r) {
 				if on != nil {
 					on(MarkChange{Revocation: r, Standing: true})
 				}

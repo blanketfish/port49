@@ -275,7 +275,11 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		// brings it to this listener (Marks.Unrecorded; review I1); when
 		// the feed's put came first, it is applied here.
 		if !held && b.Marks.Unrecorded(mark) {
-			b.MarkChanged(store.MarkChange{Revocation: mark, Standing: true})
+			told := mark
+			if r, ok := b.Marks.Get(kind, key); ok { // the store's, its flag with it (task 2 review M5)
+				told = r
+			}
+			b.MarkChanged(store.MarkChange{Revocation: told, Standing: true})
 		}
 		return RevokeReport{}, fmt.Errorf("broker: the revocation may not have been recorded: a copy already sent "+
 			"can still land when the directory answers again, and then stands everywhere, even over a lift made "+
@@ -712,6 +716,10 @@ func (r RevokeReport) markText() string {
 	fmt.Fprintf(&b, "revoked %s at %s: %d live context(s) marked, the unspent tokens under %d (device, username) "+
 		"key(s) deleted, %d held broker connection(s) closed; every mint %s is refused until `port49 revoke --lift %s`",
 		r.what(), r.Mark.At.UTC().Format(time.RFC3339), len(r.Contexts), r.TokenKeys, r.Connections, mints, r.flags())
+	if r.Mark.LandedAfterLift { // decision 51; task 2 review M5
+		fmt.Fprintf(&b, "\nthis revocation landed over a lift of %s this process's marks feed had not yet shown: it "+
+			"stands everywhere, and whoever lifted it may not know; `port49 revoke --list` names the lift", r.what())
+	}
 	if r.Mark.Kind == store.RevocationPrincipal && strings.HasPrefix(r.Request.Principal, k8sid.Prefix) {
 		b.WriteString("\na token its cluster issued stays valid at port49 until its exp, or max_token_age after it was " +
 			"issued, whatever the cluster does; this mark refuses it now, and stands for a service account " +
