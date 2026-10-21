@@ -7469,7 +7469,8 @@ when Task 14's review found a security-relevant device fact.
     - **P-1:** the settle pass keeps the old policy among priors and `supersedeTokens` clears each key
       whole, so tokens minted under the policy in force are deleted for about 30 s after an
       answer-changing edit (`token_not_found`); judge each unspent token by its own blob. Spec §5.1.3
-      does not license that loss.
+      does not license that loss. **Fixed** on `fix/post-11b`: a changed key's tokens are judged one by
+      one, blob and second-factor proof included (`MFAFresh`), and the reload line says the tokens kept.
     - **SNI:** an IPv6 literal fails `server_names`' `dnsShape` check, so IPv6 Junos cannot be listed;
       and `sni_mismatch` counts a strike, so a wrong `server_names` puts every Junos into malformed
       back-off. Trace the 3am case and decide whether a config error should strike devices.
