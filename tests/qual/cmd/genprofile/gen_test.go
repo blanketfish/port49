@@ -687,3 +687,191 @@ func TestAnAccountRecordWithNoVerdictIsASuccess(t *testing.T) {
 		t.Fatal("an account record with a verdict is not port49d's: refused, never read as a reply")
 	}
 }
+
+// perRequestNotSent makes the fixture's tls_token_login what NX-OS 10.6(2)F's
+// was (L73 cell a): the login and its accounting arrived over TLS, and no
+// authorize_command for the cell's commands did; run.json says not_sent.
+func perRequestNotSent(t *testing.T, dir string) {
+	t.Helper()
+	editRecords(t, dir, func(m map[string]any) bool {
+		ts, _ := m["ts"].(string)
+		return !(m["event"] == "authorize_command" && strings.HasPrefix(ts, "2026-10-20T12:04:"))
+	})
+	editRun(t, dir, func(m map[string]any) {
+		ca, _ := m["command_authorization"].(map[string]any)
+		if ca == nil {
+			ca = map[string]any{}
+		}
+		ca["tls_token_login"] = "not_sent"
+		m["command_authorization"] = ca
+	})
+}
+
+// addTLSSingleConnection gives the fixture a tls_single_connection cell at
+// 12:07 whose records are tls_token_login's (with its commands only when sent),
+// and its command_authorization. It runs before perRequestNotSent.
+func addTLSSingleConnection(t *testing.T, dir, sent string) {
+	t.Helper()
+	var extra []string
+	editRecords(t, dir, func(m map[string]any) bool {
+		if ts, _ := m["ts"].(string); strings.HasPrefix(ts, "2026-10-20T12:04:") && (sent == "sent" || m["event"] != "authorize_command") {
+			c := map[string]any{}
+			for k, v := range m {
+				c[k] = v
+			}
+			c["ts"] = strings.Replace(ts, "12:04:", "12:07:", 1)
+			b, _ := json.Marshal(c)
+			extra = append(extra, string(b))
+		}
+		return true
+	})
+	f, err := os.OpenFile(filepath.Join(dir, "decisions.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(strings.Join(extra, "\n") + "\n")
+	f.Close()
+	editRun(t, dir, func(m map[string]any) {
+		m["cells"].(map[string]any)["tls_single_connection"] = "2026-10-20T12:07:00.000Z"
+		m["results"].(map[string]any)["tls_single_connection"] = "pass"
+		ca, _ := m["command_authorization"].(map[string]any)
+		if ca == nil {
+			ca = map[string]any{"tls_token_login": "sent"}
+		}
+		ca["tls_single_connection"] = sent
+		m["command_authorization"] = ca
+	})
+}
+
+func stepNames(steps []devicemock.GoldenStep) []string {
+	var out []string
+	for _, s := range steps {
+		out = append(out, s.Step)
+	}
+	return out
+}
+
+// Review batch 2 I2: per-request TLS with no command authorization is a
+// measured device fact citing the run's note, not an engine gap, and the
+// tls_token_login golden holds no command step the device never sent.
+func TestPerRequestTLSWithNoCommandAuthorizationIsADeviceFact(t *testing.T) {
+	dir := copyFixture(t)
+	perRequestNotSent(t, dir)
+	p, g, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.HasFact(devicemock.FactTLSPerRequestNoCommands) {
+		t.Fatalf("no device fact: %+v", p.DeviceFacts)
+	}
+	f := p.DeviceFacts[0]
+	if f.Status != "measured" || len(f.Sources) != 1 || f.Sources[0].Register != "QUAL" || !strings.Contains(f.What, "(QUAL tls_token_login)") {
+		t.Fatalf("%+v", f)
+	}
+	for _, e := range p.EngineGaps {
+		if strings.Contains(e.ID, "tls") || strings.Contains(e.What, "TLS") {
+			t.Fatalf("a device fact is no engine gap: %+v", e)
+		}
+	}
+	if got, want := stepNames(g.Scenarios["tls_token_login"].Steps), []string{"login", "authorize_session", "account_start", "account_stop"}; !slices.Equal(got, want) {
+		t.Fatalf("tls_token_login golden %v, want %v", got, want)
+	}
+	if got := stepNames(g.Scenarios["token_login"].Steps); !slices.Contains(got, "command_denied") {
+		t.Fatalf("the plain golden keeps its command steps: %v", got)
+	}
+	if err := p.Validate("testdata"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A run whose tls_token_login sent command authorization records no fact.
+func TestPerRequestTLSWithCommandAuthorizationRecordsNoFact(t *testing.T) {
+	for _, ca := range []any{nil, map[string]any{"tls_token_login": "sent"}} {
+		dir := copyFixture(t)
+		editRun(t, dir, func(m map[string]any) {
+			if ca != nil {
+				m["command_authorization"] = ca
+			}
+		})
+		p, g, err := Generate(dir, "testdata")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(p.DeviceFacts) != 0 || !slices.Contains(stepNames(g.Scenarios["tls_token_login"].Steps), "command_permitted") {
+			t.Fatalf("%v: %+v %+v", ca, p.DeviceFacts, g.Scenarios["tls_token_login"])
+		}
+	}
+}
+
+func TestAnUnknownCommandAuthorizationValueIsRefused(t *testing.T) {
+	dir := copyFixture(t)
+	editRun(t, dir, func(m map[string]any) { m["command_authorization"] = map[string]any{"tls_token_login": "maybe"} })
+	if _, _, err := Generate(dir, "testdata"); err == nil || !strings.Contains(err.Error(), "maybe") {
+		t.Fatalf("want an error naming the value: %v", err)
+	}
+}
+
+// The single-connection TLS cell is its own scenario, generated from its own
+// window; the per-request fact's text says single-connection carried the
+// commands, which an operator acts on.
+func TestTLSSingleConnectionIsAScenarioOfItsOwn(t *testing.T) {
+	dir := copyFixture(t)
+	addTLSSingleConnection(t, dir, "sent")
+	perRequestNotSent(t, dir)
+	p, g, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(p.Scenarios, "tls_single_connection") {
+		t.Fatalf("%v", p.Scenarios)
+	}
+	sc := g.Scenarios["tls_single_connection"]
+	if want := []string{"login", "authorize_session", "command_permitted", "command_denied", "account_start", "account_stop"}; sc.Outcome != "login_ok" || !slices.Equal(stepNames(sc.Steps), want) {
+		t.Fatalf("%+v", sc)
+	}
+	if f := p.DeviceFacts[0].What; !strings.Contains(f, "single-connection") || !strings.Contains(f, "(QUAL tls_single_connection)") {
+		t.Fatalf("the fact does not say single-connection carried the commands: %q", f)
+	}
+	if err := p.Validate("testdata"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTLSSingleConnectionWithNoCommandsIsAFactToo(t *testing.T) {
+	dir := copyFixture(t)
+	addTLSSingleConnection(t, dir, "not_sent")
+	perRequestNotSent(t, dir)
+	p, g, err := Generate(dir, "testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.HasFact(devicemock.FactTLSSingleNoCommands) || slices.Contains(stepNames(g.Scenarios["tls_single_connection"].Steps), "command_permitted") {
+		t.Fatalf("%+v %+v", p.DeviceFacts, g.Scenarios["tls_single_connection"])
+	}
+}
+
+// L80's cell: whether a command port49 denies runs over per-request TLS. The
+// fact says what the cell measured; a run without the cell says L80 is open.
+func TestTheDeniedCommandCellIsCarriedIntoTheFact(t *testing.T) {
+	for ran, want := range map[string]string{"": "L80 is open", "true": "ran anyway (QUAL tls_denied_command, L80)", "false": "refused by the device (QUAL tls_denied_command, L80)"} {
+		dir := copyFixture(t)
+		perRequestNotSent(t, dir)
+		if ran != "" {
+			editRun(t, dir, func(m map[string]any) {
+				m["denied_command_ran"] = map[string]any{"tls_denied_command": ran == "true"}
+				m["cells"].(map[string]any)["tls_denied_command"] = "2026-10-20T12:04:30.000Z"
+				m["results"].(map[string]any)["tls_denied_command"] = "pass"
+			})
+		}
+		p, _, err := Generate(dir, "testdata")
+		if err != nil {
+			t.Fatalf("ran=%q: %v", ran, err)
+		}
+		if !strings.Contains(p.DeviceFacts[0].What, want) {
+			t.Errorf("ran=%q: %q lacks %q", ran, p.DeviceFacts[0].What, want)
+		}
+		if slices.Contains(p.Scenarios, "tls_denied_command") {
+			t.Errorf("the L80 cell is a register measurement, not a mock scenario: %v", p.Scenarios)
+		}
+	}
+}

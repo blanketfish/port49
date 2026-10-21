@@ -120,6 +120,9 @@ func checklist(p *devicemock.Profile, g devicemock.Golden) string {
 	if len(p.EngineGaps) == 0 {
 		b.WriteString("   - none\n")
 	}
+	for _, f := range p.DeviceFacts {
+		fmt.Fprintf(&b, "   - device fact %s [%s]: confirm it against the note's cell text\n", f.ID, f.Status)
+	}
 	b.WriteString("5. Golden outcomes against the note:\n")
 	names := make([]string, 0, len(g.Scenarios))
 	for n := range g.Scenarios {

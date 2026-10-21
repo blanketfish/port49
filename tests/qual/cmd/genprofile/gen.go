@@ -41,6 +41,13 @@ type run struct {
 	Cells       map[string]string `json:"cells"` // cell -> start time, RFC 3339
 	BreakGlass  map[string]bool   `json:"break_glass"`
 	Results     map[string]string `json:"results"` // cell -> pass, fail, not_applicable, not_run
+	// CommandAuthorization is what a TLS login cell's commands did: sent (port49
+	// decided them) or not_sent (no authorize_command for them arrived). A run
+	// that predates it graded tls_token_login pass only when they were sent.
+	CommandAuthorization map[string]string `json:"command_authorization"`
+	// DeniedCommandRan is L80's cell: whether a command port49's policy denies
+	// ran over per-request TLS that sent port49 no command authorization.
+	DeniedCommandRan map[string]bool `json:"denied_command_ran"`
 }
 
 type plainHeader struct {
@@ -141,11 +148,12 @@ var scenarioCells = map[string]struct {
 	"tls_token_login":       {[]string{"tls_token_login"}, "tls"},
 	"tls_store_unavailable": {[]string{"tls_store_unavailable"}, "tls"},
 	"flight_delay":          {[]string{"tls_token_login"}, "tls"},
+	"tls_single_connection": {[]string{"tls_single_connection"}, "tls"},
 }
 
 // scenarioOrder is the order scenarios are listed in; tls_unknown_ca is built apart.
 var scenarioOrder = []string{"token_login", "wrong_credential", "store_unavailable", "single_connection",
-	"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay"}
+	"tls_token_login", "tls_store_unavailable", "tls_unknown_ca", "flight_delay", "tls_single_connection"}
 
 // Generate builds a profile's stimulus and a first golden from one
 // conformance run's evidence directory, and pre-fills the reactions it shows.
@@ -200,6 +208,9 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 			What:    "the device sends no per-command authorization (L18); its command cells are not_applicable",
 			Sources: []devicemock.Source{note}})
 	}
+	if p.DeviceFacts, err = tlsFacts(&r, note); err != nil {
+		return nil, g, err
+	}
 	if err := minorVersions(evDir, &r, p, note); err != nil {
 		return nil, g, err
 	}
@@ -227,6 +238,48 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 		return nil, g, err
 	}
 	return p, g, nil
+}
+
+// tlsFacts are the device facts run.json's command_authorization records: a
+// TLS login cell whose commands reached port49 as no authorize_command is a
+// measured fact citing the run's note, never an engine gap and never inferred
+// from absent records. The per-request fact says what single-connection and
+// L80's cell measured, because an operator acts on them.
+func tlsFacts(r *run, note devicemock.Source) ([]devicemock.DeviceFact, error) {
+	for cell, v := range r.CommandAuthorization {
+		if v != "sent" && v != "not_sent" {
+			return nil, fmt.Errorf("run.json: command_authorization %s is %q, neither sent nor not_sent", cell, v)
+		}
+	}
+	src := []devicemock.Source{note}
+	var out []devicemock.DeviceFact
+	if r.CommandAuthorization["tls_token_login"] == "not_sent" {
+		what := "over per-request TLS (the device default) the device sent port49 no command authorization for the commands typed (QUAL tls_token_login)"
+		switch r.CommandAuthorization["tls_single_connection"] {
+		case "sent":
+			what += "; with single-connection on it did (QUAL tls_single_connection): configure single-connection on its TLS servers, or port49's command rules never see a command"
+		case "not_sent":
+			what += "; with single-connection on it sent none either (QUAL tls_single_connection)"
+		default:
+			what += "; single-connection was not measured"
+		}
+		ran, measured := r.DeniedCommandRan["tls_denied_command"]
+		switch {
+		case !measured:
+			what += "; whether a command port49's policy denies then runs is unmeasured here (L80 is open)"
+		case ran:
+			what += "; a command port49's policy denies ran anyway (QUAL tls_denied_command, L80)"
+		default:
+			what += "; a command port49's policy denies was refused by the device (QUAL tls_denied_command, L80)"
+		}
+		out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSPerRequestNoCommands, What: what, Status: "measured", Sources: src})
+	}
+	if r.CommandAuthorization["tls_single_connection"] == "not_sent" {
+		out = append(out, devicemock.DeviceFact{ID: devicemock.FactTLSSingleNoCommands,
+			What:   "with single-connection on, over TLS the device sent port49 no command authorization for the commands typed (QUAL tls_single_connection)",
+			Status: "measured", Sources: src})
+	}
+	return out, nil
 }
 
 // StimulusEqual compares what genprofile generates and nothing reviewed:
