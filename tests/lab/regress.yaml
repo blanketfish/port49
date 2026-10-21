@@ -45,8 +45,8 @@ entries:
      notes: [tests/lab/results/L71-cisco_xrd.md]}
   - {id: L76-srlinux, measured_minutes: 3.0, run: '^TestL76$', platforms: srlinux, rows: [L76], env: {PORT49_LAB_REMEASURE: L76},
      notes: [tests/lab/results/L76-nokia_srlinux.md]}
-  - {id: L74-L75, measured_minutes: 16.2, target: lab-regions, run: '^TestRegions$', rows: [L74, L75], env: {PORT49_LAB_REMEASURE: "L74,L75"},
-     timeout_minutes: 120, notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md]}
+  - {id: L74-L75-L79, measured_minutes: 18.9, target: lab-regions, run: '^TestRegions$', rows: [L74, L75, L79], env: {PORT49_LAB_REMEASURE: "L74,L75,L79"},
+     timeout_minutes: 120, notes: [tests/lab/results/L74-regions.md, tests/lab/results/L75-regions.md, tests/lab/results/L79-regions.md]}
   - id: L5
     measured_minutes: 26.1
     run: '^TestL5Watchdog$'

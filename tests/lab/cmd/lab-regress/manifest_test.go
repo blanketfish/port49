@@ -280,13 +280,14 @@ func TestAProcessStillHoldingStdoutIsNamedALeak(t *testing.T) {
 }
 
 // measured_minutes keeps its decimals: the first full run's passing entries
-// took 723.5 minutes, and a whole-minute field read 696.
+// took 723.5 minutes, and a whole-minute field read 696. L79 joined the regions
+// entry at 18.9 minutes (16.2 before), so the total is 726.2.
 func TestMeasuredMinutesKeepTheirDecimals(t *testing.T) {
 	entries, err := loadManifest("../../regress.yaml", specPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := measuredTotal(entries); got < 723.45 || got > 723.55 {
-		t.Errorf("the committed manifest's measured minutes total %.2f, want 723.5", got)
+	if got := measuredTotal(entries); got < 726.15 || got > 726.25 {
+		t.Errorf("the committed manifest's measured minutes total %.2f, want 726.2", got)
 	}
 }
