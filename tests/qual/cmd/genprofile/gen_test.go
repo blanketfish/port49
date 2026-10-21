@@ -683,4 +683,7 @@ func TestAnAccountRecordWithNoVerdictIsASuccess(t *testing.T) {
 	if err != nil || ev != "acct_success" {
 		t.Fatalf("got %q, %v; port49d writes no verdict on an account record", ev, err)
 	}
+	if _, _, err := eventOf(&rec{Event: "account", Verdict: "permit"}); err == nil {
+		t.Fatal("an account record with a verdict is not port49d's: refused, never read as a reply")
+	}
 }

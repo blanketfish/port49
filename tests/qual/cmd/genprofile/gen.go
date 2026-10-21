@@ -694,13 +694,11 @@ func eventOf(x *rec) (string, []string, error) {
 			return "author_fail", nil, nil
 		}
 	case "account":
-		// port49d's account record carries no verdict: a record it spooled is a
-		// record it acknowledged.
-		switch x.Verdict {
-		case "permit", "":
+		// port49d's account record carries no verdict (acct.go): a logged account
+		// record was acknowledged SUCCESS unless the spool's sync failed, which a
+		// lab run does not show. A record with a verdict is not port49d's.
+		if x.Verdict == "" {
 			return "acct_success", nil, nil
-		case "deny":
-			return "acct_error", nil, nil
 		}
 	}
 	return "", nil, fmt.Errorf("decisions.jsonl line %d: %s record with verdict %q has no reply class", x.n, x.Event, x.Verdict)
