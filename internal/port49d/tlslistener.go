@@ -433,13 +433,14 @@ func (l *tlsListener) sayExpired(leaf *x509.Certificate) {
 	}
 }
 
-// tlsServerNames are the SNI names a ClientHello may ask for: lower case,
-// with no trailing dot, whatever the config carries. The config's slice is
-// not touched.
+// tlsServerNames are the SNI names a ClientHello may ask for, as the
+// listener compares them (server.CanonicalServerName): names in lower case
+// with no trailing dot, and addresses canonical, whatever the config
+// carries. The config's slice is not touched.
 func tlsServerNames(cfg config.TLSListenerConfig) []string {
 	out := make([]string, 0, len(cfg.ServerNames))
 	for _, n := range cfg.ServerNames {
-		out = append(out, strings.ToLower(strings.TrimSuffix(n, ".")))
+		out = append(out, server.CanonicalServerName(strings.TrimSuffix(n, ".")))
 	}
 	return out
 }
