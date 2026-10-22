@@ -16,6 +16,17 @@ type buildVCS struct {
 	Modified bool   `json:"vcs_modified"`
 }
 
+// recorded is v as written to run.json and the L80 summaries: the first
+// twelve hex characters of the revision, under l73SummaryLeaks' 32, so the
+// writer's leak check stays as strict as it is. The checks against HEAD run on
+// the full revision, in memory, before anything is written.
+func (v buildVCS) recorded() buildVCS {
+	if len(v.Revision) > 12 {
+		v.Revision = v.Revision[:12]
+	}
+	return v
+}
+
 // parseBuildVCS reads `go version -m` output. A binary with no
 // vcs.revision (built with -buildvcs=false, or outside a checkout) is an
 // error: what it was built from cannot be shown.

@@ -236,7 +236,7 @@ func TestL80Remeasure(t *testing.T) {
 			before := l80Events()
 			var sum strings.Builder
 			fmt.Fprintf(&sum, "L80 re-measure, arm %s, cell %s, nxos106 per-request TLS, idle_timeout default\n", arm, cell.Name)
-			fmt.Fprintf(&sum, "bin/port49d: vcs.revision=%s vcs.modified=%v\n", vcs.Revision, vcs.Modified)
+			fmt.Fprintf(&sum, "bin/port49d: vcs.revision=%s vcs.modified=%v\n", vcs.recorded().Revision, vcs.Modified)
 			var mu sync.Mutex
 			var typed []l80Typed
 			var wg sync.WaitGroup

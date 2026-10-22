@@ -311,3 +311,26 @@ func TestBuildPort49dStampsTheRevisionFromANestedWorktree(t *testing.T) {
 		t.Fatalf("left behind %d entries in the temp root", len(left))
 	}
 }
+
+// run.json's port49d field must pass the writer's own leak check: a full
+// 40-hex revision is a long hex run and made the first live qual run INVALID.
+func TestQualRunRecordsAShortRevisionThatPassesTheLeakCheck(t *testing.T) {
+	full := "0123456789abcdef0123456789abcdef01234567"
+	v := buildVCS{full, false}
+	if err := qualBinaryCheck(v, full); err != nil {
+		t.Fatalf("the full revision must still compare against HEAD in memory: %v", err)
+	}
+	b, err := json.Marshal(qualRun{Port49d: v.recorded()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hits := l73SummaryLeaks(string(b)); len(hits) > 0 {
+		t.Errorf("run.json trips the leak check (%v): %s", hits, b)
+	}
+	if got := v.recorded().Revision; len(got) != 12 || !strings.HasPrefix(full, got) {
+		t.Errorf("recorded revision = %q, want the first 12 characters", got)
+	}
+	if !strings.Contains(string(b), `"vcs_modified":false`) {
+		t.Errorf("run.json lacks vcs_modified: %s", b)
+	}
+}

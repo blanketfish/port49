@@ -622,7 +622,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
 		q.t.Fatalf("INVALID: the harness tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
-	q.run.Port49d = vcs
+	q.run.Port49d = vcs.recorded()
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
 	// tls_token_login is graded per connection (honored or ignored, decision 50
