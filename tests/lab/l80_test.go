@@ -90,7 +90,6 @@ func TestL80Remeasure(t *testing.T) {
 			t.Fatalf("INVALID: repo root: %v", err)
 		}
 		root = r
-		t.Cleanup(func() { root = "" })
 	}
 	// Which build the arm runs is checked, never taken on trust (review I2).
 	vcs, err := binaryVCS(filepath.Join(root, "bin", "port49d"))
@@ -127,6 +126,10 @@ func TestL80Remeasure(t *testing.T) {
 		t.Fatal(err)
 	}
 	q.cfg = q.config()
+	// The platform's readiness daemon still holds :49 (as play does, qualify_test.go:147).
+	if err := l.stopDaemon(); err != nil {
+		t.Fatal(err)
+	}
 	q.startDaemon(q.cfg)
 	defer q.restoreDaemon()
 	q.start = l.mark()
