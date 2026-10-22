@@ -4448,7 +4448,8 @@ using the same vocabulary as `parent:` on privilege levels; a name the set does 
 from the generic adapter. A variant is the same device under another name, so everything
 port49 keys by a shipped platform's name is read for it as its base's: the `session_services` it may arrive with, its
 exec records' commands, its system users, its session discriminator (§5.8), the built-in
-redaction patterns (§5.8) and the keyword tree (§8, decision 27). The admission index carries the
+redaction patterns (§5.8), the keyword tree (§8, decision 27), and whether port49 offers it
+single-connect over TLS (decision 50 ruling 20). The admission index carries the
 base's name beside each device's for the daemon (plan 6a). Keyed by its own name, a
 `juniper_junos` variant would be refused every session `service_unsupported`, have its login
 records read as commands, and have its records logged without Junos's own redaction patterns.
@@ -10492,8 +10493,14 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   - An alert crypto/tls writes at a refused handshake is best-effort: the reset that follows can
     discard it before it leaves the host. The record is the authority; L72 records what each
     reference client saw.
-  - `port49_connection_events_total` gains `tls_refused`, `transport_mismatch` and
-    `obfuscated_over_tls`. `tls_refused` counts a struck handshake refusal and a decline at Accept
+  - `port49_connection_events_total` gains `tls_refused`, `transport_mismatch`,
+    `obfuscated_over_tls` and `single_connect_second_connection`.
+    `single_connect_second_connection` counts a connection from a device port49 offered
+    single-connect to (ruling 20) that arrives while an offered connection from the same source is
+    still open: the device ignored the offer. It stays 0 while the device honors it, and moves at
+    an ignoring device's second request, long before its connections reach `per_nas_connections`
+    and `refused_cap`. Like every value of the metric it carries no device label; the decision
+    log's records from that source name the device. `tls_refused` counts a struck handshake refusal and a decline at Accept
     (no material, an unidentifiable device). It does not count `status_unavailable` or
     `sni_mismatch`, which are declines after the ClientHello (rulings 8, 10): their window's
     refusals at Accept are `declined_refused`, and `port49_tls_handshakes_total{outcome}` counts
@@ -10527,6 +10534,30 @@ each where this document and RFC 9887 were silent; Ryan may override any.
     client in `tests/lab/cmd/tacacs-tls-client`), and closes in this plan.
   - **L73** holds every claim about a device's RFC 9887 behaviour. It closed 2026-10-18 on the
     four platforms above, with images that support RFC 9887 (L71 addenda). Device configuration and reference AAA configs for TLS are plan 12's, on L73.
+- **20. port49 offers single-connect to a platform whose client pipelines** (RFC 9887 listener
+  only). NX-OS 10.6(2)F over per-request TLS writes the next request about 20 ms after an
+  accounting record on the same connection, without waiting for the reply. Closed after one
+  session, the connection loses it: the device marks port49 dead, and with `none` as its fallback
+  the command runs unasked (L80, before the fix).
+
+  For a platform whose built-in wire facts say so, `cisco_nxos` and its variants (§8), port49 sets
+  the single-connect flag in its first reply, as RFC 8907 §4.3 allows: "The server may set this
+  flag even if the client does not set it". NX-OS then keeps one connection and asks about every
+  command (L80). The connection closes at `limits.idle_timeout`, as RFC 8907 §4.3 requires of a
+  Single Connection Mode connection.
+
+  The flag is echoed on every reply, as on a connection the client opened in single-connect: the
+  form measured, and harmless, since RFC 8907 §4.3 has both sides "ignore the flag after the
+  second packet". The fact is built in, never configured, and each entry cites its lab note. A
+  variant reads it as its base's (§8). A `replace: true` block keeps the platform's name, so it
+  keeps the fact: replace keeps "what the set measured about the device". The RFC 8907
+  listener does not offer it: NX-OS opens a connection per request there (0 of 10 pipelined).
+
+  A device port49 offered single-connect to that opens a second connection while its offered one
+  is open is counted `single_connect_second_connection` (ruling 16). It ignored the offer, and an
+  ignoring device under load reaches `per_nas_connections` and `refused_cap`. The offer adds no
+  reason code and no §12 warning, and departs from no RFC text, so the departures below are
+  unchanged.
 - **Departures from RFC 9887, named.** Three:
   1. **§3.4, revocation (a MUST).** `certificate_status: {disabled: true}` and `on_unavailable:
      allow` depart from "MUST validate the certificate path ... including revocation checking".
