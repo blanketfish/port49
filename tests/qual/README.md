@@ -47,7 +47,7 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
 
    For a platform port49 offers single-connect to over TLS (`platform.TLSServerSingleConnect`,
    decision 50 ruling 20: today `cisco_nxos`), run.json's `tls_server_single_connect_offered` is
-   true, the run restarts port49d just before `tls_token_login`'s capture
+   true, the run waits until no connection is open before and at `tls_token_login`'s capture
    (`tls_capture_started_clean`), and `genprofile` grades `tls_token_login` from its header-only
    `*.tls.json` and port49's records, writing nothing if the capture did not start clean, any two
    of the cell's connections overlap, or a record falls in no connection: `tls_server_single_connect_honored` when a connection carried a session after a

@@ -68,11 +68,11 @@ type qualRun struct {
 	// cells run only on a clean build of the harness tree's HEAD, so the
 	// offer above is the binary's own (review I2).
 	Port49d buildVCS `json:"port49d"`
-	// TLSCaptureStartedClean is set once port49d is restarted between the
-	// readiness probe and tls_token_login's capture: the capture sees only
-	// connections whose SYN it caught, so only a restart shows no held one
-	// is open in it. genprofile grades honored or ignored only when it is
-	// true (review O1).
+	// TLSCaptureStartedClean is set once no connection was open before or at
+	// tls_token_login's capture's start: the capture sees only connections
+	// whose SYN it caught, so the gauge decides (port49_connections{open} 0
+	// before, and again once the capture is live). genprofile grades honored
+	// or ignored only when it is true (review O1, R3).
 	TLSCaptureStartedClean bool `json:"tls_capture_started_clean"`
 }
 

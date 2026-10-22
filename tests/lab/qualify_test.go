@@ -608,23 +608,18 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
 	// tls_token_login is graded per connection (honored or ignored, decision 50
-	// ruling 20), so its capture starts clean (review I1, O1, N1, N4). The
-	// capture sees only connections whose SYN it caught, so no rule that waits
-	// can see one held from the readiness probe; port49d is restarted instead.
-	//   - First the readiness login's own records land (guard, settle), as at
-	//     every other restart site, so none reaches a stopped daemon.
-	//   - The restart closes any held TLS connection with close_notify, as an
-	//     idle close does (server.go's shutdown).
-	//   - A fresh readiness login then shows the device connecting on a new
-	//     connection to the restarted daemon, before the capture opens.
-	//   - The gauge must read 0 within qualCleanPolls (past idle_timeout, which
-	//     closes what that login left held), and again once the capture has
-	//     started. Either failure is INVALID; run.json records the clean start.
+	// ruling 20), so its capture starts clean (review I1, O1, N1, N4, R3): no
+	// connection open before or at its start. The capture sees only
+	// connections whose SYN it caught, so the gauge decides.
+	//   - First the readiness login's own records land (guard, settle).
+	//   - Then the gauge must read 0 within qualCleanPolls: past idle_timeout,
+	//     which closes, with close_notify, a connection the readiness login
+	//     left held (an offered NX-OS one); a per-request device's closes at
+	//     once.
+	//   - It is read again once the capture has started.
+	// Either failure is INVALID; only then does run.json record the clean start.
 	e.guard()
 	e.settle()
-	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
-	q.login()
-	e.ready("qual-tls-clean")
 	read := func() (float64, bool) { return e.metric(qualConnectionsOpen) }
 	if err := qualWaitNoConnections(read, qualCleanPolls, time.Sleep); err != nil {
 		q.t.Fatal(err)

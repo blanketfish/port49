@@ -251,7 +251,7 @@ func TestQualStillCleanAfterTheCaptureStarts(t *testing.T) {
 }
 
 // The wait outlasts the lab file's idle_timeout, which closes a connection
-// the fresh readiness login left held (review N1).
+// the readiness login left held (review N1, R3).
 func TestQualCleanWaitOutlastsTheLabIdleTimeout(t *testing.T) {
 	raw, err := os.ReadFile("port49d-lab.yaml")
 	if err != nil {

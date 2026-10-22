@@ -56,9 +56,9 @@ type run struct {
 	// ruling 20): the harness writes it from platform.TLSServerSingleConnect,
 	// since the flag itself is inside the ciphertext.
 	TLSServerSingleConnectOffered bool `json:"tls_server_single_connect_offered"`
-	// TLSCaptureStartedClean is whether port49d was restarted between the
-	// readiness probe and tls_token_login's capture, so no connection
-	// whose SYN the capture missed was open in it (review O1).
+	// TLSCaptureStartedClean is whether no connection was open before or at
+	// tls_token_login's capture's start, so none whose SYN the capture
+	// missed was open in it (review O1, R3).
 	TLSCaptureStartedClean bool `json:"tls_capture_started_clean"`
 }
 
@@ -967,7 +967,7 @@ func noCommandAuthorizationGap(platform, firmware string, l18 []byte, note devic
 // A record carries no connection identity (no source port or connection id;
 // cert_sha256 is the device's on every connection), so it is placed by time.
 // The fact is absent, never a guess, when the capture did not start clean
-// (clean: port49d restarted just before it, so no connection whose SYN it
+// (clean: no connection open before or at its start, so none whose SYN it
 // missed was open), when any two of the cell's connections overlap, or when
 // a record falls in no connection.
 //
