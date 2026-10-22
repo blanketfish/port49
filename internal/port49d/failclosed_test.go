@@ -363,3 +363,84 @@ key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
 		t.Fatalf("gauge %v:\n%s", failClosedGauge(rig), out)
 	}
 }
+
+// lapsePolicy is a policy where t holds low, at a level no bit maps, and r at
+// admin until e1: from e1 t's composition is fail-closed. u holds r until e2.
+func lapsePolicy(e1, e2 time.Time) string {
+	return `
+platform_set: 1.1.0
+privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: r, privilege: admin, permit: ["**"]}
+  - {name: low, privilege: unmapped, permit: ["show version"]}
+subjects:
+  - {name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}
+  - {name: t, identity: ["user:carol@example.com"], username: carol, token_ttl: 60s}
+  - {name: u, identity: ["user:dave@example.com"], username: dave, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [r]}
+  - {subject: t, scope: all_devices, roles: [low]}
+  - {subject: t, scope: all_devices, roles: [r], expires: ` + e1.UTC().Format(time.RFC3339) + `}
+  - {subject: u, scope: all_devices, roles: [r], expires: ` + e2.UTC().Format(time.RFC3339) + `}
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
+`
+}
+
+// The report reads only the policy, the inventory and the clock, so a grant
+// expiry moves the gauge at its instant even when the store is down and the
+// pass after it cannot complete: at 3am the store being down is when the
+// alarm must be right. The next expiry is said at its instant too, before the
+// pass's retry.
+func TestAnExpiryWithTheStoreDownStillMovesTheGauge(t *testing.T) {
+	rig := failClosedRig(t, 2)
+	e1 := rig.now.Add(time.Hour)
+	e2 := e1.Add(refreshRetry / 3)
+	swapTo(t, rig, lapsePolicy(e1, e2))
+	if failClosedGauge(rig) != 0 {
+		t.Fatalf("gauge %v before the expiry:\n%s", failClosedGauge(rig), rig.out.String())
+	}
+	rig.b.Store = failingStore{rig.st}
+	rig.now = e1
+	seen := len(rig.out.String())
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	out := rig.out.String()[seen:]
+	if !strings.Contains(out, "policy refresh stopped") || !strings.Contains(out, "policy: 1 "+countLine) ||
+		failClosedGauge(rig) != 1 {
+		t.Fatalf("the expiry with the store down: gauge %v:\n%s", failClosedGauge(rig), out)
+	}
+	if !rig.r.due.Equal(e2) {
+		t.Fatalf("due %v, not the next expiry %v", rig.r.due, e2)
+	}
+	// At e2 the timer says the report again and runs no pass: the stopped
+	// pass's retry stays at e1 + refreshRetry.
+	rig.now = e2
+	seen = len(rig.out.String())
+	rig.with(func() { rig.r.fired(context.Background()) })
+	out = rig.out.String()[seen:]
+	if strings.Contains(out, "policy refresh") || !strings.Contains(out, "policy: 1 "+countLine) ||
+		!rig.r.due.Equal(e1.Add(refreshRetry)) {
+		t.Fatalf("at the next expiry: due %v:\n%s", rig.r.due, out)
+	}
+}
+
+// With no broker there is no pass, and the expiry timer is armed again for
+// the next expiry, not left at the one just said, which would fire at once
+// for ever on the reload goroutine. Said once, it is not said again.
+func TestANoBrokerExpiryRearmsAtTheNextExpiry(t *testing.T) {
+	rig := failClosedRig(t, 2)
+	e1 := rig.now.Add(time.Hour)
+	e2 := e1.Add(time.Hour)
+	swapTo(t, rig, lapsePolicy(e1, e2))
+	rig.r.pass = nil
+	rig.now = e1
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if !rig.r.due.Equal(e2) || failClosedGauge(rig) != 1 {
+		t.Fatalf("due %v (want %v), gauge %v", rig.r.due, e2, failClosedGauge(rig))
+	}
+	seen := len(rig.out.String())
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if out := rig.out.String()[seen:]; strings.Contains(out, countLine) {
+		t.Fatalf("said again at the same instant:\n%s", out)
+	}
+}

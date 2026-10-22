@@ -98,6 +98,10 @@ type reloader struct {
 	// expiry is due, zero once it has completed; retry is when a stopped pass
 	// runs again, zero when none stopped. Zero is none.
 	expiry, settle, retry time.Time
+	// reportAt is the next grant expiry the fail-closed report is owed at,
+	// zero for none. It is the policy's alone, not the pass's: a pass the
+	// store stopped leaves expiry behind, and the report moves on.
+	reportAt time.Time
 	// pending is a changed file's version seen by one poll, waiting for the
 	// next to agree: an editor writing in place is not read half-way.
 	pending string
@@ -195,7 +199,7 @@ type reloader struct {
 	// not empty. Nil with no broker in the process.
 	mfaUnavailable func(pol *policy.Policy, now time.Time) string
 	// failClosed says the fail-closed compositions after each swap's
-	// refresh pass and each pass that crossed a grant expiry, off this
+	// refresh pass and at each grant expiry (sayAtExpiry), off this
 	// goroutine (failClosedReporter). run closes it.
 	failClosed *failClosedReporter
 	// fullPass is how the runner's duties hand run a full context pass a
@@ -252,6 +256,7 @@ func newReloader(cfg config.Config, live *policy.Live, log decision.Emitter,
 		_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
 	}
 	r.expiry, _ = live.Load().NextChange(start)
+	r.reportAt = r.expiry
 	r.reschedule()
 	r.invSeen.Store(start.UnixNano())
 	// Never negative: a document dated a little ahead of this clock, within
@@ -361,7 +366,7 @@ func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
 		case <-tick.C:
 			r.poll(ctx)
 		case <-timer.C:
-			r.refresh(ctx)
+			r.fired(ctx)
 		case now := <-r.owed:
 			r.startLeft(now)
 		case o := <-r.fullPass:
@@ -1191,6 +1196,7 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 		r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
 	}
 	r.expiry, _ = pol.NextChange(now)
+	r.reportAt = r.expiry
 	r.settle = now.Add(settleAfter(r.interval))
 	if r.pass != nil {
 		r.metrics.PolicyRefreshPending.Set(1)
@@ -1218,8 +1224,8 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 	said := r.refresh(ctx)
 	// After the pass, not before, and off this goroutine: the walk over
 	// every subject and device must not delay the supersede that a
-	// tightened requirement depends on. A pass that crossed a grant expiry
-	// has asked already.
+	// tightened requirement depends on. A refresh at a grant expiry has
+	// asked already.
 	if !said {
 		r.failClosed.ask(stderr, r.procName(), pol, now)
 	}
@@ -1264,22 +1270,17 @@ func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 // expired grant included. A complete pass that leaves it at 0 tells
 // onSettled, when set, the policy in force.
 //
-// A pass that crossed a grant expiry asks failClosed to say which
-// compositions answer fail-closed now, and returns true, or the gauge goes
-// stale at the expiry. With no broker there is no pass: the timer is still
-// armed for the next expiry, and the same is asked at it.
+// A refresh at or after a grant expiry first asks for the fail-closed
+// report (sayAtExpiry), whatever the pass then does, and returns true. With
+// no broker there is no pass: the timer is still armed for the next expiry.
 func (r *reloader) refresh(ctx context.Context) (said bool) {
+	said = r.sayAtExpiry()
 	if r.pass == nil {
 		// No broker in the process: nothing to carry, and no settle or retry
 		// scheduled. The next expiry is, or an expiry already past would
 		// fire the timer again at once: NextChange reads after it.
 		r.settle, r.retry = time.Time{}, time.Time{}
-		cur, now := r.live.Load(), r.now()
-		if !r.expiry.IsZero() && !now.Before(r.expiry) {
-			r.failClosed.ask(stderr, r.procName(), cur, now)
-			said = true
-		}
-		r.expiry, _ = cur.NextChange(now)
+		r.expiry, _ = r.live.Load().NextChange(r.now())
 		r.reschedule()
 		return said
 	}
@@ -1290,7 +1291,7 @@ func (r *reloader) refresh(ctx context.Context) (said bool) {
 	}
 	rep, err := r.pass(ctx, r.priors)
 	if err != nil && ctx.Err() != nil {
-		return false // port49d is shutting down: there is no retry to announce
+		return said // port49d is shutting down: there is no retry to announce
 	}
 	if err != nil {
 		r.stopped = true
@@ -1311,10 +1312,9 @@ func (r *reloader) refresh(ctx context.Context) (said bool) {
 		}
 		r.retry = r.now().Add(refreshRetry)
 		r.reschedule()
-		return false
+		return said
 	}
 	cur := r.live.Load()
-	crossed := !r.expiry.IsZero() && !rep.At.Before(r.expiry)
 	r.retry = time.Time{}
 	if !r.settle.IsZero() && !rep.At.Before(r.settle) {
 		r.settle = time.Time{}
@@ -1338,13 +1338,39 @@ func (r *reloader) refresh(ctx context.Context) (said bool) {
 		r.sayf("policy refresh: %s\n", summary(rep))
 	}
 	r.reschedule()
-	if crossed {
-		r.failClosed.ask(stderr, r.procName(), cur, rep.At)
-	}
 	if r.settle.IsZero() && r.onSettled != nil {
 		r.onSettled(cur)
 	}
-	return crossed
+	return said
+}
+
+// sayAtExpiry asks failClosed for the report on the policy in force once a
+// grant expiry it is owed at has come, and moves reportAt to the next. The
+// report reads only the policy, the inventory and the clock, so it is asked
+// at the expiry whether or not the refresh pass after it completes: with
+// the store down the gauge still moves at the expiry (spec §12). It reports
+// whether it asked.
+func (r *reloader) sayAtExpiry() bool {
+	now := r.now()
+	if r.reportAt.IsZero() || now.Before(r.reportAt) {
+		return false
+	}
+	cur := r.live.Load()
+	r.failClosed.ask(stderr, r.procName(), cur, now)
+	r.reportAt, _ = cur.NextChange(now)
+	return true
+}
+
+// fired is the refresh timer: the report owed at an expiry, and the pass
+// when one is due. A report's instant alone runs no pass, so a pass the
+// store stopped is retried at its retry, not early.
+func (r *reloader) fired(ctx context.Context) {
+	if due := r.passDue(); !due.IsZero() && !r.now().Before(due) {
+		r.refresh(ctx)
+		return
+	}
+	r.sayAtExpiry()
+	r.reschedule()
 }
 
 // startLeft is what a start on a persistent store left unjudged (plan
@@ -1365,15 +1391,26 @@ func (r *reloader) startLeft(now bool) {
 // reschedule sets due. A retry owed comes first, and alone: that pass judges
 // everything an expiry or a settle pass would, and a store still down must
 // not be asked again at once for an expiry already past. Otherwise it is the
-// earlier of the next expiry and the settle pass.
+// earlier of the next expiry and the settle pass. A fail-closed report owed
+// earlier (reportAt) is due first: fired says it and runs no pass.
 func (r *reloader) reschedule() {
-	r.due = r.retry
-	if r.due.IsZero() {
-		r.due = r.expiry
-		if r.due.IsZero() || (!r.settle.IsZero() && r.settle.Before(r.due)) {
-			r.due = r.settle
+	r.due = r.passDue()
+	if !r.reportAt.IsZero() && (r.due.IsZero() || r.reportAt.Before(r.due)) {
+		r.due = r.reportAt
+	}
+}
+
+// passDue is when the next refresh pass is due: the retry of a stopped one,
+// or else the next expiry or settle pass, whichever is first; zero is never.
+func (r *reloader) passDue() time.Time {
+	due := r.retry
+	if due.IsZero() {
+		due = r.expiry
+		if due.IsZero() || (!r.settle.IsZero() && r.settle.Before(due)) {
+			due = r.settle
 		}
 	}
+	return due
 }
 
 // summary is what a refresh did, in one clause per count. A context updated or

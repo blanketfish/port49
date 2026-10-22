@@ -21,8 +21,7 @@ const failClosedDevices = 3
 // words it with the device count and the first failClosedDevices, then
 // sets port49_policy_fail_closed_compositions to how many hold now. It is
 // said at start, on the start's goroutine; after a swap's refresh pass and
-// after a pass that crossed a grant expiry the reloader's failClosedReporter
-// says it.
+// at each grant expiry the reloader's failClosedReporter says it.
 func sayFailClosed(proc string, pol *policy.Policy, now time.Time, m *metrics.Metrics) {
 	if m == nil || pol == nil {
 		return
@@ -58,7 +57,7 @@ func reportFailClosed(w io.Writer, proc string, pol *policy.Policy, found []poli
 // failClosedReporter says the fail-closed compositions of each generation
 // the reloader asks for, off the reload goroutine: the walk over every
 // subject and device must not delay a reload, a refresh pass or the
-// expiry pass after it. One worker at a time works a report out, and only
+// timer at an expiry. One worker at a time works a report out, and only
 // the latest generation asked for: one still pending when a newer is asked
 // for is dropped, and one finished after a newer was asked for is not said,
 // so an older report never overwrites a newer. The worker runs only while
