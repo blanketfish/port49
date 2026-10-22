@@ -955,28 +955,53 @@ func noCommandAuthorizationGap(platform, firmware string, l18 []byte, note devic
 // serverSingleConnectFact grades whether the device honored port49's offer
 // of single-connect over per-request TLS (spec §13 decision 50 ruling 20;
 // design Task 7 RI4), in header terms only: the TLS cell's connections from
-// its header-only summary, and port49's own records of the cell, each placed
-// in the connection open at its time. The TACACS+ header is inside the
-// ciphertext, so whether port49 offered is run.json's, which the harness
-// writes from the build under test's own wire fact.
+// its header-only summary, and port49's own records of the cell. The
+// TACACS+ header is inside the ciphertext, so whether port49 offered is
+// run.json's, which the harness writes from the build under test's own wire
+// fact.
+//
+// A record carries no connection identity (no source port or connection id;
+// cert_sha256 is the device's on every connection), so it is placed by time,
+// and only in a connection no other one overlaps. A record inside an
+// overlapping connection, or inside none, is ambiguous: the fact is then
+// absent, never a guess.
 //
 //   - honored: a connection carried a session after a completed one that
 //     was not accounting. That is reuse, not arm E's pipelining behind an
 //     accounting record.
 //   - ignored: every connection that carried a session carried exactly one.
-//   - nil, no claim: port49 did not offer, or neither holds.
+//   - nil, no claim: port49 did not offer, a record could not be placed, or
+//     neither holds.
 func serverSingleConnectFact(offered bool, conns []conn, recs []*rec, note devicemock.Source) *devicemock.DeviceFact {
 	if !offered {
 		return nil
 	}
+	open := func(c conn) time.Time {
+		if c.End == "open" || c.EndAt.IsZero() {
+			return time.Time{}
+		}
+		return c.EndAt
+	}
+	// overlaps reports whether a and b were open at once.
+	overlaps := func(a, b conn) bool {
+		aEnd, bEnd := open(a), open(b)
+		return (aEnd.IsZero() || !b.SYNAt.After(aEnd)) && (bEnd.IsZero() || !a.SYNAt.After(bEnd))
+	}
 	per := make([][]*rec, len(conns))
 	for _, x := range recs {
-		for i, c := range conns {
-			if !x.at.Before(c.SYNAt) && (c.End == "open" || c.EndAt.IsZero() || !x.at.After(c.EndAt)) {
-				per[i] = append(per[i], x)
-				break
+		in := slices.IndexFunc(conns, func(c conn) bool {
+			end := open(c)
+			return !x.at.Before(c.SYNAt) && (end.IsZero() || !x.at.After(end))
+		})
+		if in < 0 {
+			return nil // inside no connection
+		}
+		for j, c := range conns {
+			if j != in && overlaps(conns[in], c) {
+				return nil // another connection was open beside it, the record's own included
 			}
 		}
+		per[in] = append(per[in], x)
 	}
 	reused, carried, single := false, 0, true
 	for _, rs := range per {

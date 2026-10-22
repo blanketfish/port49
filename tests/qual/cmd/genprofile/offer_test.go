@@ -39,6 +39,16 @@ func TestServerSingleConnectFact(t *testing.T) {
 	// arm E's pipelining, not reuse.
 	afterAcct := []conn{tlsConnAt(base, 0, 2*s), tlsConnAt(base, 3*s, 6*s)}
 	afterAcctRecs := []*rec{recAt(base, "redeem", s), recAt(base, "account", 4*s), recAt(base, "authorize_command", 5*s)}
+	// Records carry no connection identity (no source port or connection
+	// id; cert_sha256 is the device's on every connection), so a record is
+	// placed by time only in a connection no other one overlaps.
+	overlap := []conn{tlsConnAt(base, 0, 10*s), tlsConnAt(base, 2*s, 4*s)}
+	overlapRecs := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 3*s), recAt(base, "authorize_command", 5*s)}
+	// The overlapping pair carries no record; the third connection's records
+	// are placed exactly, so the claim stands.
+	overlapEmpty := []conn{tlsConnAt(base, 0, 3*s), tlsConnAt(base, 2*s, 4*s), tlsConnAt(base, 5*s, 0)}
+	overlapEmptyRecs := []*rec{recAt(base, "redeem", 6*s), recAt(base, "authorize_session", 7*s)}
+	unplaced := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 2500*time.Millisecond)}
 	for name, c := range map[string]struct {
 		offered bool
 		conns   []conn
@@ -50,6 +60,9 @@ func TestServerSingleConnectFact(t *testing.T) {
 		"offered, two sessions only behind accounting":                                   {true, afterAcct, afterAcctRecs, ""},
 		"never offered, reused":                                                          {false, reused, reusedRecs, ""},
 		"never offered, per request":                                                     {false, perRequest, perRequestRecs, ""},
+		"offered, a record inside two overlapping connections":                           {true, overlap, overlapRecs, ""},
+		"offered, overlapping connections that carry no record":                          {true, overlapEmpty, overlapEmptyRecs, devicemock.FactTLSServerSingleConnectHonored},
+		"offered, a record in no connection":                                             {true, perRequest, unplaced, ""},
 		"offered, no records":                                                            {true, perRequest, nil, ""},
 	} {
 		f := serverSingleConnectFact(c.offered, c.conns, c.recs, note)
