@@ -1038,16 +1038,21 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	// one heartbeat before it has applied the lift and the compaction: a watch
 	// opened between the two gets the lift as an event, and there is nothing
 	// to put back. Broker 3 is held away from the directory's client ports
-	// until etcd-3 has applied the compaction.
+	// until etcd-3 has applied the compaction. The hold also catches port49d
+	// r3 (same user, same namespace, so no owner match tells them apart); no
+	// check here reads it: every assertion is on the brokers' logs, broker
+	// 3's metrics and the directory read through region 1, port49d r3 serves
+	// from its snapshot during the cut already, and it reconnects on release.
 	local := "https://" + regionIP(3) + ":2379"
 	if err := freezeAcross(
 		func() error { return sudoRun(regionHold(3, true), false) },
-		func() error { return sudoRun(regionHold(3, false), false) },
+		func() error { return sudoRunAll(regionHold(3, false)) },
 		cut.healNow,
 		func() bool {
 			// A read at a revision below the compaction answers "compacted"
-			// only once etcd-3 has applied the log up to it.
-			out, err := w.dirMembers[3].ctl(local, "get", "/l74/after-lift", "--rev", strconv.FormatInt(rev-1, 10))
+			// only once etcd-3 has applied the log up to it. It runs on the
+			// host: in p49r3 it would be held with the broker.
+			out, err := w.dirMembers[3].hostCtl(local, "get", "/l74/after-lift", "--rev", strconv.FormatInt(rev-1, 10))
 			if err != nil {
 				out += err.Error()
 			}

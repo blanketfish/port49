@@ -1035,3 +1035,49 @@ func TestRegionHoldDropsOnlyTheClientPortOutput(t *testing.T) {
 		}
 	}
 }
+
+// The compaction probe must not run in the held namespace: etcdctl there
+// dials regionIP(3):2379 from inside p49r3, which regionHold drops, so the
+// probe could never see the compaction and the cell would always fail.
+func TestL74CompactedProbeRunsOnTheHostNotInTheHeldNamespace(t *testing.T) {
+	e := &regionEtcd{ns: regionNS(3), bin: "/opt/etcd", pki: &regionPKI{ca: "ca.pem", root: "root.pem", rootKey: "root-key.pem"}}
+	argv := strings.Join(e.hostArgv("https://"+regionIP(3)+":2379", "get", "/l74/after-lift", "--rev", "41"), " ")
+	for _, held := range []string{"netns", regionNS(3), "sudo"} {
+		if strings.Contains(argv, held) {
+			t.Errorf("the probe %q runs in or through %q", argv, held)
+		}
+	}
+	if !strings.Contains(argv, "--endpoints https://"+regionIP(3)+":2379") || !strings.Contains(argv, "--rev 41") {
+		t.Errorf("the probe %q lost its endpoint or revision", argv)
+	}
+	// The member's own ctl still runs in its namespace.
+	if in := strings.Join(e.argvIn(e.ns, "x"), " "); !strings.Contains(in, "netns exec "+regionNS(3)) {
+		t.Errorf("ctl no longer runs in the member's namespace: %q", in)
+	}
+}
+
+// The release attempts every delete and joins the failures: a transient
+// failure on the first rule must not leave the other two in place.
+func TestRunAllAttemptsEveryCommandAndJoinsTheErrors(t *testing.T) {
+	cmds := regionHold(3, false)
+	var tried []string
+	err := runAll(cmds, func(c []string) error {
+		tried = append(tried, strings.Join(c, " "))
+		switch len(tried) {
+		case 2:
+			return errors.New("rule 2 busy")
+		case 3:
+			return errors.New("rule 3 gone")
+		}
+		return nil
+	})
+	if len(tried) != 3 {
+		t.Fatalf("attempted %d of 3 deletes", len(tried))
+	}
+	if err == nil || !strings.Contains(err.Error(), "rule 2 busy") || !strings.Contains(err.Error(), "rule 3 gone") {
+		t.Fatalf("both failures must be reported: %v", err)
+	}
+	if runAll(cmds, func([]string) error { return nil }) != nil {
+		t.Fatal("no failures, no error")
+	}
+}
