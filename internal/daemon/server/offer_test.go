@@ -597,3 +597,71 @@ func TestTLSCountsASecondConnectionFromAnOfferedDevice(t *testing.T) {
 		}
 	})
 }
+
+// countingConn counts the bytes a TLS client's raw socket reads.
+type countingConn struct {
+	net.Conn
+	n atomic.Int64
+}
+
+func (c *countingConn) Read(p []byte) (int, error) {
+	k, err := c.Conn.Read(p)
+	c.n.Add(int64(k))
+	return k, err
+}
+
+// A shutdown ends a held TLS connection with close_notify before its FIN,
+// as an idle close does, not with a bare FIN (task 7 re-review N1). Over TLS
+// 1.3 the alert is an encrypted record, so the device's raw socket reads
+// bytes after the last reply; a bare FIN reads none.
+func TestTLSShutdownSendsCloseNotifyOnAHeldConnection(t *testing.T) {
+	var raw *countingConn
+	old := tlsDial
+	tlsDial = func(network, addr string) (net.Conn, error) {
+		c, err := net.Dial(network, addr)
+		if err != nil {
+			return nil, err
+		}
+		raw = &countingConn{Conn: c}
+		return raw, nil
+	}
+	t.Cleanup(func() { tlsDial = old })
+	f, cert := newOfferFixture(t, &syncBuffer{}, admission.Resolved{Device: nxos01TLS}, nil)
+	cl := offered(t, f, cert, 0x100)
+	before := raw.n.Load()
+	f.ts.shutdown()
+	cl.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := cl.recv(); err == nil {
+		t.Fatal("the connection was answered after shutdown")
+	}
+	if got := raw.n.Load() - before; got == 0 {
+		t.Fatal("shutdown closed the held TLS connection with a bare FIN: no close_notify record arrived")
+	}
+}
+
+// A store gone (Deps.Abort) still resets at once, with no close_notify
+// first (L28: a device acts on a reset at once).
+func TestTLSAbortResetsWithoutCloseNotify(t *testing.T) {
+	var raw *countingConn
+	old := tlsDial
+	tlsDial = func(network, addr string) (net.Conn, error) {
+		c, err := net.Dial(network, addr)
+		if err != nil {
+			return nil, err
+		}
+		raw = &countingConn{Conn: c}
+		return raw, nil
+	}
+	t.Cleanup(func() { tlsDial = old })
+	f, cert := newOfferFixture(t, &syncBuffer{}, admission.Resolved{Device: nxos01TLS}, func(d *Deps, _ *tlsFixture) {
+		d.Abort = func() bool { return true }
+	})
+	cl := offered(t, f, cert, 0x100)
+	before := raw.n.Load()
+	f.ts.shutdown()
+	cl.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _, err := cl.recv()
+	if err == nil || raw.n.Load() != before {
+		t.Fatalf("an abort sent %d bytes before closing (%v); want a bare reset", raw.n.Load()-before, err)
+	}
+}

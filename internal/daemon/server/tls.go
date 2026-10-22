@@ -308,6 +308,7 @@ func (s *conn) handshake(ctx context.Context, mat *Material) bool {
 	}
 	s.d.Metrics.TLSHandshakes.WithLabelValues(string(outcome)).Inc()
 	s.c = tc
+	s.tlsc.Store(tc)
 	s.tls = &tlsSession{mat: mat, verdict: v, peer: cs.PeerCertificates, certSHA: devicecert.Fingerprint(v.Leaf)}
 	if s.d.TLS.Seen != nil {
 		s.d.TLS.Seen(s.dev.Device.Name, v.Leaf, s.d.Now())

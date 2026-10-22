@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -48,6 +50,10 @@ type conn struct {
 	raw      net.Conn
 	mismatch bool        // admitted, on the listener its transport is not (spec §10)
 	tls      *tlsSession // set once a TLS handshake ends
+	// tlsc is the TLS connection while a shutdown may close it with
+	// close_notify; it is cleared when a reset or a protocol error drops the
+	// connection without one. Serve's shutdown goroutine reads it.
+	tlsc     atomic.Pointer[tls.Conn]
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
@@ -223,6 +229,7 @@ func reset(c net.Conn) {
 // abandoned, not closed: no close_notify goes out before the reset (L73 has
 // not measured what a device does with one).
 func (s *conn) reset() {
+	s.tlsc.Store(nil)
 	s.c = s.raw
 	reset(s.raw)
 }
@@ -279,6 +286,7 @@ func (s *conn) decline() {
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	s.backoff(ctx, "malformed_backoff")
+	s.tlsc.Store(nil)
 	s.c = s.raw // a TLS connection is dropped without close_notify, as a reset's is
 }
 

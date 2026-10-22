@@ -219,15 +219,25 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 				}
 			}()
 			// Close the connection on shutdown rather than waiting out its idle
-			// timeout; serve's own defer closes it on the normal path.
+			// timeout; serve's own defer closes it on the normal path. A store
+			// gone resets at once (L28). Otherwise a TLS connection is closed
+			// with close_notify, as an idle close is, not a bare FIN: an
+			// offered connection is held by the device between requests
+			// (decision 50 ruling 20), and a restart must look to it like the
+			// close it already accommodates. crypto/tls bounds the alert's
+			// write at 5 s.
 			done := make(chan struct{})
 			go func() {
 				select {
 				case <-ctx.Done():
 					if d.Abort != nil && d.Abort() {
 						reset(c)
+						c.Close()
+					} else if tc := cc.tlsc.Load(); tc != nil {
+						tc.Close()
+					} else {
+						c.Close()
 					}
-					c.Close()
 				case <-done:
 				}
 			}()
