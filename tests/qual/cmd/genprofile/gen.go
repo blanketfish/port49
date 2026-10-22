@@ -56,6 +56,10 @@ type run struct {
 	// ruling 20): the harness writes it from platform.TLSServerSingleConnect,
 	// since the flag itself is inside the ciphertext.
 	TLSServerSingleConnectOffered bool `json:"tls_server_single_connect_offered"`
+	// TLSCaptureStartedClean is whether port49d was restarted between the
+	// readiness probe and tls_token_login's capture, so no connection
+	// whose SYN the capture missed was open in it (review O1).
+	TLSCaptureStartedClean bool `json:"tls_capture_started_clean"`
 }
 
 type plainHeader struct {
@@ -232,7 +236,7 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 		if err != nil {
 			return nil, g, err
 		}
-		if f := serverSingleConnectFact(true, cs, tlsRecs, note); f != nil {
+		if f := serverSingleConnectFact(true, r.TLSCaptureStartedClean, cs, tlsRecs, note); f != nil {
 			p.DeviceFacts = append(p.DeviceFacts, *f)
 		}
 	}
@@ -961,10 +965,11 @@ func noCommandAuthorizationGap(platform, firmware string, l18 []byte, note devic
 // fact.
 //
 // A record carries no connection identity (no source port or connection id;
-// cert_sha256 is the device's on every connection), so it is placed by time,
-// and only in a connection no other one overlaps. A record inside an
-// overlapping connection, or inside none, is ambiguous: the fact is then
-// absent, never a guess.
+// cert_sha256 is the device's on every connection), so it is placed by time.
+// The fact is absent, never a guess, when the capture did not start clean
+// (clean: port49d restarted just before it, so no connection whose SYN it
+// missed was open), when any two of the cell's connections overlap, or when
+// a record falls in no connection.
 //
 //   - honored: a connection carried a session after a completed one that
 //     was not accounting. That is reuse, not arm E's pipelining behind an
@@ -972,8 +977,8 @@ func noCommandAuthorizationGap(platform, firmware string, l18 []byte, note devic
 //   - ignored: every connection that carried a session carried exactly one.
 //   - nil, no claim: port49 did not offer, a record could not be placed, or
 //     neither holds.
-func serverSingleConnectFact(offered bool, conns []conn, recs []*rec, note devicemock.Source) *devicemock.DeviceFact {
-	if !offered {
+func serverSingleConnectFact(offered, clean bool, conns []conn, recs []*rec, note devicemock.Source) *devicemock.DeviceFact {
+	if !offered || !clean {
 		return nil
 	}
 	open := func(c conn) time.Time {
@@ -987,6 +992,16 @@ func serverSingleConnectFact(offered bool, conns []conn, recs []*rec, note devic
 		aEnd, bEnd := open(a), open(b)
 		return (aEnd.IsZero() || !b.SYNAt.After(aEnd)) && (bEnd.IsZero() || !a.SYNAt.After(bEnd))
 	}
+	// Any two connections open at once make the cell no claim: an
+	// overlapping pair with no records looks just like parallel
+	// connections refused, the ignored signature (review O2).
+	for i := range conns {
+		for j := i + 1; j < len(conns); j++ {
+			if overlaps(conns[i], conns[j]) {
+				return nil
+			}
+		}
+	}
 	per := make([][]*rec, len(conns))
 	for _, x := range recs {
 		in := slices.IndexFunc(conns, func(c conn) bool {
@@ -995,11 +1010,6 @@ func serverSingleConnectFact(offered bool, conns []conn, recs []*rec, note devic
 		})
 		if in < 0 {
 			return nil // inside no connection
-		}
-		for j, c := range conns {
-			if j != in && overlaps(conns[in], c) {
-				return nil // another connection was open beside it, the record's own included
-			}
 		}
 		per[in] = append(per[in], x)
 	}

@@ -44,8 +44,9 @@ func TestServerSingleConnectFact(t *testing.T) {
 	// placed by time only in a connection no other one overlaps.
 	overlap := []conn{tlsConnAt(base, 0, 10*s), tlsConnAt(base, 2*s, 4*s)}
 	overlapRecs := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 3*s), recAt(base, "authorize_command", 5*s)}
-	// The overlapping pair carries no record; the third connection's records
-	// are placed exactly, so the claim stands.
+	// The overlapping pair carries no record, but two connections open at
+	// once look just like parallel connections refused, the ignored
+	// signature: any overlap in the cell is no claim (review O2).
 	overlapEmpty := []conn{tlsConnAt(base, 0, 3*s), tlsConnAt(base, 2*s, 4*s), tlsConnAt(base, 5*s, 0)}
 	overlapEmptyRecs := []*rec{recAt(base, "redeem", 6*s), recAt(base, "authorize_session", 7*s)}
 	unplaced := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 2500*time.Millisecond)}
@@ -61,11 +62,11 @@ func TestServerSingleConnectFact(t *testing.T) {
 		"never offered, reused":                                                          {false, reused, reusedRecs, ""},
 		"never offered, per request":                                                     {false, perRequest, perRequestRecs, ""},
 		"offered, a record inside two overlapping connections":                           {true, overlap, overlapRecs, ""},
-		"offered, overlapping connections that carry no record":                          {true, overlapEmpty, overlapEmptyRecs, devicemock.FactTLSServerSingleConnectHonored},
+		"offered, overlapping connections that carry no record":                          {true, overlapEmpty, overlapEmptyRecs, ""},
 		"offered, a record in no connection":                                             {true, perRequest, unplaced, ""},
 		"offered, no records":                                                            {true, perRequest, nil, ""},
 	} {
-		f := serverSingleConnectFact(c.offered, c.conns, c.recs, note)
+		f := serverSingleConnectFact(c.offered, true, c.conns, c.recs, note)
 		switch {
 		case c.want == "" && f != nil:
 			t.Errorf("%s: wrote %s, want no claim", name, f.ID)
@@ -74,5 +75,26 @@ func TestServerSingleConnectFact(t *testing.T) {
 		case f != nil && (f.Status != "measured" || len(f.Sources) != 1 || f.Sources[0] != note || f.What == ""):
 			t.Errorf("%s: %+v", name, f)
 		}
+	}
+}
+
+// Review O1: a capture that did not start clean may have missed a held
+// connection whose SYN came before it, so neither fact is written.
+func TestServerSingleConnectFactNeedsACleanCapture(t *testing.T) {
+	base := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	note := devicemock.Source{Note: "tests/lab/results/QUAL-x-cisco_nxos.md", Register: "QUAL"}
+	s := time.Second
+	reused := []conn{tlsConnAt(base, 0, 0)}
+	recs := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 2*s)}
+	perRequest := []conn{tlsConnAt(base, 0, 2*s), tlsConnAt(base, 3*s, 5*s)}
+	perRecs := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 4*s)}
+	if f := serverSingleConnectFact(true, false, reused, recs, note); f != nil {
+		t.Errorf("not started clean: wrote %s", f.ID)
+	}
+	if f := serverSingleConnectFact(true, false, perRequest, perRecs, note); f != nil {
+		t.Errorf("not started clean: wrote %s", f.ID)
+	}
+	if f := serverSingleConnectFact(true, true, reused, recs, note); f == nil || f.ID != devicemock.FactTLSServerSingleConnectHonored {
+		t.Errorf("started clean: wrote %+v", f)
 	}
 }

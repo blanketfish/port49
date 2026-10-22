@@ -603,18 +603,18 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
 	// tls_token_login is graded per connection (honored or ignored, decision 50
-	// ruling 20), so its capture starts clean: no connection open (review I1).
-	// Where port49 offers single-connect, the readiness probe's connection is
-	// still held, so the TLS daemon is restarted, which closes it as an idle
-	// close would; then the gauge must read 0 within a minute.
-	if q.run.TLSServerSingleConnectOffered {
-		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
-		q.login()
-	}
-	if err := qualWaitNoConnections(func() (float64, bool) { return e.metric(qualConnectionsOpen) },
-		60, time.Sleep); err != nil {
+	// ruling 20), so its capture starts clean (review I1, O1). The capture sees
+	// only connections whose SYN it caught, so no rule that waits can see one
+	// held from the readiness probe: port49d is restarted here, between ready
+	// and the capture, which closes any held connection as an idle close
+	// would, and run.json records it. The gauge must then read 0 within a
+	// minute, or the run is INVALID.
+	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+	q.login()
+	if err := qualWaitNoConnections(func() (float64, bool) { return e.metric(qualConnectionsOpen) }, 60, time.Sleep); err != nil {
 		q.t.Fatal(err)
 	}
+	q.run.TLSCaptureStartedClean = true
 
 	// tls_token_login: the plain token_login, command_permitted, command_denied and
 	// accounting cells together, per-request.

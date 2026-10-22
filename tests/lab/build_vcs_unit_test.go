@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"strings"
@@ -109,5 +110,19 @@ func TestQualConnectionsGaugeSpelling(t *testing.T) {
 	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	if v, ok := l73MetricValue(rec.Body.String(), qualConnectionsOpen); !ok || v != 3 {
 		t.Fatalf("%s reads %v %v from the daemon's metrics", qualConnectionsOpen, v, ok)
+	}
+}
+
+// run.json's field names are genprofile's: a misspelling would read as
+// false there and leave the facts absent forever (review O1).
+func TestQualRunNamesTheCleanCaptureAndTheOffer(t *testing.T) {
+	b, err := json.Marshal(qualRun{TLSServerSingleConnectOffered: true, TLSCaptureStartedClean: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"tls_server_single_connect_offered":true`, `"tls_capture_started_clean":true`} {
+		if !strings.Contains(string(b), key) {
+			t.Errorf("run.json lacks %s: %s", key, b)
+		}
 	}
 }
