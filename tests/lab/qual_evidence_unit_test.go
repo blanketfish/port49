@@ -956,3 +956,54 @@ func TestQualL80NoteNamesRulingTwentyAndTheBaseline(t *testing.T) {
 		t.Fatalf("offered with the baseline: wrote %d, %v", wrote, err)
 	}
 }
+
+// Ruling 2026-10-22: under ruling 20 tls_token_login stands for L80's
+// denied-command cell, only when (a) the build offers and a baseline is
+// committed, (b) tls_token_login passed with a permit and a deny by port49, and
+// (c) tls_denied_command is not_run for the command-authorization-sent reason.
+func TestQualL80NoteFromTheTokenLoginUnderRulingTwenty(t *testing.T) {
+	base := "tests/lab/evidence/L80-cisco_nxos/baseline/"
+	tok := "- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): a token login over RFC 9887; `show version` permitted and `show users` denied by port49 (authorize_command records); the stop record arrived."
+	den := "- `tls_denied_command` (re-measures L80): **not_run**. per-request TLS sent port49 command authorization (tls_token_login), so port49 decided the denied command there"
+	fix := qualL80Fix{Offered: true, Baseline: base}
+	good := []string{tok, den}
+	claim, obs, ok := qualL80Note(good, "QUAL-x", fix)
+	if !ok {
+		t.Fatal("all of (a), (b) and (c) hold: a note is written")
+	}
+	for _, want := range []string{"decision 50 ruling 20", base, "tls_token_login", "port49's deny holds"} {
+		if !strings.Contains(obs, want) {
+			t.Errorf("the note lacks %q:\n%s", want, obs)
+		}
+	}
+	if !strings.Contains(claim, "offers the device single-connect") {
+		t.Errorf("the claim does not ask the post-fix question: %s", claim)
+	}
+	wrote := 0
+	if err := qualWriteL80(good, "QUAL-x", nil, fix, func(string, string) { wrote++ }); err != nil || wrote != 1 {
+		t.Fatalf("wrote %d, %v", wrote, err)
+	}
+	for name, c := range map[string]struct {
+		notes []string
+		fix   qualL80Fix
+	}{
+		"(a) the build does not offer":   {good, qualL80Fix{Baseline: base}},
+		"(a) no committed baseline":      {good, qualL80Fix{Offered: true}},
+		"(b) the login did not pass":     {[]string{strings.Replace(tok, "**pass**", "**fail**", 1), den}, fix},
+		"(b) no deny by port49":          {[]string{strings.Replace(tok, " and `show users` denied by port49", "", 1), den}, fix},
+		"(b) login only, none sent":      {[]string{"- `tls_token_login` (re-measures L73): **pass**. per-request: login only: command authorization not sent", den}, fix},
+		"(b) no tls_token_login line":    {[]string{den}, fix},
+		"(c) the cell is not_run, other": {[]string{tok, strings.Replace(den, "per-request TLS sent port49 command authorization", "this image has no client", 1)}, fix},
+		"(c) the cell is missing":        {[]string{tok}, fix},
+		"(c) the cell failed":            {[]string{tok, strings.Replace(den, "**not_run**", "**fail**", 1)}, fix},
+	} {
+		if _, _, ok := qualL80Note(c.notes, "QUAL-x", c.fix); ok {
+			t.Errorf("%s: a note was written", name)
+		}
+		w := 0
+		if err := qualWriteL80(c.notes, "QUAL-x", nil, c.fix, func(string, string) { w++ }); err == nil || w != 0 ||
+			!strings.HasPrefix(err.Error(), "INVALID: ") {
+			t.Errorf("%s: wrote %d, %v", name, w, err)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -729,20 +730,39 @@ type qualL80Fix struct {
 
 func qualL80Note(notes []string, evidence string, fix qualL80Fix) (claim, obs string, ok bool) {
 	var lines []string
+	var tok, den string
 	for _, n := range notes {
 		if strings.HasPrefix(n, "- `tls_token_login` ") || strings.HasPrefix(n, "- `tls_denied_command` ") {
 			lines = append(lines, n)
+			if strings.HasPrefix(n, "- `tls_token_login` ") {
+				tok = n
+			} else {
+				den = n
+			}
 			ok = ok || (strings.HasPrefix(n, "- `tls_denied_command` ") && strings.Contains(n, "**observed**"))
 		}
+	}
+	if ok {
+		claim = "Whether a command port49's policy denies runs over per-request TLS (RFC 9887 with no single-connection, the device default) " +
+			"when the device sends port49 no command authorization (policy engine spec §15 L80), measured by TestQualify's `tls_denied_command` " +
+			"cell under tests/qual/qual-policy.yaml: one login typing only the denied command, graded from its first output line and port49's records."
+		obs = strings.Join(lines, "\n") + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/` (the cells' whitelisted records in decisions.jsonl; "+
+			"the denied-command login's connections in tls_denied_command.tls.json).", evidence)
+	} else if qualL80ObservedByTokenLogin(tok, den, fix) {
+		// Under ruling 20 the device sends command authorization over per-request TLS, so
+		// tls_denied_command is not run and tls_token_login holds the observation.
+		ok = true
+		claim = "Whether a command port49's policy denies runs on NX-OS 10.6 over per-request TLS (RFC 9887) when port49 offers the device " +
+			"single-connect (policy engine spec §15 L80; decision 50 ruling 20), measured by TestQualify's `tls_token_login` cell under " +
+			"tests/qual/qual-policy.yaml: a login typing `show version` and the denied command, graded from port49's authorize_command records."
+		obs = strings.Join(lines, "\n") + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/` (the cells' whitelisted records in decisions.jsonl; "+
+			"the login's connections in tls_token_login.tls.json). Before the fix the device sent command authorization for some commands only, "+
+			"so commands ran with no authorize_command record (the baseline evidence below); with the offer it asks about every command and "+
+			"port49's deny holds (this cell, and the fixed arm below).", evidence)
 	}
 	if !ok {
 		return "", "", false
 	}
-	claim = "Whether a command port49's policy denies runs over per-request TLS (RFC 9887 with no single-connection, the device default) " +
-		"when the device sends port49 no command authorization (policy engine spec §15 L80), measured by TestQualify's `tls_denied_command` " +
-		"cell under tests/qual/qual-policy.yaml: one login typing only the denied command, graded from its first output line and port49's records."
-	obs = strings.Join(lines, "\n") + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/` (the cells' whitelisted records in decisions.jsonl; "+
-		"the denied-command login's connections in tls_denied_command.tls.json).", evidence)
 	if fix.Offered && fix.Baseline != "" {
 		obs += fmt.Sprintf("\n\nUnder spec §13 decision 50 ruling 20 this build offers the device single-connect over "+
 			"per-request TLS (platform.TLSServerSingleConnect), so a request NX-OS writes behind an accounting record "+
@@ -752,6 +772,24 @@ func qualL80Note(notes []string, evidence string, fix qualL80Fix) (claim, obs st
 			fix.Baseline, strings.TrimSuffix(fix.Baseline, "baseline/")+"fixed/")
 	}
 	return claim, obs, true
+}
+
+// qualL80SentLine is what tls_token_login's verdict says only when port49 proved
+// a permit for `show version` and a deny of the denied command from its records
+// (qualTLSCommands state "sent", no problems).
+var qualL80SentLine = regexp.MustCompile("^- `tls_token_login` .*\\*\\*pass\\*\\*\\. .*`show version` permitted and `[^`]+` denied by port49 \\(authorize_command records\\)")
+
+// qualL80ObservedByTokenLogin is whether tls_token_login may stand for L80's
+// denied-command cell (ruling 2026-10-22): all of (a) the build offers
+// single-connect and a baseline is committed, (b) tls_token_login passed with
+// port49 permitting `show version` and denying the denied command, and (c)
+// tls_denied_command was not run for exactly the reason that the device sent
+// port49 command authorization. Anything else is INVALID, as before.
+func qualL80ObservedByTokenLogin(tok, den string, fix qualL80Fix) bool {
+	return fix.Offered && fix.Baseline != "" && // (a)
+		qualL80SentLine.MatchString(tok) && // (b)
+		strings.HasPrefix(den, "- `tls_denied_command` ") && strings.Contains(den, "**not_run**") &&
+		strings.Contains(den, "per-request TLS sent port49 command authorization") // (c)
 }
 
 // qualWriteL80 writes L80's note through write when the run observed the
