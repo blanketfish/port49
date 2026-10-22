@@ -2,8 +2,15 @@ package lab
 
 import (
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 )
 
 const vcsSample = "bin/port49d: go1.26.0\n\tpath\tgithub.com/rhwendt/port49/cmd/port49d\n" +
@@ -66,5 +73,41 @@ func TestQualBinaryMatchesTheTree(t *testing.T) {
 		if err := qualBinaryCheck(v, head); err == nil || !strings.HasPrefix(err.Error(), "INVALID: ") {
 			t.Errorf("%+v: %v", v, err)
 		}
+	}
+}
+
+// Review I1: tls_token_login's capture opens only once no connection is
+// open, or the run is INVALID; the grade is never loosened instead.
+func TestQualWaitNoConnections(t *testing.T) {
+	seq := func(vals ...float64) func() (float64, bool) {
+		i := 0
+		return func() (float64, bool) {
+			v := vals[min(i, len(vals)-1)]
+			i++
+			return v, true
+		}
+	}
+	nap := func(time.Duration) {}
+	if err := qualWaitNoConnections(seq(2, 1, 0), 10, nap); err != nil {
+		t.Fatalf("drains to 0: %v", err)
+	}
+	if err := qualWaitNoConnections(seq(1), 10, nap); err == nil || !strings.HasPrefix(err.Error(), "INVALID: ") {
+		t.Fatalf("never drains: %v", err)
+	}
+	if err := qualWaitNoConnections(func() (float64, bool) { return 0, false }, 10, nap); err != nil {
+		t.Fatalf("a daemon that has had no connection exports no series: %v", err)
+	}
+}
+
+// The selector is the daemon's own spelling, so an absent series means no
+// connection, never a typo.
+func TestQualConnectionsGaugeSpelling(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	m.Connections.WithLabelValues("open").Add(3)
+	rec := httptest.NewRecorder()
+	promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if v, ok := l73MetricValue(rec.Body.String(), qualConnectionsOpen); !ok || v != 3 {
+		t.Fatalf("%s reads %v %v from the daemon's metrics", qualConnectionsOpen, v, ok)
 	}
 }

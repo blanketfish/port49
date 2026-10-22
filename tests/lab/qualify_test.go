@@ -602,6 +602,20 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.run.Port49d = vcs
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
+	// tls_token_login is graded per connection (honored or ignored, decision 50
+	// ruling 20), so its capture starts clean: no connection open (review I1).
+	// Where port49 offers single-connect, the readiness probe's connection is
+	// still held, so the TLS daemon is restarted, which closes it as an idle
+	// close would; then the gauge must read 0 within a minute.
+	if q.run.TLSServerSingleConnectOffered {
+		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+		q.login()
+	}
+	if err := qualWaitNoConnections(func() (float64, bool) { return e.metric(qualConnectionsOpen) },
+		60, time.Sleep); err != nil {
+		q.t.Fatal(err)
+	}
+
 	// tls_token_login: the plain token_login, command_permitted, command_denied and
 	// accounting cells together, per-request.
 	off := q.cell("tls_token_login")

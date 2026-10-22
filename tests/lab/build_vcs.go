@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // buildVCS is what `go version -m` says a binary was built from.
@@ -107,4 +108,28 @@ func qualBinaryCheck(v buildVCS, head string) error {
 			"the offer run.json records would not be the binary's; run make build", v.Revision, v.Modified, head)
 	}
 	return nil
+}
+
+// qualConnectionsOpen is the gauge qualWaitNoConnections reads; its spelling
+// is pinned against the daemon's own metrics (TestQualConnectionsGaugeSpelling).
+const qualConnectionsOpen = `port49_connections{state="open"}`
+
+// qualWaitNoConnections polls qualConnectionsOpen (read) once a second, up
+// to limit polls, until it is 0: a clean start for a capture whose
+// connections are graded, so no connection held over from an earlier login
+// overlaps the cell's own (review I1). The lab has one device, so the
+// daemon-wide gauge is that device's. The series is created at a daemon's
+// first connection, so its absence is a daemon that has had none: 0. A gauge
+// that never drains is INVALID; the grade is never loosened instead.
+func qualWaitNoConnections(read func() (float64, bool), limit int, sleep func(time.Duration)) error {
+	last := -1.0
+	for range limit {
+		v, ok := read()
+		if !ok || v == 0 {
+			return nil
+		}
+		last = v
+		sleep(time.Second)
+	}
+	return fmt.Errorf("INVALID: %v connections still open after %ds; the capture would not start clean", last, limit)
 }
