@@ -106,6 +106,24 @@ func regionCut(i int, add bool) [][]string {
 	return cmds
 }
 
+// regionHold is the iptables rules in region i's namespace that drop the
+// clients there (the broker, port49d) from each directory member's client
+// port, added (-I) or removed (-D). Peer traffic (2380) and the host's reads
+// are untouched. Holding a process away from etcd by the network, never by a
+// signal: sudo stops itself when its command is stopped.
+func regionHold(i int, add bool) [][]string {
+	op := "-D"
+	if add {
+		op = "-I"
+	}
+	var cmds [][]string
+	for j := 1; j <= 3; j++ {
+		cmds = append(cmds, []string{"ip", "netns", "exec", regionNS(i), "iptables", op, "OUTPUT",
+			"-p", "tcp", "-d", regionIP(j), "--dport", "2379", "-j", "DROP"})
+	}
+	return cmds
+}
+
 // sudoRun runs each command under sudo -n, stopping at the first error
 // unless keepGoing.
 func sudoRun(cmds [][]string, keepGoing bool) error {

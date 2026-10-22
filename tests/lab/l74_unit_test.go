@@ -964,52 +964,74 @@ func TestL79CellKNeedsOneLineNamingAlice(t *testing.T) {
 	}
 }
 
-// Broker 3 is stopped across the heal and always resumed: on the happy path,
-// when the heal fails, when etcd-3 never applies the compaction, and when the
-// stop itself failed (nothing to resume then).
-func TestL74FreezeAcrossResumesOnEveryPath(t *testing.T) {
+// Broker 3 is held away from etcd across the heal and always let back: on the
+// happy path, when the heal fails, when etcd-3 never applies the compaction,
+// and when the hold itself failed (it may have added some rules).
+func TestL74FreezeAcrossRestoresOnEveryPath(t *testing.T) {
 	cases := []struct {
-		name      string
-		stopWhy   string
-		healErr   error
-		compacted func() bool
-		wantErr   string
-		wantCont  int
-		wantHeal  int
+		name        string
+		holdErr     error
+		healErr     error
+		compacted   func() bool
+		wantErr     string
+		wantRelease int
+		wantHeal    int
 	}{
-		{"applies at once", "", nil, func() bool { return true }, "", 1, 1},
-		{"heal fails", "", errors.New("boom"), func() bool { return true }, "the heal", 1, 1},
-		{"never compacted", "", nil, func() bool { return false }, "had not applied the compaction", 1, 1},
-		{"stop fails", "pid gone", nil, func() bool { return true }, "stopping broker 3", 0, 0},
+		{"applies at once", nil, nil, func() bool { return true }, "", 1, 1},
+		{"heal fails", nil, errors.New("boom"), func() bool { return true }, "the heal", 1, 1},
+		{"never compacted", nil, nil, func() bool { return false }, "had not applied the compaction", 1, 1},
+		{"hold fails", errors.New("no iptables"), nil, func() bool { return true }, "holding broker 3", 1, 0},
 	}
 	for _, c := range cases {
-		conts, heals := 0, 0
+		releases, heals := 0, 0
 		err := freezeAcross(
-			func() string { return c.stopWhy },
-			func() string { conts++; return "" },
+			func() error { return c.holdErr },
+			func() error { releases++; return nil },
 			func() error { heals++; return c.healErr },
 			c.compacted, 100*time.Millisecond, 10*time.Millisecond)
 		if (c.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.wantErr)) {
 			t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
 		}
-		if conts != c.wantCont || heals != c.wantHeal {
-			t.Errorf("%s: resumed %d times, healed %d; want %d, %d", c.name, conts, heals, c.wantCont, c.wantHeal)
+		if releases != c.wantRelease || heals != c.wantHeal {
+			t.Errorf("%s: restored %d times, healed %d; want %d, %d", c.name, releases, heals, c.wantRelease, c.wantHeal)
 		}
 	}
 }
 
-// A resume that fails is an error of its own, and a poll that never succeeds
-// stops at the cap rather than waiting on.
-func TestL74FreezeAcrossReportsAFailedResumeAndStopsAtTheCap(t *testing.T) {
-	err := freezeAcross(func() string { return "" }, func() string { return "no such process" },
-		func() error { return nil }, func() bool { return true }, time.Second, 10*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "resuming broker 3") {
-		t.Fatalf("a failed resume: %v", err)
+// A restore that fails is reported, also when the cell had already failed, and
+// a poll that never succeeds stops at the cap rather than waiting on.
+func TestL74FreezeAcrossReportsAFailedRestoreAndStopsAtTheCap(t *testing.T) {
+	ok := func() error { return nil }
+	badRestore := func() error { return errors.New("iptables: no such rule") }
+	err := freezeAcross(ok, badRestore, ok, func() bool { return true }, time.Second, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "restoring broker 3") {
+		t.Fatalf("a failed restore after a good cell: %v", err)
+	}
+	err = freezeAcross(ok, badRestore, func() error { return errors.New("boom") },
+		func() bool { return true }, time.Second, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "the heal") || !strings.Contains(err.Error(), "restoring broker 3") {
+		t.Fatalf("a failed restore after a failed cell must report both: %v", err)
 	}
 	start := time.Now()
-	freezeAcross(func() string { return "" }, func() string { return "" },
-		func() error { return nil }, func() bool { return false }, 150*time.Millisecond, 10*time.Millisecond)
+	freezeAcross(ok, ok, ok, func() bool { return false }, 150*time.Millisecond, 10*time.Millisecond)
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("the poll ran %v past a 150ms cap", took)
+	}
+}
+
+// The hold drops region 3's own clients' traffic to each directory member's
+// client port, and the release deletes the same rules; peers (2380) and the
+// host's reads of etcd-3 (INPUT) are untouched.
+func TestRegionHoldDropsOnlyTheClientPortOutput(t *testing.T) {
+	add, del := regionHold(3, true), regionHold(3, false)
+	if len(add) != 3 || len(del) != 3 {
+		t.Fatalf("rules: %d add, %d delete, want 3 each", len(add), len(del))
+	}
+	for j := range add {
+		a, d := strings.Join(add[j], " "), strings.Join(del[j], " ")
+		want := "ip netns exec p49r3 iptables -I OUTPUT -p tcp -d " + regionIP(j+1) + " --dport 2379 -j DROP"
+		if a != want || d != strings.Replace(want, "-I", "-D", 1) {
+			t.Errorf("rule %d: add %q, delete %q", j+1, a, d)
+		}
 	}
 }

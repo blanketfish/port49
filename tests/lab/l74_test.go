@@ -5,6 +5,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -923,23 +923,24 @@ func feedRescanned(read func() string, before float64, d, every time.Duration) (
 	return after, nil
 }
 
-// freezeCap is how long broker 3 stays stopped for etcd-3 to apply the
-// compaction: inside the directory's hold_ttl of 15s.
+// freezeCap is how long broker 3 is held away from etcd for etcd-3 to apply
+// the compaction: inside the directory's hold_ttl of 15s.
 const freezeCap = 10 * time.Second
 
-// freezeAcross stops broker 3 (stop answers why it could not, or ""), heals
-// the cut, and polls compacted until etcd-3 reports the compaction or d
-// passes; broker 3 is resumed (cont, same convention) on every path after a
-// successful stop, so a failed cell never leaves it stopped.
-func freezeAcross(stop, cont func() string, heal func() error, compacted func() bool, d, every time.Duration) (err error) {
-	if why := stop(); why != "" {
-		return fmt.Errorf("stopping broker 3 across the heal: %s", why)
-	}
+// freezeAcross holds broker 3 away from the directory (hold), heals the cut,
+// and polls compacted until etcd-3 reports the compaction or d passes. The
+// hold is released (release) on every path, even a failed hold, which may
+// have added some rules; a failed release is joined to the cell's own error,
+// never swallowed.
+func freezeAcross(hold, release, heal func() error, compacted func() bool, d, every time.Duration) (err error) {
 	defer func() {
-		if why := cont(); why != "" && err == nil {
-			err = fmt.Errorf("resuming broker 3: %s", why)
+		if rerr := release(); rerr != nil {
+			err = errors.Join(err, fmt.Errorf("restoring broker 3's connectivity: %w", rerr))
 		}
 	}()
+	if herr := hold(); herr != nil {
+		return fmt.Errorf("holding broker 3 away from the directory: %w", herr)
+	}
 	if herr := heal(); herr != nil {
 		return fmt.Errorf("the heal: %w", herr)
 	}
@@ -1036,16 +1037,12 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	// etcd-3 serves broker 3's watch from its own store, and it has a leader
 	// one heartbeat before it has applied the lift and the compaction: a watch
 	// opened between the two gets the lift as an event, and there is nothing
-	// to put back. Broker 3 is stopped until etcd-3 has applied the compaction.
-	b3 := w.brokers[3]
-	signal := func(sig syscall.Signal) string {
-		return killRecorded("/proc", b3.pidfile(), []string{"--config", b3.cfg},
-			func(pid int) error { return syscall.Kill(pid, sig) })
-	}
+	// to put back. Broker 3 is held away from the directory's client ports
+	// until etcd-3 has applied the compaction.
 	local := "https://" + regionIP(3) + ":2379"
 	if err := freezeAcross(
-		func() string { return signal(syscall.SIGSTOP) },
-		func() string { return signal(syscall.SIGCONT) },
+		func() error { return sudoRun(regionHold(3, true), false) },
+		func() error { return sudoRun(regionHold(3, false), false) },
 		cut.healNow,
 		func() bool {
 			// A read at a revision below the compaction answers "compacted"
