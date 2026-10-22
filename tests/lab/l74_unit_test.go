@@ -4,6 +4,7 @@ package lab
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -960,5 +961,55 @@ func TestL79CellKNeedsOneLineNamingAlice(t *testing.T) {
 	}
 	if l79KAgrees(1, true, cli, "a revocation of user:bob@example.com "+l79Own, b3, list) {
 		t.Fatal("another key's own line satisfied broker 3's")
+	}
+}
+
+// Broker 3 is stopped across the heal and always resumed: on the happy path,
+// when the heal fails, when etcd-3 never applies the compaction, and when the
+// stop itself failed (nothing to resume then).
+func TestL74FreezeAcrossResumesOnEveryPath(t *testing.T) {
+	cases := []struct {
+		name      string
+		stopWhy   string
+		healErr   error
+		compacted func() bool
+		wantErr   string
+		wantCont  int
+		wantHeal  int
+	}{
+		{"applies at once", "", nil, func() bool { return true }, "", 1, 1},
+		{"heal fails", "", errors.New("boom"), func() bool { return true }, "the heal", 1, 1},
+		{"never compacted", "", nil, func() bool { return false }, "had not applied the compaction", 1, 1},
+		{"stop fails", "pid gone", nil, func() bool { return true }, "stopping broker 3", 0, 0},
+	}
+	for _, c := range cases {
+		conts, heals := 0, 0
+		err := freezeAcross(
+			func() string { return c.stopWhy },
+			func() string { conts++; return "" },
+			func() error { heals++; return c.healErr },
+			c.compacted, 100*time.Millisecond, 10*time.Millisecond)
+		if (c.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.wantErr)) {
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
+		}
+		if conts != c.wantCont || heals != c.wantHeal {
+			t.Errorf("%s: resumed %d times, healed %d; want %d, %d", c.name, conts, heals, c.wantCont, c.wantHeal)
+		}
+	}
+}
+
+// A resume that fails is an error of its own, and a poll that never succeeds
+// stops at the cap rather than waiting on.
+func TestL74FreezeAcrossReportsAFailedResumeAndStopsAtTheCap(t *testing.T) {
+	err := freezeAcross(func() string { return "" }, func() string { return "no such process" },
+		func() error { return nil }, func() bool { return true }, time.Second, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "resuming broker 3") {
+		t.Fatalf("a failed resume: %v", err)
+	}
+	start := time.Now()
+	freezeAcross(func() string { return "" }, func() string { return "" },
+		func() error { return nil }, func() bool { return false }, 150*time.Millisecond, 10*time.Millisecond)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the poll ran %v past a 150ms cap", took)
 	}
 }

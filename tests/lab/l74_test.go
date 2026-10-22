@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -922,6 +923,33 @@ func feedRescanned(read func() string, before float64, d, every time.Duration) (
 	return after, nil
 }
 
+// freezeCap is how long broker 3 stays stopped for etcd-3 to apply the
+// compaction: inside the directory's hold_ttl of 15s.
+const freezeCap = 10 * time.Second
+
+// freezeAcross stops broker 3 (stop answers why it could not, or ""), heals
+// the cut, and polls compacted until etcd-3 reports the compaction or d
+// passes; broker 3 is resumed (cont, same convention) on every path after a
+// successful stop, so a failed cell never leaves it stopped.
+func freezeAcross(stop, cont func() string, heal func() error, compacted func() bool, d, every time.Duration) (err error) {
+	if why := stop(); why != "" {
+		return fmt.Errorf("stopping broker 3 across the heal: %s", why)
+	}
+	defer func() {
+		if why := cont(); why != "" && err == nil {
+			err = fmt.Errorf("resuming broker 3: %s", why)
+		}
+	}()
+	if herr := heal(); herr != nil {
+		return fmt.Errorf("the heal: %w", herr)
+	}
+	if _, _, ok := l75Poll(func() string { return fmt.Sprint(compacted()) },
+		func(s string) bool { return s == "true" }, d, every); !ok {
+		return fmt.Errorf("etcd-3 had not applied the compaction %v after the heal", d)
+	}
+	return nil
+}
+
 // feedStopped waits up to d for p to say its marks feed stopped (since the
 // last mark), or errs naming what it did not say: the cut did not reach the
 // feed, so cell (i) would measure a lift that arrived as an event.
@@ -1005,8 +1033,30 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatal("INVALID: broker 3's marks rescan counter could not be read before the heal")
 	}
 	w.guard()
-	if err := cut.healNow(); err != nil {
-		w.t.Fatalf("INVALID: the heal: %v", err)
+	// etcd-3 serves broker 3's watch from its own store, and it has a leader
+	// one heartbeat before it has applied the lift and the compaction: a watch
+	// opened between the two gets the lift as an event, and there is nothing
+	// to put back. Broker 3 is stopped until etcd-3 has applied the compaction.
+	b3 := w.brokers[3]
+	signal := func(sig syscall.Signal) string {
+		return killRecorded("/proc", b3.pidfile(), []string{"--config", b3.cfg},
+			func(pid int) error { return syscall.Kill(pid, sig) })
+	}
+	local := "https://" + regionIP(3) + ":2379"
+	if err := freezeAcross(
+		func() string { return signal(syscall.SIGSTOP) },
+		func() string { return signal(syscall.SIGCONT) },
+		cut.healNow,
+		func() bool {
+			// A read at a revision below the compaction answers "compacted"
+			// only once etcd-3 has applied the log up to it.
+			out, err := w.dirMembers[3].ctl(local, "get", "/l74/after-lift", "--rev", strconv.FormatInt(rev-1, 10))
+			if err != nil {
+				out += err.Error()
+			}
+			return strings.Contains(out, "required revision has been compacted")
+		}, freezeCap, 100*time.Millisecond); err != nil {
+		w.t.Fatalf("INVALID: %v", err)
 	}
 	rescans, rerr := feedRescanned(func() string { return w.brokerMetrics(3) }, rescansBefore, 30*time.Second, time.Second)
 	if rerr != nil {
