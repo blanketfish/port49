@@ -16,8 +16,9 @@ const (
 )
 
 const l81ClaimA = "openssl s_client -servername <IPv6 literal> against a listener whose server_names lists it in " +
-	"another spelling: accepted. An unlisted one is refused with the alert and sni_mismatch, and the next " +
-	"connection inside the window is reset at Accept, with no strike and no second record."
+	"another spelling: accepted. An unlisted one is refused with the alert (best-effort, recorded) and " +
+	"sni_mismatch, and the next connection inside the window is reset at Accept, with no strike and no second " +
+	"record."
 
 // l81Obs is what cell (a) saw, from port49's records and metrics.
 type l81Obs struct {

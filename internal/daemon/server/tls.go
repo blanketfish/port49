@@ -398,9 +398,9 @@ func (s *conn) recheckTLS(h wire.Header) bool {
 
 // tlsPacketRefused records a packet refused on the open connection by
 // recheckTLS and ends it. status_unavailable keeps the window
-// DeclineStanding marks; any other refusal opens a plain decline window. Neither is a
-// strike, and neither is a handshake, so port49_tls_handshakes_total does
-// not count it.
+// DeclineStanding marks; any other refusal is reset with no window. Neither
+// is a strike, and neither is a handshake, so port49_tls_handshakes_total
+// does not count it.
 func (s *conn) tlsPacketRefused(h wire.Header, v devicecert.Verdict) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Device: s.deviceBlock(),
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagTLSRefused),

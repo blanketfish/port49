@@ -475,7 +475,11 @@ func TestL72ReferenceClients(t *testing.T) {
 			// A mismatch is declined, not struck (decision 50 ruling 10): the
 			// second connection is reset at Accept, before any TLS byte, on the
 			// window the first opened, and makes no second record.
-			// declined_refused counts it and held_refused does not.
+			// declined_refused counts it and held_refused does not. "No TLS
+			// byte" is read from the client's error: Go reports a raw reset or
+			// EOF with no "tls:" text. If (i) disagrees, read r[1].Error in the
+			// observation first: a Go that wraps those errors fails this cell
+			// loudly, never falsely.
 			time.Sleep(time.Second)
 			rec = e.records(`"tls_outcome":"sni_mismatch"`)
 			dDecl, dHeld := e.metric(connEvent("declined_refused"))-declined, e.metric(connEvent("held_refused"))-held
