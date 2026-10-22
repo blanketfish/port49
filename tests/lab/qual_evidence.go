@@ -64,6 +64,10 @@ type qualRun struct {
 	// inside the ciphertext, so genprofile grades honored or ignored from it
 	// and the header-only connections.
 	TLSServerSingleConnectOffered bool `json:"tls_server_single_connect_offered"`
+	// Port49d is what bin/port49d was built from (go version -m). The TLS
+	// cells run only on a clean build of the harness tree's HEAD, so the
+	// offer above is the binary's own (review I2).
+	Port49d buildVCS `json:"port49d"`
 }
 
 // qualJunosL18 is the note a Junos command cell carries: the device sends no

@@ -590,7 +590,16 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 		q.tlsFiles[cell+".tls.json"] = e.evidence[cell+".tls.json"]
 	}
 	q.run.CommandAuthorization, q.run.DeniedCommandRan, q.run.DeniedCommandAsked = map[string]string{}, map[string]bool{}, map[string]bool{}
-	// bin/port49d is built from this tree, so its offer is this package's.
+	// The offer is read from this tree's table, so bin/port49d must be a
+	// clean build of this tree's HEAD, or the two could differ (review I2).
+	vcs, err := binaryVCS(filepath.Join(root, "bin", "port49d"))
+	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	if err := qualBinaryCheck(vcs, gitHead(root)); err != nil {
+		q.t.Fatal(err)
+	}
+	q.run.Port49d = vcs
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
 	// tls_token_login: the plain token_login, command_permitted, command_denied and

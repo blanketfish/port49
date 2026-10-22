@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -81,6 +82,17 @@ func TestL80Remeasure(t *testing.T) {
 		t.Skip("PORT49_L80_ARM=baseline or fixed")
 	}
 	only := strings.FieldsFunc(os.Getenv("PORT49_L80_CELLS"), func(r rune) bool { return r == ',' })
+	// Which build the arm runs is checked, never taken on trust (review I2).
+	vcs, err := binaryVCS(filepath.Join(root, "bin", "port49d"))
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	if err := l80ArmCheck(arm, vcs, gitHead(root), func(rev string) (bool, error) { return l80HasFix(root, rev) }); err != nil {
+		t.Fatal(err)
+	}
+	if arm == "fixed" && exec.Command("git", "-C", root, "diff", "--quiet", "HEAD", "--", "internal", "cmd", "platforms", "tests/lab").Run() != nil {
+		t.Fatal("INVALID: arm fixed needs an unmodified tree (internal, cmd, platforms, tests/lab)")
+	}
 	sel, _, err := platformSelection()
 	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {
 		t.Fatalf("PORT49_LAB_PLATFORMS=nxos106 only: %v", err)
@@ -174,6 +186,7 @@ func TestL80Remeasure(t *testing.T) {
 			before := l80Events()
 			var sum strings.Builder
 			fmt.Fprintf(&sum, "L80 re-measure, arm %s, cell %s, nxos106 per-request TLS, idle_timeout default\n", arm, cell.Name)
+			fmt.Fprintf(&sum, "bin/port49d: vcs.revision=%s vcs.modified=%v\n", vcs.Revision, vcs.Modified)
 			var mu sync.Mutex
 			var typed []l80Typed
 			var wg sync.WaitGroup
