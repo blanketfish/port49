@@ -50,9 +50,10 @@ type Metrics struct {
 	// speak: declined, no strike), "obfuscated_over_tls" (a packet over
 	// TLS with the unencrypted flag clear: an ERROR, then closed), and
 	// "single_connect_second_connection" (a connection from a device port49
-	// offered single-connect to, arriving while an offered one from the
-	// same source is open: the device ignored the offer; 0 while it honors
-	// it; spec §13 decision 50 rulings 16 and 20).
+	// offered single-connect to, served while an offered one from the same
+	// source is open: the device ignored the offer; 0 while it honors it;
+	// one refused at Accept is not counted; spec §13 decision 50 rulings 16
+	// and 20).
 	ConnectionEvents *prometheus.CounterVec
 	// port49_tls_handshakes_total{outcome}: the RFC 9887 listener's
 	// handshakes by devicecert.Outcome, ok and resumed included (spec §13

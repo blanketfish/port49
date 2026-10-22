@@ -75,6 +75,9 @@ type Deps struct {
 	// TLS, when set, makes this the RFC 9887 listener (spec §13 decision 50);
 	// nil is the RFC 8907 listener.
 	TLS *TLS
+	// offers is the per-source count of open offered connections
+	// (decision 50 ruling 20); nil makes a new one. A test sets it to watch.
+	offers *offers
 }
 
 func Serve(ctx context.Context, ln net.Listener, d Deps) error {
@@ -93,7 +96,10 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	}()
 
 	var lastAcceptLog time.Time
-	offered := newOffers()
+	offered := d.offers
+	if offered == nil {
+		offered = newOffers()
+	}
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -150,13 +156,6 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		// A device speaks one transport, and the other listener declines it
 		// (spec §13 decision 50 ruling 4).
 		mismatch := admitted && dev.Device.EffectiveTransport() != listener
-		// A device port49 offered single-connect to keeps the one connection
-		// while it honors the offer. A second while an offered one is open
-		// says it ignored it: counted here, before its connections reach
-		// refused_cap, with no device label (decision 50 ruling 20).
-		if d.TLS != nil && admitted && offered.any(src) && platform.TLSServerSingleConnect(wirePlatform(dev)) {
-			d.Metrics.ConnectionEvents.WithLabelValues("single_connect_second_connection").Inc()
-		}
 		// A source inside a decline window is refused at Accept, before the
 		// device writes, but only while port49d still declines it. A reload
 		// that admits it again, or the end of its quarantine, drops the
@@ -184,6 +183,14 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			}
 			d.Limits.Undecline(src)
 		}
+		// A device port49 offered single-connect to keeps the one connection
+		// while it honors the offer. A second one served while an offered one
+		// is open says it ignored it: counted here, once the connection is
+		// past every refusal at Accept, before its connections reach
+		// refused_cap, with no device label (decision 50 rulings 16 and 20).
+		if d.TLS != nil && admitted && offered.any(src) && platform.TLSServerSingleConnect(wirePlatform(dev)) {
+			d.Metrics.ConnectionEvents.WithLabelValues("single_connect_second_connection").Inc()
+		}
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
@@ -196,11 +203,6 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		go func() {
 			defer wg.Done()
 			defer release()
-			defer func() {
-				if cc.offered {
-					offered.close(src)
-				}
-			}()
 			defer d.Metrics.Connections.WithLabelValues("open").Dec()
 			// A panic in one connection must never take the daemon down with it,
 			// or every other admitted device loses service at once. Never log the

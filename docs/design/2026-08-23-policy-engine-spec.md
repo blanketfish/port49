@@ -10496,8 +10496,10 @@ each where this document and RFC 9887 were silent; Ryan may override any.
   - `port49_connection_events_total` gains `tls_refused`, `transport_mismatch`,
     `obfuscated_over_tls` and `single_connect_second_connection`.
     `single_connect_second_connection` counts a connection from a device port49 offered
-    single-connect to (ruling 20) that arrives while an offered connection from the same source is
-    still open: the device ignored the offer. It stays 0 while the device honors it, and moves at
+    single-connect to (ruling 20) that port49 serves while an offered connection from the same
+    source is still open: the device ignored the offer. A connection refused at Accept (the cap,
+    a strike's backoff, a decline window) is not counted, and an offered connection stops counting
+    before its socket closes, so a device that reconnects at once after a close is not counted. It stays 0 while the device honors it, and moves at
     an ignoring device's second request, long before its connections reach `per_nas_connections`
     and `refused_cap`. Like every value of the metric it carries no device label; the decision
     log's records from that source name the device. `tls_refused` counts a struck handshake refusal and a decline at Accept

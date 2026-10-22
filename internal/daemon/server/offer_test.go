@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"io"
+	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -423,6 +426,68 @@ func served(t *testing.T, f *tlsFixture, cert *tls.Certificate, flags uint8) *tl
 	return cl
 }
 
+// The offer is released before the socket closes, so a device that
+// reconnects the moment it sees the close is never counted against its own
+// closed connection (review M1).
+func TestTLSOfferIsReleasedBeforeTheSocketCloses(t *testing.T) {
+	off := newOffers()
+	var deps *Deps
+	f, cert := newOfferFixture(t, &syncBuffer{}, admission.Resolved{Device: nxos01TLS}, func(d *Deps, _ *tlsFixture) {
+		d.offers = off
+		deps = d
+	})
+	// A second Serve of the same Deps, on a listener whose connections say
+	// at their close whether the source still had an offer open.
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldAtClose := make(chan bool, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { defer close(served); Serve(ctx, closeProbe{raw, off, heldAtClose}, *deps) }()
+	t.Cleanup(func() { cancel(); <-served })
+	f.ts.addr = raw.Addr().String()
+	cl := offered(t, f, cert, 0x100)
+	cl.conn.Close()
+	select {
+	case held := <-heldAtClose:
+		if held {
+			t.Fatal("the socket closed while its offer was still counted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server never closed the connection")
+	}
+}
+
+// closeProbe is a listener whose connections report, at their first Close,
+// whether off still counts an offered connection from loopback.
+type closeProbe struct {
+	net.Listener
+	off  *offers
+	held chan bool
+}
+
+func (l closeProbe) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &probeConn{TCPConn: c.(*net.TCPConn), off: l.off, held: l.held}, nil
+}
+
+type probeConn struct {
+	*net.TCPConn
+	off  *offers
+	held chan bool
+	once sync.Once
+}
+
+func (c *probeConn) Close() error {
+	c.once.Do(func() { c.held <- c.off.any(loopback) })
+	return c.TCPConn.Close()
+}
+
 // Test 10 (RI3). A device port49 offered single-connect to that opens a
 // second connection while its offered one is open is counted
 // single_connect_second_connection; nothing else is.
@@ -432,10 +497,15 @@ func TestTLSCountsASecondConnectionFromAnOfferedDevice(t *testing.T) {
 	type rig struct {
 		f    *tlsFixture
 		cert *tls.Certificate
+		off  *offers
 	}
 	setup := func(t *testing.T, dev admission.Device) rig {
-		f, cert := newOfferFixture(t, &syncBuffer{}, admission.Resolved{Device: dev}, nil)
-		return rig{f, cert}
+		off := newOffers()
+		f, cert := newOfferFixture(t, &syncBuffer{}, admission.Resolved{Device: dev}, func(d *Deps, _ *tlsFixture) {
+			d.Limits = slowBackoff()
+			d.offers = off
+		})
+		return rig{f, cert, off}
 	}
 	t.Run("a second connection while the offered one is open", func(t *testing.T) {
 		r := setup(t, nxos01TLS)
@@ -449,10 +519,8 @@ func TestTLSCountsASecondConnectionFromAnOfferedDevice(t *testing.T) {
 		r := setup(t, nxos01TLS)
 		cl := offered(t, r.f, r.cert, 0x100)
 		cl.conn.Close()
-		if !waitFor(t, func() bool {
-			return testutil.ToFloat64(r.f.ts.metrics.Connections.WithLabelValues("open")) == 0
-		}) {
-			t.Fatal("the first connection never closed")
+		if !waitFor(t, func() bool { return !r.off.any(loopback) }) {
+			t.Fatal("the first connection's offer was never released")
 		}
 		served(t, r.f, r.cert, 0)
 		if n := secondConnections(r.f); n != 0 {
@@ -483,6 +551,27 @@ func TestTLSCountsASecondConnectionFromAnOfferedDevice(t *testing.T) {
 		served(t, r.f, r.cert, wire.FlagSingleConnect)
 		if n := secondConnections(r.f); n != 0 {
 			t.Fatalf("single_connect_second_connection = %v, want 0", n)
+		}
+	})
+	t.Run("a connection refused at Accept inside a decline window", func(t *testing.T) {
+		var quar atomic.Bool
+		off := newOffers()
+		f, cert := newOfferFixture(t, &syncBuffer{}, admission.Resolved{Device: nxos01TLS}, func(d *Deps, _ *tlsFixture) {
+			d.Limits = slowBackoff()
+			d.offers = off
+			d.Quarantined = func(string, time.Time) (string, bool) { return "a grant expired", quar.Load() }
+		})
+		offered(t, f, cert, 0x100)
+		quar.Store(true)
+		f.ts.limits.Decline(loopback)
+		acceptRefused(t, f.ts.addr)
+		if !waitFor(t, func() bool {
+			return testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")) == 1
+		}) {
+			t.Fatal("the second connection was not refused declined_refused")
+		}
+		if n := secondConnections(f); n != 0 {
+			t.Fatalf("single_connect_second_connection = %v for a connection refused at Accept, want 0", n)
 		}
 	})
 	t.Run("a source re-platformed off the table while its offered connection is open", func(t *testing.T) {

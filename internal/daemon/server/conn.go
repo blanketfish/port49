@@ -284,8 +284,16 @@ func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 
 func (s *conn) serve(ctx context.Context) {
 	// s.c becomes the TLS connection after a handshake: Close it as it is
-	// then, so a TLS peer gets close_notify.
-	defer func() { s.c.Close() }()
+	// then, so a TLS peer gets close_notify. An offer is released first, so
+	// a device that reconnects the moment it sees the close is not counted
+	// against the connection it just lost (decision 50 ruling 20).
+	defer func() {
+		if s.offered {
+			s.offered = false
+			s.offers.close(s.src)
+		}
+		s.c.Close()
+	}()
 	if s.d.TLS != nil && !s.startTLS(ctx) {
 		return
 	}
