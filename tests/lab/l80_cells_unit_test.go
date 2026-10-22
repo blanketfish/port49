@@ -139,3 +139,38 @@ func TestL80TimelineKeepsNoOtherField(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// Fix round 4: readiness is the device reaching port49d. A device port49
+// offered single-connect sends the probe on the connection it holds, so
+// the probe's capture holds no new SYN; port49's record of the probe is
+// enough. A new SYN alone still counts, as L73 cell a needs (a port
+// nothing answers TLS on records nothing).
+func TestL73ReadyIsAConnectionOrARecord(t *testing.T) {
+	at := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	syn := []l73Conn{{Server: l73Server + ":300", SYNAt: at.Add(time.Second)}}
+	rec := []map[string]any{{"event": "redeem", "verdict": "deny"}}
+	for name, c := range map[string]struct {
+		conns []l73Conn
+		recs  []map[string]any
+		want  bool
+	}{
+		"a new connection, no record":                 {syn, nil, true},
+		"a record over a held connection, no new SYN": {nil, rec, true},
+		"neither":                                  {nil, nil, false},
+		"a SYN to another address, no record":      {[]l73Conn{{Server: "192.0.2.9:300", SYNAt: at.Add(time.Second)}}, nil, false},
+		"a connection before the probe, no record": {[]l73Conn{{Server: l73Server + ":300", SYNAt: at.Add(-time.Second)}}, nil, false},
+	} {
+		if got := l73Ready(c.conns, at, at.Add(time.Minute), c.recs); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// Fix round 4: an L80 cell opens on a fresh connection, so it waits, without
+// probing, for no connection open, past port49d's default idle close (L80
+// runs it: DefaultIdle).
+func TestL80CleanWaitOutlastsTheDefaultIdleClose(t *testing.T) {
+	if time.Duration(l80CleanPolls)*time.Second < l80DefaultIdle+30*time.Second {
+		t.Fatalf("the wait (%ds) does not outlast the default idle close %v", l80CleanPolls, l80DefaultIdle)
+	}
+}

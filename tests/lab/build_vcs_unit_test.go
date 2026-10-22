@@ -269,3 +269,45 @@ func TestQualCleanWaitOutlastsTheLabIdleTimeout(t *testing.T) {
 		t.Fatalf("the wait (%ds) does not outlast idle_timeout %v", qualCleanPolls, cfg.Limits.IdleTimeout)
 	}
 }
+
+// Fix round 4: go build inside a git worktree nested under the main checkout
+// stamps the main checkout's HEAD (Go's VCS lookup takes only a .git
+// directory, not a worktree's .git file). buildPort49dAt builds from a
+// private clone instead, so the stamp is the revision asked for. The
+// fixture is a throwaway module with a worktree nested in it at an older
+// commit than the outer checkout.
+func TestBuildPort49dStampsTheRevisionFromANestedWorktree(t *testing.T) {
+	outer, run := gitRepo(t)
+	writeFile(t, filepath.Join(outer, "go.mod"), "module example.invalid/stamp\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(outer, "cmd/port49d/main.go"), "package main\n\nfunc main() {}\n")
+	writeFile(t, filepath.Join(outer, ".gitignore"), "/.worktrees/\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "a")
+	a := run("rev-parse", "HEAD")
+	writeFile(t, filepath.Join(outer, "cmd/port49d/main.go"), "package main\n\nfunc main() { println() }\n")
+	run("commit", "-q", "-am", "b")
+	nested := filepath.Join(outer, ".worktrees", "w")
+	run("worktree", "add", "-q", "--detach", nested, a)
+	dst := filepath.Join(t.TempDir(), "port49d")
+	v, err := buildPort49dAt(nested, "HEAD", t.TempDir(), dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Revision != a || v.Modified {
+		t.Fatalf("stamped %+v, want %s clean", v, a)
+	}
+	got, err := binaryVCS(dst)
+	if err != nil || got != v {
+		t.Fatalf("the installed binary says %+v %v, want %+v", got, err, v)
+	}
+	if _, err := buildPort49dAt(nested, "0123456789abcdef0123456789abcdef01234567", t.TempDir(), dst); err == nil {
+		t.Fatal("an unknown revision built")
+	}
+	// Every temporary tree is removed, on success and on failure.
+	tmp := t.TempDir()
+	buildPort49dAt(nested, "HEAD", tmp, dst)
+	buildPort49dAt(nested, "0123456789abcdef0123456789abcdef01234567", tmp, dst)
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("left behind %d entries in the temp root", len(left))
+	}
+}

@@ -194,8 +194,9 @@ lab-qualify:
 	PORT49_LAB_QUALIFY=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE:-$(if $(filter nxos106,$(P)),L80)} PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
 
 # L80's re-measure (decision 50 ruling 20): nxos106 over per-request TLS at the default
-# idle_timeout. ARM=baseline runs bin/port49d as built from the commit before the fix,
-# ARM=fixed as built from the branch head; build it first. CELLS=s1,idle31 runs a subset.
+# idle_timeout. The harness builds bin/port49d itself, in a private clone: ARM=baseline from
+# the commit before the fix, ARM=fixed from HEAD. Commit earlier evidence first (the tree must
+# be clean). CELLS=s1,idle31 runs a subset.
 lab-l80:
 	@case "$(ARM)" in baseline|fixed) ;; *) echo "usage: make lab-l80 ARM=baseline|fixed [CELLS=...]"; exit 2;; esac
 	PORT49_L80_ARM=$(ARM) PORT49_L80_CELLS=$(CELLS) PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL80Remeasure$$' -count=1 -v -timeout 240m

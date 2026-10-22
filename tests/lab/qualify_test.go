@@ -57,6 +57,26 @@ func TestQualify(t *testing.T) {
 	if helpOnlyPlatforms[p.sel] {
 		t.Skipf("%s is help-only: it runs no TACACS+", p.sel)
 	}
+	// The harness builds the port49d the whole run uses, from this tree's
+	// clean HEAD, in a private clone so its VCS stamp is right (fix round 4;
+	// a build in a nested worktree is stamped with the main checkout's HEAD).
+	if root == "" {
+		r, err := repoRoot()
+		if err != nil {
+			t.Fatalf("INVALID: repo root: %v", err)
+		}
+		root = r
+	}
+	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
+	}
+	bin := filepath.Join(root, "bin", "port49d")
+	if qualPort49dBuild, err = buildPort49dAt(root, "HEAD", os.TempDir(), bin); err != nil {
+		t.Fatal(err)
+	}
+	if err := labSetcap(bin); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	t.Run(p.name, func(t *testing.T) { newQualEnv(t, labFor(t, p)).play() })
 }
 
@@ -592,17 +612,15 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.run.CommandAuthorization, q.run.DeniedCommandRan, q.run.DeniedCommandAsked = map[string]string{}, map[string]bool{}, map[string]bool{}
 	// The offer is read from this tree's table, so bin/port49d must be a
 	// clean build of this tree's HEAD, or the two could differ (review I2).
-	vcs, err := binaryVCS(filepath.Join(root, "bin", "port49d"))
-	if err != nil {
-		q.t.Fatalf("INVALID: %v", err)
-	}
+	// TestQualify built it (fix round 4); check what it says.
+	vcs := qualPort49dBuild
 	if err := qualBinaryCheck(vcs, gitHead(root)); err != nil {
 		q.t.Fatal(err)
 	}
 	// The harness compiles the same table the offer is read from: its tree
 	// must be HEAD's too, untracked files included (review N4).
 	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
-		q.t.Fatalf("INVALID: the harness tree is not clean (%v):\n%s\ncommit or remove it, then rebuild after committing (make build)", err, dirty)
+		q.t.Fatalf("INVALID: the harness tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
 	}
 	q.run.Port49d = vcs
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)

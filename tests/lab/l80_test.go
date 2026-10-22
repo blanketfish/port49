@@ -91,19 +91,29 @@ func TestL80Remeasure(t *testing.T) {
 		}
 		root = r
 	}
-	// Which build the arm runs is checked, never taken on trust (review I2).
-	vcs, err := binaryVCS(filepath.Join(root, "bin", "port49d"))
+	// The harness and its evidence paths must be clean, untracked files
+	// included (review N4): an earlier batch's evidence is committed before
+	// the next batch.
+	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
+	}
+	// The harness builds the port49d the arm runs (fix round 4): the
+	// baseline from l80BaselineCommit, the fixed arm from HEAD, each in a
+	// private clone so the stamp is right, then checks it (review I2).
+	rev := "HEAD"
+	if arm == "baseline" {
+		rev = l80BaselineCommit
+	}
+	bin := filepath.Join(root, "bin", "port49d")
+	vcs, err := buildPort49dAt(root, rev, os.TempDir(), bin)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := labSetcap(bin); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
 	if err := l80ArmCheck(arm, vcs, gitHead(root), func(rev string) (bool, error) { return l80HasFix(root, rev) }); err != nil {
 		t.Fatal(err)
-	}
-	// The harness and its evidence paths must be clean too, untracked files
-	// included (review N4): an earlier batch's evidence is committed, and the
-	// binary rebuilt, before the next batch.
-	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
-		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it, then rebuild after committing (make build)", err, dirty)
 	}
 	sel, _, err := platformSelection()
 	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {
@@ -209,8 +219,19 @@ func TestL80Remeasure(t *testing.T) {
 			q.tlsDaemon(e, "l80", daemon)
 			q.login()
 			time.Sleep(40 * time.Second)
+			// Every cell opens on a fresh connection: wait, without probing,
+			// until none is open (an offered NX-OS holds one until the idle
+			// close), and read the gauge again once the capture is live
+			// (fix round 4). Either failure is INVALID.
+			read := func() (float64, bool) { return e.metric(qualConnectionsOpen) }
+			if err := qualWaitNoConnections(read, l80CleanPolls, time.Sleep); err != nil {
+				t.Fatal(err)
+			}
 			q.cell("l80_" + cell.Name)
 			stop := e.capture("l80_" + cell.Name)
+			if err := qualStillClean(read); err != nil {
+				t.Fatal(err)
+			}
 			off := l.mark()
 			before := l80Events()
 			var sum strings.Builder

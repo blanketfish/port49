@@ -3,7 +3,9 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -163,6 +165,77 @@ const qualCleanPolls = 6 * 60
 func qualStillClean(read func() (float64, bool)) error {
 	if v, ok := read(); ok && v != 0 {
 		return fmt.Errorf("INVALID: %v connections open when tls_token_login's capture started; it did not start clean", v)
+	}
+	return nil
+}
+
+// buildPort49dAt builds cmd/port49d of repo at rev and installs it at dst,
+// and returns what the binary says it was built from (fix round 4). It never
+// builds in place: Go's VCS stamp looks for a .git directory, not a
+// worktree's .git file, so a build inside a worktree nested under the main
+// checkout is stamped with the main checkout's HEAD, and one outside with
+// nothing. It builds in a private clone (git clone --shared, which has its
+// own .git directory) under tmpRoot, checked out at rev, and removes it on
+// every path. The stamp must be rev, unmodified, or nothing is installed.
+func buildPort49dAt(repo, rev, tmpRoot, dst string) (buildVCS, error) {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--verify", rev+"^{commit}").Output()
+	if err != nil {
+		return buildVCS{}, fmt.Errorf("INVALID: revision %s is not in %s: %w", rev, repo, err)
+	}
+	full := strings.TrimSpace(string(out))
+	dir, err := os.MkdirTemp(tmpRoot, "port49d-build-")
+	if err != nil {
+		return buildVCS{}, err
+	}
+	defer os.RemoveAll(dir)
+	src := filepath.Join(dir, "src")
+	for _, args := range [][]string{
+		{"clone", "-q", "--shared", "--no-checkout", repo, src},
+		{"-C", src, "checkout", "-q", "--detach", full},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			return buildVCS{}, fmt.Errorf("INVALID: git %s: %v %s", args[0], err, out)
+		}
+	}
+	built := filepath.Join(dir, "port49d")
+	cmd := exec.Command("go", "build", "-o", built, "./cmd/port49d")
+	cmd.Dir, cmd.Env = src, append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return buildVCS{}, fmt.Errorf("INVALID: go build at %s: %v %s", full, err, out)
+	}
+	v, err := binaryVCS(built)
+	if err != nil {
+		return v, fmt.Errorf("INVALID: %w", err)
+	}
+	if v.Revision != full || v.Modified {
+		return v, fmt.Errorf("INVALID: the build at %s is stamped %s (modified %v)", full, v.Revision, v.Modified)
+	}
+	raw, err := os.ReadFile(built)
+	if err != nil {
+		return v, err
+	}
+	// Written beside dst and renamed over it, so a running port49d's text
+	// file is never truncated in place.
+	tmp := dst + ".new"
+	if err := os.WriteFile(tmp, raw, 0o755); err != nil {
+		return v, err
+	}
+	return v, os.Rename(tmp, dst)
+}
+
+// l80BaselineCommit is the commit before Task 7's code: the spec alone
+// (docs: decision 50 ruling 20). L80's baseline arm builds from it.
+const l80BaselineCommit = "9f97a84f"
+
+// qualPort49dBuild is what TestQualify built bin/port49d from.
+var qualPort49dBuild buildVCS
+
+// labSetcap gives bin the capability to bind port 49 unprivileged, as
+// initGlobal does for the binary it finds; a binary the harness built
+// replaces that one.
+func labSetcap(bin string) error {
+	if out, err := exec.Command("sudo", "-n", "setcap", "cap_net_bind_service=+ep", bin).CombinedOutput(); err != nil {
+		return fmt.Errorf("setcap failed (%v): %s", err, out)
 	}
 	return nil
 }

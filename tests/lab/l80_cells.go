@@ -165,3 +165,22 @@ func l80Timeline(recs []map[string]any) []string {
 	}
 	return out
 }
+
+// l73Ready is whether a readiness probe reached port49d: the probe's capture
+// holds a new connection to port49's address (L73 cell a: a port nothing
+// answers TLS on records nothing), or port49 recorded the probe (fix round
+// 4: a device port49 offered single-connect sends it on the connection it
+// already holds, so no SYN is captured). The lab has one device, so any
+// record since the probe's mark is that device's.
+func l73Ready(conns []l73Conn, from, to time.Time, recs []map[string]any) bool {
+	return len(l73Window(conns, l73Server, from, to)) > 0 || len(recs) > 0
+}
+
+// l80DefaultIdle is port49d's default limits.idle_timeout
+// (internal/config/config.go), which L80's daemon runs (DefaultIdle).
+const l80DefaultIdle = 30 * time.Second
+
+// l80CleanPolls bounds the wait, one poll a second, for no connection open
+// before an L80 cell's capture: past the default idle close of a connection
+// an offered NX-OS holds (fix round 4).
+const l80CleanPolls = 60
