@@ -17,6 +17,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -54,7 +55,9 @@ type conn struct {
 	keys     keyring.Set
 
 	version  int  // 0 until the first packet validates; then the only version this connection uses
-	single   bool // the first packet asked to keep the connection open
+	single   bool // the first packet asked to keep the connection open, or port49 offered it (ruling 20)
+	offered  bool // port49 alone opened it single-connect; counted in offers while it is open
+	offers   *offers
 	sessions map[uint32]*authen.Session
 }
 
@@ -398,10 +401,21 @@ func (s *conn) serve(ctx context.Context) {
 		body := raw
 		if s.tls != nil {
 			// No key over TLS (RFC 9887 §4): the first packet's
-			// single-connect flag decides, as the first validated one does on 49.
+			// single-connect flag decides, as the first validated one does on
+			// 49, and no later packet's flag changes it (RFC 8907 §4.3). A
+			// device whose wire platform has the fact is offered the mode
+			// even unasked, as RFC 8907 §4.3 allows: NX-OS 10.6 pipelines
+			// a request behind an accounting record, and a close after one
+			// session loses it (decision 50 ruling 20). Every packet still
+			// passes admission, the quarantine and the TLS recheck above.
 			if !s.tls.started {
 				s.tls.started = true
-				s.single = h.Flags&wire.FlagSingleConnect != 0
+				asked := h.Flags&wire.FlagSingleConnect != 0
+				s.single = asked || platform.TLSServerSingleConnect(wirePlatform(s.dev))
+				if s.single && !asked {
+					s.offered = true
+					s.offers.open(s.src)
+				}
 			}
 		} else {
 			var ok bool
@@ -497,6 +511,10 @@ func (s *conn) pastDate(now time.Time) bool {
 }
 
 // write sends one reply, obfuscated with the version that validated the request.
+// While the connection is single-connect every reply carries the flag, an
+// offered one's too: that is the form NX-OS's reuse was measured under, and
+// RFC 8907 §4.3 has both sides ignore the flag after the second packet
+// (decision 50 ruling 20).
 func (s *conn) write(h wire.Header, body []byte) bool {
 	flags := uint8(0)
 	if s.single {

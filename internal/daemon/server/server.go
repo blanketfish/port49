@@ -25,6 +25,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Admitter answers which device a source address is and which key_ref admits
@@ -92,6 +93,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	}()
 
 	var lastAcceptLog time.Time
+	offered := newOffers()
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -148,6 +150,13 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		// A device speaks one transport, and the other listener declines it
 		// (spec §13 decision 50 ruling 4).
 		mismatch := admitted && dev.Device.EffectiveTransport() != listener
+		// A device port49 offered single-connect to keeps the one connection
+		// while it honors the offer. A second while an offered one is open
+		// says it ignored it: counted here, before its connections reach
+		// refused_cap, with no device label (decision 50 ruling 20).
+		if d.TLS != nil && admitted && offered.any(src) && platform.TLSServerSingleConnect(wirePlatform(dev)) {
+			d.Metrics.ConnectionEvents.WithLabelValues("single_connect_second_connection").Inc()
+		}
 		// A source inside a decline window is refused at Accept, before the
 		// device writes, but only while port49d still declines it. A reload
 		// that admits it again, or the end of its quarantine, drops the
@@ -178,7 +187,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
-			refused: found && dev.Refused != "", sessions: map[uint32]*authen.Session{}}
+			refused: found && dev.Refused != "", offers: offered, sessions: map[uint32]*authen.Session{}}
 		if cc.admitted && !mismatch && d.TLS == nil {
 			cc.keys = d.Keys[dev.KeyRef]
 		}
@@ -187,6 +196,11 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		go func() {
 			defer wg.Done()
 			defer release()
+			defer func() {
+				if cc.offered {
+					offered.close(src)
+				}
+			}()
 			defer d.Metrics.Connections.WithLabelValues("open").Dec()
 			// A panic in one connection must never take the daemon down with it,
 			// or every other admitted device loses service at once. Never log the
