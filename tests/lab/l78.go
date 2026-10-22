@@ -159,11 +159,14 @@ type l78Grading struct {
 // (final review I4).
 func l78Grade(loggedIn, record, failClosed bool, total int, out string) l78Grading {
 	ran, first := qualRan(out)
-	if !ran && first == "no output" {
+	silent := !ran && first == "no output"
+	if silent {
 		first = ""
 	}
 	g := l78Grading{Shown: first, OK: true}
 	switch {
+	case loggedIn && record && silent:
+		g.OK, g.Says = false, "logged in; no output, so whether `show version` ran is unmeasured"
 	case loggedIn && record && failClosed && !ran:
 		g.Says = fmt.Sprintf("logged in; `show version` refused (deny-all) after a %d-byte reply", total)
 	case loggedIn && record && failClosed:

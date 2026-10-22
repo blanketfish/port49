@@ -917,7 +917,7 @@ func feedRescanned(read func() string, before float64, d, every time.Duration) (
 	}, d, every)
 	if !ok {
 		return after, fmt.Errorf("region 3's marks feed did not rescan after the heal (port49_store_feed_rescans_total "+
-			"{feed=\"marks\"} %v, was %v), a port49 finding if the compaction landed above the lift", after, before)
+			"{feed=\"marks\"} did not increase: still %v; %v before the heal), a port49 finding if the compaction landed above the lift", after, before)
 	}
 	return after, nil
 }

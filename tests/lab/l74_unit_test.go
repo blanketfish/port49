@@ -728,7 +728,7 @@ func TestL74FeedRescannedWaitsForTheCounterToRise(t *testing.T) {
 	}
 	flat := func() string { return "port49_store_feed_rescans_total{feed=\"marks\"} 2\n" }
 	if _, err := feedRescanned(flat, 2, 200*time.Millisecond, 20*time.Millisecond); err == nil ||
-		!strings.Contains(err.Error(), "a port49 finding") {
+		!strings.Contains(err.Error(), "a port49 finding") || !strings.Contains(err.Error(), "did not increase") {
 		t.Fatalf("a counter that never rises: %v, want the INVALID error", err)
 	}
 }
