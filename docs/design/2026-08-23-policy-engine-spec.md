@@ -6123,7 +6123,10 @@ worded and redacted as `policy test` does, with the device count and the first t
 Then one line: `policy: N composition(s) answered fail-closed now (port49 policy test names
 them)`, printed when N is above 0 or was before. N counts the findings that hold now; a finding
 for a later moment is printed with its moment and is not counted until the moment comes.
-`port49_policy_fail_closed_compositions`, a gauge with no labels, holds N.
+`port49_policy_fail_closed_compositions`, a gauge with no labels, holds N. After a swap or an
+expiry pass the report is worked out off the reload: it follows that generation's refresh pass,
+the reload never waits for it, and a newer generation supersedes one not yet printed, so the
+lines and the gauge always describe the latest policy in force.
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
