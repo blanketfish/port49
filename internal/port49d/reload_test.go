@@ -87,6 +87,9 @@ func (rig *reloadRig) with(fn func()) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = rig.out
 	fn()
+	// The fail-closed report a swap or expiry pass asked for is said off
+	// this goroutine; what the test reads next includes it.
+	rig.r.failClosed.wait()
 }
 
 // swapTo puts body in force as the watch does: written, then two polls

@@ -194,6 +194,10 @@ type reloader struct {
 	// force (broker.Broker.MFAUnavailable), said after each swap when it is
 	// not empty. Nil with no broker in the process.
 	mfaUnavailable func(pol *policy.Policy, now time.Time) string
+	// failClosed says the fail-closed compositions after each swap's
+	// refresh pass and each pass that crossed a grant expiry, off this
+	// goroutine (failClosedReporter). run closes it.
+	failClosed *failClosedReporter
 	// fullPass is how the runner's duties hand run a full context pass a
 	// replica owes (runner.owed), which whole runs (full). Both are
 	// port49-broker's; elsewhere fullPass is nil, and a receive never fires.
@@ -241,7 +245,7 @@ func newReloader(cfg config.Config, live *policy.Live, log decision.Emitter,
 	start := now()
 	r := &reloader{cfg: cfg, live: live, log: log, pass: pass, metrics: m, now: now,
 		interval: cfg.Policy.WatchInterval, priors: []broker.Prior{{Policy: live.Load(), At: start}},
-		owed: make(chan bool, 1)}
+		owed: make(chan bool, 1), failClosed: newFailClosedReporter(m)}
 	// run sets the version the start loaded; this is a test's. In service
 	// mode there is no inventory file.
 	if cfg.InventoryFile != "" {
@@ -337,6 +341,7 @@ func policyVersion(path string) ([]byte, string, error) {
 // run serves until ctx ends: a poll every interval, a reload at every SIGHUP,
 // and the refresh schedule.
 func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
+	defer r.failClosed.close()
 	tick := time.NewTicker(r.interval)
 	defer tick.Stop()
 	timer := time.NewTimer(time.Hour)
@@ -1211,11 +1216,12 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 		r.generic.record(pol, now)
 	}
 	said := r.refresh(ctx)
-	// After the pass, not before: the walk over every subject and device must
-	// not delay the supersede that a tightened requirement depends on. A
-	// pass that crossed a grant expiry has said it already.
+	// After the pass, not before, and off this goroutine: the walk over
+	// every subject and device must not delay the supersede that a
+	// tightened requirement depends on. A pass that crossed a grant expiry
+	// has asked already.
 	if !said {
-		sayFailClosed(r.procName(), pol, now, r.metrics)
+		r.failClosed.ask(stderr, r.procName(), pol, now)
 	}
 	if r.mfaUnavailable != nil {
 		if line := r.mfaUnavailable(pol, now); line != "" {
@@ -1258,10 +1264,10 @@ func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 // expired grant included. A complete pass that leaves it at 0 tells
 // onSettled, when set, the policy in force.
 //
-// A pass that crossed a grant expiry says which compositions answer
-// fail-closed now (sayFailClosed), and returns true, or the gauge goes stale
-// at the expiry. With no broker there is no pass: the timer is still armed
-// for the next expiry, and the same statement is made at it.
+// A pass that crossed a grant expiry asks failClosed to say which
+// compositions answer fail-closed now, and returns true, or the gauge goes
+// stale at the expiry. With no broker there is no pass: the timer is still
+// armed for the next expiry, and the same is asked at it.
 func (r *reloader) refresh(ctx context.Context) (said bool) {
 	if r.pass == nil {
 		// No broker in the process: nothing to carry, and no settle or retry
@@ -1270,7 +1276,7 @@ func (r *reloader) refresh(ctx context.Context) (said bool) {
 		r.settle, r.retry = time.Time{}, time.Time{}
 		cur, now := r.live.Load(), r.now()
 		if !r.expiry.IsZero() && !now.Before(r.expiry) {
-			sayFailClosed(r.procName(), cur, now, r.metrics)
+			r.failClosed.ask(stderr, r.procName(), cur, now)
 			said = true
 		}
 		r.expiry, _ = cur.NextChange(now)
@@ -1333,7 +1339,7 @@ func (r *reloader) refresh(ctx context.Context) (said bool) {
 	}
 	r.reschedule()
 	if crossed {
-		sayFailClosed(r.procName(), cur, rep.At, r.metrics)
+		r.failClosed.ask(stderr, r.procName(), cur, rep.At)
 	}
 	if r.settle.IsZero() && r.onSettled != nil {
 		r.onSettled(cur)

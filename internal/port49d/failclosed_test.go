@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
@@ -100,23 +103,36 @@ func TestAReloadToAFailClosedCompositionIsSaidAndGauged(t *testing.T) {
 	}
 }
 
-// The line is said after the refresh pass, as the unverifiable-requirement
-// line is: the pass carries the swap into live sessions, and the walk over
-// every subject and device must not delay it.
+// The report of a generation is worked out after that generation's refresh
+// pass, as the unverifiable-requirement line is: the pass carries the swap
+// into live sessions, and the walk over every subject and device must not
+// delay it. The pass here waits a while for a report begun too early.
 func TestTheFailClosedLineIsSaidAfterTheRefreshPass(t *testing.T) {
 	rig := failClosedRig(t, 2)
-	var mu sync.Mutex
+	var passing, early atomic.Bool
+	began := make(chan struct{}, 16)
+	compute := rig.r.failClosed.compute
+	rig.r.failClosed.compute = func(pol *policy.Policy, now time.Time) []policy.FailClosed {
+		early.Store(early.Load() || passing.Load())
+		began <- struct{}{}
+		return compute(pol, now)
+	}
 	pass := rig.r.pass
 	rig.r.pass = func(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error) {
-		mu.Lock()
-		defer mu.Unlock()
+		passing.Store(true)
+		defer passing.Store(false)
 		fmt.Fprintln(stderr, "MARK pass")
-		return pass(ctx, priors)
+		rep, err := pass(ctx, priors)
+		select {
+		case <-began:
+		case <-time.After(200 * time.Millisecond):
+		}
+		return rep, err
 	}
 	swapTo(t, rig, failClosedPolicy(refusedRole, ""))
 	out := rig.out.String()
-	if pi, li := strings.Index(out, "MARK pass"), strings.Index(out, countLine); pi < 0 || li < pi {
-		t.Fatalf("the line was said before the pass ran:\n%s", out)
+	if pi, li := strings.Index(out, "MARK pass"), strings.Index(out, countLine); early.Load() || pi < 0 || li < pi {
+		t.Fatalf("the report was worked out before its generation's pass finished (%v):\n%s", early.Load(), out)
 	}
 }
 
@@ -193,5 +209,157 @@ func TestAStartSaysWhichCompositionsAreFailClosed(t *testing.T) {
 		if got := strings.Count(start.String(), "policy: 1 "+countLine); (got == 1) != (c.want == 1) || failClosedGauge(rig) != c.want {
 			t.Fatalf("%q: gauge %v, said %d times:\n%s", c.role, failClosedGauge(rig), got, start.String())
 		}
+	}
+}
+
+// holdCompute makes rig's fail-closed report wait at entered until release is
+// closed, each call telling entered first.
+func holdCompute(rig *reloadRig) (entered chan struct{}, release chan struct{}) {
+	entered, release = make(chan struct{}, 16), make(chan struct{})
+	compute := rig.r.failClosed.compute
+	rig.r.failClosed.compute = func(pol *policy.Policy, now time.Time) []policy.FailClosed {
+		entered <- struct{}{}
+		<-release
+		return compute(pol, now)
+	}
+	return entered, release
+}
+
+// The report is worked out off the reload goroutine: a reload returns while
+// it is still being worked out, and the line and gauge follow when it is.
+func TestTheFailClosedReportRunsOffTheReloadGoroutine(t *testing.T) {
+	rig := failClosedRig(t, 2)
+	entered, release := holdCompute(rig)
+	rig.write(t, failClosedPolicy(refusedRole, ""))
+	reloaded := make(chan struct{})
+	func() {
+		defer func(w io.Writer) { stderr = w }(stderr)
+		stderr = rig.out
+		go func() {
+			defer close(reloaded)
+			rig.r.poll(context.Background())
+			rig.r.poll(context.Background())
+		}()
+		select {
+		case <-reloaded:
+		case <-time.After(10 * time.Second):
+			close(release)
+			t.Fatal("the reload waited on the fail-closed report")
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the report was never worked out")
+	}
+	if strings.Contains(rig.out.String(), countLine) || failClosedGauge(rig) != 0 {
+		t.Fatalf("said before it was worked out:\n%s", rig.out.String())
+	}
+	close(release)
+	rig.r.failClosed.wait()
+	if !strings.Contains(rig.out.String(), "policy: 1 "+countLine) || failClosedGauge(rig) != 1 {
+		t.Fatalf("gauge %v:\n%s", failClosedGauge(rig), rig.out.String())
+	}
+}
+
+// Asked again while a report is worked out, the reporter works out only the
+// latest generation: one still pending is dropped, and one finished after a
+// newer was asked for is never said, so an older result never overwrites a
+// newer one.
+func TestTheLatestFailClosedReportWins(t *testing.T) {
+	rig := failClosedRig(t, 2)
+	pol := rig.r.live.Load()
+	at := func(n int) time.Time { return time.Unix(int64(n), 0) }
+	finding := func(n int) []policy.FailClosed {
+		return []policy.FailClosed{{Kind: policy.FindingProjectionRefused, Message: fmt.Sprintf("generation %d", n),
+			Devices: []string{"srx01"}}}
+	}
+	entered, release := make(chan int, 8), make(chan struct{})
+	var asked []int
+	var mu sync.Mutex
+	rig.r.failClosed.compute = func(_ *policy.Policy, now time.Time) []policy.FailClosed {
+		n := int(now.Unix())
+		mu.Lock()
+		asked = append(asked, n)
+		mu.Unlock()
+		entered <- n
+		if n == 1 {
+			<-release
+		}
+		return finding(n)
+	}
+	var out syncBuffer
+	rig.r.failClosed.ask(&out, "port49d", pol, at(1))
+	<-entered
+	rig.r.failClosed.ask(&out, "port49d", pol, at(2))
+	rig.r.failClosed.ask(&out, "port49d", pol, at(3))
+	close(release)
+	rig.r.failClosed.wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(asked, []int{1, 3}) || strings.Contains(out.String(), "generation 1") ||
+		strings.Contains(out.String(), "generation 2") || !strings.Contains(out.String(), "generation 3") ||
+		failClosedGauge(rig) != 1 {
+		t.Fatalf("worked out %v, gauge %v:\n%s", asked, failClosedGauge(rig), out.String())
+	}
+}
+
+// A reloader that stops stops its reporter: what is in flight finishes, and
+// nothing is worked out after, so shutdown leaves no worker behind.
+func TestAStoppedReloaderLeavesNoFailClosedWorker(t *testing.T) {
+	rig := failClosedRig(t, 2)
+	entered, release := holdCompute(rig)
+	var out syncBuffer
+	rig.r.failClosed.ask(&out, "port49d", rig.r.live.Load(), rig.now)
+	<-entered
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); rig.r.run(ctx, nil) }()
+	select {
+	case <-stopped:
+		t.Fatal("run returned with the report still being worked out")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-stopped
+	rig.r.failClosed.ask(&out, "port49d", rig.r.live.Load(), rig.now)
+	select {
+	case <-entered:
+		t.Fatal("a stopped reporter worked a report out")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if rig.r.failClosed.busy() {
+		t.Fatal("a worker is still running")
+	}
+}
+
+// A finding an expiry brings on is said with the moment it holds from, and
+// is not counted now: here t's grant at admin lapses, and the level left,
+// which no bit maps, has the fail-closed reply from then on.
+func TestAFailClosedFindingFromALaterMomentIsSaidAndNotCounted(t *testing.T) {
+	rig := failClosedRig(t, 2)
+	lapse := rig.now.Add(time.Hour).UTC()
+	swapTo(t, rig, `
+platform_set: 1.1.0
+privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: r, privilege: admin, permit: ["**"]}
+  - {name: low, privilege: unmapped, permit: ["show version"]}
+subjects:
+  - {name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}
+  - {name: t, identity: ["user:carol@example.com"], username: carol, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [r]}
+  - {subject: t, scope: all_devices, roles: [low]}
+  - {subject: t, scope: all_devices, roles: [r], expires: `+lapse.Format(time.RFC3339)+`}
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
+`)
+	out := rig.out.String()
+	from := `policy: projection_refused: subject "t" on juniper_junos, from ` + decision.FormatTime(lapse) +
+		`, when grant all_devices [r] expires`
+	if !strings.Contains(out, from) || strings.Contains(out, countLine) || failClosedGauge(rig) != 0 {
+		t.Fatalf("gauge %v:\n%s", failClosedGauge(rig), out)
 	}
 }
