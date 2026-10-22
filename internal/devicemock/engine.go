@@ -141,7 +141,7 @@ func Play(ctx context.Context, p *Profile, scenario string, t Target, l Login) (
 			return pl.tr, err
 		}
 		if res.SingleConnect {
-			if rr, err := p.React(s.Name, "reply_single_connect"); err == nil && rr.Then == "reuse_connection" {
+			if rr, err := p.React(s.Name, "reply_single_connect"); err == nil && rr.Then == "reuse_connection" || pl.honorsOffer() {
 				pl.reuse = true
 			}
 		}
@@ -413,11 +413,19 @@ func (pl *player) step(ctx context.Context, s Step) (StepResult, error) {
 		}
 		break
 	}
-	if !(res.SingleConnect && h.Flags&wire.FlagSingleConnect != 0) {
+	if !(res.SingleConnect && (h.Flags&wire.FlagSingleConnect != 0 || pl.honorsOffer())) {
 		pl.closeConn()
 		pl.reuse = false
 	}
 	return res, nil
+}
+
+// honorsOffer reports whether this play keeps a connection the server
+// offered single-connect on unasked: a TLS scenario of a profile that
+// measured the offer honored (decision 50 ruling 20; NX-OS 10.6 over
+// per-request TLS).
+func (pl *player) honorsOffer() bool {
+	return ScenarioTransport(pl.tr.Scenario) == "tls" && pl.p.HasFact(FactTLSServerSingleConnectHonored)
 }
 
 func acctFlag(f string) uint8 {

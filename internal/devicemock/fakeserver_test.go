@@ -21,6 +21,7 @@ type fake struct {
 	authenRepeat        bool    // keep answering with the last status once the list is down to it (a fleet's many plays)
 	authorArgs          [][]byte
 	echo, singleConnect bool
+	offer               bool // set single-connect on every reply, asked or not, and keep the connection (decision 50 ruling 20)
 	clearReply          bool // reply with the unencrypted flag and a clear body
 	wrongSession        bool // reply with a session id the request did not carry
 	conns               atomic.Int32
@@ -165,7 +166,7 @@ func (f *fake) serve(c net.Conn) {
 			return
 		}
 		f.record(rec)
-		agreed := f.singleConnect && h.Flags&wire.FlagSingleConnect != 0
+		agreed := f.singleConnect && h.Flags&wire.FlagSingleConnect != 0 || f.offer
 		rh := wire.Header{MajorVersion: h.MajorVersion, MinorVersion: h.MinorVersion, Type: h.Type,
 			SeqNo: h.SeqNo + 1, SessionID: h.SessionID, Length: uint32(len(reply))}
 		if agreed {

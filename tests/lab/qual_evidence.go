@@ -58,6 +58,12 @@ type qualRun struct {
 	// DeniedCommandAsked is whether that command reached port49 as an
 	// authorize_command, so the page says who refused it (review M2).
 	DeniedCommandAsked map[string]bool `json:"denied_command_asked"`
+	// TLSServerSingleConnectOffered is whether the build under test offers
+	// this platform single-connect over per-request TLS
+	// (platform.TLSServerSingleConnect; decision 50 ruling 20). The flag is
+	// inside the ciphertext, so genprofile grades honored or ignored from it
+	// and the header-only connections.
+	TLSServerSingleConnectOffered bool `json:"tls_server_single_connect_offered"`
 }
 
 // qualJunosL18 is the note a Junos command cell carries: the device sends no

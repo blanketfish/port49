@@ -16,6 +16,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/devicemock"
+	adapter "github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
@@ -589,6 +590,8 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 		q.tlsFiles[cell+".tls.json"] = e.evidence[cell+".tls.json"]
 	}
 	q.run.CommandAuthorization, q.run.DeniedCommandRan, q.run.DeniedCommandAsked = map[string]string{}, map[string]bool{}, map[string]bool{}
+	// bin/port49d is built from this tree, so its offer is this package's.
+	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
 	// tls_token_login: the plain token_login, command_permitted, command_denied and
 	// accounting cells together, per-request.

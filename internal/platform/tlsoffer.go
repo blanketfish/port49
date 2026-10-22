@@ -26,3 +26,9 @@ func TLSServerSingleConnect(wirePlatform string) bool {
 	_, ok := tlsServerSingleConnect[wirePlatform]
 	return ok
 }
+
+// TLSServerSingleConnectPlatforms lists the table's platforms, sorted:
+// tests/qual's drift test holds each to a profile that measured it honored.
+func TLSServerSingleConnectPlatforms() []string {
+	return sortedKeys(tlsServerSingleConnect)
+}
