@@ -223,3 +223,25 @@ func TestNXOSDebugFallBackMethodIsAllowListed(t *testing.T) {
 		}
 	}
 }
+
+// Task 8 fix round 1, F2: a count or id is at most five digits and a port is
+// 1-65535, so an OTP-shaped number in any numeric position never survives.
+func TestNXOSDebugNumbersAreBounded(t *testing.T) {
+	tried, leaked := ddNumberRuns(nxosDebugKeptFixture, nxosTestFilter.Keep)
+	if tried == 0 {
+		t.Fatal("no numeric positions tried")
+	}
+	for _, l := range leaked {
+		t.Errorf("a number survived at %s", l)
+	}
+	for in, want := range map[string]string{
+		"05:00:18.000001 tacacsd: nxos_ssl_write:sending 9 bytes to 192.0.2.1 port 65535 on socket 5": "05:00:18.000001 tacacsd: nxos_ssl_write:sending 9 bytes to 192.0.2.1 port 65535 on socket 5",
+		"05:00:18.000002 tacacsd: nxos_ssl_write:sending 9 bytes to 192.0.2.1 port 65536 on socket 5": "",
+		"05:00:18.000003 tacacsd: nxos_ssl_write:sending 9 bytes to 192.0.2.1 port 0 on socket 5":     "",
+		"05:00:18.000004 tacacsd: connect_tac_server:7 tplus_sm->ssl_enable 1":                        "05:00:18.000004 tacacsd: connect_tac_server:7 tplus_sm->ssl_enable 1",
+	} {
+		if got := nxosTestFilter.Keep(in); got != want {
+			t.Errorf("%.70q: kept %q, want %q", in, got, want)
+		}
+	}
+}

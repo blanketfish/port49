@@ -2,7 +2,9 @@ package lab
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,7 +20,9 @@ import (
 //
 //  1. Drop the line if it holds a secret word or a hex run (the NX-OS rules,
 //     nxosDebugSecret and nxosDebugHexRun). Payload lines are the packet body.
-//  2. Mask every run of 24 or more token characters as <LONG>.
+//  2. Drop the line if it holds a run of 24 or more token characters
+//     (nxosDebugLong: a token or base64). NX-OS masks such a run; here the
+//     line is dropped, as the task brief says.
 //  3. Keep the line only if one anchored shape of the platform's profile
 //     admits it. A shape admits a count, a status word, a verb or an address,
 //     never a free-text field, so a debug line of a shape nobody listed is
@@ -27,7 +31,9 @@ import (
 //     lab's (Addrs), a server group only from Groups, a method list only from
 //     deviceDebugLists, a fallback method only none or local, a username only
 //     from the lab's (deviceDebugUser), and an opaque id (a session, handle or
-//     tty name) is always <masked>. An attribute line keeps its key only for
+//     tty name) is always <masked>. A number is kept only in a named position
+//     and within bounds: a port 1-65535, a version or small counter of three
+//     digits at most; a session or request id is written <n>. An attribute line keeps its key only for
 //     service, cmd, cmd-arg and priv-lvl, with the NX-OS word lists
 //     (nxosDebugServices, nxosDebugWords, priv-lvl 0-15); any other value is
 //     <masked>, any other key drops the line.
@@ -66,6 +72,7 @@ const (
 	ddMethod = "\x04" // a fallback method: none or local
 	ddUser   = "\x05" // a username
 	ddOpaque = "\x06" // a session id, handle or tty name: always masked
+	ddID     = "\x07" // a session or request id: kept as <n>
 )
 
 // ddProfile is one platform's line format and shapes.
@@ -80,7 +87,10 @@ type ddProfile struct {
 }
 
 const (
-	ddN      = `-?\d+`
+	// ddSmall is a version or small counter (three digits at most); ddPort is
+	// a port, 1 to 65535. A session or request id is kept as <n> (ddID).
+	ddSmall  = `\d{1,3}`
+	ddPort   = `(?:6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|[1-9]\d{0,3})`
 	ddStatus = `(PASS|FAIL|FAILURE|ERROR|GETUSER|GETPASS|GETDATA|RESTART|FOLLOW|PASS_ADD|PASS_REPL|SUCCESS)`
 	ddKind   = `(authentication|authorization|accounting)`
 )
@@ -88,23 +98,23 @@ const (
 var deviceDebugProfiles = map[string]*ddProfile{
 	"iosxe": {
 		line: regexp.MustCompile(`^[*.]?(?:[A-Z][a-z]{2} +\d+(?: \d{4})? )?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^(TAC\+: +)(priv-lvl|service|cmd-arg|cmd|[a-z-]+)=(.*)$`),
+		av:   regexp.MustCompile(`^(TAC\+: +)(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
-			`TPLUS: Queuing AAA (Authentication|Authorization|Accounting) request ` + ddN + ` for processing`,
-			`TPLUS: processing (authentication|authorization|accounting) (start )?request id ` + ddN,
-			`TPLUS: Authentication start packet created for ` + ddN + `\(` + ddUser + `\)`,
+			`TPLUS: Queuing AAA (Authentication|Authorization|Accounting) request ` + ddID + ` for processing`,
+			`TPLUS: processing (authentication|authorization|accounting) (start )?request id ` + ddID,
+			`TPLUS: Authentication start packet created for ` + ddID + `\(` + ddUser + `\)`,
 			`TPLUS: (Using|Choosing next) server ` + ddIP,
-			`TPLUS\(` + ddOpaque + `\)/` + ddN + `/` + ddOpaque + `/` + ddOpaque + `: Started ` + ddN + ` sec timeout`,
-			`TPLUS\(` + ddOpaque + `\) login timer (started ` + ddN + ` sec timeout|stopped)`,
-			`TAC\+: Opening TCP/IP to ` + ddIP + `/` + ddN + ` timeout=` + ddN,
-			`TAC\+: Opened TCP/IP handle ` + ddOpaque + ` to ` + ddIP + `/` + ddN,
-			`TAC\+: Closing TCP/IP ` + ddOpaque + ` connection to ` + ddIP + `/` + ddN + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
+			`TPLUS\(` + ddOpaque + `\)/` + ddSmall + `/` + ddOpaque + `/` + ddOpaque + `: Started ` + ddSmall + ` sec timeout`,
+			`TPLUS\(` + ddOpaque + `\) login timer (started ` + ddSmall + ` sec timeout|stopped)`,
+			`TAC\+: Opening TCP/IP to ` + ddIP + `/` + ddPort + ` timeout=` + ddSmall,
+			`TAC\+: Opened TCP/IP handle ` + ddOpaque + ` to ` + ddIP + `/` + ddPort,
+			`TAC\+: Closing TCP/IP ` + ddOpaque + ` connection to ` + ddIP + `/` + ddPort + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
 			`TAC\+: Using single connection to ` + ddIP,
 			`TAC\+: Server ` + ddIP + ` (marked|is) (DEAD|ALIVE)`,
 			`TAC\+: Using default tacacs server-group "` + ddGroup + `"`,
 			`TAC\+: send (AUTHEN|AUTHOR|ACCT)/(START|CONT|REQ|REQUEST) packet`,
-			`TAC\+: ver=` + ddN + ` id=` + ddN + ` received (AUTHEN|AUTHOR|ACCT) status = ` + ddStatus,
-			`TAC\+: \(` + ddN + `\): received (authen|author|acct) response status = ` + ddStatus,
+			`TAC\+: ver=` + ddSmall + ` id=` + ddID + ` received (AUTHEN|AUTHOR|ACCT) status = ` + ddStatus,
+			`TAC\+: \(` + ddID + `\): received (authen|author|acct) response status = ` + ddStatus,
 			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Pick method list '` + ddList + `'`,
 			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Status = ` + ddStatus,
 			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Method=(LOCAL|NONE)`,
@@ -113,7 +123,7 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`AAA/ACCT/(EXEC|CMD|NET)/(START|STOP|WATCHDOG) User ` + ddUser + `, Port ` + ddOpaque,
 		},
 		open:     regexp.MustCompile(`TAC\+: Opening TCP/IP to`),
-		closed:   regexp.MustCompile(`TAC\+: Closing TCP/IP \S+ connection to \S+(?: \(([a-z ]+)\))?$`),
+		closed:   regexp.MustCompile(`TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$`),
 		authen:   regexp.MustCompile(`send AUTHEN/`),
 		author:   regexp.MustCompile(`send AUTHOR/`),
 		acct:     regexp.MustCompile(`send ACCT/`),
@@ -123,12 +133,12 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"eos": {
 		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ |\d{4}-\d\d-\d\dT)?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?)(?:[+-]\d\d:\d\d|Z)? (?:\S+ )?(?P<p>Aaa|Tacacs|TacPlus)(?:\[\d+\])?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd|[a-z-]+)=(.*)$`),
+		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
-			`(Connecting|Connected) to (TACACS\+ )?server ` + ddIP + `( port |:)` + ddN,
-			`Connection to ` + ddIP + `:` + ddN + ` (closed|closed by peer|closed by server|closed idle timeout|reset|timed out)`,
-			`Sending ` + ddKind + ` request ` + ddN + ` to ` + ddIP + `(:` + ddN + `)?`,
-			`Received ` + ddKind + ` reply ` + ddN + ` status ` + ddStatus,
+			`(Connecting|Connected) to (TACACS\+ )?server ` + ddIP + `( port |:)` + ddPort,
+			`Connection to ` + ddIP + `:` + ddPort + ` (closed|closed by peer|closed by server|closed idle timeout|reset|timed out)`,
+			`Sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP + `(:` + ddPort + `)?`,
+			`Received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
 			`Single connect (flag set|negotiated|not supported)`,
 			`Server ` + ddIP + ` (marked dead|marked alive|is not responding)`,
 			`Falling back to ` + ddMethod + ` for ` + ddKind,
@@ -146,12 +156,12 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"iosxr": {
 		line: regexp.MustCompile(`^(?:RP/\d+/\S+:)?(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd|[a-z-]+)=(.*)$`),
+		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
-			`(Opening|Opened) connection to ` + ddIP + ` port ` + ddN,
-			`Closing connection to ` + ddIP + ` port ` + ddN + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
-			`Sending ` + ddKind + ` request ` + ddN + ` to ` + ddIP,
-			`Received ` + ddKind + ` reply ` + ddN + ` status ` + ddStatus,
+			`(Opening|Opened) connection to ` + ddIP + ` port ` + ddPort,
+			`Closing connection to ` + ddIP + ` port ` + ddPort + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
+			`Sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP,
+			`Received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
 			`Single connection (flag set|negotiated|not supported)`,
 			`Server ` + ddIP + ` (marked dead|marked alive|is not responding)`,
 			`Falling back to ` + ddMethod + ` for ` + ddKind,
@@ -159,7 +169,7 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`User ` + ddUser + ` authenticating via method list ` + ddList,
 		},
 		open:     regexp.MustCompile(`^Opening connection to`),
-		closed:   regexp.MustCompile(`^Closing connection to \S+ port \S+(?: \(([a-z ]+)\))?$`),
+		closed:   regexp.MustCompile(`^Closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$`),
 		authen:   regexp.MustCompile(`^Sending authentication request`),
 		author:   regexp.MustCompile(`^Sending authorization request`),
 		acct:     regexp.MustCompile(`^Sending accounting request`),
@@ -169,12 +179,12 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"junos": {
 		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?) (?:\S+ )?(?P<p>mgd|sshd|login|tacplus|authd)(?:\[\d+\])?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd|[a-z-]+)=(.*)$`),
+		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
-			`(connecting|connected) to server ` + ddIP + ` port ` + ddN,
+			`(connecting|connected) to server ` + ddIP + ` port ` + ddPort,
 			`connection to ` + ddIP + ` (closed|closed by server|closed idle timeout|reset|timed out)`,
-			`sending ` + ddKind + ` request ` + ddN + ` to ` + ddIP,
-			`received ` + ddKind + ` reply ` + ddN + ` status ` + ddStatus,
+			`sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP,
+			`received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
 			`single-connect (flag set|negotiated|not offered)`,
 			`server ` + ddIP + ` (marked dead|marked alive|timed out)`,
 			`falling back to ` + ddMethod,
@@ -195,14 +205,14 @@ var deviceDebugProfiles = map[string]*ddProfile{
 // ddCompiled are a platform's shapes with their value kinds, compiled once.
 type ddCompiled struct {
 	re    *regexp.Regexp
-	kinds []byte // per capturing group: 'i' address, 'g' group, 'l' method list, 'm' fallback method, 'u' user, 'x' opaque
+	kinds []byte // per capturing group: 'i' address, 'g' group, 'l' method list, 'm' fallback method, 'u' user, 'x' opaque, 'n' id
 }
 
 var ddShapes = func() map[string][]ddCompiled {
 	out := map[string][]ddCompiled{}
 	repl := strings.NewReplacer(ddIP, `([0-9A-Za-z.:]{2,39})`, ddGroup, `([A-Za-z0-9_-]{0,32})`,
 		ddList, `([A-Za-z0-9_:-]{1,40})`, ddMethod, `([a-z]+)`, ddUser, `([A-Za-z0-9_.-]{1,32})`,
-		ddOpaque, `(<LONG>|[0-9A-Za-z_.:-]{1,23})`)
+		ddOpaque, `([0-9A-Za-z_.:-]{1,23})`, ddID, `(-?\d{1,12})`)
 	for name, p := range deviceDebugProfiles {
 		for _, s := range p.shapes {
 			var kinds []byte
@@ -220,6 +230,8 @@ var ddShapes = func() map[string][]ddCompiled {
 					kinds = append(kinds, 'u')
 				case ddOpaque:
 					kinds = append(kinds, 'x')
+				case ddID:
+					kinds = append(kinds, 'n')
 				}
 			}
 			re := repl.Replace(nxosNonCapturing(s))
@@ -232,7 +244,7 @@ var ddShapes = func() map[string][]ddCompiled {
 // Keep is text (the device's debug output, as `show logging` or `show log`
 // prints it) cut to the lines the rules above keep, one per line, in the form
 // `time [process:] message`.
-func (f deviceDebugFilter) Keep(text string) string {
+func (f deviceDebugFilter) Keep(text string) deviceDebugKept {
 	p := deviceDebugProfiles[f.Platform]
 	if p == nil {
 		return ""
@@ -244,13 +256,18 @@ func (f deviceDebugFilter) Keep(text string) string {
 			continue
 		}
 		msg := strings.TrimSpace(m[p.line.SubexpIndex("m")])
+		// A run of 24 or more token characters is a token or base64: the
+		// line is dropped, not masked.
+		if nxosDebugLong.MatchString(msg) {
+			continue
+		}
 		// An attribute line is judged by key before the mask, which would
 		// otherwise swallow `key=` with its value.
 		var ok bool
 		if av := p.av.FindStringSubmatch(msg); av != nil {
 			msg, ok = ddAV(av)
 		} else {
-			msg, ok = f.admitted(f.Platform, nxosDebugLong.ReplaceAllString(msg, "<LONG>"))
+			msg, ok = f.admitted(f.Platform, msg)
 		}
 		if !ok {
 			continue
@@ -261,12 +278,17 @@ func (f deviceDebugFilter) Keep(text string) string {
 		}
 		out = append(out, prefix+" "+msg)
 	}
-	return strings.Join(out, "\n")
+	return deviceDebugKept(strings.Join(out, "\n"))
 }
 
-// ddAV is an attribute message as kept, or false to drop it: priv-lvl keeps
-// 0-15, service a listed service, cmd and cmd-arg a listed word, and any other
-// value is <masked>. Any other key drops the line.
+// deviceDebugKept is text Keep has filtered. The counters take only this type,
+// so a raw capture cannot reach them without an explicit conversion.
+type deviceDebugKept string
+
+// ddAV is an attribute message as kept: priv-lvl keeps 0-15, service a listed
+// service, cmd and cmd-arg a listed word, and any other value is <masked>. The
+// av pattern admits only those four keys; any other key reaches the shapes,
+// which have none for it, so the line is dropped.
 func ddAV(av []string) (string, bool) {
 	prefix, key, val := av[1], av[2], av[3]
 	var ok bool
@@ -277,8 +299,6 @@ func ddAV(av []string) (string, bool) {
 		ok = slices.Contains(nxosDebugServices, val)
 	case "cmd", "cmd-arg":
 		ok = slices.Contains(nxosDebugWords, val)
-	default:
-		return "", false
 	}
 	if !ok {
 		val = "<masked>"
@@ -297,7 +317,14 @@ func (f deviceDebugFilter) admitted(platform, msg string) (string, bool) {
 		// Replace from the last field back, so earlier offsets stay right.
 		for g := len(sh.kinds) - 1; g >= 0; g-- {
 			a, b := idx[2*g+2], idx[2*g+3]
-			if a < 0 || f.allowed(sh.kinds[g], msg[a:b]) {
+			if a < 0 {
+				continue
+			}
+			if sh.kinds[g] == 'n' {
+				msg = msg[:a] + "<n>" + msg[b:]
+				continue
+			}
+			if f.allowed(sh.kinds[g], msg[a:b]) {
 				continue
 			}
 			msg = msg[:a] + "<masked>" + msg[b:]
@@ -347,7 +374,7 @@ type deviceDebugSummary struct {
 
 // deviceDebugSummarize reads the counters out of kept, which Keep has already
 // filtered, in order: a request belongs to the connection open at that line.
-func deviceDebugSummarize(platform, kept string) deviceDebugSummary {
+func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSummary {
 	var s deviceDebugSummary
 	p := deviceDebugProfiles[platform]
 	if p == nil || kept == "" {
@@ -360,7 +387,7 @@ func deviceDebugSummarize(platform, kept string) deviceDebugSummary {
 			cur = len(s.Conns) - 1
 		}
 	}
-	for _, ln := range strings.Split(kept, "\n") {
+	for _, ln := range strings.Split(string(kept), "\n") {
 		at, msg, _ := strings.Cut(ln, " ")
 		// Cut the process name off a `time proc: message` line.
 		if proc, rest, ok := strings.Cut(msg, ": "); ok && !strings.Contains(proc, " ") && p.line.SubexpIndex("p") > 0 {
@@ -431,17 +458,22 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 		Enable: []string{"clear log p49-tacplus.log", "configure",
 			"set system tacplus-options traceoptions file p49-tacplus.log",
 			"set system tacplus-options traceoptions flag all", "commit and-quit"},
-		Disable: []string{"configure", "delete system tacplus-options traceoptions", "commit and-quit"},
+		Disable: []string{"configure", "delete system tacplus-options traceoptions", "commit and-quit",
+			"clear log p49-tacplus.log"},
 		Collect: []string{"show log p49-tacplus.log"},
 	},
 }
 
 // captureDeviceDebug turns the platform's debug on, runs during (the cell
-// under measurement), collects the debug text and turns debug off again, even
-// when during or a command fails. run sends one line to the device and returns
-// its output. The collected text is filtered here, in-process: the raw text
-// is never returned, so a caller cannot write it to disk.
-func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error), during func() error) (string, error) {
+// under measurement), collects the debug text and turns debug off again. The
+// debug is collected and debug turned off even when during or a step fails: it
+// is wanted most when a cell goes wrong. run sends one line to the device and
+// returns its output. The collected text is filtered here, in-process: the raw
+// text is never returned, so a caller cannot write it to disk. An error from
+// run can hold the device's output (a prompt timeout prints the whole tail),
+// so each is replaced by ddWrap's text; during's error is the caller's own and
+// is returned first, unchanged.
+func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error), during func() error) (deviceDebugKept, error) {
 	cmds, ok := deviceDebugCmds[f.Platform]
 	if !ok {
 		return "", errUnknownDebugPlatform
@@ -449,32 +481,46 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	for _, c := range cmds.Enable {
 		if _, err := run(c); err != nil {
 			disableDeviceDebug(cmds, run)
-			return "", err
+			return "", ddWrap(c, err)
 		}
 	}
-	err := during()
+	cellErr := during()
 	var kept []string
-	if err == nil {
-		for _, c := range cmds.Collect {
-			var raw string
-			if raw, err = run(c); err != nil {
-				break
-			}
-			kept = append(kept, f.Keep(raw))
+	var collectErr error
+	for _, c := range cmds.Collect {
+		raw, err := run(c)
+		// A partial capture is kept, filtered like the rest.
+		kept = append(kept, string(f.Keep(raw)))
+		if err != nil && collectErr == nil {
+			collectErr = ddWrap(c, err)
 		}
 	}
-	// A failure to disable is reported when nothing else failed first.
-	if derr := disableDeviceDebug(cmds, run); err == nil {
-		err = derr
+	disableErr := disableDeviceDebug(cmds, run)
+	err := cellErr
+	if err == nil {
+		err = collectErr
 	}
-	return strings.Join(kept, "\n"), err
+	if err == nil {
+		err = disableErr
+	}
+	return deviceDebugKept(strings.Join(kept, "\n")), err
+}
+
+// ddWrap replaces err with the command it came from and its kind, and the size
+// of what was withheld (the device's output can be in it, as in l71Wrap).
+func ddWrap(cmd string, err error) error {
+	kind := "error"
+	if errors.Is(err, os.ErrDeadlineExceeded) || strings.Contains(err.Error(), "appeared") {
+		kind = "timeout"
+	}
+	return fmt.Errorf("device debug %q: %s (%d bytes of device output withheld from this message)", cmd, kind, len(err.Error()))
 }
 
 func disableDeviceDebug(cmds deviceDebugCommands, run func(string) (string, error)) error {
 	var first error
 	for _, c := range cmds.Disable {
 		if _, err := run(c); err != nil && first == nil {
-			first = err
+			first = ddWrap(c, err)
 		}
 	}
 	return first

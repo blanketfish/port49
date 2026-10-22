@@ -110,29 +110,33 @@ type nxosDebugShape struct {
 }
 
 var nxosDebugAllow = func() []nxosDebugShape {
-	const ip, group, list, method, n, fn = "\x01", "\x02", "\x03", "\x04", `-?\d+`, `(<LONG>: )?`
+	// n is a count or id of at most five digits; port a port, 1-65535. A longer
+	// number is no shape's, so the line is dropped: an OTP-sized number in a
+	// numeric field never survives (task 8 fix round 1, F2).
+	const ip, group, list, method, n, fn = "\x01", "\x02", "\x03", "\x04", `-?\d{1,5}`, `(<LONG>: )?`
+	const port = `(?:6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|[1-9]\d{0,3})`
 	shapes := []string{
 		// Request construction: the type and counts, never the user.
 		`construct_tac_req(\(` + n + `\))?:? ?(aaa session id: ` + n + `, )?aaa type: ` + n +
 			`(, user_len=` + n + `)?(, av_count_net=` + n + `)?(, av_count_host=` + n + `)?`,
 		`construct_tac_req: (entering|exiting) for aaa session id: ` + n,
 		// Socket writes and reads.
-		`nxos_ssl_write: ?sending ` + n + ` bytes to ` + ip + ` port ` + n + ` on socket ` + n,
+		`nxos_ssl_write: ?sending ` + n + ` bytes to ` + ip + ` port ` + port + ` on socket ` + n,
 		fn + `before calling nxos_ssl_write\(\) total length ` + n,
 		fn + `nxos_ssl_read\(\) for server ` + ip + ` on socket ` + n,
 		fn + `nxos_ssl_read\(\) for server ` + ip + ` group ` + group + ` aaa session id: ` + n + ` recv_bytes_left ` + n,
 		fn + `nxos_ssl_read\(\) failed for socket ` + n + `\.?`,
 		// Named counters only, at most four: a run of word=decimal fields
 		// could spell anything.
-		`non_blocking_(read|write)(\(` + n + `\))?:?( (socket|sock|sock_fd|fd|len|length|bytes|rc|ret|errno)[ =:]*-?\d{1,10},?){0,4}`,
-		`before nxos_ssl_open +hostname ` + ip + ` server ` + ip + ` on port ` + n + ` vrf ` + n,
+		`non_blocking_(read|write)(\(` + n + `\))?:?( (socket|sock|sock_fd|fd|len|length|bytes|rc|ret|errno)[ =:]*-?\d{1,5},?){0,4}`,
+		`before nxos_ssl_open +hostname ` + ip + ` server ` + ip + ` on port ` + port + ` vrf ` + n,
 		`after nxos_ssl_open rc ` + n,
 		`nxos_ssl_(open success|open failed|retry_open)`,
 		// Connections, and their reuse.
 		`connect_tac_server(\(` + n + `\))?: connection is Active/connect succeeded +! socket\(` + n + `\)`,
 		`connect_tac_server(\(` + n + `\))?:Entering for aaa session id: ` + n,
 		`connect_tac_server: exiting for aaa session id: ` + n,
-		`connect_tac_server:` + n + ` current server servername ` + ip + ` ` + n + ` port ` + n + ` ssl_enable ` + n,
+		`connect_tac_server:` + n + ` current server servername ` + ip + ` ` + n + ` port ` + port + ` ssl_enable ` + n,
 		`connect_tac_server:` + n + ` tplus_sm->ssl_enable ` + n,
 		`connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id\(` + n + `\) rtvalue\(` + n + `\)`,
 		`clean_up_sock_sm_node: (socket ` + n + ` is_ssl_socket ` + n + `|freeing ssl_ctx for sock_fd ` + n + `|return Successfully)`,
