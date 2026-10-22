@@ -285,9 +285,12 @@ func (s *conn) decline() {
 // arrived on the wire.
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
-	s.backoff(ctx, "malformed_backoff")
+	// A TLS connection is dropped without close_notify, as a reset's is,
+	// and that holds for a shutdown during the backoff too: the handle is
+	// cleared before the hold, not after it.
 	s.tlsc.Store(nil)
-	s.c = s.raw // a TLS connection is dropped without close_notify, as a reset's is
+	s.c = s.raw
+	s.backoff(ctx, "malformed_backoff")
 }
 
 func (s *conn) serve(ctx context.Context) {

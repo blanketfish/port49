@@ -665,3 +665,88 @@ func TestTLSAbortResetsWithoutCloseNotify(t *testing.T) {
 		t.Fatalf("an abort sent %d bytes before closing (%v); want a bare reset", raw.n.Load()-before, err)
 	}
 }
+
+// A connection a protocol error dropped into its backoff gets no
+// close_notify at a later shutdown: the error cleared its TLS handle
+// (task 7 re-review R1).
+func TestTLSProtocolErrorClearsTheTLSHandle(t *testing.T) {
+	var raw *countingConn
+	old := tlsDial
+	tlsDial = func(network, addr string) (net.Conn, error) {
+		c, err := net.Dial(network, addr)
+		if err != nil {
+			return nil, err
+		}
+		raw = &countingConn{Conn: c}
+		return raw, nil
+	}
+	t.Cleanup(func() { tlsDial = old })
+	log := &syncBuffer{}
+	f, cert := newOfferFixture(t, log, admission.Resolved{Device: nxos01TLS}, func(d *Deps, _ *tlsFixture) {
+		d.Limits = slowBackoff()
+	})
+	cl := offered(t, f, cert, 0x100)
+	// A CONTINUE for a session this connection never started: a protocol
+	// error, held for slowBackoff's 5 s before the close.
+	cl.sid, cl.seq = 0x999, 3
+	if err := cl.send(wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("x")}.Encode(), wire.FlagUnencrypted); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"malformed_after_validation"`) }) {
+		t.Fatalf("no protocol error: %s", log.String())
+	}
+	before := raw.n.Load()
+	f.ts.shutdown()
+	cl.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	cl.recv()
+	if got := raw.n.Load() - before; got != 0 {
+		t.Fatalf("a connection a protocol error dropped got %d bytes (close_notify) at shutdown", got)
+	}
+}
+
+// reset clears the TLS handle too, so a shutdown racing it never puts a
+// close_notify before the reset (task 7 re-review R1).
+func TestResetClearsTheTLSHandle(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	s := &conn{c: a, raw: a}
+	s.tlsc.Store(tls.Client(a, &tls.Config{}))
+	s.reset()
+	if s.tlsc.Load() != nil || s.c != a {
+		t.Fatal("reset left the TLS handle for a shutdown to close with close_notify")
+	}
+}
+
+// protocolError clears the TLS handle before its backoff hold, so a
+// shutdown during the hold finds none to send close_notify on. Checked
+// during the hold itself, which the end-to-end test above can only race.
+func TestProtocolErrorClearsTheTLSHandleBeforeItsHold(t *testing.T) {
+	var deps *Deps
+	log := &syncBuffer{}
+	newTestServerWith(t, log, seededStore(t), nil, func(d *Deps) {
+		d.Limits = slowBackoff()
+		deps = d
+	})
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	s := &conn{d: *deps, c: a, raw: a, src: loopback}
+	s.tlsc.Store(tls.Client(a, &tls.Config{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); s.protocolError(ctx, wire.Header{Type: wire.TypeAuthen, SeqNo: 3}) }()
+	defer func() { cancel(); <-done }()
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"malformed_after_validation"`) }) {
+		t.Fatal("no protocol error record")
+	}
+	time.Sleep(50 * time.Millisecond) // well inside slowBackoff's 5 s hold
+	select {
+	case <-done:
+		t.Fatal("the backoff did not hold")
+	default:
+	}
+	if s.tlsc.Load() != nil {
+		t.Fatal("the TLS handle is still set during the backoff hold: a shutdown now would send close_notify")
+	}
+}
