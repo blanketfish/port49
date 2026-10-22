@@ -82,6 +82,16 @@ func TestL80Remeasure(t *testing.T) {
 		t.Skip("PORT49_L80_ARM=baseline or fixed")
 	}
 	only := strings.FieldsFunc(os.Getenv("PORT49_L80_CELLS"), func(r rune) bool { return r == ',' })
+	// The build check runs before any platform is up, so initGlobal has not set
+	// root yet (as L72 does, l72_test.go:400).
+	if root == "" {
+		r, err := repoRoot()
+		if err != nil {
+			t.Fatalf("INVALID: repo root: %v", err)
+		}
+		root = r
+		t.Cleanup(func() { root = "" })
+	}
 	// Which build the arm runs is checked, never taken on trust (review I2).
 	vcs, err := binaryVCS(filepath.Join(root, "bin", "port49d"))
 	if err != nil {
