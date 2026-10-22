@@ -232,6 +232,9 @@ type l73Daemon struct {
 	Attrs         string // session_attributes, a YAML flow list; "" keeps the lab file's
 	// HandshakeTimeout is tls_listener.handshake_timeout; 0 keeps the default (10s).
 	HandshakeTimeout time.Duration
+	// DefaultIdle drops the lab file's limits.idle_timeout (5m), so port49d
+	// runs its own default (30s): L80's re-measure crosses that boundary.
+	DefaultIdle bool
 }
 
 func l73DaemonYAML(base string, o l73Daemon) (string, error) {
@@ -251,6 +254,11 @@ func l73DaemonYAML(base string, o l73Daemon) (string, error) {
 	}
 	if out, err = l73AddAfter(out, "limits:", "  malformed_backoff_base: 2s"); err != nil {
 		return "", err
+	}
+	if o.DefaultIdle {
+		if out, err = l73SetLine(out, "  idle_timeout: ", "  # idle_timeout: port49d's default"); err != nil {
+			return "", err
+		}
 	}
 	if o.FaultFile != "" {
 		if out, err = l73AddAfter(out, "lab:", "  fault_file: "+o.FaultFile); err != nil {

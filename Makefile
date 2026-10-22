@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -192,6 +192,13 @@ lab-l50:
 lab-qualify:
 	@test -n "$(P)" || { echo "usage: make lab-qualify P=<selector, e.g. nxos106>"; exit 2; }
 	PORT49_LAB_QUALIFY=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE:-$(if $(filter nxos106,$(P)),L80)} PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
+
+# L80's re-measure (decision 50 ruling 20): nxos106 over per-request TLS at the default
+# idle_timeout. ARM=baseline runs bin/port49d as built from the commit before the fix,
+# ARM=fixed as built from the branch head; build it first. CELLS=s1,idle31 runs a subset.
+lab-l80:
+	@case "$(ARM)" in baseline|fixed) ;; *) echo "usage: make lab-l80 ARM=baseline|fixed [CELLS=...]"; exit 2;; esac
+	PORT49_L80_ARM=$(ARM) PORT49_L80_CELLS=$(CELLS) PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL80Remeasure$$' -count=1 -v -timeout 240m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+

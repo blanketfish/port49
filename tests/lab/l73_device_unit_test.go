@@ -133,6 +133,23 @@ func TestL73DaemonYAMLFromTheLabConfig(t *testing.T) {
 	if sa, ok := cfg.Lab["session_attributes"].([]any); !ok || len(sa) != 0 {
 		t.Fatalf("session_attributes %v", cfg.Lab["session_attributes"])
 	}
+	if cfg.Limits["idle_timeout"] != "5m" {
+		t.Fatalf("with no DefaultIdle the lab file's idle_timeout stays: %v", cfg.Limits["idle_timeout"])
+	}
+	// DefaultIdle drops the lab's 5m, so port49d runs its own default (30s),
+	// as L80's re-measure does.
+	def, err := l73DaemonYAML(string(base), l73Daemon{Inventory: "/i", TLSListen: "172.100.100.1:300", Cert: "c", Key: "k",
+		ClientCA: "a", StateDir: "s", Status: "{disabled: true}", DefaultIdle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Limits = nil
+	if err := yaml.Unmarshal([]byte(def), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Limits["idle_timeout"]; ok || cfg.Limits["malformed_backoff_base"] != "2s" {
+		t.Fatalf("DefaultIdle: limits %v", cfg.Limits)
+	}
 	out, err = l73DaemonYAML(string(base), l73Daemon{Inventory: "/i", TLSListen: "172.100.100.1:300", Cert: "c", Key: "k",
 		ClientCA: "a", StateDir: "s", Status: "{disabled: true}"})
 	if err != nil || !strings.Contains(out, `listen: "172.100.100.1:49"`) || strings.Contains(out, "intermediates_file") ||
