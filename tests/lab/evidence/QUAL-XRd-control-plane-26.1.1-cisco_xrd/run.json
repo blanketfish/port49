@@ -3,24 +3,24 @@
   "lab_platform": "cisco_xrd",
   "firmware": "XRd control plane 26.1.1",
   "image": "XRd control plane 26.1.1",
-  "commit": "e1ce27da0c4e",
-  "date": "2026-10-21",
+  "commit": "50acc3980d90",
+  "date": "2026-10-22",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-21T09:53:26.136372166Z",
-    "command_denied": "2026-10-21T09:53:24.300058592Z",
-    "command_permitted": "2026-10-21T09:53:24.300058592Z",
-    "single_connection": "2026-10-21T09:53:44.377904366Z",
-    "store_unavailable": "2026-10-21T09:53:31.247608666Z",
-    "tls_single_connection": "2026-10-21T09:55:32.552179217Z",
-    "tls_store_unavailable": "2026-10-21T09:54:48.359028577Z",
-    "tls_token_login": "2026-10-21T09:54:32.772914565Z",
-    "tls_unknown_ca": "2026-10-21T09:55:03.868799833Z",
-    "token_login": "2026-10-21T09:53:23.054466049Z",
-    "wrong_credential": "2026-10-21T09:53:27.785460773Z"
+    "accounting": "2026-10-22T17:50:24.942547113Z",
+    "command_denied": "2026-10-22T17:50:23.115669365Z",
+    "command_permitted": "2026-10-22T17:50:23.115669365Z",
+    "single_connection": "2026-10-22T17:50:43.187866425Z",
+    "store_unavailable": "2026-10-22T17:50:30.064117338Z",
+    "tls_single_connection": "2026-10-22T17:52:37.889477256Z",
+    "tls_store_unavailable": "2026-10-22T17:51:53.999373904Z",
+    "tls_token_login": "2026-10-22T17:51:38.417914588Z",
+    "tls_unknown_ca": "2026-10-22T17:52:09.462868715Z",
+    "token_login": "2026-10-22T17:50:21.900697073Z",
+    "wrong_credential": "2026-10-22T17:50:26.622292815Z"
   },
   "registers": {
     "accounting": [
@@ -86,5 +86,11 @@
     "tls_token_login": "sent"
   },
   "denied_command_ran": {},
-  "denied_command_asked": {}
+  "denied_command_asked": {},
+  "tls_server_single_connect_offered": false,
+  "port49d": {
+    "vcs_revision": "50acc3980d90",
+    "vcs_modified": false
+  },
+  "tls_capture_started_clean": true
 }
