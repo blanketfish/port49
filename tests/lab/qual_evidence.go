@@ -713,7 +713,15 @@ func qualL80Applies(platform, firmware string) bool {
 // verdict lines: the per-request login's and the denied-command cell's, so
 // the row can be closed on a note the harness wrote. ok is false when the
 // cell did not run or was not measured (no observed line for it).
-func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
+// qualL80Fix is what the L80 note says of decision 50 ruling 20: whether
+// the build under test offers this platform single-connect over TLS, and the
+// committed before-the-fix baseline directory ("" when none is committed).
+type qualL80Fix struct {
+	Offered  bool
+	Baseline string
+}
+
+func qualL80Note(notes []string, evidence string, fix qualL80Fix) (claim, obs string, ok bool) {
 	var lines []string
 	for _, n := range notes {
 		if strings.HasPrefix(n, "- `tls_token_login` ") || strings.HasPrefix(n, "- `tls_denied_command` ") {
@@ -729,6 +737,14 @@ func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 		"cell under tests/qual/qual-policy.yaml: one login typing only the denied command, graded from its first output line and port49's records."
 	obs = strings.Join(lines, "\n") + fmt.Sprintf("\n\nEvidence: `tests/lab/evidence/%s/` (the cells' whitelisted records in decisions.jsonl; "+
 		"the denied-command login's connections in tls_denied_command.tls.json).", evidence)
+	if fix.Offered && fix.Baseline != "" {
+		obs += fmt.Sprintf("\n\nUnder spec §13 decision 50 ruling 20 this build offers the device single-connect over "+
+			"per-request TLS (platform.TLSServerSingleConnect), so a request NX-OS writes behind an accounting record "+
+			"is read and decided on the same connection. The before-the-fix evidence, the same sequences on the build "+
+			"before the fix, is committed under `%s` (make lab-l80 ARM=baseline); the fixed arm's idle-boundary and "+
+			"concurrent-sessions cells beside it, under `%s` (make lab-l80 ARM=fixed).",
+			fix.Baseline, strings.TrimSuffix(fix.Baseline, "baseline/")+"fixed/")
+	}
 	return claim, obs, true
 }
 
@@ -736,8 +752,13 @@ func qualL80Note(notes []string, evidence string) (claim, obs string, ok bool) {
 // denied-command cell. Otherwise it writes nothing and returns the INVALID
 // error: a re-measure that observed nothing must never replace the closed
 // row's note, which a later commit would then carry (final review I2).
-func qualWriteL80(notes []string, evidence string, secrets []string, write func(claim, obs string)) error {
-	claim, obs, ok := qualL80Note(notes, evidence)
+func qualWriteL80(notes []string, evidence string, secrets []string, fix qualL80Fix, write func(claim, obs string)) error {
+	if fix.Offered && fix.Baseline == "" {
+		return errors.New("INVALID: this build offers single-connect (decision 50 ruling 20) and no before-the-fix baseline " +
+			"is committed under tests/lab/evidence/L80-<platform>/baseline/: run make lab-l80 ARM=baseline and commit it first; " +
+			"tests/lab/results/L80-cisco_nxos.md is left as committed")
+	}
+	claim, obs, ok := qualL80Note(notes, evidence, fix)
 	if !ok {
 		return errors.New("INVALID: L80 was re-measured and the denied-command cell was not observed " +
 			"(see the QUAL note's tls_denied_command line); tests/lab/results/L80-cisco_nxos.md is left as committed")

@@ -774,7 +774,7 @@ func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 		"- `tls_token_login` (re-measures L73): **pass**. per-request (the device default): not sent",
 		"- `tls_denied_command` (re-measures L80): **observed**. per-request (the device default): **denied command ran; port49 never asked (the device's local method, presumed)**",
 		"- `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: sent"}
-	claim, obs, ok := qualL80Note(notes, "QUAL-Nexus-9300v-10.6-2-F-cisco_nxos")
+	claim, obs, ok := qualL80Note(notes, "QUAL-Nexus-9300v-10.6-2-F-cisco_nxos", qualL80Fix{})
 	if !ok {
 		t.Fatal("the cell ran: a note is written")
 	}
@@ -793,7 +793,7 @@ func TestQualL80NoteCarriesTheTwoPerRequestVerdicts(t *testing.T) {
 			t.Errorf("observation carries another cell's line %q", never)
 		}
 	}
-	if _, _, ok := qualL80Note(notes[:2], "x"); ok {
+	if _, _, ok := qualL80Note(notes[:2], "x", qualL80Fix{}); ok {
 		t.Error("no tls_denied_command line: no L80 note")
 	}
 }
@@ -852,11 +852,11 @@ func TestQualL80NoteIsWrittenOnlyForAMeasuredCell(t *testing.T) {
 		"- `tls_token_login` (re-measures L73): **pass**. per-request: a token login over RFC 9887",
 		"- `tls_denied_command` (re-measures L80): **not_run**. per-request TLS sent port49 command authorization, so port49 decided the denied command there",
 	}
-	if _, _, ok := qualL80Note(notes, "x"); ok {
+	if _, _, ok := qualL80Note(notes, "x", qualL80Fix{}); ok {
 		t.Fatal("a not_run cell wrote an L80 note")
 	}
 	notes[1] = "- `tls_denied_command` (re-measures L80): **observed**. denied command refused"
-	if _, _, ok := qualL80Note(notes, "x"); !ok {
+	if _, _, ok := qualL80Note(notes, "x", qualL80Fix{}); !ok {
 		t.Fatal("an observed cell wrote no L80 note")
 	}
 }
@@ -881,20 +881,20 @@ func TestQualL80NotMeasuredWritesNoNote(t *testing.T) {
 	notes := []string{"- `tls_token_login` x", "- `tls_denied_command` **not_run**: per-request TLS sent port49 command authorization"}
 	wrote := 0
 	write := func(claim, obs string) { wrote++ }
-	err := qualWriteL80(notes, "QUAL-x", nil, write)
+	err := qualWriteL80(notes, "QUAL-x", nil, qualL80Fix{}, write)
 	want := "INVALID: L80 was re-measured and the denied-command cell was not observed (see the QUAL note's tls_denied_command line); tests/lab/results/L80-cisco_nxos.md is left as committed"
 	if wrote != 0 || err == nil || err.Error() != want {
 		t.Fatalf("wrote %d notes, %v", wrote, err)
 	}
-	if err := qualWriteL80(nil, "QUAL-x", nil, write); wrote != 0 || err == nil {
+	if err := qualWriteL80(nil, "QUAL-x", nil, qualL80Fix{}, write); wrote != 0 || err == nil {
 		t.Fatalf("no verdict: wrote %d notes, %v", wrote, err)
 	}
 	notes[1] = "- `tls_denied_command` (re-measures L80): **observed**. denied command ran"
-	if err := qualWriteL80(notes, "QUAL-x", nil, write); err != nil || wrote != 1 {
+	if err := qualWriteL80(notes, "QUAL-x", nil, qualL80Fix{}, write); err != nil || wrote != 1 {
 		t.Fatalf("an observed cell: wrote %d notes, %v", wrote, err)
 	}
 	// A note holding a run secret is not written either.
-	if err := qualWriteL80(notes, "QUAL-x", []string{"denied command ran"}, write); err == nil || wrote != 1 {
+	if err := qualWriteL80(notes, "QUAL-x", []string{"denied command ran"}, qualL80Fix{}, write); err == nil || wrote != 1 {
 		t.Fatalf("a gated note: wrote %d notes, %v", wrote, err)
 	}
 }
@@ -923,5 +923,36 @@ func TestQualStoreVerdictNeedsTheStoreUnavailableDeny(t *testing.T) {
 		if got, why := qualStoreVerdict(c.err, c.recs, "qual01"); got != c.result || (got == "fail" && why == "") {
 			t.Errorf("case %d: got %s %q, want %s", i, got, why, c.result)
 		}
+	}
+}
+
+// Review I3: the harness, not a hand edit, writes what test 8 reads. A
+// platform port49 offers single-connect to gets an L80 note naming ruling
+// 20 and the committed before-the-fix baseline; with no committed baseline
+// the note is not written (INVALID), so a re-vet can never drop it.
+func TestQualL80NoteNamesRulingTwentyAndTheBaseline(t *testing.T) {
+	notes := []string{"- `tls_token_login` (re-measures L73): **pass**. per-request",
+		"- `tls_denied_command` (re-measures L80): **observed**. per-request: denied by port49"}
+	base := "tests/lab/evidence/L80-cisco_nxos/baseline/"
+	_, obs, ok := qualL80Note(notes, "QUAL-x", qualL80Fix{Offered: true, Baseline: base})
+	if !ok {
+		t.Fatal("an observed cell writes a note")
+	}
+	for _, want := range []string{"decision 50 ruling 20", base} {
+		if !strings.Contains(obs, want) {
+			t.Errorf("the note lacks %q:\n%s", want, obs)
+		}
+	}
+	if _, obs, _ := qualL80Note(notes, "QUAL-x", qualL80Fix{}); strings.Contains(obs, "ruling 20") || strings.Contains(obs, "baseline") {
+		t.Errorf("a platform port49 does not offer to names the ruling:\n%s", obs)
+	}
+	wrote := 0
+	write := func(string, string) { wrote++ }
+	if err := qualWriteL80(notes, "QUAL-x", nil, qualL80Fix{Offered: true}, write); err == nil || wrote != 0 ||
+		!strings.HasPrefix(err.Error(), "INVALID: ") {
+		t.Fatalf("offered with no committed baseline: wrote %d, %v", wrote, err)
+	}
+	if err := qualWriteL80(notes, "QUAL-x", nil, qualL80Fix{Offered: true, Baseline: base}, write); err != nil || wrote != 1 {
+		t.Fatalf("offered with the baseline: wrote %d, %v", wrote, err)
 	}
 }

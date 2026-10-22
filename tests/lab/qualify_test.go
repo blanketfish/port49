@@ -886,7 +886,13 @@ func (q *qualEnv) write() {
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
 	if qualL80Applies(q.run.Platform, q.run.Firmware) {
-		err := qualWriteL80(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name, secrets, func(claim, obs string) {
+		fix := qualL80Fix{Offered: q.run.TLSServerSingleConnectOffered}
+		// Only a committed baseline is cited: git, not the working tree, says so.
+		base := "tests/lab/evidence/L80-" + q.l.p.name + "/baseline/"
+		if out, err := exec.Command("git", "-C", root, "ls-files", "--", base).Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			fix.Baseline = base
+		}
+		err := qualWriteL80(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name, secrets, fix, func(claim, obs string) {
 			q.l.result(q.t, "L80", claim, obs)
 		})
 		if err != nil {
