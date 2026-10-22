@@ -174,7 +174,7 @@ func TestL80Remeasure(t *testing.T) {
 		}
 		filter.Addrs = append(filter.Addrs, addr)
 	}
-	filter.Groups = []string{"port49"}
+	filter.Groups = []string{l73Group}
 
 	var stops []string
 	for _, cell := range l80Cells(arm) {

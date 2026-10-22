@@ -209,3 +209,17 @@ func TestNXOSDebugKeepsOnlyTheLabsValues(t *testing.T) {
 		}
 	}
 }
+
+// Task 7 re-review R2: the fallback method is the filter's last free word;
+// only NX-OS's own methods are kept.
+func TestNXOSDebugFallBackMethodIsAllowListed(t *testing.T) {
+	for in, want := range map[string]string{
+		"05:00:17.000001 aaad: Fall back method none succeeded":             "05:00:17.000001 aaad: Fall back method none succeeded",
+		"05:00:17.000002 aaad: Fall back method local failed":               "05:00:17.000002 aaad: Fall back method local failed",
+		"05:00:17.000003 aaad: Fall back method hunterxyzabcdefg succeeded": "05:00:17.000003 aaad: Fall back method <masked> succeeded",
+	} {
+		if got := nxosTestFilter.Keep(in); got != want {
+			t.Errorf("kept %q, want %q", got, want)
+		}
+	}
+}

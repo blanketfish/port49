@@ -25,7 +25,8 @@ import (
 //  4. Every value field is allow-listed (task 7 re-review N6): an address
 //     is kept only if it is one of the lab's (port49's listen address and
 //     the device's, nxosDebugFilter.Addrs), a server group only if it is
-//     the lab's (Groups), a method list only from nxosDebugLists. Any other
+//     the lab's (Groups), a method list only from nxosDebugLists, a fallback
+//     method only from nxosDebugMethods. Any other
 //     value is written <masked>, IPv6 included: a valid address can still
 //     spell 16 bytes.
 //  5. An avstr= line keeps its key only for service, cmd, cmd-arg and
@@ -64,6 +65,8 @@ var nxosDebugWords = []string{"show", "users", "version", "clock", "terminal", "
 var (
 	nxosDebugServices = []string{"shell"}
 	nxosDebugLists    = []string{"all_cmds:default", "commands:default", "exec:default", "login:default"}
+	// nxosDebugMethods are the fallback methods kept: NX-OS's own.
+	nxosDebugMethods = []string{"none", "local"}
 )
 
 // nxosDebugFilter is the capture filter for one lab: the addresses and server
@@ -103,11 +106,11 @@ var (
 // may have cut to <LONG>.
 type nxosDebugShape struct {
 	re    *regexp.Regexp
-	kinds []byte // per capturing group: 'i' address, 'g' group, 'l' method list
+	kinds []byte // per capturing group: 'i' address, 'g' group, 'l' method list, 'm' fallback method
 }
 
 var nxosDebugAllow = func() []nxosDebugShape {
-	const ip, group, list, n, fn = "\x01", "\x02", "\x03", `-?\d+`, `(<LONG>: )?`
+	const ip, group, list, method, n, fn = "\x01", "\x02", "\x03", "\x04", `-?\d+`, `(<LONG>: )?`
 	shapes := []string{
 		// Request construction: the type and counts, never the user.
 		`construct_tac_req(\(` + n + `\))?:? ?(aaa session id: ` + n + `, )?aaa type: ` + n +
@@ -138,7 +141,7 @@ var nxosDebugAllow = func() []nxosDebugShape {
 		`aaa_mark_server_dead ` + n,
 		`aaa_mark_server_dead : +Idle time is ` + n + `\. Server will not be monitored`,
 		// What fell back, and to what.
-		`Fall back method [a-z]+ (succeeded|failed)`,
+		`Fall back method ` + method + ` (succeeded|failed)`,
 		`Sending request to (TACACS|LOCAL) service`,
 		`protocol TACACS failed with server group ` + group,
 		`LOCAL method not supported for (Authorization|Authentication|Accounting) req ` + list,
@@ -158,10 +161,12 @@ var nxosDebugAllow = func() []nxosDebugShape {
 				kinds = append(kinds, 'g')
 			case '\x03':
 				kinds = append(kinds, 'l')
+			case '\x04':
+				kinds = append(kinds, 'm')
 			}
 		}
 		re := strings.NewReplacer(ip, `([0-9A-Za-z.:]{2,39})`, group, `([A-Za-z0-9_-]{0,32})`,
-			list, `([a-z_-]+:[A-Za-z0-9_-]+)`).Replace(nxosNonCapturing(s))
+			list, `([a-z_-]+:[A-Za-z0-9_-]+)`, method, `([a-z]+)`).Replace(nxosNonCapturing(s))
 		out[i] = nxosDebugShape{re: regexp.MustCompile(`^` + re + `$`), kinds: kinds}
 	}
 	return out
@@ -262,6 +267,8 @@ func (f nxosDebugFilter) allowed(kind byte, v string) bool {
 		return v == "" || slices.Contains(f.Groups, v)
 	case 'l':
 		return slices.Contains(nxosDebugLists, v)
+	case 'm':
+		return slices.Contains(nxosDebugMethods, v)
 	}
 	return false
 }
