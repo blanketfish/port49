@@ -1,0 +1,135 @@
+L80 re-measure, arm fixed, cell concurrent, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.53 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show clock"         gap=0.0s took=0.25s err=false first="17:02:27.097 UTC Thu Oct 22 2026"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show clock"         gap=0.0s took=0.25s err=false first="17:02:27.600 UTC Thu Oct 22 2026"
+session 1: login_latency_s=6.82 prompt_err=false
+  s1 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+session 2: login_latency_s=6.82 prompt_err=false
+  s0 "show version"       gap=0.0s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s1 "show clock"         gap=0.0s took=0.25s err=false first="17:02:28.690 UTC Thu Oct 22 2026"
+  s2 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "configure terminal" gap=0.0s took=0.25s err=false first="Enter configuration commands, one per line. End with CNTL/Z."
+  s1 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s2 "show clock"         gap=0.0s took=0.25s err=false first="17:02:28.988 UTC Thu Oct 22 2026"
+  s0 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s1 "show clock"         gap=0.0s took=0.25s err=false first="17:02:29.189 UTC Thu Oct 22 2026"
+  s2 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s2 "show clock"         gap=0.0s took=0.25s err=false first="17:02:29.485 UTC Thu Oct 22 2026"
+  s0 "end"                gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show clock"         gap=0.0s took=0.25s err=false first="17:02:29.850 UTC Thu Oct 22 2026"
+  s0 "show users"         gap=0.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s1 "show version"       gap=0.0s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s1 "configure terminal" gap=0.0s took=0.25s err=false first="Enter configuration commands, one per line. End with CNTL/Z."
+  s2 "show version"       gap=0.0s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s1 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s2 "configure terminal" gap=0.0s took=0.25s err=false first="Enter configuration commands, one per line. End with CNTL/Z."
+  s1 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s2 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s1 "end"                gap=0.0s took=0.25s err=false first="nx1#"
+  s2 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s1 "show clock"         gap=0.0s took=0.25s err=false first="17:02:31.445 UTC Thu Oct 22 2026"
+  s2 "end"                gap=0.0s took=0.25s err=false first="nx1#"
+  s1 "show users"         gap=0.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s2 "show clock"         gap=0.0s took=0.25s err=false first="17:02:31.745 UTC Thu Oct 22 2026"
+  s2 "show users"         gap=0.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 1, most open at once: 1
+  conn port=35126 syn=17:02:27.155 hold=40.81s end=server-fin
+connection_events deltas: <LONG> idle_closed=1 refused_cap=0
+port49 records:
+  17:02:32.163 redeem permit
+  17:02:32.178 redeem permit
+  17:02:32.194 redeem permit
+  17:02:32.219 authorize_session permit
+  17:02:32.242 authorize_session permit
+  17:02:32.266 authorize_session permit
+  17:02:32.404 account
+  17:02:32.564 authorize_command permit "terminal length 0"
+  17:02:32.590 account
+  17:02:32.814 authorize_command permit "show clock"
+  17:02:33.066 authorize_command permit "terminal length 0"
+  17:02:33.085 account
+  17:02:33.316 authorize_command permit "show clock"
+  17:02:33.567 authorize_command permit "show version"
+  17:02:33.990 account
+  17:02:34.156 authorize_command permit "terminal length 0"
+  17:02:34.179 account
+  17:02:34.298 account
+  17:02:34.408 authorize_command permit "show clock"
+  17:02:34.456 authorize_command permit "terminal length 0"
+  17:02:34.477 account
+  17:02:34.570 authorize_command permit "configure terminal"
+  17:02:34.658 authorize_command permit "terminal length 0"
+  17:02:34.678 account
+  17:02:34.706 authorize_command permit "show clock"
+  17:02:34.821 authorize_command permit "hostname nx1"
+  17:02:34.886 account
+  17:02:34.906 authorize_command permit "show clock"
+  17:02:34.960 authorize_command permit "terminal length 0"
+  17:02:34.980 account
+  17:02:35.071 authorize_command permit "hostname nx1"
+  17:02:35.093 account
+  17:02:35.159 authorize_command permit "show version"
+  17:02:35.204 authorize_command permit "show clock"
+  17:02:35.318 authorize_command permit "end"
+  17:02:35.457 authorize_command permit "show version"
+  17:02:35.568 authorize_command permit "show clock"
+  17:02:35.820 authorize_command deny "show users"
+  17:02:36.072 account
+  17:02:36.160 authorize_command permit "configure terminal"
+  17:02:36.414 authorize_command permit "hostname nx1"
+  17:02:36.459 authorize_command permit "configure terminal"
+  17:02:36.477 account
+  17:02:36.664 authorize_command permit "hostname nx1"
+  17:02:36.687 account
+  17:02:36.712 authorize_command permit "hostname nx1"
+  17:02:36.778 account
+  17:02:36.915 authorize_command permit "end"
+  17:02:36.961 authorize_command permit "hostname nx1"
+  17:02:36.983 account
+  17:02:37.164 authorize_command permit "show clock"
+  17:02:37.213 authorize_command permit "end"
+  17:02:37.416 authorize_command deny "show users"
+  17:02:37.464 authorize_command permit "show clock"
+  17:02:37.669 account
+  17:02:37.716 authorize_command deny "show users"
+  17:02:37.969 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show clock" gap=0.0s asked=true denied=false
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show clock" gap=0.0s asked=true denied=false
+typed s1 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show version" gap=0.0s asked=true denied=false
+typed s1 "show clock" gap=0.0s asked=true denied=false
+typed s2 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "configure terminal" gap=0.0s asked=true denied=false
+typed s1 "terminal length 0" gap=0.0s asked=true denied=false
+typed s2 "show clock" gap=0.0s asked=true denied=false
+typed s0 "hostname nx1" gap=0.0s asked=true denied=false
+typed s1 "show clock" gap=0.0s asked=true denied=false
+typed s2 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "hostname nx1" gap=0.0s asked=true denied=false
+typed s2 "show clock" gap=0.0s asked=true denied=false
+typed s0 "end" gap=0.0s asked=true denied=false
+typed s0 "show clock" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=0.0s asked=true denied=true
+typed s1 "show version" gap=0.0s asked=true denied=false
+typed s1 "configure terminal" gap=0.0s asked=true denied=false
+typed s2 "show version" gap=0.0s asked=true denied=false
+typed s1 "hostname nx1" gap=0.0s asked=true denied=false
+typed s2 "configure terminal" gap=0.0s asked=true denied=false
+typed s1 "hostname nx1" gap=0.0s asked=true denied=false
+typed s2 "hostname nx1" gap=0.0s asked=true denied=false
+typed s1 "end" gap=0.0s asked=true denied=false
+typed s2 "hostname nx1" gap=0.0s asked=true denied=false
+typed s1 "show clock" gap=0.0s asked=true denied=false
+typed s2 "end" gap=0.0s asked=true denied=false
+typed s1 "show users" gap=0.0s asked=true denied=true
+typed s2 "show clock" gap=0.0s asked=true denied=false
+typed s2 "show users" gap=0.0s asked=true denied=true
+debug counts: connection_active=56 fall_back_none=0 mark_server_dead=0 request_acct=22 request_authen=3 request_author=39 ssl_open_success=1 ssl_read_failed=0 tacacs_group_failed=3
+interleaving: not observable. The TACACS+ header, session_id included, is inside the TLS ciphertext, and port49's records carry no connection identity (no source port or connection id; cert_sha256 is the device's on every connection). Connections per device, above, is the measure.
+

@@ -1,0 +1,53 @@
+L80 re-measure, arm fixed, cell idle30, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.48 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=30.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=30.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=30.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=30.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=30.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 6, most open at once: 1
+  conn port=50834 syn=16:48:52.050 hold=35.38s end=server-fin
+  conn port=35388 syn=16:49:27.721 hold=35.27s end=server-fin
+  conn port=60172 syn=16:50:03.329 hold=35.28s end=server-fin
+  conn port=36768 syn=16:50:38.896 hold=35.28s end=server-fin
+  conn port=51206 syn=16:51:14.502 hold=35.28s end=server-fin
+  conn port=40706 syn=16:51:50.111 hold=35.26s end=server-fin
+connection_events deltas: <LONG> idle_closed=6 refused_cap=0
+port49 records:
+  16:48:57.060 redeem permit
+  16:48:57.086 authorize_session permit
+  16:48:57.242 account
+  16:48:57.405 authorize_command permit "terminal length 0"
+  16:48:57.427 account
+  16:49:32.730 authorize_command deny "show users"
+  16:49:32.976 authorize_command permit "terminal length 0"
+  16:49:32.995 account
+  16:50:08.337 authorize_command deny "show users"
+  16:50:08.586 authorize_command permit "terminal length 0"
+  16:50:08.606 account
+  16:50:43.904 authorize_command deny "show users"
+  16:50:44.152 authorize_command permit "terminal length 0"
+  16:50:44.173 account
+  16:51:19.509 authorize_command deny "show users"
+  16:51:19.762 authorize_command permit "terminal length 0"
+  16:51:19.782 account
+  16:51:55.119 authorize_command deny "show users"
+  16:51:55.366 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=30.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=30.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=30.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=30.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=30.0s asked=true denied=true
+debug counts: connection_active=13 fall_back_none=0 mark_server_dead=0 request_acct=11 request_authen=1 request_author=13 ssl_open_success=6 ssl_read_failed=0 tacacs_group_failed=3
+

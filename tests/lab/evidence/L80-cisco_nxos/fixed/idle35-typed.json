@@ -1,0 +1,1 @@
+[{"session":0,"command":"terminal length 0","took_s":0.250604635,"denied":false,"asked":true},{"session":0,"command":"show users","gap_s":35,"took_s":5.25692199,"denied":true,"asked":true},{"session":0,"command":"terminal length 0","took_s":0.251326381,"denied":false,"asked":true},{"session":0,"command":"show users","gap_s":35,"took_s":5.259539236,"denied":true,"asked":true}]

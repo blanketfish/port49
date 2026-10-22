@@ -1,0 +1,205 @@
+16:38:02.698506 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:02.698510 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=10, av_count_net=0, av_count_host=0
+16:38:02.698675 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:02.698727 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:02.698883 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:02.701577 tacacsd: after nxos_ssl_open rc -1
+16:38:02.701606 tacacsd: nxos_ssl_open failed
+16:38:02.701747 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:02.701777 tacacsd: aaa_mark_server_dead 1
+16:38:02.701876 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:02.702009 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:02.926571 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:02.926583 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=10, av_count_net=4, av_count_host=4
+16:38:02.927250 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:02.927299 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:02.927407 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:02.930471 tacacsd: after nxos_ssl_open rc -1
+16:38:02.930495 tacacsd: nxos_ssl_open failed
+16:38:02.930601 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:02.930624 tacacsd: aaa_mark_server_dead 1
+16:38:02.930675 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:02.930759 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:02.950640 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:02.950651 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=10, av_count_net=0, av_count_host=0
+16:38:02.951029 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:02.951169 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:02.951487 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:02.954424 tacacsd: after nxos_ssl_open rc -1
+16:38:02.954489 tacacsd: nxos_ssl_open failed
+16:38:02.954614 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:02.954644 tacacsd: aaa_mark_server_dead 1
+16:38:02.954730 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:02.954878 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:03.176259 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:03.176267 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=10, av_count_net=4, av_count_host=4
+16:38:03.176740 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:03.176787 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:03.176935 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:03.180029 tacacsd: after nxos_ssl_open rc -1
+16:38:03.180060 tacacsd: nxos_ssl_open failed
+16:38:03.180186 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:03.180219 tacacsd: aaa_mark_server_dead 1
+16:38:03.180269 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:03.180353 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:03.200260 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:03.200282 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=10, av_count_net=0, av_count_host=0
+16:38:03.200495 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:03.200555 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:03.200723 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:03.203446 tacacsd: after nxos_ssl_open rc -1
+16:38:03.203473 tacacsd: nxos_ssl_open failed
+16:38:03.203591 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:03.203611 tacacsd: aaa_mark_server_dead 1
+16:38:03.203645 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:03.203709 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:03.203750 aaad: protocol TACACS failed with server group port49
+16:38:03.426132 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:03.426135 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=10, av_count_net=4, av_count_host=4
+16:38:03.426409 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:03.426448 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:03.426555 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:03.429481 tacacsd: after nxos_ssl_open rc -1
+16:38:03.429504 tacacsd: nxos_ssl_open failed
+16:38:03.429628 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:03.429650 tacacsd: aaa_mark_server_dead 1
+16:38:03.429698 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:03.429779 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:03.429793 aaad: protocol TACACS failed with server group port49
+16:38:03.429817 aaad: LOCAL method not supported for Authorization req all_cmds:default
+16:38:03.433590 aaad: Sending request to TACACS service
+16:38:03.450578 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:03.450587 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=10, av_count_net=0, av_count_host=0
+16:38:03.450880 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:03.450941 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:03.451123 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:03.453877 tacacsd: after nxos_ssl_open rc -1
+16:38:03.453904 tacacsd: nxos_ssl_open failed
+16:38:03.454038 tacacsd: connect_tac_server: tplus_do_ssl_connect failed, switching server for aaa session id(0) rtvalue(0)
+16:38:03.454060 tacacsd: aaa_mark_server_dead 1
+16:38:03.454099 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+16:38:03.454167 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:03.454187 aaad: protocol TACACS failed with server group port49
+16:38:03.454218 aaad: response for accounting request of old library will be sent as SUCCESS
+16:38:45.230311 aaad: Sending request to TACACS service
+16:38:45.246917 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:45.246926 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 1, user_len=6, av_count_net=0, av_count_host=0
+16:38:45.247071 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:45.247123 tacacsd: connect_tac_server:1888 tplus_sm->ssl_enable 1
+16:38:45.247274 tacacsd: before nxos_ssl_open  hostname 172.100.100.1 server 172.100.100.1 on port 300 vrf 2
+16:38:45.251025 tacacsd: after nxos_ssl_open rc -1
+16:38:50.251183 tacacsd: nxos_ssl_retry_open
+16:38:50.253776 tacacsd: nxos_ssl_open success
+16:38:50.253826 tacacsd: <LONG>: before calling nxos_ssl_write() total length 70
+16:38:50.253834 tacacsd: nxos_ssl_write:sending 70 bytes to 172.100.100.1 port 300 on socket 32
+16:38:50.253882 tacacsd: connect_tac_server: exiting for aaa session id: 0
+16:38:50.253959 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:50.257650 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:50.257711 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 6
+16:38:50.258047 aaad: Sending request to TACACS service
+16:38:50.279922 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:50.279924 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=0, av_count_host=0
+16:38:50.280007 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:50.280078 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:50.280145 tacacsd: <LONG>: before calling nxos_ssl_write() total length 87
+16:38:50.280147 tacacsd: nxos_ssl_write:sending 87 bytes to 172.100.100.1 port 300 on socket 32
+16:38:50.280259 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:50.281116 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:50.281259 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group  aaa session id: 0 recv_bytes_left 32
+16:38:50.418063 aaad: Sending request to TACACS service
+16:38:50.434667 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:50.434669 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=6, av_count_net=0, av_count_host=0
+16:38:50.434750 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:50.434861 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:50.435065 tacacsd: <LONG>: before calling nxos_ssl_write() total length 117
+16:38:50.435069 tacacsd: nxos_ssl_write:sending 117 bytes to 172.100.100.1 port 300 on socket 32
+16:38:50.435228 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:50.435990 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:50.436051 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+16:38:50.436181 aaad: response for accounting request of old library will be sent as SUCCESS
+16:38:50.582715 aaad: Sending request to TACACS service
+16:38:50.600265 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:50.600273 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=4, av_count_host=4
+16:38:50.600660 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:50.600773 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:50.600910 tacacsd: <LONG>: before calling nxos_ssl_write() total length 104
+16:38:50.600914 tacacsd: nxos_ssl_write:sending 104 bytes to 172.100.100.1 port 300 on socket 32
+16:38:50.601332 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:50.601896 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:50.601951 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 6
+16:38:50.603882 aaad: Sending request to TACACS service
+16:38:50.619813 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:50.619820 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=6, av_count_net=0, av_count_host=0
+16:38:50.619941 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:50.620032 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:50.620108 tacacsd: <LONG>: before calling nxos_ssl_write() total length 149
+16:38:50.620110 tacacsd: nxos_ssl_write:sending 149 bytes to 172.100.100.1 port 300 on socket 32
+16:38:50.620264 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:50.621207 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:50.621293 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+16:38:50.621438 aaad: response for accounting request of old library will be sent as SUCCESS
+16:38:50.832949 aaad: Sending request to TACACS service
+16:38:50.849956 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:50.849958 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=3, av_count_host=3
+16:38:50.850112 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:50.850179 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:50.850245 tacacsd: <LONG>: before calling nxos_ssl_write() total length 97
+16:38:50.850247 tacacsd: nxos_ssl_write:sending 97 bytes to 172.100.100.1 port 300 on socket 32
+16:38:50.850411 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:50.851168 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:50.851280 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 6
+16:38:51.084852 aaad: Sending request to TACACS service
+16:38:51.102603 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:51.102615 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=3, av_count_host=3
+16:38:51.103372 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:51.103553 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:51.103709 tacacsd: <LONG>: before calling nxos_ssl_write() total length 91
+16:38:51.103712 tacacsd: nxos_ssl_write:sending 91 bytes to 172.100.100.1 port 300 on socket 32
+16:38:51.103858 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:51.104589 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:51.104732 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 6
+16:38:51.148784 aaad: Sending request to TACACS service
+16:38:51.165441 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:51.165454 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=6, av_count_net=0, av_count_host=0
+16:38:51.165850 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:51.166039 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:51.166155 tacacsd: <LONG>: before calling nxos_ssl_write() total length 165
+16:38:51.166157 tacacsd: nxos_ssl_write:sending 165 bytes to 172.100.100.1 port 300 on socket 32
+16:38:51.166357 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:51.167346 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:51.167499 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+16:38:51.167699 aaad: response for accounting request of old library will be sent as SUCCESS
+16:38:51.335919 aaad: Sending request to TACACS service
+16:38:51.353155 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:51.353168 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=2, av_count_host=2
+16:38:51.353802 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:51.353969 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:51.354264 tacacsd: <LONG>: before calling nxos_ssl_write() total length 74
+16:38:51.354276 tacacsd: nxos_ssl_write:sending 74 bytes to 172.100.100.1 port 300 on socket 32
+16:38:51.354486 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:51.355297 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:51.355397 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 6
+16:38:51.586389 aaad: Sending request to TACACS service
+16:38:51.602218 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:51.602225 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=3, av_count_host=3
+16:38:51.602596 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:51.602714 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:51.602779 tacacsd: <LONG>: before calling nxos_ssl_write() total length 89
+16:38:51.602781 tacacsd: nxos_ssl_write:sending 89 bytes to 172.100.100.1 port 300 on socket 32
+16:38:51.603213 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:51.603609 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:51.603664 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 77
+16:38:51.837319 aaad: Sending request to TACACS service
+16:38:51.852968 tacacsd: construct_tac_req: entering for aaa session id: 0
+16:38:51.852970 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 3, user_len=6, av_count_net=0, av_count_host=0
+16:38:51.853044 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+16:38:51.853132 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+16:38:51.853211 tacacsd: <LONG>: before calling nxos_ssl_write() total length 138
+16:38:51.853213 tacacsd: nxos_ssl_write:sending 138 bytes to 172.100.100.1 port 300 on socket 32
+16:38:51.853386 tacacsd: construct_tac_req: exiting for aaa session id: 0
+16:38:51.854169 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+16:38:51.854278 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+16:38:51.854449 aaad: response for accounting request of old library will be sent as SUCCESS
+16:39:20.851814 tacacsd: clean_up_sock_sm_node: socket 32 is_ssl_socket 1
+16:39:20.851818 tacacsd: clean_up_sock_sm_node: freeing ssl_ctx for sock_fd 32
+16:39:20.852296 tacacsd: clean_up_sock_sm_node: return Successfully
