@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -272,6 +273,62 @@ func TestALiftsLeaseGrantIsAcceptedWhileOneMemberIsDark(t *testing.T) {
 	}
 	if failed != 0 {
 		t.Fatalf("%d of %d lifts that granted a lease failed with one of three members dark", failed, lifts)
+	}
+}
+
+// A mint whose token needs a fresh lease, as every mint at a bucket's
+// rollover does, gets its lease while a member is dark: the grant alone is
+// hedged. The token's own Txn is not (a second copy would write a second
+// token), so a Txn sent to the dark connection may still fail: the test
+// counts only the mints that failed before their Txn (beforeTokenTxn), and
+// checks the Txn's ctx is never marked idempotent.
+func TestAMintsLeaseGrantIsAcceptedWhileOneMemberIsDark(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	var reached, marked atomic.Int32
+	beforeTokenTxn = func(ctx context.Context) {
+		reached.Add(1)
+		if ctx.Value(idempotentKey{}) != nil {
+			marked.Add(1)
+		}
+	}
+	t.Cleanup(func() { beforeTokenTxn = nil })
+	mint := func(ctx context.Context, i int) error {
+		_, err := s.PutToken(ctx, k, store.Token{ID: fmt.Sprintf("t%d", i), Secret: []byte("x"), Kind: store.KindLogin,
+			ExpiresAt: time.Now().Add(time.Minute)})
+		return err
+	}
+	for i := 0; i < 30; i++ { // round-robin: every connection has carried a grant and a mint
+		s.tokLeases.Reset()
+		if err := mint(context.Background(), i); err != nil {
+			t.Fatalf("warming mint %d: %v", i, err)
+		}
+	}
+	ps[2].Hang(true)
+	grantFailed := 0
+	const mints = 12 // well inside keepalive's 10s + 2s, which would drop the dark connection
+	for i := 0; i < mints; i++ {
+		// 0, 1 or 2 reads first, so the grant meets each connection in turn.
+		for range i % 3 {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			if _, err := s.tok.Get(ctx, "rotate"); err != nil {
+				t.Fatalf("a hedged read failed: %v", err)
+			}
+			cancel()
+		}
+		s.tokLeases.Reset()
+		before := reached.Load()
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		if err := mint(ctx, 100+i); err != nil && reached.Load() == before {
+			grantFailed++
+		}
+		cancel()
+	}
+	if grantFailed != 0 {
+		t.Fatalf("%d of %d mints failed at their lease grant with one of three members dark", grantFailed, mints)
+	}
+	if n := marked.Load(); n != 0 {
+		t.Fatalf("%d token Txns were sent with an idempotent ctx: a second copy would write a second token", n)
 	}
 }
 
