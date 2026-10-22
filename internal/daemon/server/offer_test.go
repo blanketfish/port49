@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/devicecert"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -259,6 +260,18 @@ func TestTLSOfferedConnectionStillChecksEveryPacket(t *testing.T) {
 		"re-platformed to arista_eos by a reload": {func(t *testing.T, f *tlsFixture, _ *atomic.Bool) {
 			f.admit.swap(t, admission.Resolved{Device: aristaTLS})
 		}, "admission_withdrawn", false},
+		// Ruling 9's recheck: a certificate revoked, or anchors a reload
+		// replaced, after the offer (review M2).
+		"certificate revoked on the held connection": {func(_ *testing.T, f *tlsFixture, _ *atomic.Bool) {
+			f.status.Store(int32(devicecert.StatusRevoked))
+		}, "tls_refused", false},
+		"anchors replaced by a reload on the held connection": {func(t *testing.T, f *tlsFixture, _ *atomic.Bool) {
+			other, err := testpki.NewCA("Other", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.mat.Store(f.material(other, true))
+		}, "tls_refused", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			log := &syncBuffer{}
