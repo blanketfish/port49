@@ -91,10 +91,13 @@ func l80MostOpen(conns []l73Conn) int {
 // l80Stops are the design's stop conditions for the fixed arm; the baseline
 // is expected to lose commands and stops on nothing.
 //   - any command lost or run unasked, and any `show users` not denied;
-//   - in the concurrent cell, more than one connection open at once, or
-//     single_connect_second_connection above 0: either makes the ignore
-//     signal fire on honest use.
-func l80Stops(arm, cell string, typed []l80Typed, mostOpen int, second float64) []string {
+//   - single_connect_second_connection above 0 in any cell: the ignore
+//     signal firing on honest use (review M4 c);
+//   - in the concurrent cell, more than one connection open at once;
+//   - past the idle close (idle31, idle35), any `nxos_ssl_read() failed` or
+//     `mark server ... dead`: the device found the close only on write,
+//     which is the fail-open path (review M4 b). counts is nxosDebugCounts.
+func l80Stops(arm, cell string, typed []l80Typed, mostOpen int, second float64, counts map[string]int) []string {
 	if arm == "baseline" {
 		return nil
 	}
@@ -107,16 +110,28 @@ func l80Stops(arm, cell string, typed []l80Typed, mostOpen int, second float64) 
 			out = append(out, fmt.Sprintf("%s: session %d `show users` (after %.1fs) was not denied", cell, x.Session, x.Gap))
 		}
 	}
-	if cell == "concurrent" {
-		if mostOpen > 1 {
-			out = append(out, fmt.Sprintf("concurrent: %d connections open at once; the ignore signal would fire on honest use", mostOpen))
-		}
-		if second > 0 {
-			out = append(out, fmt.Sprintf("concurrent: single_connect_second_connection +%v", second))
+	if second > 0 {
+		out = append(out, fmt.Sprintf("%s: single_connect_second_connection +%v; the ignore signal fired on honest use", cell, second))
+	}
+	if cell == "concurrent" && mostOpen > 1 {
+		out = append(out, fmt.Sprintf("concurrent: %d connections open at once; the ignore signal would fire on honest use", mostOpen))
+	}
+	if cell == "idle31" || cell == "idle35" {
+		for _, k := range []string{"ssl_read_failed", "mark_server_dead"} {
+			if counts[k] > 0 {
+				out = append(out, fmt.Sprintf("%s: %s %d past the idle close; the device found the close only on write", cell, k, counts[k]))
+			}
 		}
 	}
 	return out
 }
+
+// l80Interleaving is what the concurrent cell's summary says of the design's
+// "whether session_ids from different CLI sessions interleave on one
+// connection" (review M4 a).
+const l80Interleaving = "interleaving: not observable. The TACACS+ header, session_id included, is inside the TLS " +
+	"ciphertext, and port49's records carry no connection identity (no source port or connection id; cert_sha256 is " +
+	"the device's on every connection). Connections per device, above, is the measure."
 
 // l80ConnLine is one connection in a summary: its port, when, how long, and
 // who ended it.

@@ -65,24 +65,46 @@ func TestL80AskMatchesRecordsInOrder(t *testing.T) {
 
 func TestL80StopsAreTheDesigns(t *testing.T) {
 	ok := []l80Typed{{Command: "terminal length 0", Asked: true}, {Command: "show users", Asked: true, Denied: true}}
-	if s := l80Stops("fixed", "idle31", ok, 1, 0); len(s) != 0 {
+	if s := l80Stops("fixed", "idle31", ok, 1, 0, nil); len(s) != 0 {
 		t.Fatalf("a clean sample stops: %v", s)
 	}
 	lost := []l80Typed{{Command: "terminal length 0", Asked: true}, {Command: "show users", Gap: 31}}
-	if s := l80Stops("fixed", "idle31", lost, 1, 0); len(s) != 2 {
+	if s := l80Stops("fixed", "idle31", lost, 1, 0, nil); len(s) != 2 {
 		t.Fatalf("a lost and run `show users` is two stops: %v", s)
 	}
-	if s := l80Stops("baseline", "s1", lost, 1, 0); len(s) != 0 {
+	if s := l80Stops("baseline", "s1", lost, 1, 0, nil); len(s) != 0 {
 		t.Fatalf("the baseline stops on nothing: %v", s)
 	}
-	if s := l80Stops("fixed", "concurrent", ok, 2, 0); len(s) != 1 {
+	if s := l80Stops("fixed", "concurrent", ok, 2, 0, nil); len(s) != 1 {
 		t.Fatalf("two connections at once: %v", s)
 	}
-	if s := l80Stops("fixed", "concurrent", ok, 1, 1); len(s) != 1 {
+	if s := l80Stops("fixed", "concurrent", ok, 1, 1, nil); len(s) != 1 {
 		t.Fatalf("a second-connection count with every command asked: %v", s)
 	}
-	if s := l80Stops("fixed", "idle31", ok, 2, 1); len(s) != 0 {
-		t.Fatalf("the connection stops are the concurrent cell's: %v", s)
+	if s := l80Stops("fixed", "idle31", ok, 2, 0, nil); len(s) != 0 {
+		t.Fatalf("most open at once is the concurrent cell's stop: %v", s)
+	}
+	// Review M4 (c): a second-connection count in a sequential cell is the
+	// same false fire.
+	if s := l80Stops("fixed", "s1", ok, 1, 1, nil); len(s) != 1 {
+		t.Fatalf("a second-connection count in a sequential cell: %v", s)
+	}
+	// Review M4 (b): past the idle close the device reconnects cleanly.
+	dead := map[string]int{"ssl_read_failed": 1, "mark_server_dead": 1}
+	for _, cell := range []string{"idle31", "idle35"} {
+		if s := l80Stops("fixed", cell, ok, 1, 0, dead); len(s) != 2 {
+			t.Fatalf("%s with a failed read and a dead mark: %v", cell, s)
+		}
+	}
+	if s := l80Stops("fixed", "idle29", ok, 1, 0, dead); len(s) != 0 {
+		t.Fatalf("the read and dead stops are the past-the-close cells': %v", s)
+	}
+}
+
+// Review M4 (a): the concurrent summary says interleaving is not observable.
+func TestL80InterleavingIsSaidNotObservable(t *testing.T) {
+	if !strings.Contains(l80Interleaving, "not observable") || !strings.Contains(l80Interleaving, "ciphertext") {
+		t.Fatalf("%q", l80Interleaving)
 	}
 }
 

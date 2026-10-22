@@ -199,7 +199,7 @@ func TestL80Remeasure(t *testing.T) {
 					qc, err := l.sshCLI(qualUser, mint())
 					if err != nil {
 						mu.Lock()
-						fmt.Fprintf(&sum, "session %d: login error: %v\n", i, err)
+						fmt.Fprintf(&sum, "session %d: login error: %v\n", i, err != nil)
 						mu.Unlock()
 						return
 					}
@@ -207,7 +207,7 @@ func TestL80Remeasure(t *testing.T) {
 					qc.prompt = l.p.node + "#"
 					_, perr := qc.expect(120*time.Second, qc.prompt)
 					mu.Lock()
-					fmt.Fprintf(&sum, "session %d: login_latency_s=%.2f prompt_err=%v\n", i, time.Since(began).Seconds(), perr)
+					fmt.Fprintf(&sum, "session %d: login_latency_s=%.2f prompt_err=%v\n", i, time.Since(began).Seconds(), perr != nil)
 					mu.Unlock()
 					gap := 0.0
 					for _, cmd := range seq {
@@ -230,7 +230,7 @@ func TestL80Remeasure(t *testing.T) {
 							Denied: strings.Contains(first, "AAA authorization failed")}
 						mu.Lock()
 						typed = append(typed, x)
-						fmt.Fprintf(&sum, "  s%d %-20q gap=%.1fs took=%.2fs err=%v first=%q\n", i, cmd, gap, x.Took, err, first)
+						fmt.Fprintf(&sum, "  s%d %-20q gap=%.1fs took=%.2fs err=%v first=%q\n", i, cmd, gap, x.Took, err != nil, first)
 						mu.Unlock()
 						gap = 0
 					}
@@ -285,7 +285,10 @@ func TestL80Remeasure(t *testing.T) {
 					sum.WriteString("    " + ln + "\n")
 				}
 			}
-			cellStops := l80Stops(arm, cell.Name, typed, most, second)
+			if cell.Name == "concurrent" {
+				sum.WriteString(l80Interleaving + "\n")
+			}
+			cellStops := l80Stops(arm, cell.Name, typed, most, second, cnt)
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
 			}
