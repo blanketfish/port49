@@ -706,7 +706,11 @@ func projectionNote(kind string) bool {
 // fails nothing (decision 27). A projection finding or warning names its
 // devices where it is not on every device the subject has a reply on there.
 func (p *Policy) Projections(now time.Time) []Finding {
-	groups, lands := p.projectionGroups(now)
+	return projectionFindings(p.projectionGroups(now))
+}
+
+// projectionFindings is each group worded as `policy test` words it.
+func projectionFindings(groups []*projectionGroup, lands map[string]map[string]bool) []Finding {
 	var out []Finding
 	for _, g := range groups {
 		out = append(out, Finding{Kind: g.kind, Message: g.text(lands)})
@@ -722,86 +726,50 @@ type projectionGroup struct {
 	later                                bool
 }
 
+// projectionGroups is projectionGroupsBy the device signature: a fleet's
+// devices fall into few signatures, and each is resolved once per subject
+// and moment, not once per device (Task 4's cost limit).
 func (p *Policy) projectionGroups(now time.Time) ([]*projectionGroup, map[string]map[string]bool) {
+	scopes := sortedKeys(p.scopes)
+	return p.projectionGroupsBy(now, func(d admission.Device) string { return p.signature(d, scopes) })
+}
+
+// projectionGroupsBy is every projection finding of every subject on every
+// projected device, at now and at every later grant expiry. Devices with one
+// key are resolved once, by the first of them, and reported alike: key must
+// tell apart any two devices that resolve differently (signature).
+func (p *Policy) projectionGroupsBy(now time.Time, key func(admission.Device) string) ([]*projectionGroup,
+	map[string]map[string]bool) {
 	patterns, secrets := p.Redactions(), p.HiddenValues()
 	type group = projectionGroup
 	var groups []*group
 	index := map[string]*group{}
+	has := map[*group]map[string]bool{}
 	for _, name := range sortedKeys(p.subs) {
 		instants, lapsing := p.subjectInstants(p.subs[name], now)
+		memo := map[string][]deviceFinding{}
 		for _, d := range p.env.Devices {
 			if !p.dialect(d.Platform).Projected() {
 				continue
 			}
-			// What the device is told at each instant: a quarantine or a
-			// refused mint is none, reported as one.
-			replies := make([]*projection.Result, len(instants))
-			for i, at := range instants {
-				if res, err := p.resolve(p.subs[name], d, at); err == nil && res.Projection != nil {
-					replies[i] = res.Projection
-				}
+			sig := key(d)
+			finds, ok := memo[sig]
+			if !ok {
+				finds = p.deviceFindings(name, d, instants, lapsing, patterns, secrets)
+				memo[sig] = finds
 			}
-			// What each reply reports: its composition, and a warning for
-			// each allow it leaves unsent. Each holds from the instant it
-			// first appears until the first it does not.
-			type item struct{ kind, msg string }
-			reports := make([][]item, len(replies))
-			for i, pr := range replies {
-				if pr == nil {
-					continue
+			for _, f := range finds {
+				g := index[f.key]
+				if g == nil {
+					g = &group{kind: f.kind, msg: f.msg, subject: name, platform: d.Platform, moment: f.moment,
+						later: f.later}
+					index[f.key] = g
+					groups = append(groups, g)
+					has[g] = map[string]bool{}
 				}
-				if pr.FailClosed == "" {
-					reports[i] = append(reports[i], item{FindingProjection, projectionMessage(*pr, patterns, secrets)})
-				} else {
-					kind, msg := refusedMessage(*pr, patterns, secrets)
-					reports[i] = append(reports[i], item{kind, msg})
-				}
-				for _, u := range pr.Unsent {
-					reports[i] = append(reports[i], item{FindingProjectionArgumentAllow, unsentMessage(u, patterns, secrets)})
-				}
-				// Only where the pinned set lets NETCONF stay on (R8): under
-				// 1.1.0 check-config has it off on the whole device.
-				if pr.NetconfClosed() && len(p.dialect(d.Platform).RPCEntryDenies) > 0 {
-					reports[i] = append(reports[i], item{FindingProjectionNetconfClosed, netconfClosedMessage(*pr)})
-				}
-				if len(pr.ConfigurationBeneath) > 0 {
-					reports[i] = append(reports[i], item{FindingProjectionDenyBeneathViewConfiguration,
-						configurationBeneathMessage(*pr, patterns, secrets)})
-				}
-				if len(pr.ReachOverflow) > 0 {
-					reports[i] = append(reports[i], item{FindingProjectionReachDenyOverflow,
-						reachOverflowMessage(*pr, patterns, secrets)})
-				}
-			}
-			for i := range replies {
-				for _, it := range reports[i] {
-					if i > 0 && slices.Contains(reports[i-1], it) {
-						continue
-					}
-					var moment []string
-					if i > 0 {
-						moment = append(moment, fmt.Sprintf("from %s, when %s expires", decision.FormatTime(instants[i]),
-							lapsing[instants[i]]))
-					}
-					for j := i + 1; j < len(replies); j++ {
-						if slices.Contains(reports[j], it) {
-							continue
-						}
-						moment = append(moment, fmt.Sprintf("until %s, when %s expires", decision.FormatTime(instants[j]),
-							lapsing[instants[j]]))
-						break
-					}
-					key := strings.Join([]string{name, d.Platform, it.kind, strings.Join(moment, ", "), it.msg}, "\x00")
-					g := index[key]
-					if g == nil {
-						g = &group{kind: it.kind, msg: it.msg, subject: name, platform: d.Platform,
-							moment: strings.Join(moment, ", "), later: i > 0}
-						index[key] = g
-						groups = append(groups, g)
-					}
-					if !slices.Contains(g.devices, d.Name) {
-						g.devices = append(g.devices, d.Name)
-					}
+				if !has[g][d.Name] {
+					has[g][d.Name] = true
+					g.devices = append(g.devices, d.Name)
 				}
 			}
 		}
@@ -820,6 +788,84 @@ func (p *Policy) projectionGroups(now time.Time) ([]*projectionGroup, map[string
 		}
 	}
 	return groups, lands
+}
+
+// deviceFinding is one projection finding a device is reported in: the key
+// of its group, and what the group is made of.
+type deviceFinding struct {
+	key, kind, msg, moment string
+	later                  bool
+}
+
+// deviceFindings is every projection finding of subject name on d, at each
+// of instants, each with the moments it holds from and until.
+func (p *Policy) deviceFindings(name string, d admission.Device, instants []time.Time, lapsing map[time.Time]string,
+	patterns []platform.Redaction, secrets []string) []deviceFinding {
+	// What the device is told at each instant: a quarantine or a refused
+	// mint is none, reported as one.
+	replies := make([]*projection.Result, len(instants))
+	for i, at := range instants {
+		if res, err := p.resolve(p.subs[name], d, at); err == nil && res.Projection != nil {
+			replies[i] = res.Projection
+		}
+	}
+	// What each reply reports: its composition, and a warning for each allow
+	// it leaves unsent. Each holds from the instant it first appears until
+	// the first it does not.
+	type item struct{ kind, msg string }
+	reports := make([][]item, len(replies))
+	for i, pr := range replies {
+		if pr == nil {
+			continue
+		}
+		if pr.FailClosed == "" {
+			reports[i] = append(reports[i], item{FindingProjection, projectionMessage(*pr, patterns, secrets)})
+		} else {
+			kind, msg := refusedMessage(*pr, patterns, secrets)
+			reports[i] = append(reports[i], item{kind, msg})
+		}
+		for _, u := range pr.Unsent {
+			reports[i] = append(reports[i], item{FindingProjectionArgumentAllow, unsentMessage(u, patterns, secrets)})
+		}
+		// Only where the pinned set lets NETCONF stay on (R8): under 1.1.0
+		// check-config has it off on the whole device.
+		if pr.NetconfClosed() && len(p.dialect(d.Platform).RPCEntryDenies) > 0 {
+			reports[i] = append(reports[i], item{FindingProjectionNetconfClosed, netconfClosedMessage(*pr)})
+		}
+		if len(pr.ConfigurationBeneath) > 0 {
+			reports[i] = append(reports[i], item{FindingProjectionDenyBeneathViewConfiguration,
+				configurationBeneathMessage(*pr, patterns, secrets)})
+		}
+		if len(pr.ReachOverflow) > 0 {
+			reports[i] = append(reports[i], item{FindingProjectionReachDenyOverflow,
+				reachOverflowMessage(*pr, patterns, secrets)})
+		}
+	}
+	var out []deviceFinding
+	for i := range replies {
+		for _, it := range reports[i] {
+			if i > 0 && slices.Contains(reports[i-1], it) {
+				continue
+			}
+			var moment []string
+			if i > 0 {
+				moment = append(moment, fmt.Sprintf("from %s, when %s expires", decision.FormatTime(instants[i]),
+					lapsing[instants[i]]))
+			}
+			for j := i + 1; j < len(replies); j++ {
+				if slices.Contains(reports[j], it) {
+					continue
+				}
+				moment = append(moment, fmt.Sprintf("until %s, when %s expires", decision.FormatTime(instants[j]),
+					lapsing[instants[j]]))
+				break
+			}
+			m := strings.Join(moment, ", ")
+			out = append(out, deviceFinding{key: strings.Join([]string{name, d.Platform, it.kind, m, it.msg}, "\x00"),
+				kind: it.kind, msg: it.msg, moment: m, later: i > 0})
+		}
+	}
+	return out
 }
 
 // text is g worded as `policy test` words it. lands is the devices each
@@ -874,6 +920,12 @@ type FailClosed struct {
 // A subject's finding that holds now has Later false.
 func (p *Policy) FailClosedCompositions(now time.Time) []FailClosed {
 	groups, _ := p.projectionGroups(now)
+	return failClosed(groups)
+}
+
+// failClosed is the groups that are projection_refused and
+// projection_overflow findings.
+func failClosed(groups []*projectionGroup) []FailClosed {
 	var out []FailClosed
 	for _, g := range groups {
 		if g.kind != FindingProjectionRefused && g.kind != FindingProjectionOverflow {

@@ -1323,3 +1323,29 @@ func TestFailClosedCompositionsKeepTheDevicesApartFromTheText(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// A finding an expiry brings on is Later, and carries the moment it holds
+// from: here a grant at admin lapses, and the level left, which no bit
+// maps, has the fail-closed reply from then on (spec §8, "Generator
+// constraints" 5).
+func TestAFailClosedCompositionALapseBringsOnIsLater(t *testing.T) {
+	e := env()
+	e.Devices = []admission.Device{deviceNamed(t, "srx-fw-04")}
+	p, err := Parse([]byte(`platform_set: 1.1.0
+`+unmappedLevel+scopeOK+`roles:
+  - {name: low, privilege: unmapped, permit: ["show version"]}
+  - {name: high, privilege: admin, permit: ["**"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [low]}
+  - {subject: s, scope: all_devices, roles: [high], expires: 2099-01-01}
+`), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := p.FailClosedCompositions(noon)
+	if len(got) != 1 || !got[0].Later || got[0].Kind != FindingProjectionRefused ||
+		!strings.HasPrefix(got[0].Message, `subject "s" on juniper_junos, from 2099-01-01T00:00:00.000Z, when grant all_devices [high] expires`) ||
+		!slices.Equal(got[0].Devices, []string{"srx-fw-04"}) {
+		t.Fatalf("%+v", got)
+	}
+}
