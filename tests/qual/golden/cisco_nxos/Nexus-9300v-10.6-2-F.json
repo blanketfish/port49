@@ -107,6 +107,14 @@
           ]
         },
         {
+          "step": "command_permitted",
+          "event": "author_pass_add"
+        },
+        {
+          "step": "command_denied",
+          "event": "author_fail"
+        },
+        {
           "step": "account_start",
           "event": "acct_success"
         },
