@@ -7474,6 +7474,10 @@ when Task 14's review found a security-relevant device fact.
     - **SNI:** an IPv6 literal fails `server_names`' `dnsShape` check, so IPv6 Junos cannot be listed;
       and `sni_mismatch` counts a strike, so a wrong `server_names` puts every Junos into malformed
       back-off. Trace the 3am case and decide whether a config error should strike devices.
+      **Fixed** on `fix/post-11b`: `sni_mismatch` is declined under a standing window, with no strike
+      (decision 50 ruling 10). `server_names` takes IP addresses, stored canonical and matched by
+      address, and refuses at load a numeric entry that is not an address. What Junos sends over IPv6
+      is L81 (b), open.
     - **Fail-closed reload (L78):** a reload that turns a subject's grant fail-closed must say so in the
       reload line, not only "0 device(s) quarantined". Spec §12 warning row first.
     - **Revoke text (L79 k):** "could not be recorded" should say it may still land when the link heals;
