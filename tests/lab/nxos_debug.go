@@ -3,13 +3,14 @@ package lab
 import (
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 )
 
 // NX-OS debug capture (L80; spec §13 decision 50 ruling 20). `debug
 // tacacs+ all` and `debug aaa` write the request, the reply and the
 // credential into the device's debug logfile, so nothing from that file is
-// kept as it is. nxosDebugKeep filters each line before anything reaches
+// kept as it is. nxosDebugFilter.Keep filters each line before anything reaches
 // disk, in this order:
 //
 //  1. Drop the line if it holds a secret word (nxosDebugSecret: payload
@@ -21,13 +22,18 @@ import (
 //     it. A pattern admits a count, an address, a status or a request kind,
 //     never a free-text field, so a new debug line that carries a body is
 //     lost rather than kept.
-//  4. An avstr= line keeps its key only for service, cmd, cmd-arg and
-//     priv-lvl; a cmd or cmd-arg value only when it is one word of
-//     nxosDebugWords, and a service or priv-lvl value only when it is one
-//     word of at most 16 characters; any other value is written <masked>.
-//     An address field is kept only if it parses as an address. A typed secret
-//     (`username x password s`) arrives as cmd-arg=password, then
-//     cmd-arg=s, and the secret-word rule catches only the first.
+//  4. Every value field is allow-listed (task 7 re-review N6): an address
+//     is kept only if it is one of the lab's (port49's listen address and
+//     the device's, nxosDebugFilter.Addrs), a server group only if it is
+//     the lab's (Groups), a method list only from nxosDebugLists. Any other
+//     value is written <masked>, IPv6 included: a valid address can still
+//     spell 16 bytes.
+//  5. An avstr= line keeps its key only for service, cmd, cmd-arg and
+//     priv-lvl: priv-lvl only as an integer 0-15, service only from
+//     nxosDebugServices, cmd and cmd-arg only from nxosDebugWords. Any other
+//     value is <masked>. A typed secret (`username x password s`) arrives
+//     as cmd-arg=password, then cmd-arg=s, and the secret-word rule
+//     catches only the first.
 //
 // No body byte is decoded, and no line is kept unfiltered.
 
@@ -53,6 +59,21 @@ var (
 var nxosDebugWords = []string{"show", "users", "version", "clock", "terminal", "length", "0", "configure",
 	"hostname", "nx1", "end", "<cr>"}
 
+// nxosDebugServices are the only avstr service values kept, and
+// nxosDebugLists the only `req <kind>:<list>` method lists: the lab's own.
+var (
+	nxosDebugServices = []string{"shell"}
+	nxosDebugLists    = []string{"all_cmds:default", "commands:default", "exec:default", "login:default"}
+)
+
+// nxosDebugFilter is the capture filter for one lab: the addresses and server
+// group names a kept line may name. Anything else in those fields is
+// <masked>.
+type nxosDebugFilter struct {
+	Addrs  []netip.Addr // port49's listen address and the device's management address
+	Groups []string     // the lab's TACACS+ server group names
+}
+
 var (
 	// nxosDebugLine is `HH:MM:SS.ffffff process: message`, the shape of a
 	// logfile line once its date prefix is cut.
@@ -71,18 +92,22 @@ var (
 	// nxosDebugAvstr is an attribute line; its key and value are judged by
 	// nxosDebugAV.
 	nxosDebugAvstr = regexp.MustCompile(`^avstr=([A-Za-z0-9_-]+)=(.*)$`)
-	// nxosDebugWord is a service or priv-lvl value kept as it is: one short
-	// word. Anything longer is <masked>, whatever its key.
-	nxosDebugWord = regexp.MustCompile(`^[A-Za-z0-9_-]{1,16}$`)
+	// nxosDebugPrivLvl is a priv-lvl value kept as it is: 0 to 15.
+	nxosDebugPrivLvl = regexp.MustCompile(`^(1[0-5]|[0-9])$`)
 )
 
 // nxosDebugAllow are the anchored shapes a kept line may have, after the
-// drop and mask rules. ip is an address, and the only capturing group: each
-// one must parse as an address (netip.ParseAddr), so colon-separated hex of
-// any other kind is dropped. n is a count; fn a function name the mask may
-// have cut to <LONG>.
-var nxosDebugAllow = func() []*regexp.Regexp {
-	const ip, n, fn = "\x01", `-?\d+`, `(<LONG>: )?`
+// drop and mask rules. ip, group and list are value fields, and the only
+// capturing groups: each is judged against the filter's allow-lists and kept
+// or <masked> (nxosDebugValue). n is a count; fn a function name the mask
+// may have cut to <LONG>.
+type nxosDebugShape struct {
+	re    *regexp.Regexp
+	kinds []byte // per capturing group: 'i' address, 'g' group, 'l' method list
+}
+
+var nxosDebugAllow = func() []nxosDebugShape {
+	const ip, group, list, n, fn = "\x01", "\x02", "\x03", `-?\d+`, `(<LONG>: )?`
 	shapes := []string{
 		// Request construction: the type and counts, never the user.
 		`construct_tac_req(\(` + n + `\))?:? ?(aaa session id: ` + n + `, )?aaa type: ` + n +
@@ -92,7 +117,7 @@ var nxosDebugAllow = func() []*regexp.Regexp {
 		`nxos_ssl_write: ?sending ` + n + ` bytes to ` + ip + ` port ` + n + ` on socket ` + n,
 		fn + `before calling nxos_ssl_write\(\) total length ` + n,
 		fn + `nxos_ssl_read\(\) for server ` + ip + ` on socket ` + n,
-		fn + `nxos_ssl_read\(\) for server ` + ip + ` group [A-Za-z0-9_-]* aaa session id: ` + n + ` recv_bytes_left ` + n,
+		fn + `nxos_ssl_read\(\) for server ` + ip + ` group ` + group + ` aaa session id: ` + n + ` recv_bytes_left ` + n,
 		fn + `nxos_ssl_read\(\) failed for socket ` + n + `\.?`,
 		// Named counters only, at most four: a run of word=decimal fields
 		// could spell anything.
@@ -115,16 +140,29 @@ var nxosDebugAllow = func() []*regexp.Regexp {
 		// What fell back, and to what.
 		`Fall back method [a-z]+ (succeeded|failed)`,
 		`Sending request to (TACACS|LOCAL) service`,
-		`protocol TACACS failed with server group [A-Za-z0-9_-]+`,
-		`LOCAL method not supported for (Authorization|Authentication|Accounting) req [a-z_]+:[A-Za-z0-9_-]+`,
-		`(TACACS|LOCAL|group [A-Za-z0-9_-]+) method (not supported|failed|succeeded) for (Authorization|Authentication|Accounting) req [a-z_]+:[A-Za-z0-9_-]+`,
+		`protocol TACACS failed with server group ` + group,
+		`LOCAL method not supported for (Authorization|Authentication|Accounting) req ` + list,
+		`(TACACS|LOCAL|group ` + group + `) method (not supported|failed|succeeded) for (Authorization|Authentication|Accounting) req ` + list,
 		// The fixed-shape response lines: a request kind and a status.
 		`(aaad: )?response for (accounting|authorization|authentication) request of (old|new) library will be sent as (SUCCESS|FAILURE|ERROR)`,
 		`(aaad: )?response status[ :=]+(SUCCESS|FAIL|FAILURE|ERROR|PASS_ADD|PASS_REPL|PASS)`,
 	}
-	out := make([]*regexp.Regexp, len(shapes))
+	out := make([]nxosDebugShape, len(shapes))
 	for i, s := range shapes {
-		out[i] = regexp.MustCompile(`^` + strings.ReplaceAll(nxosNonCapturing(s), ip, `([0-9A-Fa-f.:]{2,39})`) + `$`)
+		var kinds []byte
+		for _, c := range nxosNonCapturing(s) {
+			switch c {
+			case '\x01':
+				kinds = append(kinds, 'i')
+			case '\x02':
+				kinds = append(kinds, 'g')
+			case '\x03':
+				kinds = append(kinds, 'l')
+			}
+		}
+		re := strings.NewReplacer(ip, `([0-9A-Za-z.:]{2,39})`, group, `([A-Za-z0-9_-]{0,32})`,
+			list, `([a-z_-]+:[A-Za-z0-9_-]+)`).Replace(nxosNonCapturing(s))
+		out[i] = nxosDebugShape{re: regexp.MustCompile(`^` + re + `$`), kinds: kinds}
 	}
 	return out
 }()
@@ -142,38 +180,35 @@ func nxosNonCapturing(s string) string {
 	return b.String()
 }
 
-// nxosDebugAV is an avstr= message as kept, or false to drop it: service
-// and priv-lvl keep a one-word value, cmd and cmd-arg keep a listed word,
-// and any other value is <masked>. Any other key drops the line.
+// nxosDebugAV is an avstr= message as kept, or false to drop it: priv-lvl
+// keeps 0-15, service a listed service, cmd and cmd-arg a listed word, and
+// any other value is <masked>. Any other key drops the line.
 func nxosDebugAV(msg string) (string, bool) {
 	m := nxosDebugAvstr.FindStringSubmatch(msg)
 	if m == nil {
 		return "", false
 	}
 	key, val := m[1], m[2]
+	var ok bool
 	switch key {
-	case "service", "priv-lvl":
-		if !nxosDebugWord.MatchString(val) {
-			val = "<masked>"
-		}
+	case "priv-lvl":
+		ok = nxosDebugPrivLvl.MatchString(val)
+	case "service":
+		ok = slices.Contains(nxosDebugServices, val)
 	case "cmd", "cmd-arg":
-		ok := false
-		for _, w := range nxosDebugWords {
-			ok = ok || val == w
-		}
-		if !ok {
-			val = "<masked>"
-		}
+		ok = slices.Contains(nxosDebugWords, val)
 	default:
 		return "", false
+	}
+	if !ok {
+		val = "<masked>"
 	}
 	return "avstr=" + key + "=" + val, true
 }
 
-// nxosDebugKeep is text (the contents of `show debug logfile`) cut to the
-// lines the rules above keep, one per line, in the form `time process:
-// message`.
-func nxosDebugKeep(text string) string {
+// Keep is text (the contents of `show debug logfile`) cut to the lines the
+// rules above keep, one per line, in the form `time process: message`.
+func (f nxosDebugFilter) Keep(text string) string {
 	var out []string
 	for _, ln := range strings.Split(nxosDebugANSI.ReplaceAllString(text, ""), "\n") {
 		m := nxosDebugLine.FindStringSubmatch(ln)
@@ -181,34 +216,52 @@ func nxosDebugKeep(text string) string {
 			continue
 		}
 		// An avstr= line is judged by key before the mask, which would
-		// otherwise swallow `avstr=key=` with its value; a long value is
-		// masked all the same, since no listed word is long.
+		// otherwise swallow `avstr=key=` with its value.
 		msg := strings.TrimSpace(m[3])
+		var ok bool
 		if strings.HasPrefix(msg, "avstr=") {
-			var ok bool
-			if msg, ok = nxosDebugAV(msg); !ok {
-				continue
-			}
-		} else if msg = nxosDebugLong.ReplaceAllString(msg, "<LONG>"); !nxosDebugAdmitted(msg) {
-			continue
+			msg, ok = nxosDebugAV(msg)
+		} else {
+			msg, ok = f.admitted(nxosDebugLong.ReplaceAllString(msg, "<LONG>"))
 		}
-		out = append(out, m[1]+" "+m[2]+": "+msg)
+		if ok {
+			out = append(out, m[1]+" "+m[2]+": "+msg)
+		}
 	}
 	return strings.Join(out, "\n")
 }
 
-func nxosDebugAdmitted(msg string) bool {
-	for _, re := range nxosDebugAllow {
-		m := re.FindStringSubmatch(msg)
-		if m == nil {
+// admitted is msg as kept, its value fields judged, or false when no shape
+// admits it.
+func (f nxosDebugFilter) admitted(msg string) (string, bool) {
+	for _, sh := range nxosDebugAllow {
+		idx := sh.re.FindStringSubmatchIndex(msg)
+		if idx == nil {
 			continue
 		}
-		for _, addr := range m[1:] {
-			if _, err := netip.ParseAddr(addr); err != nil {
-				return false
+		// Replace from the last field back, so earlier offsets stay right.
+		for g := len(sh.kinds) - 1; g >= 0; g-- {
+			a, b := idx[2*g+2], idx[2*g+3]
+			if a < 0 || f.allowed(sh.kinds[g], msg[a:b]) {
+				continue
 			}
+			msg = msg[:a] + "<masked>" + msg[b:]
 		}
-		return true
+		return msg, true
+	}
+	return "", false
+}
+
+// allowed reports whether v, a field of kind, is one of the lab's values.
+func (f nxosDebugFilter) allowed(kind byte, v string) bool {
+	switch kind {
+	case 'i':
+		a, err := netip.ParseAddr(v)
+		return err == nil && slices.ContainsFunc(f.Addrs, func(x netip.Addr) bool { return x.Unmap() == a.Unmap() })
+	case 'g':
+		return v == "" || slices.Contains(f.Groups, v)
+	case 'l':
+		return slices.Contains(nxosDebugLists, v)
 	}
 	return false
 }

@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func nxosDebugSample() string {
 }
 
 func TestNXOSDebugKeepKeepsTheAllowedShapes(t *testing.T) {
-	kept := strings.Split(nxosDebugKeep(nxosDebugSample()), "\n")
+	kept := strings.Split(nxosTestFilter.Keep(nxosDebugSample()), "\n")
 	for _, want := range nxosDebugKeptFixture {
 		if !slices.Contains(kept, want) {
 			t.Errorf("lost %q", want)
@@ -70,7 +71,7 @@ func TestNXOSDebugKeepKeepsTheAllowedShapes(t *testing.T) {
 }
 
 func TestNXOSDebugKeepDropsEverySecretAndUnknownLine(t *testing.T) {
-	kept := nxosDebugKeep(nxosDebugSample())
+	kept := nxosTestFilter.Keep(nxosDebugSample())
 	for ln, secret := range nxosDebugDroppedFixture {
 		if strings.Contains(kept, secret) {
 			t.Errorf("kept %q from the line %.40q...", secret, ln)
@@ -104,7 +105,7 @@ func TestNXOSDebugAvstrValues(t *testing.T) {
 		"05:00:14.000007 tacacsd: avstr=priv-lvl=15",
 		"05:00:14.000008 tacacsd: avstr=cmd-arg=<masked>",
 	}
-	got := nxosDebugKeep(in)
+	got := nxosTestFilter.Keep(in)
 	if got != strings.Join(want, "\n") {
 		t.Fatalf("kept:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
@@ -129,7 +130,7 @@ func TestNXOSDebugSequencesUseOnlyListedWords(t *testing.T) {
 }
 
 func TestNXOSDebugCountsAndFallbacks(t *testing.T) {
-	kept := nxosDebugKeep(nxosDebugSample())
+	kept := nxosTestFilter.Keep(nxosDebugSample())
 	c := nxosDebugCounts(kept)
 	for k, v := range map[string]int{"ssl_read_failed": 1, "mark_server_dead": 1, "fall_back_none": 1,
 		"tacacs_group_failed": 1, "connection_active": 1, "request_author": 1} {
@@ -159,16 +160,52 @@ func TestNXOSDebugReviewFixturesAreMaskedOrDropped(t *testing.T) {
 		"05:00:15.000002 tacacsd: avstr=service=" + long:                                                           "05:00:15.000002 tacacsd: avstr=service=<masked>",
 		"05:00:15.000003 tacacsd: avstr=service=FAKEFAKEFAKEFAKEZ":                                                 "05:00:15.000003 tacacsd: avstr=service=<masked>",
 		"05:00:15.000004 tacacsd: avstr=service=shell":                                                             "05:00:15.000004 tacacsd: avstr=service=shell",
-		"05:00:15.000005 tacacsd: <LONG>: nxos_ssl_read() for server 70:61:73:73:77:6f:72:64:31:32:33 on socket 5": "",
-		"05:00:15.000006 tacacsd: nxos_ssl_write:sending 9 bytes to 66:61:6b:65 port 300 on socket 5":              "",
+		"05:00:15.000005 tacacsd: <LONG>: nxos_ssl_read() for server 70:61:73:73:77:6f:72:64:31:32:33 on socket 5": "05:00:15.000005 tacacsd: <LONG>: nxos_ssl_read() for server <masked> on socket 5",
+		"05:00:15.000006 tacacsd: nxos_ssl_write:sending 9 bytes to 66:61:6b:65 port 300 on socket 5":              "05:00:15.000006 tacacsd: nxos_ssl_write:sending 9 bytes to <masked> port 300 on socket 5",
 		"05:00:15.000007 tacacsd: nxos_ssl_write:sending 9 bytes to 2001:db8::1 port 300 on socket 5":              "05:00:15.000007 tacacsd: nxos_ssl_write:sending 9 bytes to 2001:db8::1 port 300 on socket 5",
 		"05:00:15.000008 tacacsd: non_blocking_read: a=112, a=97, a=115, a=115":                                    "",
 		"05:00:15.000009 tacacsd: non_blocking_read: socket=5, a=97":                                               "",
 		"05:00:15.000010 tacacsd: non_blocking_read: socket=5, bytes=76, socket=6, bytes=1, rc=0":                  "",
 		"05:00:15.000011 tacacsd: non_blocking_read: socket=5, bytes=76":                                           "05:00:15.000011 tacacsd: non_blocking_read: socket=5, bytes=76",
 	} {
-		if got := nxosDebugKeep(in); got != want {
+		if got := nxosTestFilter.Keep(in); got != want {
 			t.Errorf("%.60q...: kept %q, want %q", in, got, want)
+		}
+	}
+}
+
+// nxosTestFilter is the lab's filter with made-up lab values: port49 at
+// 192.0.2.1 and 2001:db8::1, the server group grp9.
+var nxosTestFilter = nxosDebugFilter{Addrs: []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("2001:db8::1")},
+	Groups: []string{"grp9"}}
+
+// Task 7 re-review N6, ruled allow-list: an address is kept only if it is
+// one of the lab's, priv-lvl only as 0-15, service, group and method-list
+// names only from the lab's words. Everything else is <masked>. Every value
+// here is made up; the IPv6 ones spell bytes.
+func TestNXOSDebugKeepsOnlyTheLabsValues(t *testing.T) {
+	g23 := "wxyzwxyzwxyzwxyzwxyzwxy"
+	for in, want := range map[string]string{
+		"05:00:16.000001 tacacsd: <LONG>: nxos_ssl_read() for server 7061:7373:776f:7264:7365:6372:6574:3132 on socket 5":             "05:00:16.000001 tacacsd: <LONG>: nxos_ssl_read() for server <masked> on socket 5",
+		"05:00:16.000002 tacacsd: nxos_ssl_write:sending 9 bytes to dead:beef:: port 300 on socket 5":                                 "05:00:16.000002 tacacsd: nxos_ssl_write:sending 9 bytes to <masked> port 300 on socket 5",
+		"05:00:16.000003 tacacsd: before nxos_ssl_open  hostname 198.51.100.7 server 198.51.100.8 on port 300 vrf 1":                  "05:00:16.000003 tacacsd: before nxos_ssl_open  hostname <masked> server <masked> on port 300 vrf 1",
+		"05:00:16.000004 tacacsd: before nxos_ssl_open  hostname 192.0.2.1 server 192.0.2.1 on port 300 vrf 1":                        "05:00:16.000004 tacacsd: before nxos_ssl_open  hostname 192.0.2.1 server 192.0.2.1 on port 300 vrf 1",
+		"05:00:16.000005 tacacsd: avstr=priv-lvl=15":                                                                                  "05:00:16.000005 tacacsd: avstr=priv-lvl=15",
+		"05:00:16.000006 tacacsd: avstr=priv-lvl=0":                                                                                   "05:00:16.000006 tacacsd: avstr=priv-lvl=0",
+		"05:00:16.000007 tacacsd: avstr=priv-lvl=16":                                                                                  "05:00:16.000007 tacacsd: avstr=priv-lvl=<masked>",
+		"05:00:16.000008 tacacsd: avstr=priv-lvl=abcdefghijklmnop":                                                                    "05:00:16.000008 tacacsd: avstr=priv-lvl=<masked>",
+		"05:00:16.000009 tacacsd: avstr=service=shell":                                                                                "05:00:16.000009 tacacsd: avstr=service=shell",
+		"05:00:16.000010 tacacsd: avstr=service=frobnicatefrobni":                                                                     "05:00:16.000010 tacacsd: avstr=service=<masked>",
+		"05:00:16.000011 aaad: protocol TACACS failed with server group " + g23:                                                       "05:00:16.000011 aaad: protocol TACACS failed with server group <masked>",
+		"05:00:16.000012 aaad: protocol TACACS failed with server group grp9":                                                         "05:00:16.000012 aaad: protocol TACACS failed with server group grp9",
+		"05:00:16.000013 aaad: LOCAL method not supported for Authorization req all_cmds:" + g23:                                      "05:00:16.000013 aaad: LOCAL method not supported for Authorization req <masked>",
+		"05:00:16.000014 aaad: group " + g23 + " method failed for Authorization req all_cmds:default":                                "05:00:16.000014 aaad: group <masked> method failed for Authorization req all_cmds:default",
+		"05:00:16.000015 tacacsd: <LONG>: nxos_ssl_read() for server 192.0.2.1 group " + g23 + " aaa session id: 7 recv_bytes_left 0": "05:00:16.000015 tacacsd: <LONG>: nxos_ssl_read() for server 192.0.2.1 group <masked> aaa session id: 7 recv_bytes_left 0",
+		"05:00:16.000016 tacacsd: <LONG>: nxos_ssl_read() for server 192.0.2.1 group  aaa session id: 7 recv_bytes_left 0":            "05:00:16.000016 tacacsd: <LONG>: nxos_ssl_read() for server 192.0.2.1 group  aaa session id: 7 recv_bytes_left 0",
+		"05:00:16.000017 tacacsd: nxos_ssl_write:sending 9 bytes to 2001:db8:0:0::1 port 300 on socket 5":                             "05:00:16.000017 tacacsd: nxos_ssl_write:sending 9 bytes to 2001:db8:0:0::1 port 300 on socket 5",
+	} {
+		if got := nxosTestFilter.Keep(in); got != want {
+			t.Errorf("%.70q...:\n kept %q\n want %q", in, got, want)
 		}
 	}
 }

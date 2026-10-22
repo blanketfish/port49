@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -162,6 +163,19 @@ func TestL80Remeasure(t *testing.T) {
 		}
 	}
 
+	// The debug filter keeps only the lab's own values: port49's listen
+	// address, the device's, and the server group the device is configured
+	// with (review N6).
+	var filter nxosDebugFilter
+	for _, a := range []string{l73Server, l.p.addr} {
+		addr, err := netip.ParseAddr(a)
+		if err != nil {
+			t.Fatalf("INVALID: lab address %q: %v", a, err)
+		}
+		filter.Addrs = append(filter.Addrs, addr)
+	}
+	filter.Groups = []string{"port49"}
+
 	var stops []string
 	for _, cell := range l80Cells(arm) {
 		if len(only) > 0 && !slices.Contains(only, cell.Name) {
@@ -271,7 +285,7 @@ func TestL80Remeasure(t *testing.T) {
 			time.Sleep(15 * time.Second)
 			at := len(c.transcript())
 			c.sendExpect("show debug logfile "+label, 180*time.Second, c.prompt)
-			kept := nxosDebugKeep(c.transcript()[at:])
+			kept := filter.Keep(c.transcript()[at:])
 			cnt := nxosDebugCounts(kept)
 			var ks []string
 			for k := range nxosDebugMarkers {
