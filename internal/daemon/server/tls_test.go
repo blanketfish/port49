@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -131,9 +132,15 @@ type tlsClient struct {
 	seq  uint8
 }
 
+// tlsDial is dialTLS's TCP dial; a test swaps it to inject what the kernel
+// can return.
+var tlsDial = net.Dial
+
 // dialTLS opens a TLS connection as a device presenting cert (nil: none).
 // In TLS 1.3 the server's verdict on the client certificate arrives after
-// the client's Finished, so a refusal shows at the first read.
+// the client's Finished, so a refusal shows at the first read. A refusal at
+// Accept is a reset, which on loopback can reach the dialer before connect
+// returns: that is returned as the error too, never a fatal dial failure.
 func (f *tlsFixture) dialTLS(t *testing.T, cert *tls.Certificate, adjust func(*tls.Config)) (*tlsClient, error) {
 	t.Helper()
 	cfg := &tls.Config{RootCAs: f.ca.Pool(), ServerName: "tacacs.example.net", MinVersion: tls.VersionTLS12}
@@ -143,7 +150,10 @@ func (f *tlsFixture) dialTLS(t *testing.T, cert *tls.Certificate, adjust func(*t
 	if adjust != nil {
 		adjust(cfg)
 	}
-	raw, err := net.Dial("tcp", f.ts.addr)
+	raw, err := tlsDial("tcp", f.ts.addr)
+	if errors.Is(err, syscall.ECONNRESET) {
+		return nil, err
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,6 +724,21 @@ func TestTLSUnidentifiableDeviceIsDecidedAtAccept(t *testing.T) {
 	// One record: the window stood for the later dials.
 	if n := strings.Count(log.String(), `"tls_outcome":"identity_mismatch"`); n != 1 {
 		t.Fatalf("%d records, want 1", n)
+	}
+}
+
+// The server's reset at Accept can reach the dialer before connect returns,
+// and that is the refusal a caller waits for: dialTLS, and so login,
+// returns it as the error, as a reset after connect would be
+// (TestTLSUnidentifiableDeviceIsDecidedAtAccept failed so under make test).
+func TestTLSDialResetAtConnectIsARefusal(t *testing.T) {
+	f := newTLSFixture(t, &syncBuffer{}, nil)
+	reset := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNRESET)}
+	tlsDial = func(string, string) (net.Conn, error) { return nil, reset }
+	t.Cleanup(func() { tlsDial = net.Dial })
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	if _, _, err := f.login(t, &cert, nil); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("login: %v, want the reset as its error", err)
 	}
 }
 
