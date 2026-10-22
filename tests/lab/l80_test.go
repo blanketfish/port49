@@ -24,7 +24,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -90,8 +89,11 @@ func TestL80Remeasure(t *testing.T) {
 	if err := l80ArmCheck(arm, vcs, gitHead(root), func(rev string) (bool, error) { return l80HasFix(root, rev) }); err != nil {
 		t.Fatal(err)
 	}
-	if arm == "fixed" && exec.Command("git", "-C", root, "diff", "--quiet", "HEAD", "--", "internal", "cmd", "platforms", "tests/lab").Run() != nil {
-		t.Fatal("INVALID: arm fixed needs an unmodified tree (internal, cmd, platforms, tests/lab)")
+	// The harness and its evidence paths must be clean too, untracked files
+	// included (review N4): an earlier batch's evidence is committed, and the
+	// binary rebuilt, before the next batch.
+	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it, then rebuild after committing (make build)", err, dirty)
 	}
 	sel, _, err := platformSelection()
 	if err != nil || len(sel) != 1 || sel[0].sel != "nxos106" {

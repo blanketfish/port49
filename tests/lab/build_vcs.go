@@ -57,12 +57,14 @@ const l80FixCommit = "bf71174d"
 // and its error (an unknown revision) is INVALID too.
 func l80ArmCheck(arm string, v buildVCS, head string, hasFix func(rev string) (bool, error)) error {
 	if v.Modified {
-		return fmt.Errorf("INVALID: bin/port49d was built from a modified tree (%s); build it clean for arm %s", v.Revision, arm)
+		return fmt.Errorf("INVALID: bin/port49d was built from a modified tree (%s) for arm %s: commit or remove what "+
+			"git status shows (evidence included), and rebuild after committing (make build)", v.Revision, arm)
 	}
 	switch arm {
 	case "fixed":
 		if v.Revision != head {
-			return fmt.Errorf("INVALID: arm fixed needs bin/port49d built from HEAD %s, it was built from %s: run make build", head, v.Revision)
+			return fmt.Errorf("INVALID: arm fixed needs bin/port49d built from HEAD %s, it was built from %s: committing "+
+				"evidence moves HEAD, so rebuild after committing (make build)", head, v.Revision)
 		}
 	case "baseline":
 		fix, err := hasFix(v.Revision)
@@ -78,25 +80,39 @@ func l80ArmCheck(arm string, v buildVCS, head string, hasFix func(rev string) (b
 	return nil
 }
 
-// l80HasFix reports whether rev, in the checkout at dir, holds the fix:
-// l80FixCommit is its ancestor, or it has the fix's table file. Either is
-// enough; an unknown revision or commit is an error.
-func l80HasFix(dir, rev string) (bool, error) {
-	cmd := exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", l80FixCommit, rev)
-	err := cmd.Run()
+// l80HasFix reports whether rev, in the checkout at dir, holds the fix.
+func l80HasFix(dir, rev string) (bool, error) { return l80HasFixAt(dir, l80FixCommit, rev) }
+
+// l80HasFixAt reports whether rev holds fix: fix is its ancestor, or, after
+// a rebase made fix unreachable from it, rev carries the fix's table file.
+// Either is enough; an unknown revision or commit is an error.
+func l80HasFixAt(dir, fix, rev string) (bool, error) {
+	err := exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", fix, rev).Run()
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
 		return true, nil
 	case errors.As(err, &ee) && ee.ExitCode() == 1:
 	default:
-		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %v", l80FixCommit, rev, err)
+		return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %v", fix, rev, err)
 	}
-	if exec.Command("git", "-C", dir, "cat-file", "-e", rev+":internal/platform/tlsoffer.go").Run() == nil {
-		return true, nil
-	}
-	return false, nil
+	return exec.Command("git", "-C", dir, "cat-file", "-e", rev+":internal/platform/tlsoffer.go").Run() == nil, nil
 }
+
+// treeDirty is `git status --porcelain` over paths: tracked changes and
+// untracked files alike, so evidence a run wrote and nobody committed
+// counts (review N4). "" is clean.
+func treeDirty(dir string, paths ...string) (string, error) {
+	out, err := exec.Command("git", append([]string{"-C", dir, "status", "--porcelain", "--"}, paths...)...).Output()
+	if err != nil {
+		return "", fmt.Errorf("git status: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// codePaths are the paths a lab run's binary and harness are built from,
+// with the evidence and results the run reads or writes.
+var codePaths = []string{"internal", "cmd", "platforms", "tests/lab", "tests/qual"}
 
 // qualBinaryCheck holds the qual run's bin/port49d to the harness tree:
 // run.json's tls_server_single_connect_offered is read from this tree's
@@ -104,8 +120,9 @@ func l80HasFix(dir, rev string) (bool, error) {
 // could differ (review I2).
 func qualBinaryCheck(v buildVCS, head string) error {
 	if v.Modified || v.Revision != head {
-		return fmt.Errorf("INVALID: bin/port49d was built from %s (modified %v), not from this tree's HEAD %s: "+
-			"the offer run.json records would not be the binary's; run make build", v.Revision, v.Modified, head)
+		return fmt.Errorf("INVALID: bin/port49d was built from %s (modified %v), not from this tree's clean HEAD %s, so "+
+			"the offer run.json records would not be the binary's: committing evidence moves HEAD, so rebuild after "+
+			"committing (make build)", v.Revision, v.Modified, head)
 	}
 	return nil
 }

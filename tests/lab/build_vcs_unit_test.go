@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +126,110 @@ func TestQualRunNamesTheCleanCaptureAndTheOffer(t *testing.T) {
 	for _, key := range []string{`"tls_server_single_connect_offered":true`, `"tls_capture_started_clean":true`} {
 		if !strings.Contains(string(b), key) {
 			t.Errorf("run.json lacks %s: %s", key, b)
+		}
+	}
+}
+
+// gitRepo is a throwaway repository: run runs git in it and returns HEAD.
+func gitRepo(t *testing.T) (dir string, run func(args ...string) string) {
+	t.Helper()
+	dir = t.TempDir()
+	run = func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+			"-c", "commit.gpgsign=false"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q", "-b", "main")
+	return dir, run
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Review N5: l80HasFix against a real history. A revision holds the fix if
+// the fix commit is its ancestor, or, after a rebase made that commit
+// unreachable, if it carries the fix's table file.
+func TestL80HasFixAgainstAHistory(t *testing.T) {
+	dir, run := gitRepo(t)
+	writeFile(t, filepath.Join(dir, "README"), "base\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "base")
+	base := run("rev-parse", "HEAD")
+	writeFile(t, filepath.Join(dir, "internal/platform/tlsoffer.go"), "package platform\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "fix")
+	fix := run("rev-parse", "HEAD")
+	writeFile(t, filepath.Join(dir, "after"), "x\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "after")
+	after := run("rev-parse", "HEAD")
+	// A rebased fix: same file, a branch that does not descend from fix.
+	run("checkout", "-q", "-b", "rebased", base)
+	writeFile(t, filepath.Join(dir, "internal/platform/tlsoffer.go"), "package platform\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "fix, rebased")
+	rebased := run("rev-parse", "HEAD")
+	for rev, want := range map[string]bool{base: false, fix: true, after: true, rebased: true} {
+		got, err := l80HasFixAt(dir, fix, rev)
+		if err != nil || got != want {
+			t.Errorf("%s: %v %v, want %v", rev[:8], got, err, want)
+		}
+	}
+	if _, err := l80HasFixAt(dir, fix, "0123456789abcdef0123456789abcdef01234567"); err == nil {
+		t.Error("an unknown revision is an error")
+	}
+}
+
+// Review N4: the dirty check sees untracked files under the paths too.
+func TestTreeDirtySeesUntrackedFiles(t *testing.T) {
+	dir, run := gitRepo(t)
+	writeFile(t, filepath.Join(dir, "internal/a.go"), "package a\n")
+	run("add", "-A")
+	run("commit", "-q", "-m", "base")
+	if d, err := treeDirty(dir, "internal", "tests/lab"); err != nil || d != "" {
+		t.Fatalf("clean tree: %q %v", d, err)
+	}
+	writeFile(t, filepath.Join(dir, "tests/lab/evidence/x/new.txt"), "untracked\n")
+	if d, err := treeDirty(dir, "internal", "tests/lab"); err != nil || d == "" {
+		t.Fatalf("an untracked evidence file: %q %v", d, err)
+	}
+	writeFile(t, filepath.Join(dir, "elsewhere.txt"), "untracked\n")
+	run("add", "tests")
+	run("commit", "-q", "-m", "evidence")
+	if d, err := treeDirty(dir, "internal", "tests/lab"); err != nil || d != "" {
+		t.Fatalf("a change outside the paths: %q %v", d, err)
+	}
+	writeFile(t, filepath.Join(dir, "internal/a.go"), "package a // edited\n")
+	if d, err := treeDirty(dir, "internal", "tests/lab"); err != nil || d == "" {
+		t.Fatalf("a modified tracked file: %q %v", d, err)
+	}
+}
+
+// Review N2: each INVALID about the build names the fix, since committing
+// evidence moves HEAD past the build.
+func TestBuildInvalidsNameTheFix(t *testing.T) {
+	head := "1111111111111111111111111111111111111111"
+	none := func(string) (bool, error) { return false, nil }
+	for _, err := range []error{
+		l80ArmCheck("fixed", buildVCS{"2222222222222222222222222222222222222222", false}, head, none),
+		l80ArmCheck("fixed", buildVCS{head, true}, head, none),
+		qualBinaryCheck(buildVCS{"2222222222222222222222222222222222222222", false}, head),
+		qualBinaryCheck(buildVCS{head, true}, head),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "rebuild after committing") {
+			t.Errorf("%v", err)
 		}
 	}
 }
