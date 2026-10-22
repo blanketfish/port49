@@ -10498,8 +10498,10 @@ each where this document and RFC 9887 were silent; Ryan may override any.
     `single_connect_second_connection` counts a connection from a device port49 offered
     single-connect to (ruling 20) that port49 serves while an offered connection from the same
     source is still open: the device ignored the offer. A connection refused at Accept (the cap,
-    a strike's backoff, a decline window) is not counted, and an offered connection stops counting
-    before its socket closes, so a device that reconnects at once after a close is not counted. It stays 0 while the device honors it, and moves at
+    a strike's backoff, a decline window) is not counted. An offered connection stops counting
+    before port49 closes its socket, so a device that reconnects at once after port49 closes it
+    (an idle close, a decline, a reset) is not counted; one that closes its own connection and
+    reconnects at once can be counted once, since its close and the new Accept are not ordered. It stays 0 while the device honors it, and moves at
     an ignoring device's second request, long before its connections reach `per_nas_connections`
     and `refused_cap`. Like every value of the metric it carries no device label; the decision
     log's records from that source name the device. `tls_refused` counts a struck handshake refusal and a decline at Accept
