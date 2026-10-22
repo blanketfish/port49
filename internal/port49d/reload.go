@@ -1210,9 +1210,13 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 	if r.generic != nil {
 		r.generic.record(pol, now)
 	}
-	r.refresh(ctx)
+	said := r.refresh(ctx)
 	// After the pass, not before: the walk over every subject and device must
-	// not delay the supersede that a tightened requirement depends on.
+	// not delay the supersede that a tightened requirement depends on. A
+	// pass that crossed a grant expiry has said it already.
+	if !said {
+		sayFailClosed(r.procName(), pol, now, r.metrics)
+	}
 	if r.mfaUnavailable != nil {
 		if line := r.mfaUnavailable(pol, now); line != "" {
 			r.sayf("broker: %s\n", line)
@@ -1253,12 +1257,25 @@ func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 // live context may still hold a policy no longer in force — a withdrawn or
 // expired grant included. A complete pass that leaves it at 0 tells
 // onSettled, when set, the policy in force.
-func (r *reloader) refresh(ctx context.Context) {
+//
+// A pass that crossed a grant expiry says which compositions answer
+// fail-closed now (sayFailClosed), and returns true, or the gauge goes stale
+// at the expiry. With no broker there is no pass: the timer is still armed
+// for the next expiry, and the same statement is made at it.
+func (r *reloader) refresh(ctx context.Context) (said bool) {
 	if r.pass == nil {
-		// No broker in the process: nothing to carry, and nothing scheduled,
-		// or an expiry already past would fire the timer again at once.
-		r.expiry, r.settle, r.retry, r.due = time.Time{}, time.Time{}, time.Time{}, time.Time{}
-		return
+		// No broker in the process: nothing to carry, and no settle or retry
+		// scheduled. The next expiry is, or an expiry already past would
+		// fire the timer again at once: NextChange reads after it.
+		r.settle, r.retry = time.Time{}, time.Time{}
+		cur, now := r.live.Load(), r.now()
+		if !r.expiry.IsZero() && !now.Before(r.expiry) {
+			sayFailClosed(r.procName(), cur, now, r.metrics)
+			said = true
+		}
+		r.expiry, _ = cur.NextChange(now)
+		r.reschedule()
+		return said
 	}
 	if !r.expiry.IsZero() && !r.now().Before(r.expiry) {
 		// A grant has expired, and until this pass reaches every context
@@ -1267,7 +1284,7 @@ func (r *reloader) refresh(ctx context.Context) {
 	}
 	rep, err := r.pass(ctx, r.priors)
 	if err != nil && ctx.Err() != nil {
-		return // port49d is shutting down: there is no retry to announce
+		return false // port49d is shutting down: there is no retry to announce
 	}
 	if err != nil {
 		r.stopped = true
@@ -1288,9 +1305,10 @@ func (r *reloader) refresh(ctx context.Context) {
 		}
 		r.retry = r.now().Add(refreshRetry)
 		r.reschedule()
-		return
+		return false
 	}
 	cur := r.live.Load()
+	crossed := !r.expiry.IsZero() && !rep.At.Before(r.expiry)
 	r.retry = time.Time{}
 	if !r.settle.IsZero() && !rep.At.Before(r.settle) {
 		r.settle = time.Time{}
@@ -1314,9 +1332,13 @@ func (r *reloader) refresh(ctx context.Context) {
 		r.sayf("policy refresh: %s\n", summary(rep))
 	}
 	r.reschedule()
+	if crossed {
+		sayFailClosed(r.procName(), cur, rep.At, r.metrics)
+	}
 	if r.settle.IsZero() && r.onSettled != nil {
 		r.onSettled(cur)
 	}
+	return crossed
 }
 
 // startLeft is what a start on a persistent store left unjudged (plan

@@ -57,6 +57,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.CertStatusUnavailable.WithLabelValues("broker").Inc()
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
+	m.SetPolicyFailClosed(0)
 	m.PolicyRefreshPending.Set(0)
 	if v := testutil.ToFloat64(m.PolicyBundleMatchesRunner); v != 1 {
 		t.Fatalf("port49_policy_bundle_matches_runner starts at %v; nothing is known to differ", v)

@@ -706,11 +706,25 @@ func projectionNote(kind string) bool {
 // fails nothing (decision 27). A projection finding or warning names its
 // devices where it is not on every device the subject has a reply on there.
 func (p *Policy) Projections(now time.Time) []Finding {
-	patterns, secrets := p.Redactions(), p.HiddenValues()
-	type group struct {
-		kind, msg, subject, platform, moment string
-		devices                              []string
+	groups, lands := p.projectionGroups(now)
+	var out []Finding
+	for _, g := range groups {
+		out = append(out, Finding{Kind: g.kind, Message: g.text(lands)})
 	}
+	return out
+}
+
+// projectionGroup is one projection finding before it is worded: the
+// devices it lands on, and whether it holds only from a later grant expiry.
+type projectionGroup struct {
+	kind, msg, subject, platform, moment string
+	devices                              []string
+	later                                bool
+}
+
+func (p *Policy) projectionGroups(now time.Time) ([]*projectionGroup, map[string]map[string]bool) {
+	patterns, secrets := p.Redactions(), p.HiddenValues()
+	type group = projectionGroup
 	var groups []*group
 	index := map[string]*group{}
 	for _, name := range sortedKeys(p.subs) {
@@ -781,7 +795,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 					g := index[key]
 					if g == nil {
 						g = &group{kind: it.kind, msg: it.msg, subject: name, platform: d.Platform,
-							moment: strings.Join(moment, ", ")}
+							moment: strings.Join(moment, ", "), later: i > 0}
 						index[key] = g
 						groups = append(groups, g)
 					}
@@ -805,30 +819,69 @@ func (p *Policy) Projections(now time.Time) []Finding {
 			lands[k][d] = true
 		}
 	}
-	var out []Finding
-	for _, g := range groups {
-		msg := fmt.Sprintf("subject %q on %s", g.subject, g.platform)
+	return groups, lands
+}
+
+// text is g worded as `policy test` words it. lands is the devices each
+// subject has a reply on, per platform.
+func (g *projectionGroup) text(lands map[string]map[string]bool) string {
+	msg := g.base()
+	named := projectionNote(g.kind)
+	if !named || len(g.devices) < len(lands[g.subject+"\x00"+g.platform]) {
+		slices.Sort(g.devices)
+		noun := "devices"
+		if len(g.devices) == 1 {
+			noun = "device"
+		}
+		msg += fmt.Sprintf("; on %d %s: %s", len(g.devices), noun, strings.Join(g.devices, ", "))
+	}
+	return msg
+}
+
+// base is g's text before any device list.
+func (g *projectionGroup) base() string {
+	msg := fmt.Sprintf("subject %q on %s", g.subject, g.platform)
+	if g.moment != "" {
+		msg += ", " + g.moment
+	}
+	if projectionNote(g.kind) {
+		msg += ":" + g.msg
+	} else {
 		if g.moment != "" {
-			msg += ", " + g.moment
+			msg += ","
 		}
-		if projectionNote(g.kind) {
-			msg += ":" + g.msg
-		} else {
-			if g.moment != "" {
-				msg += ","
-			}
-			msg += g.msg
+		msg += g.msg
+	}
+	return msg
+}
+
+// FailClosed is a composition that gets the fail-closed reply, as `policy
+// test` reports it, with the devices it lands on counted apart from the text.
+type FailClosed struct {
+	// Kind is projection_refused or projection_overflow.
+	Kind string
+	// Message is the finding's text, without its device list.
+	Message string
+	// Devices are the devices it lands on, sorted.
+	Devices []string
+	// Later is true for a finding that holds only from a later grant
+	// expiry: it is reported with its moment and is not yet in force.
+	Later bool
+}
+
+// FailClosedCompositions is each projection_refused and projection_overflow
+// finding at now and at every later grant expiry, redacted as Projections is.
+// A subject's finding that holds now has Later false.
+func (p *Policy) FailClosedCompositions(now time.Time) []FailClosed {
+	groups, _ := p.projectionGroups(now)
+	var out []FailClosed
+	for _, g := range groups {
+		if g.kind != FindingProjectionRefused && g.kind != FindingProjectionOverflow {
+			continue
 		}
-		named := projectionNote(g.kind)
-		if !named || len(g.devices) < len(lands[g.subject+"\x00"+g.platform]) {
-			slices.Sort(g.devices)
-			noun := "devices"
-			if len(g.devices) == 1 {
-				noun = "device"
-			}
-			msg += fmt.Sprintf("; on %d %s: %s", len(g.devices), noun, strings.Join(g.devices, ", "))
-		}
-		out = append(out, Finding{Kind: g.kind, Message: msg})
+		devs := slices.Clone(g.devices)
+		slices.Sort(devs)
+		out = append(out, FailClosed{Kind: g.kind, Message: g.base(), Devices: devs, Later: g.later})
 	}
 	return out
 }

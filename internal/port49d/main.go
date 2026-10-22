@@ -297,6 +297,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	}
 	now := time.Now()
 	sayPolicy(procOf(cfg), pol, now)
+	sayFailClosed(procOf(cfg), pol, now, m)
 	var cert tls.Certificate
 	var anchorCert *x509.Certificate
 	if cfg.Broker.ClientCAFile != "" {
@@ -1031,7 +1032,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return err
 		}
-		sayPolicy(procOf(cfg), pol, time.Now())
+		now := time.Now()
+		sayPolicy(procOf(cfg), pol, now)
+		sayFailClosed(procOf(cfg), pol, now, m)
 		live = policy.NewLive(pol)
 	}
 	if startDoc != nil {
