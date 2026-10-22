@@ -6117,6 +6117,14 @@ added here before any code emits it:
 | `projection_deny_beneath_view_configuration` | a sent deny that meets `show configuration` beneath a held `view-configuration`: the CLI refuses it and NETCONF is closed, but the bit is what grants the configuration; withhold the bit instead (§8; decision 44); a reach deny (decision 48) is never named | no, a warning; `policy diff` prints the ones the change brings |
 | `projection_reach_deny_overflow` | on a platform whose pinned set carries `deny_reach_bits`, a composition whose reply would send a bit with its undecided reach denied (decision 48), except that those denies take `deny-commands` past RFC 8907's 255 bytes. The reply falls back to the one the set renders without the key: the bit not sent, and the device refusing the carve-out it would have shown (`show configuration`). The warning names the reach denies and the remedy: fewer denies beneath `show`, or the denies moved into the template's class (`port49 platform export --classes`) | no, a warning; `policy diff` prints the ones the change brings |
 
+port49d, and port49-broker in a split, print each `projection_refused` and
+`projection_overflow` finding at start, after every swap and after every grant-expiry pass,
+worded and redacted as `policy test` does, with the device count and the first three devices.
+Then one line: `policy: N composition(s) answered fail-closed now (port49 policy test names
+them)`, printed when N is above 0 or was before. N counts the findings that hold now; a finding
+for a later moment is printed with its moment and is not counted until the moment comes.
+`port49_policy_fail_closed_compositions`, a gauge with no labels, holds N.
+
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
 

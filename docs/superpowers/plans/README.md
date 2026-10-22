@@ -7479,7 +7479,9 @@ when Task 14's review found a security-relevant device fact.
       address, and refuses at load a numeric entry that is not an address. What Junos sends over IPv6
       is L81 (b), open.
     - **Fail-closed reload (L78):** a reload that turns a subject's grant fail-closed must say so in the
-      reload line, not only "0 device(s) quarantined". Spec §12 warning row first.
+      reload line, not only "0 device(s) quarantined". Spec §12 warning row first. **Fixed** on `fix/post-11b`:
+      a count line and each finding at start, after every swap and every expiry pass, and the gauge
+      `port49_policy_fail_closed_compositions`.
     - **Revoke text (L79 k):** "could not be recorded" should say it may still land when the link heals;
       the late write is logged and attributed. Consider a guard so a stale copy cannot re-create after a
       lift (a tombstone or revision floor).
@@ -7682,8 +7684,8 @@ reference config waits on the measurement.
   `tests/qual/profiles/`) in place of vEOS: a login through the shape, then the state surviving a restart.
 - Decision 48's 255-byte budget is provisional on L78. vJunos-router 23.4 and 26.2 showed no lockout up to
   375 bytes; hardware Junos is unmeasured, so ship the budget as it stands.
-- Alarm for the fail-closed projection: a reload that turns a grant fail-closed today shows only
-  "0 device(s) quarantined" (the post-11b fix PR adds the reload line; the alarm waits for it).
+- Alarm on `port49_policy_fail_closed_compositions` > 0: a reload that turns a grant fail-closed
+  prints the composition count line and each finding (the post-11b fix PR).
 - The XR reference configuration needs an operator `platforms: cisco_iosxr:` block until a `platform_set`
   adapter lands (readonly priv-lvl 1, operator and admin 15; `tests/lab/results/QUAL-XRd-*.md`). SR Linux
   needs its block too.
