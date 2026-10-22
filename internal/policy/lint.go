@@ -745,14 +745,21 @@ func (p *Policy) projectionGroupsBy(now time.Time, key func(admission.Device) st
 	var groups []*group
 	index := map[string]*group{}
 	has := map[*group]map[string]bool{}
+	// Each device's key, once: it is the same for every subject.
+	keys := make([]string, len(p.env.Devices))
+	for i, d := range p.env.Devices {
+		if p.dialect(d.Platform).Projected() {
+			keys[i] = key(d)
+		}
+	}
 	for _, name := range sortedKeys(p.subs) {
 		instants, lapsing := p.subjectInstants(p.subs[name], now)
 		memo := map[string][]deviceFinding{}
-		for _, d := range p.env.Devices {
+		for i, d := range p.env.Devices {
 			if !p.dialect(d.Platform).Projected() {
 				continue
 			}
-			sig := key(d)
+			sig := keys[i]
 			finds, ok := memo[sig]
 			if !ok {
 				finds = p.deviceFindings(name, d, instants, lapsing, patterns, secrets)

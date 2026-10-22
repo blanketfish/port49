@@ -81,15 +81,52 @@ func TestTheFailClosedReportTakesUnderASecondAtTenThousandDevices(t *testing.T) 
 	}
 }
 
-// bySignature and byDevice are what projectionGroups groups devices by: the
-// signature, and the device's own name, which resolves every device on its
-// own, as it did before the signature.
+// bySignature is what projectionGroups groups devices by.
 func bySignature(p *Policy) func(admission.Device) string {
 	scopes := sortedKeys(p.scopes)
 	return func(d admission.Device) string { return p.signature(d, scopes) }
 }
 
-func byDevice(d admission.Device) string { return d.Name }
+// perDevice is the projection report with no memo: every subject resolved on
+// every device on its own and grouped as policy test groups it, as before
+// the signature. It shares nothing with projectionGroupsBy but
+// deviceFindings, one subject's resolve on one device.
+func perDevice(p *Policy, now time.Time) ([]*projectionGroup, map[string]map[string]bool) {
+	patterns, secrets := p.Redactions(), p.HiddenValues()
+	var groups []*projectionGroup
+	index := map[string]*projectionGroup{}
+	for _, name := range sortedKeys(p.subs) {
+		instants, lapsing := p.subjectInstants(p.subs[name], now)
+		for _, d := range p.env.Devices {
+			if !p.dialect(d.Platform).Projected() {
+				continue
+			}
+			for _, f := range p.deviceFindings(name, d, instants, lapsing, patterns, secrets) {
+				g := index[f.key]
+				if g == nil {
+					g = &projectionGroup{kind: f.kind, msg: f.msg, subject: name, platform: d.Platform,
+						moment: f.moment, later: f.later}
+					index[f.key] = g
+					groups = append(groups, g)
+				}
+				if !slices.Contains(g.devices, d.Name) {
+					g.devices = append(g.devices, d.Name)
+				}
+			}
+		}
+	}
+	lands := map[string]map[string]bool{}
+	for _, g := range groups {
+		k := g.subject + "\x00" + g.platform
+		if lands[k] == nil {
+			lands[k] = map[string]bool{}
+		}
+		for _, d := range g.devices {
+			lands[k][d] = true
+		}
+	}
+	return groups, lands
+}
 
 // sameReports fails t unless grouping by signature reports what resolving
 // every device on its own does, as Projections and FailClosedCompositions
@@ -97,7 +134,7 @@ func byDevice(d admission.Device) string { return d.Name }
 func sameReports(t *testing.T, p *Policy) {
 	t.Helper()
 	fast, fastLands := p.projectionGroupsBy(noon, bySignature(p))
-	slow, slowLands := p.projectionGroupsBy(noon, byDevice)
+	slow, slowLands := perDevice(p, noon)
 	if got, want := projectionFindings(fast, fastLands), projectionFindings(slow, slowLands); !reflect.DeepEqual(got, want) {
 		t.Fatalf("grouped by signature:\n%s\nresolved per device:\n%s", findingLines(got), findingLines(want))
 	}
@@ -215,7 +252,7 @@ grants:
 	// what the pair is reported in, or, for a selection by an incomparable
 	// version, which spec §5.5 has reported but no projection reads, in
 	// what it resolves to.
-	groups, _ := p.projectionGroupsBy(noon, byDevice)
+	groups, _ := perDevice(p, noon)
 	for _, c := range pairs {
 		a, _ := p.device(c.a)
 		b, _ := p.device(c.b)
