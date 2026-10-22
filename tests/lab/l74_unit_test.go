@@ -1081,3 +1081,35 @@ func TestRunAllAttemptsEveryCommandAndJoinsTheErrors(t *testing.T) {
 		t.Fatal("no failures, no error")
 	}
 }
+
+// A cut is the broker's own once it says so: store status pings live and says
+// "cut" up to one freshness check before the mint path knows. A line from an
+// earlier cut (before the mark) is not this cut's.
+func TestL75NotAnsweringWaitsForTheLineAfterTheMark(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "b3.log")
+	p := &regionProc{name: "port49-broker l75 b3", log: log}
+	line := "port49-broker: directory store: not answering; serving from the cache confirmed 1.4s ago\n"
+	if err := os.WriteFile(log, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.mark()
+	if err := l75NotAnswering(p, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "directory store: not answering") {
+		t.Fatalf("only an earlier cut's line: %v, want the INVALID error naming the line", err)
+	}
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		f.WriteString(line)
+	}()
+	start := time.Now()
+	if err := l75NotAnswering(p, 5*time.Second); err != nil {
+		t.Fatalf("a line written after the mark: %v", err)
+	}
+	if took := time.Since(start); took < 100*time.Millisecond || took > 3*time.Second {
+		t.Fatalf("returned after %v: it must wait for the line, and stop when it comes", took)
+	}
+}
