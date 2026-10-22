@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"net/netip"
 	"regexp"
 	"strings"
 )
@@ -21,8 +22,10 @@ import (
 //     never a free-text field, so a new debug line that carries a body is
 //     lost rather than kept.
 //  4. An avstr= line keeps its key only for service, cmd, cmd-arg and
-//     priv-lvl, and a cmd or cmd-arg value only when it is one word of
-//     nxosDebugWords; any other value is written <masked>. A typed secret
+//     priv-lvl; a cmd or cmd-arg value only when it is one word of
+//     nxosDebugWords, and a service or priv-lvl value only when it is one
+//     word of at most 16 characters; any other value is written <masked>.
+//     An address field is kept only if it parses as an address. A typed secret
 //     (`username x password s`) arrives as cmd-arg=password, then
 //     cmd-arg=s, and the secret-word rule catches only the first.
 //
@@ -68,14 +71,18 @@ var (
 	// nxosDebugAvstr is an attribute line; its key and value are judged by
 	// nxosDebugAV.
 	nxosDebugAvstr = regexp.MustCompile(`^avstr=([A-Za-z0-9_-]+)=(.*)$`)
-	nxosDebugWord  = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	// nxosDebugWord is a service or priv-lvl value kept as it is: one short
+	// word. Anything longer is <masked>, whatever its key.
+	nxosDebugWord = regexp.MustCompile(`^[A-Za-z0-9_-]{1,16}$`)
 )
 
 // nxosDebugAllow are the anchored shapes a kept line may have, after the
-// drop and mask rules. ip is an address; n a count; fn a function name the
-// mask may have cut to <LONG>.
+// drop and mask rules. ip is an address, and the only capturing group: each
+// one must parse as an address (netip.ParseAddr), so colon-separated hex of
+// any other kind is dropped. n is a count; fn a function name the mask may
+// have cut to <LONG>.
 var nxosDebugAllow = func() []*regexp.Regexp {
-	const ip, n, fn = `[0-9A-Fa-f.:]+`, `-?\d+`, `(<LONG>: )?`
+	const ip, n, fn = "\x01", `-?\d+`, `(<LONG>: )?`
 	shapes := []string{
 		// Request construction: the type and counts, never the user.
 		`construct_tac_req(\(` + n + `\))?:? ?(aaa session id: ` + n + `, )?aaa type: ` + n +
@@ -87,7 +94,9 @@ var nxosDebugAllow = func() []*regexp.Regexp {
 		fn + `nxos_ssl_read\(\) for server ` + ip + ` on socket ` + n,
 		fn + `nxos_ssl_read\(\) for server ` + ip + ` group [A-Za-z0-9_-]* aaa session id: ` + n + ` recv_bytes_left ` + n,
 		fn + `nxos_ssl_read\(\) failed for socket ` + n + `\.?`,
-		`non_blocking_(read|write)(\(` + n + `\))?:?( [a-z_]+[ =:]*` + n + `,?)*`,
+		// Named counters only, at most four: a run of word=decimal fields
+		// could spell anything.
+		`non_blocking_(read|write)(\(` + n + `\))?:?( (socket|sock|sock_fd|fd|len|length|bytes|rc|ret|errno)[ =:]*-?\d{1,10},?){0,4}`,
 		`before nxos_ssl_open +hostname ` + ip + ` server ` + ip + ` on port ` + n + ` vrf ` + n,
 		`after nxos_ssl_open rc ` + n,
 		`nxos_ssl_(open success|open failed|retry_open)`,
@@ -115,10 +124,23 @@ var nxosDebugAllow = func() []*regexp.Regexp {
 	}
 	out := make([]*regexp.Regexp, len(shapes))
 	for i, s := range shapes {
-		out[i] = regexp.MustCompile(`^` + s + `$`)
+		out[i] = regexp.MustCompile(`^` + strings.ReplaceAll(nxosNonCapturing(s), ip, `([0-9A-Fa-f.:]{2,39})`) + `$`)
 	}
 	return out
 }()
+
+// nxosNonCapturing makes every group of s non-capturing, so the only
+// capturing groups are the addresses put in after it.
+func nxosNonCapturing(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		b.WriteByte(s[i])
+		if s[i] == '(' && (i == 0 || s[i-1] != '\\') && (i+1 >= len(s) || s[i+1] != '?') {
+			b.WriteString("?:")
+		}
+	}
+	return b.String()
+}
 
 // nxosDebugAV is an avstr= message as kept, or false to drop it: service
 // and priv-lvl keep a one-word value, cmd and cmd-arg keep a listed word,
@@ -177,9 +199,16 @@ func nxosDebugKeep(text string) string {
 
 func nxosDebugAdmitted(msg string) bool {
 	for _, re := range nxosDebugAllow {
-		if re.MatchString(msg) {
-			return true
+		m := re.FindStringSubmatch(msg)
+		if m == nil {
+			continue
 		}
+		for _, addr := range m[1:] {
+			if _, err := netip.ParseAddr(addr); err != nil {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

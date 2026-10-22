@@ -148,3 +148,27 @@ func TestNXOSDebugCountsAndFallbacks(t *testing.T) {
 		t.Fatalf("fallback context %+v", f)
 	}
 }
+
+// The review's attacks (task 7 review M3), made up: a long avstr value of
+// any key, an "address" that is colon-separated hex, and repeated
+// word=decimal fields. Each comes out masked or dropped.
+func TestNXOSDebugReviewFixturesAreMaskedOrDropped(t *testing.T) {
+	long := strings.Repeat("FAKE", 9) // 36 characters
+	for in, want := range map[string]string{
+		"05:00:15.000001 tacacsd: avstr=priv-lvl=" + long:                                                          "05:00:15.000001 tacacsd: avstr=priv-lvl=<masked>",
+		"05:00:15.000002 tacacsd: avstr=service=" + long:                                                           "05:00:15.000002 tacacsd: avstr=service=<masked>",
+		"05:00:15.000003 tacacsd: avstr=service=FAKEFAKEFAKEFAKEZ":                                                 "05:00:15.000003 tacacsd: avstr=service=<masked>",
+		"05:00:15.000004 tacacsd: avstr=service=shell":                                                             "05:00:15.000004 tacacsd: avstr=service=shell",
+		"05:00:15.000005 tacacsd: <LONG>: nxos_ssl_read() for server 70:61:73:73:77:6f:72:64:31:32:33 on socket 5": "",
+		"05:00:15.000006 tacacsd: nxos_ssl_write:sending 9 bytes to 66:61:6b:65 port 300 on socket 5":              "",
+		"05:00:15.000007 tacacsd: nxos_ssl_write:sending 9 bytes to 2001:db8::1 port 300 on socket 5":              "05:00:15.000007 tacacsd: nxos_ssl_write:sending 9 bytes to 2001:db8::1 port 300 on socket 5",
+		"05:00:15.000008 tacacsd: non_blocking_read: a=112, a=97, a=115, a=115":                                    "",
+		"05:00:15.000009 tacacsd: non_blocking_read: socket=5, a=97":                                               "",
+		"05:00:15.000010 tacacsd: non_blocking_read: socket=5, bytes=76, socket=6, bytes=1, rc=0":                  "",
+		"05:00:15.000011 tacacsd: non_blocking_read: socket=5, bytes=76":                                           "05:00:15.000011 tacacsd: non_blocking_read: socket=5, bytes=76",
+	} {
+		if got := nxosDebugKeep(in); got != want {
+			t.Errorf("%.60q...: kept %q, want %q", in, got, want)
+		}
+	}
+}
