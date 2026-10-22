@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -96,5 +97,31 @@ func TestServerSingleConnectFactNeedsACleanCapture(t *testing.T) {
 	}
 	if f := serverSingleConnectFact(true, true, reused, recs, note); f == nil || f.ID != devicemock.FactTLSServerSingleConnectHonored {
 		t.Errorf("started clean: wrote %+v", f)
+	}
+}
+
+// Review N5: run.json's keys as the lab harness writes them (pinned on that
+// side by TestQualRunNamesTheCleanCaptureAndTheOffer) are the ones Generate
+// reads.
+func TestRunReadsTheOfferAndTheCleanCapture(t *testing.T) {
+	var r run
+	if err := json.Unmarshal([]byte(`{"tls_server_single_connect_offered":true,"tls_capture_started_clean":true}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if !r.TLSServerSingleConnectOffered || !r.TLSCaptureStartedClean {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// Review N5: two connections that only touch, one ending as the next
+// begins, count as overlapping: the conservative reading, no claim.
+func TestServerSingleConnectFactTouchingIsOverlap(t *testing.T) {
+	base := time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+	note := devicemock.Source{Note: "tests/lab/results/QUAL-x-cisco_nxos.md", Register: "QUAL"}
+	s := time.Second
+	touch := []conn{tlsConnAt(base, 0, 2*s), tlsConnAt(base, 2*s, 4*s)}
+	recs := []*rec{recAt(base, "redeem", s), recAt(base, "authorize_session", 3*s)}
+	if f := serverSingleConnectFact(true, true, touch, recs, note); f != nil {
+		t.Fatalf("touching connections wrote %s", f.ID)
 	}
 }
