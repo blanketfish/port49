@@ -608,23 +608,36 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
 	// tls_token_login is graded per connection (honored or ignored, decision 50
-	// ruling 20), so its capture starts clean (review I1, O1). The capture sees
-	// only connections whose SYN it caught, so no rule that waits can see one
-	// held from the readiness probe: port49d is restarted here, between ready
-	// and the capture, which closes any held connection as an idle close
-	// would, and run.json records it. The gauge must then read 0 within a
-	// minute, or the run is INVALID.
+	// ruling 20), so its capture starts clean (review I1, O1, N1, N4). The
+	// capture sees only connections whose SYN it caught, so no rule that waits
+	// can see one held from the readiness probe; port49d is restarted instead.
+	//   - First the readiness login's own records land (guard, settle), as at
+	//     every other restart site, so none reaches a stopped daemon.
+	//   - The restart closes any held TLS connection with close_notify, as an
+	//     idle close does (server.go's shutdown).
+	//   - A fresh readiness login then shows the device connecting on a new
+	//     connection to the restarted daemon, before the capture opens.
+	//   - The gauge must read 0 within qualCleanPolls (past idle_timeout, which
+	//     closes what that login left held), and again once the capture has
+	//     started. Either failure is INVALID; run.json records the clean start.
+	e.guard()
+	e.settle()
 	q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
 	q.login()
-	if err := qualWaitNoConnections(func() (float64, bool) { return e.metric(qualConnectionsOpen) }, 60, time.Sleep); err != nil {
+	e.ready("qual-tls-clean")
+	read := func() (float64, bool) { return e.metric(qualConnectionsOpen) }
+	if err := qualWaitNoConnections(read, qualCleanPolls, time.Sleep); err != nil {
 		q.t.Fatal(err)
 	}
-	q.run.TLSCaptureStartedClean = true
 
 	// tls_token_login: the plain token_login, command_permitted, command_denied and
 	// accounting cells together, per-request.
 	off := q.cell("tls_token_login")
 	stop := e.capture("tls_token_login")
+	if err := qualStillClean(read); err != nil {
+		q.t.Fatal(err)
+	}
+	q.run.TLSCaptureStartedClean = true
 	outs, err := login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
 	recs := q.waitStop(off)
 	time.Sleep(l73SettleTail)

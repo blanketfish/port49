@@ -13,6 +13,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 )
@@ -231,5 +232,40 @@ func TestBuildInvalidsNameTheFix(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "rebuild after committing") {
 			t.Errorf("%v", err)
 		}
+	}
+}
+
+// Review N4: the gauge is read again once the capture has started, so a
+// connection opened between the last 0 and the capture's first SYN makes
+// the run INVALID rather than an unclean "clean" capture.
+func TestQualStillCleanAfterTheCaptureStarts(t *testing.T) {
+	if err := qualStillClean(func() (float64, bool) { return 0, true }); err != nil {
+		t.Fatal(err)
+	}
+	if err := qualStillClean(func() (float64, bool) { return 0, false }); err != nil {
+		t.Fatalf("no series yet is no connection: %v", err)
+	}
+	if err := qualStillClean(func() (float64, bool) { return 1, true }); err == nil || !strings.HasPrefix(err.Error(), "INVALID: ") {
+		t.Fatalf("a connection open at the capture's start: %v", err)
+	}
+}
+
+// The wait outlasts the lab file's idle_timeout, which closes a connection
+// the fresh readiness login left held (review N1).
+func TestQualCleanWaitOutlastsTheLabIdleTimeout(t *testing.T) {
+	raw, err := os.ReadFile("port49d-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Limits struct {
+			IdleTimeout time.Duration `yaml:"idle_timeout"`
+		} `yaml:"limits"`
+	}
+	if err := yaml.Unmarshal(raw, &cfg); err != nil || cfg.Limits.IdleTimeout == 0 {
+		t.Fatalf("idle_timeout: %v %v", cfg.Limits.IdleTimeout, err)
+	}
+	if time.Duration(qualCleanPolls)*time.Second < cfg.Limits.IdleTimeout+30*time.Second {
+		t.Fatalf("the wait (%ds) does not outlast idle_timeout %v", qualCleanPolls, cfg.Limits.IdleTimeout)
 	}
 }

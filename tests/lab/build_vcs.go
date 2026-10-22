@@ -150,3 +150,19 @@ func qualWaitNoConnections(read func() (float64, bool), limit int, sleep func(ti
 	}
 	return fmt.Errorf("INVALID: %v connections still open after %ds; the capture would not start clean", last, limit)
 }
+
+// qualCleanPolls bounds qualWaitNoConnections before tls_token_login: one
+// poll a second for six minutes, past the lab file's idle_timeout (5m), which
+// closes a connection the fresh readiness login left held (an offered NX-OS
+// one) with close_notify (review N1).
+const qualCleanPolls = 6 * 60
+
+// qualStillClean reads the gauge once the capture has started: a connection
+// opened between the last 0 and the capture's first SYN would be open and
+// uncaptured, so it is INVALID (review N4). No series is no connection.
+func qualStillClean(read func() (float64, bool)) error {
+	if v, ok := read(); ok && v != 0 {
+		return fmt.Errorf("INVALID: %v connections open when tls_token_login's capture started; it did not start clean", v)
+	}
+	return nil
+}
