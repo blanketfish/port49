@@ -651,6 +651,70 @@ func DeleteTokenRemovesOne(t *testing.T, newStore func() store.Store, now time.T
 	}
 }
 
+// TokenIDsListsTheLive: TokenIDs is the ID of every live token under k and
+// no other, and nothing once they are deleted (spec §5.1.3: a refresh deletes
+// every ID it does not keep, one it cannot open included).
+func TokenIDsListsTheLive(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	k := store.TokenKey{NAS: "leaf-01", Username: "svc"}
+	put := func(k store.TokenKey, id string, expires time.Time) {
+		t.Helper()
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("secret-" + id), Kind: store.KindLogin,
+			ExpiresAt: expires, Principal: "spiffe://example.com/a", Username: k.Username, MintedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(k, "a", now.Add(time.Minute))
+	put(k, "b", now.Add(time.Minute))
+	put(k, "old", now) // expired: not live
+	put(store.TokenKey{NAS: "leaf-02", Username: "svc"}, "c", now.Add(time.Minute))
+	ids, err := s.TokenIDs(ctx, k)
+	if slices.Sort(ids); err != nil || !slices.Equal(ids, []string{"a", "b"}) {
+		t.Fatalf("TokenIDs = %q %v, want [a b]", ids, err)
+	}
+	if err := s.DeleteToken(ctx, k, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.TokenIDs(ctx, k); err != nil || !slices.Equal(ids, []string{"b"}) {
+		t.Fatalf("TokenIDs after a's delete = %q %v, want [b]", ids, err)
+	}
+	if ids, err := s.TokenIDs(ctx, store.TokenKey{NAS: "nowhere", Username: "svc"}); err != nil || len(ids) != 0 {
+		t.Fatalf("TokenIDs of an empty key = %q %v", ids, err)
+	}
+}
+
+// TokenCarriesItsProof: a token's per-login proof comes back as it was put,
+// MFAFresh true and false alike, through the backend's own encoding (spec
+// §5.1.3: a refresh keeps a token on a fresh proof whatever reuse_for is).
+func TokenCarriesItsProof(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	for _, fresh := range []bool{true, false} {
+		id := fmt.Sprintf("fresh-%v", fresh)
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("secret-" + id), Kind: store.KindLogin,
+			ExpiresAt: now.Add(time.Minute), Principal: "user:alice", Username: k.Username, MintedAt: now,
+			Credential: store.Credential{Method: "cert", MFAMethod: "hardware_key_touch",
+				MFAAt: now.Add(-30 * time.Second), MFAFresh: fresh}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("Candidates: %d tokens, %v", len(got), err)
+	}
+	for _, tok := range got {
+		c := tok.Credential
+		if c.MFAFresh != (tok.ID == "fresh-true") || c.MFAMethod != "hardware_key_touch" ||
+			!c.MFAAt.Equal(now.Add(-30*time.Second)) {
+			t.Fatalf("token %s came back with MFAFresh %v, method %q, at %v", tok.ID, c.MFAFresh, c.MFAMethod, c.MFAAt)
+		}
+	}
+}
+
 // SecretsIntact fails t unless the live tokens under k are exactly ids, in
 // any order, each with the Secret "secret-"+ID. A Secret is compared and
 // never printed.
@@ -801,13 +865,13 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		list[2].Key != bob.Key {
 		t.Fatalf("list: %+v %v", list, err)
 	}
-	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a lifted mark stands: %v", err)
 	}
-	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
 		t.Fatalf("lifting a mark twice: %v", err)
 	}
 	if got, err := s.GetRevocation(ctx, cert.Kind, cert.Key); err != nil || !got.At.Equal(cert.At) {
@@ -1033,6 +1097,8 @@ func Run(t *testing.T, b Backend) {
 		{"TokenIndex", func(t *testing.T) { TokenIndex(t, fixed(t), t0) }},
 		{"DeleteTokenRemovesOne", func(t *testing.T) { DeleteTokenRemovesOne(t, fixed(t), t0) }},
 		{"DeleteTokenRacesRedeem", func(t *testing.T) { DeleteTokenRacesRedeem(t, fixed(t), t0) }},
+		{"TokenIDsListsTheLive", func(t *testing.T) { TokenIDsListsTheLive(t, fixed(t), t0) }},
+		{"TokenCarriesItsProof", func(t *testing.T) { TokenCarriesItsProof(t, fixed(t), t0) }},
 		{"RevocationMarks", func(t *testing.T) { RevocationMarks(t, fixed(t), t0) }},
 		{"CeilingShortensOnly", func(t *testing.T) { CeilingShortensOnly(t, fixed(t), t0) }},
 		{"RefreshSetsTheCeiling", func(t *testing.T) { RefreshSetsTheCeiling(t, fixed(t), t0) }},

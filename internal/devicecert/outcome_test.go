@@ -27,9 +27,10 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-func TestOnlyStatusUnavailableIsNotStruck(t *testing.T) {
+// Two refusals are declines, not strikes (decision 50 rulings 8, 10).
+func TestOnlyStatusUnavailableAndSNIMismatchAreNotStruck(t *testing.T) {
 	for _, o := range Outcomes {
-		if o.Struck() == (o == StatusUnavailable) {
+		if o.Struck() == (o == StatusUnavailable || o == SNIMismatch) {
 			t.Errorf("%s: Struck %v", o, o.Struck())
 		}
 	}

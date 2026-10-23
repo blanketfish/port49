@@ -51,6 +51,15 @@ type run struct {
 	// DeniedCommandAsked is whether that command reached port49 as an
 	// authorize_command: refused by port49, not by the device (review M2).
 	DeniedCommandAsked map[string]bool `json:"denied_command_asked"`
+	// TLSServerSingleConnectOffered is whether the build under test offers
+	// single-connect to this platform over per-request TLS (decision 50
+	// ruling 20): the harness writes it from platform.TLSServerSingleConnect,
+	// since the flag itself is inside the ciphertext.
+	TLSServerSingleConnectOffered bool `json:"tls_server_single_connect_offered"`
+	// TLSCaptureStartedClean is whether no connection was open before or at
+	// tls_token_login's capture's start, so none whose SYN the capture
+	// missed was open in it (review O1, R3).
+	TLSCaptureStartedClean bool `json:"tls_capture_started_clean"`
 }
 
 type plainHeader struct {
@@ -89,6 +98,9 @@ type conn struct {
 	ServerHello    *serverHello  `json:"server_hello"`
 	ServerFlightAt time.Time     `json:"server_flight_at"`
 	DeviceReplyAt  time.Time     `json:"device_reply_at"`
+	SYNAt          time.Time     `json:"syn_at"`
+	End            string        `json:"end"` // device-fin, server-fin, device-rst, server-rst, open
+	EndAt          time.Time     `json:"end_at"`
 }
 
 // rec is one whitelisted decision record (qualRecord's shape).
@@ -214,6 +226,19 @@ func Generate(evDir, repoRoot string) (*devicemock.Profile, devicemock.Golden, e
 	}
 	if p.DeviceFacts, err = tlsFacts(&r, note); err != nil {
 		return nil, g, err
+	}
+	if r.TLSServerSingleConnectOffered {
+		var cs []conn
+		if err := readJSON(filepath.Join(evDir, "tls_token_login.tls.json"), &cs); err != nil {
+			return nil, g, err
+		}
+		tlsRecs, err := scenarioRecords(recs, win, &r, "tls_token_login")
+		if err != nil {
+			return nil, g, err
+		}
+		if f := serverSingleConnectFact(true, r.TLSCaptureStartedClean, cs, tlsRecs, note); f != nil {
+			p.DeviceFacts = append(p.DeviceFacts, *f)
+		}
 	}
 	if err := minorVersions(evDir, &r, p, note); err != nil {
 		return nil, g, err
@@ -929,4 +954,87 @@ func noCommandAuthorizationGap(platform, firmware string, l18 []byte, note devic
 	return devicemock.EngineGap{ID: "command_authorization_not_sent",
 		What:    "the device sends no per-command authorization (" + cite + "); its command cells are not_applicable",
 		Sources: []devicemock.Source{note}}
+}
+
+// serverSingleConnectFact grades whether the device honored port49's offer
+// of single-connect over per-request TLS (spec §13 decision 50 ruling 20;
+// design Task 7 RI4), in header terms only: the TLS cell's connections from
+// its header-only summary, and port49's own records of the cell. The
+// TACACS+ header is inside the ciphertext, so whether port49 offered is
+// run.json's, which the harness writes from the build under test's own wire
+// fact.
+//
+// A record carries no connection identity (no source port or connection id;
+// cert_sha256 is the device's on every connection), so it is placed by time.
+// The fact is absent, never a guess, when the capture did not start clean
+// (clean: no connection open before or at its start, so none whose SYN it
+// missed was open), when any two of the cell's connections overlap, or when
+// a record falls in no connection.
+//
+//   - honored: a connection carried a session after a completed one that
+//     was not accounting. That is reuse, not arm E's pipelining behind an
+//     accounting record.
+//   - ignored: every connection that carried a session carried exactly one.
+//   - nil, no claim: port49 did not offer, a record could not be placed, or
+//     neither holds.
+func serverSingleConnectFact(offered, clean bool, conns []conn, recs []*rec, note devicemock.Source) *devicemock.DeviceFact {
+	if !offered || !clean {
+		return nil
+	}
+	open := func(c conn) time.Time {
+		if c.End == "open" || c.EndAt.IsZero() {
+			return time.Time{}
+		}
+		return c.EndAt
+	}
+	// overlaps reports whether a and b were open at once.
+	overlaps := func(a, b conn) bool {
+		aEnd, bEnd := open(a), open(b)
+		return (aEnd.IsZero() || !b.SYNAt.After(aEnd)) && (bEnd.IsZero() || !a.SYNAt.After(bEnd))
+	}
+	// Any two connections open at once make the cell no claim: an
+	// overlapping pair with no records looks just like parallel
+	// connections refused, the ignored signature (review O2).
+	for i := range conns {
+		for j := i + 1; j < len(conns); j++ {
+			if overlaps(conns[i], conns[j]) {
+				return nil
+			}
+		}
+	}
+	per := make([][]*rec, len(conns))
+	for _, x := range recs {
+		in := slices.IndexFunc(conns, func(c conn) bool {
+			end := open(c)
+			return !x.at.Before(c.SYNAt) && (end.IsZero() || !x.at.After(end))
+		})
+		if in < 0 {
+			return nil // inside no connection
+		}
+		per[in] = append(per[in], x)
+	}
+	reused, carried, single := false, 0, true
+	for _, rs := range per {
+		if len(rs) == 0 {
+			continue
+		}
+		carried++
+		single = single && len(rs) == 1
+		slices.SortFunc(rs, func(a, b *rec) int { return a.at.Compare(b.at) })
+		for i := 1; i < len(rs); i++ {
+			reused = reused || rs[i-1].Event != "account"
+		}
+	}
+	src := []devicemock.Source{note}
+	switch {
+	case reused:
+		return &devicemock.DeviceFact{ID: devicemock.FactTLSServerSingleConnectHonored, Status: "measured", Sources: src,
+			What: "Over per-request TLS the device honored the single-connect port49 offers it (decision 50 ruling 20): " +
+				"it sent a later session on the connection after a completed one (QUAL tls_token_login)"}
+	case carried > 0 && single:
+		return &devicemock.DeviceFact{ID: devicemock.FactTLSServerSingleConnectIgnored, Status: "measured", Sources: src,
+			What: "Over per-request TLS the device ignored the single-connect port49 offers it (decision 50 ruling 20): " +
+				"every connection carried one session (QUAL tls_token_login)"}
+	}
+	return nil
 }

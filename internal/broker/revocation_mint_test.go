@@ -250,7 +250,7 @@ func TestARevocationDuringAMintDeletesWhatItWrote(t *testing.T) {
 	if _, ok := recs[1]["index_error"]; ok {
 		t.Fatalf("a delete that succeeded is no index_error: %v", recs[1])
 	}
-	if err := f.st.DeleteRevocation(context.Background(), store.RevocationPrincipal, "user:alice@example.com"); err != nil {
+	if err := f.st.DeleteRevocation(context.Background(), store.RevocationPrincipal, "user:alice@example.com", store.Lift{}); err != nil {
 		t.Fatal(err)
 	}
 	f.advance(time.Second)

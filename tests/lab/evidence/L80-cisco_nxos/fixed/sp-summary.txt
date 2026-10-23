@@ -1,0 +1,56 @@
+L80 re-measure, arm fixed, cell sp, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.48 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=1.9s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=2.1s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=10.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=29.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=31.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 2, most open at once: 1
+  conn port=33304 syn=16:40:52.557 hold=81.49s end=server-fin
+  conn port=54694 syn=16:42:15.280 hold=35.26s end=server-fin
+connection_events deltas: <LONG> idle_closed=2 refused_cap=0
+port49 records:
+  16:40:57.565 redeem permit
+  16:40:57.590 authorize_session permit
+  16:40:57.745 account
+  16:40:57.911 authorize_command permit "terminal length 0"
+  16:40:57.933 account
+  16:40:58.663 authorize_command deny "show users"
+  16:40:58.912 authorize_command permit "terminal length 0"
+  16:40:58.933 account
+  16:41:01.072 authorize_command deny "show users"
+  16:41:01.323 authorize_command permit "terminal length 0"
+  16:41:01.343 account
+  16:41:03.682 authorize_command deny "show users"
+  16:41:03.933 authorize_command permit "terminal length 0"
+  16:41:03.952 account
+  16:41:14.235 authorize_command deny "show users"
+  16:41:14.486 authorize_command permit "terminal length 0"
+  16:41:14.506 account
+  16:41:43.777 authorize_command deny "show users"
+  16:41:44.026 authorize_command permit "terminal length 0"
+  16:41:44.046 account
+  16:42:20.288 authorize_command deny "show users"
+  16:42:20.539 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=0.5s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=1.9s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=2.1s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=10.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=29.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=31.0s asked=true denied=true
+debug counts: connection_active=20 fall_back_none=0 mark_server_dead=0 request_acct=12 request_authen=1 request_author=16 ssl_open_success=2 ssl_read_failed=0 tacacs_group_failed=3
+

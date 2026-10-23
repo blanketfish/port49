@@ -1037,7 +1037,7 @@ func TestAReloadNeverLiftsAMarkItsWriteLost(t *testing.T) {
 	st := b.Store
 	b.Store = putRevocationUnavailable{st}
 	if _, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); err == nil ||
-		!strings.Contains(err.Error(), "could not be recorded") {
+		!strings.Contains(err.Error(), "may not have been recorded") {
 		t.Fatalf("the revocation: %v", err)
 	}
 	feed := &replayFeed{fail: make(chan error), afters: make(chan uint64, 2)}
@@ -1077,7 +1077,7 @@ func TestAReloadNeverLiftsAMarkItsWriteLost(t *testing.T) {
 	}
 }
 
-// A mark this process could not record (Revoke's "could not be recorded")
+// A mark this process could not record (Revoke's "may not have been recorded")
 // reaches its own listener once the store holds it, put there by another
 // process or by a write whose reply was lost: the feed's put, or a
 // compacted watch's load, closes its held connections and refuses the next
@@ -1089,7 +1089,7 @@ func TestAMarkThatLandsAfterAFailedWriteReachesTheListener(t *testing.T) {
 		st := b.Store
 		b.Store = putRevocationUnavailable{st}
 		if _, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); err == nil ||
-			!strings.Contains(err.Error(), "could not be recorded") {
+			!strings.Contains(err.Error(), "may not have been recorded") {
 			t.Fatalf("the revocation: %v", err)
 		}
 		if bindRefused(t, l, "user:alice@example.com") {
@@ -1201,7 +1201,7 @@ func TestALiftDuringARevokeIsNotUndone(t *testing.T) {
 	b.Marks = store.NewMarks()
 	st := b.Store
 	b.Store = putRevocationThen{Store: st, then: func(r store.Revocation) {
-		if err := st.DeleteRevocation(context.Background(), r.Kind, r.Key); err != nil {
+		if err := st.DeleteRevocation(context.Background(), r.Kind, r.Key, store.Lift{}); err != nil {
 			t.Error(err)
 		}
 		b.Marks.Set(r, false) // the feed's lift

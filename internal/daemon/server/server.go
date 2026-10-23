@@ -25,6 +25,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Admitter answers which device a source address is and which key_ref admits
@@ -74,6 +75,9 @@ type Deps struct {
 	// TLS, when set, makes this the RFC 9887 listener (spec §13 decision 50);
 	// nil is the RFC 8907 listener.
 	TLS *TLS
+	// offers is the per-source count of open offered connections
+	// (decision 50 ruling 20); nil makes a new one. A test sets it to watch.
+	offers *offers
 }
 
 func Serve(ctx context.Context, ln net.Listener, d Deps) error {
@@ -92,6 +96,10 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	}()
 
 	var lastAcceptLog time.Time
+	offered := d.offers
+	if offered == nil {
+		offered = newOffers()
+	}
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -175,10 +183,18 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			}
 			d.Limits.Undecline(src)
 		}
+		// A device port49 offered single-connect to keeps the one connection
+		// while it honors the offer. A second one served while an offered one
+		// is open says it ignored it: counted here, once the connection is
+		// past every refusal at Accept, before its connections reach
+		// refused_cap, with no device label (decision 50 rulings 16 and 20).
+		if d.TLS != nil && admitted && offered.any(src) && platform.TLSServerSingleConnect(wirePlatform(dev)) {
+			d.Metrics.ConnectionEvents.WithLabelValues("single_connect_second_connection").Inc()
+		}
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
-			refused: found && dev.Refused != "", sessions: map[uint32]*authen.Session{}}
+			refused: found && dev.Refused != "", offers: offered, sessions: map[uint32]*authen.Session{}}
 		if cc.admitted && !mismatch && d.TLS == nil {
 			cc.keys = d.Keys[dev.KeyRef]
 		}
@@ -203,15 +219,27 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 				}
 			}()
 			// Close the connection on shutdown rather than waiting out its idle
-			// timeout; serve's own defer closes it on the normal path.
+			// timeout; serve's own defer closes it on the normal path. A store
+			// gone resets at once (L28). Otherwise a TLS connection is closed
+			// with close_notify, as an idle close is, not a bare FIN: an
+			// offered connection is held by the device between requests
+			// (decision 50 ruling 20). The idle close is the one measured (L80
+			// idle35); how an NX-OS device takes a close_notify at shutdown
+			// in the middle of a session is not measured, and the L80 restart
+			// cell (port49d restarted during a command loop) measures it.
+			// crypto/tls bounds the alert's write at 5 s.
 			done := make(chan struct{})
 			go func() {
 				select {
 				case <-ctx.Done():
 					if d.Abort != nil && d.Abort() {
 						reset(c)
+						c.Close()
+					} else if tc := cc.tlsc.Load(); tc != nil {
+						tc.Close()
+					} else {
+						c.Close()
 					}
-					c.Close()
 				case <-done:
 				}
 			}()
@@ -224,11 +252,12 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 // declining reports whether port49d would decline a connection from dev on
 // this listener as admission and the policy stand now: a source the
 // inventory does not name, a device admission refuses, one of the other
-// transport, a quarantined one, or one whose certificate status could not
-// be established, whose window stands until it lapses (spec §13 decision 50
-// ruling 8). It is asked only at an Accept inside a decline window.
+// transport, a quarantined one, or one whose last decline stands until it
+// lapses (Limiter.DeclineStanding: a certificate status that could not be
+// established, or a server name not in server_names; spec §13 decision 50
+// rulings 8 and 10). It is asked only at an Accept inside a decline window.
 func declining(d Deps, src netip.Addr, dev admission.Resolved, admitted bool, listener string) bool {
-	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedForStatus(src) {
+	if !admitted || dev.Device.EffectiveTransport() != listener || d.Limits.DeclinedStanding(src) {
 		return true
 	}
 	if d.TLS != nil {

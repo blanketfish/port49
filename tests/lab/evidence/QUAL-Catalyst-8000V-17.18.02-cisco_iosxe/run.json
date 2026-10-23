@@ -3,24 +3,24 @@
   "lab_platform": "cisco_iosxe",
   "firmware": "Catalyst 8000V 17.18.02",
   "image": "Catalyst 8000V 17.18.02",
-  "commit": "f83de037a88c",
-  "date": "2026-10-21",
+  "commit": "8c653d2a53fa",
+  "date": "2026-10-23",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-21T09:41:34.251974792Z",
-    "command_denied": "2026-10-21T09:41:33.21961401Z",
-    "command_permitted": "2026-10-21T09:41:33.21961401Z",
-    "single_connection": "2026-10-21T09:42:28.782722127Z",
-    "store_unavailable": "2026-10-21T09:41:40.944400634Z",
-    "tls_single_connection": "2026-10-21T09:44:26.830001871Z",
-    "tls_store_unavailable": "2026-10-21T09:43:32.042884943Z",
-    "tls_token_login": "2026-10-21T09:43:18.70716108Z",
-    "tls_unknown_ca": "2026-10-21T09:43:52.739604596Z",
-    "token_login": "2026-10-21T09:41:32.42919506Z",
-    "wrong_credential": "2026-10-21T09:41:35.035082699Z"
+    "accounting": "2026-10-23T03:37:37.522880701Z",
+    "command_denied": "2026-10-23T03:37:36.488986114Z",
+    "command_permitted": "2026-10-23T03:37:36.488986114Z",
+    "single_connection": "2026-10-23T03:38:31.182769126Z",
+    "store_unavailable": "2026-10-23T03:37:43.892142365Z",
+    "tls_single_connection": "2026-10-23T03:40:35.300133668Z",
+    "tls_store_unavailable": "2026-10-23T03:39:40.521877602Z",
+    "tls_token_login": "2026-10-23T03:39:27.161556678Z",
+    "tls_unknown_ca": "2026-10-23T03:40:01.2027831Z",
+    "token_login": "2026-10-23T03:37:35.697857453Z",
+    "wrong_credential": "2026-10-23T03:37:38.307438468Z"
   },
   "registers": {
     "accounting": [
@@ -86,5 +86,11 @@
     "tls_token_login": "sent"
   },
   "denied_command_ran": {},
-  "denied_command_asked": {}
+  "denied_command_asked": {},
+  "tls_server_single_connect_offered": false,
+  "port49d": {
+    "vcs_revision": "8c653d2a53fa",
+    "vcs_modified": false
+  },
+  "tls_capture_started_clean": true
 }

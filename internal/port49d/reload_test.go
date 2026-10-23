@@ -87,6 +87,9 @@ func (rig *reloadRig) with(fn func()) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = rig.out
 	fn()
+	// The fail-closed report a swap or expiry pass asked for is said off
+	// this goroutine; what the test reads next includes it.
+	rig.r.failClosed.wait()
 }
 
 // swapTo puts body in force as the watch does: written, then two polls
@@ -541,6 +544,22 @@ func TestABusyContextIsSaidAsBusyNotAsAStop(t *testing.T) {
 	if strings.Contains(out, "stopped") || !strings.Contains(out, "1 context(s) still changing after every attempt") ||
 		!strings.Contains(out, "trying them again in 30s") || !rig.r.due.Equal(rig.now.Add(refreshRetry)) ||
 		testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+		t.Fatalf("due %v, stderr %q", rig.r.due, out)
+	}
+}
+
+// A token pass that met a policy swapped in after it began is said as that,
+// not as busy contexts that do not exist.
+func TestASwapDuringThePassIsSaidAsASwap(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.pass = func(context.Context, []broker.Prior) (broker.RefreshReport, error) {
+		return broker.RefreshReport{}, fmt.Errorf("deleting superseded tokens: %w", broker.ErrPolicySwapped)
+	}
+	rig.write(t, showOnly)
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := rig.out.String()
+	if strings.Contains(out, "still changing") || !strings.Contains(out, "the policy in force changed during the pass") ||
+		!strings.Contains(out, "trying again in 30s") || !rig.r.due.Equal(rig.now.Add(refreshRetry)) {
 		t.Fatalf("due %v, stderr %q", rig.r.due, out)
 	}
 }

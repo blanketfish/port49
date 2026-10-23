@@ -1,16 +1,16 @@
 port49-broker: metrics on 10.149.0.12:9050
 port49-broker: store: broker.state_dir/marks.json is absent: this replica's copy starts from the store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd restore lost cannot be put back from it)
-port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:52:07Z (0 days)
-port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-22T07:52:07Z (0 days)
+port49-broker: store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-23T14:54:04Z (0 days)
+port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-10-23T14:54:04Z (0 days)
 port49-broker: ledger: 0 context key(s) known (0 from the ledger record); following the store from revision 1
 port49-broker: store: 0 revocation(s) in force from the directory store
 port49-broker: identity: humans: x509 from broker.client_ca_file (no broker.identity is configured); no OIDC verifier
 port49-broker: policy: no bundle has been judged on this keyspace; this start is not judged against one
 port49-broker: policy: mints wait for a takeover to judge bundle sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d (meta/judged: none recorded): until this replica's runner or another's is done, POST /v1/token answers 503 store_unavailable, which is this start gate and not a store fault: port49 workload retries it, and port49 token (through the agent) exits saying to retry in 5s
 port49-broker: broker: certificate status checking is disabled (broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until `port49 revoke --cert`
-port49-broker: admin socket on /tmp/p49l741452195517/r2-b.sock (port49 revoke, port49 directory forget)
+port49-broker: admin socket on /tmp/p49l741891858131/r2-b.sock (port49 revoke, port49 directory forget)
 port49-broker: listening on 10.149.0.12:8443, metrics on 10.149.0.12:9050
-port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1283717, since 2026-10-21T07:52:21Z)"): this replica runs the start, the sweep and the policy refresh
+port49-broker: runner: took keyspace /port49/ ("port49-broker on beehive (pid 1513650, since 2026-10-22T14:54:18Z)"): this replica runs the start, the sweep and the policy refresh
 port49-broker: runner: the put-back of broker.state_dir/marks.json waits for the directory store; this region's duties run meanwhile
 port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the store was restored; going by meta/judged alone
 port49-broker: runner: the bundle in force (sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d) is not the one the last runner judged (none recorded); 0 unspent token(s) purged (run 'port49 token' again)
@@ -20,8 +20,19 @@ port49-broker: policy: mints open: this replica's takeover is done (bundle sha25
 port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
 port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
 port49-broker: runner: 0 standing revocation(s) applied to the live contexts after a put-back (0 context(s) marked revoked)
-port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 0 context(s) here
-port49-broker: directory store: not answering (store: unavailable: context deadline exceeded): serving from the cache confirmed 1.4s ago; revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers
-port49-broker: directory store: answering again; the cache was 2.0s old
-port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 0 context(s) here
-port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 0 context(s) here
+{"ts":"2026-10-22T14:54:30.349Z","event":"blob","blob":{"hash":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92","body":{"version":2,"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":true},"privilege":"admin","attributes":["priv-lvl=15","roles=network-admin"],"rules":[{"verdict":"permit","rule":"**","role":"admin"}],"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"classes":{}}}}
+{"ts":"2026-10-22T14:54:30.351Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+{"ts":"2026-10-22T14:54:34.837Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: broker: a revocation of user:alice@example.com made on a broker process closed 2 held connection(s) here
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+{"ts":"2026-10-22T14:54:35.720Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"user:alice@example.com","auth":{"method":"cert"},"device":{"nas":"","name":"l74-client","platform":"arista_eos"},"mint":{"token_sha256":["<redacted sha256>"],"ttl_seconds":900,"blob":"sha256:0f48a728577351c5bbba9e9c4e878943e697c2261ea558c846c0022cd09c2f92"},"policy":{"bundle":"sha256:427c3eb74b799f68b8f7ae853089be197ad4f7e92c2a48c4d45432184ef01f3d","subject":"alice","grants":[{"scope":"all","roles":["admin"]}]}}
+port49-broker: runner: a revocation of user:carol@example.com made elsewhere reached 0 token key(s) and 0 context(s) here
+port49-broker: broker: a revocation of user:alice@example.com made on a broker process closed 1 held connection(s) here
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: broker: a revocation of user:alice@example.com made at 2026-10-22T14:56:31Z was put back after the lift at 2026-10-22T14:56:44Z by a port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift, which it cannot tell from a mark an etcd restore lost; it stands everywhere; lift it again with port49 revoke --lift if it was lifted on purpose
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: runner: a revocation of user:alice@example.com made elsewhere reached 0 token key(s) and 1 context(s) here
+port49-broker: broker: a revocation of user:alice@example.com made at 2026-10-22T14:58:11Z before the lift at 2026-10-22T14:58:12Z landed after it: a copy sent while its writer was cut off; it stands everywhere

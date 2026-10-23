@@ -1,0 +1,96 @@
+L80 re-measure, arm baseline, cell s3, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=10.48 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=5.01s err=false first="nx1#"
+  s0 "configure terminal" gap=0.0s took=5.01s err=false first="Enter configuration commands, one per line. End with CNTL/Z."
+  s0 "hostname nx1"       gap=0.0s took=5.26s err=false first="nx1(config)#"
+  s0 "end"                gap=0.0s took=5.01s err=false first="nx1#"
+  s0 "show users"         gap=0.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 8, most open at once: 1
+  conn port=40904 syn=15:49:45.666 hold=5.01s end=server-fin
+  conn port=53214 syn=15:49:50.697 hold=5.01s end=server-fin
+  conn port=53228 syn=15:49:55.859 hold=5.01s end=server-fin
+  conn port=46170 syn=15:50:00.906 hold=5.01s end=server-fin
+  conn port=46176 syn=15:50:06.041 hold=5.01s end=server-fin
+  conn port=47362 syn=15:50:11.111 hold=5.02s end=server-rst
+  conn port=47370 syn=15:50:16.310 hold=5.01s end=server-fin
+  conn port=42978 syn=15:50:21.568 hold=5.01s end=server-fin
+connection_events deltas: <LONG> idle_closed=0 refused_cap=0
+port49 records:
+  15:49:50.672 redeem permit
+  15:49:55.705 authorize_session permit
+  15:50:00.868 account
+  15:50:05.914 account
+  15:50:11.048 authorize_command permit "hostname nx1"
+  15:50:16.119 account
+  15:50:21.318 authorize_command deny "show users"
+  15:50:26.574 account
+typed s0 "terminal length 0" gap=0.0s asked=false denied=false
+typed s0 "configure terminal" gap=0.0s asked=false denied=false
+typed s0 "hostname nx1" gap=0.0s asked=true denied=false
+typed s0 "end" gap=0.0s asked=false denied=false
+typed s0 "show users" gap=0.0s asked=true denied=true
+debug counts: connection_active=3 fall_back_none=3 mark_server_dead=3 request_acct=7 request_authen=1 request_author=9 ssl_open_success=8 ssl_read_failed=3 tacacs_group_failed=6
+fallback 1 at device 15:49:57.952586: 15:49:57.952586 aaad: Fall back method none succeeded
+  before: 15:49:57.952452 aaad: LOCAL method not supported for Authorization req all_cmds:default
+    15:49:57.950164 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=4, av_count_host=4
+    15:49:57.950564 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+    15:49:57.950712 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(32)
+    15:49:57.950831 tacacsd: <LONG>: before calling nxos_ssl_write() total length 104
+    15:49:57.950834 tacacsd: nxos_ssl_write:sending 104 bytes to 172.100.100.1 port 300 on socket 32
+    15:49:57.950970 tacacsd: construct_tac_req: exiting for aaa session id: 0
+    15:49:57.951062 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+    15:49:57.951345 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+    15:49:57.951590 aaad: response for accounting request of old library will be sent as SUCCESS
+    15:49:57.951625 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 32
+    15:49:57.951692 tacacsd: <LONG>: nxos_ssl_read() failed for socket 32.
+    15:49:57.951697 tacacsd: clean_up_sock_sm_node: socket 32 is_ssl_socket 1
+    15:49:57.951701 tacacsd: clean_up_sock_sm_node: freeing ssl_ctx for sock_fd 32
+    15:49:57.952200 tacacsd: clean_up_sock_sm_node(4564): mark server(172.100.100.1) dead
+    15:49:57.952204 tacacsd: aaa_mark_server_dead 1
+    15:49:57.952254 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+    15:49:57.952319 tacacsd: clean_up_sock_sm_node: return Successfully
+    15:49:57.952394 aaad: protocol TACACS failed with server group port49
+    15:49:57.952452 aaad: LOCAL method not supported for Authorization req all_cmds:default
+fallback 2 at device 15:50:02.999112: 15:50:02.999112 aaad: Fall back method none succeeded
+  before: 15:50:02.999053 aaad: LOCAL method not supported for Authorization req all_cmds:default
+    15:50:02.997367 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=3, av_count_host=3
+    15:50:02.997689 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+    15:50:02.997790 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(51)
+    15:50:02.997919 tacacsd: <LONG>: before calling nxos_ssl_write() total length 97
+    15:50:02.997923 tacacsd: nxos_ssl_write:sending 97 bytes to 172.100.100.1 port 300 on socket 51
+    15:50:02.998042 tacacsd: construct_tac_req: exiting for aaa session id: 0
+    15:50:02.998134 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 51
+    15:50:02.998205 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+    15:50:02.998351 aaad: response for accounting request of old library will be sent as SUCCESS
+    15:50:02.998396 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 51
+    15:50:02.998468 tacacsd: <LONG>: nxos_ssl_read() failed for socket 51.
+    15:50:02.998471 tacacsd: clean_up_sock_sm_node: socket 51 is_ssl_socket 1
+    15:50:02.998474 tacacsd: clean_up_sock_sm_node: freeing ssl_ctx for sock_fd 51
+    15:50:02.998822 tacacsd: clean_up_sock_sm_node(4564): mark server(172.100.100.1) dead
+    15:50:02.998836 tacacsd: aaa_mark_server_dead 1
+    15:50:02.998926 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+    15:50:02.999025 aaad: protocol TACACS failed with server group port49
+    15:50:02.999053 aaad: LOCAL method not supported for Authorization req all_cmds:default
+fallback 3 at device 15:50:13.204409: 15:50:13.204409 aaad: Fall back method none succeeded
+  before: 15:50:13.204339 aaad: LOCAL method not supported for Authorization req all_cmds:default
+    15:50:13.202530 tacacsd: construct_tac_req(1563):aaa session id: 0, aaa type: 2, user_len=6, av_count_net=2, av_count_host=2
+    15:50:13.202696 tacacsd: connect_tac_server(1648):Entering for aaa session id: 0
+    15:50:13.202813 tacacsd: connect_tac_server(1762): connection is Active/connect succeeded  ! socket(51)
+    15:50:13.202932 tacacsd: <LONG>: before calling nxos_ssl_write() total length 74
+    15:50:13.202935 tacacsd: nxos_ssl_write:sending 74 bytes to 172.100.100.1 port 300 on socket 51
+    15:50:13.203059 tacacsd: construct_tac_req: exiting for aaa session id: 0
+    15:50:13.203135 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 51
+    15:50:13.203225 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 group port49 aaa session id: 0 recv_bytes_left 5
+    15:50:13.203440 aaad: response for accounting request of old library will be sent as SUCCESS
+    15:50:13.203487 tacacsd: <LONG>: nxos_ssl_read() for server 172.100.100.1 on socket 51
+    15:50:13.203551 tacacsd: <LONG>: nxos_ssl_read() failed for socket 51.
+    15:50:13.203554 tacacsd: clean_up_sock_sm_node: socket 51 is_ssl_socket 1
+    15:50:13.203557 tacacsd: clean_up_sock_sm_node: freeing ssl_ctx for sock_fd 51
+    15:50:13.204127 tacacsd: clean_up_sock_sm_node(4564): mark server(172.100.100.1) dead
+    15:50:13.204133 tacacsd: aaa_mark_server_dead 1
+    15:50:13.204200 tacacsd: aaa_mark_server_dead :  Idle time is 0. Server will not be monitored
+    15:50:13.204285 tacacsd: clean_up_sock_sm_node: return Successfully
+    15:50:13.204305 aaad: protocol TACACS failed with server group port49
+    15:50:13.204339 aaad: LOCAL method not supported for Authorization req all_cmds:default
+

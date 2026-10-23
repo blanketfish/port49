@@ -994,6 +994,9 @@ func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig
 		return nil
 	}
 	if err := b.CheckIdentityAt(cctx, true, ref.scope); err != nil {
+		if errors.Is(err, etcdstore.ErrMissingGrant) { // the refusal names the grant itself
+			return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, leaves["broker"].Subject.CommonName, err)
+		}
 		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
 			"apply 'port49d store-roles' output", at, leaves["broker"].Subject.CommonName, err)
 	}

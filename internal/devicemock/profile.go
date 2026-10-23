@@ -158,10 +158,23 @@ const (
 	// FactTLSPerRequestDeniedByPort49: the device asked port49 about the same
 	// command, and port49 denied it (L80's cell).
 	FactTLSPerRequestDeniedByPort49 = "tls_per_request_denied_command_denied_by_port49"
+	// FactTLSServerSingleConnectHonored: over per-request TLS, port49 offered
+	// single-connect (its first reply set the flag, the device's first
+	// request had not) and the device sent a session on that connection
+	// after a completed one that was not accounting: it reused the
+	// connection. The mock then reuses it too (spec §13 decision 50 ruling
+	// 20). tests/qual's drift test ties it to platform.TLSServerSingleConnect.
+	FactTLSServerSingleConnectHonored = "tls_server_single_connect_honored"
+	// FactTLSServerSingleConnectIgnored: port49 offered, and every offered
+	// connection carried exactly one session: the device opened a new
+	// connection per request instead. Neither fact is written where port49
+	// never offered; absent is no claim.
+	FactTLSServerSingleConnectIgnored = "tls_server_single_connect_ignored"
 )
 
 var deviceFacts = map[string]string{FactTLSPerRequestNoCommands: "tls", FactTLSSingleNoCommands: "tls",
-	FactTLSPerRequestDeniedRuns: "tls", FactTLSPerRequestDeniedRefused: "tls", FactTLSPerRequestDeniedByPort49: "tls"}
+	FactTLSPerRequestDeniedRuns: "tls", FactTLSPerRequestDeniedRefused: "tls", FactTLSPerRequestDeniedByPort49: "tls",
+	FactTLSServerSingleConnectHonored: "tls", FactTLSServerSingleConnectIgnored: "tls"}
 
 // noCommandFact is the fact under which a scenario plays no command step.
 var noCommandFact = map[string]string{"tls_token_login": FactTLSPerRequestNoCommands, "tls_single_connection": FactTLSSingleNoCommands}

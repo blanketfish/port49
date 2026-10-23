@@ -233,6 +233,31 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	return c
 }
 
+// signature is everything compose and resolve read of a device, as one key:
+// its platform, whose adapter compiles and projects the composition, and for
+// every scope whether it selects the device and whether only by a version it
+// could not compare. compose reads the device's name and attributes only
+// through selects. Two devices with one signature resolve alike for every
+// subject at every moment, but for the name an error quotes, which a reader
+// that groups by signature must not read. scopes is every scope's name,
+// sorted (sortedKeys).
+func (p *Policy) signature(d admission.Device, scopes []string) string {
+	var b strings.Builder
+	b.WriteString(d.Platform)
+	b.WriteByte(0)
+	for _, name := range scopes {
+		switch ok, byIncomparable := p.scopes[name].selects(d); {
+		case !ok:
+			b.WriteByte('-')
+		case byIncomparable:
+			b.WriteByte('?')
+		default:
+			b.WriteByte('+')
+		}
+	}
+	return b.String()
+}
+
 // granting is the subjects of subs, in order, with at least one grant in the
 // composition.
 func (c composition) granting(subs []*Subject) []*Subject {

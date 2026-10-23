@@ -575,3 +575,41 @@ func TestTLSSingleConnectionSetsTheFlag(t *testing.T) {
 		}
 	}
 }
+
+// Decision 50 ruling 20: port49 offers single-connect to NX-OS over
+// per-request TLS. A profile that measured the offer honored reuses the
+// offered connection, its requests still without the flag; one that did not
+// measure it, or a server that does not offer, gets a connection per step.
+func TestPerRequestTLSReusesAnOfferedConnectionWhereMeasured(t *testing.T) {
+	for name, c := range map[string]struct {
+		honored, offer bool
+		conns          int
+	}{
+		"honored and offered":       {true, true, 1},
+		"offered, no measured fact": {false, true, 3},
+		"honored, not offered":      {true, false, 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, ca, f := tlsFakeProfile(t)
+			f.authen, f.offer = []uint8{wire.AuthenStatusPass}, c.offer
+			f.authorArgs = [][]byte{[]byte("local-user-name=p49-ro")}
+			if c.honored {
+				p.DeviceFacts = []DeviceFact{{ID: FactTLSServerSingleConnectHonored, Status: "measured"}}
+			}
+			tr, err := Play(t.Context(), p, "tls_token_login", Target{Addr: f.ln.Addr().String(), Transport: "tls", Scale: 0,
+				Sleep: func(time.Duration) {}, TLS: &TLSMaterial{Client: issue(t, ca, true), ServerCAs: ca.Pool(), ServerIP: "127.0.0.1"}},
+				Login{User: "q", Credential: freshCredential(t)})
+			if err != nil || tr.Outcome != "login_ok" {
+				t.Fatalf("%v\n%s", err, tr)
+			}
+			if tr.Conns != c.conns || int(f.conns.Load()) != c.conns {
+				t.Fatalf("%d connections (the server saw %d), want %d", tr.Conns, f.conns.Load(), c.conns)
+			}
+			for _, s := range f.seen() {
+				if s.Flags&wire.FlagSingleConnect != 0 {
+					t.Fatalf("a type %d request asked for single-connect: the device never does over per-request TLS", s.Type)
+				}
+			}
+		})
+	}
+}

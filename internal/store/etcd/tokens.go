@@ -34,6 +34,11 @@ func liveTokens(kvs []*mvccpb.KeyValue, now time.Time) []store.Token {
 	return out
 }
 
+// beforeTokenTxn, when set by a test, is called with PutToken's Txn ctx,
+// after its lease is had. A package variable: not safe for a test under
+// t.Parallel.
+var beforeTokenTxn func(ctx context.Context)
+
 // PutToken writes t and counts the live tokens under k, in one
 // transaction, as the memory store counts them after its append.
 func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
@@ -42,9 +47,17 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		return 0, err
 	}
 	for attempt := 0; ; attempt++ {
-		id, err := s.tokLeases.For(ctx, t.ExpiresAt)
+		// The grant alone is hedged: a mint at a bucket's rollover grants,
+		// and an unhedged grant on a dark member's stalled connection fails
+		// one mint in three. The marked ctx goes to the grant only; the
+		// token's Txn is never hedged, since a second copy would write a
+		// second token.
+		id, err := s.tokLeases.For(idempotent(ctx), t.ExpiresAt)
 		if err != nil {
 			return 0, unavailable(err)
+		}
+		if beforeTokenTxn != nil {
+			beforeTokenTxn(ctx)
 		}
 		resp, err := s.tok.Txn(ctx).Then(
 			clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id)),
@@ -68,6 +81,24 @@ func (s *Store) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token
 		return nil, unavailable(err)
 	}
 	return liveTokens(resp.Kvs, s.now()), nil
+}
+
+// TokenIDs is the ID of every live token under k. A record that does not
+// decode is left out, as Candidates leaves it: its lease reclaims it.
+func (s *Store) TokenIDs(ctx context.Context, k store.TokenKey) ([]string, error) {
+	resp, err := s.tok.Get(ctx, s.k.tokens(k), clientv3.WithPrefix())
+	if err != nil {
+		return nil, unavailable(err)
+	}
+	var ids []string
+	for _, kv := range resp.Kvs {
+		var r tokenRec
+		if json.Unmarshal(kv.Value, &r) != nil || !r.ExpiresAt.After(s.now()) {
+			continue
+		}
+		ids = append(ids, r.ID)
+	}
+	return ids, nil
 }
 
 // liveToken reads one token key: its revision, or found false when it is

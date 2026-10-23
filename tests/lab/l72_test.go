@@ -445,9 +445,11 @@ func TestL72ReferenceClients(t *testing.T) {
 		{"e", "expired", "certificate_expired", nil},
 		{"f", "other_device", "identity_mismatch", nil},
 		{"g", "revoked", "certificate_revoked", nil},
-		{"i", "good", "sni_mismatch", []string{"-server-name", "wrong.l72.example"}},
+		// The second connection at once, inside the 2s decline window.
+		{"i", "good", "sni_mismatch", []string{"-count", "2", "-server-name", "wrong.l72.example"}},
 	} {
 		settle()
+		declined, held := e.metric(connEvent("declined_refused")), e.metric(connEvent("held_refused"))
 		r := e.client(e.tlsPort, c.cert, c.args...)
 		rec := waitRec(`"tls_outcome":"` + c.outcome + `"`)
 		ossl := ""
@@ -468,9 +470,27 @@ func TestL72ReferenceClients(t *testing.T) {
 			// (ruling 16) and are recorded, not asserted.
 			ok = ok && r[0].Handshake == "ok" && !strings.Contains(r[0].Error, "remote error")
 		}
+		extra := ""
+		if c.id == "i" {
+			// A mismatch is declined, not struck (decision 50 ruling 10): the
+			// second connection is reset at Accept, before any TLS byte, on the
+			// window the first opened, and makes no second record.
+			// declined_refused counts it and held_refused does not. "No TLS
+			// byte" is read from the client's error: Go reports a raw reset or
+			// EOF with no "tls:" text. If (i) disagrees, read r[1].Error in the
+			// observation first: a Go that wraps those errors fails this cell
+			// loudly, never falsely.
+			time.Sleep(time.Second)
+			rec = e.records(`"tls_outcome":"sni_mismatch"`)
+			dDecl, dHeld := e.metric(connEvent("declined_refused"))-declined, e.metric(connEvent("held_refused"))-held
+			ok = len(r) == 2 && len(rec) == 1 && r[0].Status == "none" && r[1].Handshake == "error" &&
+				!strings.Contains(r[1].Error, "remote error") && !strings.Contains(r[1].Error, "tls:") &&
+				dDecl == 1 && dHeld == 0
+			extra = fmt.Sprintf("; declined_refused +%v, held_refused +%v", dDecl, dHeld)
+		}
 		cell(c.id, ok,
-			"client: %+v; record: %s; openssl (evidence/L72-reference/openssl-%s.txt): %s", r, strings.Join(rec, " "),
-			c.id, l72AlertLine(ossl))
+			"client: %+v; record: %s; openssl (evidence/L72-reference/openssl-%s.txt): %s%s", r, strings.Join(rec, " "),
+			c.id, l72AlertLine(ossl), extra)
 	}
 	// -server-name wrong.l72.example also fails the client's own check of
 	// port49's certificate; the server's refusal at the ClientHello comes first,

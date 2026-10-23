@@ -215,8 +215,9 @@ type Broker struct {
 	// last deleted its unspent tokens: an idempotent retry of a mint from
 	// before then is not replayed with a token that no longer exists
 	// (token.Request). It is this process's copy of the store's (plan 7e,
-	// Ruling 9), each entry kept SupersededFor (supersede).
-	superseded map[store.TokenKey]time.Time
+	// Ruling 9), each entry kept SupersededFor from when it was recorded, as
+	// the store keeps its own (supersede).
+	superseded map[store.TokenKey]supersededMark
 	// supersedePruned is when supersede last pruned superseded: at most once
 	// per supersedePruneEvery, so a pass that supersedes n keys scans the
 	// map once, not n times, under mu.
@@ -1006,11 +1007,37 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 // found (Reloaded) is said, never silent: it may be a mark an etcd restore
 // lost (final review 7e-1 C-1). The daemon's marks (b.Marks) are the
 // feed's own to keep (store.FollowMarks).
+//
+// A mark the store flagged landed_after_lift is said once, as it is told
+// Standing (store.MarkChange), off the feed's goroutine, whether or not this process runs its
+// region (decision 51; R-I5): in the form its time against the lift's
+// calls for (landedLine). One this process's own write failed to record
+// is said as its own (Marks.FailedWrite; post-11b, C2).
 func (b *Broker) MarkChanged(c store.MarkChange) {
 	if c.Reloaded && !c.Standing {
 		b.say("broker: a reload of the marks found the revocation of %s lifted: lifted on a broker process "+
 			"while the marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted "+
 			"on purpose", printsafe.Line(c.Key, 160))
+	}
+	if c.Standing {
+		own := b.Marks.FailedWrite(c.Kind, c.Key, c.At)
+		switch {
+		case c.LandedAfterLift:
+			// The lift's record is read off the feed's goroutine, so a slow
+			// directory never stalls the marks every login and mint read
+			// (task 2 review M1). Flagged marks are rare: each needs a lift
+			// of its key within the hour.
+			go func(r store.Revocation) {
+				line := b.landedLine(r)
+				if own {
+					line += "; " + b.ownClause()
+				}
+				b.say("%s", line)
+			}(c.Revocation)
+		case own:
+			b.say("broker: a revocation of %s %s, landed when the store answered again; it stands everywhere",
+				printsafe.Line(c.Key, 160), b.ownClause())
+		}
 	}
 	if b.Conns == nil {
 		return
@@ -1023,6 +1050,56 @@ func (b *Broker) MarkChanged(c store.MarkChange) {
 		b.say("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
 			printsafe.Line(c.Key, 160), n)
 	}
+}
+
+// landedReadTimeout bounds the read of a lift's record for a flagged mark's
+// line, read off the marks feed's goroutine (MarkChanged); one that does not
+// answer in time is said in the unreadable form.
+const landedReadTimeout = 5 * time.Second
+
+// landedLine is the line for r, a mark flagged landed_after_lift (spec §13
+// decision 51; re-review R-I2): r's time against the lift's, read from its
+// record, says whether it was a copy sent before the lift and held back by
+// a cut, or a revoke made after it by a writer that had not yet seen it.
+// Clocks are NTP-close and a cut lasts seconds. No form tells anyone to
+// lift again but a runner's put-back of a mark made before the lift
+// (store.PutBackOrigin; task 2 review I1), which re-created a lifted mark,
+// as sayPutBack says: a put-back made after it was a revoke the store had
+// lost.
+func (b *Broker) landedLine(r store.Revocation) string {
+	ctx, cancel := context.WithTimeout(context.Background(), landedReadTimeout)
+	defer cancel()
+	l, err := b.Store.GetLift(ctx, r.Kind, r.Key)
+	key := printsafe.Line(r.Key, 160)
+	_, putBack := store.PutBackOf(r.Origin)
+	switch {
+	case err == nil && putBack && r.At.Before(l.At):
+		return fmt.Sprintf("broker: a revocation of %s made at %s was put back after the lift at %s by a "+
+			"port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift, which "+
+			"it cannot tell from a mark an etcd restore lost; it stands everywhere; lift it again with port49 revoke "+
+			"--lift if it was lifted on purpose", key, r.At.UTC().Format(time.RFC3339), l.At.UTC().Format(time.RFC3339))
+	case err == nil && putBack:
+		return fmt.Sprintf("broker: a revocation of %s made at %s after the lift at %s was put back by a "+
+			"port49-broker runner from its broker.state_dir/marks.json: the store had lost it (an etcd restore); it "+
+			"stands everywhere", key, r.At.UTC().Format(time.RFC3339), l.At.UTC().Format(time.RFC3339))
+	case errors.Is(err, store.ErrNotFound):
+		return fmt.Sprintf("broker: a revocation of %s landed after a lift; the lift's record has expired", key)
+	case err != nil:
+		return fmt.Sprintf("broker: a revocation of %s landed after a lift; the lift's record could not be read "+
+			"(%s): `port49 revoke --list` names it", key, printsafe.Line(err.Error(), 300))
+	case r.At.Before(l.At):
+		return fmt.Sprintf("broker: a revocation of %s made at %s before the lift at %s landed after it: a copy "+
+			"sent while its writer was cut off; it stands everywhere", key, r.At.UTC().Format(time.RFC3339),
+			l.At.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("broker: a revocation of %s made at %s (%s) after the lift at %s, by a writer whose marks "+
+		"feed had not yet shown the lift; it stands everywhere; check with whoever revoked before lifting", key,
+		r.At.UTC().Format(time.RFC3339), printsafe.Line(r.Origin, 160), l.At.UTC().Format(time.RFC3339))
+}
+
+// ownClause says a mark was this process's own write, reported failed.
+func (b *Broker) ownClause() string {
+	return "made on this " + b.proc() + ", reported unrecorded then"
 }
 
 // RefusedAtBind records a request the broker's listener refused as its
@@ -1135,15 +1212,19 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) {
 	b.mu.Lock()
 	if b.superseded == nil {
-		b.superseded = map[store.TokenKey]time.Time{}
+		b.superseded = map[store.TokenKey]supersededMark{}
 	}
-	if at.After(b.superseded[k]) {
-		b.superseded[k] = at
+	now := b.Now()
+	mark := b.superseded[k]
+	if at.After(mark.at) {
+		mark.at = at
 	}
-	if now := b.Now(); now.Sub(b.supersedePruned) >= supersedePruneEvery {
+	mark.recorded = now
+	b.superseded[k] = mark
+	if now.Sub(b.supersedePruned) >= supersedePruneEvery {
 		b.supersedePruned = now
-		for key, t := range b.superseded {
-			if now.Sub(t) > store.SupersededFor {
+		for key, m := range b.superseded {
+			if now.Sub(m.recorded) > store.SupersededFor {
 				delete(b.superseded, key)
 			}
 		}
@@ -1157,6 +1238,12 @@ func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) 
 	}
 }
 
+// supersededMark is one key's entry in Broker.superseded: at is the instant
+// a replay of a mint from before is minted afresh, and recorded when this
+// process last recorded it, what the entry's life runs from. A refresh's at
+// is a deleted token's MintedAt, which may be older than SupersededFor.
+type supersededMark struct{ at, recorded time.Time }
+
 // supersedePruneEvery bounds how often supersede prunes its local copy: an
 // entry lives at most this long past SupersededFor, which only ever mints
 // a replay afresh.
@@ -1166,7 +1253,7 @@ const supersedePruneEvery = time.Minute
 // store's (every process's, and a start's purge).
 func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time, error) {
 	b.mu.Lock()
-	local := b.superseded[k]
+	local := b.superseded[k].at
 	b.mu.Unlock()
 	at, err := b.Store.SupersededAt(ctx, k)
 	if err != nil {
@@ -1311,7 +1398,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 			return item, true
 		}
 		perLogin = v.rec
-		cred.MFAMethod, cred.MFAAt, cred.MFAAgentSHA256 = v.method, v.at, v.agent
+		cred.MFAMethod, cred.MFAAt, cred.MFAAgentSHA256, cred.MFAFresh = v.method, v.at, v.agent, v.fresh
 		return api.MintItem{}, false
 	}
 	// Replay-versus-fresh is decided here once. The mint is told, so one

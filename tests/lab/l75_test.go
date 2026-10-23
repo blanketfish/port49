@@ -303,6 +303,18 @@ func l75RunnerLine(p *regionProc, d time.Duration) (time.Duration, string, error
 	}
 }
 
+// l75NotAnswering waits up to d for the broker to say its directory store does
+// not answer (since the last mark, so mark before the cut): the mint path, a
+// forget and a logout follow that check (Freshness.Reachable, set by
+// keepFresh up to a check and a call timeout after the cut), not store status,
+// which pings live and says "cut" before it.
+func l75NotAnswering(p *regionProc, d time.Duration) error {
+	if _, err := p.wait("directory store: not answering", d); err != nil {
+		return fmt.Errorf("%s: the broker never said its directory store stopped answering after the cut: %w", p.name, err)
+	}
+	return nil
+}
+
 // l75AnsweringAgain waits up to d for the broker to say its directory store
 // answers again (since the last mark): mints follow that check, not store
 // status, which pings live.
@@ -718,8 +730,12 @@ func l75(t *testing.T, w *regionWorld) []string {
 		"user:bob@corp.example.com"); code != 0 {
 		t.Fatalf("INVALID: reset-second-factor of bob at b3 before its cut: exit %d: %s", code, w.leakless(oneLineMax(out, 300)))
 	}
+	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
+	}
+	if err := l75NotAnswering(bs[3].proc, 30*time.Second); err != nil {
+		t.Fatalf("INVALID: %v", err)
 	}
 	// The clock starts with the code in hand: the wait for the step is not b3's.
 	code3 := carol.code()
@@ -780,10 +796,16 @@ func l75(t *testing.T, w *regionWorld) []string {
 	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
 		t.Fatalf("INVALID: carol's mint at b3 after the re-pin: %d %s", st, e)
 	}
+	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
 	}
-	bs[3].proc.mark()
+	// store status pings live and says "cut" up to one freshness check before
+	// the copy knows: until then the forget waits out the call timeout and
+	// carol's pin is served from the watch with no cached-membership line.
+	if err := l75NotAnswering(bs[3].proc, 30*time.Second); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	_, f3, ft3 := w.port49("directory", "forget", "--socket", bs[3].sock(), "user:carol@corp.example.com")
 	m3, _ := l75Mint(w, carolC, bs[3].addr(), "")
 	cached := strings.Contains(bs[3].proc.said(), "serving user:carol@corp.example.com's cached directory membership")
@@ -861,8 +883,12 @@ func l75(t *testing.T, w *regionWorld) []string {
 	s2 := "l75-g-" + l75Random(t)
 	tok2 := idToken(s2)
 	g2, _ := l75Mint(w, plain, bs[1].addr(), tok2)
+	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
+	}
+	if err := l75NotAnswering(bs[3].proc, 30*time.Second); err != nil {
+		t.Fatalf("INVALID: %v", err)
 	}
 	lo3 := l75Logout(plain, bs[3].addr(), logoutToken(s2))
 	r3, why3 := l75Mint(w, plain, bs[3].addr(), tok2)

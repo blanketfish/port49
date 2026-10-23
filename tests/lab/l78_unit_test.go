@@ -115,7 +115,12 @@ func TestL78GradeNeedsAPermitRecordBeforeItNamesALockout(t *testing.T) {
 		// A fail-closed reply under which the command ran: deny-all did not hold.
 		{true, true, true, 124, "Hostname: srx1", false, false, false, "ran `show version` under the fail-closed reply of 124 bytes", "Hostname: srx1"},
 		// Logged in under a permit reply and answered nothing: the command did not run.
-		{true, true, false, 208, "", false, false, false, "refused `show version` under a permit reply of 208 bytes", ""},
+		// M9: no output at all measures nothing, so the grade claims neither a run nor a refusal.
+		{true, true, false, 208, "", false, false, false, "whether `show version` ran is unmeasured", ""},
+		{true, true, true, 124, "", false, false, false, "whether `show version` ran is unmeasured", ""},
+		{true, true, true, 124, "\r\n", false, false, false, "whether `show version` ran is unmeasured", ""},
+		// Logged in with no record: the reply is unknown, so no output keeps its grade.
+		{true, false, true, 0, "", false, false, true, "no authorize_session record showed the reply", ""},
 	}
 	for _, c := range cases {
 		g := l78Grade(c.loggedIn, c.record, c.failClosed, c.total, c.out)

@@ -1,0 +1,29 @@
+L80 re-measure, arm fixed, cell s1, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.52 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show version"       gap=0.0s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show users"         gap=0.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.0s took=0.25s err=false first="16:36:46.750 UTC Thu Oct 22 2026"
+  s0 "show users"         gap=0.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 1, most open at once: 1
+  conn port=49908 syn=16:36:40.412 hold=37.41s end=server-fin
+connection_events deltas: <LONG> idle_closed=1 refused_cap=0
+port49 records:
+  16:36:45.420 redeem permit
+  16:36:45.445 authorize_session permit
+  16:36:45.648 account
+  16:36:45.812 authorize_command permit "terminal length 0"
+  16:36:45.831 account
+  16:36:46.064 authorize_command permit "show version"
+  16:36:47.067 authorize_command deny "show users"
+  16:36:47.318 authorize_command permit "show clock"
+  16:36:47.568 authorize_command deny "show users"
+  16:36:47.820 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show version" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=0.0s asked=true denied=true
+typed s0 "show clock" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=0.0s asked=true denied=true
+debug counts: connection_active=9 fall_back_none=0 mark_server_dead=0 request_acct=7 request_authen=1 request_author=9 ssl_open_success=1 ssl_read_failed=0 tacacs_group_failed=2
+

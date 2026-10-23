@@ -1,0 +1,2 @@
+Connecting to 127.0.0.1
+write:errno=104

@@ -102,7 +102,9 @@ func passGuardAtStart(ctx context.Context, cfg config.Config, judged judgedReade
 					live.Swap(pol)
 					fmt.Fprintf(stderr, "port49-broker: policy: %s %s passes the guard at start (bundle %s); "+
 						"starting\n", policyKey(cfg), cfg.Policy.File, pol.Bundle)
-					sayPolicy(procOf(cfg), pol, time.Now())
+					now := time.Now()
+					sayPolicy(procOf(cfg), pol, now)
+					sayFailClosed(procOf(cfg), pol, now, m)
 				}
 				return nil
 			case errors.As(refused, &sr):

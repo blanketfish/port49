@@ -12,13 +12,13 @@ import (
 // method fails TestEveryStoreMethodIsPlaced until it is listed in one table
 // (decision 51).
 var directoryMethods = set(`
-	PutRevocation GetRevocation DeleteRevocation ListRevocations
+	PutRevocation GetRevocation DeleteRevocation ListRevocations GetLift
 	PutMembership PutPin RefuseMapKeys GetMembership MembershipByKey DeleteMembership
 	PutLogout GetLogout
 `)
 
 var sessionMethods = set(`
-	PutToken Candidates RedeemAndReceipt DeleteTokens DeleteToken PurgeTokens
+	PutToken Candidates TokenIDs RedeemAndReceipt DeleteTokens DeleteToken PurgeTokens
 	GetReceipt ExtendReceipt FailReceipt DeleteReceiptsByPrincipal
 	PutContext GetContext SwapContext SwapLogin RewriteContext TouchContext SetPrivilege
 	AnnotateContext RefreshContext SetRevokedAt SetContextPolicy StampRefreshed

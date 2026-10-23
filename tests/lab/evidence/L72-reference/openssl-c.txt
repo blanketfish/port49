@@ -8,4 +8,4 @@ Hash used: SHA256
 Signature type: ecdsa_secp256r1_sha256
 Verification: OK
 Negotiated TLS1.3 group: X25519MLKEM768
-40E712AB20700000:error:0A00045C:SSL routines:ssl3_read_bytes:tlsv13 alert certificate required:../ssl/record/rec_layer_s3.c:918:SSL alert number 116
+40570B43C27C0000:error:0A00045C:SSL routines:ssl3_read_bytes:tlsv13 alert certificate required:../ssl/record/rec_layer_s3.c:918:SSL alert number 116

@@ -1302,3 +1302,50 @@ func TestAnIPv6RuleIsNotASecretRule(t *testing.T) {
 		}
 	}
 }
+
+// FailClosedCompositions is the projection_refused and projection_overflow
+// findings with their devices apart from the text, each marked Later where it
+// holds only from a later grant expiry (spec §12).
+func TestFailClosedCompositionsKeepTheDevicesApartFromTheText(t *testing.T) {
+	// ok alone is carried; with r it is the refused shape, until r lapses,
+	// and that holds now.
+	until := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: ok, privilege: readonly, permit: ["show version"]}
+  - {name: r, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [ok]}
+  - {subject: s, scope: all_devices, roles: [r], expires: 2099-01-01}
+`)
+	got := until.FailClosedCompositions(noon)
+	if len(got) != 1 || got[0].Kind != FindingProjectionRefused || got[0].Later || len(got[0].Devices) != 4 ||
+		!slices.IsSorted(got[0].Devices) || strings.Contains(got[0].Message, "; on 4 devices") ||
+		!strings.HasPrefix(got[0].Message, `subject "s" on juniper_junos, until 2099-01-01T00:00:00.000Z`) {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// A finding an expiry brings on is Later, and carries the moment it holds
+// from: here a grant at admin lapses, and the level left, which no bit
+// maps, has the fail-closed reply from then on (spec §8, "Generator
+// constraints" 5).
+func TestAFailClosedCompositionALapseBringsOnIsLater(t *testing.T) {
+	e := env()
+	e.Devices = []admission.Device{deviceNamed(t, "srx-fw-04")}
+	p, err := Parse([]byte(`platform_set: 1.1.0
+`+unmappedLevel+scopeOK+`roles:
+  - {name: low, privilege: unmapped, permit: ["show version"]}
+  - {name: high, privilege: admin, permit: ["**"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [low]}
+  - {subject: s, scope: all_devices, roles: [high], expires: 2099-01-01}
+`), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := p.FailClosedCompositions(noon)
+	if len(got) != 1 || !got[0].Later || got[0].Kind != FindingProjectionRefused ||
+		!strings.HasPrefix(got[0].Message, `subject "s" on juniper_junos, from 2099-01-01T00:00:00.000Z, when grant all_devices [high] expires`) ||
+		!slices.Equal(got[0].Devices, []string{"srx-fw-04"}) {
+		t.Fatalf("%+v", got)
+	}
+}

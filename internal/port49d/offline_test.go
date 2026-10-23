@@ -59,10 +59,12 @@ func TestAnOfflineOwnerRefusalNeverAdvisesAChown(t *testing.T) {
 func TestAnOfflineFailureGivesTheToolsOwnAdvice(t *testing.T) {
 	for _, lift := range []bool{false, true} {
 		// Revoke's own error, as broker.Revoke words it on a failed write.
-		s := offlineFailed(lift, fmt.Errorf("broker: the revocation could not be recorded, so nothing else was "+
-			"revoked; this port49d denies what it names until a lift on this port49d or its restart (%w); cut "+
-			"access another way: remove the principal's grants from broker.policy_file (live within two watch "+
-			"intervals), or stop port49d", store.ErrUnavailable))
+		s := offlineFailed(lift, fmt.Errorf("broker: the revocation may not have been recorded: a copy already sent "+
+			"can still land when the directory answers again, and then stands everywhere, even over a lift made "+
+			"meanwhile. Until then this port49d denies what it names, until a lift on this port49d or its "+
+			"restart; after the heal check `port49 revoke --list` (%w); cut access another way: remove the "+
+			"principal's grants from broker.policy_file (live within two watch intervals), or stop port49d",
+			store.ErrUnavailable))
 		if strings.Contains(s, "this port49d") || strings.Contains(s, "stop port49d") ||
 			!strings.Contains(s, store.ErrUnavailable.Error()) || !strings.HasPrefix(s, offlineSay) ||
 			!strings.Contains(s, "the same command is safe to run again") ||

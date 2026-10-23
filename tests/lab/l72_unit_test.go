@@ -77,6 +77,34 @@ func TestL72FilterDropsSessionSecrets(t *testing.T) {
 	}
 }
 
+// openssl's stderr can interleave with the ticket dump, so the dump's last
+// line arrives wrapped, without its "0000 - " offset form, and after a field
+// line that ended the dump. None of it may survive (made-up bytes).
+func TestL72FilterDropsAWrappedTicketDumpTail(t *testing.T) {
+	in := "    Cipher    : TLS_AES_256_GCM_SHA384\n" +
+		"    SRP username: None\n" +
+		"6 de ad be ef   ......W0.S...^.k\n" +
+		"    Start Time: 1700000000\n" +
+		"Early data was not sent\n"
+	got := l72FilterTranscript(in)
+	if hits := l72TranscriptLeaks(got); len(hits) > 0 {
+		t.Fatalf("still carries %v:\n%s", hits, got)
+	}
+	if strings.Contains(got, "de ad be ef") || strings.Contains(got, "W0.S") {
+		t.Errorf("the wrapped tail survives:\n%s", got)
+	}
+	for _, keep := range []string{"SRP username: None", "Start Time: 1700000000", "Early data was not sent"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("the filter dropped %q", keep)
+		}
+	}
+	// The same tail inside a dump that a marker opened and a blank line ends.
+	in2 := "TLS session ticket:\nzz 11 22 33 stray\n\n    Start Time: 1\n"
+	if got := l72FilterTranscript(in2); strings.Contains(got, "11 22 33") || !strings.Contains(got, "Start Time: 1") {
+		t.Errorf("dump state wrong:\n%s", got)
+	}
+}
+
 // A decision record's credential_sha256 value is replaced and its field kept,
 // in a JSON line and in the note's quotation of one; other hashes stay.
 func TestL72RedactsTheCredentialHash(t *testing.T) {

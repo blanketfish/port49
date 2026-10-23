@@ -247,7 +247,7 @@ func TestTheMarkFeedBringsPutsAndLifts(t *testing.T) {
 	if err := s.PutRevocation(ctx, cert); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRevocation(ctx, cert.Kind, cert.Key); err != nil {
+	if err := s.DeleteRevocation(ctx, cert.Kind, cert.Key, store.Lift{}); err != nil {
 		t.Fatal(err)
 	}
 	type ev struct {
@@ -337,7 +337,7 @@ func TestAMarkWatchFromACompactedRevisionSaysSo(t *testing.T) {
 	r := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}
 	s.PutRevocation(ctx, r)
 	rev, _, _ := s.Revocations(ctx)
-	s.DeleteRevocation(ctx, r.Kind, r.Key)
+	s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{})
 	resp, err := s.tok.Put(ctx, "compact-me", "x")
 	if err != nil {
 		t.Fatal(err)

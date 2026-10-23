@@ -6,17 +6,21 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/daemon/limits"
 	"github.com/rhwendt/port49/internal/devicecert"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
@@ -128,9 +132,15 @@ type tlsClient struct {
 	seq  uint8
 }
 
+// tlsDial is dialTLS's TCP dial; a test swaps it to inject what the kernel
+// can return.
+var tlsDial = net.Dial
+
 // dialTLS opens a TLS connection as a device presenting cert (nil: none).
 // In TLS 1.3 the server's verdict on the client certificate arrives after
-// the client's Finished, so a refusal shows at the first read.
+// the client's Finished, so a refusal shows at the first read. A refusal at
+// Accept is a reset, which on loopback can reach the dialer before connect
+// returns: that is returned as the error too, never a fatal dial failure.
 func (f *tlsFixture) dialTLS(t *testing.T, cert *tls.Certificate, adjust func(*tls.Config)) (*tlsClient, error) {
 	t.Helper()
 	cfg := &tls.Config{RootCAs: f.ca.Pool(), ServerName: "tacacs.example.net", MinVersion: tls.VersionTLS12}
@@ -140,7 +150,10 @@ func (f *tlsFixture) dialTLS(t *testing.T, cert *tls.Certificate, adjust func(*t
 	if adjust != nil {
 		adjust(cfg)
 	}
-	raw, err := net.Dial("tcp", f.ts.addr)
+	raw, err := tlsDial("tcp", f.ts.addr)
+	if errors.Is(err, syscall.ECONNRESET) {
+		return nil, err
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,8 +304,6 @@ func TestTLSRefusesAtTheHandshake(t *testing.T) {
 			c := f.deviceCert(t, nil, testpki.Leaf{DNSNames: []string{"leaf-02"}})
 			return &c
 		}, nil, devicecert.IdentityMismatch},
-		"a server name not configured": {func(f *tlsFixture) *tls.Certificate { c := f.deviceCert(t, nil, testpki.Leaf{}); return &c },
-			func(c *tls.Config) { c.ServerName = "other.example.net"; c.InsecureSkipVerify = true }, devicecert.SNIMismatch},
 	} {
 		t.Run(name, func(t *testing.T) {
 			log := &syncBuffer{}
@@ -416,10 +427,15 @@ func TestTLSAllowUnknownAdmits(t *testing.T) {
 }
 
 // acceptRefused dials raw TCP and wants the connection ended with no byte
-// from the server: nothing TLS was exchanged.
+// from the server: nothing TLS was exchanged. The server's reset can reach
+// the dialer before connect returns (about 1 run in 300), and that is the
+// same refusal.
 func acceptRefused(t *testing.T, addr string) {
 	t.Helper()
 	conn, err := net.Dial("tcp", addr)
+	if errors.Is(err, syscall.ECONNRESET) {
+		return
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,6 +727,21 @@ func TestTLSUnidentifiableDeviceIsDecidedAtAccept(t *testing.T) {
 	}
 }
 
+// The server's reset at Accept can reach the dialer before connect returns,
+// and that is the refusal a caller waits for: dialTLS, and so login,
+// returns it as the error, as a reset after connect would be
+// (TestTLSUnidentifiableDeviceIsDecidedAtAccept failed so under make test).
+func TestTLSDialResetAtConnectIsARefusal(t *testing.T) {
+	f := newTLSFixture(t, &syncBuffer{}, nil)
+	reset := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNRESET)}
+	tlsDial = func(string, string) (net.Conn, error) { return nil, reset }
+	t.Cleanup(func() { tlsDial = net.Dial })
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	if _, _, err := f.login(t, &cert, nil); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("login: %v, want the reset as its error", err)
+	}
+}
+
 // A later packet is judged again. A refusal there is a reset with no strike
 // (ruling 9), and not a handshake.
 func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
@@ -772,8 +803,8 @@ func TestTLSRecheckRefusesLaterPacketsWithoutAStrike(t *testing.T) {
 			if n := testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 1 {
 				t.Fatalf("admission_closed = %v", n)
 			}
-			if got := f.ts.limits.DeclinedForStatus(loopback); got != c.status {
-				t.Fatalf("declined for status %v, want %v", got, c.status)
+			if got := f.ts.limits.DeclinedStanding(loopback); got != c.status {
+				t.Fatalf("a standing decline %v, want %v", got, c.status)
 			}
 			if n := testutil.ToFloat64(f.ts.metrics.TLSHandshakes.WithLabelValues(string(c.outcome))); n != 0 {
 				t.Fatalf("a packet refusal counted as a handshake: %v", n)
@@ -900,6 +931,144 @@ func TestTLSAbsentSNIIsAcceptedAndNamesFoldCase(t *testing.T) {
 	upper := func(c *tls.Config) { c.ServerName = "TACACS.example.net"; c.InsecureSkipVerify = true }
 	if _, r, err := f.login(t, &cert, upper); err != nil || r.Status != wire.AuthenStatusPass {
 		t.Fatalf("upper-case SNI: %v", err)
+	}
+}
+
+// A server name not in server_names is declined, not struck: the device or
+// server_names is misconfigured, not hostile (decision 50 ruling 10). Its
+// window stands as status_unavailable's does: the next dial inside it is
+// reset at Accept, with no second record, though leaf-01 is admitted. It is
+// no longer counted as connection event tls_refused.
+func TestTLSSNIMismatchDeclinesWithoutAStrike(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) { d.Limits = slowBackoff() })
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	other := func(c *tls.Config) { c.ServerName = "other.example.net"; c.InsecureSkipVerify = true }
+	refusedAtHandshake(t, f, log, &cert, other, devicecert.SNIMismatch, false)
+	if !f.ts.limits.DeclinedStanding(loopback) {
+		t.Fatal("the decline does not stand: an admitted device's next Accept would drop it")
+	}
+	events := f.ts.metrics.ConnectionEvents
+	declinedBefore := testutil.ToFloat64(events.WithLabelValues("declined_refused"))
+	acceptRefused(t, f.ts.addr)
+	if got := testutil.ToFloat64(events.WithLabelValues("declined_refused")); got != declinedBefore+1 {
+		t.Fatalf("declined_refused %v, want %v: the window did not stand", got, declinedBefore+1)
+	}
+	if n := strings.Count(log.String(), `"tls_outcome":"sni_mismatch"`); n != 1 {
+		t.Fatalf("%d sni_mismatch records, want 1: the second dial ran a handshake", n)
+	}
+	if f.ts.limits.Holding(loopback) || testutil.ToFloat64(events.WithLabelValues("held_refused")) != 0 {
+		t.Fatal("struck")
+	}
+	if n := testutil.ToFloat64(events.WithLabelValues("tls_refused")); n != 0 {
+		t.Fatalf("tls_refused counted %v: a declined mismatch is not a struck refusal", n)
+	}
+}
+
+// A standing decline (status_unavailable's, sni_mismatch's) keeps its window
+// at an Accept where the device is admitted on its own listener. A plain
+// Decline's window is dropped there, and the device is served.
+func TestTLSStandingDeclineSurvivesAnAdmittedAccept(t *testing.T) {
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) { d.Limits = slowBackoff() })
+	cert := f.deviceCert(t, nil, testpki.Leaf{})
+	f.ts.limits.Decline(loopback)
+	if _, r, err := f.login(t, &cert, nil); err != nil || r.Status != wire.AuthenStatusPass {
+		t.Fatalf("a plain decline was kept for a device admitted on this listener: %v", err)
+	}
+	f.ts.limits.DeclineStanding(loopback)
+	acceptRefused(t, f.ts.addr)
+	if n := testutil.ToFloat64(f.ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused %v, want 1: the standing decline was dropped at Accept", n)
+	}
+}
+
+// A hostile source alternating mismatches with struck refusals gains no
+// rate: every refusal opens a window that the next Accept enforces, and
+// each of the two counters stops at malformed_backoff_max. Once both are
+// there, each refused handshake costs the source a whole max window, as
+// strikes alone do (decision 50 ruling 10).
+func TestTLSAlternatingMismatchesKeepTheStrikeCap(t *testing.T) {
+	var skew atomic.Int64
+	now := func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
+	advance := func(d time.Duration) { skew.Add(int64(d)) }
+	const base, max = time.Second, 4 * time.Second
+	log := &syncBuffer{}
+	f := newTLSFixture(t, log, func(d *Deps, _ *tlsFixture) {
+		d.Limits = limits.New(limits.Config{PerNASConnections: 4, IdleTimeout: time.Second,
+			MalformedBackoffBase: base, MalformedBackoffMax: max, MalformedWindow: time.Hour,
+			AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: time.Millisecond,
+			AuthFailureWindow: time.Minute}, now)
+	})
+	otherCA, err := testpki.NewCA("Other", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := f.deviceCert(t, nil, testpki.Leaf{})
+	stranger := f.deviceCert(t, otherCA, testpki.Leaf{})
+	mismatch := func(c *tls.Config) { c.ServerName = "other.example.net"; c.InsecureSkipVerify = true }
+	records := func() int { return strings.Count(log.String(), `"diagnosis":"tls_refused"`) }
+	events := f.ts.metrics.ConnectionEvents
+	atAccept := func() float64 {
+		return testutil.ToFloat64(events.WithLabelValues("held_refused")) +
+			testutil.ToFloat64(events.WithLabelValues("declined_refused"))
+	}
+	refusedAtAccept := func(when string) {
+		t.Helper()
+		before := atAccept()
+		acceptRefused(t, f.ts.addr)
+		if got := atAccept(); got != before+1 {
+			t.Fatalf("%s: refused at Accept %v times, want %v: a dial got past Accept", when, got, before+1)
+		}
+	}
+	for i := range 8 {
+		before := records()
+		if i%2 == 0 {
+			_, _, err = f.login(t, &good, mismatch)
+		} else {
+			_, _, err = f.login(t, &stranger, nil)
+		}
+		if err == nil || !waitFor(t, func() bool { return records() == before+1 }) {
+			t.Fatalf("refusal %d: %v, %d records, want %d: a window outlasted malformed_backoff_max", i, err,
+				records(), before+1)
+		}
+		refusedAtAccept(fmt.Sprintf("just after refusal %d", i))
+		if i >= 4 { // both counters at the cap: base, 2*base, then max
+			advance(max - 200*time.Millisecond)
+			refusedAtAccept(fmt.Sprintf("refusal %d's window, just short of max", i))
+			advance(400 * time.Millisecond)
+		} else {
+			advance(max + 200*time.Millisecond)
+		}
+	}
+	if n := strings.Count(log.String(), `"tls_outcome":"sni_mismatch"`); n != 4 {
+		t.Fatalf("%d sni_mismatch records, want 4", n)
+	}
+}
+
+// serverNameListed compares an address SNI by address, and a name exactly
+// (decision 50 ruling 10).
+func TestServerNameListedComparesAddressesByAddress(t *testing.T) {
+	for _, c := range []struct {
+		listed []string
+		sni    string
+		want   bool
+	}{
+		{[]string{"2001:db8::1"}, "2001:0DB8:0:0::1", true},
+		{[]string{"192.0.2.1"}, "::ffff:192.0.2.1", true},
+		{[]string{"192.0.2.1"}, "192.0.2.1", true},
+		{[]string{"tacacs.example.net"}, "tacacs.example.net", true},
+		{[]string{"tacacs.example.net"}, "TACACS.Example.NET", true},
+		{[]string{"tacacs.example.net"}, "other.example.net", false},
+		{[]string{"192.0.2.1"}, "192.0.2.2", false},
+		{[]string{"2001:db8::1"}, "[2001:db8::1]", false},
+		{[]string{"2001:db8::1"}, "2001:db8::1%eth0", false},
+		{[]string{"fe80::1"}, "fe80::1%eth0", false},
+		{[]string{"10.0.0.1"}, "010.0.0.1", false},
+	} {
+		if got := serverNameListed(c.listed, c.sni); got != c.want {
+			t.Errorf("%q against %q: %v, want %v", c.sni, c.listed, got, c.want)
+		}
 	}
 }
 

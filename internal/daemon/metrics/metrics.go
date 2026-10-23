@@ -43,10 +43,19 @@ type Metrics struct {
 	// (Accept failed and the listener is being retried), "tls_refused" (the
 	// RFC 9887 listener refused a connection: a handshake refusal struck the
 	// source; an unidentifiable device, or no loaded material, is declined at
-	// Accept with no handshake and no strike),
+	// Accept with no handshake and no strike. status_unavailable and
+	// sni_mismatch are declines, not strikes, and are not counted here:
+	// port49_tls_handshakes_total and the record count them),
 	// "transport_mismatch" (an admitted device on the listener it does not
-	// speak: declined, no strike), and "obfuscated_over_tls" (a packet over
-	// TLS with the unencrypted flag clear: an ERROR, then closed).
+	// speak: declined, no strike), "obfuscated_over_tls" (a packet over
+	// TLS with the unencrypted flag clear: an ERROR, then closed), and
+	// "single_connect_second_connection" (a connection from a device port49
+	// offered single-connect to, served while an offered one from the same
+	// source is open: the device ignored the offer; 0 while it honors it;
+	// one refused at Accept is not counted; a device that closes and
+	// redials at once can count one before serve sees the EOF, so a single
+	// count is not a fault: alert on a rate; spec §13 decision 50 rulings 16
+	// and 20).
 	ConnectionEvents *prometheus.CounterVec
 	// port49_tls_handshakes_total{outcome}: the RFC 9887 listener's
 	// handshakes by devicecert.Outcome, ok and resumed included (spec §13
@@ -403,6 +412,16 @@ type Metrics struct {
 	// 0 once a file loads or the file is put back. It is the alert: an edit
 	// someone believes is live, and is not.
 	PolicyFileRefused prometheus.Gauge
+	// port49_policy_fail_closed_compositions: how many compositions of a
+	// subject on a projected platform get the fail-closed reply under the
+	// policy in force now (projection_refused and projection_overflow,
+	// spec §12), re-read at start, after every swap and after every
+	// grant-expiry pass. Nonzero is the alert: those users are denied all
+	// but the allows, with only per-session projection_fail_closed records
+	// to show for it. No labels: no device or subject is named in a metric.
+	// SetPolicyFailClosed writes it.
+	PolicyFailClosed prometheus.Gauge
+	failClosed       atomic.Int64
 	// port49_policy_refresh_pending: 1 from a policy swap or a grant's
 	// expiry until the settle pass 30s after it completes, and while a pass
 	// the store stopped, or that left a context still changing, is owed a
@@ -547,6 +566,14 @@ func (k keyCollector) Collect(ch chan<- prometheus.Metric) {
 // WatchKeys sets what the key series report at each scrape.
 func (m *Metrics) WatchKeys(sample func() []KeySample, now func() time.Time) {
 	m.keys.Store(&keyWatch{sample: sample, now: now})
+}
+
+// SetPolicyFailClosed sets port49_policy_fail_closed_compositions to n and
+// returns the count it held before.
+func (m *Metrics) SetPolicyFailClosed(n int) (before int) {
+	before = int(m.failClosed.Swap(int64(n)))
+	m.PolicyFailClosed.Set(float64(n))
+	return before
 }
 
 // WatchInventoryAge sets what port49_inventory_snapshot_age_seconds reports.
@@ -765,6 +792,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
 			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
+		PolicyFailClosed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_fail_closed_compositions",
+			Help: "Compositions answered fail-closed under the policy in force now: those users are denied all but the allows. `port49 policy test` names them."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
 			Help: "1 from a policy swap or grant expiry until its settle pass has carried it into every live login context."}),
 		PolicyBundleMatchesRunner: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_bundle_matches_runner",
@@ -889,7 +918,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.PolicyFailClosed,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,

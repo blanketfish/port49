@@ -1,0 +1,29 @@
+L80 re-measure, arm fixed, cell idle35, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.47 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=35.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=35.0s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 3, most open at once: 1
+  conn port=34616 syn=16:59:01.738 hold=35.37s end=server-fin
+  conn port=51808 syn=16:59:42.415 hold=35.28s end=server-fin
+  conn port=60356 syn=17:00:22.922 hold=35.26s end=server-fin
+connection_events deltas: <LONG> idle_closed=3 refused_cap=0
+port49 records:
+  16:59:06.746 redeem permit
+  16:59:06.771 authorize_session permit
+  16:59:06.922 account
+  16:59:07.088 authorize_command permit "terminal length 0"
+  16:59:07.109 account
+  16:59:47.423 authorize_command deny "show users"
+  16:59:47.670 authorize_command permit "terminal length 0"
+  16:59:47.691 account
+  17:00:27.931 authorize_command deny "show users"
+  17:00:28.181 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=35.0s asked=true denied=true
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=35.0s asked=true denied=true
+debug counts: connection_active=7 fall_back_none=0 mark_server_dead=0 request_acct=7 request_authen=1 request_author=8 ssl_open_success=3 ssl_read_failed=0 tacacs_group_failed=3
+

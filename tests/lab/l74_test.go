@@ -5,6 +5,7 @@ package lab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -917,9 +918,37 @@ func feedRescanned(read func() string, before float64, d, every time.Duration) (
 	}, d, every)
 	if !ok {
 		return after, fmt.Errorf("region 3's marks feed did not rescan after the heal (port49_store_feed_rescans_total "+
-			"{feed=\"marks\"} %v, was %v), a port49 finding if the compaction landed above the lift", after, before)
+			"{feed=\"marks\"} did not increase: still %v; %v before the heal), a port49 finding if the compaction landed above the lift", after, before)
 	}
 	return after, nil
+}
+
+// freezeCap is how long broker 3 is held away from etcd for etcd-3 to apply
+// the compaction: inside the directory's hold_ttl of 15s.
+const freezeCap = 10 * time.Second
+
+// freezeAcross holds broker 3 away from the directory (hold), heals the cut,
+// and polls compacted until etcd-3 reports the compaction or d passes. The
+// hold is released (release) on every path, even a failed hold, which may
+// have added some rules; a failed release is joined to the cell's own error,
+// never swallowed.
+func freezeAcross(hold, release, heal func() error, compacted func() bool, d, every time.Duration) (err error) {
+	defer func() {
+		if rerr := release(); rerr != nil {
+			err = errors.Join(err, fmt.Errorf("restoring broker 3's connectivity: %w", rerr))
+		}
+	}()
+	if herr := hold(); herr != nil {
+		return fmt.Errorf("holding broker 3 away from the directory: %w", herr)
+	}
+	if herr := heal(); herr != nil {
+		return fmt.Errorf("the heal: %w", herr)
+	}
+	if _, _, ok := l75Poll(func() string { return fmt.Sprint(compacted()) },
+		func(s string) bool { return s == "true" }, d, every); !ok {
+		return fmt.Errorf("etcd-3 had not applied the compaction %v after the heal", d)
+	}
+	return nil
 }
 
 // feedStopped waits up to d for p to say its marks feed stopped (since the
@@ -962,7 +991,9 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if revokedAt == 0 {
 		w.t.Fatal("INVALID: alice's mark revision could not be read before the cut")
 	}
-	w.brokers[3].mark() // the put-back line is looked for from here
+	for i := 1; i <= 3; i++ {
+		w.brokers[i].mark() // the put-back lines are looked for from here
+	}
 	cut := w.cutRegion3()
 	defer cut.heal()
 	// The lift must reach region 3 as a missed event: until broker 3's marks
@@ -1003,8 +1034,31 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatal("INVALID: broker 3's marks rescan counter could not be read before the heal")
 	}
 	w.guard()
-	if err := cut.healNow(); err != nil {
-		w.t.Fatalf("INVALID: the heal: %v", err)
+	// etcd-3 serves broker 3's watch from its own store, and it has a leader
+	// one heartbeat before it has applied the lift and the compaction: a watch
+	// opened between the two gets the lift as an event, and there is nothing
+	// to put back. Broker 3 is held away from the directory's client ports
+	// until etcd-3 has applied the compaction. The hold also catches port49d
+	// r3 (same user, same namespace, so no owner match tells them apart); no
+	// check here reads it: every assertion is on the brokers' logs, broker
+	// 3's metrics and the directory read through region 1, port49d r3 serves
+	// from its snapshot during the cut already, and it reconnects on release.
+	local := "https://" + regionIP(3) + ":2379"
+	if err := freezeAcross(
+		func() error { return sudoRun(regionHold(3, true), false) },
+		func() error { return sudoRunAll(regionHold(3, false)) },
+		cut.healNow,
+		func() bool {
+			// A read at a revision below the compaction answers "compacted"
+			// only once etcd-3 has applied the log up to it. It runs on the
+			// host: in p49r3 it would be held with the broker.
+			out, err := w.dirMembers[3].hostCtl(local, "get", "/l74/after-lift", "--rev", strconv.FormatInt(rev-1, 10))
+			if err != nil {
+				out += err.Error()
+			}
+			return strings.Contains(out, "required revision has been compacted")
+		}, freezeCap, 100*time.Millisecond); err != nil {
+		w.t.Fatalf("INVALID: %v", err)
 	}
 	rescans, rerr := feedRescanned(func() string { return w.brokerMetrics(3) }, rescansBefore, 30*time.Second, time.Second)
 	if rerr != nil {
@@ -1016,12 +1070,62 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: reading the directory's marks after the heal: %v", kerr)
 	}
 	n := strings.Count(keys, "alice@example.com") // alice's own mark, not every mark under rv/
-	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal",
-		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); broker 3's marks rescans %v before the heal, %v after; put-back line after %v: %s; alice's marks in the directory after: %d",
-			revokedAt, rev, rescansBefore, rescans, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n),
-		perr == nil && n == 1)
+	// The flagged mark's line is said as each feed delivers the put-back,
+	// well inside a short wait.
+	var said [3]string
+	for i := 1; i <= 3; i++ {
+		w.brokers[i].wait(l74PutBack, 10*time.Second)
+		said[i-1] = w.brokers[i].said()
+	}
+	row("i", "a lift in region 1 during a cut longer than a compaction: whether region 3's runner puts the mark back on the heal, and what every broker says of it",
+		fmt.Sprintf("alice's mark written at revision %d; lift exit 0; compacted at revision %d (after one more write); broker 3's marks rescans %v before the heal, %v after; put-back line after %v: %s; alice's marks in the directory after: %d; brokers 1, 2 and 3's lines naming alice since the cut: %s // %s // %s",
+			revokedAt, rev, rescansBefore, rescans, took.Round(10*time.Millisecond), firstLineWith(w.brokers[3].said(), "are put back"), n,
+			w.l79Lines(said[0], l79Who, 3), w.l79Lines(said[1], l79Who, 3), w.l79Lines(said[2], l79Who, 3)),
+		l74IAgrees(perr == nil, n, said))
 	// Cleanup after the last cell: nothing is measured from it.
 	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
+}
+
+// What cell (i)'s agreement needs said (task 2 review I1): the mark broker
+// 3's runner put back over region 1's lift is said on every broker as a
+// put-back, never as a copy a cut held back.
+const (
+	l74PutBack = "was put back after the lift at"
+	l74CutOff  = "while its writer was cut off"
+)
+
+// l74IAgrees is cell (i)'s agreement: broker 3 said its put-back, alice's
+// mark is in the directory once, and every broker's log since the cut has
+// the put-back form for alice and no cut-off form.
+func l74IAgrees(putBack bool, n int, said [3]string) bool {
+	if !putBack || n != 1 {
+		return false
+	}
+	for _, s := range said {
+		if !lineNaming(s, l79Principal, l74PutBack) || lineNaming(s, l79Principal, l74CutOff) {
+			return false
+		}
+	}
+	return true
+}
+
+// lineNaming is whether one line of log names who and holds every one of
+// frags: two lines, or two keys' lines, never add up to one (task 2 review
+// M4).
+func lineNaming(log, who string, frags ...string) bool {
+	for _, l := range strings.Split(log, "\n") {
+		if !strings.Contains(l, who) {
+			continue
+		}
+		all := true
+		for _, f := range frags {
+			all = all && strings.Contains(l, f)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
 }
 
 // l79Cell is one cell of L79, the row carried from 11a's final review: a write
@@ -1115,6 +1219,24 @@ func (w *regionWorld) l79Lines(s, sub string, n int) string {
 }
 
 func oneLineOf(s string) string { return strings.ReplaceAll(s, "\n", " / ") }
+
+// What cell k's agreement needs said (post-11b, I8): broker 3's revoke
+// reported "may not have been recorded"; broker 3 says the late mark as
+// its own; region 1's broker says it landed after its lift, in the form for
+// a copy sent before the lift; region 1's revoke --list shows the flag.
+const (
+	l79Unrecorded = "the revocation may not have been recorded: a copy already sent can still land"
+	l79Own        = "made on this port49-broker, reported unrecorded then"
+	l79Before     = "while its writer was cut off; it stands everywhere"
+	l79Listed     = "landed after the lift at"
+)
+
+// l79KAgrees is cell k's agreement: the revoke failed and said it may still
+// land, the mark came back (fail closed), and each line above was said.
+func l79KAgrees(code int, back bool, cli, broker3, broker1, list string) bool {
+	return code != 0 && back && strings.Contains(cli, l79Unrecorded) && lineNaming(broker3, l79Principal, l79Own) &&
+		lineNaming(broker1, l79Principal, "before the lift at", l79Before) && strings.Contains(list, l79Listed)
+}
 
 // l79Revoked is alice's mark written from region 1 and known to broker 3, the
 // state both cells start from. It is INVALID when it cannot be set up.
@@ -1222,6 +1344,7 @@ func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: the lift in region 1 left the mark (exit %d, mark %v)", lcode, inDuring)
 	}
 	status, scode, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	w.brokers[1].mark()
 	w.brokers[3].mark()
 	w.daemons[3].mark()
 	healed, err := cut.healAt(cutAt, l79Cells[1].Heal)
@@ -1235,14 +1358,21 @@ func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	for _, in := range polls {
 		back = back || in
 	}
+	// The lines a flagged mark brings are said as the feed delivers it, well
+	// inside the poll window; a short wait covers a slow feed.
+	w.brokers[3].wait(l79Own, 10*time.Second)
+	w.brokers[1].wait(l79Before, 10*time.Second)
+	list, lscode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--list")
 	row("k", l79Cells[1].Claim,
 		fmt.Sprintf("revoke from region 3 exit %d in %v: %s; the lift in region 1 exit %d; the mark during the cut after the lift: %v; %s; store status in region 3 during the cut (exit %d): %s; after the heal: %s; broker 3's lines naming alice since the heal: %s; port49d 3's lines naming the directory since the heal: %s",
 			code, took.Round(time.Millisecond), w.leakless(oneLineOf(out)), lcode, inDuring, l79Timeline(false, polls, l79Poll),
 			scode, w.leakless(oneLineOf(status)), w.leakless(oneLineOf(after)),
 			w.l79Lines(w.brokers[3].said(), l79Who, 3), w.l79Lines(w.daemons[3].said(), "directory", 3))+
 			fmt.Sprintf("; the directory's revision at the cut %d, after the lift %d, and the mark's after the heal %d; \"are put back\" lines in broker 3's log since the heal: %d",
-				revAtCut, revAfterLift, markRev, strings.Count(w.brokers[3].said(), "are put back")),
-		code != 0 && back)
+				revAtCut, revAfterLift, markRev, strings.Count(w.brokers[3].said(), "are put back"))+
+			fmt.Sprintf("; broker 1's lines naming alice since the heal: %s; port49 revoke --list in region 1 (exit %d): %s",
+				w.l79Lines(w.brokers[1].said(), l79Who, 3), lscode, w.leakless(oneLineOf(list))),
+		l79KAgrees(code, back, out, w.brokers[3].said(), w.brokers[1].said(), list))
 	cut.heal()
 	w.l79Clean()
 }

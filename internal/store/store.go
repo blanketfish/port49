@@ -112,6 +112,14 @@ type Credential struct {
 	MFAMethod      string
 	MFAAt          time.Time
 	MFAAgentSHA256 string
+	// MFAFresh is a proof made for the mint's own challenge, which covers
+	// that mint once whatever reuse_for is; false is a kept proof reused,
+	// held to reuse_for from MFAAt. A refresh judges an unspent token's proof
+	// by it (spec §5.1.3). Every encoding writes it, false included, and
+	// every lossy read is false: a record an older port49 wrote, a field an
+	// encoding dropped, a zero value. So a lost true costs one `port49 token`
+	// again, and never keeps a token the policy forbids.
+	MFAFresh bool
 }
 
 type Token struct {
@@ -638,6 +646,12 @@ type Idempotency struct {
 type Store interface {
 	PutToken(ctx context.Context, k TokenKey, t Token) (count int, err error)
 	Candidates(ctx context.Context, k TokenKey) ([]Token, error)
+	// TokenIDs is the ID of every live token under k, one the reader cannot
+	// open included: the IDs are plaintext (Token.ID), so the sealing layer
+	// passes it through. A refresh reads it before Candidates and deletes
+	// an ID that Candidates did not give, which is unreadable or was spent
+	// in between (spec §5.1.3).
+	TokenIDs(ctx context.Context, k TokenKey) ([]string, error)
 	// RedeemAndReceipt removes the token with this ID and writes the receipt in
 	// one atomic operation, indexing the receipt by principal (design §12).
 	RedeemAndReceipt(ctx context.Context, k TokenKey, tokenID string, w ReceiptWrite) error
@@ -996,15 +1010,24 @@ type Store interface {
 	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)
 	// DeleteRevocation lifts the mark for (kind, key); none is not an error.
 	// It lifts only the mark it read: one made again while it ran stands,
-	// and the lift returns ErrConflict.
-	DeleteRevocation(ctx context.Context, kind, key string) error
+	// and the lift returns ErrConflict. A backend that flags a late mark
+	// (decision 51; etcd) writes by, the lift's time and origin, as the
+	// lift's record in the same write, for LiftTTL; one that cannot write it
+	// lifts nothing. by.Revision is not read.
+	DeleteRevocation(ctx context.Context, kind, key string, by Lift) error
+	// GetLift is the record of the last lift of (kind, key) within
+	// LiftTTL, with the revision it was written at, or ErrNotFound: none,
+	// or expired, or a backend that keeps none (memory).
+	GetLift(ctx context.Context, kind, key string) (Lift, error)
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
-	// SupersedeTokens records that k's unspent tokens were deleted at at, by
-	// a refresh or a revocation, keeping the later of at and what stands,
-	// for SupersededFor. An idempotent replay of a mint from before it, on
-	// any broker process, is minted afresh rather than answered with a token
-	// that no longer exists (plan 7e, Ruling 9).
+	// SupersedeTokens records that some of k's unspent tokens were deleted
+	// at at, by a refresh or a revocation, keeping the later of at and what
+	// stands, for SupersededFor. An idempotent replay of a mint from before
+	// it, on any broker process, is minted afresh rather than answered with
+	// a token that no longer exists (plan 7e, Ruling 9). A refresh passes the
+	// latest MintedAt among the tokens it deletes, so a replay of a token it
+	// kept, minted after them, still replays.
 	SupersedeTokens(ctx context.Context, k TokenKey, at time.Time) error
 	// SupersedeAll is SupersedeTokens for every key at once: a start that
 	// purged every unspent token.
@@ -1387,6 +1410,72 @@ type Revocation struct {
 	At time.Time
 	// Origin says who asked: "admin_socket uid 0".
 	Origin string
+	// LandedAfterLift is set by the store when the mark was created over a
+	// lift of its key that its writer's marks feed had not delivered (spec
+	// §13 decision 51, the cache): a copy a cut held back, or a revoke made
+	// before the lift reached its writer. The mark stands like any other.
+	LandedAfterLift bool
+}
+
+// Lift is the record a lift leaves (spec §13 decision 51, the cache):
+// when it was made and who asked, and, as read back, the store revision it
+// was written at, which a later put of the mark compares with its writer's
+// floor (WithMarkFloor).
+type Lift struct {
+	At       time.Time
+	Origin   string
+	Revision uint64
+}
+
+// LiftTTL is how long a lift's record lives, and how long a process
+// remembers its own lift of a key and its own failed revocation writes
+// (Marks.FailedWrite): past the kernel giving up on a cut link, about 15
+// minutes.
+const LiftTTL = time.Hour
+
+// putBack is what a port49-broker runner's put-back adds to a mark's
+// origin (task 2 review I1).
+const putBack = "put back from broker.state_dir/marks.json"
+
+// PutBackOrigin is origin as a runner's put-back from its marks copy writes
+// it: the mark's own origin first, so a CA's mark stays a CA's, then that it
+// was put back, said once however often it is (task 2 review I1). A flagged
+// mark's line says the put-back as its cause, never a cut.
+func PutBackOrigin(origin string) string {
+	if _, ok := PutBackOf(origin); ok {
+		return origin
+	}
+	if origin == "" {
+		return putBack
+	}
+	return origin + "; " + putBack
+}
+
+// PutBackOf is the mark's own origin and true when origin is a put-back's
+// (PutBackOrigin).
+func PutBackOf(origin string) (string, bool) {
+	if origin == putBack {
+		return "", true
+	}
+	orig, ok := strings.CutSuffix(origin, "; "+putBack)
+	return orig, ok
+}
+
+type markFloorKey struct{}
+
+// WithMarkFloor is ctx carrying rev as its PutRevocation's floor: the
+// revision up to which the writer's marks feed has delivered every mark
+// event (Marks.ConfirmedRevision). A lift recorded above it is one the
+// writer had not seen, and the mark is put flagged LandedAfterLift.
+func WithMarkFloor(ctx context.Context, rev uint64) context.Context {
+	return context.WithValue(ctx, markFloorKey{}, rev)
+}
+
+// MarkFloor is ctx's floor (WithMarkFloor), 0 when it carries none: every
+// lift recorded is then one the writer had not seen.
+func MarkFloor(ctx context.Context) uint64 {
+	rev, _ := ctx.Value(markFloorKey{}).(uint64)
+	return rev
 }
 
 // OIDCOwner is every principal minting under an OIDC sid or sub (plan 7h,

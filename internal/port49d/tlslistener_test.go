@@ -593,6 +593,10 @@ func TestTLSServerNamesAreFoldedAtLoad(t *testing.T) {
 	if cfg.ServerNames[0] != "TACACS.Example.NET." {
 		t.Fatal("the config's own slice was rewritten in place")
 	}
+	addrs := tlsServerNames(config.TLSListenerConfig{ServerNames: []string{"2001:0DB8::1", "::ffff:192.0.2.1"}})
+	if len(addrs) != 2 || addrs[0] != "2001:db8::1" || addrs[1] != "192.0.2.1" {
+		t.Fatalf("addresses are canonical, as the SNI they are matched with is: %q", addrs)
+	}
 }
 
 // Carry 5: only Good is good.

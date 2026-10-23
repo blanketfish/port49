@@ -319,3 +319,10 @@ func TestMemorySeenIsItsCounter(t *testing.T) {
 		t.Fatalf("Seen %d after a write at %d: %v", s.Seen(), rev, err)
 	}
 }
+
+// The memory store keeps no lift's record and never flags a mark (final
+// check F-M1).
+func TestTheMemoryStoreKeepsNoLiftRecord(t *testing.T) {
+	now := time.Unix(1_000_000, 0).UTC()
+	storetest.MemoryKeepsNoLiftRecord(t, New(func() time.Time { return now }), now)
+}

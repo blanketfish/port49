@@ -55,9 +55,13 @@ func (pr Prior) instants(now time.Time) []time.Time {
 // RefreshReport counts what one refresh did, for the line port49d writes after
 // it. The context counts are port49_context_refreshes_total's outcomes.
 type RefreshReport struct {
-	// TokenKeys is how many (device, username) keys had their unspent tokens
-	// deleted as superseded.
-	TokenKeys                                        int
+	// TokenKeys is how many (device, username) keys had at least one unspent
+	// token deleted as superseded.
+	TokenKeys int
+	// TokensKept is how many unspent tokens were kept under keys whose answer
+	// changed: each one the policy in force would mint now as it is (spec
+	// §5.1.3).
+	TokensKept                                       int
 	Updated, Unchanged, Revoked, Quarantined, Failed int
 	// Unreached is how many of the contexts updated, revoked or failed are
 	// on a platform that does not authorize commands (Junos, spec §13
@@ -136,12 +140,14 @@ func (b *Broker) passLog(rep *RefreshReport) decision.Emitter {
 //
 // Then the tokens. A token carries its blob hash, ceiling and enable
 // mechanism from the policy that minted it, and a redemption writes them into
-// the context it creates or joins. So an unspent token minted under a prior
-// policy whose answer the policy in force would not give is deleted, key by
-// key; otherwise a grant removed at 10:00 comes back at 10:05 on a device where
-// the operator had no context yet, from a token minted at 09:58. A token the
-// policy in force would mint identically is left alone: a reload is not a
-// reason to make everyone run `port49 token` again.
+// the context it creates or joins. So under a (device, username) where a prior
+// policy's answer differs from the policy in force's, each unspent token is
+// judged on its own and deleted unless the policy in force would mint it now
+// as it is (supersedeTokens); otherwise a grant removed at 10:00 comes back at
+// 10:05 on a device where the operator had no context yet, from a token minted
+// at 09:58. A key whose answer is unchanged is left alone, and so is a token
+// minted under the policy in force since the swap: a reload is not a reason to
+// make everyone run `port49 token` again.
 //
 // Every context the refresh changes is one `refresh` decision record naming
 // the context's ctx_id, so the record before a command's changed answer says
@@ -185,7 +191,7 @@ func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, er
 			return rep, fmt.Errorf("refreshing live contexts: %w", busy)
 		}
 		// A busy context is left for the retry, and the tokens are still
-		// superseded: a key whose answer changed is cleared either way.
+		// judged: a key whose answer changed is judged either way.
 		if err := b.supersedeTokens(ctx, cur, rep.At, priors, &rep); err != nil {
 			return rep, fmt.Errorf("deleting superseded tokens: %w", err)
 		}
@@ -325,8 +331,10 @@ func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation
 }
 
 // minted is what a token for one principal on one device carries of its
-// policy, the bundle aside: every policy file has its own bundle, so comparing
-// it would supersede every token at every edit. ttl is the subject's
+// policy. blob is its blob with the bundle aside: every policy file has its
+// own bundle, so comparing it would flag every key at every edit. hash is the
+// blob's hash with the policy's own bundle, the one a token it mints carries,
+// by which a changed key's tokens are judged (spec §5.1.3). ttl is the subject's
 // token_ttl, the longest the token can live; age is the device's
 // max_session_age, zero for never. mfa is the per-login requirement the
 // token was minted under: it is in no blob, and a token minted under a weaker
@@ -334,6 +342,7 @@ func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation
 type minted struct {
 	username string
 	blob     []byte
+	hash     string
 	ceiling  uint8
 	enable   string
 	ttl      time.Duration
@@ -353,13 +362,17 @@ func mintedBy(p *policy.Policy, m policy.Member, d admission.Device, at time.Tim
 	if code, _ := policy.MintCheck(res, m.Principal, d.Name); code != "" {
 		return minted{}, false
 	}
+	_, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		return minted{}, false
+	}
 	blob := res.Blob
 	blob.Bundle = "-" // Encode refuses an empty bundle; every real one is a sha256
 	body, _, err := engine.Encode(blob)
 	if err != nil {
 		return minted{}, false
 	}
-	return minted{username: res.Username, blob: body, ceiling: res.MaxPrivilege, enable: res.Enable,
+	return minted{username: res.Username, blob: body, hash: hash, ceiling: res.MaxPrivilege, enable: res.Enable,
 		ttl: res.TokenTTL, age: res.SessionAge.Of(def), mfa: res.PerLoginMFA}, true
 }
 
@@ -374,6 +387,23 @@ func (m minted) keeps(o minted) bool {
 		m.enable == o.enable && m.ttl <= o.ttl && !longerAge(m.age, o.age) && o.mfa.MetBy(m.mfa)
 }
 
+// mints reports whether t, under k, is a token m's policy would mint now as
+// it is (spec §5.1.3): under the username m gives, with m's blob, bundle
+// included, its ceiling and enable mechanism, a life no longer than m
+// allows, and, under a per-login requirement, a proof of the token's own
+// that meets it now (proofMeets). A token minted under the policy in force
+// since the swap, on any process, is one; a token a replaced policy minted
+// carries another bundle, and is not. A reused proof's age is judged at the
+// token's MintedAt, a few milliseconds after the mint judged it: a token
+// minted with less than that left on reuse_for is deleted, which fails
+// closed and costs a re-mint.
+func (m minted) mints(k store.TokenKey, t store.Token) bool {
+	return m.username == k.Username && t.BlobHash == m.hash && t.MaxPrivilege == m.ceiling &&
+		t.Enable == m.enable && !longerAge(t.MaxSessionAge, m.age) && t.ExpiresAt.Sub(t.MintedAt) <= m.ttl &&
+		(!m.mfa.Required() || proofMeets(m.mfa, policy.MFAMethod(t.Credential.MFAMethod), t.Credential.MFAFresh,
+			t.Credential.MFAAt, t.MintedAt))
+}
+
 // longerAge reports whether a ceiling of a outlasts one of b, zero being
 // never: a token minted under a longer ceiling than the policy in force
 // allows is superseded, as a longer token_ttl is (decision 33).
@@ -381,13 +411,33 @@ func longerAge(a, b time.Duration) bool {
 	return b != 0 && (a == 0 || a > b)
 }
 
-// supersedeTokens deletes the unspent tokens of every (device, username) where
+// supersedeTokens judges the unspent tokens of every (device, username) where
 // a prior policy minted something, at any instant of its span, that the policy
-// in force would not. A key is cleared whole: tokens are keyed by it, and
-// every principal minting under one username is one subject, whose answer
-// changed. That includes a token minted under the policy in force between the
-// swap and this pass — the operator runs `port49 token` again, and the refresh
-// runs straight after the swap to keep that window short.
+// in force would not (spec §5.1.3). Such a key's tokens are judged one by one
+// (judgeKey): each is kept only if the policy in force would mint it now as
+// it is, for its own principal, and every other is deleted, one this process
+// cannot open included. So a token minted under the policy in force since the
+// swap, on any process, survives this pass and the settle pass alike: the
+// operator who tightened a grant and ran `port49 token` again keeps that
+// token.
+//
+// The hash compares the bundle. An inventory-only swap in plain-file mode
+// keeps it (policy.Load: Bundle is the file's hash), so a prior's token can
+// match too; that is right, since every field is compared. Replicas whose
+// inventory snapshots differ have different bundles, and their tokens are
+// judged as a prior's: deleted, which is safe and expected. A replica already
+// on a newer policy than this one can lose a token to this pass the same way,
+// until this process reloads it too (two policy_watch_intervals).
+//
+// The pass's bound: a mint that lands between judgeKey's reads and its deletes
+// is not judged, so a late replica's token landing just after the settle
+// pass's read survives to its TTL. The whole-key delete had the same window,
+// a few microseconds narrower.
+//
+// A declared-username collision is cleared whole, by principal, as before.
+// A policy swapped in while the pass runs stops it (ErrPolicySwapped): the
+// swap's own pass judges the rest. port49d's reloader runs swaps and passes
+// on one goroutine, so there it is a guard that never fires.
 func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now time.Time, priors []Prior,
 	rep *RefreshReport) error {
 	seen := map[string]bool{}
@@ -409,6 +459,19 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		ok bool
 	}
 	current := map[[2]string]answer{} // the policy in force's, by (principal, device), computed once
+	// inForce is the policy in force's answer for principal on device, computed
+	// once. A device the inventory in force no longer names mints nothing
+	// now, so every token for it is superseded.
+	inForce := func(principal string, m policy.Member, name string) answer {
+		is, computed := current[[2]string{principal, name}]
+		if !computed {
+			if nd, ok := cur.Device(name); ok {
+				is.m, is.ok = mintedFor(cur, m, nd, now, b.MaxSessionAge)
+			}
+			current[[2]string{principal, name}] = is
+		}
+		return is
+	}
 	keys := map[store.TokenKey]bool{}
 	// A group member is named by no identity subject, so the principals the
 	// scan judges are those a prior declares and those the store holds a
@@ -468,16 +531,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 					if !ok {
 						continue // nothing was minted then, so nothing is superseded
 					}
-					is, computed := current[[2]string{principal, name}]
-					if !computed {
-						// A device the inventory in force no longer names mints
-						// nothing now, so every token for it is superseded.
-						if nd, ok := cur.Device(name); ok {
-							is.m, is.ok = mintedFor(cur, m, nd, now, b.MaxSessionAge)
-						}
-						current[[2]string{principal, name}] = is
-					}
-					if is.ok && was.keeps(is.m) {
+					if is := inForce(principal, m, name); is.ok && was.keeps(is.m) {
 						continue
 					}
 					keys[store.TokenKey{NAS: name, Username: was.username}] = true
@@ -489,6 +543,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 	// minted before the declaration: it would log in under the declared
 	// subject's name. Its keys are cleared whole, and only its (never the
 	// tokens a reload deliberately keeps), whether or not it has a context.
+	whole := map[store.TokenKey]bool{}
 	for _, principal := range held {
 		if _, err := memberOf(principal); err != nil {
 			return err
@@ -501,7 +556,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 			return err
 		}
 		for _, k := range tks {
-			keys[k] = true
+			keys[k], whole[k] = true, true
 		}
 	}
 	ordered := make([]store.TokenKey, 0, len(keys))
@@ -515,23 +570,116 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		return ordered[i].Username < ordered[j].Username
 	})
 	for _, k := range ordered {
-		// Read first only to count: a key whose tokens are all spent or
-		// expired supersedes nothing an operator would notice.
-		toks, err := b.Store.Candidates(ctx, k)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := b.Store.DeleteTokens(ctx, k); err != nil {
-			return err
+		if whole[k] {
+			// Read first only to count: a key whose tokens are all spent or
+			// expired supersedes nothing an operator would notice.
+			toks, err := b.Store.Candidates(ctx, k)
+			if err != nil {
+				return err
+			}
+			if err := b.Store.DeleteTokens(ctx, k); err != nil {
+				return err
+			}
+			b.supersede(ctx, k, b.Now())
+			if len(toks) > 0 {
+				rep.TokenKeys++
+				b.Metrics.TokensSuperseded.Inc()
+			}
+			continue
 		}
-		b.supersede(ctx, k, b.Now())
-		if len(toks) > 0 {
-			rep.TokenKeys++
-			b.Metrics.TokensSuperseded.Inc()
+		judge := func(t store.Token) (bool, error) {
+			m, err := memberOf(t.Principal)
+			if err != nil {
+				return false, err
+			}
+			is := inForce(t.Principal, m, k.NAS)
+			return is.ok && is.m.mints(k, t), nil
+		}
+		if err := b.judgeKey(ctx, cur, k, judge, rep); err != nil {
+			return err
 		}
 	}
 	return nil
 }
+
+// judgeKey judges every unspent token under k by judge, and deletes each it
+// does not keep. The IDs are read before the tokens (store.TokenIDs, then
+// Candidates): an ID that Candidates did not give is a token this process
+// cannot open, or one spent or expired in between, and is deleted unjudged,
+// as the whole-key delete took it; a token minted between the two reads is
+// in Candidates alone, and is judged with the rest. One that expired in
+// between stamps the supersede at now, as an unreadable one does: a kept
+// token's replay is then minted afresh, which costs one token. Before the first delete the
+// supersede is recorded, at the latest MintedAt among the tokens deleted, or
+// now if any cannot be read: a replay of a deleted token's mint is then
+// minted afresh, and a replay of a kept token minted after them still
+// replays, even if the store stops the pass part-way. A token spent before
+// its delete (store.ErrNotFound) is skipped.
+func (b *Broker) judgeKey(ctx context.Context, cur *policy.Policy, k store.TokenKey,
+	judge func(store.Token) (bool, error), rep *RefreshReport) error {
+	ids, err := b.Store.TokenIDs(ctx, k)
+	if err != nil {
+		return err
+	}
+	toks, err := b.Store.Candidates(ctx, k)
+	if err != nil {
+		return err
+	}
+	read := make(map[string]bool, len(toks))
+	var drop []string
+	var at time.Time
+	kept := 0
+	for _, t := range toks {
+		read[t.ID] = true
+		keep, err := judge(t)
+		switch {
+		case err != nil:
+			return err
+		case keep:
+			kept++
+			continue
+		}
+		drop = append(drop, t.ID)
+		if t.MintedAt.After(at) {
+			at = t.MintedAt
+		}
+	}
+	for _, id := range ids {
+		if !read[id] {
+			drop = append(drop, id)
+			at = b.Now()
+		}
+	}
+	// A mint under a policy swapped in since the pass began, read above,
+	// would be judged against the one it replaced. Checked after the reads:
+	// a mint holds the policy until its token is written (policy.Live), so
+	// one the reads gave was minted under cur, or the swap is seen here.
+	if b.Policy.Load() != cur {
+		return ErrPolicySwapped
+	}
+	rep.TokensKept += kept
+	if len(drop) == 0 {
+		return nil
+	}
+	b.supersede(ctx, k, at)
+	for _, id := range drop {
+		if err := b.Store.DeleteToken(ctx, k, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	rep.TokenKeys++
+	b.Metrics.TokensSuperseded.Inc()
+	return nil
+}
+
+// ErrPolicySwapped is a token pass that met a policy swapped in after it
+// began: left for the swap's own pass, which judges the rest, as a busy
+// context is (an ErrConflict).
+var ErrPolicySwapped = fmt.Errorf("broker: the policy in force changed during the token pass; the next pass "+
+	"judges the rest: %w", store.ErrConflict)
 
 // refreshContexts visits every live context through the indexes the daemon
 // keeps for exactly this (spec §5.1.3): active_principals, then each one's

@@ -641,7 +641,9 @@ func (e *l73Env) startOn() {
 // unreachable IOS XE 17.13 answered logins locally without sending it a
 // packet (awaitTACACS's comment; L10). A cell measured then would record
 // that memory, not the cell. The test is a connection, not a record: cell
-// a's first login may go to a port nothing answers TLS on.
+// a's first login may go to a port nothing answers TLS on. A record of the
+// probe counts too (l73Ready, fix round 4): a device port49 offered
+// single-connect sends the probe on the connection it holds, with no SYN.
 // It returns the connections of the probe that reached port49.
 func (e *l73Env) ready(cell string) []l73Conn {
 	e.t.Helper()
@@ -653,9 +655,12 @@ func (e *l73Env) ready(cell string) []l73Conn {
 			}
 			e.probeAt[cell] = time.Now()
 		}
+		off := e.l.mark()
 		stop := e.capture(fmt.Sprintf("%s-ready%d", cell, n))
 		_, _, _ = e.breakglassLogin()
-		if conns := stop(); len(l73Window(conns, l73Server, time.Time{}, time.Now())) > 0 {
+		conns := stop()
+		if l73Ready(conns, time.Time{}, time.Now(), e.l.waitForRecords(off, 5*time.Second,
+			func(rs []map[string]any) bool { return len(rs) > 0 })) {
 			return conns
 		}
 		if time.Now().After(deadline) {

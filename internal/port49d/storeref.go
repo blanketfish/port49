@@ -102,11 +102,18 @@ func (h *dirHandle) GetRevocation(ctx context.Context, kind, key string) (store.
 	return store.Revocation{}, errNoDirectory
 }
 
-func (h *dirHandle) DeleteRevocation(ctx context.Context, kind, key string) error {
+func (h *dirHandle) DeleteRevocation(ctx context.Context, kind, key string, by store.Lift) error {
 	if s := h.get(); s != nil {
-		return s.DeleteRevocation(ctx, kind, key)
+		return s.DeleteRevocation(ctx, kind, key, by)
 	}
 	return errNoDirectory
+}
+
+func (h *dirHandle) GetLift(ctx context.Context, kind, key string) (store.Lift, error) {
+	if s := h.get(); s != nil {
+		return s.GetLift(ctx, kind, key)
+	}
+	return store.Lift{}, errNoDirectory
 }
 
 func (h *dirHandle) ListRevocations(ctx context.Context) ([]store.Revocation, error) {

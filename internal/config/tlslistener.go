@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/rhwendt/port49/internal/printsafe"
 )
 
 // ListenNone is listen's value that turns the RFC 8907 listener off (spec
@@ -30,7 +33,8 @@ type TLSListenerConfig struct {
 	IntermediatesFile string               `yaml:"intermediates_file"`
 	DeviceIdentity    DeviceIdentityConfig `yaml:"device_identity"`
 	// ServerNames, when set, are the SNI names a ClientHello may ask for
-	// (ruling 10). Lower-cased at load.
+	// (ruling 10): DNS names, lower-cased at load, and IP addresses, stored
+	// canonical.
 	ServerNames           []string      `yaml:"server_names"`
 	HandshakeTimeout      time.Duration `yaml:"handshake_timeout"`       // default 10s; 1s to 30s
 	SessionTicketLifetime time.Duration `yaml:"session_ticket_lifetime"` // default 0s (off); up to 1h
@@ -125,11 +129,10 @@ func checkTLSListener(y *tlsListenerYAML, listen string) (*TLSListenerConfig, er
 		}
 		id.DNSSuffixes[i] = s
 	}
-	for i, n := range t.ServerNames {
-		n = strings.ToLower(strings.TrimSuffix(n, "."))
-		if !dnsShape(n) {
-			return nil, fmt.Errorf("config: %s.server_names[%d] is not a server name (letters, digits, - and ., "+
-				"no wildcard)", key, i)
+	for i, raw := range t.ServerNames {
+		n, err := serverName(raw)
+		if err != nil {
+			return nil, fmt.Errorf("config: %s.server_names[%d] %q %w", key, i, printsafe.Line(raw, 253), err)
 		}
 		t.ServerNames[i] = n
 	}
@@ -186,6 +189,32 @@ func sameBind(a, b string) bool {
 	}
 	wild := func(h string) bool { return h == "" || h == "0.0.0.0" || h == "::" }
 	return ah == bh || wild(ah) || wild(bh)
+}
+
+// serverName is a server_names entry as the listener compares it (decision
+// 50 ruling 10): an IP address in canonical form (IPv4-mapped folded to
+// IPv4, IPv6 as RFC 5952 text), or a DNS name in lower case with no
+// trailing dot. An entry whose last label is all digits must be an address:
+// RFC 1123 allows no all-numeric top label, so as a name it is a mistyped
+// address that no SNI would match. The address is not guessed: 010 is 10
+// or octal 8 depending on the parser, and the wrong guess would admit
+// another server name.
+func serverName(raw string) (string, error) {
+	n := strings.ToLower(strings.TrimSuffix(raw, "."))
+	if a, err := netip.ParseAddr(n); err == nil {
+		if a.Zone() != "" {
+			return "", errors.New("has a zone, which no SNI carries: write the address alone")
+		}
+		return a.Unmap().String(), nil
+	}
+	if last := n[strings.LastIndex(n, ".")+1:]; last != "" && strings.Trim(last, "0123456789") == "" {
+		return "", errors.New("looks like an IP address but is not one in canonical form: write IPv4 as four " +
+			"decimal octets with no leading zeros (192.0.2.1), or IPv6 as RFC 5952 text (2001:db8::1)")
+	}
+	if !dnsShape(n) {
+		return "", errors.New("is not a server name or an IP address (letters, digits, - and ., no wildcard)")
+	}
+	return n, nil
 }
 
 // dnsShape is letters, digits, - and ., between 1 and 253 bytes, no empty

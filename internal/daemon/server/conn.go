@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -11,12 +12,14 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -47,6 +50,10 @@ type conn struct {
 	raw      net.Conn
 	mismatch bool        // admitted, on the listener its transport is not (spec §10)
 	tls      *tlsSession // set once a TLS handshake ends
+	// tlsc is the TLS connection while a shutdown may close it with
+	// close_notify; it is cleared when a reset or a protocol error drops the
+	// connection without one. Serve's shutdown goroutine reads it.
+	tlsc     atomic.Pointer[tls.Conn]
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
@@ -54,7 +61,9 @@ type conn struct {
 	keys     keyring.Set
 
 	version  int  // 0 until the first packet validates; then the only version this connection uses
-	single   bool // the first packet asked to keep the connection open
+	single   bool // the first packet asked to keep the connection open, or port49 offered it (ruling 20)
+	offered  bool // port49 alone opened it single-connect; counted in offers while it is open
+	offers   *offers
 	sessions map[uint32]*authen.Session
 }
 
@@ -220,6 +229,7 @@ func reset(c net.Conn) {
 // abandoned, not closed: no close_notify goes out before the reset (L73 has
 // not measured what a device does with one).
 func (s *conn) reset() {
+	s.tlsc.Store(nil)
 	s.c = s.raw
 	reset(s.raw)
 }
@@ -275,14 +285,37 @@ func (s *conn) decline() {
 // arrived on the wire.
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
+	// A TLS connection is dropped without close_notify, as a reset's is,
+	// and that holds for a shutdown during the backoff too: the handle is
+	// cleared before the hold, not after it.
+	s.tlsc.Store(nil)
+	s.c = s.raw
 	s.backoff(ctx, "malformed_backoff")
-	s.c = s.raw // a TLS connection is dropped without close_notify, as a reset's is
+}
+
+// badTLSHeader holds the backoff for a header on the RFC 9887 listener that
+// fails ValidateTLS for a reason other than the obfuscated flag. As in
+// protocolError, the TLS handle is dropped before the hold, so a shutdown
+// during it sends no close_notify either.
+func (s *conn) badTLSHeader(ctx context.Context, h wire.Header) {
+	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
+	s.tlsc.Store(nil)
+	s.c = s.raw
+	s.backoff(ctx, "malformed_backoff")
 }
 
 func (s *conn) serve(ctx context.Context) {
 	// s.c becomes the TLS connection after a handshake: Close it as it is
-	// then, so a TLS peer gets close_notify.
-	defer func() { s.c.Close() }()
+	// then, so a TLS peer gets close_notify. An offer is released first, so
+	// a device that reconnects the moment it sees the close is not counted
+	// against the connection it just lost (decision 50 ruling 20).
+	defer func() {
+		if s.offered {
+			s.offered = false
+			s.offers.close(s.src)
+		}
+		s.c.Close()
+	}()
 	if s.d.TLS != nil && !s.startTLS(ctx) {
 		return
 	}
@@ -373,8 +406,7 @@ func (s *conn) serve(ctx context.Context) {
 					s.obfuscatedOverTLS(h)
 					return
 				}
-				s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
-				s.backoff(ctx, "malformed_backoff")
+				s.badTLSHeader(ctx, h)
 				return
 			}
 		} else if err := h.Validate(); err != nil {
@@ -398,10 +430,21 @@ func (s *conn) serve(ctx context.Context) {
 		body := raw
 		if s.tls != nil {
 			// No key over TLS (RFC 9887 §4): the first packet's
-			// single-connect flag decides, as the first validated one does on 49.
+			// single-connect flag decides, as the first validated one does on
+			// 49, and no later packet's flag changes it (RFC 8907 §4.3). A
+			// device whose wire platform has the fact is offered the mode
+			// even unasked, as RFC 8907 §4.3 allows: NX-OS 10.6 pipelines
+			// a request behind an accounting record, and a close after one
+			// session loses it (decision 50 ruling 20). Every packet still
+			// passes admission, the quarantine and the TLS recheck above.
 			if !s.tls.started {
 				s.tls.started = true
-				s.single = h.Flags&wire.FlagSingleConnect != 0
+				asked := h.Flags&wire.FlagSingleConnect != 0
+				s.single = asked || platform.TLSServerSingleConnect(wirePlatform(s.dev))
+				if s.single && !asked {
+					s.offered = true
+					s.offers.open(s.src)
+				}
 			}
 		} else {
 			var ok bool
@@ -497,6 +540,10 @@ func (s *conn) pastDate(now time.Time) bool {
 }
 
 // write sends one reply, obfuscated with the version that validated the request.
+// While the connection is single-connect every reply carries the flag, an
+// offered one's too: that is the form NX-OS's reuse was measured under, and
+// RFC 8907 §4.3 has both sides ignore the flag after the second packet
+// (decision 50 ruling 20).
 func (s *conn) write(h wire.Header, body []byte) bool {
 	flags := uint8(0)
 	if s.single {

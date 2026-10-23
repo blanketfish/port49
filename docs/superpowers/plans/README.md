@@ -7454,27 +7454,33 @@ when Task 14's review found a security-relevant device fact.
   - **L80 opened and closed 2026-10-21** (`tests/lab/results/L80-cisco_nxos.md`, `33fd31e9`). On NX-OS
     10.6(2)F over per-request TLS, `show users`, which port49's qual policy denies, ran, and port49 was
     never asked about it (0 `authorize_command` records for it). With single-connection on, port49 was
-    asked and denied it. The cause, the device's local fallback, is presumed and not measured. The page row
-    reads "partial". `tests/lab/regress.yaml` has an entry, `L80-nxos106`, and a run that observes nothing
+    asked and denied it. The cause, the device's local fallback, was presumed then; the post-11b fix
+    (decision 50 ruling 20, port49 offering single-connect) closed the gap: with the offer the device asks about
+    every command and `show users` is denied (fixed arm and re-vet, `tests/lab/results/L80-cisco_nxos.md`),
+    and the page row reads "qualified". `tests/lab/regress.yaml` has an entry, `L80-nxos106`, and a run that observes nothing
     is INVALID and writes no L80 note, so the committed one stands (final review I2). Other NX-OS images do
     not overwrite the note.
   - L35, L37 and L66 passed on the rerun (L35 at `fee22706`, judging a dark port49d by decision 37).
     L29-reload's vJunos refused phase is a device flake, retry it.
-- **Decision pending (Ryan): NX-OS 10.6 over per-request TLS.** A port49 deny does not hold. The controller
-  recommends a docs warning plus a §12 log warning when a `cisco_nxos` device uses per-request TLS; the
-  alternative is refusing those logins. Not decided, and no warning is added in 11b (no new warnings
-  here).
+- **Resolved: NX-OS 10.6 over per-request TLS.** Superseded by decision 50 ruling 20: port49 now offers single-connect, and with the offer the device asks port49 about every command and the deny holds (L80 fixed arm, `tests/lab/evidence/L80-cisco_nxos/fixed/`), so a warning or refusal is no longer pending.
 - **Carried forward.**
   - **A post-11b fix PR** (port49 code, not 11b scope; Opus implementer, with P-1 first):
     - **P-1:** the settle pass keeps the old policy among priors and `supersedeTokens` clears each key
       whole, so tokens minted under the policy in force are deleted for about 30 s after an
       answer-changing edit (`token_not_found`); judge each unspent token by its own blob. Spec §5.1.3
-      does not license that loss.
+      does not license that loss. **Fixed** on `fix/post-11b`: a changed key's tokens are judged one by
+      one, blob and second-factor proof included (`MFAFresh`), and the reload line says the tokens kept.
     - **SNI:** an IPv6 literal fails `server_names`' `dnsShape` check, so IPv6 Junos cannot be listed;
       and `sni_mismatch` counts a strike, so a wrong `server_names` puts every Junos into malformed
       back-off. Trace the 3am case and decide whether a config error should strike devices.
+      **Fixed** on `fix/post-11b`: `sni_mismatch` is declined under a standing window, with no strike
+      (decision 50 ruling 10). `server_names` takes IP addresses, stored canonical and matched by
+      address, and refuses at load a numeric entry that is not an address. What Junos sends over IPv6
+      is L81 (b), open.
     - **Fail-closed reload (L78):** a reload that turns a subject's grant fail-closed must say so in the
-      reload line, not only "0 device(s) quarantined". Spec §12 warning row first.
+      reload line, not only "0 device(s) quarantined". Spec §12 warning row first. **Fixed** on `fix/post-11b`:
+      a count line and each finding at start, after every swap and every expiry pass, and the gauge
+      `port49_policy_fail_closed_compositions`.
     - **Revoke text (L79 k):** "could not be recorded" should say it may still land when the link heals;
       the late write is logged and attributed. Consider a guard so a stale copy cannot re-create after a
       lift (a tombstone or revision floor).
@@ -7505,6 +7511,10 @@ when Task 14's review found a security-relevant device fact.
       kept decision log on the next run.
     - Parked minors: Task 3's `-run-<12hex>` and `KEY=value` masks; Task 13's sub-5 ms delay rounding to
       0; Task 8's DelayFlight on a second ClientHello after an HRR.
+    - **L80 restart cell (final review M1):** restart port49d during an NX-OS command loop and count
+      lost or unasked commands under device debug. Shutdown sends close_notify on an offered
+      connection, and only the idle close (`idle35`) is measured. Until it closes, the plan 12 NX-OS
+      TLS reference config should name two servers.
 
 ## Plan 12 — Deployment (§19 step 12)
 
@@ -7677,14 +7687,15 @@ reference config waits on the measurement.
   `tests/qual/profiles/`) in place of vEOS: a login through the shape, then the state surviving a restart.
 - Decision 48's 255-byte budget is provisional on L78. vJunos-router 23.4 and 26.2 showed no lockout up to
   375 bytes; hardware Junos is unmeasured, so ship the budget as it stands.
-- Alarm for the fail-closed projection: a reload that turns a grant fail-closed today shows only
-  "0 device(s) quarantined" (the post-11b fix PR adds the reload line; the alarm waits for it).
+- Alarm on `port49_policy_fail_closed_compositions` > 0: a reload that turns a grant fail-closed
+  prints the composition count line and each finding (the post-11b fix PR).
 - The XR reference configuration needs an operator `platforms: cisco_iosxr:` block until a `platform_set`
   adapter lands (readonly priv-lvl 1, operator and admin 15; `tests/lab/results/QUAL-XRd-*.md`). SR Linux
   needs its block too.
-- **NX-OS 10.6(2)F over TLS:** its reference configuration sets single-connection on the TLS server
-  (L80: over per-request TLS a command port49 denies ran, and port49 was never asked). Ryan's decision on
-  a §12 warning or refusing those logins is pending.
+- **NX-OS 10.6(2)F over TLS:** before the fix (L80), over per-request TLS a command port49 denies ran and
+  port49 was never asked; port49 now offers single-connect and the device honors it
+  (`tests/lab/results/L80-cisco_nxos.md`). A §12 warning or
+  refusing those logins is no longer pending (resolved above).
 - The pre-beta review runs `make lab-regress` in full (733.6 minutes).
 
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
@@ -7833,8 +7844,8 @@ From plan 11b (Plan 11b — As built, above):
     privilege block (or an adapter) every command is refused locally.
   - **SR Linux** setup leads with `priv-lvl-authorization true`: the default false sends port49 no
     authorization, and the YANG says that is full admin. Each local role also needs `services [ cli ]`.
-  - **NX-OS 10.6(2)F over TLS** needs single-connection; over per-request TLS port49's command rules do
-    not hold (L80).
+  - **NX-OS 10.6(2)F over TLS:** port49 offers single-connect and the device honors it, so port49's command
+    rules hold over per-request TLS (L80 fixed arm; before the fix they did not).
   - **IOS XE and XR** do not fall to the local method on an ERROR reply, so break-glass fails with the
     store down (3am-table warning).
 - The `lab-regress` operator environment (the README section "Regressions (plan 11b)") and the NX-OS boot

@@ -3,22 +3,22 @@
   "lab_platform": "juniper_vjunos-router",
   "firmware": "vJunos-router 26.2R1.7",
   "image": "vJunos-router 26.2R1.7",
-  "commit": "817bcae44e50",
-  "date": "2026-10-21",
+  "commit": "f4bb399a80fa",
+  "date": "2026-10-23",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-21T09:48:40.772442349Z",
-    "single_connection": "2026-10-21T09:49:02.486388134Z",
-    "store_unavailable": "2026-10-21T09:48:51.846811514Z",
-    "tls_single_connection": "2026-10-21T09:50:35.15493862Z",
-    "tls_store_unavailable": "2026-10-21T09:49:56.139769836Z",
-    "tls_token_login": "2026-10-21T09:49:42.025269423Z",
-    "tls_unknown_ca": "2026-10-21T09:50:13.839783426Z",
-    "token_login": "2026-10-21T09:48:38.597475447Z",
-    "wrong_credential": "2026-10-21T09:48:45.023199284Z"
+    "accounting": "2026-10-23T03:26:55.287177847Z",
+    "single_connection": "2026-10-23T03:27:16.844970252Z",
+    "store_unavailable": "2026-10-23T03:27:06.221130728Z",
+    "tls_single_connection": "2026-10-23T03:33:51.339240667Z",
+    "tls_store_unavailable": "2026-10-23T03:33:12.380422509Z",
+    "tls_token_login": "2026-10-23T03:32:54.295950778Z",
+    "tls_unknown_ca": "2026-10-23T03:33:30.059895933Z",
+    "token_login": "2026-10-23T03:26:51.508957329Z",
+    "wrong_credential": "2026-10-23T03:26:59.531329649Z"
   },
   "registers": {
     "accounting": [
@@ -77,5 +77,11 @@
     "tls_token_login": "not_applicable"
   },
   "denied_command_ran": {},
-  "denied_command_asked": {}
+  "denied_command_asked": {},
+  "tls_server_single_connect_offered": false,
+  "port49d": {
+    "vcs_revision": "f4bb399a80fa",
+    "vcs_modified": false
+  },
+  "tls_capture_started_clean": true
 }

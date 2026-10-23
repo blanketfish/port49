@@ -378,6 +378,9 @@ func (noStore) PutToken(context.Context, store.TokenKey, store.Token) (int, erro
 func (noStore) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
 	panic("store called")
 }
+func (noStore) TokenIDs(context.Context, store.TokenKey) ([]string, error) {
+	panic("store called")
+}
 func (noStore) RedeemAndReceipt(context.Context, store.TokenKey, string, store.ReceiptWrite) error {
 	panic("store called")
 }
@@ -483,10 +486,13 @@ func (noStore) PutRevocation(context.Context, store.Revocation) error {
 func (noStore) GetRevocation(context.Context, string, string) (store.Revocation, error) {
 	panic("store called")
 }
-func (noStore) DeleteRevocation(context.Context, string, string) error {
+func (noStore) DeleteRevocation(context.Context, string, string, store.Lift) error {
 	panic("store called")
 }
 func (noStore) ListRevocations(context.Context) ([]store.Revocation, error) {
+	panic("store called")
+}
+func (noStore) GetLift(context.Context, string, string) (store.Lift, error) {
 	panic("store called")
 }
 
@@ -1305,7 +1311,7 @@ func TestALoginRefusedAfterItsJoinReplaysNoPassOnceTheRevocationIsLifted(t *test
 		f.records(t)[0]["reason"] != "credential_revoked" {
 		t.Fatalf("a login under a mark its token predates: %+v %v", reply, f.records(t))
 	}
-	if err := f.st.DeleteRevocation(context.Background(), store.RevocationCert, store.CertKey("ca", "0b")); err != nil {
+	if err := f.st.DeleteRevocation(context.Background(), store.RevocationCert, store.CertKey("ca", "0b"), store.Lift{}); err != nil {
 		t.Fatal(err)
 	}
 	later := f.tag() + "certCcertCcertCcertCcert"

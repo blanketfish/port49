@@ -89,6 +89,10 @@ type RevokeReport struct {
 	// decimal is set when the serial was typed in decimal digits alone,
 	// which is read as hex: openssl prints a small serial in decimal (M1).
 	decimal bool
+	// landedHere is set when this call's own write created a mark the store
+	// flagged landed_after_lift; a flagged mark that already stood is not
+	// this call's (task 2 re-review RR-M1).
+	landedHere bool
 	// workload is set when a certificate revocation's issuer is a workload's
 	// (Workload.Issued): the workload renews under a new serial (decision 40
 	// ruling 8).
@@ -253,28 +257,45 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	if !held {
 		b.Marks.Pend(mark)
 	}
-	if err := b.Store.PutRevocation(ctx, mark); err != nil {
-		if !held && (errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused)) {
+	// The put carries this process's floor, what its marks feed has
+	// delivered: a lift recorded above it is one this process had not seen,
+	// and the store flags the mark landed_after_lift (decision 51).
+	if err := b.Store.PutRevocation(store.WithMarkFloor(ctx, b.Marks.ConfirmedRevision()), mark); err != nil {
+		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) {
+			if held { // a refused write never lands: the mark held here stands (task 2 review M2)
+				return RevokeReport{}, fmt.Errorf("broker: the revocation was refused; the revocation of %s this %s "+
+					"already holds stands (%w); "+b.fallback(), printsafe.Line(key, 160), b.proc(), err)
+			}
 			b.Marks.Set(mark, false)
 			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
 				b.fallback(), err)
 		}
+		// A copy already sent may land when the store answers again, held
+		// or not, and over a lift made meanwhile (L79 k): its mark is said
+		// as this process's own then (MarkChanged; post-11b, C2).
+		b.Marks.NoteFailedWrite(mark)
 		// Once the store holds it after all (another process's revocation,
 		// or this write committed with its reply lost), the marks feed
 		// brings it to this listener (Marks.Unrecorded; review I1); when
 		// the feed's put came first, it is applied here.
 		if !held && b.Marks.Unrecorded(mark) {
-			b.MarkChanged(store.MarkChange{Revocation: mark, Standing: true})
+			told := mark
+			if r, ok := b.Marks.Get(kind, key); ok { // the store's, its flag with it (task 2 review M5)
+				told = r
+			}
+			b.MarkChanged(store.MarkChange{Revocation: told, Standing: true})
 		}
-		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing else was "+
-			"revoked; this %s denies what it names until a lift on this %s or its restart (%w); "+
-			b.fallback(), b.proc(), b.proc(), err)
+		return RevokeReport{}, fmt.Errorf("broker: the revocation may not have been recorded: a copy already sent "+
+			"can still land when the directory answers again, and then stands everywhere, even over a lift made "+
+			"meanwhile. Until then this %s denies what it names, until a lift on this %s or its restart; after the "+
+			"heal check `port49 revoke --list` (%w); "+b.fallback(), b.proc(), b.proc(), err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
 	if got, err := b.readMark(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
+	rep.landedHere = rep.Mark.LandedAfterLift && rep.Mark.At.Equal(mark.At)
 	// A correction only: a lift the feed brought since the write is not
 	// undone, and the listener is not marked for it (review M2).
 	stands := b.Marks == nil || b.Marks.Put(rep.Mark)
@@ -438,7 +459,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	case err != nil:
 		return RevokeReport{}, fmt.Errorf("broker: reading the revocation: %w", err)
 	}
-	if err := b.Store.DeleteRevocation(ctx, kind, key); err != nil {
+	if err := b.Store.DeleteRevocation(ctx, kind, key, store.Lift{At: b.Now(), Origin: req.Origin}); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			// The store's "context changed" would send an operator to the
 			// sessions; this names the mark and what to do.
@@ -700,6 +721,14 @@ func (r RevokeReport) markText() string {
 	fmt.Fprintf(&b, "revoked %s at %s: %d live context(s) marked, the unspent tokens under %d (device, username) "+
 		"key(s) deleted, %d held broker connection(s) closed; every mint %s is refused until `port49 revoke --lift %s`",
 		r.what(), r.Mark.At.UTC().Format(time.RFC3339), len(r.Contexts), r.TokenKeys, r.Connections, mints, r.flags())
+	switch { // decision 51; task 2 review M5, re-review RR-M1
+	case r.landedHere:
+		fmt.Fprintf(&b, "\nthis revocation landed over a lift of %s this process's marks feed had not yet shown: it "+
+			"stands everywhere, and whoever lifted it may not know; `port49 revoke --list` names the lift", r.what())
+	case r.Mark.LandedAfterLift:
+		fmt.Fprintf(&b, "\nan earlier revocation of %s, flagged landed_after_lift, stands; `port49 revoke --list` "+
+			"names its lift", r.what())
+	}
 	if r.Mark.Kind == store.RevocationPrincipal && strings.HasPrefix(r.Request.Principal, k8sid.Prefix) {
 		b.WriteString("\na token its cluster issued stays valid at port49 until its exp, or max_token_age after it was " +
 			"issued, whatever the cluster does; this mark refuses it now, and stands for a service account " +
@@ -739,14 +768,30 @@ func (r RevokeReport) LiftedText() string {
 	return b.String()
 }
 
-// RevocationsText is what `port49 revoke --list` prints.
-func RevocationsText(rs []store.Revocation) string {
+// RevocationsText is what `port49 revoke --list` prints. A mark flagged
+// LandedAfterLift names its lift, the time and revision liftOf reads from
+// the lift's record: a put cannot copy them into the mark (decision 51).
+func RevocationsText(rs []store.Revocation, liftOf func(kind, key string) (store.Lift, error)) string {
 	if len(rs) == 0 {
 		return "no revocation is in force"
 	}
 	var lines []string
 	for _, r := range rs {
-		lines = append(lines, fmt.Sprintf("%s since %s (%s)", markWhat(r), r.At.UTC().Format(time.RFC3339), r.Origin))
+		line := fmt.Sprintf("%s since %s (%s)", markWhat(r), r.At.UTC().Format(time.RFC3339), r.Origin)
+		if r.LandedAfterLift {
+			l, err := liftOf(r.Kind, r.Key)
+			switch {
+			case err == nil:
+				line += fmt.Sprintf("; landed after the lift at %s (revision %d)", l.At.UTC().Format(time.RFC3339),
+					l.Revision)
+			case errors.Is(err, store.ErrNotFound):
+				line += "; landed after a lift; the lift's record has expired"
+			default:
+				line += fmt.Sprintf("; landed after a lift; the lift's record could not be read (%s)",
+					printsafe.Line(err.Error(), 300))
+			}
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
 }

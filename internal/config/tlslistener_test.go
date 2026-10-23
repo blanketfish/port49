@@ -201,6 +201,58 @@ func TestTLSListenerNamesAreLowerCasedAndTrimmed(t *testing.T) {
 	}
 }
 
+// An IP address is a server name too (decision 50 ruling 10): Junos sends
+// the address it was configured with as SNI. It is stored canonical, so an
+// address SNI matches it by address whatever the spelling.
+func TestTLSListenerServerNamesTakeIPAddresses(t *testing.T) {
+	block := tlsMinimal + "  server_names: [\"2001:db8::1\", \"2001:0DB8::1\", \"::ffff:192.0.2.1\", \"192.0.2.7\", " +
+		"a.1b, 10.example, host-1]\n"
+	c, err := Load(tlsBase(t, "listen: 127.0.0.1:0\n", block))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"2001:db8::1", "2001:db8::1", "192.0.2.1", "192.0.2.7", "a.1b", "10.example", "host-1"}
+	if got := c.TLSListener.ServerNames; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("server names %q, want %q", got, want)
+	}
+}
+
+func TestTLSListenerServerNamesRefuseWhatNoSNICanMatch(t *testing.T) {
+	for name, entry := range map[string]string{
+		"a zone":          "fe80::1%eth0",
+		"a bracketed one": "[2001:db8::1]",
+	} {
+		block := tlsMinimal + "  server_names: [tacacs.example.net, \"" + entry + "\"]\n"
+		if _, err := Load(tlsBase(t, "listen: 127.0.0.1:0\n", block)); err == nil ||
+			!strings.Contains(err.Error(), "server_names[1]") {
+			t.Errorf("%s (%s): %v", name, entry, err)
+		}
+	}
+}
+
+// An entry whose last label is all digits and that is no address is a
+// mistyped address (RFC 1123 allows no all-numeric top label): refused at
+// load, naming the entry and the form, never stored as a name that could
+// not match (decision 50 ruling 10; pre-flight I6, R-M6).
+func TestTLSListenerNumericServerNamesAreRefused(t *testing.T) {
+	for _, entry := range []string{"010.0.0.1", "1.2.3", "192.0.2.256", "1.2.3.4.5", "0x7f.0.0.1", "4711"} {
+		t.Run(entry, func(t *testing.T) {
+			block := tlsMinimal + "  server_names: [tacacs.example.net, \"" + entry + "\"]\n"
+			_, err := Load(tlsBase(t, "listen: 127.0.0.1:0\n", block))
+			if err == nil {
+				t.Fatal("loaded")
+			}
+			for _, want := range []string{`tls_listener.server_names[1] "` + entry + `"`,
+				"looks like an IP address but is not one in canonical form",
+				"four decimal octets with no leading zeros (192.0.2.1)", "RFC 5952 text (2001:db8::1)"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error does not say %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
 func TestTLSListenerKeptListsAreNoOtherFile(t *testing.T) {
 	block := strings.Replace(tlsMinimal, "certificate_status: {disabled: true}",
 		"certificate_status: {crls: [{name: issuing, file: DIR/ca.pem, issuer_file: DIR/ca.pem}]}", 1) + "  state_dir: DIR\n"

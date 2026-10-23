@@ -44,6 +44,18 @@ port49 decisions), `qual-policy.yaml` and `qual-daemon.yaml` (what every run is 
    then reads "no: over per-request TLS, a command port49 denies runs (L80)" or "no command
    authorization over per-request TLS; denied commands refused locally (L80)". The harness never
    turns single-connection on to make a per-request cell pass.
+
+   For a platform port49 offers single-connect to over TLS (`platform.TLSServerSingleConnect`,
+   decision 50 ruling 20: today `cisco_nxos`), run.json's `tls_server_single_connect_offered` is
+   true, the run waits until no connection is open before and at `tls_token_login`'s capture
+   (`tls_capture_started_clean`), and `genprofile` grades `tls_token_login` from its header-only
+   `*.tls.json` and port49's records, writing nothing if the capture did not start clean, any two
+   of the cell's connections overlap, or a record falls in no connection: `tls_server_single_connect_honored` when a connection carried a session after a
+   completed one that was not accounting, `tls_server_single_connect_ignored` when every
+   connection carried one session. Neither is written where port49 never offered: absent is no
+   claim. The mock reuses an offered connection where the profile says honored. The drift test
+   (`tests/qual/drift_test.go`) fails when the table and the profiles disagree either way, so a
+   firmware that ignores the offer fails before a release ships the table entry for it.
 5. Commit the evidence, the note, the profile, the golden and the list.
 
 No mock is added for an image the lab has not run (ruling 8).

@@ -1,0 +1,7 @@
+device returned 327 log lines in all; the filter kept 0 of the cell's
+tls connections (header-only capture): 2
+  conn port=42514 syn=01:49:29.653 hold=0.01s end=server-fin
+  conn port=42518 syn=01:49:34.370 hold=open end=open
+debug connections opened=0 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
+connections that carried more than one request: 0 of 0 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log

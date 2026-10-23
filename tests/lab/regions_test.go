@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -106,6 +107,24 @@ func regionCut(i int, add bool) [][]string {
 	return cmds
 }
 
+// regionHold is the iptables rules in region i's namespace that drop the
+// clients there (the broker, port49d) from each directory member's client
+// port, added (-I) or removed (-D). Peer traffic (2380) and the host's reads
+// are untouched. Holding a process away from etcd by the network, never by a
+// signal: sudo stops itself when its command is stopped.
+func regionHold(i int, add bool) [][]string {
+	op := "-D"
+	if add {
+		op = "-I"
+	}
+	var cmds [][]string
+	for j := 1; j <= 3; j++ {
+		cmds = append(cmds, []string{"ip", "netns", "exec", regionNS(i), "iptables", op, "OUTPUT",
+			"-p", "tcp", "-d", regionIP(j), "--dport", "2379", "-j", "DROP"})
+	}
+	return cmds
+}
+
 // sudoRun runs each command under sudo -n, stopping at the first error
 // unless keepGoing.
 func sudoRun(cmds [][]string, keepGoing bool) error {
@@ -116,6 +135,23 @@ func sudoRun(cmds [][]string, keepGoing bool) error {
 		}
 	}
 	return nil
+}
+
+// sudoRunAll runs every command under sudo -n, whatever an earlier one did,
+// and joins the failures: a release that stops at the first would leave the
+// later rules in place.
+func sudoRunAll(cmds [][]string) error {
+	return runAll(cmds, func(c []string) error { return sudoRun([][]string{c}, false) })
+}
+
+func runAll(cmds [][]string, run func([]string) error) error {
+	var errs []error
+	for _, c := range cmds {
+		if err := run(c); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // inNS is argv run in namespace ns as this user, with env: sudo resets the
@@ -338,11 +374,31 @@ func stopRecorded(name string, done <-chan struct{}, pidfile string, want ...str
 
 // ctl is etcdctl as etcd's root at endpoints, run where the member runs.
 func (e *regionEtcd) ctl(endpoints string, args ...string) (string, error) {
+	return runCtl(e.argvIn(e.ns, endpoints, args...))
+}
+
+// hostCtl is ctl run on the host, not in the member's namespace: it reaches
+// the member through the bridge, so a rule that drops the namespace's own
+// clients (regionHold) does not drop it.
+func (e *regionEtcd) hostCtl(endpoints string, args ...string) (string, error) {
+	return runCtl(e.hostArgv(endpoints, args...))
+}
+
+func (e *regionEtcd) hostArgv(endpoints string, args ...string) []string {
+	return e.argvIn("", endpoints, args...)
+}
+
+// argvIn is etcdctl at endpoints run in namespace ns ("" for the host).
+func (e *regionEtcd) argvIn(ns, endpoints string, args ...string) []string {
 	a := append([]string{filepath.Join(e.bin, "etcdctl"), "--endpoints", endpoints, "--cacert", e.pki.ca,
 		"--cert", e.pki.root, "--key", e.pki.rootKey, "--dial-timeout", "3s", "--command-timeout", "5s"}, args...)
-	if e.ns != "" {
-		a = inNS(e.ns, nil, a...)
+	if ns != "" {
+		a = inNS(ns, nil, a...)
 	}
+	return a
+}
+
+func runCtl(a []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, a[0], a[1:]...).CombinedOutput()

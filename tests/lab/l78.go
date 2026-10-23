@@ -156,14 +156,18 @@ type l78Grading struct {
 // the device was sent. Whether the command ran is qualRan's reading, so a
 // refusal under a permit reply (a Junos that drops attributes past 255 bytes
 // and refuses with `error: ...`) is a failed step, never a login that counts
-// (final review I4).
+// (final review I4). A login with a permit record and no output at all is
+// unmeasured, not a refusal or a run: OK is false and the grade claims neither.
 func l78Grade(loggedIn, record, failClosed bool, total int, out string) l78Grading {
 	ran, first := qualRan(out)
-	if !ran && first == "no output" {
+	silent := !ran && first == "no output"
+	if silent {
 		first = ""
 	}
 	g := l78Grading{Shown: first, OK: true}
 	switch {
+	case loggedIn && record && silent:
+		g.OK, g.Says = false, "logged in; no output, so whether `show version` ran is unmeasured"
 	case loggedIn && record && failClosed && !ran:
 		g.Says = fmt.Sprintf("logged in; `show version` refused (deny-all) after a %d-byte reply", total)
 	case loggedIn && record && failClosed:

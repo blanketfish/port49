@@ -53,7 +53,7 @@ var l72Cells = []l72Cell{
 	{"f", "a leaf naming another device: the alert and identity_mismatch"},
 	{"g", "a leaf the CRL lists: the handshake completes, then a reset (no alert), and certificate_revoked"},
 	{"h", "a CRL source past nextUpdate and unreachable: the handshake completes, then a reset and status_unavailable; the next connection reset at Accept with no strike and no second record"},
-	{"i", "a server name not in server_names: the alert and sni_mismatch"},
+	{"i", "a server name not in server_names: the alert and sni_mismatch; the next connection reset at Accept with no strike and no second record"},
 	{"j", "tickets on: the second connection resumes; one ticket presented twice resumes once"},
 	{"k", "openssl -early_data with a port49 session: whether early data is sent"},
 	{"l", "a packet with the unencrypted flag clear: an ERROR with the flag, then the close"},
@@ -71,6 +71,17 @@ var l72SecretMarkers = []string{"session-id", "psk", "master-key", "tls session 
 // l72HexLine is a line of openssl's hex dump (`0000 - 7f 3a ...`).
 var l72HexLine = regexp.MustCompile(`^\s*[0-9a-f]{4} - [0-9a-f]{2} `)
 
+// l72HexTail is the wrapped last line of a hex dump, as it arrives when
+// stderr interleaves with the dump: a short offset (or the end of one), the
+// bytes, then the ASCII column (`6 de ad be ef   ......W0`).
+var l72HexTail = regexp.MustCompile(`^\s*[0-9a-f]{1,4} (?:[0-9a-f]{2}[ -]){1,16} {2,}.*$`)
+
+// l72HexBytes is two hex bytes in a row, anywhere in a line.
+var l72HexBytes = regexp.MustCompile(`(?:\b[0-9a-f]{2}[ -]){2}`)
+
+// l72DumpField is a `Key:` line, which ends a dump a marker opened.
+var l72DumpField = regexp.MustCompile(`^\s*[a-z][a-z0-9 ./_-]*:(\s|$)`)
+
 // l72FilterTranscript drops from an openssl s_client transcript every line
 // that carries a session secret, and every hex dump line wherever it
 // stands: s_client dumps only session and handshake bytes, and stderr
@@ -78,20 +89,31 @@ var l72HexLine = regexp.MustCompile(`^\s*[0-9a-f]{4} - [0-9a-f]{2} `)
 // Alert and "Early data" lines are untouched.
 func l72FilterTranscript(s string) string {
 	var out []string
+	inDump := false // after a ticket or PSK marker: every line of hex bytes goes until the dump ends
 	for _, line := range strings.Split(s, "\n") {
 		low := strings.ToLower(line)
-		if l72HexLine.MatchString(low) || strings.Contains(low, "<spaces/nuls>") {
-			continue
-		}
-		drop := false
+		marked := false
 		for _, m := range l72SecretMarkers {
 			if strings.Contains(low, m) {
-				drop = true
+				marked = true
 			}
 		}
-		if !drop {
-			out = append(out, line)
+		if marked {
+			inDump = true
+			continue
 		}
+		if inDump {
+			switch {
+			case strings.TrimSpace(low) == "" || l72DumpField.MatchString(low):
+				inDump = false
+			case l72HexBytes.MatchString(low):
+				continue // a dump line, however it starts; stderr noise between them stays
+			}
+		}
+		if l72HexLine.MatchString(low) || l72HexTail.MatchString(low) || strings.Contains(low, "<spaces/nuls>") {
+			continue
+		}
+		out = append(out, line)
 	}
 	return strings.Join(out, "\n")
 }
@@ -107,7 +129,7 @@ func l72TranscriptLeaks(s string) []string {
 		}
 	}
 	for _, line := range strings.Split(low, "\n") {
-		if l72HexLine.MatchString(line) {
+		if l72HexLine.MatchString(line) || l72HexTail.MatchString(line) {
 			hits = append(hits, "a hex dump line")
 			break
 		}

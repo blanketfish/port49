@@ -1,0 +1,14 @@
+device returned 741 log lines in all; the filter kept 90 of the cell's
+tls connections (header-only capture): 9
+  conn port=58104 syn=02:43:26.097 hold=0.02s end=server-fin
+  conn port=58118 syn=02:43:26.124 hold=0.02s end=server-fin
+  conn port=58126 syn=02:43:26.150 hold=0.02s end=server-fin
+  conn port=58130 syn=02:43:26.481 hold=0.02s end=server-fin
+  conn port=58146 syn=02:43:26.508 hold=0.02s end=server-fin
+  conn port=58158 syn=02:43:26.734 hold=0.03s end=server-fin
+  conn port=58174 syn=02:43:26.763 hold=0.02s end=server-fin
+  conn port=59858 syn=02:43:26.984 hold=0.02s end=server-fin
+  conn port=59868 syn=02:43:27.127 hold=0.02s end=server-fin
+debug connections opened=0 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
+connections that carried more than one request: 0 of 0 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 2

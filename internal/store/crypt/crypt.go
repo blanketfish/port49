@@ -447,6 +447,12 @@ func (w *wrapped) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenI
 	return w.inner.RedeemAndReceipt(ctx, k, tokenID, wr)
 }
 
+// TokenIDs carries no sealed field: the IDs are plaintext, so a token this
+// layer cannot open is listed too.
+func (w *wrapped) TokenIDs(ctx context.Context, k store.TokenKey) ([]string, error) {
+	return w.inner.TokenIDs(ctx, k)
+}
+
 // DeleteTokens carries no sealed field: the key alone addresses the records.
 func (w *wrapped) DeleteTokens(ctx context.Context, k store.TokenKey) error {
 	return w.inner.DeleteTokens(ctx, k)
@@ -988,8 +994,13 @@ func (w *wrapped) GetRevocation(ctx context.Context, kind, key string) (store.Re
 	return w.inner.GetRevocation(ctx, kind, key)
 }
 
-func (w *wrapped) DeleteRevocation(ctx context.Context, kind, key string) error {
-	return w.inner.DeleteRevocation(ctx, kind, key)
+func (w *wrapped) DeleteRevocation(ctx context.Context, kind, key string, by store.Lift) error {
+	return w.inner.DeleteRevocation(ctx, kind, key, by)
+}
+
+// GetLift passes through: a lift's record names identity alone, as a mark.
+func (w *wrapped) GetLift(ctx context.Context, kind, key string) (store.Lift, error) {
+	return w.inner.GetLift(ctx, kind, key)
 }
 
 func (w *wrapped) ListRevocations(ctx context.Context) ([]store.Revocation, error) {

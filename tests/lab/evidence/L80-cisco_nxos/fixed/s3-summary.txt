@@ -1,0 +1,30 @@
+L80 re-measure, arm fixed, cell s3, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.48 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "configure terminal" gap=0.0s took=0.25s err=false first="Enter configuration commands, one per line. End with CNTL/Z."
+  s0 "hostname nx1"       gap=0.0s took=0.25s err=false first="nx1(config)#"
+  s0 "end"                gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show users"         gap=0.0s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+tls connections: 1, most open at once: 1
+  conn port=44548 syn=16:38:46.823 hold=36.60s end=server-fin
+connection_events deltas: <LONG> idle_closed=1 refused_cap=0
+port49 records:
+  16:38:51.830 redeem permit
+  16:38:51.853 authorize_session permit
+  16:38:52.008 account
+  16:38:52.174 authorize_command permit "terminal length 0"
+  16:38:52.193 account
+  16:38:52.423 authorize_command permit "configure terminal"
+  16:38:52.677 authorize_command permit "hostname nx1"
+  16:38:52.739 account
+  16:38:52.927 authorize_command permit "end"
+  16:38:53.176 authorize_command deny "show users"
+  16:38:53.426 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "configure terminal" gap=0.0s asked=true denied=false
+typed s0 "hostname nx1" gap=0.0s asked=true denied=false
+typed s0 "end" gap=0.0s asked=true denied=false
+typed s0 "show users" gap=0.0s asked=true denied=true
+debug counts: connection_active=10 fall_back_none=0 mark_server_dead=0 request_acct=8 request_authen=1 request_author=9 ssl_open_success=1 ssl_read_failed=0 tacacs_group_failed=3
+

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +28,9 @@ type Marks struct {
 	// origin is each mark's Origin, as its put carried it (plan 11a): Get
 	// answers a mark whole, and revokedError names a CA's.
 	origin map[[2]string]string
+	// landed is each mark the store flagged LandedAfterLift (decision 51),
+	// carried into the revocations file and the ds/m/ snapshot (R-M5).
+	landed map[[2]string]bool
 	// unwritten is each mark put in force before the store was known to
 	// hold it (Pend): a load that lacks it keeps it (Ruling T9-b).
 	unwritten map[[2]string]bool
@@ -36,11 +40,25 @@ type Marks struct {
 	// counted is told how many marks stand by kind after every change, under
 	// the lock, so its calls are in the changes' order (Count).
 	counted func(principal, cert int)
+	// now is the clock a failed write's memory expires by: time.Now.
+	now func() time.Time
+	// failed is each of this process's PutRevocation calls that failed,
+	// by kind and key: the mark's At and until when it is remembered
+	// (NoteFailedWrite). No lift and no Set clears it.
+	failed map[[2]string][]failedWrite
+	// confirmed is the floor W (ConfirmedRevision), raised by the feed alone.
+	confirmed atomic.Uint64
 }
+
+// failedWrite is one write this process saw fail: the mark's time, and
+// until when it is remembered.
+type failedWrite struct{ at, until time.Time }
 
 // NewMarks is an empty set: no mark stands.
 func NewMarks() *Marks {
-	return &Marks{m: map[[2]string]time.Time{}, origin: map[[2]string]string{}, unwritten: map[[2]string]bool{}, unrecorded: map[[2]string]bool{}}
+	return &Marks{m: map[[2]string]time.Time{}, origin: map[[2]string]string{}, landed: map[[2]string]bool{},
+		unwritten: map[[2]string]bool{}, unrecorded: map[[2]string]bool{}, now: time.Now,
+		failed: map[[2]string][]failedWrite{}}
 }
 
 // Set puts r in force, or lifts it when on is false. A mark already in
@@ -57,6 +75,7 @@ func (m *Marks) Set(r Revocation, on bool) {
 		if _, ok := m.m[k]; ok {
 			delete(m.m, k)
 			delete(m.origin, k)
+			delete(m.landed, k)
 			m.count()
 		}
 		delete(m.unwritten, k)
@@ -66,7 +85,17 @@ func (m *Marks) Set(r Revocation, on bool) {
 	if _, ok := m.m[k]; !ok {
 		m.m[k] = r.At
 		m.origin[k] = r.Origin
+		m.setLanded(k, r.LandedAfterLift)
 		m.count()
+	}
+}
+
+// setLanded records whether the mark for k is flagged; m.mu is held.
+func (m *Marks) setLanded(k [2]string, on bool) {
+	if on {
+		m.landed[k] = true
+	} else {
+		delete(m.landed, k)
 	}
 }
 
@@ -134,7 +163,7 @@ func (m *Marks) Keep(r Revocation) {
 	}
 }
 
-// Unrecorded says r's write failed (Revoke's "could not be recorded"),
+// Unrecorded says r's write failed (Revoke's "may not have been recorded"),
 // after Pend: it stays unwritten, and once a load or the feed shows the
 // store holds it (another process's revocation, or this write committed
 // with its reply lost), the feed tells on it Standing, so this process's
@@ -159,17 +188,22 @@ func (m *Marks) Unrecorded(r Revocation) bool {
 	return false
 }
 
-// stored says the store holds the mark for (kind, key): it is unwritten
-// no longer. It reports whether the mark stands and was unrecorded, which
-// the caller tells Standing. A mark Pended and not Unrecorded has its
-// Revoke still in flight, which applies it itself, and is told nothing.
-func (m *Marks) stored(kind, key string) bool {
+// stored says the store holds r, the mark for its kind and key: it is
+// unwritten no longer, and a mark in force here takes the store's flag
+// (task 2 review M5). It reports whether the mark stands and was
+// unrecorded, which the caller tells Standing. A mark Pended and not
+// Unrecorded has its Revoke still in flight, which applies it itself, and
+// is told nothing.
+func (m *Marks) stored(r Revocation) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	k := [2]string{kind, key}
+	k := [2]string{r.Kind, r.Key}
+	if _, ok := m.m[k]; ok && m.unwritten[k] {
+		m.setLanded(k, r.LandedAfterLift)
+	}
 	delete(m.unwritten, k)
 	if !m.unrecorded[k] {
 		return false
@@ -205,8 +239,50 @@ func (m *Marks) Put(r Revocation) bool {
 	if r.Origin != "" {
 		m.origin[k] = r.Origin
 	}
+	m.setLanded(k, r.LandedAfterLift)
 	delete(m.unwritten, k)
 	delete(m.unrecorded, k)
+	return true
+}
+
+// remade makes the mark in force for (r.Kind, r.Key) r, when the copy holds
+// it at another time and it is not unwritten: a reload found the key lifted
+// and made again while the feed was away (LoadMarks). It reports whether it
+// changed the mark.
+func (m *Marks) remade(r Revocation) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := [2]string{r.Kind, r.Key}
+	at, ok := m.m[k]
+	if !ok || m.unwritten[k] || at.Equal(r.At) {
+		return false
+	}
+	m.m[k] = r.At
+	m.origin[k] = r.Origin
+	m.setLanded(k, r.LandedAfterLift)
+	return true
+}
+
+// gainedFlag makes the mark in force for (r.Kind, r.Key) flagged, with r's
+// origin, when it stands here unflagged at r's time and the store's r is
+// flagged: a runner's put-back over a lift this process missed, put back
+// before its reload found the mark it already held (task 2 re-review
+// RR-I1). It reports whether it changed the mark, which the caller tells
+// Standing once: the mark is flagged from then on. An unwritten mark is
+// its Revoke's (stored).
+func (m *Marks) gainedFlag(r Revocation) bool {
+	if !r.LandedAfterLift {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := [2]string{r.Kind, r.Key}
+	at, ok := m.m[k]
+	if !ok || m.unwritten[k] || m.landed[k] || !at.Equal(r.At) {
+		return false
+	}
+	m.origin[k] = r.Origin
+	m.setLanded(k, true)
 	return true
 }
 
@@ -260,6 +336,92 @@ func (m *Marks) Len() int {
 	return len(m.m)
 }
 
+// Flagged is how many marks in force are flagged LandedAfterLift: a start
+// says the count, since the line each one had is not said again (R-I5).
+func (m *Marks) Flagged() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.landed)
+}
+
+// ConfirmedRevision is the floor W (spec §13 decision 51, the cache): the
+// highest revision up to which this process's marks feed has delivered
+// every mark event, from a load's revision, each event once applied, and
+// each progress notification (FollowMarks). Nothing else raises it, an
+// unrelated call's header least of all: one above a lift not yet delivered
+// would hide that lift from the flag. A revocation's put carries it
+// (WithMarkFloor). 0 when no feed runs.
+func (m *Marks) ConfirmedRevision() uint64 {
+	if m == nil {
+		return 0
+	}
+	return m.confirmed.Load()
+}
+
+// confirm raises the floor to rev; it never lowers it.
+func (m *Marks) confirm(rev uint64) {
+	if m == nil {
+		return
+	}
+	for {
+		cur := m.confirmed.Load()
+		if rev <= cur || m.confirmed.CompareAndSwap(cur, rev) {
+			return
+		}
+	}
+}
+
+// NoteFailedWrite records that this process's PutRevocation of r failed,
+// whether or not a mark already stood (post-11b, C2): the write may still
+// land when the store answers again, and when its mark comes back through
+// the feed, this process says it is its own (FailedWrite). It is
+// remembered for LiftTTL, and no lift or Set clears it.
+func (m *Marks) NoteFailedWrite(r Revocation) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	for k, ws := range m.failed {
+		live := ws[:0]
+		for _, w := range ws {
+			if now.Before(w.until) {
+				live = append(live, w)
+			}
+		}
+		if len(live) == 0 {
+			delete(m.failed, k)
+		} else {
+			m.failed[k] = live
+		}
+	}
+	k := [2]string{r.Kind, r.Key}
+	m.failed[k] = append(m.failed[k], failedWrite{at: r.At, until: now.Add(LiftTTL)})
+}
+
+// FailedWrite reports whether this process saw its write of the mark
+// (kind, key, at) fail within LiftTTL. at is matched with Equal: the JSON
+// round trip drops the monotonic reading, and an Origin does not tell two
+// processes apart, so the time is what names this process's write.
+func (m *Marks) FailedWrite(kind, key string, at time.Time) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	now := m.now()
+	for _, w := range m.failed[[2]string{kind, key}] {
+		if w.at.Equal(at) && now.Before(w.until) {
+			return true
+		}
+	}
+	return false
+}
+
 // Get is the mark in force for (kind, key), with the origin its put
 // carried, and whether one stands. The placement router's GetRevocation
 // reads it (plan 11a; decision 51), so a login's and a mint's check never
@@ -275,7 +437,7 @@ func (m *Marks) Get(kind, key string) (Revocation, bool) {
 	if !ok {
 		return Revocation{}, false
 	}
-	return Revocation{Kind: kind, Key: key, At: at, Origin: m.origin[k]}, true
+	return Revocation{Kind: kind, Key: key, At: at, Origin: m.origin[k], LandedAfterLift: m.landed[k]}, true
 }
 
 // All is every mark in force, sorted by kind and key.
@@ -287,7 +449,7 @@ func (m *Marks) All() []Revocation {
 	defer m.mu.RUnlock()
 	out := make([]Revocation, 0, len(m.m))
 	for k, at := range m.m {
-		out = append(out, Revocation{Kind: k[0], Key: k[1], At: at, Origin: m.origin[k]})
+		out = append(out, Revocation{Kind: k[0], Key: k[1], At: at, Origin: m.origin[k], LandedAfterLift: m.landed[k]})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
@@ -302,7 +464,10 @@ func (m *Marks) All() []Revocation {
 // 5): a mark that now stands, or one lifted. Reloaded is a change a load
 // found by difference, not an event the watch delivered: a mark missing
 // from a load may be a lift made in a gap, or a mark an etcd restore lost
-// (Ruling 12).
+// (Ruling 12). A Standing change is told once per mark the store made: the
+// watch's put that created it, or a load that found it new, and never a
+// load that finds it standing as this process holds it, so a flagged
+// mark's line is said once (decision 51; R-I5).
 type MarkChange struct {
 	Revocation
 	Standing, Reloaded bool
@@ -312,7 +477,9 @@ type MarkChange struct {
 // holds is put in, every mark m holds that feed lacks is lifted, unless it
 // is unwritten (Pend; Ruling T9-b) or kept (Keep), and on is told of each change, as
 // Reloaded (nil tells nothing). An unrecorded mark the store now holds is
-// told Standing too (Unrecorded). It returns the
+// told Standing too (Unrecorded), and so is a mark feed holds at another
+// time than m does, unless m's is unwritten: its key was lifted and made
+// again in a gap, and m takes the store's (post-11b, C2). It returns the
 // revision read at, which FollowMarks follows from.
 func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)) (uint64, error) {
 	rev, rs, err := feed.Revocations(ctx)
@@ -322,7 +489,10 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 	stored := map[[2]string]bool{}
 	for _, r := range rs {
 		stored[[2]string{r.Kind, r.Key}] = true
-		tell := m.stored(r.Kind, r.Key)
+		// Before stored: a mark this process's Revoke still has in flight
+		// keeps its own time, which that Revoke corrects (Put).
+		remade := m.remade(r)
+		tell := m.stored(r) || remade || m.gainedFlag(r)
 		if !m.Holds(r.Kind, r.Key) {
 			m.Set(r, true)
 			tell = true
@@ -364,6 +534,15 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange),
 	up func(bool), rescanned func() error, logf func(string, ...any)) error {
 	failing := false
+	// The floor W (Marks.ConfirmedRevision) is raised here alone, from what
+	// this feed delivered: a load of it (from, when not 0, is one), an event
+	// once applied, a progress notification. Not from a LoadMarks a caller
+	// ran on another feed, a snapshot's, whose revision says nothing of the
+	// directory's events. An event's own revision, not its watch response's
+	// header: etcd sends a watcher catching up its events in batches, each
+	// under the store's current revision, so a header can be above an event
+	// still to come.
+	m.confirm(from)
 	// delivered is a change or progress the watch told: after a stop, the
 	// feed follows the store again (final review 7e-1 I-2).
 	delivered := func(rev uint64) {
@@ -378,6 +557,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 		if err == nil {
 			var rev uint64
 			if rev, err = LoadMarks(ctx, feed, m, on); err == nil {
+				m.confirm(rev)
 				from = max(rev, 1)
 				if failing {
 					logf("store: the marks feed loaded the marks; it follows the store again")
@@ -401,7 +581,14 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 		up(true)
 		err := feed.WatchRevocations(ctx, from, func(r Revocation, lifted bool, rev uint64) {
 			delivered(rev)
-			if !lifted && m.stored(r.Kind, r.Key) {
+			defer m.confirm(rev) // once applied, and told
+			if !lifted && m.stored(r) {
+				if on != nil {
+					on(MarkChange{Revocation: r, Standing: true})
+				}
+				return
+			}
+			if !lifted && m.gainedFlag(r) {
 				if on != nil {
 					on(MarkChange{Revocation: r, Standing: true})
 				}
@@ -414,7 +601,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			if on != nil {
 				on(MarkChange{Revocation: r, Standing: !lifted})
 			}
-		}, delivered)
+		}, func(rev uint64) { delivered(rev); m.confirm(rev) })
 		up(false)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -430,6 +617,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			if herr := rescanned(); herr != nil {
 				err = herr
 			} else if rev, lerr := LoadMarks(ctx, feed, m, on); lerr == nil {
+				m.confirm(rev)
 				from = max(from, rev)
 				continue
 			} else {

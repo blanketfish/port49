@@ -59,6 +59,9 @@ func ApplyRefresh(c *Context, r ContextRefresh) (moved bool, err error) {
 	}
 	if r.MFAMethod != "" {
 		c.Credential.MFAMethod, c.Credential.MFAAt, c.Credential.MFAAgentSHA256 = r.MFAMethod, r.MFAAt, r.MFAAgentSHA256
+		// The login's fresh flag does not describe this proof; false is the
+		// side that fails closed (Credential.MFAFresh).
+		c.Credential.MFAFresh = false
 	}
 	return moved, nil
 }

@@ -541,7 +541,8 @@ func TestTwoRequestsUnderOneKeyMintOnce(t *testing.T) {
 		body := `{"devices":["leaf1"]}`
 		decodeMint(t, f.post(context.Background(), f.state(f.alice), body, "01S"))
 		f.b.mu.Lock()
-		f.b.superseded = map[store.TokenKey]time.Time{{NAS: "leaf1", Username: "alice"}: f.now.Add(time.Second)}
+		f.b.superseded = map[store.TokenKey]supersededMark{
+			{NAS: "leaf1", Username: "alice"}: {at: f.now.Add(time.Second), recorded: f.now}}
 		f.b.mu.Unlock()
 		g := f.gate()
 		first := make(chan *httptest.ResponseRecorder, 1)
@@ -961,7 +962,9 @@ func TestSupersedePrunesOncePerInterval(t *testing.T) {
 	if kept {
 		t.Fatal("an entry past SupersededFor survived a prune")
 	}
-	f.b.supersede(ctx, old, f.b.Now().Add(-store.SupersededFor-time.Second))
+	f.b.mu.Lock()
+	f.b.superseded[old] = supersededMark{at: f.b.Now(), recorded: f.b.Now().Add(-store.SupersededFor - time.Second)}
+	f.b.mu.Unlock()
 	f.b.supersede(ctx, store.TokenKey{NAS: "bare", Username: "alice"}, f.b.Now())
 	f.b.mu.Lock()
 	_, kept = f.b.superseded[old]

@@ -4,6 +4,7 @@ package lab
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -728,7 +729,7 @@ func TestL74FeedRescannedWaitsForTheCounterToRise(t *testing.T) {
 	}
 	flat := func() string { return "port49_store_feed_rescans_total{feed=\"marks\"} 2\n" }
 	if _, err := feedRescanned(flat, 2, 200*time.Millisecond, 20*time.Millisecond); err == nil ||
-		!strings.Contains(err.Error(), "a port49 finding") {
+		!strings.Contains(err.Error(), "a port49 finding") || !strings.Contains(err.Error(), "did not increase") {
 		t.Fatalf("a counter that never rises: %v, want the INVALID error", err)
 	}
 }
@@ -875,6 +876,37 @@ func TestL79MarkStates(t *testing.T) {
 	}
 }
 
+// Cell k agrees only when the mark came back after a failed revoke and
+// every line an operator needs was said: the revoke's "may not have been
+// recorded", broker 3's own-write clause, region 1's before-the-lift line,
+// and the flag in region 1's revoke --list (post-11b, I8).
+func TestL79CellKNeedsEveryLandedLine(t *testing.T) {
+	cli := "port49 revoke: broker: " + l79Unrecorded + " when the directory answers again"
+	b3 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
+		"it: a copy sent while its writer was cut off; it stands everywhere; " + l79Own
+	b1 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
+		"it: a copy sent while its writer was cut off; it stands everywhere"
+	list := "principal user:alice@example.com since T0 (admin_socket uid 0); landed after the lift at T1 (revision 8)"
+	if !l79KAgrees(1, true, cli, b3, b1, list) {
+		t.Fatal("every line said, and the mark back: cell k agrees")
+	}
+	after := "port49-broker: broker: a revocation of user:alice@example.com made at T2 (admin_socket uid 0) after the " +
+		"lift at T1, by a writer whose marks feed had not yet shown the lift; it stands everywhere"
+	for name, c := range map[string][]any{
+		"revoke exited 0":         {0, true, cli, b3, b1, list},
+		"mark never back":         {1, false, cli, b3, b1, list},
+		"old CLI text":            {1, true, "port49 revoke: broker: the revocation could not be recorded", b3, b1, list},
+		"broker 3 says elsewhere": {1, true, cli, "a revocation of user:alice@example.com made elsewhere reached", b1, list},
+		"region 1 silent":         {1, true, cli, b3, "", list},
+		"region 1 after form":     {1, true, cli, b3, after, list},
+		"list unflagged":          {1, true, cli, b3, b1, "principal user:alice@example.com since T0 (admin_socket uid 0)"},
+	} {
+		if l79KAgrees(c[0].(int), c[1].(bool), c[2].(string), c[3].(string), c[4].(string), c[5].(string)) {
+			t.Errorf("%s: cell k agreed", name)
+		}
+	}
+}
+
 // PORT49_LAB_REGIONS_ONLY names the one row a run covers; empty covers every row.
 func TestRegionRowWantedFollowsTheOnlySelector(t *testing.T) {
 	if !regionRowWanted("", "L74") || !regionRowWanted("", "L79") {
@@ -882,5 +914,202 @@ func TestRegionRowWantedFollowsTheOnlySelector(t *testing.T) {
 	}
 	if regionRowWanted("L79", "L74") || regionRowWanted("L79", "L75") || !regionRowWanted("L79", "L79") {
 		t.Fatal("a selector runs its own row alone")
+	}
+}
+
+// Cell (i)'s agreement needs every broker to say the put-back form for
+// alice's mark, and none the cut-off form (task 2 review I1).
+func TestL74CellINeedsThePutBackFormOnEveryBroker(t *testing.T) {
+	put := "port49-broker: broker: a revocation of user:alice@example.com made at T0 was put back after the lift at " +
+		"T1 by a port49-broker runner from its broker.state_dir/marks.json: its watch had not delivered the lift"
+	cut := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed " +
+		"after it: a copy sent while its writer was cut off; it stands everywhere"
+	every := [3]string{put, put, put}
+	if !l74IAgrees(true, 1, every) {
+		t.Fatal("put back, one mark, every broker said the put-back form: cell (i) agrees")
+	}
+	for name, c := range map[string]struct {
+		putBack bool
+		n       int
+		said    [3]string
+	}{
+		"no put-back line":   {false, 1, every},
+		"no mark":            {true, 0, every},
+		"broker 1 silent":    {true, 1, [3]string{"", put, put}},
+		"broker 2 cut form":  {true, 1, [3]string{put, cut, put}},
+		"cut form alongside": {true, 1, [3]string{put + "\n" + cut, put, put}},
+		"another key's line": {true, 1, [3]string{strings.ReplaceAll(put, "alice", "bob"), put, put}},
+	} {
+		if l74IAgrees(c.putBack, c.n, c.said) {
+			t.Errorf("%s: cell (i) agreed", name)
+		}
+	}
+}
+
+// Cell k's region 1 line must be one line naming alice that holds both
+// fragments, never two lines or two keys (task 2 review M4).
+func TestL79CellKNeedsOneLineNamingAlice(t *testing.T) {
+	cli := "port49 revoke: broker: " + l79Unrecorded + " when the directory answers again"
+	b3 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
+		"it: a copy sent while its writer was cut off; it stands everywhere; " + l79Own
+	list := "principal user:alice@example.com since T0 (admin_socket uid 0); landed after the lift at T1 (revision 8)"
+	split := "port49-broker: broker: a revocation of user:bob@example.com made at T0 before the lift at T1 landed\n" +
+		"port49-broker: broker: a revocation of user:alice@example.com made at T2 (x) after the lift at T1: a copy " +
+		"sent " + l79Before
+	if l79KAgrees(1, true, cli, b3, split, list) {
+		t.Fatal("two lines' fragments satisfied region 1's line")
+	}
+	if l79KAgrees(1, true, cli, "a revocation of user:bob@example.com "+l79Own, b3, list) {
+		t.Fatal("another key's own line satisfied broker 3's")
+	}
+}
+
+// Broker 3 is held away from etcd across the heal and always let back: on the
+// happy path, when the heal fails, when etcd-3 never applies the compaction,
+// and when the hold itself failed (it may have added some rules).
+func TestL74FreezeAcrossRestoresOnEveryPath(t *testing.T) {
+	cases := []struct {
+		name        string
+		holdErr     error
+		healErr     error
+		compacted   func() bool
+		wantErr     string
+		wantRelease int
+		wantHeal    int
+	}{
+		{"applies at once", nil, nil, func() bool { return true }, "", 1, 1},
+		{"heal fails", nil, errors.New("boom"), func() bool { return true }, "the heal", 1, 1},
+		{"never compacted", nil, nil, func() bool { return false }, "had not applied the compaction", 1, 1},
+		{"hold fails", errors.New("no iptables"), nil, func() bool { return true }, "holding broker 3", 1, 0},
+	}
+	for _, c := range cases {
+		releases, heals := 0, 0
+		err := freezeAcross(
+			func() error { return c.holdErr },
+			func() error { releases++; return nil },
+			func() error { heals++; return c.healErr },
+			c.compacted, 100*time.Millisecond, 10*time.Millisecond)
+		if (c.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.wantErr)) {
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.wantErr)
+		}
+		if releases != c.wantRelease || heals != c.wantHeal {
+			t.Errorf("%s: restored %d times, healed %d; want %d, %d", c.name, releases, heals, c.wantRelease, c.wantHeal)
+		}
+	}
+}
+
+// A restore that fails is reported, also when the cell had already failed, and
+// a poll that never succeeds stops at the cap rather than waiting on.
+func TestL74FreezeAcrossReportsAFailedRestoreAndStopsAtTheCap(t *testing.T) {
+	ok := func() error { return nil }
+	badRestore := func() error { return errors.New("iptables: no such rule") }
+	err := freezeAcross(ok, badRestore, ok, func() bool { return true }, time.Second, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "restoring broker 3") {
+		t.Fatalf("a failed restore after a good cell: %v", err)
+	}
+	err = freezeAcross(ok, badRestore, func() error { return errors.New("boom") },
+		func() bool { return true }, time.Second, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "the heal") || !strings.Contains(err.Error(), "restoring broker 3") {
+		t.Fatalf("a failed restore after a failed cell must report both: %v", err)
+	}
+	start := time.Now()
+	freezeAcross(ok, ok, ok, func() bool { return false }, 150*time.Millisecond, 10*time.Millisecond)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Fatalf("the poll ran %v past a 150ms cap", took)
+	}
+}
+
+// The hold drops region 3's own clients' traffic to each directory member's
+// client port, and the release deletes the same rules; peers (2380) and the
+// host's reads of etcd-3 (INPUT) are untouched.
+func TestRegionHoldDropsOnlyTheClientPortOutput(t *testing.T) {
+	add, del := regionHold(3, true), regionHold(3, false)
+	if len(add) != 3 || len(del) != 3 {
+		t.Fatalf("rules: %d add, %d delete, want 3 each", len(add), len(del))
+	}
+	for j := range add {
+		a, d := strings.Join(add[j], " "), strings.Join(del[j], " ")
+		want := "ip netns exec p49r3 iptables -I OUTPUT -p tcp -d " + regionIP(j+1) + " --dport 2379 -j DROP"
+		if a != want || d != strings.Replace(want, "-I", "-D", 1) {
+			t.Errorf("rule %d: add %q, delete %q", j+1, a, d)
+		}
+	}
+}
+
+// The compaction probe must not run in the held namespace: etcdctl there
+// dials regionIP(3):2379 from inside p49r3, which regionHold drops, so the
+// probe could never see the compaction and the cell would always fail.
+func TestL74CompactedProbeRunsOnTheHostNotInTheHeldNamespace(t *testing.T) {
+	e := &regionEtcd{ns: regionNS(3), bin: "/opt/etcd", pki: &regionPKI{ca: "ca.pem", root: "root.pem", rootKey: "root-key.pem"}}
+	argv := strings.Join(e.hostArgv("https://"+regionIP(3)+":2379", "get", "/l74/after-lift", "--rev", "41"), " ")
+	for _, held := range []string{"netns", regionNS(3), "sudo"} {
+		if strings.Contains(argv, held) {
+			t.Errorf("the probe %q runs in or through %q", argv, held)
+		}
+	}
+	if !strings.Contains(argv, "--endpoints https://"+regionIP(3)+":2379") || !strings.Contains(argv, "--rev 41") {
+		t.Errorf("the probe %q lost its endpoint or revision", argv)
+	}
+	// The member's own ctl still runs in its namespace.
+	if in := strings.Join(e.argvIn(e.ns, "x"), " "); !strings.Contains(in, "netns exec "+regionNS(3)) {
+		t.Errorf("ctl no longer runs in the member's namespace: %q", in)
+	}
+}
+
+// The release attempts every delete and joins the failures: a transient
+// failure on the first rule must not leave the other two in place.
+func TestRunAllAttemptsEveryCommandAndJoinsTheErrors(t *testing.T) {
+	cmds := regionHold(3, false)
+	var tried []string
+	err := runAll(cmds, func(c []string) error {
+		tried = append(tried, strings.Join(c, " "))
+		switch len(tried) {
+		case 2:
+			return errors.New("rule 2 busy")
+		case 3:
+			return errors.New("rule 3 gone")
+		}
+		return nil
+	})
+	if len(tried) != 3 {
+		t.Fatalf("attempted %d of 3 deletes", len(tried))
+	}
+	if err == nil || !strings.Contains(err.Error(), "rule 2 busy") || !strings.Contains(err.Error(), "rule 3 gone") {
+		t.Fatalf("both failures must be reported: %v", err)
+	}
+	if runAll(cmds, func([]string) error { return nil }) != nil {
+		t.Fatal("no failures, no error")
+	}
+}
+
+// A cut is the broker's own once it says so: store status pings live and says
+// "cut" up to one freshness check before the mint path knows. A line from an
+// earlier cut (before the mark) is not this cut's.
+func TestL75NotAnsweringWaitsForTheLineAfterTheMark(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "b3.log")
+	p := &regionProc{name: "port49-broker l75 b3", log: log}
+	line := "port49-broker: directory store: not answering; serving from the cache confirmed 1.4s ago\n"
+	if err := os.WriteFile(log, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.mark()
+	if err := l75NotAnswering(p, 300*time.Millisecond); err == nil || !strings.Contains(err.Error(), "directory store: not answering") {
+		t.Fatalf("only an earlier cut's line: %v, want the INVALID error naming the line", err)
+	}
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		f.WriteString(line)
+	}()
+	start := time.Now()
+	if err := l75NotAnswering(p, 5*time.Second); err != nil {
+		t.Fatalf("a line written after the mark: %v", err)
+	}
+	if took := time.Since(start); took < 100*time.Millisecond || took > 3*time.Second {
+		t.Fatalf("returned after %v: it must wait for the line, and stop when it comes", took)
 	}
 }

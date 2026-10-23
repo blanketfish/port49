@@ -71,6 +71,7 @@ type Store struct {
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
+	ownLifts             ownLifts           // this process's own lifts, by key (marks.go)
 	seenRev              atomic.Uint64      // Seen: the highest revision a response carried
 	logf                 func(format string, args ...any)
 	idxUndecodable       prometheus.Counter // nil counts nothing

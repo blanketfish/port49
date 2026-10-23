@@ -16,6 +16,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/devicemock"
+	adapter "github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
@@ -56,6 +57,26 @@ func TestQualify(t *testing.T) {
 	if helpOnlyPlatforms[p.sel] {
 		t.Skipf("%s is help-only: it runs no TACACS+", p.sel)
 	}
+	// The harness builds the port49d the whole run uses, from this tree's
+	// clean HEAD, in a private clone so its VCS stamp is right (fix round 4;
+	// a build in a nested worktree is stamped with the main checkout's HEAD).
+	if root == "" {
+		r, err := repoRoot()
+		if err != nil {
+			t.Fatalf("INVALID: repo root: %v", err)
+		}
+		root = r
+	}
+	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+		t.Fatalf("INVALID: the tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
+	}
+	bin := filepath.Join(root, "bin", "port49d")
+	if qualPort49dBuild, err = buildPort49dAt(root, "HEAD", os.TempDir(), bin); err != nil {
+		t.Fatal(err)
+	}
+	if err := labSetcap(bin); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	t.Run(p.name, func(t *testing.T) { newQualEnv(t, labFor(t, p)).play() })
 }
 
@@ -77,6 +98,7 @@ type qualEnv struct {
 	notes    []string
 	master   string  // the run's capture
 	e        *l73Env // the TLS cells' environment, once there is one
+	dd       ddArmState
 }
 
 func newQualEnv(t *testing.T, l *lab) *qualEnv {
@@ -86,7 +108,8 @@ func newQualEnv(t *testing.T, l *lab) *qualEnv {
 	if v := os.Getenv("PORT49_LAB_QUAL_VARIANT"); v != "" {
 		slug += "-variant-" + v
 	}
-	q := &qualEnv{t: t, l: l, slug: slug, starts: map[string]time.Time{}, ends: map[string]time.Time{}, tlsFiles: map[string][]byte{}}
+	q := &qualEnv{t: t, l: l, slug: slug, starts: map[string]time.Time{}, ends: map[string]time.Time{}, tlsFiles: map[string][]byte{},
+		dd: ddArmState{files: map[string][]byte{}, conns: map[string][]l73Conn{}}}
 	// Firmware is the platform row's version string as the results notes' Image version line
 	// carries it, so the slug is e.g. Nexus-9300v-10.6-2-F.
 	q.run = qualRun{Platform: inventoryPlatform(t, l.p.node), LabPlatform: l.p.name, Image: l.p.version,
@@ -136,6 +159,9 @@ func (q *qualEnv) guard() {
 // play starts port49d on the conformance config, opens the broker session as
 // the slice does, and plays each cell under one capture.
 func (q *qualEnv) play() {
+	if os.Getenv(ddArmEnv) == "1" {
+		q.ddArmCheck()
+	}
 	q.guard()
 	// The broker's server certificate must exist when port49d starts, and a
 	// later write would mint a new CA the running daemon does not trust.
@@ -148,7 +174,7 @@ func (q *qualEnv) play() {
 	}
 	q.startDaemon(q.cfg)
 	defer q.restoreDaemon()
-	rawStop := q.l.capture(q.t, "QUAL-"+q.slug)
+	rawStop := q.l.capture(q.t, ddArmMasterName(q.slug, os.Getenv(ddArmEnv) == "1"))
 	q.master = q.l.capAbs
 	stopped := false
 	stop := func() {
@@ -184,6 +210,10 @@ func (q *qualEnv) play() {
 	q.l.capAbs = q.master // the note points at the master capture
 	q.l.captureNote = q.l.stoppedCaptureLine(q.t)
 	q.l.capAbs = ""
+	if os.Getenv(ddArmEnv) == "1" {
+		q.writeDebug()
+		return
+	}
 	q.write()
 }
 
@@ -585,20 +615,71 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	if err != nil {
 		q.t.Fatalf("INVALID: %v", err)
 	}
-	keep := func(cell string, _ []l73Conn) {
+	keep := func(cell string, conns []l73Conn) {
 		q.tlsFiles[cell+".tls.json"] = e.evidence[cell+".tls.json"]
+		q.dd.conns[cell] = conns
 	}
 	q.run.CommandAuthorization, q.run.DeniedCommandRan, q.run.DeniedCommandAsked = map[string]string{}, map[string]bool{}, map[string]bool{}
+	// The offer is read from this tree's table, so bin/port49d must be a
+	// clean build of this tree's HEAD, or the two could differ (review I2).
+	// TestQualify built it (fix round 4); check what it says.
+	vcs := qualPort49dBuild
+	if err := qualBinaryCheck(vcs, gitHead(root)); err != nil {
+		q.t.Fatal(err)
+	}
+	// The harness compiles the same table the offer is read from: its tree
+	// must be HEAD's too, untracked files included (review N4).
+	if dirty, err := treeDirty(root, codePaths...); err != nil || dirty != "" {
+		q.t.Fatalf("INVALID: the harness tree is not clean (%v):\n%s\ncommit or remove it first", err, dirty)
+	}
+	q.run.Port49d = vcs.recorded()
+	q.run.TLSServerSingleConnectOffered = adapter.TLSServerSingleConnect(q.run.Platform)
 
-	// tls_token_login: the plain token_login, command_permitted, command_denied and
-	// accounting cells together, per-request.
-	off := q.cell("tls_token_login")
-	stop := e.capture("tls_token_login")
-	outs, err := login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
-	recs := q.waitStop(off)
-	time.Sleep(l73SettleTail)
-	keep("tls_token_login", stop())
-	q.tlsLoginVerdict("tls_token_login", qualPerRequest, outs, err, recs)
+	// tls_token_login is graded per connection (honored or ignored, decision 50
+	// ruling 20), so its capture starts clean (review I1, O1, N1, N4, R3): no
+	// connection open before or at its start. The capture sees only
+	// connections whose SYN it caught, so the gauge decides.
+	//   - First the readiness login's own records land (guard, settle).
+	//   - Then the gauge must read 0 within qualCleanPolls: past idle_timeout,
+	//     which closes, with close_notify, a connection the readiness login
+	//     left held (an offered NX-OS one); a per-request device's closes at
+	//     once.
+	//   - It is read again once the capture has started.
+	// Either failure is INVALID; only then does run.json record the clean start.
+	var (
+		off      int64
+		stop     func() []l73Conn
+		outs     []string
+		recs     []map[string]any
+		loginErr error
+	)
+	restartTLS := func() {
+		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
+		q.login()
+		q.dd.ready = len(e.ready("qual-tls-debug"))
+	}
+	q.debugCell(e, "tls_token_login", restartTLS, func() { e.ready("qual-tls-post") }, func() {
+		e.guard()
+		e.settle()
+		read := func() (float64, bool) { return e.metric(qualConnectionsOpen) }
+		if err := qualWaitNoConnections(read, qualCleanPolls, time.Sleep); err != nil {
+			q.t.Fatal(err)
+		}
+
+		// tls_token_login: the plain token_login, command_permitted, command_denied and
+		// accounting cells together, per-request.
+		off = q.cell("tls_token_login")
+		stop = e.capture("tls_token_login")
+		if err := qualStillClean(read); err != nil {
+			q.t.Fatal(err)
+		}
+		q.run.TLSCaptureStartedClean = true
+		outs, loginErr = login(qualUser, q.mint(), qualProbeCommands(q.run.Platform)...)
+		recs = q.waitStop(off)
+		time.Sleep(l73SettleTail)
+		keep("tls_token_login", stop())
+	})
+	q.tlsLoginVerdict("tls_token_login", qualPerRequest, outs, loginErr, recs)
 
 	q.tlsDeniedCommand(e, login, keep)
 
@@ -631,24 +712,26 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	}
 
 	// tls_unknown_ca: port49's client_ca_file is a CA that did not sign the device's leaf.
-	e.guard()
-	e.settle()
-	q.guard()
-	q.tlsDaemon(e, "qual-unknown-ca", l73Daemon{Intermediates: e.files["inter.pem"], ClientCA: e.files["other.pem"]})
-	off = q.cell("tls_unknown_ca")
-	stop = e.capture("tls_unknown_ca")
-	// The handshake is refused whatever the credential: a break-glass login makes the device try port49.
-	_, _, _ = e.breakglassLogin()
-	recs = q.l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
-		for _, r := range qualEvents(rs, "unvalidated", nil) {
-			if str(sub(r, "unvalidated"), "tls_outcome") == "unknown_ca" {
-				return true
+	q.debugCell(e, "tls_unknown_ca", restartTLS, nil, func() {
+		e.guard()
+		e.settle()
+		q.guard()
+		q.tlsDaemon(e, "qual-unknown-ca", l73Daemon{Intermediates: e.files["inter.pem"], ClientCA: e.files["other.pem"]})
+		off = q.cell("tls_unknown_ca")
+		stop = e.capture("tls_unknown_ca")
+		// The handshake is refused whatever the credential: a break-glass login makes the device try port49.
+		_, _, _ = e.breakglassLogin()
+		recs = q.l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
+			for _, r := range qualEvents(rs, "unvalidated", nil) {
+				if str(sub(r, "unvalidated"), "tls_outcome") == "unknown_ca" {
+					return true
+				}
 			}
-		}
-		return false
+			return false
+		})
+		time.Sleep(l73SettleTail)
+		keep("tls_unknown_ca", stop())
 	})
-	time.Sleep(l73SettleTail)
-	keep("tls_unknown_ca", stop())
 	refused := false
 	for _, r := range qualEvents(recs, "unvalidated", nil) {
 		refused = refused || str(sub(r, "unvalidated"), "tls_outcome") == "unknown_ca"
@@ -874,7 +957,13 @@ func (q *qualEnv) write() {
 	}
 	q.l.result(q.t, "QUAL-"+q.slug, claim, obs)
 	if qualL80Applies(q.run.Platform, q.run.Firmware) {
-		err := qualWriteL80(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name, secrets, func(claim, obs string) {
+		fix := qualL80Fix{Offered: q.run.TLSServerSingleConnectOffered}
+		// Only a committed baseline is cited: git, not the working tree, says so.
+		base := "tests/lab/evidence/L80-" + q.l.p.name + "/baseline/"
+		if out, err := exec.Command("git", "-C", root, "ls-files", "--", base).Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			fix.Baseline = base
+		}
+		err := qualWriteL80(q.notes, "QUAL-"+q.slug+"-"+q.l.p.name, secrets, fix, func(claim, obs string) {
 			q.l.result(q.t, "L80", claim, obs)
 		})
 		if err != nil {

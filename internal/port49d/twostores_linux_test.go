@@ -162,7 +162,7 @@ func TestABrokerOnTwoStoresMarksInTheDirectory(t *testing.T) {
 }
 
 // Review Focus 5: with the directory cut, a revocation is refused within the
-// directory's call_timeout, saying it could not be recorded, and the
+// directory's call_timeout, saying it may not have been recorded, and the
 // broker says the directory is not answering.
 func TestARevocationWithTheDirectoryCutFailsPromptly(t *testing.T) {
 	var out syncBuffer
@@ -176,7 +176,7 @@ func TestARevocationWithTheDirectoryCutFailsPromptly(t *testing.T) {
 	f.dproxy.Hang(true)
 	start := time.Now()
 	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	if err != nil || !strings.Contains(r.Error, "could not be recorded") || time.Since(start) > 5*time.Second {
+	if err != nil || !strings.Contains(r.Error, "may not have been recorded") || time.Since(start) > 5*time.Second {
 		t.Fatalf("%+v %v after %v", r, err, time.Since(start))
 	}
 	waitWithin(t, &out, "port49-broker: directory store: not answering", 10*time.Second)
@@ -340,7 +340,7 @@ func TestTheDirectorysRoleCheckRefusesABrokerWithoutUnlockRecords(t *testing.T) 
 		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
 	}
 	// The broker reaches every directory family but ul/.
-	for _, fam := range []string{"rv/", "mb/", "mk/", "lo/", "sf/", "meta/"} {
+	for _, fam := range []string{"rv/", "rl/", "mb/", "mk/", "lo/", "sf/", "meta/"} {
 		k := prefix + "v1/" + fam
 		grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k), Write: true})
 	}
@@ -360,6 +360,56 @@ func TestTheDirectorysRoleCheckRefusesABrokerWithoutUnlockRecords(t *testing.T) 
 	err = checkRoles(context.Background(), nil, b, e, map[string]*x509.Certificate{"broker": leaf}, ref)
 	if err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.broker") || !strings.Contains(err.Error(), "ul/") {
 		t.Fatalf("a broker without ul/ passed the directory check, or was refused for another reason: %v", err)
+	}
+}
+
+// A broker role without readwrite on rl/, the lift records (post-11b), is
+// refused at the start by the exact grant it lacks, readwrite, whether it
+// has no grant there or a read one, so one restart after the grant is
+// enough; it is not told to get an etcd user of its own (task 2 review I2).
+func TestTheRoleCheckNamesTheLiftRecordsGrant(t *testing.T) {
+	const prefix = "/port49/"
+	const want = "etcdctl role grant-permission port49_broker readwrite --prefix=true /port49/v1/rl/"
+	for _, readable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("readable=%v", readable), func(t *testing.T) {
+			srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+			var grants []etcdtest.Grant
+			for _, g := range etcd.RolesFor(prefix, etcd.ScopeDirectory) {
+				if g.Role == etcd.RoleBroker {
+					continue
+				}
+				grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+			}
+			fams := []string{"rv/", "mb/", "mk/", "lo/", "sf/", "ul/", "meta/"}
+			for _, fam := range fams {
+				k := prefix + "v1/" + fam
+				grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k),
+					Write: true})
+			}
+			if readable {
+				k := prefix + "v1/rl/"
+				grants = append(grants, etcdtest.Grant{Role: etcd.RoleBroker, Key: k, RangeEnd: clientv3.GetPrefixRangeEnd(k)})
+			}
+			srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon},
+				"port49-broker": {etcd.RoleBroker}})
+			tc := srv.TLS(t, "port49-broker")
+			b, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, TLS: tc, Prefix: prefix})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { b.Close() })
+			leaf, err := x509.ParseCertificate(tc.Certificates[0].Certificate[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := &config.EtcdConfig{CallTimeout: 2 * time.Second, Roles: config.RolesEnforced}
+			ref := storeRef{at: "stores.directory", scope: etcd.ScopeDirectory, dir: true}
+			err = checkRoles(context.Background(), nil, b, e, map[string]*x509.Certificate{"broker": leaf}, ref)
+			if err == nil || !strings.Contains(err.Error(), "stores.directory.etcd.broker") ||
+				!strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "etcd user of its own") {
+				t.Fatalf("the refusal does not name the rl/ grant, or gives the wrong advice: %v", err)
+			}
+		})
 	}
 }
 
