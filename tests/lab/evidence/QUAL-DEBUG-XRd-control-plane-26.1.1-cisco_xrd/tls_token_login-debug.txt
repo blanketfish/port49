@@ -1,1 +1,35 @@
-
+09:38:55.761 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:03.054 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:03.054 tacacsd: Socket connected <masked>
+09:39:03.054 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:03.382 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:03.383 tacacsd: Socket connected <masked>
+09:39:03.383 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:03.712 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:03.712 tacacsd: Socket connected <masked>
+09:39:03.712 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:04.097 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:04.097 tacacsd: Socket connected <masked>
+09:39:04.097 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:04.591 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:04.592 tacacsd: Socket connected <masked>
+09:39:04.592 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:04.947 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:04.947 tacacsd: Socket connected <masked>
+09:39:04.947 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:04.968 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:04.968 tacacsd: Socket connected <masked>
+09:39:04.968 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:04.988 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:04.988 tacacsd: Socket connected <masked>
+09:39:04.988 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:05.272 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:05.272 tacacsd: Socket connected <masked>
+09:39:05.272 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:06.124 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:06.124 tacacsd: Socket connected <masked>
+09:39:06.124 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:06.135 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:39:06.135 tacacsd: Socket connected <masked>
+09:39:06.135 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:39:11.406 tacacsd: Socket <masked> to 172.100.100.1/300 opened

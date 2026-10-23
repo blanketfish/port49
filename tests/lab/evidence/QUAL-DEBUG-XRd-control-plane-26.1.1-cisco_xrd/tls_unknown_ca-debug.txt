@@ -1,1 +1,11 @@
-
+09:40:30.305 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:40:37.803 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:40:37.803 tacacsd: Socket connected <masked>
+09:40:37.803 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:40:38.199 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:40:38.199 tacacsd: Socket connected <masked>
+09:40:38.199 tacacsd: Socket <masked> to 172.100.100.1/300 opened
+09:40:38.263 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:40:43.528 tacacsd: Socket bound <masked> with <masked> address <masked>
+09:40:43.528 tacacsd: Socket connected <masked>
+09:40:43.528 tacacsd: Socket <masked> to 172.100.100.1/300 opened
