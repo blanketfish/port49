@@ -161,3 +161,36 @@ func TestDeviceDebugArmMasterCaptureNeverTakesTheReVetName(t *testing.T) {
 		t.Errorf("an armed run names its master %q", got)
 	}
 }
+
+// The 160-character cut lands on a token boundary: a partial last token such
+// as "authentica" is dropped, not listed.
+func TestDeviceDebugArmSampleCutsOnATokenBoundary(t *testing.T) {
+	line := strings.Repeat("tacacs ", 22) + "authentication" // 7*22 = 154, then "authentica" would straddle 160
+	got := ddArmSample(line, 5)
+	if len(got) != 1 {
+		t.Fatalf("sample = %q", got)
+	}
+	if len(got[0]) > 160 {
+		t.Errorf("longer than 160: %d", len(got[0]))
+	}
+	if strings.HasSuffix(got[0], "authentica") || strings.Contains(got[0], "authentic") {
+		t.Errorf("a partial token was kept: %q", got[0])
+	}
+	if got[0] != strings.TrimSpace(strings.Repeat("tacacs ", 22)) {
+		t.Errorf("sample = %q", got[0])
+	}
+}
+
+// Hot or cold is decided on the sampled output, not the raw line: a hot word
+// that only appears in a span the closed alphabet replaces with _ makes the
+// line cold.
+func TestDeviceDebugArmSampleOrdersOnTheSampledOutput(t *testing.T) {
+	raw := strings.Join([]string{
+		"interface Serverfarm1 up", // "Serverfarm1" is one unknown run: no hot word survives
+		"tacacs server opened",
+	}, "\n")
+	got := ddArmSample(raw, 10)
+	if len(got) != 2 || got[0] != "tacacs server opened" {
+		t.Errorf("hot line not first: %q", got)
+	}
+}

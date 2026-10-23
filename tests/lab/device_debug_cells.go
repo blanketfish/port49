@@ -142,7 +142,8 @@ func init() {
 // of any value is ever copied: the output is only [a-z], A, _ and space. "TAC+:
 // Opened TCP/IP handle 0x1F to 10.149.0.2/49" becomes "tac _ opened tcp _ handle
 // _ to A _". Lines about the exchange come first and a repeated line is listed
-// once. At most max lines come back, cut to 160 characters.
+// once. At most max lines come back, cut to 160 characters on a token boundary.
+// Hot or cold is decided on the output, not the raw line.
 func ddArmSample(raw string, max int) []string {
 	var hot, cold []string
 	seen := map[string]bool{}
@@ -155,13 +156,20 @@ func ddArmSample(raw string, max int) []string {
 			continue
 		}
 		if len(out) > 160 {
-			out = out[:160]
+			// Cut on a token boundary: a partial last token is dropped.
+			if out[160] == ' ' {
+				out = out[:160]
+			} else if i := strings.LastIndexByte(out[:160], ' '); i >= 0 {
+				out = out[:i]
+			} else {
+				out = out[:160]
+			}
 		}
 		if seen[out] {
 			continue
 		}
 		seen[out] = true
-		if ddArmHot.MatchString(ln) {
+		if ddArmHot.MatchString(out) {
 			hot = append(hot, out)
 		} else {
 			cold = append(cold, out)
