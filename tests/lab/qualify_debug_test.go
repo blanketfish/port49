@@ -100,12 +100,14 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		rawLines int
 		sample   []string
 		answers  []string
+		ran      bool
 	)
 	e.cli(func(c *cliConn) error {
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
 		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, filter, platform, &rawLines, &sample, &answers), func() error {
+			ran = true
 			restart()
 			body()
 			return e.l.stopDaemon()
@@ -113,6 +115,12 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		return nil
 	})
 	q.t.Logf("device debug command answers, %s %s (shapes):\n  %s", platform, cell, strings.Join(answers, "\n  "))
+	if !ran {
+		// Debug would not go on (the summary says why): the cell is still
+		// played, without it, so the run's other results stand.
+		restart()
+		body()
+	}
 	q.login()
 	if post != nil {
 		post()

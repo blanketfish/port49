@@ -444,7 +444,7 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 		Collect: []string{"show logging"},
 	},
 	"iosxr": {
-		Enable:  []string{"terminal length 0", "clear logging", "", "debug tacacs", "debug aaa"},
+		Enable:  []string{"terminal length 0", "clear logging", "y", "debug tacacs", "debug aaa"},
 		Disable: []string{"undebug all"},
 		Collect: []string{"show logging"},
 	},
