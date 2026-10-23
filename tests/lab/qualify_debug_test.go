@@ -45,7 +45,7 @@ func (q *qualEnv) armed(family string) (string, bool) {
 // lines the collect commands returned and keeps a shape sample of them for the
 // case where the filter keeps nothing, and returns the raw text to
 // captureDeviceDebug alone.
-func ddArmRun(c *cliConn, platform string, rawLines *int, sample *[]string) func(string) (string, error) {
+func ddArmRun(c *cliConn, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
 	cfgMode := false
 	return func(cmd string) (string, error) {
 		var wait []string
@@ -54,6 +54,12 @@ func ddArmRun(c *cliConn, platform string, rawLines *int, sample *[]string) func
 		if strings.HasPrefix(cmd, "show log") {
 			*rawLines += strings.Count(out, "\n")
 			*sample = append(*sample, ddArmSample(out, 40)...)
+		} else {
+			// What the enable and disable commands answered, as shapes: the
+			// first thing to learn when no debug line comes back.
+			for _, sh := range ddArmSample(out, 6) {
+				*cmdShapes = append(*cmdShapes, cmd+" => "+sh)
+			}
 		}
 		return out, err
 	}
@@ -85,15 +91,17 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		capErr   error
 		rawLines int
 		sample   []string
+		answers  []string
 	)
 	e.cli(func(c *cliConn) error {
 		restart()
-		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, platform, &rawLines, &sample), func() error {
+		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, platform, &rawLines, &sample, &answers), func() error {
 			body()
 			return e.l.stopDaemon()
 		})
 		return nil
 	})
+	q.t.Logf("device debug command answers, %s %s (shapes):\n  %s", platform, cell, strings.Join(answers, "\n  "))
 	q.login()
 	if post != nil {
 		post()
