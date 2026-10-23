@@ -408,9 +408,8 @@ func TestDeviceDebugCounters(t *testing.T) {
 			ddFacility["eos"] + "Tacacs: Connection to 172.100.100.1:49 closed by peer",
 		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:40:00.123", Closed: "09:40:00.123", Authen: 1, Reason: "closed by peer"}}}},
 		{"junos", []string{
-			"Oct 23 09:41:00.100 vjunos tacplus[1]: connecting to server 172.100.100.1",
-			"Oct 23 09:41:00.101 vjunos tacplus[1]: sending accounting request 2",
-		}, want{open: 1, conns: []deviceDebugConn{{Opened: "09:41:00.100", Acct: 1}}}},
+			"Oct 23 09:41:00.101 vjunos auditd[1]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message",
+		}, want{conns: []deviceDebugConn{{Acct: 1}}}},
 		{"nxos", []string{
 			"05:00:11.100001 tacacsd: nxos_ssl_open success",
 			"05:00:11.100002 tacacsd: construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5",
@@ -637,15 +636,11 @@ func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
 	}
 }
 
-// The raw Junos trace file is cleared after it is collected, and every file a
-// Collect reads is cleared by Disable.
-func TestDeviceDebugJunosClearsTheTraceFile(t *testing.T) {
+// Every file a Collect reads is cleared by Disable.
+func TestDeviceDebugJunosClearsTheFileItReads(t *testing.T) {
 	c := deviceDebugCmds["junos"]
-	if !slices.Contains(c.Disable, "clear log p49-tacplus.log") {
-		t.Errorf("Disable does not clear the trace file: %v", c.Disable)
-	}
-	if !slices.Contains(c.Collect, "show log p49-tacplus.log") {
-		t.Errorf("Collect reads another file: %v", c.Collect)
+	if !slices.Contains(c.Disable, "clear log p49-auth.log") || !slices.Contains(c.Collect, "show log p49-auth.log") {
+		t.Errorf("Disable %v does not clear what Collect %v reads", c.Disable, c.Collect)
 	}
 }
 

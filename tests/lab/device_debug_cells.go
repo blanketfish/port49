@@ -93,6 +93,9 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 	}
 	fmt.Fprintf(&b, "debug connections opened=%d closed=%s single_connect_lines=%d server_dead_lines=%d fallback_lines=%d\n",
 		s.Opened, closedAll, s.SingleConnect, s.ServerDead, s.Fallback)
+	if s.Failed > 0 {
+		fmt.Fprintf(&b, "debug connections failed_opens=%d\n", s.Failed)
+	}
 	for i, c := range s.Conns {
 		open, closed := c.Opened, c.Closed
 		if open == "" {

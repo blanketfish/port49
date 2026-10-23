@@ -113,9 +113,8 @@ func TestDeviceDebugNoteSaysUnmeasuredWhenNothingWasKept(t *testing.T) {
 func TestDeviceDebugNoteJunosCloseAndPipeliningAreUnmeasured(t *testing.T) {
 	f := ddTestFilter("junos")
 	kept := ddKeepStr(t, f, strings.Join([]string{
-		"Oct 23 10:00:24.100000 authd[900]: opened 172.100.100.1/49",
-		"Oct 23 10:00:24 vjunos authd[900]: sent tacacs+ authentication request message, 7",
-		"Oct 23 10:00:24 vjunos authd[900]: sent tacacs+ authorization request message, 8",
+		"Oct 23 10:00:24 vjunos auditd[900]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message",
+		"Oct 23 10:00:24 vjunos auditd[900]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message",
 		"Oct 23 10:00:25 vjunos authd[900]: send failed: authentication with error TLS 5 has failed",
 	}, "\n"))
 	in := ddNoteRun{Platform: "juniper_vjunos-router", Profile: "junos", Image: "Test Junos 1.0", Cells: []ddNoteCell{
@@ -129,7 +128,7 @@ func TestDeviceDebugNoteJunosCloseAndPipeliningAreUnmeasured(t *testing.T) {
 	for _, want := range []string{
 		"closed=unknown",
 		"neither file has a close line",
-		"**Do requests ride one connection together (pipelining)?** Unmeasured: 2 request line(s) were kept, but the trace's requests cannot be assigned to a connection",
+		"**Do requests ride one connection together (pipelining)?** Unmeasured: 2 request line(s) were kept but no connection open",
 		"TLS failure `",
 	} {
 		if !strings.Contains(obs, want) {

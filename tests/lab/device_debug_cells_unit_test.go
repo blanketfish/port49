@@ -142,11 +142,11 @@ func TestDeviceDebugArmWaitFollowsTheJunosModes(t *testing.T) {
 			t.Errorf("%q: waits for %q, config mode %v; want %q, %v", cmd, w, cfg, want, wantCfg)
 		}
 	}
-	step("clear log p49-tacplus.log", "> ", false)
+	step("clear log p49-auth.log", "> ", false)
 	step("configure", "# ", true)
-	step("set system processes general-authentication-service traceoptions flag all", "# ", true)
+	step("set system syslog file p49-auth.log any any", "# ", true)
 	step("commit and-quit", "> ", false)
-	step("show log p49-tacplus.log", "> ", false)
+	step("show log p49-auth.log", "> ", false)
 	if w, _ := ddArmWait("iosxe", "clear logging", false, "r1#"); len(w) != 2 || w[1] != "[confirm]" {
 		t.Errorf("clear logging waits for %q", w)
 	}
@@ -253,27 +253,24 @@ func TestDeviceDebugEOSTracesTheAaaAgent(t *testing.T) {
 	}
 }
 
-func TestDeviceDebugJunosTracesAuthdAndLogsTheAuthFacility(t *testing.T) {
+// authd's traceoptions are not set: authd is the subscriber-management AAA daemon,
+// holds no system-login TACACS+ line, and restarting it is not for a TACACS+ qual.
+func TestDeviceDebugJunosLogsOnlyTheAuthFacility(t *testing.T) {
 	c := deviceDebugCmds["junos"]
-	for _, set := range []string{
-		"set system processes general-authentication-service traceoptions flag all",
-		"set system syslog file p49-auth.log any any",
-	} {
-		if !slices.Contains(c.Enable, set) {
-			t.Errorf("junos enable lacks %q", set)
-		}
+	if !slices.Contains(c.Enable, "set system syslog file p49-auth.log any any") {
+		t.Errorf("junos enable lacks the syslog file: %q", c.Enable)
 	}
-	if c.Enable[len(c.Enable)-1] != "commit and-quit" || c.Disable[len(c.Disable)-3] != "commit and-quit" {
+	if c.Enable[len(c.Enable)-1] != "commit and-quit" || !slices.Contains(c.Disable, "commit and-quit") {
 		t.Errorf("junos enable %q or disable %q does not commit", c.Enable, c.Disable)
 	}
-	if !slices.Equal(c.Collect, []string{"show log p49-tacplus.log", "show log p49-auth.log"}) {
+	if !slices.Equal(c.Collect, []string{"show log p49-auth.log"}) {
 		t.Errorf("junos collect %q", c.Collect)
 	}
-	// 26.2R1.7 rejects these (syntax error at the set).
-	for _, cmd := range c.Enable {
-		if strings.Contains(cmd, "traceoptions level") || strings.Contains(cmd, "services ssh traceoptions") ||
-			strings.Contains(cmd, "tacplus-options traceoptions") {
-			t.Errorf("junos enable has %q, which 26.2R1.7 rejects", cmd)
+	for _, list := range [][]string{c.Enable, c.Disable, c.Collect} {
+		for _, cmd := range list {
+			if strings.Contains(cmd, "traceoptions") || strings.Contains(cmd, "general-authentication-service") || strings.Contains(cmd, "p49-tacplus") {
+				t.Errorf("junos uses %q: authd's trace is not set, and no tacplus file is read", cmd)
+			}
 		}
 	}
 }

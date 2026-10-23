@@ -26,6 +26,7 @@ type ddNoteCell struct {
 	Ready      int          // readiness-probe connections that ran after debug went on
 	CaptureErr bool         // the capture ended in an error (its text is not kept)
 	Drops      ddDropCounts // lines dropped, by rule (numbers only)
+	Tags       string       // the syslog process tag counts (Junos), numbers only
 }
 
 // ddNoteRun is an armed run: the platform, the image and its cells.
@@ -152,6 +153,12 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		}
 		fmt.Fprintf(&b, "  - debug connections opened=%d closed=%s single_connect_lines=%d server_dead_lines=%d fallback_lines=%d.\n",
 			s.Opened, closed, s.SingleConnect, s.ServerDead, s.Fallback)
+		if s.Failed > 0 {
+			fmt.Fprintf(&b, "  - debug connections failed_opens=%d.\n", s.Failed)
+		}
+		if c.Tags != "" {
+			fmt.Fprintf(&b, "  - syslog process tags (counts only): %s.\n", c.Tags)
+		}
 		for i, cn := range s.Conns {
 			open, end := cn.Opened, cn.Closed
 			if open == "" {

@@ -73,6 +73,9 @@ type deviceDebugFilter struct {
 	Secrets  func() []string
 	// Drops, if set, counts the lines Keep drops, by reason. Numbers only.
 	Drops *ddDropCounts
+	// Tags, if set, counts the syslog process tag of each line Keep reads before
+	// the facility rule (ddTagCounts). Numbers only.
+	Tags *ddTagCounts
 }
 
 // ddDropCounts is how many lines Keep dropped, by the rule that dropped them.
@@ -164,15 +167,17 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"junos": {
 		facility: regexp.MustCompile(`(?i)\b(?:tacplus|authd|tacacs)\b`),
-		// The tacplus trace wording below is a GUESS from the vendor documents, not
-		// measured: no tacplus line has been kept from a run yet. noClose stays set
-		// so the summary says "unknown" rather than a count nobody has verified.
-		open:     regexp.MustCompile(`(?i)connecting to server|\bopened\b|\bconnection (?:established|opened)\b`),
-		closed:   regexp.MustCompile(`(?i)\bclos(?:ing|ed) (?:the )?(?:tacplus )?(?:connection|socket)\b|\bconnection closed\b`),
+		// Only the auditd accounting line is measured (step 4d). No connection or
+		// authentication line has been kept: the login path's syslog tag is not
+		// known yet (see ddTagCounts), so they are unmeasured, not guessed, and the
+		// close stays unknown. The reservation-file "opened" lines of authd are not
+		// connections and are not counted.
+		open:     ddNever,
+		closed:   ddNever,
 		noClose:  true,
-		authen:   regexp.MustCompile(`(?i)sending authentication request|sent tacacs` + ddSep + `authentication request message`),
-		author:   regexp.MustCompile(`(?i)sending authorization request|sent tacacs` + ddSep + `authorization request message`),
-		acct:     regexp.MustCompile(`(?i)sending accounting request|sent tacacs` + ddSep + `accounting request message`),
+		authen:   ddNever,
+		author:   ddNever,
+		acct:     regexp.MustCompile(`(?i)successfully sent tacacs\+ accounting-request message`),
 		single:   regexp.MustCompile(`(?i)single-connect (?:flag set|negotiated)`),
 		dead:     regexp.MustCompile(`(?i)marked dead`),
 		fallback: regexp.MustCompile(`(?i)falling back to`),
@@ -237,15 +242,12 @@ func ddHexView(line string) bool {
 
 // ddHexMessage is whether the message after the facility (first match of p) is
 // nothing but hex groups.
-func ddHexMessage(p *ddProfile, line string, whole bool) bool {
+func ddHexMessage(p *ddProfile, line string) bool {
 	loc := p.facility.FindStringIndex(line)
-	rest := line
-	switch {
-	case loc != nil:
-		rest = line[loc[1]:]
-	case !whole:
+	if loc == nil {
 		return false
 	}
+	rest := line[loc[1]:]
 	rest = rest[len(ddIndex.FindString(rest)):]
 	rest = ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(rest, "T"), " ")
 	return ddHexOnly.MatchString(strings.TrimSpace(rest))
@@ -389,13 +391,8 @@ func ddLeaks(text string, forms, hexForms []string) bool {
 
 // drop is the rule of steps 1 and 2 that drops line, or "" if none does.
 func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
-	return f.dropFrom(p, line, false)
-}
-
-// dropFrom is drop for a line of a source whose every line is TACACS (whole).
-func (f deviceDebugFilter) dropFrom(p *ddProfile, line string, whole bool) string {
 	switch {
-	case !whole && !p.facility.MatchString(line):
+	case !p.facility.MatchString(line):
 		return "facility"
 	case ddPayload.MatchString(line) || nxosDebugHexRun.MatchString(line):
 		return "payload"
@@ -403,7 +400,7 @@ func (f deviceDebugFilter) dropFrom(p *ddProfile, line string, whole bool) strin
 		return "marker"
 	case ddHexView(line):
 		return "hex_view"
-	case ddHexMessage(p, line, whole):
+	case ddHexMessage(p, line):
 		return "hex_message"
 	}
 	return ""
@@ -440,13 +437,6 @@ func (d *ddDropCounts) count(reason string) {
 // It returns errDeviceDebugLeak, and nothing else, when a known secret
 // survives the scrub.
 func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
-	return f.KeepSource(text, false)
-}
-
-// KeepSource is Keep for text that comes from one source file. whole says that
-// every line of that file is a TACACS line (Junos's tacplus traceoptions file),
-// so the facility rule is skipped; every other rule applies to every line.
-func (f deviceDebugFilter) KeepSource(text string, whole bool) (deviceDebugKept, error) {
 	p := deviceDebugProfiles[f.Platform]
 	if p == nil {
 		return "", nil
@@ -464,7 +454,10 @@ func (f deviceDebugFilter) KeepSource(text string, whole bool) (deviceDebugKept,
 		if ln == "" {
 			continue
 		}
-		if r := f.dropFrom(p, ln, whole); r != "" {
+		if f.Tags != nil {
+			f.Tags.add(ln, forms, hexForms)
+		}
+		if r := f.drop(p, ln); r != "" {
 			f.Drops.count(r)
 			continue
 		}
@@ -599,10 +592,6 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 // not yet confirmed on the image: the lab run confirms it (task 8 report).
 type deviceDebugCommands struct {
 	Enable, Disable, Collect []string
-	// Whole names the Collect commands whose output is wholly TACACS lines
-	// (Junos's tacplus traceoptions file): every line of it is kept past the
-	// facility rule.
-	Whole []string
 }
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
@@ -623,16 +612,15 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 		Collect: []string{"show logging"},
 	},
 	"junos": {
-		Enable: []string{"set cli screen-width 300", "clear log p49-tacplus.log", "clear log p49-auth.log", "configure",
-			"set system processes general-authentication-service traceoptions file p49-tacplus.log",
-			"set system processes general-authentication-service traceoptions flag all",
+		// authd's traceoptions are not set: authd is the subscriber-management AAA
+		// daemon, its trace holds no system-login TACACS+ exchange, and the enable
+		// commit restarts it. The login path is read from the syslog file.
+		Enable: []string{"set cli screen-width 300", "clear log p49-auth.log", "configure",
 			"set system syslog file p49-auth.log any any",
 			"commit and-quit"},
-		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions",
-			"delete system syslog file p49-auth.log", "commit and-quit",
-			"clear log p49-tacplus.log", "clear log p49-auth.log"},
-		Collect: []string{"show log p49-tacplus.log", "show log p49-auth.log"},
-		Whole:   []string{"show log p49-tacplus.log"},
+		Disable: []string{"configure", "delete system syslog file p49-auth.log", "commit and-quit",
+			"clear log p49-auth.log"},
+		Collect: []string{"show log p49-auth.log"},
 	},
 }
 
@@ -663,7 +651,7 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	for _, c := range cmds.Collect {
 		raw, err := run(c)
 		// A partial capture is kept, filtered like the rest.
-		k, kerr := f.KeepSource(ddWithoutEcho(raw, c, slices.Contains(cmds.Whole, c)), slices.Contains(cmds.Whole, c))
+		k, kerr := f.Keep(raw)
 		if kerr != nil {
 			leakErr = kerr
 		} else if k != "" {
@@ -720,23 +708,62 @@ func ddKnownSecrets(parts ...[]string) []string {
 	return all
 }
 
-// ddWithoutEcho, for a whole-source collection, removes what the CLI adds around
-// the file: the echoed command and the prompt lines. Other sources go through
-// the facility rule, which drops those anyway.
-func ddWithoutEcho(raw, cmd string, whole bool) string {
-	if !whole {
-		return raw
-	}
-	var out []string
-	for _, ln := range strings.Split(raw, "\n") {
-		t := strings.TrimSpace(ln)
-		if strings.Contains(t, cmd) || ddCLIPrompt.MatchString(t) || strings.HasPrefix(t, "---(more") {
-			continue
-		}
-		out = append(out, ln)
-	}
-	return strings.Join(out, "\n")
+// ddTagRe captures the syslog process tag: `Oct 23 15:31:11 host tag[pid]: `.
+var ddTagRe = regexp.MustCompile(`^\S+\s+\S+\s+\S+\s+\S+\s+([a-z][a-z0-9_-]{1,23})(\[[0-9]+\])?:`)
+
+// ddMaxTags is how many distinct tags ddTagCounts reports; the rest count as other.
+const ddMaxTags = 30
+
+// ddTagCounts counts lines per syslog process tag, to learn which process
+// writes the login path. It holds only counts: a tag that is not a short
+// lower-case word of at most 24 characters, that holds a known secret in any
+// form or looks like hex counts as other, and no text is kept. A line that does not
+// match counts as other.
+type ddTagCounts struct {
+	tags  map[string]int
+	other int
 }
 
-// ddCLIPrompt is a Junos operational or configuration prompt, `user@host> `.
-var ddCLIPrompt = regexp.MustCompile(`^\S+@\S+[>#%]\s*$`)
+func (t *ddTagCounts) add(line string, forms, hexForms []string) {
+	m := ddTagRe.FindStringSubmatch(line)
+	if m == nil {
+		t.other++
+		return
+	}
+	tag := m[1]
+	if ddLeaks(tag, forms, hexForms) || ddHexView(tag) {
+		t.other++
+		return
+	}
+	if t.tags == nil {
+		t.tags = map[string]int{}
+	}
+	t.tags[tag]++
+}
+
+// String is `tag=n ... other=n`, the most frequent tags first, at most ddMaxTags
+// of them; the rest are in other.
+func (t *ddTagCounts) String() string {
+	names := make([]string, 0, len(t.tags))
+	for n := range t.tags {
+		names = append(names, n)
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		if t.tags[a] != t.tags[b] {
+			return t.tags[b] - t.tags[a]
+		}
+		return strings.Compare(a, b)
+	})
+	other := t.other
+	if len(names) > ddMaxTags {
+		for _, n := range names[ddMaxTags:] {
+			other += t.tags[n]
+		}
+		names = names[:ddMaxTags]
+	}
+	var parts []string
+	for _, n := range names {
+		parts = append(parts, fmt.Sprintf("%s=%d", n, t.tags[n]))
+	}
+	return strings.Join(append(parts, fmt.Sprintf("other=%d", other)), " ")
+}
