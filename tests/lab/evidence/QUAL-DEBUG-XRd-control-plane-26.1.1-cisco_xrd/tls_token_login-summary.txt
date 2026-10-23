@@ -1,28 +1,29 @@
-device returned 1687 log lines in all; the filter kept 35 of the cell's
+device returned 1689 log lines in all; the filter kept 1178 of the cell's
 tls connections (header-only capture): 11
-  conn port=34956 syn=09:39:03.105 hold=0.28s end=server-fin
-  conn port=60508 syn=09:39:03.433 hold=0.28s end=server-fin
-  conn port=63949 syn=09:39:03.762 hold=0.33s end=server-fin
-  conn port=44283 syn=09:39:04.148 hold=0.32s end=server-fin
-  conn port=59688 syn=09:39:04.642 hold=0.30s end=server-fin
-  conn port=42539 syn=09:39:04.997 hold=0.27s end=server-fin
-  conn port=36641 syn=09:39:05.019 hold=0.54s end=server-fin
-  conn port=31491 syn=09:39:05.039 hold=0.80s end=server-fin
-  conn port=34664 syn=09:39:05.323 hold=0.80s end=server-fin
-  conn port=29921 syn=09:39:06.175 hold=0.28s end=server-fin
-  conn port=52385 syn=09:39:06.185 hold=0.54s end=server-fin
-debug connections opened=11 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
-  debug conn 1: opened=09:39:03.054 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 2: opened=09:39:03.383 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 3: opened=09:39:03.712 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 4: opened=09:39:04.097 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 5: opened=09:39:04.592 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 6: opened=09:39:04.947 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 7: opened=09:39:04.968 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 8: opened=09:39:04.988 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 9: opened=09:39:05.272 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 10: opened=09:39:06.124 closed=open reason="" authen=0 author=0 acct=0
-  debug conn 11: opened=09:39:06.135 closed=open reason="" authen=0 author=0 acct=0
-connections that carried more than one request: 0 of 11 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+  conn port=21249 syn=15:29:49.015 hold=0.29s end=server-fin
+  conn port=18934 syn=15:29:49.353 hold=0.28s end=server-fin
+  conn port=33661 syn=15:29:50.164 hold=0.28s end=server-fin
+  conn port=29297 syn=15:29:50.501 hold=0.28s end=server-fin
+  conn port=48417 syn=15:29:50.833 hold=0.28s end=server-fin
+  conn port=47005 syn=15:29:51.170 hold=0.27s end=server-fin
+  conn port=28720 syn=15:29:51.189 hold=0.53s end=server-fin
+  conn port=34920 syn=15:29:51.204 hold=0.79s end=server-fin
+  conn port=29681 syn=15:29:51.494 hold=0.78s end=server-fin
+  conn port=24004 syn=15:29:52.326 hold=0.28s end=server-fin
+  conn port=35045 syn=15:29:52.334 hold=0.55s end=server-fin
+debug connections opened=12 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
+  debug conn 1: opened=15:29:48.965 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 2: opened=15:29:49.302 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 3: opened=15:29:50.113 closed=open reason="" authen=0 author=3 acct=0
+  debug conn 4: opened=15:29:50.450 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 5: opened=15:29:50.782 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 6: opened=15:29:51.119 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 7: opened=15:29:51.139 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 8: opened=15:29:51.154 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 9: opened=15:29:51.444 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 10: opened=15:29:52.276 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 11: opened=15:29:52.284 closed=open reason="" authen=0 author=0 acct=0
+  debug conn 12: opened=15:29:57.551 closed=open reason="" authen=0 author=2 acct=0
+connections that carried more than one request: 2 of 12 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+lines dropped by rule: facility=14 body_word=0 hex_view=498 hex_message=0 evidence_marker=0 known_value_hex=0
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 0
-THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log
