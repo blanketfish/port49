@@ -45,3 +45,7 @@ ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:uni
 # Round 4 test fixtures (commit 7a51f17e): a type 7 and a $9$ stub in a test since removed.
 7a51f17e3c895308a903c4a623ac29a6cb23a936:tests/lab/device_debug_round4_unit_test.go:cisco-type7:51
 7a51f17e3c895308a903c4a623ac29a6cb23a936:tests/lab/device_debug_round4_unit_test.go:junos-type9:52
+#
+# Round 4 test fixtures restored (commit aad300f2): a type 7 and a $9$ stub in the Junos trace-file test.
+aad300f2a03db528f710a8ad3458264fd66f1cd5:tests/lab/device_debug_round4_unit_test.go:cisco-type7:142
+aad300f2a03db528f710a8ad3458264fd66f1cd5:tests/lab/device_debug_round4_unit_test.go:junos-type9:143
