@@ -17,7 +17,10 @@ import (
 // summary are written, to tests/lab/evidence/QUAL-DEBUG-<slug>-<platform>/.
 // An armed run is a measurement of its own: it writes no QUAL evidence and no
 // QUAL note, so a re-vet's committed evidence is never replaced by a run that
-// had debug on. Everything the arm writes passes deviceDebugFilter.Keep (in
+// had debug on. Its results note, tests/lab/results/QUAL-DEBUG-<slug>-<platform>.md,
+// is written by the harness from the same run (qualWriteDebug): platform and image
+// from the run, each open question answered by a kept debug line or unmeasured.
+// Everything the arm writes passes deviceDebugFilter.Keep (in
 // captureDeviceDebug) first; the raw collect text is held in memory only.
 
 // ddArmEnv is the opt-in variable.
@@ -29,6 +32,9 @@ type ddArmState struct {
 	notes []string          // one line per cell, for the results note
 	conns map[string][]l73Conn
 	ready int // connections of the readiness probe that ran after debug went on
+	// profile and cells are what the results note is written from (qualWriteDebug).
+	profile string
+	cells   []ddNoteCell
 }
 
 // armed is whether this run is a device-debug run on a platform that has a
@@ -161,6 +167,9 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	if n := ddArmLineCount(kept); n == 0 || masked*10 >= n*8 {
 		sum += "THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log\n"
 	}
+	q.dd.profile = platform
+	q.dd.cells = append(q.dd.cells, ddNoteCell{Cell: cell, Kept: kept, RawLines: rawLines, Shapes: sample, TLSConns: conns,
+		Ready: q.dd.ready, CaptureErr: capErr != nil})
 	q.dd.files[cell+"-debug.txt"] = []byte(string(kept) + "\n")
 	q.dd.files[cell+"-summary.txt"] = []byte(l80Filter(sum))
 	q.dd.notes = append(q.dd.notes, fmt.Sprintf("- `%s`: %d device log lines, the filter kept %d, %d tls connection(s).",
@@ -202,4 +211,13 @@ func (q *qualEnv) writeDebug() {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
 	q.t.Logf("wrote %s", dir)
+	// The results note is written from the same run, never by hand. Platform and
+	// image are the run's.
+	run := ddNoteRun{Platform: q.l.p.name, Profile: q.dd.profile, Image: q.run.Image, Cells: q.dd.cells}
+	err := qualWriteDebug(run, q.ddSecrets(), func(claim, obs string) {
+		q.l.result(q.t, "QUAL-DEBUG-"+q.slug, claim, obs)
+	})
+	if err != nil {
+		q.t.Fatalf("%v", err)
+	}
 }

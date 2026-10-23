@@ -562,6 +562,17 @@ type deviceDebugSummary struct {
 	ServerDead, Fallback int  // server-dead and fallback lines
 }
 
+// ddKeptMsg splits a kept line, `time [process:] message`, into its clock and
+// its message.
+func ddKeptMsg(p *ddProfile, ln string) (at, msg string) {
+	at, msg, _ = strings.Cut(ln, " ")
+	// Cut the process name off a `time proc: message` line.
+	if proc, rest, ok := strings.Cut(msg, ": "); ok && !strings.Contains(proc, " ") && p.line.SubexpIndex("p") > 0 {
+		msg = rest
+	}
+	return at, msg
+}
+
 // deviceDebugSummarize reads the counters out of kept, which Keep has already
 // filtered, in order: a request belongs to the connection open at that line.
 func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSummary {
@@ -588,11 +599,7 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 		}
 	}
 	for _, ln := range strings.Split(string(kept), "\n") {
-		at, msg, _ := strings.Cut(ln, " ")
-		// Cut the process name off a `time proc: message` line.
-		if proc, rest, ok := strings.Cut(msg, ": "); ok && !strings.Contains(proc, " ") && p.line.SubexpIndex("p") > 0 {
-			msg = rest
-		}
+		at, msg := ddKeptMsg(p, ln)
 		switch {
 		case p.open.MatchString(msg):
 			s.Opened++
