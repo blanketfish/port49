@@ -10497,7 +10497,8 @@ each where this document and RFC 9887 were silent; Ryan may override any.
     `obfuscated_over_tls` and `single_connect_second_connection`.
     `single_connect_second_connection` counts a connection from a device port49 offered
     single-connect to (ruling 20) that port49 serves while an offered connection from the same
-    source is still open: the device ignored the offer. A connection refused at Accept (the cap,
+    source is still open: the device ignored the offer, or closed and redialed before port49 saw the
+    close. A single count is not a fault; alert on a rate. A connection refused at Accept (the cap,
     a strike's backoff, a decline window) is not counted. An offered connection stops counting
     before port49 closes its socket, so a device that reconnects at once after port49 closes it
     (an idle close, a decline, a reset) is not counted; one that closes its own connection and

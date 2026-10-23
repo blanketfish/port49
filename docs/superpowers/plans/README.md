@@ -7511,6 +7511,10 @@ when Task 14's review found a security-relevant device fact.
       kept decision log on the next run.
     - Parked minors: Task 3's `-run-<12hex>` and `KEY=value` masks; Task 13's sub-5 ms delay rounding to
       0; Task 8's DelayFlight on a second ClientHello after an HRR.
+    - **L80 restart cell (final review M1):** restart port49d during an NX-OS command loop and count
+      lost or unasked commands under device debug. Shutdown sends close_notify on an offered
+      connection, and only the idle close (`idle35`) is measured. Until it closes, the plan 12 NX-OS
+      TLS reference config should name two servers.
 
 ## Plan 12 — Deployment (§19 step 12)
 

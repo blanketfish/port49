@@ -52,7 +52,9 @@ type Metrics struct {
 	// "single_connect_second_connection" (a connection from a device port49
 	// offered single-connect to, served while an offered one from the same
 	// source is open: the device ignored the offer; 0 while it honors it;
-	// one refused at Accept is not counted; spec §13 decision 50 rulings 16
+	// one refused at Accept is not counted; a device that closes and
+	// redials at once can count one before serve sees the EOF, so a single
+	// count is not a fault: alert on a rate; spec §13 decision 50 rulings 16
 	// and 20).
 	ConnectionEvents *prometheus.CounterVec
 	// port49_tls_handshakes_total{outcome}: the RFC 9887 listener's

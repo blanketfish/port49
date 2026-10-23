@@ -223,9 +223,11 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			// gone resets at once (L28). Otherwise a TLS connection is closed
 			// with close_notify, as an idle close is, not a bare FIN: an
 			// offered connection is held by the device between requests
-			// (decision 50 ruling 20), and a restart must look to it like the
-			// close it already accommodates. crypto/tls bounds the alert's
-			// write at 5 s.
+			// (decision 50 ruling 20). The idle close is the one measured (L80
+			// idle35); how an NX-OS device takes a close_notify at shutdown
+			// in the middle of a session is not measured, and the L80 restart
+			// cell (port49d restarted during a command loop) measures it.
+			// crypto/tls bounds the alert's write at 5 s.
 			done := make(chan struct{})
 			go func() {
 				select {

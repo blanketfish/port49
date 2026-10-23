@@ -12,7 +12,8 @@ import (
 // 20). A device that honors the offer keeps the one connection; a second
 // one while it is open is the sign the device ignored it, counted at Accept
 // as single_connect_second_connection, long before its connections reach the
-// per-source cap. A connection counts from its first packet, when the offer
+// per-source cap. A device that closes and redials at once can count one
+// before serve sees the EOF, so one count is not a fault; alert on a rate. A connection counts from its first packet, when the offer
 // is made, so one still in its handshake is not counted against itself.
 type offers struct {
 	mu sync.Mutex
