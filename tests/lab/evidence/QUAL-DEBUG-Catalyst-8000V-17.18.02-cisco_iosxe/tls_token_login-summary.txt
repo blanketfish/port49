@@ -1,19 +1,19 @@
 device returned 716 log lines in all; the filter kept 281 of the cell's
 tls connections (header-only capture): 9
-  conn port=43720 syn=15:37:36.771 hold=0.03s end=server-fin
-  conn port=53326 syn=15:37:36.800 hold=0.03s end=server-fin
-  conn port=53342 syn=15:37:36.827 hold=0.02s end=server-fin
-  conn port=53346 syn=15:37:37.157 hold=0.03s end=server-fin
-  conn port=53358 syn=15:37:37.185 hold=0.02s end=server-fin
-  conn port=53362 syn=15:37:37.409 hold=0.02s end=server-fin
-  conn port=53364 syn=15:37:37.437 hold=0.02s end=server-fin
-  conn port=53376 syn=15:37:37.658 hold=0.03s end=server-fin
-  conn port=53378 syn=15:37:37.804 hold=0.03s end=server-fin
+  conn port=35884 syn=16:59:13.913 hold=0.02s end=server-fin
+  conn port=35888 syn=16:59:13.940 hold=0.02s end=server-fin
+  conn port=35902 syn=16:59:13.966 hold=0.02s end=server-fin
+  conn port=35914 syn=16:59:14.300 hold=0.02s end=server-fin
+  conn port=35924 syn=16:59:14.325 hold=0.07s end=server-fin
+  conn port=35930 syn=16:59:14.550 hold=0.03s end=server-fin
+  conn port=35940 syn=16:59:14.580 hold=0.02s end=server-fin
+  conn port=35952 syn=16:59:14.800 hold=0.02s end=server-fin
+  conn port=35958 syn=16:59:14.944 hold=0.03s end=server-fin
 debug connections opened=2 closed=2 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
   debug conn 1: opened=before closed=open reason="" authen=3 author=0 acct=14
-  debug conn 2: opened=15:37:23.942 closed=15:37:24.446 reason="" authen=1 author=0 acct=0
+  debug conn 2: opened=16:59:01.053 closed=16:59:01.557 reason="" authen=1 author=0 acct=0
   debug conn 3: opened=before closed=open reason="" authen=3 author=0 acct=0
-  debug conn 4: opened=15:37:36.779 closed=15:37:36.782 reason="" authen=1 author=0 acct=0
+  debug conn 4: opened=16:59:13.920 closed=16:59:13.922 reason="" authen=1 author=0 acct=0
   debug conn 5: opened=before closed=open reason="" authen=0 author=1 acct=4
 connections that carried more than one request: 3 of 5 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
 lines dropped by rule: facility=297 body_word=0 hex_view=138 hex_message=0 evidence_marker=2 known_value_hex=0
