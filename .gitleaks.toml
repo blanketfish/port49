@@ -1,0 +1,247 @@
+# Secret scanning (`make leaks`, and the `leaks` CI job). The default rules plus the
+# credential shapes network devices and this repo's lab produce. Run with --redact:
+# a finding's value is never printed.
+#
+# Allowlist entries are narrow on purpose (one file or one regex each) and each says why
+# it exists. tests/lab/evidence/ and tests/lab/results/ are NOT allowlisted as a whole:
+# a real leak from a lab run would land there.
+title = "port49"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "junos-type9"
+description = "Junos $9$ reversible-encrypted secret"
+regex = '''\$9\$[-A-Za-z0-9./]{8,}'''
+keywords = ["$9$"]
+
+[[rules]]
+id = "unix-crypt-hash"
+description = "Unix crypt hash ($1$, $5$, $6$, $8$)"
+regex = '''\$(?:1|5|6|8)\$[^\s$]+\$[A-Za-z0-9./]{8,}'''
+keywords = ["$1$", "$5$", "$6$", "$8$"]
+
+[[rules]]
+id = "yescrypt-hash"
+description = "yescrypt hash ($y$), the Debian and Ubuntu shadow default"
+regex = '''\$y\$[^\s$]+\$[^\s$]+\$[A-Za-z0-9./]{8,}'''
+keywords = ["$y$"]
+
+[[rules]]
+id = "bcrypt-hash"
+description = "bcrypt hash ($2a$, $2b$, $2y$)"
+regex = '''\$2[aby]\$[0-9]{2}\$[A-Za-z0-9./]{53}'''
+keywords = ["$2a$", "$2b$", "$2y$"]
+
+[[rules]]
+id = "cisco-type7"
+description = "Cisco type 7 reversible password"
+regex = '''(?i)(?:key|key-string|password|secret) 7 "?[0-9]{2}[0-9A-Fa-f]{4,}'''
+keywords = [" 7 "]
+
+[[rules]]
+id = "tacacs-key-config-line"
+description = "TACACS+ shared key in a device config line"
+regex = '''(?i)(?:tacacs-server (?:host \S+ )?key|tacacs\S*[^\n]{0,80}\skey|\bkey [06]|\bkey-string)\s+(?:[0-7]\s+)?"?[^\s"'<>$%{}()\[\]]{4,}'''
+keywords = ["key"]
+
+# To add an entry: one [[allowlists]] block with a `description` that says why the value is
+# deliberate. Prefer one regex, or one file (paths); never a directory. For a finding that
+# exists only in history, or a single line, prefer a commit-scoped fingerprint in
+# .gitleaksignore (`<full sha>:<file>:<rule>:<line>`). NEVER add a fingerprint without a
+# commit: it hides that line in every future commit. A fingerprint holds no value; get it from
+# a `--redact` JSON report's Fingerprint field. `make leaks` runs in CI on every push and PR
+# (.github/workflows/leaks.yml). Run it with --redact only.
+[[allowlists]]
+description = "RFC 7515 appendix A.2 and A.3 example JWS: public test vectors from the RFC, used to test signature verification"
+condition = "OR"
+paths = [
+  '''^internal/oidc/testdata/rfc7515-a2\.json$''',
+  '''^internal/oidc/testdata/rfc7515-a3\.json$''',
+]
+
+# Test stubs shaped like SHA-512 crypt but with an 8-30 char tail; a real $5$/$6$/$8$ tail is
+# 43 or 86 chars, so a real hash cannot match. Excludes tests/lab/configs/vjunos-startup.conf.
+[[allowlists]]
+description = "unix-crypt-hash: truncated crypt stubs in redaction/scrub tests and one plan"
+targetRules = ["unix-crypt-hash"]
+condition = "AND"
+regexTarget = "match"
+regexes = ['''^\$[568]\$[^$]{1,16}\$[./0-9A-Za-z]{1,42}$''']
+paths = [
+  '''^cmd/port49d/redact_test\.go$''',
+  '''^internal/port49d/redact_test\.go$''',
+  '''^internal/policy/platforms_test\.go$''',
+  '''^docs/superpowers/plans/2026-10-17-l76-srlinux\.md$''',
+  '''^tests/lab/junos_groups_unit_test\.go$''',
+  '''^tests/lab/l71_unit_test\.go$''',
+  '''^tests/lab/l73_junos_root_unit_test\.go$''',
+  '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/labcreds/labcreds_test\.go$''',
+]
+
+# PEM stubs whose body is at most 44 base64 chars (<= 33 bytes): no real private key fits.
+# They test that scp and the CA-bundle parser refuse private-key blocks.
+[[allowlists]]
+description = "private-key: short PEM stubs in refusal tests"
+targetRules = ["private-key"]
+condition = "AND"
+regexTarget = "match"
+regexes = ['''PRIVATE KEY-----(?:\s|\\n)*[A-Za-z0-9+/=]{1,44}(?:\s|\\n)*-----END''']
+paths = [
+  '''^internal/broker/api/cabundle_test\.go$''',
+  '''^tests/lab/l73_device_unit_test\.go$''',
+]
+
+# BEGIN header lines with no body or END: step-ca log-scrub test input.
+[[allowlists]]
+description = "private-key: bare PEM headers in the step-ca log scrub tests"
+targetRules = ["private-key"]
+paths = ['''^tests/lab/workload_unit_test\.go$''']
+
+# Results notes say "key ECDSA-P-256" (the device key type); the rule's prose branch reads it
+# as a TACACS+ key. Pinned to that phrase, so a real key line in a note still fires.
+[[allowlists]]
+description = "tacacs-key-config-line: key-type prose in L73/QUAL results notes"
+targetRules = ["tacacs-key-config-line"]
+condition = "AND"
+regexTarget = "match"
+regexes = ['''(?i)\bkey\s+ECDSA-P-?(?:256|384|521)\b''']
+paths = ['''^tests/lab/results/(?:L73|QUAL)-[^/]+\.md$''']
+
+# IOS XE self-signed trustpoint label in a results note: a public identifier.
+[[allowlists]]
+description = "generic-api-key: IOS XE TP-self-signed trustpoint name in the L53 note"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexes = ['''^TP-self-signed-[0-9]{9,10}$''']
+paths = ['''^tests/lab/results/L53-cisco_iosxe\.md$''']
+
+# Prose and test-table literals after "tacacs ... key": none is a lab constant.
+# Leaves out the two plans that also carry labcreds.Key (see .gitleaksignore below).
+[[allowlists]]
+description = "tacacs-key-config-line: prose and test literals in tests and docs"
+targetRules = ["tacacs-key-config-line"]
+paths = [
+  '''^cmd/port49/devices_test\.go$''',
+  '''^cmd/port49/platform_test\.go$''',
+  '''^internal/platform/config_test\.go$''',
+  '''^docs/design/2026-08-23-policy-engine-spec\.md$''',
+  '''^docs/design/2026-08-26-spec-review-findings\.md$''',
+  '''^docs/superpowers/plans/2026-09-30-06b-inventory-service\.md$''',
+  '''^docs/superpowers/plans/2026-10-19-11b-qualification-suite\.md$''',
+  '''^tests/lab/device_debug_unit_test\.go$''',
+  '''^tests/lab/l71_unit_test\.go$''',
+  '''^tests/lab/l73_dialect_unit_test\.go$''',
+  '''^tests/lab/l73_invalid_unit_test\.go$''',
+  '''^tests/lab/single_connection_unit_test\.go$''',
+  '''^tests/lab/split_unit_test\.go$''',
+  '''^tests/lab/wire_pcap_test\.go$''',
+]
+
+# Type 7 test vectors (decode to a common word) and a sequential-hex placeholder.
+[[allowlists]]
+description = "cisco-type7: test vectors in redaction tests"
+targetRules = ["cisco-type7"]
+paths = [
+  '''^cmd/port49/platform_test\.go$''',
+  '''^tests/lab/l22_redact_unit_test\.go$''',
+  '''^tests/lab/l71_unit_test\.go$''',
+  '''^tests/lab/l73_dialect_unit_test\.go$''',
+]
+
+# $9$ stubs, 10-15 chars, that do not decode: masking tests.
+[[allowlists]]
+description = "junos-type9: undecodable stubs in masking tests"
+targetRules = ["junos-type9"]
+paths = [
+  '''^tests/lab/l71_unit_test\.go$''',
+  '''^tests/lab/l73_invalid_unit_test\.go$''',
+  '''^tests/lab/labcreds/labcreds_test\.go$''',
+]
+
+# Test literals named secret/token/password/key in unit tests, the storetest helper, one etcd
+# fixture (base64 of key paths) and plans that quote those literals. None is a lab constant;
+# none occurs in a production path except a sequential-hex placeholder.
+[[allowlists]]
+description = "generic-api-key: test literals and the plans that quote them"
+targetRules = ["generic-api-key"]
+paths = [
+  '''^cmd/port49-inventory/main_test\.go$''',
+  '''^cmd/port49/(?:inventory|keys|policy|qr)_test\.go$''',
+  '''^internal/admission/admission_test\.go$''',
+  '''^internal/broker/signin_test\.go$''',
+  '''^internal/daemon/acct/(?:acct|sink|spool)_test\.go$''',
+  '''^internal/daemon/author/author_test\.go$''',
+  '''^internal/inventory/config_test\.go$''',
+  '''^internal/pivattest/pivattest_test\.go$''',
+  '''^internal/platform/redact_test\.go$''',
+  '''^internal/policy/admit_test\.go$''',
+  '''^internal/port49d/directory_test\.go$''',
+  '''^internal/replay/replay_test\.go$''',
+  '''^internal/sot/client_test\.go$''',
+  '''^internal/store/etcd/oidc_test\.go$''',
+  '''^internal/store/storetest/membership\.go$''',
+  '''^internal/token/minter_test\.go$''',
+  '''^internal/yamlfault/yamlfault_test\.go$''',
+  '''^tests/lab/device_debug_cells_unit_test\.go$''',
+  '''^tests/lab/l49_evidence_unit_test\.go$''',
+  '''^tests/lab/l66_unit_test\.go$''',
+  '''^tests/lab/l72_unit_test\.go$''',
+  '''^tests/lab/l74_test\.go$''',
+  '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/qual_evidence_unit_test\.go$''',
+  '''^tests/lab/testdata/etcd-get-keys-only\.json$''',
+  '''^docs/superpowers/plans/2026-09-24-05a-platform-adapters\.md$''',
+  '''^docs/superpowers/plans/2026-10-01-06c-inventory-connectors\.md$''',
+  '''^docs/superpowers/plans/2026-10-14-09e-directory-password-sign-in\.md$''',
+  '''^docs/superpowers/plans/2026-10-17-11a-directory-and-session-stores\.md$''',
+]
+
+# Lab-only constants (ruling 2026-10-23): labcreds.Key in the lab device startup configs, and
+# crypt(labcreds.BreakglassPassword) in the vJunos startup config. Published lab values, used
+# on lab devices only; no production path carries them. One file each, per rule.
+[[allowlists]]
+description = "tacacs-key-config-line: labcreds.Key in the lab device startup configs"
+targetRules = ["tacacs-key-config-line"]
+paths = [
+  '''^tests/lab/configs/eos-startup\.cfg$''',
+  '''^tests/lab/configs/iosxe-startup\.cfg$''',
+  '''^tests/lab/configs/nxos-startup\.cfg$''',
+  '''^tests/lab/configs/xrd-startup\.cfg$''',
+]
+
+[[allowlists]]
+description = "unix-crypt-hash: crypt of the lab break-glass password in the vJunos startup config"
+targetRules = ["unix-crypt-hash"]
+paths = ['''^tests/lab/configs/vjunos-startup\.conf$''']
+
+# The English word in prose ("a $9$-encrypted value"). The hyphen in the junos-type9 class
+# makes the rule read it as a $9$ secret; the exact word is not one.
+[[allowlists]]
+description = "junos-type9: the prose word $9$-encrypted"
+targetRules = ["junos-type9"]
+regexTarget = "match"
+regexes = ['''^\$9\$-encrypted$''']
+
+# Go string concatenation: `"... key 0 "+labcreds.Key` builds a device config line from the
+# lab constant. The match ends in exactly `"+labcreds.Key` or `"+labKeyDefault`, an expression,
+# not a key. Pinned to those two names so a real key starting with `+` still fires.
+[[allowlists]]
+description = "tacacs-key-config-line: the lab key constant concatenated after a 'key 0' string"
+targetRules = ["tacacs-key-config-line"]
+regexTarget = "match"
+regexes = ['''\s"\+(?:labcreds\.Key|labKeyDefault),?$''']
+
+# yescrypt-shaped stubs with a 12 char tail; a real yescrypt hash has a 43 char tail.
+[[allowlists]]
+description = "yescrypt-hash: truncated yescrypt stubs in the L76 SR Linux test and plan"
+targetRules = ["yescrypt-hash"]
+condition = "AND"
+regexTarget = "match"
+regexes = ['''^\$y\$[^$]+\$[^$]+\$[./0-9A-Za-z]{1,30}$''']
+paths = [
+  '''^tests/lab/l76_unit_test\.go$''',
+  '''^docs/superpowers/plans/2026-10-17-l76-srlinux\.md$''',
+]
