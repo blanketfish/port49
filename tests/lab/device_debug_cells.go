@@ -47,6 +47,16 @@ func ddArmWait(platform, cmd string, cfgMode bool, prompt string) (wait []string
 	return []string{prompt}, false
 }
 
+// ddArmMasterName is the name of a TestQualify run's master capture. An armed
+// run (device debug on) must never write the QUAL-<firmware> master that a
+// committed re-vet's evidence is audited against, so it writes a QUAL-DEBUG one.
+func ddArmMasterName(slug string, armed bool) string {
+	if armed {
+		return "QUAL-DEBUG-" + slug
+	}
+	return "QUAL-" + slug
+}
+
 // ddArmLineCount is the number of lines in kept.
 func ddArmLineCount(kept deviceDebugKept) int {
 	if kept == "" {

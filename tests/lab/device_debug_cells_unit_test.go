@@ -107,3 +107,12 @@ func TestDeviceDebugArmWaitFollowsTheJunosModes(t *testing.T) {
 		t.Errorf("debug aaa waits for %q", w)
 	}
 }
+
+func TestDeviceDebugArmMasterCaptureNeverTakesTheReVetName(t *testing.T) {
+	if got := ddArmMasterName("Nexus-9300v-10.6-2-F", false); got != "QUAL-Nexus-9300v-10.6-2-F" {
+		t.Errorf("an unarmed run names its master %q", got)
+	}
+	if got := ddArmMasterName("Nexus-9300v-10.6-2-F", true); got != "QUAL-DEBUG-Nexus-9300v-10.6-2-F" {
+		t.Errorf("an armed run names its master %q", got)
+	}
+}

@@ -174,7 +174,7 @@ func (q *qualEnv) play() {
 	}
 	q.startDaemon(q.cfg)
 	defer q.restoreDaemon()
-	rawStop := q.l.capture(q.t, "QUAL-"+q.slug)
+	rawStop := q.l.capture(q.t, ddArmMasterName(q.slug, os.Getenv(ddArmEnv) == "1"))
 	q.master = q.l.capAbs
 	stopped := false
 	stop := func() {
