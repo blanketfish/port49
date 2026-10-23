@@ -29,6 +29,7 @@ type ddArmState struct {
 	files map[string][]byte // <cell>-debug.txt and <cell>-summary.txt
 	notes []string          // one line per cell, for the results note
 	conns map[string][]l73Conn
+	ready int // connections of the readiness probe that ran after debug went on
 }
 
 // armed is whether this run is a device-debug run on a platform that has a
@@ -68,8 +69,8 @@ func ddArmRun(c *cliConn, platform string, rawLines *int, sample, cmdShapes *[]s
 // debugCell runs body, a cell of the TLS arm, with the platform's debug on
 // when the run is armed, and plain body otherwise. restart brings port49d up
 // on the daemon the cell expects and makes the device reach it; it runs in a
-// held break-glass session, before debug is turned on, so the cell's log is
-// the cell's own. post, if any, makes the device reach port49d again once the
+// held break-glass session, after debug is turned on (the readiness probes it
+// makes are in the log too, and the summary says how many connections they were). post, if any, makes the device reach port49d again once the
 // session has ended and port49d is back. The collection runs with port49d stopped, as L80's does.
 func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) {
 	platform, ok := q.armed(e.d.Family)
@@ -94,8 +95,11 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		answers  []string
 	)
 	e.cli(func(c *cliConn) error {
-		restart()
+		// Debug goes on first, while port49d is stopped and the session is the
+		// local one: with port49d up, the device sends this session's commands
+		// to it and they are refused ("this session was not ... by port49").
 		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, platform, &rawLines, &sample, &answers), func() error {
+			restart()
 			body()
 			return e.l.stopDaemon()
 		})
@@ -111,6 +115,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		conns = append(conns, l80ConnLine(cn))
 	}
 	sum := ddArmSummary(platform, cell, kept, rawLines, conns)
+	sum += fmt.Sprintf("readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): %d\n", q.dd.ready)
 	if capErr != nil {
 		sum += "capture error: " + capErr.Error() + "\n"
 	}

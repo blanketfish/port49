@@ -653,7 +653,7 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 	restartTLS := func() {
 		q.tlsDaemon(e, "qual-tls", l73Daemon{Intermediates: e.files["inter.pem"]})
 		q.login()
-		e.ready("qual-tls-debug")
+		q.dd.ready = len(e.ready("qual-tls-debug"))
 	}
 	q.debugCell(e, "tls_token_login", restartTLS, func() { e.ready("qual-tls-post") }, func() {
 		e.guard()
