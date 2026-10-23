@@ -3,6 +3,7 @@ package lab
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -303,6 +304,104 @@ func TestDeviceDebugEnableWidensTheTerminal(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("%s: Enable does not set a wide terminal", p)
+		}
+	}
+}
+
+// R1: a byte list with a 0x or \x prefix, or separated by commas or dashes, is a
+// hex dump like the spaced one.
+func TestDeviceDebugDropsPrefixedAndOtherSeparatorByteLists(t *testing.T) {
+	layouts := map[string]string{
+		"x_prefix":      "data: 0xc0 0x01 0x02 0x03 0x04",
+		"x_prefix_four": "data: 0xc0 0x01 0x02 0x03",
+		"comma":         "data: c0,01,02,03",
+		"comma_space":   "data: c0, 01, 02, 03",
+		"backslash_x":   `data: \xc0\x01\x02\x03`,
+		"dash":          "data: c0-01-02-03",
+	}
+	known := ddSentinelKey // p49-zzz
+	spell := func(sep, pre string) string {
+		var parts []string
+		for _, b := range []byte(known) {
+			parts = append(parts, fmt.Sprintf("%s%02x", pre, b))
+		}
+		return strings.Join(parts, sep)
+	}
+	for name, body := range map[string]string{
+		"known_x_prefix": "data: " + spell(" ", "0x"),
+		"known_comma":    "data: " + spell(",", ""),
+		"known_comma_x":  "data: " + spell(", ", "0x"),
+		"known_bs_x":     "data: " + spell("", `\x`),
+		"known_dash":     "data: " + spell("-", ""),
+	} {
+		layouts[name] = body
+	}
+	for _, p := range ddPlatforms {
+		for name, body := range layouts {
+			if got := ddKeepOrLeak(ddTestFilter(p), ddFacility[p]+body); got != "" {
+				t.Errorf("%s: the byte list %s was kept", p, name)
+			}
+		}
+	}
+}
+
+// R2: a line with a PEM marker or a _sha256 word goes, so the gate never has to
+// refuse a whole run for one.
+func TestDeviceDebugDropsEvidenceMarkerLines(t *testing.T) {
+	for _, p := range ddPlatforms {
+		for _, body := range []string{"tls: -----BEGIN CERTIFICATE-----", "cipher tls_aes_128_gcm_sha256 negotiated", "x TLS_AES_128_GCM_SHA256 y"} {
+			got := ddKeep(t, ddTestFilter(p), ddFacility[p]+body)
+			if got != "" {
+				t.Errorf("%s: a marker line was kept", p)
+			}
+			if bad := qualDebugGate("x-debug.txt", []byte(got)); len(bad) > 0 {
+				t.Errorf("%s: the gate refuses what Keep passed", p)
+			}
+		}
+	}
+}
+
+// R3: the drops are counted by rule, numbers only.
+func TestDeviceDebugCountsDropsByRule(t *testing.T) {
+	var d ddDropCounts
+	f := ddTestFilter("eos")
+	f.Drops = &d
+	in := strings.Join([]string{
+		"unrelated line",
+		ddFacility["eos"] + "payload is here",
+		ddFacility["eos"] + "x c0 01 02 03 y",
+		ddFacility["eos"] + "c0 01",
+		ddFacility["eos"] + "tls_aes_128_gcm_sha256",
+		ddFacility["eos"] + "kept line",
+	}, "\n")
+	if got := ddKeep(t, f, in); got != ddFacility["eos"]+"kept line" {
+		t.Fatalf("kept %q", got)
+	}
+	want := ddDropCounts{Facility: 1, Payload: 1, HexView: 1, HexMessage: 1, Marker: 1}
+	if d != want {
+		t.Errorf("drops %s, want %s", d, want)
+	}
+	// the stripped-hex-of-a-secret drop is counted too
+	f.Secrets = func() []string { return []string{"zq7"} }
+	d = ddDropCounts{}
+	ddKeep(t, f, ddFacility["eos"]+"v zq7 is 7a 71 37 end")
+	if d.StrippedSecret+d.HexView != 1 {
+		t.Errorf("a secret's spaced hex was not counted: %s", d)
+	}
+}
+
+// R1: a short known secret (three bytes, too few for the hex-dump rule) written
+// with 0x or \x prefixes is still found, by the separator-stripped check.
+func TestDeviceDebugShortSecretInPrefixedHexNeverSurvives(t *testing.T) {
+	for _, p := range ddPlatforms {
+		for name, body := range map[string]string{
+			"x_prefix":    "v 0x7a 0x71 0x37 end",
+			"backslash_x": `v \x7a\x71\x37 end`,
+			"comma":       "v 7a,71,37 end",
+		} {
+			if got := ddKeepOrLeak(ddTestFilter(p), ddFacility[p]+body); got != "" {
+				t.Errorf("%s: %s kept the short secret's hex", p, name)
+			}
 		}
 	}
 }

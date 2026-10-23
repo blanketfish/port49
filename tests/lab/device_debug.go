@@ -71,6 +71,19 @@ var (
 type deviceDebugFilter struct {
 	Platform string
 	Secrets  func() []string
+	// Drops, if set, counts the lines Keep drops, by reason. Numbers only.
+	Drops *ddDropCounts
+}
+
+// ddDropCounts is how many lines Keep dropped, by the rule that dropped them.
+type ddDropCounts struct {
+	Facility, Payload, HexView, HexMessage, Marker, StrippedSecret int
+}
+
+// String is the counts as `name=n` words, for the summary and the note.
+func (d ddDropCounts) String() string {
+	return fmt.Sprintf("facility=%d payload=%d hex_view=%d hex_message=%d evidence_marker=%d stripped_secret_hex=%d",
+		d.Facility, d.Payload, d.HexView, d.HexMessage, d.Marker, d.StrippedSecret)
 }
 
 // ddProfile is one platform's facility and counters. The counters read kept
@@ -190,18 +203,23 @@ var (
 	// A clock is replaced by T first, so `09:39:03` is not a dump, and a dotted
 	// address never is one (the dot is no separator).
 	ddHexTok   = `(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,2})`
-	ddHexChain = regexp.MustCompile(`(?:^|[ \t:])(?:` + ddHexTok + `[ \t:]+){3,}` + ddHexTok + `(?:[ \t:]|$)`)
+	ddHexChain = regexp.MustCompile(`(?:^|[ \t:,-])(?:` + ddHexTok + `[ \t:,-]+){3,}` + ddHexTok + `(?:[ \t:,-]|$)`)
 	ddHexRun   = regexp.MustCompile(`[0-9A-Fa-f]{8,}`)
 	ddHexOnly  = regexp.MustCompile(`^(?:(?:0x)?[0-9A-Fa-f]{1,8}(?:[ \t:.]+|$)){2,}$`)
 	ddIndex    = regexp.MustCompile(`^\s*(?:\[\d+\]|\(\w+\))?[\s:+]*`)
 	// ddSepStrip removes the separators of a spelled-out hex string.
 	ddSepStrip = regexp.MustCompile(`[\s:.,;-]`)
+	// ddBytePrefix is the 0x or \x in front of a byte, C and Python style.
+	ddBytePrefix = regexp.MustCompile(`(?i)\\x|\b0x`)
+	// ddMarker is what an evidence file must not hold, so the line goes rather
+	// than the whole run turning INVALID at the gate.
+	ddMarker = regexp.MustCompile(`(?i:_sha256)|BEGIN `)
 )
 
 // ddHexView is whether line, a clock aside, has a hex-dump layout: a run of
 // eight or more hex digits, or four or more hex groups in a row.
 func ddHexView(line string) bool {
-	v := ddClock.ReplaceAllString(line, "T")
+	v := ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(line, "T"), " ")
 	return ddHexRun.MatchString(v) || ddHexChain.MatchString(v)
 }
 
@@ -322,7 +340,7 @@ func ddStrippedHex(line string, hexForms []string) bool {
 	if len(hexForms) == 0 {
 		return false
 	}
-	low := strings.ToLower(ddSepStrip.ReplaceAllString(line, ""))
+	low := strings.ToLower(ddSepStrip.ReplaceAllString(ddBytePrefix.ReplaceAllString(line, " "), ""))
 	for _, f := range hexForms {
 		if strings.Contains(low, f) {
 			return true
@@ -351,11 +369,47 @@ func ddLeaks(text string, forms, hexForms []string) bool {
 	return false
 }
 
+// drop is the rule of steps 1 and 2 that drops line, or "" if none does.
+func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
+	switch {
+	case !p.facility.MatchString(line):
+		return "facility"
+	case ddPayload.MatchString(line) || nxosDebugHexRun.MatchString(line):
+		return "payload"
+	case ddMarker.MatchString(line):
+		return "marker"
+	case ddHexView(line):
+		return "hex_view"
+	case ddHexMessage(p, line):
+		return "hex_message"
+	}
+	return ""
+}
+
 // keeps is whether line passes the facility, payload and hex-dump rules (steps 1
 // and 2).
 func (f deviceDebugFilter) keeps(p *ddProfile, line string) bool {
-	return p.facility.MatchString(line) && !ddPayload.MatchString(line) && !nxosDebugHexRun.MatchString(line) &&
-		!ddHexView(line) && !ddHexMessage(p, line)
+	return f.drop(p, line) == ""
+}
+
+func (d *ddDropCounts) count(reason string) {
+	if d == nil {
+		return
+	}
+	switch reason {
+	case "facility":
+		d.Facility++
+	case "payload":
+		d.Payload++
+	case "marker":
+		d.Marker++
+	case "hex_view":
+		d.HexView++
+	case "hex_message":
+		d.HexMessage++
+	case "stripped_secret_hex":
+		d.StrippedSecret++
+	}
 }
 
 // Keep is text (the device's debug output, as `show logging` or `show log`
@@ -377,7 +431,15 @@ func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
 	for _, ln := range strings.Split(nxosDebugANSI.ReplaceAllString(text, ""), "\n") {
 		ln = strings.TrimSpace(ln)
 		// A secret spelled in separated hex cannot be redacted in place: the line goes.
-		if ln == "" || !f.keeps(p, ln) || ddStrippedHex(ln, hexForms) {
+		if ln == "" {
+			continue
+		}
+		if r := f.drop(p, ln); r != "" {
+			f.Drops.count(r)
+			continue
+		}
+		if ddStrippedHex(ln, hexForms) {
+			f.Drops.count("stripped_secret_hex")
 			continue
 		}
 		// Long runs are masked before the redaction too, so a redaction cannot

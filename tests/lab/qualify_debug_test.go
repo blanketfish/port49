@@ -96,7 +96,8 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		body()
 		return
 	}
-	filter := deviceDebugFilter{Platform: platform, Secrets: q.ddSecrets}
+	drops := &ddDropCounts{}
+	filter := deviceDebugFilter{Platform: platform, Secrets: q.ddSecrets, Drops: drops}
 	var (
 		kept     deviceDebugKept
 		capErr   error
@@ -142,6 +143,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		conns = append(conns, l80ConnLine(cn))
 	}
 	sum := ddArmSummary(platform, cell, kept, rawLines, conns)
+	sum += "lines dropped by rule: " + drops.String() + "\n"
 	sum += fmt.Sprintf("readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): %d\n", q.dd.ready)
 	if capErr != nil {
 		sum += "capture error: " + capErr.Error() + "\n"
@@ -155,7 +157,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	}
 	q.dd.profile = platform
 	q.dd.cells = append(q.dd.cells, ddNoteCell{Cell: cell, Kept: kept, RawLines: rawLines, Shapes: sample, TLSConns: conns,
-		Ready: q.dd.ready, CaptureErr: capErr != nil})
+		Ready: q.dd.ready, CaptureErr: capErr != nil, Drops: *drops})
 	q.dd.files[cell+"-debug.txt"] = []byte(string(kept) + "\n")
 	q.dd.files[cell+"-summary.txt"] = []byte(l80Filter(sum))
 	q.dd.notes = append(q.dd.notes, fmt.Sprintf("- `%s`: %d device log lines, the filter kept %d, %d tls connection(s).",

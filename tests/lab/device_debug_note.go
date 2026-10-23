@@ -20,11 +20,12 @@ import (
 type ddNoteCell struct {
 	Cell       string
 	Kept       deviceDebugKept
-	RawLines   int      // the log lines the device returned
-	Shapes     []string // the shape sample of the lines the filter dropped, `command => skeleton`
-	TLSConns   []string // the cell's TLS connections from the header-only capture
-	Ready      int      // readiness-probe connections that ran after debug went on
-	CaptureErr bool     // the capture ended in an error (its text is not kept)
+	RawLines   int          // the log lines the device returned
+	Shapes     []string     // the shape sample of the lines the filter dropped, `command => skeleton`
+	TLSConns   []string     // the cell's TLS connections from the header-only capture
+	Ready      int          // readiness-probe connections that ran after debug went on
+	CaptureErr bool         // the capture ended in an error (its text is not kept)
+	Drops      ddDropCounts // lines dropped, by rule (numbers only)
 }
 
 // ddNoteRun is an armed run: the platform, the image and its cells.
@@ -144,6 +145,7 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		lifecycle := len(ddNoteLines(p, c.Kept, p.open)) + len(ddNoteLines(p, c.Kept, p.closed))
 		fmt.Fprintf(&b, "- `%s`: the device returned %d log lines and the filter kept %d (%d connection open/close, %d request, %d other); "+
 			"the capture holds %d TLS connection(s).\n", c.Cell, c.RawLines, n, lifecycle, reqs, max(n-lifecycle-reqs, 0), len(c.TLSConns))
+		fmt.Fprintf(&b, "  Lines dropped by rule: %s.\n", c.Drops)
 		closed := fmt.Sprint(s.Closed)
 		if s.CloseUnknown {
 			closed = "unknown"
