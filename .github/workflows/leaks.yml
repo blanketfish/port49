@@ -1,0 +1,16 @@
+# Secret scanning (.gitleaks.toml): the pinned gitleaks binary, checksum-verified, over the
+# full history and the working tree. --redact so a finding's value never reaches the log.
+# `make leaks` is the same scan by hand; keep the version and sha256 in step with the Makefile.
+name: leaks
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  gitleaks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: make leaks
