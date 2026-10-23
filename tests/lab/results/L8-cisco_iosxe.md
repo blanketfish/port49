@@ -1,11 +1,12 @@
 # L8 — cisco_iosxe
 
-- **Date measured:** 2026-09-23
+- **Date measured:** 2026-10-23
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/evidence/L8-cisco_iosxe.pcap` — 968 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L8-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L8-cisco_iosxe.pcap` — 960 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L8-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `2ebd3b3026ccb01b30ffd3fd3a54a69c985b4eff`, `PORT49_LAB_PLATFORMS=iosxe`, `-run ^TestL8PasswordLength$`
 
 ## Claim
 
