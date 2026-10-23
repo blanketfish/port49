@@ -4,68 +4,68 @@ session store: etcd
 etcd: etcd v3.6.15, a single member; keys under /port49/ at the start: 313
 session 0: login_latency_s=5.54 prompt_err=false
   s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:20:43.395 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:27:46.450 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:20:45.652 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:27:48.706 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
   s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:20:48.660 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:27:51.715 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:20:50.919 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:27:53.971 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
   s0 "show users"         gap=0.5s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:20:58.943 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:28:01.993 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:21:01.197 UTC Fri Oct 23 2026"
-  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
-  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:21:04.207 UTC Fri Oct 23 2026"
-  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:21:06.463 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:28:04.250 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
   s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:21:09.473 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:28:07.258 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
-  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:21:11.730 UTC Fri Oct 23 2026"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:28:09.516 UTC Fri Oct 23 2026"
+  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:28:12.525 UTC Fri Oct 23 2026"
+  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="10:28:14.784 UTC Fri Oct 23 2026"
   s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
   s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
 restart: port49d's connection-event counters were reset by the restart; their deltas below are not graded
 tls connections: 2, most open at once: 1
-  conn port=57550 syn=10:20:39.024 hold=15.42s end=server-fin
-  conn port=52344 syn=10:20:54.964 hold=51.07s end=server-fin
+  conn port=60810 syn=10:27:42.382 hold=15.42s end=server-fin
+  conn port=47182 syn=10:27:58.327 hold=51.06s end=server-fin
 connection_events deltas: <LONG> idle_closed=1 refused_cap=0
 port49 records:
-  10:20:44.033 redeem permit
-  10:20:44.061 authorize_session permit
-  10:20:44.266 account
-  10:20:44.432 authorize_command permit "terminal length 0"
-  10:20:44.453 account
-  10:20:45.185 authorize_command permit "show clock"
-  10:20:45.938 authorize_command permit "show version"
-  10:20:47.441 authorize_command permit "show clock"
-  10:20:48.193 authorize_command permit "show version"
-  10:20:49.698 authorize_command deny "show users"
-  10:20:50.451 authorize_command permit "show clock"
-  10:20:51.203 authorize_command permit "show version"
-  10:20:52.708 authorize_command permit "show clock"
-  10:20:53.460 authorize_command permit "show version"
-  10:20:59.972 authorize_command deny "show users"
-  10:21:00.731 authorize_command permit "show clock"
-  10:21:01.483 authorize_command permit "show version"
-  10:21:02.986 authorize_command permit "show clock"
-  10:21:03.736 authorize_command permit "show version"
-  10:21:05.243 authorize_command deny "show users"
-  10:21:05.996 authorize_command permit "show clock"
-  10:21:06.747 authorize_command permit "show version"
-  10:21:08.252 authorize_command permit "show clock"
-  10:21:09.004 authorize_command permit "show version"
-  10:21:10.510 authorize_command deny "show users"
-  10:21:11.262 authorize_command permit "show clock"
-  10:21:12.016 authorize_command permit "show version"
-  10:21:13.519 authorize_command permit "show clock"
-  10:21:14.273 authorize_command permit "show version"
-  10:21:15.776 authorize_command deny "show users"
-  10:21:16.028 account
+  10:27:47.391 redeem permit
+  10:27:47.421 authorize_session permit
+  10:27:47.630 account
+  10:27:47.795 authorize_command permit "terminal length 0"
+  10:27:47.818 account
+  10:27:48.547 authorize_command permit "show clock"
+  10:27:49.301 authorize_command permit "show version"
+  10:27:50.802 authorize_command permit "show clock"
+  10:27:51.554 authorize_command permit "show version"
+  10:27:53.059 authorize_command deny "show users"
+  10:27:53.811 authorize_command permit "show clock"
+  10:27:54.563 authorize_command permit "show version"
+  10:27:56.069 authorize_command permit "show clock"
+  10:27:56.821 authorize_command permit "show version"
+  10:28:03.335 authorize_command deny "show users"
+  10:28:04.088 authorize_command permit "show clock"
+  10:28:04.841 authorize_command permit "show version"
+  10:28:06.347 authorize_command permit "show clock"
+  10:28:07.099 authorize_command permit "show version"
+  10:28:08.603 authorize_command deny "show users"
+  10:28:09.355 authorize_command permit "show clock"
+  10:28:10.109 authorize_command permit "show version"
+  10:28:11.612 authorize_command permit "show clock"
+  10:28:12.364 authorize_command permit "show version"
+  10:28:13.869 authorize_command deny "show users"
+  10:28:14.621 authorize_command permit "show clock"
+  10:28:15.374 authorize_command permit "show version"
+  10:28:16.881 authorize_command permit "show clock"
+  10:28:17.634 authorize_command permit "show version"
+  10:28:19.137 authorize_command deny "show users"
+  10:28:19.390 account
 typed s0 "terminal length 0" gap=0.0s asked=true denied=false
 typed s0 "show clock" gap=0.5s asked=true denied=false
 typed s0 "show version" gap=0.5s asked=true denied=false
@@ -94,7 +94,7 @@ typed s0 "show version" gap=0.5s asked=true denied=false
 typed s0 "show users" gap=0.5s asked=true denied=true
 debug counts: connection_active=29 fall_back_none=0 mark_server_dead=0 request_acct=7 request_authen=1 request_author=30 ssl_open_success=2 ssl_read_failed=0 tacacs_group_failed=3
 etcd: keys under /port49/ at the end: 324
-restart window: stop=10:20:54.443 up=10:20:54.950
+restart window: stop=10:27:57.804 up=10:27:58.311
 restart: commands: 21 asked and permitted, 5 asked and denied, 0 not asked and not run (lost), 0 not asked and run (unasked)
 restart: while port49d was down or coming up: 0 lost, 0 unasked
 restart: connections answered by port49 after the stop: 1
