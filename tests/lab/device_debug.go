@@ -242,12 +242,15 @@ func ddHexView(line string) bool {
 
 // ddHexMessage is whether the message after the facility (first match of p) is
 // nothing but hex groups.
-func ddHexMessage(p *ddProfile, line string) bool {
+func ddHexMessage(p *ddProfile, line string, whole bool) bool {
 	loc := p.facility.FindStringIndex(line)
-	if loc == nil {
+	rest := line
+	switch {
+	case loc != nil:
+		rest = line[loc[1]:]
+	case !whole:
 		return false
 	}
-	rest := line[loc[1]:]
 	rest = rest[len(ddIndex.FindString(rest)):]
 	rest = ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(rest, "T"), " ")
 	return ddHexOnly.MatchString(strings.TrimSpace(rest))
@@ -391,8 +394,14 @@ func ddLeaks(text string, forms, hexForms []string) bool {
 
 // drop is the rule of steps 1 and 2 that drops line, or "" if none does.
 func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
+	return f.dropFrom(p, line, false)
+}
+
+// dropFrom is drop for a line of a source file whose every line is a line of the
+// AAA daemon's own trace (whole): the facility rule is skipped for it.
+func (f deviceDebugFilter) dropFrom(p *ddProfile, line string, whole bool) string {
 	switch {
-	case !p.facility.MatchString(line):
+	case !whole && !p.facility.MatchString(line):
 		return "facility"
 	case ddPayload.MatchString(line) || nxosDebugHexRun.MatchString(line):
 		return "payload"
@@ -400,7 +409,7 @@ func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
 		return "marker"
 	case ddHexView(line):
 		return "hex_view"
-	case ddHexMessage(p, line):
+	case ddHexMessage(p, line, whole):
 		return "hex_message"
 	}
 	return ""
@@ -437,6 +446,16 @@ func (d *ddDropCounts) count(reason string) {
 // It returns errDeviceDebugLeak, and nothing else, when a known secret
 // survives the scrub.
 func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
+	return f.KeepSource(text, false)
+}
+
+// KeepSource is Keep for text that comes from one source file. whole says that
+// the file is the AAA daemon's own trace (Junos's authd traceoptions file): its
+// lines are kept past the facility rule, which they need not carry. The file is
+// the whole authd trace, not TACACS+ alone (local, RADIUS and LDAP
+// authentication too), so what protects it is the scrub: every other rule
+// applies to every line, and the fail-closed check runs on all of it.
+func (f deviceDebugFilter) KeepSource(text string, whole bool) (deviceDebugKept, error) {
 	p := deviceDebugProfiles[f.Platform]
 	if p == nil {
 		return "", nil
@@ -457,7 +476,7 @@ func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
 		if f.Tags != nil {
 			f.Tags.add(ln, forms, hexForms)
 		}
-		if r := f.drop(p, ln); r != "" {
+		if r := f.dropFrom(p, ln, whole); r != "" {
 			f.Drops.count(r)
 			continue
 		}
@@ -592,7 +611,14 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 // not yet confirmed on the image: the lab run confirms it (task 8 report).
 type deviceDebugCommands struct {
 	Enable, Disable, Collect []string
+	// Whole names the Collect commands whose output is a daemon's own trace file
+	// (Junos's authd traceoptions): every line of it is kept past the facility
+	// rule.
+	Whole []string
 }
+
+// ddJunosFlagHelp lists the traceoptions flags this release has.
+const ddJunosFlagHelp = "set system processes general-authentication-service traceoptions flag ?"
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
 	"eos": {
@@ -612,15 +638,25 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 		Collect: []string{"show logging"},
 	},
 	"junos": {
-		// authd's traceoptions are not set: authd is the subscriber-management AAA
-		// daemon, its trace holds no system-login TACACS+ exchange, and the enable
-		// commit restarts it. The login path is read from the syslog file.
-		Enable: []string{"set cli screen-width 300", "clear log p49-auth.log", "configure",
+		// authd (general-authentication-service) is the process whose trace this
+		// reads. The first trace on this image held only startup lines, so the
+		// trace now also sets `level all`. A set the CLI rejects does not stop the
+		// others from committing. The flag help is read once in configure mode
+		// (`?` shows the words and nothing is committed by it) to learn whether
+		// this release has a TACACS or login flag. The syslog file stays for
+		// auditd's accounting line and the process tags.
+		Enable: []string{"set cli screen-width 300", "clear log tacacs-traceoptions", "clear log p49-auth.log", "configure",
+			ddJunosFlagHelp,
+			"set system processes general-authentication-service traceoptions file tacacs-traceoptions",
+			"set system processes general-authentication-service traceoptions flag all",
+			"set system processes general-authentication-service traceoptions level all",
 			"set system syslog file p49-auth.log any any",
 			"commit and-quit"},
-		Disable: []string{"configure", "delete system syslog file p49-auth.log", "commit and-quit",
-			"clear log p49-auth.log"},
-		Collect: []string{"show log p49-auth.log"},
+		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions",
+			"delete system syslog file p49-auth.log", "commit and-quit",
+			"clear log tacacs-traceoptions", "clear log p49-auth.log"},
+		Collect: []string{"show log tacacs-traceoptions", "show log p49-auth.log"},
+		Whole:   []string{"show log tacacs-traceoptions"},
 	},
 }
 
@@ -651,7 +687,7 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	for _, c := range cmds.Collect {
 		raw, err := run(c)
 		// A partial capture is kept, filtered like the rest.
-		k, kerr := f.Keep(raw)
+		k, kerr := f.KeepSource(ddWithoutEcho(raw, c, slices.Contains(cmds.Whole, c)), slices.Contains(cmds.Whole, c))
 		if kerr != nil {
 			leakErr = kerr
 		} else if k != "" {
@@ -766,4 +802,55 @@ func (t *ddTagCounts) String() string {
 		parts = append(parts, fmt.Sprintf("%s=%d", n, t.tags[n]))
 	}
 	return strings.Join(append(parts, fmt.Sprintf("other=%d", other)), " ")
+}
+
+// ddWithoutEcho, for a whole-file collection, removes what the CLI adds around
+// the file: the echoed command, the prompt lines and the pager prompt. Other
+// sources go through the facility rule, which drops those anyway.
+func ddWithoutEcho(raw, cmd string, whole bool) string {
+	if !whole {
+		return raw
+	}
+	var out []string
+	for _, ln := range strings.Split(raw, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.Contains(t, cmd) || ddCLIPrompt.MatchString(t) || strings.HasPrefix(t, "---(more") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ddCLIPrompt is a Junos operational or configuration prompt, `user@host> `.
+var ddCLIPrompt = regexp.MustCompile(`^\S+@\S+[>#%]\s*$`)
+
+// ddFlagWord is what a traceoptions flag name looks like. Only such a word is
+// ever written from the CLI's flag help.
+var ddFlagWord = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
+
+// ddFlagWords reads the flag names out of the CLI's `?` help for flag: the first
+// word of each line under "Possible completions:" that matches ddFlagWord, once
+// each, sorted, at most 100. Nothing else of the help is kept.
+func ddFlagWords(help string) []string {
+	var words []string
+	in := false
+	for _, ln := range strings.Split(help, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "Possible completions:") {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		if f := strings.Fields(t); len(f) > 0 && ddFlagWord.MatchString(f[0]) && !slices.Contains(words, f[0]) {
+			words = append(words, f[0])
+		}
+	}
+	slices.Sort(words)
+	if len(words) > 100 {
+		words = words[:100]
+	}
+	return words
 }

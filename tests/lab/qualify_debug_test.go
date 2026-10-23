@@ -50,7 +50,7 @@ func (q *qualEnv) armed(family string) (string, bool) {
 // lines the collect commands returned (not the echo or the prompt), keeps the
 // shapes of the lines the filter drops, and returns the raw text to
 // captureDeviceDebug alone.
-func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
+func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes, flags *[]string) func(string) (string, error) {
 	cfgMode := false
 	return func(cmd string) (string, error) {
 		var wait []string
@@ -70,6 +70,9 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform
 			for _, sh := range ddArmSample(l73MaskAll(strings.Join(dropped, "\n"), secrets()...), 500) {
 				*sample = append(*sample, cmd+" => "+sh)
 			}
+		} else if cmd == ddJunosFlagHelp {
+			// The flag names only (ddFlagWords): the rest of the help is not kept.
+			*flags = ddFlagWords(out)
 		} else {
 			// What the enable and disable commands answered, as shapes: the
 			// first thing to learn when no debug line comes back.
@@ -110,6 +113,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		capErr   error
 		rawLines int
 		sample   []string
+		flags    []string
 		answers  []string
 		ran      bool
 	)
@@ -117,7 +121,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
-		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers)
+		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers, &flags)
 		kept, capErr = captureDeviceDebug(filter, run, func() error {
 			ran = true
 			finished := false
@@ -151,6 +155,9 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	}
 	sum := ddArmSummary(platform, cell, kept, rawLines, conns)
 	sum += "lines dropped by rule: " + drops.String() + "\n"
+	if len(flags) > 0 {
+		sum += "traceoptions flag words: " + strings.Join(flags, " ") + "\n"
+	}
 	tagCounts := ""
 	if tags != nil {
 		tagCounts = tags.String()
@@ -169,7 +176,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	}
 	q.dd.profile = platform
 	q.dd.cells = append(q.dd.cells, ddNoteCell{Cell: cell, Kept: kept, RawLines: rawLines, Shapes: sample, TLSConns: conns,
-		Ready: q.dd.ready, CaptureErr: capErr != nil, Drops: *drops, Tags: tagCounts})
+		Ready: q.dd.ready, CaptureErr: capErr != nil, Drops: *drops, Tags: tagCounts, Flags: flags})
 	q.dd.files[cell+"-debug.txt"] = []byte(string(kept) + "\n")
 	q.dd.files[cell+"-summary.txt"] = []byte(l80Filter(sum))
 	q.dd.notes = append(q.dd.notes, fmt.Sprintf("- `%s`: %d device log lines, the filter kept %d, %d tls connection(s).",

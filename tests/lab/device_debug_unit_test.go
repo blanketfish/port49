@@ -637,10 +637,12 @@ func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
 }
 
 // Every file a Collect reads is cleared by Disable.
-func TestDeviceDebugJunosClearsTheFileItReads(t *testing.T) {
+func TestDeviceDebugJunosClearsTheFilesItReads(t *testing.T) {
 	c := deviceDebugCmds["junos"]
-	if !slices.Contains(c.Disable, "clear log p49-auth.log") || !slices.Contains(c.Collect, "show log p49-auth.log") {
-		t.Errorf("Disable %v does not clear what Collect %v reads", c.Disable, c.Collect)
+	for _, col := range c.Collect {
+		if !slices.Contains(c.Disable, "clear log "+strings.TrimPrefix(col, "show log ")) {
+			t.Errorf("Disable %v does not clear what %q reads", c.Disable, col)
+		}
 	}
 }
 

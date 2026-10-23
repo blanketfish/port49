@@ -142,11 +142,11 @@ func TestDeviceDebugArmWaitFollowsTheJunosModes(t *testing.T) {
 			t.Errorf("%q: waits for %q, config mode %v; want %q, %v", cmd, w, cfg, want, wantCfg)
 		}
 	}
-	step("clear log p49-auth.log", "> ", false)
+	step("clear log tacacs-traceoptions", "> ", false)
 	step("configure", "# ", true)
-	step("set system syslog file p49-auth.log any any", "# ", true)
+	step("set system processes general-authentication-service traceoptions flag all", "# ", true)
 	step("commit and-quit", "> ", false)
-	step("show log p49-auth.log", "> ", false)
+	step("show log tacacs-traceoptions", "> ", false)
 	if w, _ := ddArmWait("iosxe", "clear logging", false, "r1#"); len(w) != 2 || w[1] != "[confirm]" {
 		t.Errorf("clear logging waits for %q", w)
 	}
@@ -253,25 +253,35 @@ func TestDeviceDebugEOSTracesTheAaaAgent(t *testing.T) {
 	}
 }
 
-// authd's traceoptions are not set: authd is the subscriber-management AAA daemon,
-// holds no system-login TACACS+ line, and restarting it is not for a TACACS+ qual.
-func TestDeviceDebugJunosLogsOnlyTheAuthFacility(t *testing.T) {
+// Junos traces authd (general-authentication-service) into tacacs-traceoptions with
+// flag all and level all, reads the flag help once without committing it, and logs
+// the syslog file for auditd's accounting line and the process tags.
+func TestDeviceDebugJunosTracesAuthdAndLogsTheAuthFacility(t *testing.T) {
 	c := deviceDebugCmds["junos"]
-	if !slices.Contains(c.Enable, "set system syslog file p49-auth.log any any") {
-		t.Errorf("junos enable lacks the syslog file: %q", c.Enable)
-	}
-	if c.Enable[len(c.Enable)-1] != "commit and-quit" || !slices.Contains(c.Disable, "commit and-quit") {
-		t.Errorf("junos enable %q or disable %q does not commit", c.Enable, c.Disable)
-	}
-	if !slices.Equal(c.Collect, []string{"show log p49-auth.log"}) {
-		t.Errorf("junos collect %q", c.Collect)
-	}
-	for _, list := range [][]string{c.Enable, c.Disable, c.Collect} {
-		for _, cmd := range list {
-			if strings.Contains(cmd, "traceoptions") || strings.Contains(cmd, "general-authentication-service") || strings.Contains(cmd, "p49-tacplus") {
-				t.Errorf("junos uses %q: authd's trace is not set, and no tacplus file is read", cmd)
-			}
+	for _, set := range []string{
+		"set system processes general-authentication-service traceoptions file tacacs-traceoptions",
+		"set system processes general-authentication-service traceoptions flag all",
+		"set system processes general-authentication-service traceoptions level all",
+		"set system syslog file p49-auth.log any any",
+	} {
+		if !slices.Contains(c.Enable, set) {
+			t.Errorf("junos enable lacks %q", set)
 		}
+	}
+	help := slices.Index(c.Enable, "set system processes general-authentication-service traceoptions flag ?")
+	if help < slices.Index(c.Enable, "configure") || help > slices.Index(c.Enable, "set system processes general-authentication-service traceoptions file tacacs-traceoptions") {
+		t.Errorf("the flag help is not read in configure mode before the trace config: %q", c.Enable)
+	}
+	if c.Enable[len(c.Enable)-1] != "commit and-quit" || !slices.Contains(c.Disable, "commit and-quit") ||
+		!slices.Contains(c.Disable, "delete system processes general-authentication-service traceoptions") ||
+		!slices.Contains(c.Disable, "clear log tacacs-traceoptions") {
+		t.Errorf("junos enable %q or disable %q does not commit or undo the trace", c.Enable, c.Disable)
+	}
+	if !slices.Contains(c.Enable, "clear log tacacs-traceoptions") {
+		t.Errorf("the trace file is not cleared before the cell")
+	}
+	if !slices.Equal(c.Collect, []string{"show log tacacs-traceoptions", "show log p49-auth.log"}) || !slices.Equal(c.Whole, []string{"show log tacacs-traceoptions"}) {
+		t.Errorf("junos collect %q whole %q", c.Collect, c.Whole)
 	}
 }
 

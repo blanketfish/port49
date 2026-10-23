@@ -27,6 +27,7 @@ type ddNoteCell struct {
 	CaptureErr bool         // the capture ended in an error (its text is not kept)
 	Drops      ddDropCounts // lines dropped, by rule (numbers only)
 	Tags       string       // the syslog process tag counts (Junos), numbers only
+	Flags      []string     // the traceoptions flag words the CLI offered (Junos), each ddFlagWord
 }
 
 // ddNoteRun is an armed run: the platform, the image and its cells.
@@ -155,6 +156,9 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 			s.Opened, closed, s.SingleConnect, s.ServerDead, s.Fallback)
 		if s.Failed > 0 {
 			fmt.Fprintf(&b, "  - debug connections failed_opens=%d.\n", s.Failed)
+		}
+		if len(c.Flags) > 0 {
+			fmt.Fprintf(&b, "  - traceoptions flag words the CLI offered: %s.\n", strings.Join(c.Flags, " "))
 		}
 		if c.Tags != "" {
 			fmt.Fprintf(&b, "  - syslog process tags (counts only): %s.\n", c.Tags)
