@@ -225,14 +225,14 @@ targetRules = ["junos-type9"]
 regexTarget = "match"
 regexes = ['''^\$9\$-encrypted$''']
 
-# Go string concatenation: `"... key 0 "+labcreds.Key` builds a device config line from a
-# constant. The match ends in `+<identifier>`, an expression, not a key. A literal key never
-# looks like this.
+# Go string concatenation: `"... key 0 "+labcreds.Key` builds a device config line from the
+# lab constant. The match ends in exactly `"+labcreds.Key` or `"+labKeyDefault`, an expression,
+# not a key. Pinned to those two names so a real key starting with `+` still fires.
 [[allowlists]]
-description = "tacacs-key-config-line: a Go identifier concatenated after a 'key 0' string"
+description = "tacacs-key-config-line: the lab key constant concatenated after a 'key 0' string"
 targetRules = ["tacacs-key-config-line"]
 regexTarget = "match"
-regexes = ['''\s"?\+[A-Za-z_][A-Za-z0-9_.]*,?$''']
+regexes = ['''\s"\+(?:labcreds\.Key|labKeyDefault),?$''']
 
 # yescrypt-shaped stubs with a 12 char tail; a real yescrypt hash has a 43 char tail.
 [[allowlists]]
