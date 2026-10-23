@@ -500,3 +500,19 @@ func TestL80ReasonsFollowTheRecordsInOrder(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+// A verdict is longer than the 24-character mask; the summary must still name it.
+func TestL80FilterKeepsOnlyAKnownRestartVerdict(t *testing.T) {
+	for _, v := range []string{l80RestartCtxLost, l80RestartPermDenied, l80RestartClean} {
+		if got := l80Filter("restart verdict: " + v); got != "restart verdict: "+v {
+			t.Errorf("%q masked: %q", v, got)
+		}
+	}
+	long := "restart verdict: " + strings.Repeat("a", 40)
+	if got := l80Filter(long); got != "restart verdict: <LONG>" {
+		t.Errorf("an unknown word must stay masked: %q", got)
+	}
+	if got := l80Filter("restart verdict: " + l80RestartCtxLost + " token"); got != "" {
+		t.Errorf("a secret word must still drop the line: %q", got)
+	}
+}

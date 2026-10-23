@@ -278,6 +278,12 @@ const (
 	l80RestartCtxLost = "context_lost_on_memory_store"
 )
 
+// l80IsVerdict is whether v is one of the restart cell's verdict words.
+func l80IsVerdict(v string) bool {
+	return slices.Contains([]string{l80RestartClean, l80RestartLost, l80RestartPermDenied, l80RestartUnasked,
+		l80RestartDeadOnly, l80RestartNoConn, l80RestartCtxLost}, v)
+}
+
 // The restart cells' session stores.
 const (
 	l80StoreMemory = "memory"
