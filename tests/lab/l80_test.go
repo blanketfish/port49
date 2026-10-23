@@ -149,6 +149,10 @@ func TestL80Remeasure(t *testing.T) {
 	}
 	q.startDaemon(q.cfg)
 	defer q.restoreDaemon()
+	// The restart_etcd cell's broker and etcd: stopped before the standing
+	// config comes back (defers run last in, first out), which needs :8449.
+	var stack *l80EtcdStack
+	defer func() { stack.stop() }()
 	q.start = l.mark()
 	q.login()
 	defer q.stopAgent()
@@ -223,7 +227,19 @@ func TestL80Remeasure(t *testing.T) {
 			}
 			// e.cli stopped port49d for this break-glass session; the cell
 			// runs against it started again, debug held on here.
-			q.tlsDaemon(e, "l80", daemon)
+			if l80RestartStore(cell.Name) == l80StoreEtcd {
+				// The conformance config's broker moves out of the daemon, which
+				// runs on etcd beside port49-broker (see l80_etcd.go).
+				if stack == nil {
+					stack = l80EtcdUp(t, l, q, e)
+				}
+				memText := q.cfgText
+				q.cfgText = stack.daemonText
+				q.tlsDaemon(e, "l80", daemon)
+				q.cfgText = memText
+			} else {
+				q.tlsDaemon(e, "l80", daemon)
+			}
 			q.login()
 			time.Sleep(40 * time.Second)
 			// Every cell opens on a fresh connection: wait, without probing,
@@ -244,6 +260,12 @@ func TestL80Remeasure(t *testing.T) {
 			var sum strings.Builder
 			fmt.Fprintf(&sum, "L80 re-measure, arm %s, cell %s, nxos106 per-request TLS, idle_timeout default\n", arm, cell.Name)
 			fmt.Fprintf(&sum, "bin/port49d: vcs.revision=%s vcs.modified=%v\n", vcs.recorded().Revision, vcs.Modified)
+			if l80IsRestart(cell.Name) {
+				fmt.Fprintf(&sum, "session store: %s\n", l80RestartStore(cell.Name))
+			}
+			if l80RestartStore(cell.Name) == l80StoreEtcd {
+				fmt.Fprintf(&sum, "etcd: %s, a single member; keys under /port49/ at the start: %s\n", stack.version, stack.keyCount())
+			}
 			var mu sync.Mutex
 			var typed []l80Typed
 			var wg sync.WaitGroup
@@ -377,6 +399,9 @@ func TestL80Remeasure(t *testing.T) {
 			}
 			var g l80RestartGrade
 			if l80IsRestart(cell.Name) {
+				if l80RestartStore(cell.Name) == l80StoreEtcd {
+					fmt.Fprintf(&sum, "etcd: keys under /port49/ at the end: %s\n", stack.keyCount())
+				}
 				if restartErr != nil {
 					sum.WriteString("restart: port49d did not come back\n")
 				}

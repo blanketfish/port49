@@ -22,7 +22,7 @@ func TestL80CellsAreTheDesigns(t *testing.T) {
 		t.Fatalf("baseline cells %s", got)
 	}
 	fixed := l80Cells("fixed")
-	if got := names(fixed); got != "s1,s3,sp,idle29,idle30,idle31,idle35,concurrent,restart" {
+	if got := names(fixed); got != "s1,s3,sp,idle29,idle30,idle31,idle35,concurrent,restart,restart_etcd" {
 		t.Fatalf("fixed cells %s", got)
 	}
 	for _, c := range fixed {

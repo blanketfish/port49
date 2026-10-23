@@ -45,7 +45,8 @@ func l80Cells(arm string) []l80Cell {
 		cells = append(cells, l80Cell{"idle" + g.gap, [][]string{seq}})
 	}
 	cells = append(cells, l80Cell{"concurrent", [][]string{nxosSeqE1, nxosSeqE1, nxosSeqE1}})
-	return append(cells, l80Cell{"restart", [][]string{l80RestartSeq()}})
+	cells = append(cells, l80Cell{"restart", [][]string{l80RestartSeq()}})
+	return append(cells, l80Cell{"restart_etcd", [][]string{l80RestartSeq()}})
 }
 
 // The restart cell (device-debug shapes follow-up, step 3): port49d is stopped
