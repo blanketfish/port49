@@ -70,6 +70,8 @@ condition = "AND"
 regexTarget = "match"
 regexes = ['''^\$[568]\$[^$]{1,16}\$[./0-9A-Za-z]{1,42}$''']
 paths = [
+  '''^tests/lab/device_debug_unit_test\.go$''',
+  '''^tests/lab/device_debug_round2_unit_test\.go$''',
   '''^cmd/port49d/redact_test\.go$''',
   '''^internal/port49d/redact_test\.go$''',
   '''^internal/policy/platforms_test\.go$''',
@@ -124,6 +126,7 @@ paths = ['''^tests/lab/results/L53-cisco_iosxe\.md$''']
 description = "tacacs-key-config-line: prose and test literals in tests and docs"
 targetRules = ["tacacs-key-config-line"]
 paths = [
+  '''^tests/lab/device_debug_round2_unit_test\.go$''',
   '''^cmd/port49/devices_test\.go$''',
   '''^cmd/port49/platform_test\.go$''',
   '''^internal/platform/config_test\.go$''',
@@ -145,6 +148,8 @@ paths = [
 description = "cisco-type7: test vectors in redaction tests"
 targetRules = ["cisco-type7"]
 paths = [
+  '''^tests/lab/device_debug_unit_test\.go$''',
+  '''^tests/lab/device_debug_round2_unit_test\.go$''',
   '''^cmd/port49/platform_test\.go$''',
   '''^tests/lab/l22_redact_unit_test\.go$''',
   '''^tests/lab/l71_unit_test\.go$''',
@@ -156,6 +161,8 @@ paths = [
 description = "junos-type9: undecodable stubs in masking tests"
 targetRules = ["junos-type9"]
 paths = [
+  '''^tests/lab/device_debug_unit_test\.go$''',
+  '''^tests/lab/device_debug_round2_unit_test\.go$''',
   '''^tests/lab/l71_unit_test\.go$''',
   '''^tests/lab/l73_invalid_unit_test\.go$''',
   '''^tests/lab/labcreds/labcreds_test\.go$''',
@@ -168,6 +175,7 @@ paths = [
 description = "generic-api-key: test literals and the plans that quote them"
 targetRules = ["generic-api-key"]
 paths = [
+  '''^tests/lab/nxos_debug_unit_test\.go$''',
   '''^cmd/port49-inventory/main_test\.go$''',
   '''^cmd/port49/(?:inventory|keys|policy|qr)_test\.go$''',
   '''^internal/admission/admission_test\.go$''',
