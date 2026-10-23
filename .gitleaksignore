@@ -1,0 +1,27 @@
+# Fingerprints (commit:file:rule:line, or file:rule:line for the working tree). A
+# fingerprint holds no value. Used where a path entry would also hide a real lab key.
+#
+# Prose after "tacacs ... key" in two plans that also quote labcreds.Key.
+87f0c7843d02ea7846ee98303c80d9911c47e543:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:3118
+b0f5cae8135223e8bc49437b62a155c03bbb2cb6:docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:7
+docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:7
+docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:3118
+#
+# labcreds.Key quoted in the same two plans (lab-only constant, ruling 2026-10-23).
+16cd5d309ca727749b673204a4c42db3ec1665be:docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:5098
+b0f5cae8135223e8bc49437b62a155c03bbb2cb6:docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:5043
+62b7b58da5c00968bf961b9b7ac9f7e14f124bcc:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:2850
+62b7b58da5c00968bf961b9b7ac9f7e14f124bcc:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:2873
+62b7b58da5c00968bf961b9b7ac9f7e14f124bcc:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:2892
+#
+# PEM stubs in the scp/CA-bundle refusal test, judged FAKE by the triage (body too short to be
+# a key) but outside the private-key regex entry above.
+017268d9d4085df1101e550f686dde0aba6844f5:tests/lab/l73_device_unit_test.go:private-key:267
+c3da08adcf84b5f939166b81e610ac3dcc01d315:tests/lab/l73_device_unit_test.go:private-key:267
+#
+# Working-tree (dir) fingerprints for the same plan lines and PEM stub, at their HEAD line numbers.
+docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:3199
+docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:3222
+docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:3241
+docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:5179
+tests/lab/l73_device_unit_test.go:private-key:290
