@@ -80,7 +80,7 @@ type nxosDebugFilter struct {
 var (
 	// nxosDebugLine is `HH:MM:SS.ffffff process: message`, the shape of a
 	// logfile line once its date prefix is cut.
-	nxosDebugLine = regexp.MustCompile(`(\d\d:\d\d:\d\d\.\d+) (tacacsd|aaad): (.*)$`)
+	nxosDebugLine = regexp.MustCompile(`(\d\d:\d\d:\d\d\.\d{1,9}) (tacacsd|aaad): (.*)$`)
 	// nxosDebugSecret drops a line outright: a credential word, a JWT
 	// prefix, or any payload line (`in tac payload(hex): ...`), whose hex is
 	// the packet body. The extra words cost nothing: no pattern below
