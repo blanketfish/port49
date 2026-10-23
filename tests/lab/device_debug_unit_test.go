@@ -208,7 +208,6 @@ var ddCases = []ddCase{
 			"Oct 22 05:00:11.104 vjunos mgd[900]: sending authorization request 2 to 172.100.100.1",
 			"Oct 22 05:00:11.105 vjunos mgd[900]: sending accounting request 3 to 172.100.100.1",
 			"Oct 22 05:00:11.106 vjunos mgd[900]: priv-lvl=15",
-			"Oct 22 05:00:11.107 vjunos mgd[900]: connection to 172.100.100.1 closed by server",
 			"Oct 22 05:00:11.108 vjunos mgd[900]: server 172.100.100.1 marked dead",
 			"Oct 22 05:00:11.109 vjunos mgd[900]: falling back to local",
 		},
@@ -220,7 +219,6 @@ var ddCases = []ddCase{
 			"05:00:11.104 mgd: sending authorization request <n> to 172.100.100.1",
 			"05:00:11.105 mgd: sending accounting request <n> to 172.100.100.1",
 			"05:00:11.106 mgd: priv-lvl=15",
-			"05:00:11.107 mgd: connection to 172.100.100.1 closed by server",
 			"05:00:11.108 mgd: server 172.100.100.1 marked dead",
 			"05:00:11.109 mgd: falling back to local",
 		},
@@ -242,8 +240,9 @@ var ddCases = []ddCase{
 			"Oct 22 05:00:13.008 vjunos mgd[900]: body QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
 			"Oct 22 05:00:13.009 vjunos cron[900]: connecting to server 172.100.100.1 port 49 hunter9",
 		},
-		open: 1, closed: 1, single: 1, dead: 1, fallback: 1,
-		conns: []deviceDebugConn{{Opened: "05:00:11.100", Closed: "05:00:11.107", Reason: "closed by server", Authen: 1, Author: 1, Acct: 1}},
+		// Junos has no close line (step 1), so the connection never closes here.
+		open: 1, closed: 0, single: 1, dead: 1, fallback: 1,
+		conns: []deviceDebugConn{{Opened: "05:00:11.100", Authen: 1, Author: 1, Acct: 1}},
 	},
 }
 

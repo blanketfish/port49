@@ -38,8 +38,12 @@ import (
 //     (nxosDebugServices, nxosDebugWords, priv-lvl 0-15); any other value is
 //     <masked>, any other key drops the line.
 //
-// The line shapes are plausible wording, not measured: the lab run confirms
-// them, and a wrong guess costs masked or missing lines, never a leak. No body
+// The line shapes come from the step 1 shape samples (device_debug shapes
+// report: the words and the punctuation, never a value), vendor documentation
+// and the earlier guesses; the spellings in a position the sample showed as `_`
+// are guesses the step 4 lab measures. A wrong guess keeps nothing, it never
+// leaks: a position the sample could not name is an opaque span (masked) or a
+// run of punctuation (ddGap), never free text. No body
 // byte is decoded and no line is kept unfiltered. The collector
 // (captureDeviceDebug) filters in-process, so the raw output never reaches
 // disk.
@@ -84,7 +88,41 @@ type ddProfile struct {
 	open, authen, author, acct, single, dead, fallback *regexp.Regexp
 	// closed matches a close; its one group is the reason the device states.
 	closed *regexp.Regexp
+	// noClose is a platform whose debug has no close line (Junos): its summary
+	// says the close is unknown instead of counting none.
+	noClose bool
 }
+
+// Building blocks for shapes written from a sampled skeleton, where `_` is a
+// span the vocabulary lacks. ddGap stands for the punctuation between two
+// words: one to three characters from a fixed punctuation set, so no value fits
+// in it. An unknown word or number is an opaque span or an id, which Keep masks.
+// ddCI makes a shape case-insensitive where the skeleton, which is lowercased,
+// does not give the spelling. An optional span holds at most one value group, and
+// a value group is never repeated: a repeated group would report only its last
+// match, leaving the earlier ones unmasked.
+const (
+	ddGap    = `[ :,;=/_+-]{1,3}`
+	ddCI     = `(?i)`
+	ddOptOpq = `(?:` + ddGap + ddOpaque + `)?`
+	// ddTarget is an optional address after a verb, with a link word or an opaque
+	// span before it. The bare address comes first: an opaque span, tried first,
+	// would take the address for itself and mask it.
+	ddTarget = `(?:` + ddGap + ddIP + `(?:/` + ddPort + `)?` +
+		`|` + ddGap + `(?:to|on|at)` + ddGap + ddIP + `(?:/` + ddPort + `)?` +
+		`|` + ddGap + ddOpaque + `(?:` + ddGap + `(?:to|on|at))?` + ddGap + ddIP + `(?:/` + ddPort + `)?` + `)?`
+	ddOptPort = `(?:` + ddGap + `port` + ddGap + ddPort + `)?`
+	// ddEOSFac is the optional trace facility in front of an EOS agent-log message.
+	ddEOSFac = `(?:Tacacs` + ddGap + `)?`
+	// ddJunosTag is up to two opaque tag words in front of a Junos message.
+	ddJunosTag = `(?:` + ddOpaque + ddGap + `)?(?:` + ddOpaque + ddGap + `)?`
+)
+
+// ddSep is the punctuation between two words in a kept line, for the counters.
+const ddSep = `[ :,;=/_+-]+`
+
+// ddW joins the words of a shape with the punctuation between them.
+func ddW(parts ...string) string { return strings.Join(parts, ddGap) }
 
 const (
 	// ddSmall is a version or small counter (three digits at most); ddPort is
@@ -94,6 +132,19 @@ const (
 	ddStatus = `(PASS|FAIL|FAILURE|ERROR|GETUSER|GETPASS|GETDATA|RESTART|FOLLOW|PASS_ADD|PASS_REPL|SUCCESS)`
 	ddKind   = `(authentication|authorization|accounting)`
 )
+
+// ddXRReq is the request-line shapes of one IOS XR packet kind: the skeleton
+// has the session id before or after the verb words, and an optional socket and
+// tls tail. core is the verb words in the order the sample showed them.
+func ddXRReq(core string) []string {
+	tail := ddGap + `server` + ddGap + ddIP + `(?:/` + ddPort + `)?` +
+		`(?:` + ddGap + `socket` + ddOptOpq + `(?:` + ddGap + `tls` + ddOptOpq + `)?)?`
+	return []string{
+		ddCI + core + ddGap + `session` + ddGap + ddID + tail,
+		ddCI + `session` + ddGap + ddID + ddGap + core + tail,
+		ddCI + core + tail,
+	}
+}
 
 var deviceDebugProfiles = map[string]*ddProfile{
 	"iosxe": {
@@ -121,18 +172,38 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Method=` + ddGroup + ` \(tacacs\+\)`,
 			`AAA/AUTHOR/(EXEC|CMD) \(` + ddOpaque + `\): (Method=` + ddGroup + ` \(tacacs\+\)|Post authorization status = ` + ddStatus + `)`,
 			`AAA/ACCT/(EXEC|CMD|NET)/(START|STOP|WATCHDOG) User ` + ddUser + `, Port ` + ddOpaque,
+			// The connection lifecycle (step 1 skeletons `tplus _ connected socket _`,
+			// `tplus _ immediate connect _ new _`, `tac _ opened A _` and the secure
+			// connection lines naming a peer).
+			ddCI + `TPLUS` + ddGap + `connected socket` + ddOptOpq,
+			ddCI + `TPLUS` + ddGap + `immediate connect` + ddOptOpq + ddGap + `new` + ddGap + ddOpaque,
+			ddCI + `TAC\+` + ddGap + `opened` + ddGap + ddIP + `(?:/` + ddPort + `)?`,
+			ddCI + `(?:TAC\+` + ddGap + `)?tacacs secure connection (?:established|closed) with peer ` + ddIP + `(?:/` + ddPort + `)?` + ddOptPort + `[.,;]?`,
+			ddCI + ddW(`TAC\+`, `tacacs`, `secure`, `session`, `(?:established|closed)`,
+				`tacacs secure connection (?:established|closed) with peer `+ddIP+`(?:/`+ddPort+`)?`+ddOptPort+`[.,;]?`),
+			// Requests, created and processed (skeletons `tplus _ accounting request
+			// created for _`, `tplus _ processing authentication _ request _`,
+			// `tplus _ processing the reply packet _`).
+			ddCI + `TPLUS` + ddGap + `(?:authentication|authorization|accounting) request created for` + ddGap + ddID + `\(` + ddUser + `\)`,
+			ddCI + `TPLUS` + ddGap + `(?:authentication|authorization|accounting) request created for` + ddGap + ddOpaque,
+			ddCI + `TPLUS` + ddGap + `processing (?:authentication|authorization|accounting)` + ddOptOpq + ` request(?: id ` + ddID + `)?`,
+			ddCI + `TPLUS(?:\(` + ddOpaque + `\)/` + ddID + `(?:/` + ddOpaque + `)?(?:/` + ddOpaque + `)?)?` + ddGap + `processing the reply packet`,
+			ddCI + `(?:TAC\+|TPLUS)` + ddGap + `using previously` + ddOptOpq + ` server ` + ddIP + ` from group` + ddGap + ddGroup,
 		},
-		open:     regexp.MustCompile(`TAC\+: Opening TCP/IP to`),
-		closed:   regexp.MustCompile(`TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$`),
-		authen:   regexp.MustCompile(`send AUTHEN/`),
-		author:   regexp.MustCompile(`send AUTHOR/`),
-		acct:     regexp.MustCompile(`send ACCT/`),
+		open:     regexp.MustCompile(`^TAC\+: Opening TCP/IP to|tacacs secure connection established with peer`),
+		closed:   regexp.MustCompile(`(?:TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|tacacs secure connection closed with peer \S+(?: port \S+)?[.,;]?)$`),
+		authen:   regexp.MustCompile(`send AUTHEN/|(?i)TPLUS` + ddSep + `processing authentication\b`),
+		author:   regexp.MustCompile(`send AUTHOR/|(?i)TPLUS` + ddSep + `authorization request created`),
+		acct:     regexp.MustCompile(`send ACCT/|(?i)TPLUS` + ddSep + `accounting request created`),
 		single:   regexp.MustCompile(`Using single connection`),
 		dead:     regexp.MustCompile(`Server \S+ (marked|is) DEAD`),
 		fallback: regexp.MustCompile(`Method=(LOCAL|NONE)`),
 	},
 	"eos": {
-		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ |\d{4}-\d\d-\d\dT)?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?)(?:[+-]\d\d:\d\d|Z)? (?:\S+ )?(?P<p>Aaa|Tacacs|TacPlus)(?:\[\d+\])?: (?P<m>.*)$`),
+		// `[date ]time[tz][ thread][ host] Agent|Facility[N]: message`. The trace
+		// facility (Tacacs) may come after the agent name (Aaa); a shape starts with
+		// ddEOSFac to take it.
+		line: regexp.MustCompile(`^(?:\d{4}-\d\d-\d\d[ T]|[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?)(?:[+-]\d\d:\d\d|Z)?(?: +\d+)?(?: +[A-Za-z0-9_.-]+)? *(?P<p>Aaa|Tacacs|TacPlus)(?:\[\d+\])?(?:: *| +)(?P<m>.*)$`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
 			`(Connecting|Connected) to (TACACS\+ )?server ` + ddIP + `( port |:)` + ddPort,
@@ -144,20 +215,36 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`Falling back to ` + ddMethod + ` for ` + ddKind,
 			`Using server group ` + ddGroup,
 			`User ` + ddUser + ` authenticating via method list ` + ddList,
+			// `show agent Aaa logs` lines (step 1 skeletons), each with the trace
+			// facility prefix. tac_send_author_status, tac_create_author, created
+			// socket, tls session, authorization from, accounting request.
+			ddCI + ddEOSFac + ddW(`tac`, `send`, `author`, `status`) + `(?:` + ddGap + `(?:` + ddStatus + `|` + ddID + `))?`,
+			ddCI + ddEOSFac + ddW(`tac`, `send`, `(?:author|authen|acct)`) + ddOptOpq,
+			ddCI + ddEOSFac + ddW(`tac`, `create`, `(?:author|authen|acct)`) + ddOptOpq,
+			ddCI + ddEOSFac + ddW(`tac`, `send`, `(?:author|authen|acct) failed`, `connect`) + ddOptOpq + ddGap + `connection` + ddOptOpq,
+			ddCI + ddEOSFac + ddW(`tacacs authorization error`, `connect`) + ddOptOpq + ddGap + `connection` + ddOptOpq,
+			ddCI + ddEOSFac + `created socket` + ddTarget,
+			ddCI + ddEOSFac + `(?:open|close)` + ddOptOpq,
+			ddCI + ddEOSFac + `tls session` + ddOptOpq + ddGap + `for` + ddOptOpq + ddGap + `default`,
+			ddCI + ddEOSFac + `(?:authorization|accounting) from` + ddTarget,
+			ddCI + ddEOSFac + `accounting request` + ddOptOpq + `(?:` + ddGap + `exec` + ddOptOpq + `)?`,
+			ddCI + ddEOSFac + `error` + ddOptOpq + ddGap + `ssl failed` + ddOptOpq + ddGap + `tls`,
 		},
-		open:     regexp.MustCompile(`^(Connecting|Connected) to`),
-		closed:   regexp.MustCompile(`^Connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)$`),
-		authen:   regexp.MustCompile(`^Sending authentication request`),
-		author:   regexp.MustCompile(`^Sending authorization request`),
-		acct:     regexp.MustCompile(`^Sending accounting request`),
+		open:     regexp.MustCompile(`^(Connecting|Connected) to|(?i)^(?:Tacacs[: ]+)?created socket`),
+		closed:   regexp.MustCompile(`^Connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)$|(?i)^(?:Tacacs[: ]+)?close(?: <masked>)?$`),
+		authen:   regexp.MustCompile(`^Sending authentication request|(?i)^(?:Tacacs` + ddSep + `)?tac` + ddSep + `send` + ddSep + `authen(?: <masked>)?$`),
+		author:   regexp.MustCompile(`^Sending authorization request|(?i)^(?:Tacacs` + ddSep + `)?tac` + ddSep + `send` + ddSep + `author(?: <masked>)?$`),
+		acct:     regexp.MustCompile(`^Sending accounting request|(?i)^(?:Tacacs` + ddSep + `)?tac` + ddSep + `send` + ddSep + `acct(?: <masked>)?$`),
 		single:   regexp.MustCompile(`^Single connect (flag set|negotiated)`),
 		dead:     regexp.MustCompile(`marked dead|is not responding`),
 		fallback: regexp.MustCompile(`^Falling back to`),
 	},
 	"iosxr": {
-		line: regexp.MustCompile(`^(?:RP/\d+/\S+:)?(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
+		// `node [Mon DD ]time zone: process[N]: message`; the node name follows its
+		// own colon or a space, and the zone is the capital letters before the colon.
+		line: regexp.MustCompile(`^(?:[A-Za-z0-9_/.-]+[: ] ?)?(?:[A-Z][a-z]{2} +\d+ (?:\d{4} )?)?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
-		shapes: []string{
+		shapes: append([]string{
 			`(Opening|Opened) connection to ` + ddIP + ` port ` + ddPort,
 			`Closing connection to ` + ddIP + ` port ` + ddPort + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
 			`Sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP,
@@ -167,22 +254,36 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`Falling back to ` + ddMethod + ` for ` + ddKind,
 			`Using server group ` + ddGroup,
 			`User ` + ddUser + ` authenticating via method list ` + ddList,
-		},
-		open:     regexp.MustCompile(`^Opening connection to`),
-		closed:   regexp.MustCompile(`^Closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$`),
-		authen:   regexp.MustCompile(`^Sending authentication request`),
-		author:   regexp.MustCompile(`^Sending authorization request`),
-		acct:     regexp.MustCompile(`^Sending accounting request`),
+			// The socket lifecycle (step 1 skeletons `socket created _ A _`,
+			// `socket bound _ with _ address A _`, `socket connected _`,
+			// `socket _ A _ opened _`, `connection closed _ A port _`).
+			ddCI + `socket created` + ddTarget + ddOptPort,
+			ddCI + `socket bound` + ddOptOpq + ddGap + `with` + ddOptOpq + ddGap + `address` + ddTarget,
+			ddCI + `socket connected` + ddTarget + ddOptPort,
+			ddCI + `socket` + ddTarget + ddGap + `opened` + ddOptOpq,
+			ddCI + `connection closed` + ddTarget + ddGap + `port` + ddGap + ddPort,
+			// The replies (`reply _ session _ from server A _`).
+			ddCI + `reply` + ddOptOpq + ddGap + `session` + ddGap + ddID + ddGap + `from` + ddGap + `server` + ddGap + ddIP + `(?:/` + ddPort + `)?`,
+		}, slices.Concat(
+			ddXRReq(`packet`+ddGap+`start`+ddGap+`login`),
+			ddXRReq(`packet`+ddGap+`author`+ddGap+`start`),
+			ddXRReq(`packet`+ddGap+`request`+ddGap+`start`))...),
+		open:     regexp.MustCompile(`^(?:Opening connection to|(?i:socket connected))`),
+		closed:   regexp.MustCompile(`^(?:Closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|(?i:connection closed)` + ddSep + `(?:\S+ )?(?:(?:to|on|at) )?\S+ port \S+)$`),
+		authen:   regexp.MustCompile(`^Sending authentication request|(?i)packet` + ddSep + `start` + ddSep + `login\b`),
+		author:   regexp.MustCompile(`^Sending authorization request|(?i)packet` + ddSep + `author` + ddSep + `start\b`),
+		acct:     regexp.MustCompile(`^Sending accounting request|(?i)packet` + ddSep + `request` + ddSep + `start\b`),
 		single:   regexp.MustCompile(`^Single connection (flag set|negotiated)`),
 		dead:     regexp.MustCompile(`marked dead|is not responding`),
 		fallback: regexp.MustCompile(`^Falling back to`),
 	},
 	"junos": {
+		// `[Mon DD ]time [host ]process[N]: message`. The authd trace file and the
+		// syslog file both use it.
 		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?) (?:\S+ )?(?P<p>mgd|sshd|login|tacplus|authd)(?:\[\d+\])?: (?P<m>.*)$`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
 			`(connecting|connected) to server ` + ddIP + ` port ` + ddPort,
-			`connection to ` + ddIP + ` (closed|closed by server|closed idle timeout|reset|timed out)`,
 			`sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP,
 			`received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
 			`single-connect (flag set|negotiated|not offered)`,
@@ -190,12 +291,33 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`falling back to ` + ddMethod,
 			`using server group ` + ddGroup,
 			`user ` + ddUser + ` authenticating via method list ` + ddList,
+			// The authd trace (step 1 skeletons `connect _`, `connect fail _`,
+			// `connection state _`, `opened _`, `address _`, `server _ name _`).
+			// A message may start with one or two tag words, which are opaque.
+			ddCI + ddJunosTag + `connect failed` + ddOptOpq,
+			ddCI + ddJunosTag + `connect` + ddOptOpq + ddGap + `failed` + ddOptOpq,
+			ddCI + ddJunosTag + `connect fail` + ddTarget,
+			ddCI + ddJunosTag + `connect` + ddTarget + ddOptPort,
+			ddCI + ddJunosTag + `connection state` + ddOptOpq,
+			ddCI + ddJunosTag + `opened` + ddTarget + ddOptPort,
+			ddCI + ddJunosTag + `server` + ddOptOpq + ddGap + `name` + ddOptOpq,
+			ddCI + ddJunosTag + `address` + ddTarget,
+			// The syslog file (`connection received`, `open session open sent`,
+			// `connect failed`, `sent tacacs accounting request message`,
+			// `authentication with error tls has failed`).
+			ddCI + ddJunosTag + `connection received` + `(?:` + ddGap + `from` + ddTarget + `)?`,
+			ddCI + ddJunosTag + `open` + ddOptOpq + ddGap + `session` + ddOptOpq + ddGap + `open` + ddOptOpq + ddGap + `sent`,
+			ddCI + ddJunosTag + ddW(`sent`, `tacacs`, ddKind, `request message`) + `(?:` + ddGap + ddID + `)?`,
+			ddCI + ddJunosTag + ddW(`authentication with error`, `tls`) + ddOptOpq + ddGap + `has failed`,
 		},
-		open:     regexp.MustCompile(`^connecting to server`),
-		closed:   regexp.MustCompile(`^connection to \S+ (closed(?: by server| idle timeout)?|reset|timed out)$`),
-		authen:   regexp.MustCompile(`^sending authentication request`),
-		author:   regexp.MustCompile(`^sending authorization request`),
-		acct:     regexp.MustCompile(`^sending accounting request`),
+		open: regexp.MustCompile(`^connecting to server|^(?:\S+ ){0,2}opened\b`),
+		// Neither Junos file has a close line (step 1): nothing matches, and the
+		// summary says the close is unknown.
+		closed:   regexp.MustCompile(`\z\A`),
+		noClose:  true,
+		authen:   regexp.MustCompile(`^sending authentication request|(?i)\bsent tacacs` + ddSep + `authentication request message`),
+		author:   regexp.MustCompile(`^sending authorization request|(?i)\bsent tacacs` + ddSep + `authorization request message`),
+		acct:     regexp.MustCompile(`^sending accounting request|(?i)\bsent tacacs` + ddSep + `accounting request message`),
 		single:   regexp.MustCompile(`^single-connect (flag set|negotiated)`),
 		dead:     regexp.MustCompile(`marked dead`),
 		fallback: regexp.MustCompile(`^falling back to`),
@@ -368,8 +490,9 @@ type deviceDebugConn struct {
 type deviceDebugSummary struct {
 	Conns                []deviceDebugConn
 	Opened, Closed       int
-	SingleConnect        int // lines showing single-connect negotiated or its flag
-	ServerDead, Fallback int // server-dead and fallback lines
+	CloseUnknown         bool // the platform's debug has no close line: Closed says nothing
+	SingleConnect        int  // lines showing single-connect negotiated or its flag
+	ServerDead, Fallback int  // server-dead and fallback lines
 }
 
 // deviceDebugSummarize reads the counters out of kept, which Keep has already
@@ -377,7 +500,11 @@ type deviceDebugSummary struct {
 func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSummary {
 	var s deviceDebugSummary
 	p := deviceDebugProfiles[platform]
-	if p == nil || kept == "" {
+	if p == nil {
+		return s
+	}
+	s.CloseUnknown = p.noClose
+	if kept == "" {
 		return s
 	}
 	cur := -1 // the index in s.Conns of the connection requests go to
