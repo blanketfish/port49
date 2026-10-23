@@ -1,0 +1,39 @@
+# Commit-scoped fingerprints (<full sha>:file:rule:line); a fingerprint holds no value.
+# Never add one without a commit: it would hide that line in every future commit.
+#
+# Prose after "tacacs ... key" in two plans that also quote labcreds.Key.
+87f0c7843d02ea7846ee98303c80d9911c47e543:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:3118
+b0f5cae8135223e8bc49437b62a155c03bbb2cb6:docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:7
+#
+# labcreds.Key quoted in the same two plans (lab-only constant, ruling 2026-10-23).
+16cd5d309ca727749b673204a4c42db3ec1665be:docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:5098
+b0f5cae8135223e8bc49437b62a155c03bbb2cb6:docs/superpowers/plans/2026-09-06-01-protocol-core.md:tacacs-key-config-line:5043
+62b7b58da5c00968bf961b9b7ac9f7e14f124bcc:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:2850
+62b7b58da5c00968bf961b9b7ac9f7e14f124bcc:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:2873
+62b7b58da5c00968bf961b9b7ac9f7e14f124bcc:docs/superpowers/plans/2026-10-17-l73-device-tls.md:tacacs-key-config-line:2892
+#
+# PEM stubs in the scp/CA-bundle refusal test, judged FAKE by the triage (body too short to be
+# a key) but outside the private-key regex entry above.
+017268d9d4085df1101e550f686dde0aba6844f5:tests/lab/l73_device_unit_test.go:private-key:267
+c3da08adcf84b5f939166b81e610ac3dcc01d315:tests/lab/l73_device_unit_test.go:private-key:267
+#
+# Commit 10be6456: credential_sha256 values of expired per-run lab tokens in the L72 evidence.
+# Cleaned at HEAD (b26f020d); kept in history by Ryan's ruling on 2026-10-23, no rewrite.
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/results/L72-reference.md:generic-api-key:17
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/evidence/L72-reference/decisions.jsonl:generic-api-key:2
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/evidence/L72-reference/decisions.jsonl:generic-api-key:12
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/evidence/L72-reference/decisions.jsonl:generic-api-key:13
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/evidence/L72-reference/decisions.jsonl:generic-api-key:14
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/evidence/L72-reference/decisions.jsonl:generic-api-key:16
+10be6456ce3df2f67deffeee3ce571424f029b42:tests/lab/evidence/L72-reference/decisions.jsonl:generic-api-key:20
+#
+# Results note L4 (arista_eos), prose word after 'key', judged FAKE by the triage.
+00e0200529cc2b0ffc6c05237dc589101728c1a9:tests/lab/results/L4-error-arista_eos.md:tacacs-key-config-line:128
+#
+# Pre-minting static lab seed tokens (labcreds.TokenPrefix) in tests/lab/transport_test.go,
+# commit d4538d78; removed 2026-09-22 (d9dcc34d). Lab-only, ruling 2026-10-23.
+d4538d78e0ef5e8be6acf3f5a55108bb24ffdeb8:tests/lab/transport_test.go:generic-api-key:77
+d4538d78e0ef5e8be6acf3f5a55108bb24ffdeb8:tests/lab/transport_test.go:generic-api-key:84
+#
+# A test word in the redaction table (not a lab constant), commit 60cf3fcb.
+60cf3fcb0616ccc0841d62eea6d8712d6a44c0bb:internal/platform/redact_test.go:tacacs-key-config-line:441
