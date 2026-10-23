@@ -716,9 +716,13 @@ func (q *qualEnv) tlsCells(d l73Dialect) {
 		e.guard()
 		e.settle()
 		q.guard()
-		q.tlsDaemon(e, "qual-unknown-ca", l73Daemon{Intermediates: e.files["inter.pem"], ClientCA: e.files["other.pem"]})
+		// The offset and the capture come before the refusing daemon: a device that
+		// connects on its own as the daemon comes up is refused and struck, and a
+		// record written before the offset is never graded, while the break-glass
+		// login below then meets the strike backoff (held_refused, no record).
 		off = q.cell("tls_unknown_ca")
 		stop = e.capture("tls_unknown_ca")
+		q.tlsDaemon(e, "qual-unknown-ca", l73Daemon{Intermediates: e.files["inter.pem"], ClientCA: e.files["other.pem"]})
 		// The handshake is refused whatever the credential: a break-glass login makes the device try port49.
 		_, _, _ = e.breakglassLogin()
 		recs = q.l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
