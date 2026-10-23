@@ -7462,12 +7462,7 @@ when Task 14's review found a security-relevant device fact.
     not overwrite the note.
   - L35, L37 and L66 passed on the rerun (L35 at `fee22706`, judging a dark port49d by decision 37).
     L29-reload's vJunos refused phase is a device flake, retry it.
-- **Decision pending (Ryan): NX-OS 10.6 over per-request TLS.** At the time of 11b a port49 deny did not hold;
-  the post-11b fix (ruling 20) changed that: with the offer the deny holds
-  (`tests/lab/results/L80-cisco_nxos.md`, fixed arm), so whether a warning is still wanted is Ryan's call. The controller
-  recommends a docs warning plus a §12 log warning when a `cisco_nxos` device uses per-request TLS; the
-  alternative is refusing those logins. Not decided, and no warning is added in 11b (no new warnings
-  here).
+- **Resolved: NX-OS 10.6 over per-request TLS.** Superseded by decision 50 ruling 20: port49 now offers single-connect, and with the offer the device asks port49 about every command and the deny holds (L80 fixed arm, `tests/lab/evidence/L80-cisco_nxos/fixed/`), so a warning or refusal is no longer pending.
 - **Carried forward.**
   - **A post-11b fix PR** (port49 code, not 11b scope; Opus implementer, with P-1 first):
     - **P-1:** the settle pass keeps the old policy among priors and `supersedeTokens` clears each key
@@ -7695,8 +7690,8 @@ reference config waits on the measurement.
   needs its block too.
 - **NX-OS 10.6(2)F over TLS:** before the fix (L80), over per-request TLS a command port49 denies ran and
   port49 was never asked; port49 now offers single-connect and the device honors it
-  (`tests/lab/results/L80-cisco_nxos.md`). Ryan's decision on
-  a §12 warning or refusing those logins is pending.
+  (`tests/lab/results/L80-cisco_nxos.md`). A §12 warning or
+  refusing those logins is no longer pending (resolved above).
 - The pre-beta review runs `make lab-regress` in full (733.6 minutes).
 
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
