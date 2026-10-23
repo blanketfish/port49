@@ -4,9 +4,9 @@
 - **Platform:** cisco_xrd (containerlab node `xrd1`, 172.100.100.61)
 - **Image version:** XRd control plane 26.1.1 (`port49lab/xrd-control-plane:26.1.1`)
 - **Topology:** `tests/lab/topologies/xrd261.clab.yml`
-- **Capture:** `tests/lab/evidence/QUAL-DEBUG-XRd-control-plane-26.1.1-cisco_xrd.pcap` — 971 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-DEBUG-XRd-control-plane-26.1.1-cisco_xrd.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/QUAL-DEBUG-XRd-control-plane-26.1.1-cisco_xrd.pcap` — 968 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-DEBUG-XRd-control-plane-26.1.1-cisco_xrd.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `da97eb6d37b539b5cfcedd50942c0b32df46c229`, `PORT49_LAB_PLATFORMS=xrd261`, `-run ^TestQualify$`
+- **Run:** commit `0953fbf877a0ea7ba529a37718479380e08eb787`, `PORT49_LAB_PLATFORMS=xrd261`, `-run ^TestQualify$`
 
 ## Claim
 
@@ -18,48 +18,54 @@ Platform cisco_xrd, image XRd control plane 26.1.1. Debug on: `terminal length 0
 
 ### What the filter kept
 
-- `tls_token_login`: the device returned 1689 log lines and the filter kept 1178 (12 connection open/close, 5 request, 1161 other); the capture holds 11 TLS connection(s).
-  Lines dropped by rule: facility=14 body_word=0 hex_view=498 hex_message=0 evidence_marker=0 known_value_hex=0.
-  - debug connections opened=12 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
-  - debug connection 1: opened=15:29:48.965 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 2: opened=15:29:49.302 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 3: opened=15:29:50.113 closed=open reason="" authen=0 author=3 acct=0.
-  - debug connection 4: opened=15:29:50.450 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 5: opened=15:29:50.782 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 6: opened=15:29:51.119 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 7: opened=15:29:51.139 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 8: opened=15:29:51.154 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 9: opened=15:29:51.444 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 10: opened=15:29:52.276 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 11: opened=15:29:52.284 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 12: opened=15:29:57.551 closed=open reason="" authen=0 author=2 acct=0.
-  - capture: `conn port=21249 syn=15:29:49.015 hold=0.29s end=server-fin`
-  - capture: `conn port=18934 syn=15:29:49.353 hold=0.28s end=server-fin`
-  - capture: `conn port=33661 syn=15:29:50.164 hold=0.28s end=server-fin`
-  - capture: `conn port=29297 syn=15:29:50.501 hold=0.28s end=server-fin`
-  - capture: `conn port=48417 syn=15:29:50.833 hold=0.28s end=server-fin`
-  - capture: `conn port=47005 syn=15:29:51.170 hold=0.27s end=server-fin`
-  - capture: `conn port=28720 syn=15:29:51.189 hold=0.53s end=server-fin`
-  - capture: `conn port=34920 syn=15:29:51.204 hold=0.79s end=server-fin`
-  - capture: `conn port=29681 syn=15:29:51.494 hold=0.78s end=server-fin`
-  - capture: `conn port=24004 syn=15:29:52.326 hold=0.28s end=server-fin`
-  - capture: `conn port=35045 syn=15:29:52.334 hold=0.55s end=server-fin`
-- `tls_unknown_ca`: the device returned 608 log lines and the filter kept 474 (3 connection open/close, 2 request, 469 other); the capture holds 3 TLS connection(s).
+- `tls_token_login`: the device returned 1690 log lines and the filter kept 1177 (23 connection open/close, 3 request, 1151 other); the capture holds 11 TLS connection(s).
+  Lines dropped by rule: facility=14 body_word=0 hex_view=500 hex_message=0 evidence_marker=0 known_value_hex=0.
+  - debug connections opened=12 closed=11 single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
+  - debug connection 1: opened=16:51:40.626 closed=open reason="" authen=0 author=0 acct=0.
+  - debug connection 2: opened=16:51:40.958 closed=16:51:40.958 reason="" authen=0 author=0 acct=0.
+  - debug connection 3: opened=before closed=16:51:41.295 reason="" authen=0 author=0 acct=0.
+  - debug connection 4: opened=16:51:41.741 closed=16:51:42.078 reason="" authen=0 author=3 acct=0.
+  - debug connection 5: opened=16:51:42.081 closed=open reason="" authen=0 author=0 acct=0.
+  - debug connection 6: opened=16:51:42.414 closed=16:51:42.414 reason="" authen=0 author=0 acct=0.
+  - debug connection 7: opened=before closed=16:51:42.746 reason="" authen=0 author=0 acct=0.
+  - debug connection 8: opened=16:51:42.748 closed=open reason="" authen=0 author=0 acct=0.
+  - debug connection 9: opened=16:51:42.768 closed=open reason="" authen=0 author=0 acct=0.
+  - debug connection 10: opened=16:51:42.782 closed=open reason="" authen=0 author=0 acct=0.
+  - debug connection 11: opened=16:51:43.071 closed=16:51:43.632 reason="" authen=0 author=0 acct=0.
+  - debug connection 12: opened=before closed=16:51:43.633 reason="" authen=0 author=0 acct=0.
+  - debug connection 13: opened=before closed=16:51:43.910 reason="" authen=0 author=0 acct=0.
+  - debug connection 14: opened=before closed=16:51:43.911 reason="" authen=0 author=0 acct=0.
+  - debug connection 15: opened=16:51:43.912 closed=open reason="" authen=0 author=0 acct=0.
+  - debug connection 16: opened=16:51:43.921 closed=16:51:44.520 reason="" authen=0 author=0 acct=0.
+  - debug connection 17: opened=before closed=16:51:44.521 reason="" authen=0 author=0 acct=0.
+  - debug connection 18: opened=16:51:49.190 closed=open reason="" authen=0 author=0 acct=0.
+  - capture: `conn port=17855 syn=16:51:40.677 hold=0.28s end=server-fin`
+  - capture: `conn port=46902 syn=16:51:41.009 hold=0.29s end=server-fin`
+  - capture: `conn port=60279 syn=16:51:41.791 hold=0.29s end=server-fin`
+  - capture: `conn port=31655 syn=16:51:42.132 hold=0.28s end=server-fin`
+  - capture: `conn port=35820 syn=16:51:42.464 hold=0.28s end=server-fin`
+  - capture: `conn port=44662 syn=16:51:42.798 hold=0.27s end=server-fin`
+  - capture: `conn port=25701 syn=16:51:42.818 hold=0.53s end=server-fin`
+  - capture: `conn port=40417 syn=16:51:42.832 hold=0.80s end=server-fin`
+  - capture: `conn port=52181 syn=16:51:43.122 hold=0.79s end=server-fin`
+  - capture: `conn port=45164 syn=16:51:43.962 hold=0.28s end=server-fin`
+  - capture: `conn port=30909 syn=16:51:43.972 hold=0.55s end=server-fin`
+- `tls_unknown_ca`: the device returned 608 log lines and the filter kept 474 (5 connection open/close, 2 request, 467 other); the capture holds 3 TLS connection(s).
   Lines dropped by rule: facility=14 body_word=0 hex_view=121 hex_message=0 evidence_marker=0 known_value_hex=0.
-  - debug connections opened=3 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
-  - debug connection 1: opened=15:31:11.860 closed=open reason="" authen=0 author=0 acct=0.
-  - debug connection 2: opened=15:31:12.402 closed=open reason="" authen=0 author=2 acct=0.
-  - debug connection 3: opened=15:31:17.726 closed=open reason="" authen=0 author=0 acct=0.
-  - capture: `conn port=15689 syn=15:31:11.910 hold=0.28s end=server-rst`
-  - capture: `conn port=31728 syn=15:31:12.452 hold=0.00s end=server-rst`
-  - capture: `conn port=65066 syn=15:31:12.512 hold=0.00s end=server-rst`
+  - debug connections opened=3 closed=2 single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
+  - debug connection 1: opened=16:53:03.083 closed=16:53:03.416 reason="" authen=0 author=0 acct=0.
+  - debug connection 2: opened=16:53:03.476 closed=16:53:03.538 reason="" authen=0 author=2 acct=0.
+  - debug connection 3: opened=16:53:08.809 closed=open reason="" authen=0 author=0 acct=0.
+  - capture: `conn port=19761 syn=16:53:03.134 hold=0.28s end=server-rst`
+  - capture: `conn port=17896 syn=16:53:03.526 hold=0.00s end=server-rst`
+  - capture: `conn port=41920 syn=16:53:03.589 hold=0.00s end=server-rst`
 
 ### Open questions
 
-- **Which debug line marks a connection open?** `tls_token_login`: `RP/0/RP0/CPU0:Oct 23 15:29:48.965 UTC: tacacsd[1139]: Socket connected successfully` (12 in the cell); `tls_unknown_ca`: `RP/0/RP0/CPU0:Oct 23 15:31:11.860 UTC: tacacsd[1139]: Socket connected successfully` (3 in the cell).
-- **tls_token_login: why does the device open a second connection?** The debug shows the second open at `RP/0/RP0/CPU0:Oct 23 15:29:49.302 UTC: tacacsd[1139]: Socket connected successfully`, after `RP/0/RP0/CPU0:Oct 23 15:29:49.302 UTC: tacacsd[1139]: Connection success!!`. That is the line that comes before it, not a stated cause.
-- **How does a connection end?** `tls_unknown_ca`: TLS failure `RP/0/RP0/CPU0:Oct 23 15:31:12.195 UTC: tacacsd[1139]: %<LONG> : SSL_write operation with TACACS+ server 172.100.100.1/300 failed [server-private: No], SSL Error:System call error.`.
-- **Do requests ride one connection together (pipelining)?** 2 of 12 debug connection(s) carried more than one request (5 request line(s)); first request line `RP/0/RP0/CPU0:Oct 23 15:29:50.113 UTC: tacacsd[1139]: [session 13] packet AUTHOR/START selected server 172.100.100.1/300 socket 1000064 TLS: Enabled`.
+- **Which debug line marks a connection open?** `tls_token_login`: `RP/0/RP0/CPU0:Oct 23 16:51:40.626 UTC: tacacsd[1139]: Socket connected successfully` (12 in the cell); `tls_unknown_ca`: `RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Socket connected successfully` (3 in the cell).
+- **tls_token_login: why does the device open a second connection?** The debug shows the second open at `RP/0/RP0/CPU0:Oct 23 16:51:40.958 UTC: tacacsd[1139]: Socket connected successfully`, after `RP/0/RP0/CPU0:Oct 23 16:51:40.958 UTC: tacacsd[1139]: Connection success!!`. That is the line that comes before it, not a stated cause.
+- **How does a connection end?** `tls_unknown_ca`: close `RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: closing the socket 1000084`, TLS failure `RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: %<LONG> : SSL_write operation with TACACS+ server 172.100.100.1/300 failed [server-private: No], SSL Error:System call error.`; `tls_token_login`: close `RP/0/RP0/CPU0:Oct 23 16:51:40.958 UTC: tacacsd[1139]: closing the socket 1000062`.
+- **Do requests ride one connection together (pipelining)?** 1 of 18 debug connection(s) carried more than one request (3 request line(s)); first request line `RP/0/RP0/CPU0:Oct 23 16:51:41.741 UTC: tacacsd[1139]: [session 13] packet AUTHOR/START selected server 172.100.100.1/300 socket 1000064 TLS: Enabled`.
 
 ### Shapes of the lines the filter dropped
 
