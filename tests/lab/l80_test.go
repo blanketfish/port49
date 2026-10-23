@@ -367,11 +367,12 @@ func TestL80Remeasure(t *testing.T) {
 			if cell.Name == "concurrent" {
 				sum.WriteString(l80Interleaving + "\n")
 			}
+			var g l80RestartGrade
 			if cell.Name == "restart" {
 				if restartErr != nil {
 					sum.WriteString("restart: port49d did not come back\n")
 				}
-				g := l80GradeRestart(typed, window, cnt, len(nxosFallbacks(kept)), conns)
+				g = l80GradeRestart(typed, window, cnt, len(nxosFallbacks(kept)), conns)
 				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(window.StopAt), l80Clock(window.UpAt))
 				for _, f := range g.Facts {
 					sum.WriteString("restart: " + f + "\n")
@@ -379,6 +380,12 @@ func TestL80Remeasure(t *testing.T) {
 				fmt.Fprintf(&sum, "restart verdict: %s\n", g.Verdict)
 			}
 			cellStops := l80Stops(arm, cell.Name, typed, most, second, cnt)
+			if cell.Name == "restart" && restartErr != nil {
+				cellStops = append(cellStops, "restart: port49d did not come back after the restart")
+			}
+			if g.PermittedDenied > 0 {
+				cellStops = append(cellStops, fmt.Sprintf("restart: %d permitted command(s) denied after the restart: the session did not survive it (a port49 finding)", g.PermittedDenied))
+			}
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
 			}
