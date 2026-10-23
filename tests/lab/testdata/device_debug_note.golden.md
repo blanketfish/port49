@@ -1,4 +1,4 @@
-What cisco_iosxe's own TACACS+ debug says about the TLS cells of a qualification run on Test Router 1.2.3: which debug line marks a connection, how many requests ride one connection, and how a connection ends. Every line quoted is one the platform's allow-list filter kept (values masked); no device line is kept as the device wrote it.
+What cisco_iosxe's own TACACS+ debug says about the TLS cells of a qualification run on Test Router 1.2.3: which debug line marks a connection, how many requests ride one connection, and how a connection ends. Every line quoted is one the platform's debug filter kept: it carries the platform's TACACS+/AAA facility, and the run's secrets, reversible encodings and long runs were redacted or masked in it.
 
 Platform cisco_iosxe, image Test Router 1.2.3. Debug on: `terminal length 0`, `clear logging`, `<enter>`, `debug tacacs`, `debug aaa authentication`, `debug aaa authorization`, `debug aaa accounting` (read with `show logging`; off with `undebug all`).
 
@@ -18,10 +18,10 @@ Platform cisco_iosxe, image Test Router 1.2.3. Debug on: `terminal length 0`, `c
 
 ### Open questions
 
-- **Which debug line marks a connection open?** `tls_token_login`: `09:48:29.345 TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (<masked> <masked>)` (2 in the cell).
-- **tls_token_login: why does the device open a second connection?** The debug shows the second open at `09:48:30.100 TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (<masked> <masked>)`, after `09:48:30.001 TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (<masked> <masked>)`. That is the line that comes before it, not a stated cause.
-- **How does a connection end?** `tls_unknown_ca`: close `09:49:01.050 TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (<masked> <masked>)`; `tls_token_login`: close `09:48:30.001 TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (<masked> <masked>)`.
-- **Do requests ride one connection together (pipelining)?** 1 of 2 debug connection(s) carried more than one request (3 request line(s)); first request line `09:48:29.345 TPLUS: processing authentication <masked> request id <n>`.
+- **Which debug line marks a connection open?** `tls_token_login`: `*Oct 23 09:48:29.345: TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 7)` (2 in the cell).
+- **tls_token_login: why does the device open a second connection?** The debug shows the second open at `*Oct 23 09:48:30.100: TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 8)`, after `*Oct 23 09:48:30.001: TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)`. That is the line that comes before it, not a stated cause.
+- **How does a connection end?** `tls_unknown_ca`: close `*Oct 23 09:49:01.050: TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)`; `tls_token_login`: close `*Oct 23 09:48:30.001: TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)`.
+- **Do requests ride one connection together (pipelining)?** 1 of 2 debug connection(s) carried more than one request (3 request line(s)); first request line `*Oct 23 09:48:29.345: TPLUS: processing authentication login request id 1`.
 
 ### Shapes of the lines the filter dropped
 

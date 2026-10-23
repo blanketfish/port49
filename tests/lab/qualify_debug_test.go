@@ -4,7 +4,6 @@ package lab
 
 import (
 	"fmt"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,7 +63,7 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform
 			// The shapes of what the filter drops: the lines to decide about.
 			var dropped []string
 			for _, ln := range strings.Split(out, "\n") {
-				if f.Keep(ln) == "" {
+				if !f.keeps(deviceDebugProfiles[platform], ln) {
 					dropped = append(dropped, ln)
 				}
 			}
@@ -97,14 +96,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		body()
 		return
 	}
-	filter := deviceDebugFilter{Platform: platform, Groups: []string{l73Group}}
-	for _, a := range []string{l73Server, q.l.p.addr} {
-		addr, err := netip.ParseAddr(a)
-		if err != nil {
-			q.t.Fatalf("INVALID: lab address %q: %v", a, err)
-		}
-		filter.Addrs = append(filter.Addrs, addr)
-	}
+	filter := deviceDebugFilter{Platform: platform, Secrets: q.ddSecrets}
 	var (
 		kept     deviceDebugKept
 		capErr   error

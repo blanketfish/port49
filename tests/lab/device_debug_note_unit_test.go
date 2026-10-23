@@ -8,9 +8,12 @@ import (
 
 // ddNoteFixtureRun is an armed IOS XE run with two cells, built from lines in the
 // step 4 shapes. The image string is invented: the note takes it from the run.
-func ddNoteFixtureRun() ddNoteRun {
+const ddXEPre = "*Oct 23 09:48:29.345: "
+
+func ddNoteFixtureRun(t *testing.T) ddNoteRun {
+	t.Helper()
 	f := ddTestFilter("iosxe")
-	token := f.Keep(strings.Join([]string{
+	token := ddKeepStr(t, f, strings.Join([]string{
 		ddXEPre + "TPLUS: immediate connect 3, new 0x7F12",
 		ddXEPre + "TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 7)",
 		ddXEPre + "TPLUS: processing authentication login request id 1",
@@ -19,7 +22,7 @@ func ddNoteFixtureRun() ddNoteRun {
 		"*Oct 23 09:48:30.100: TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 8)",
 		"*Oct 23 09:48:30.101: TPLUS: Authorization request created for 0(alice07)",
 	}, "\n"))
-	ca := f.Keep(strings.Join([]string{
+	ca := ddKeepStr(t, f, strings.Join([]string{
 		"*Oct 23 09:49:01.000: TAC+: opened 172.100.100.1/49",
 		"*Oct 23 09:49:01.050: TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)",
 	}, "\n"))
@@ -40,7 +43,7 @@ func ddNoteFixtureRun() ddNoteRun {
 // observation. Update testdata/device_debug_note.golden.md only after reading
 // the new text.
 func TestDeviceDebugNoteMatchesTheGoldenText(t *testing.T) {
-	claim, obs, err := ddDebugNote(ddNoteFixtureRun())
+	claim, obs, err := ddDebugNote(ddNoteFixtureRun(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +59,8 @@ func TestDeviceDebugNoteMatchesTheGoldenText(t *testing.T) {
 // Platform and image come from the run: another run gives another note, and no
 // platform or image of another row is in it.
 func TestDeviceDebugNoteTakesPlatformAndImageFromTheRun(t *testing.T) {
-	a := ddNoteFixtureRun()
-	b := ddNoteFixtureRun()
+	a := ddNoteFixtureRun(t)
+	b := ddNoteFixtureRun(t)
 	b.Platform, b.Image = "some_other_platform", "Other Image 9.9"
 	ca, oa, _ := ddDebugNote(a)
 	cb, ob, _ := ddDebugNote(b)
@@ -109,7 +112,7 @@ func TestDeviceDebugNoteSaysUnmeasuredWhenNothingWasKept(t *testing.T) {
 // the note says so rather than printing a zero or a count.
 func TestDeviceDebugNoteJunosCloseAndPipeliningAreUnmeasured(t *testing.T) {
 	f := ddTestFilter("junos")
-	kept := f.Keep(strings.Join([]string{
+	kept := ddKeepStr(t, f, strings.Join([]string{
 		"Oct 23 10:00:24.100000 authd[900]: opened 172.100.100.1/49",
 		"Oct 23 10:00:24 vjunos authd[900]: sent tacacs+ authentication request message, 7",
 		"Oct 23 10:00:24 vjunos authd[900]: sent tacacs+ authorization request message, 8",
@@ -142,15 +145,15 @@ func TestDeviceDebugNoteJunosCloseAndPipeliningAreUnmeasured(t *testing.T) {
 // whatever put it in the input: the write is refused, not the line trimmed.
 func TestDeviceDebugNoteRefusesUnsafeLines(t *testing.T) {
 	for name, mut := range map[string]func(*ddNoteRun){
-		"kept secret word": func(r *ddNoteRun) { r.Cells[0].Kept += "\n09:48:31.000 TPLUS: connected socket password" },
-		"kept hex run":     func(r *ddNoteRun) { r.Cells[0].Kept += "\n09:48:31.000 TPLUS: connected socket deadbeefcafe0123" },
+		"kept payload word": func(r *ddNoteRun) { r.Cells[0].Kept += "\n09:48:31.000 TPLUS: connected socket payload" },
+		"kept hex run":      func(r *ddNoteRun) { r.Cells[0].Kept += "\n09:48:31.000 TPLUS: connected socket deadbeefcafe0123" },
 		"kept long run": func(r *ddNoteRun) {
 			r.Cells[0].Kept += deviceDebugKept("\n09:48:31.000 TPLUS: connected socket " + strings.Repeat("Zz", 14))
 		},
 		"shape payload": func(r *ddNoteRun) { r.Cells[0].Shapes = append(r.Cells[0].Shapes, "show logging => _ payload _") },
 		"capture token": func(r *ddNoteRun) { r.Cells[0].TLSConns = append(r.Cells[0].TLSConns, "conn token=x") },
 	} {
-		in := ddNoteFixtureRun()
+		in := ddNoteFixtureRun(t)
 		mut(&in)
 		wrote := false
 		err := qualWriteDebug(in, nil, func(string, string) { wrote = true })
@@ -166,7 +169,7 @@ func TestDeviceDebugNoteRefusesUnsafeLines(t *testing.T) {
 // The writer passes the run's secrets through the same gate as every results
 // note, and writes the claim and observation once when they are clean.
 func TestDeviceDebugNoteWriterGatesAndWrites(t *testing.T) {
-	in := ddNoteFixtureRun()
+	in := ddNoteFixtureRun(t)
 	n := 0
 	if err := qualWriteDebug(in, []string{"zorkmid-not-in-note"}, func(claim, obs string) {
 		n++
@@ -197,13 +200,13 @@ func TestDeviceDebugNoteWriterGatesAndWrites(t *testing.T) {
 // platform that has a close line too; a close line alone answers it elsewhere.
 func TestDeviceDebugNoteQuotesTheFailureLine(t *testing.T) {
 	f := ddTestFilter("eos")
-	kept := f.Keep("2026-10-23 10:05:13.100000 21 Aaa Tacacs: error: ssl failed 7 tls\n2026-10-23 10:05:13.200000 21 Aaa Tacacs: close 5")
+	kept := ddKeepStr(t, f, "2026-10-23 10:05:13.100000 21 Aaa Tacacs: error: ssl failed 7 tls\n2026-10-23 10:05:13.200000 21 Aaa Tacacs: close 5")
 	_, obs, err := ddDebugNote(ddNoteRun{Platform: "arista_ceos", Profile: "eos", Image: "i",
 		Cells: []ddNoteCell{{Cell: "tls_unknown_ca", Kept: kept, RawLines: 5}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(obs, "`tls_unknown_ca`: close `10:05:13.200000 Tacacs: close <masked>`, TLS failure `10:05:13.100000 Tacacs: error: ssl failed <masked> tls`") {
+	if !strings.Contains(obs, "`tls_unknown_ca`: close `2026-10-23 10:05:13.200000 21 Aaa Tacacs: close 5`, TLS failure `2026-10-23 10:05:13.100000 21 Aaa Tacacs: error: ssl failed 7 tls`") {
 		t.Errorf("the end-of-connection answer is not both lines:\n%s", obs)
 	}
 }

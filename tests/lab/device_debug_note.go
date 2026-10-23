@@ -44,11 +44,18 @@ const (
 // ddNoteFailure is a kept message that states a TLS failure.
 var ddNoteFailure = regexp.MustCompile(`(?i)\b(?:ssl|tls)\b.*\b(?:fail|failed|error)\b|\b(?:fail|failed|error)\b.*\b(?:ssl|tls)\b`)
 
-// ddNoteSafe is whether a device-derived line may go in a note: no secret word,
-// no hex run and no long token run. Keep drops such lines already; this is the
-// second gate, on what is written.
+// ddNoteSafe is whether a line that did not come through Keep (a capture line, a
+// shape) may go in a note: no secret word, no hex run and no long token run.
 func ddNoteSafe(s string) bool {
 	return !nxosDebugSecret.MatchString(s) && !nxosDebugHexRun.MatchString(s) && !nxosDebugLong.MatchString(s)
+}
+
+// ddNoteKeptSafe is whether a kept line may go in a note. Keep has redacted the
+// run's secrets and masked long runs, and a debug line may say "password" or
+// "challenge" without holding one, so this second gate is the payload word, a
+// hex run and a long run: what Keep drops or masks, so none can be here.
+func ddNoteKeptSafe(s string) bool {
+	return !ddPayload.MatchString(s) && !nxosDebugHexRun.MatchString(s) && !nxosDebugLong.MatchString(s)
 }
 
 // ddNoteLines are the kept lines of cell whose message matches re.
@@ -58,7 +65,7 @@ func ddNoteLines(p *ddProfile, kept deviceDebugKept, re *regexp.Regexp) []string
 		return nil
 	}
 	for _, ln := range strings.Split(string(kept), "\n") {
-		if _, msg := ddKeptMsg(p, ln); re.MatchString(msg) {
+		if _, msg := ddKeptMsg(ln); re.MatchString(msg) {
 			out = append(out, ln)
 		}
 	}
@@ -97,7 +104,7 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		b      strings.Builder
 		unsafe []string
 		quote  = func(ln string) string { // a device-derived line, gated
-			if !ddNoteSafe(ln) {
+			if !ddNoteKeptSafe(ln) {
 				unsafe = append(unsafe, ln)
 				return "(withheld)"
 			}
@@ -112,7 +119,7 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		// in the note are read from all of them.
 		if c.Kept != "" {
 			for _, ln := range strings.Split(string(c.Kept), "\n") {
-				if !ddNoteSafe(ln) {
+				if !ddNoteKeptSafe(ln) {
 					unsafe = append(unsafe, ln)
 				}
 			}
@@ -121,7 +128,8 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 
 	claim = fmt.Sprintf("What %s's own TACACS+ debug says about the TLS cells of a qualification run on %s: which debug line marks a "+
 		"connection, how many requests ride one connection, and how a connection ends. Every line quoted is one the platform's "+
-		"allow-list filter kept (values masked); no device line is kept as the device wrote it.", in.Platform, in.Image)
+		"debug filter kept: it carries the platform's TACACS+/AAA facility, and the run's secrets, reversible encodings "+
+		"and long runs were redacted or masked in it.", in.Platform, in.Image)
 
 	fmt.Fprintf(&b, "Platform %s, image %s. Debug on: %s (read with %s; off with %s).\n",
 		in.Platform, in.Image, ddNoteCmds(cmds.Enable), ddNoteCmds(cmds.Collect), ddNoteCmds(cmds.Disable))

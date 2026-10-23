@@ -1,402 +1,462 @@
 package lab
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
-	"net/netip"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
 )
 
 // Every fixture here is invented for the test, never a device transcript, and
-// every "secret" in it is made up. The line shapes are plausible, not
-// measured (the lab run confirms them), so a test that a shape is kept
-// proves the filter's rule, not the device's wording. Failure messages name
-// a fixture by index and never print a sentinel.
+// every "secret" in it is an obvious sentinel. Failure messages name a platform
+// and a fixture index and never print a sentinel.
 
-// ddSentinels are the made-up values no kept line may contain, whatever
-// field they sit in.
-var ddSentinels = []string{"hunter9", "fakesecret77", "faketok123abc", "deadbeefcafe0123", "QWxhZGRpbjpvcGVuIHNlc2FtZQ",
-	"mallory42", "evilgroup", "evil:list", "frobwidget", "10.66.66.66", "0xfeedface", "badmethod"}
+// The sentinels the run "handled": a TACACS+ key, a password whose base64 uses
+// the characters the standard and URL alphabets spell differently, a token and
+// a TOTP code. All are short enough that their hex forms are under sixteen
+// digits, so the payload rule does not drop the line before the redaction is
+// tried; the token is long on purpose and is caught by the payload rule in hex.
+const (
+	ddSentinelKey   = "p49-zzz"
+	ddSentinelPass  = "zz?>>?~"
+	ddSentinelType7 = "zq-42"
+	ddSentinelToken = "faketok-1x"
+	ddSentinelOTP   = "424242"
+)
 
-var ddTestFilter = func(platform string) deviceDebugFilter {
-	return deviceDebugFilter{Platform: platform, Groups: []string{"port49"},
-		Addrs: []netip.Addr{netip.MustParseAddr("172.100.100.1"), netip.MustParseAddr("172.100.100.41")}}
+func ddTestSecrets() []string {
+	return []string{ddSentinelKey, ddSentinelPass, ddSentinelType7, ddSentinelToken, ddSentinelOTP}
 }
 
-// ddCase is one platform's fixtures: lines kept verbatim, lines kept with a
-// field masked, and attacks (each holds a sentinel in a field position, or an
-// unknown shape) that must come out dropped or masked.
-type ddCase struct {
-	platform string
-	kept     []string
-	want     []string // exactly what Keep writes for each kept line, written by hand
-	masked   map[string]string
-	attacks  []string
-	// counters, over kept and the conns the kept lines describe
-	open, closed, single, dead, fallback int
-	conns                                []deviceDebugConn
+func ddTestFilter(platform string) deviceDebugFilter {
+	return deviceDebugFilter{Platform: platform, Secrets: ddTestSecrets}
 }
 
-var ddCases = []ddCase{
-	{
-		platform: "iosxe",
-		kept: []string{
-			"*Oct 22 05:00:11.100: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5",
-			"*Oct 22 05:00:11.101: TAC+: Using single connection to 172.100.100.1",
-			"*Oct 22 05:00:11.102: AAA/AUTHEN/LOGIN (00000001): Pick method list 'default'",
-			"*Oct 22 05:00:11.103: TAC+: send AUTHEN/START packet",
-			"*Oct 22 05:00:11.104: TAC+: (1234): received authen response status = PASS",
-			"*Oct 22 05:00:11.105: TAC+: send AUTHOR/REQ packet",
-			"*Oct 22 05:00:11.106: TAC+:    priv-lvl=15",
-			"*Oct 22 05:00:11.107: TAC+:    cmd=show",
-			"*Oct 22 05:00:11.108: TAC+: send ACCT/REQ packet",
-			"*Oct 22 05:00:11.109: TAC+: Closing TCP/IP 0x7F1234 connection to 172.100.100.1/49 (idle timeout)",
-			"*Oct 22 05:00:11.110: TAC+: Server 172.100.100.1 marked DEAD",
-			"*Oct 22 05:00:11.111: AAA/AUTHEN/LOGIN (00000001): Method=LOCAL",
-			"*Oct 22 05:00:11.112: TPLUS(00000001) login timer stopped",
-			"*Oct 22 05:00:11.113: TAC+: ver=192 id=1234 received AUTHEN status = PASS",
-		},
-		want: []string{
-			"05:00:11.100 TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5",
-			"05:00:11.101 TAC+: Using single connection to 172.100.100.1",
-			"05:00:11.102 AAA/AUTHEN/LOGIN (<masked>): Pick method list 'default'",
-			"05:00:11.103 TAC+: send AUTHEN/START packet",
-			"05:00:11.104 TAC+: (<n>): received authen response status = PASS",
-			"05:00:11.105 TAC+: send AUTHOR/REQ packet",
-			"05:00:11.106 TAC+:    priv-lvl=15",
-			"05:00:11.107 TAC+:    cmd=show",
-			"05:00:11.108 TAC+: send ACCT/REQ packet",
-			"05:00:11.109 TAC+: Closing TCP/IP <masked> connection to 172.100.100.1/49 (idle timeout)",
-			"05:00:11.110 TAC+: Server 172.100.100.1 marked DEAD",
-			"05:00:11.111 AAA/AUTHEN/LOGIN (<masked>): Method=LOCAL",
-			"05:00:11.112 TPLUS(<masked>) login timer stopped",
-			"05:00:11.113 TAC+: ver=192 id=<n> received AUTHEN status = PASS",
-		},
-		masked: map[string]string{
-			"*Oct 22 05:00:12.001: TAC+: Closing TCP/IP 0x7F1234 connection to 172.100.100.1/49 (idle timeout)": "05:00:12.001 TAC+: Closing TCP/IP <masked> connection to 172.100.100.1/49 (idle timeout)",
-			"*Oct 22 05:00:12.002: TAC+: Using single connection to 198.51.100.9":                               "05:00:12.002 TAC+: Using single connection to <masked>",
-			"*Oct 22 05:00:12.003: AAA/AUTHEN/LOGIN (00000001): Pick method list 'evil-list'":                   "05:00:12.003 AAA/AUTHEN/LOGIN (<masked>): Pick method list '<masked>'",
-			"*Oct 22 05:00:12.004: TAC+: Using default tacacs server-group \"evilgroup\"":                       "05:00:12.004 TAC+: Using default tacacs server-group \"<masked>\"",
-			"*Oct 22 05:00:12.005: TPLUS: Authentication start packet created for 0(mallory42)":                 "05:00:12.005 TPLUS: Authentication start packet created for <n>(<masked>)",
-			"*Oct 22 05:00:12.006: TPLUS: Authentication start packet created for 0(alice07)":                   "05:00:12.006 TPLUS: Authentication start packet created for <n>(alice07)",
-			"*Oct 22 05:00:12.007: TAC+:    priv-lvl=16":                                                        "05:00:12.007 TAC+:    priv-lvl=<masked>",
-			"*Oct 22 05:00:12.008: TAC+:    cmd-arg=frobwidget":                                                 "05:00:12.008 TAC+:    cmd-arg=<masked>",
-			"*Oct 22 05:00:12.009: TAC+:    service=shell":                                                      "05:00:12.009 TAC+:    service=shell",
-			"*Oct 22 05:00:12.010: TAC+:    service=frobwidget":                                                 "05:00:12.010 TAC+:    service=<masked>",
-			"*Oct 22 05:00:12.011: AAA/AUTHEN/LOGIN (00000001): Method=badmethod (tacacs+)":                     "05:00:12.011 AAA/AUTHEN/LOGIN (<masked>): Method=<masked> (tacacs+)",
-		},
-		attacks: []string{
-			"*Oct 22 05:00:13.001: TAC+: send AUTHEN/START packet password hunter9",
-			"*Oct 22 05:00:13.002: TAC+: payload(hex): c0 01 02 01 de ad be ef 00 00 00 05",
-			"*Oct 22 05:00:13.003: TAC+: (1234): received authen response status = PASS token faketok123abc",
-			"*Oct 22 05:00:13.004: TAC+: Server 172.100.100.1 marked DEAD deadbeefcafe0123",
-			"*Oct 22 05:00:13.005: TAC+: body QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
-			"*Oct 22 05:00:13.006: TAC+:    user=mallory42",
-			"*Oct 22 05:00:13.007: TAC+:    cmd=username fakesecret77",
-			"*Oct 22 05:00:13.008: some new debug line about frobwidget 42",
-			"*Oct 22 05:00:13.009: TAC+: Opening TCP/IP to 10.66.66.66/49 timeout=5 hunter9",
-		},
-		open: 1, closed: 1, single: 1, dead: 1, fallback: 1,
-		conns: []deviceDebugConn{{Opened: "05:00:11.100", Closed: "05:00:11.109", Reason: "idle timeout", Authen: 1, Author: 1, Acct: 1}},
-	},
-	{
-		platform: "eos",
-		kept: []string{
-			"Oct 22 05:00:11.100 Tacacs: Connecting to server 172.100.100.1 port 49",
-			"Oct 22 05:00:11.101 Tacacs: Single connect flag set",
-			"Oct 22 05:00:11.102 Aaa: Sending authentication request 7 to 172.100.100.1",
-			"Oct 22 05:00:11.103 Aaa: Received authentication reply 7 status PASS",
-			"Oct 22 05:00:11.104 Aaa: Sending authorization request 8 to 172.100.100.1",
-			"Oct 22 05:00:11.105 Aaa: Sending accounting request 9 to 172.100.100.1",
-			"Oct 22 05:00:11.106 Aaa: priv-lvl=15",
-			"Oct 22 05:00:11.107 Tacacs: Connection to 172.100.100.1:49 closed by peer",
-			"Oct 22 05:00:11.108 Tacacs: Server 172.100.100.1 marked dead",
-			"Oct 22 05:00:11.109 Aaa: Falling back to local for authentication",
-			"Oct 22 05:00:11.110 Aaa: User breakglass authenticating via method list default",
-		},
-		want: []string{
-			"05:00:11.100 Tacacs: Connecting to server 172.100.100.1 port 49",
-			"05:00:11.101 Tacacs: Single connect flag set",
-			"05:00:11.102 Aaa: Sending authentication request <n> to 172.100.100.1",
-			"05:00:11.103 Aaa: Received authentication reply <n> status PASS",
-			"05:00:11.104 Aaa: Sending authorization request <n> to 172.100.100.1",
-			"05:00:11.105 Aaa: Sending accounting request <n> to 172.100.100.1",
-			"05:00:11.106 Aaa: priv-lvl=15",
-			"05:00:11.107 Tacacs: Connection to 172.100.100.1:49 closed by peer",
-			"05:00:11.108 Tacacs: Server 172.100.100.1 marked dead",
-			"05:00:11.109 Aaa: Falling back to local for authentication",
-			"05:00:11.110 Aaa: User breakglass authenticating via method list default",
-		},
-		masked: map[string]string{
-			"Oct 22 05:00:12.001 Tacacs: Connecting to server 10.66.66.66 port 49":                        "05:00:12.001 Tacacs: Connecting to server <masked> port 49",
-			"Oct 22 05:00:12.002 Aaa: Falling back to badmethod for authentication":                       "05:00:12.002 Aaa: Falling back to <masked> for authentication",
-			"Oct 22 05:00:12.003 Aaa: User mallory42 authenticating via method list evil:list":            "05:00:12.003 Aaa: User <masked> authenticating via method list <masked>",
-			"Oct 22 05:00:12.004 Aaa: Using server group evilgroup":                                       "05:00:12.004 Aaa: Using server group <masked>",
-			"Oct 22 05:00:12.005 Aaa: Using server group port49":                                          "05:00:12.005 Aaa: Using server group port49",
-			"Oct 22 05:00:12.006 Aaa: cmd-arg=frobwidget":                                                 "05:00:12.006 Aaa: cmd-arg=<masked>",
-			"Oct 22 05:00:12.007 Aaa: cmd-arg=users":                                                      "05:00:12.007 Aaa: cmd-arg=users",
-			"2026-10-22T05:00:12.008+00:00 eos1 Tacacs: Connecting to server 2001:db8::1 port 49":         "05:00:12.008 Tacacs: Connecting to server <masked> port 49",
-			"Oct 22 05:00:12.009 Tacacs: Connection to 7061:7373:776f:7264:7365:6372:6574:3132:49 closed": "05:00:12.009 Tacacs: Connection to <masked>:49 closed",
-		},
-		attacks: []string{
-			"Oct 22 05:00:13.001 Aaa: Sending authentication request 7 to 172.100.100.1 password hunter9",
-			"Oct 22 05:00:13.002 Tacacs: payload(hex): c0 01 02 01 de ad be ef 00 00 00 05",
-			"Oct 22 05:00:13.003 Aaa: Received authentication reply 7 status PASS secret fakesecret77",
-			"Oct 22 05:00:13.004 Tacacs: key deadbeefcafe0123",
-			"Oct 22 05:00:13.005 Aaa: user=mallory42",
-			"Oct 22 05:00:13.006 Aaa: some new debug line about frobwidget 42",
-			"Oct 22 05:00:13.007 Aaa: Received authentication reply 7 status QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
-			"Oct 22 05:00:13.008 Sshd: Received authentication reply 7 status PASS faketok123abc",
-		},
-		open: 1, closed: 1, single: 1, dead: 1, fallback: 1,
-		conns: []deviceDebugConn{{Opened: "05:00:11.100", Closed: "05:00:11.107", Reason: "closed by peer", Authen: 1, Author: 1, Acct: 1}},
-	},
-	{
-		platform: "iosxr",
-		kept: []string{
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: Opening connection to 172.100.100.1 port 49",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.101 UTC: tacacsd[1000]: Single connection negotiated",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.102 UTC: tacacsd[1000]: Sending authentication request 3 to 172.100.100.1",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.103 UTC: tacacsd[1000]: Received authentication reply 3 status PASS",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.104 UTC: tacacsd[1000]: Sending authorization request 4 to 172.100.100.1",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.105 UTC: tacacsd[1000]: Sending accounting request 5 to 172.100.100.1",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.106 UTC: aaad[1001]: service=shell",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.107 UTC: tacacsd[1000]: Closing connection to 172.100.100.1 port 49 (remote reset)",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.108 UTC: tacacsd[1000]: Server 172.100.100.1 marked dead",
-			"RP/0/RP0/CPU0:Oct 22 05:00:11.109 UTC: aaad[1001]: Falling back to local for authentication",
-		},
-		want: []string{
-			"05:00:11.100 tacacsd: Opening connection to 172.100.100.1 port 49",
-			"05:00:11.101 tacacsd: Single connection negotiated",
-			"05:00:11.102 tacacsd: Sending authentication request <n> to 172.100.100.1",
-			"05:00:11.103 tacacsd: Received authentication reply <n> status PASS",
-			"05:00:11.104 tacacsd: Sending authorization request <n> to 172.100.100.1",
-			"05:00:11.105 tacacsd: Sending accounting request <n> to 172.100.100.1",
-			"05:00:11.106 aaad: service=shell",
-			"05:00:11.107 tacacsd: Closing connection to 172.100.100.1 port 49 (remote reset)",
-			"05:00:11.108 tacacsd: Server 172.100.100.1 marked dead",
-			"05:00:11.109 aaad: Falling back to local for authentication",
-		},
-		masked: map[string]string{
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.001 UTC: tacacsd[1000]: Opening connection to 10.66.66.66 port 49":       "05:00:12.001 tacacsd: Opening connection to <masked> port 49",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.002 UTC: aaad[1001]: service=frobwidget":                                 "05:00:12.002 aaad: service=<masked>",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.003 UTC: aaad[1001]: User mallory42 authenticating via method list evil": "05:00:12.003 aaad: User <masked> authenticating via method list <masked>",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.004 UTC: aaad[1001]: Using server group evilgroup":                       "05:00:12.004 aaad: Using server group <masked>",
-		},
-		attacks: []string{
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.001 UTC: tacacsd[1000]: Sending authentication request 3 to 172.100.100.1 password hunter9",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.002 UTC: tacacsd[1000]: payload(hex): c0 01 02 01 de ad be ef 00 00 00 05",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.003 UTC: tacacsd[1000]: Received authentication reply 3 status PASS token faketok123abc",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.004 UTC: aaad[1001]: user=mallory42",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.005 UTC: aaad[1001]: cmd=username fakesecret77",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.006 UTC: tacacsd[1000]: some new debug line about frobwidget 42",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.007 UTC: tacacsd[1000]: key deadbeefcafe0123",
-			"RP/0/RP0/CPU0:Oct 22 05:00:13.008 UTC: tacacsd[1000]: body QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
-		},
-		open: 1, closed: 1, single: 1, dead: 1, fallback: 1,
-		conns: []deviceDebugConn{{Opened: "05:00:11.100", Closed: "05:00:11.107", Reason: "remote reset", Authen: 1, Author: 1, Acct: 1}},
-	},
-	{
-		platform: "junos",
-		kept: []string{
-			"Oct 22 05:00:11.100 vjunos mgd[900]: connecting to server 172.100.100.1 port 49",
-			"Oct 22 05:00:11.101 vjunos mgd[900]: single-connect flag set",
-			"Oct 22 05:00:11.102 vjunos mgd[900]: sending authentication request 1 to 172.100.100.1",
-			"Oct 22 05:00:11.103 vjunos mgd[900]: received authentication reply 1 status PASS",
-			"Oct 22 05:00:11.104 vjunos mgd[900]: sending authorization request 2 to 172.100.100.1",
-			"Oct 22 05:00:11.105 vjunos mgd[900]: sending accounting request 3 to 172.100.100.1",
-			"Oct 22 05:00:11.106 vjunos mgd[900]: priv-lvl=15",
-			"Oct 22 05:00:11.108 vjunos mgd[900]: server 172.100.100.1 marked dead",
-			"Oct 22 05:00:11.109 vjunos mgd[900]: falling back to local",
-		},
-		want: []string{
-			"05:00:11.100 mgd: connecting to server 172.100.100.1 port 49",
-			"05:00:11.101 mgd: single-connect flag set",
-			"05:00:11.102 mgd: sending authentication request <n> to 172.100.100.1",
-			"05:00:11.103 mgd: received authentication reply <n> status PASS",
-			"05:00:11.104 mgd: sending authorization request <n> to 172.100.100.1",
-			"05:00:11.105 mgd: sending accounting request <n> to 172.100.100.1",
-			"05:00:11.106 mgd: priv-lvl=15",
-			"05:00:11.108 mgd: server 172.100.100.1 marked dead",
-			"05:00:11.109 mgd: falling back to local",
-		},
-		masked: map[string]string{
-			"Oct 22 05:00:12.001 vjunos mgd[900]: connecting to server 10.66.66.66 port 49":                               "05:00:12.001 mgd: connecting to server <masked> port 49",
-			"Oct 22 05:00:12.002 vjunos mgd[900]: cmd-arg=frobwidget":                                                     "05:00:12.002 mgd: cmd-arg=<masked>",
-			"Oct 22 05:00:12.003 vjunos mgd[900]: user mallory42 authenticating via method list evil":                     "05:00:12.003 mgd: user <masked> authenticating via method list <masked>",
-			"Oct 22 05:00:12.004 vjunos mgd[900]: falling back to badmethod":                                              "05:00:12.004 mgd: falling back to <masked>",
-			"Oct 22 05:00:12.005 vjunos mgd[900]: sending authentication request 1 to 172.100.100.1 on socket 0xfeedface": "",
-		},
-		attacks: []string{
-			"Oct 22 05:00:13.001 vjunos mgd[900]: sending authentication request 1 to 172.100.100.1 password hunter9",
-			"Oct 22 05:00:13.002 vjunos mgd[900]: payload(hex): c0 01 02 01 de ad be ef 00 00 00 05",
-			"Oct 22 05:00:13.003 vjunos mgd[900]: received authentication reply 1 status PASS token faketok123abc",
-			"Oct 22 05:00:13.004 vjunos mgd[900]: user=mallory42",
-			"Oct 22 05:00:13.005 vjunos mgd[900]: cmd=username fakesecret77",
-			"Oct 22 05:00:13.006 vjunos mgd[900]: some new debug line about frobwidget 42",
-			"Oct 22 05:00:13.007 vjunos mgd[900]: key deadbeefcafe0123",
-			"Oct 22 05:00:13.008 vjunos mgd[900]: body QWxhZGRpbjpvcGVuIHNlc2FtZQ==",
-			"Oct 22 05:00:13.009 vjunos cron[900]: connecting to server 172.100.100.1 port 49 hunter9",
-		},
-		// Junos has no close line (step 1), so the connection never closes here.
-		open: 1, closed: 0, single: 1, dead: 1, fallback: 1,
-		conns: []deviceDebugConn{{Opened: "05:00:11.100", Authen: 1, Author: 1, Acct: 1}},
-	},
+// ddFacility is a line prefix each platform's facility keeps, in the shape of
+// the step 4 samples where they showed one.
+var ddFacility = map[string]string{
+	"iosxr": "RP/0/RP0/CPU0:Oct 23 09:39:03.054 UTC: tacacsd[1000]: ",
+	"iosxe": "*Oct 23 09:48:29.345: TAC+: ",
+	"eos":   "Oct 23 09:40:00.123 Aaa: ",
+	"junos": "Oct 23 09:41:00.123 vjunos tacplus[1234]: ",
+	"nxos":  "05:00:11.100001 tacacsd: ",
 }
 
-func ddCaseFor(t *testing.T, platform string) ddCase {
+var ddPlatforms = []string{"iosxr", "iosxe", "eos", "junos", "nxos"}
+
+func ddKeep(t *testing.T, f deviceDebugFilter, text string) string {
 	t.Helper()
-	for _, c := range ddCases {
-		if c.platform == platform {
-			return c
-		}
+	k, err := f.Keep(text)
+	if err != nil {
+		t.Fatalf("%s: Keep failed: %v", f.Platform, err)
 	}
-	t.Fatalf("no fixtures for %s", platform)
-	return ddCase{}
+	return string(k)
 }
 
-// ddNorm is the kept form of a verbatim fixture line: what Keep writes for
-// it.
-func ddNorm(f deviceDebugFilter, ln string) string { return ddKeep(f, ln) }
-
-func ddKeep(f deviceDebugFilter, text string) string { return string(f.Keep(text)) }
-
-func TestDeviceDebugKeepsTheAllowedShapes(t *testing.T) {
-	for _, c := range ddCases {
-		f := ddTestFilter(c.platform)
-		if len(c.want) != len(c.kept) {
-			t.Fatalf("%s: %d fixtures, %d expected lines", c.platform, len(c.kept), len(c.want))
-		}
-		got := strings.Split(ddKeep(f, strings.Join(c.kept, "\n")), "\n")
-		if !slices.Equal(got, c.want) {
-			t.Errorf("%s: kept\n%s\nwant\n%s", c.platform, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
-		}
+// ddEncodings are the forms of s the tests plant, written without the
+// production code: the literal, its hex in both cases, and its base64 in both
+// alphabets.
+func ddEncodings(s string) map[string]string {
+	b := []byte(s)
+	return map[string]string{
+		"literal":    s,
+		"upper":      strings.ToUpper(s),
+		"hex_lower":  hex.EncodeToString(b),
+		"hex_upper":  strings.ToUpper(hex.EncodeToString(b)),
+		"base64_std": base64.StdEncoding.EncodeToString(b),
+		"base64_url": base64.URLEncoding.EncodeToString(b),
+		"base64_raw": base64.RawStdEncoding.EncodeToString(b),
 	}
 }
 
-func TestDeviceDebugMasksOnlyTheLabsValues(t *testing.T) {
-	for _, c := range ddCases {
-		f := ddTestFilter(c.platform)
-		for in, want := range c.masked {
-			got := ddKeep(f, in)
-			if want == "" {
-				if got != "" {
-					t.Errorf("%s: a line meant to drop was kept (%d bytes)", c.platform, len(got))
-				}
-				continue
-			}
-			if got != want {
-				t.Errorf("%s: %.50q...\n kept %q\n want %q", c.platform, in, got, want)
+// ddSurvives is whether any form of any secret is in text, case-insensitively.
+func ddSurvives(text string, secrets []string, withType7 bool) (string, bool) {
+	low := strings.ToLower(text)
+	for i, s := range secrets {
+		for name, enc := range ddEncodings(s) {
+			if strings.Contains(low, strings.ToLower(enc)) {
+				return name + " of secret " + string(rune('0'+i)), true
 			}
 		}
-	}
-}
-
-// The binding rule: a sentinel in any field position, or an unknown shape,
-// never survives.
-func TestDeviceDebugNoSentinelSurvivesKeep(t *testing.T) {
-	for _, c := range ddCases {
-		f := ddTestFilter(c.platform)
-		for i, ln := range c.attacks {
-			got := ddKeep(f, ln)
-			for _, s := range ddSentinels {
-				if strings.Contains(got, s) {
-					t.Errorf("%s: attack %d: a sentinel survived (%d bytes kept)", c.platform, i, len(got))
+		if withType7 {
+			for salt := 0; salt < 16; salt++ {
+				if strings.Contains(low, strings.ToLower(ddType7(s, salt))) {
+					return "type7 of secret " + string(rune('0'+i)), true
 				}
 			}
-			if strings.Contains(strings.ToLower(got), "payload") {
-				t.Errorf("%s: attack %d: a payload line survived", c.platform, i)
-			}
 		}
-		// And the whole mixed capture, as the harness passes it.
-		all := strings.Join(append(append([]string{}, c.kept...), c.attacks...), "\n")
-		for key := range c.masked {
-			all += "\n" + key
+	}
+	return "", false
+}
+
+// The fixtures mean something only if the base64 alphabets differ for the
+// password and the encodings of the others fit under the payload rule.
+func TestDeviceDebugFixturesAreMeaningful(t *testing.T) {
+	e := ddEncodings(ddSentinelPass)
+	if e["base64_std"] == e["base64_url"] {
+		t.Errorf("the password's standard and URL base64 are the same, so the URL form tests nothing")
+	}
+	for _, s := range []string{ddSentinelKey, ddSentinelPass, ddSentinelType7, ddSentinelOTP} {
+		if nxosDebugHexRun.MatchString(ddEncodings(s)["hex_lower"]) || nxosDebugHexRun.MatchString(ddType7(s, 5)) && s != ddSentinelKey && s != ddSentinelPass {
+			t.Errorf("the payload rule would drop the fixture's own encoding of a secret before the redaction is tried")
 		}
-		got := ddKeep(f, all)
-		for _, s := range ddSentinels {
-			if strings.Contains(got, s) {
-				t.Errorf("%s: a sentinel survived the whole capture", c.platform)
+	}
+}
+
+// The lines step 4 showed each family printing are kept as they are, because
+// they carry only a facility and no secret.
+func TestDeviceDebugKeepsTheStep4Shapes(t *testing.T) {
+	const xr = "RP/0/RP0/CPU0:Oct 23 09:39:03.054 UTC: tacacsd[1000]: "
+	const xe = "*Oct 23 09:48:29.345: "
+	lines := map[string][]string{
+		"iosxr": {
+			xr + "packet 0x1 start 0x2 login 3 session 0x4f server 172.100.100.1/49 fd=7",
+			xr + "packet author 0x1 start 0x2 session 17 server 172.100.100.1/49 fd=7",
+			xr + "packet 0x1 request 0x2 start 0x3 session 0x4f server 172.100.100.1/49 fd=7",
+			xr + "reply 0x1 session 0x4f from server 172.100.100.1/49 fd=7",
+			xr + "socket created 5 172.100.100.1/49 ok",
+			// No process name: the facility takes the close line by its words.
+			"RP/0/RP0/CPU0:Oct 23 09:39:03.099 UTC: connection closed 5 172.100.100.1 port 49",
+		},
+		"iosxe": {
+			xe + "TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 7)",
+			xe + "TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)",
+			xe + "TPLUS(00000001)/0/7F1234: connected socket 5",
+			xe + "TPLUS: immediate connect 3, new 0x7F12",
+			xe + "TAC+: (1234): opened 172.100.100.1/49 ok",
+		},
+		"eos": {
+			ddFacility["eos"] + "Tacacs: close 5",
+			ddFacility["eos"] + "Sending authentication request 3 to 172.100.100.1",
+		},
+		"junos": {
+			ddFacility["junos"] + "sending authentication request 3 to 172.100.100.1",
+			"Oct 23 09:41:00.124 vjunos authd[900]: tacplus: connecting to server 172.100.100.1",
+		},
+		"nxos": {
+			ddFacility["nxos"] + "construct_tac_req(1762):aaa session id: 7, aaa type: 2, user_len=5",
+			"05:00:11.100002 aaad: Fall back method none succeeded",
+		},
+	}
+	for _, p := range ddPlatforms {
+		got := ddKeep(t, ddTestFilter(p), strings.Join(lines[p], "\n"))
+		if got != strings.Join(lines[p], "\n") {
+			t.Errorf("%s: the step 4 shapes were not kept as they are:\n%s", p, got)
+		}
+	}
+}
+
+// Step 1: a line without the platform's facility is dropped, whatever it says.
+func TestDeviceDebugDropsLinesWithoutTheFacility(t *testing.T) {
+	for _, p := range ddPlatforms {
+		for i, ln := range []string{
+			"Oct 23 09:40:00.123 sshd[77]: Accepted publickey for operator",
+			"Oct 23 09:40:00.124 kernel: eth0: link up",
+			"RP/0/RP0/CPU0:Oct 23 09:39:03.054 UTC: sshd[1000]: session opened",
+		} {
+			if got := ddKeep(t, ddTestFilter(p), ln); got != "" {
+				t.Errorf("%s: line %d without the facility was kept", p, i)
 			}
 		}
 	}
 }
 
-// An unknown platform keeps nothing: the filter fails closed.
+// Step 2: a payload line is dropped whole, hex or not.
+func TestDeviceDebugDropsPayloadLines(t *testing.T) {
+	for _, p := range ddPlatforms {
+		f := ddTestFilter(p)
+		for i, body := range []string{
+			"in tac payload(hex): c0 1 2 1 de ad be ef 0 0 0 5",
+			"packet Payload follows",
+			"body 1234567812345678",
+			"body 1a 2b 3c 4d 5e 6f 70 81 92",
+			"body 0123456789ABCDEF0123",
+		} {
+			if got := ddKeep(t, f, ddFacility[p]+body); got != "" {
+				t.Errorf("%s: payload line %d was kept", p, i)
+			}
+		}
+	}
+}
+
+// Step 3: every known secret, in every form, inside a facility line, on every
+// platform, is gone from what Keep returns.
+func TestDeviceDebugNoKnownSecretSurvives(t *testing.T) {
+	secrets := ddTestSecrets()
+	for _, p := range ddPlatforms {
+		f := ddTestFilter(p)
+		var in []string
+		for _, s := range secrets {
+			for name, enc := range ddEncodings(s) {
+				in = append(in, ddFacility[p]+"seen "+name+" ["+enc+"] after the request")
+			}
+			for _, salt := range []int{0, 5, 11, 15} {
+				in = append(in, ddFacility[p]+"cfg "+ddType7(s, salt)+" end")
+			}
+		}
+		got := ddKeep(t, f, strings.Join(in, "\n"))
+		if what, bad := ddSurvives(got, secrets, true); bad {
+			t.Errorf("%s: a secret survived Keep (%s)", p, what)
+		}
+		if !strings.Contains(got, "<redacted>") {
+			t.Errorf("%s: nothing was redacted", p)
+		}
+	}
+}
+
+// The forms the payload rule does not drop must be redacted by their own rule:
+// one case per form, so dropping a form turns exactly this test red.
+func TestDeviceDebugEachFormIsRedactedByItsOwnRule(t *testing.T) {
+	for _, form := range []string{"literal", "upper", "hex_lower", "hex_upper", "base64_std", "base64_url", "base64_raw"} {
+		for _, p := range ddPlatforms {
+			enc := ddEncodings(ddSentinelPass)[form]
+			if form == "hex_lower" || form == "hex_upper" {
+				enc = ddEncodings(ddSentinelKey)[form]
+			}
+			got := ddKeep(t, ddTestFilter(p), ddFacility[p]+"x "+enc+" y")
+			if !strings.Contains(got, "<redacted>") || strings.Contains(strings.ToLower(got), strings.ToLower(enc)) {
+				t.Errorf("%s: the %s form was not redacted", p, form)
+			}
+		}
+	}
+}
+
+// Type 7: the encodings of a known secret at every salt are redacted by the
+// 16-salt enumeration, wherever they appear.
+func TestDeviceDebugRedactsEverySaltOfTypeSeven(t *testing.T) {
+	for _, p := range ddPlatforms {
+		for salt := 0; salt < 16; salt++ {
+			enc := ddType7(ddSentinelType7, salt)
+			got := ddKeep(t, ddTestFilter(p), ddFacility[p]+"cfg "+enc+" end")
+			if strings.Contains(strings.ToLower(got), strings.ToLower(enc)) {
+				t.Errorf("%s: the type 7 encoding at salt %d survived", p, salt)
+			}
+		}
+	}
+}
+
+// The reversible encodings are redacted by shape, without knowing the secret.
+func TestDeviceDebugRedactsReversibleEncodingsByShape(t *testing.T) {
+	const j9 = "$9$qf3nCtu1hSyKvLx"
+	for _, p := range ddPlatforms {
+		f := ddTestFilter(p)
+		for name, c := range map[string]struct{ in, gone string }{
+			"junos_9":      {"set secret " + j9, j9},
+			"junos_9_bare": {"x " + j9 + " y", j9},
+			"crypt_1":      {"hash $1$salt$abc12345 here", "abc12345"},
+			"crypt_5":      {"hash $5$salt$abc12345 here", "abc12345"},
+			"crypt_6":      {"hash $6$salt$abc12345 here", "abc12345"},
+			"crypt_8":      {"hash $8$salt$abc12345 here", "abc12345"},
+			"type7_key":    {"tacacs-server key 7 0822455D0A16", "0822455D0A16"},
+			"type7_pass":   {"username x password 7 0822455D0A16", "0822455D0A16"},
+			"type7_secret": {"enable secret 7 0822455D0A16", "0822455D0A16"},
+			"key_0":        {"tacacs-server key 0 plainvalue", "plainvalue"},
+			"key_6":        {"tacacs-server key 6 plainvalue", "plainvalue"},
+			"pass_8":       {"password 8 plainvalue", "plainvalue"},
+			"secret_9":     {"secret 9 plainvalue", "plainvalue"},
+		} {
+			got := ddKeep(t, f, ddFacility[p]+c.in)
+			if strings.Contains(got, c.gone) || !strings.Contains(got, "<redacted>") {
+				t.Errorf("%s: %s was not redacted by shape", p, name)
+			}
+		}
+	}
+	// A key word without a value shape is left alone.
+	if got := ddKeep(t, ddTestFilter("eos"), ddFacility["eos"]+"key exchange done"); !strings.Contains(got, "key exchange done") {
+		t.Errorf("a harmless key line was changed: %q", got)
+	}
+}
+
+// Step 4: a run of 24 or more token characters is masked.
+func TestDeviceDebugMasksLongRuns(t *testing.T) {
+	run := strings.Repeat("Qq", 12)
+	for _, p := range ddPlatforms {
+		got := ddKeep(t, ddTestFilter(p), ddFacility[p]+"id "+run+" and "+run[:23])
+		if strings.Contains(got, run) || !strings.Contains(got, "<LONG>") || !strings.Contains(got, run[:23]) {
+			t.Errorf("%s: long run handling wrong: %q", p, got)
+		}
+	}
+}
+
+// Step 5: if a known secret survives the scrub, the whole capture is discarded
+// with an error that names no device text.
+func TestDeviceDebugFailsClosed(t *testing.T) {
+	broken := ddRedactSecrets
+	t.Cleanup(func() { ddRedactSecrets = broken })
+	ddRedactSecrets = func(text string, forms []string) string { return text } // a redaction that does nothing
+	for _, p := range ddPlatforms {
+		in := ddFacility[p] + "benign line one\n" + ddFacility[p] + "leak " + ddSentinelKey + " end\n" + ddFacility[p] + "benign line two"
+		kept, err := ddTestFilter(p).Keep(in)
+		if !errors.Is(err, errDeviceDebugLeak) || kept != "" {
+			t.Errorf("%s: a leaked secret did not discard the capture (err %v, %d bytes)", p, err, len(kept))
+			continue
+		}
+		if strings.Contains(err.Error(), ddSentinelKey) || strings.Contains(err.Error(), "benign") {
+			t.Errorf("%s: the error names device text", p)
+		}
+	}
+	// A broken type 7 enumeration is caught the same way.
+	ddRedactSecrets = func(text string, forms []string) string {
+		return broken(text, slices.DeleteFunc(slices.Clone(forms), func(f string) bool { return f == strings.ToLower(ddType7(ddSentinelType7, 3)) }))
+	}
+	if _, err := ddTestFilter("eos").Keep(ddFacility["eos"] + "cfg " + ddType7(ddSentinelType7, 3)); !errors.Is(err, errDeviceDebugLeak) {
+		t.Errorf("a surviving type 7 form did not fail closed: %v", err)
+	}
+}
+
+// The capture is discarded as a whole: captureDeviceDebug returns nothing and
+// the error, and still turns the debug off.
+func TestDeviceDebugCollectDiscardsAfterALeak(t *testing.T) {
+	broken := ddRedactSecrets
+	t.Cleanup(func() { ddRedactSecrets = broken })
+	ddRedactSecrets = func(text string, forms []string) string { return text }
+	cmds := deviceDebugCmds["eos"]
+	var ran []string
+	run := func(cmd string) (string, error) {
+		ran = append(ran, cmd)
+		if cmd == cmds.Collect[0] {
+			return ddFacility["eos"] + "ok line\n" + ddFacility["eos"] + "leak " + ddSentinelKey, nil
+		}
+		return "", nil
+	}
+	kept, err := captureDeviceDebug(ddTestFilter("eos"), run, func() error { return nil })
+	if !errors.Is(err, errDeviceDebugLeak) || kept != "" {
+		t.Errorf("err %v, %d bytes kept", err, len(kept))
+	}
+	if ran[len(ran)-1] != cmds.Disable[len(cmds.Disable)-1] {
+		t.Errorf("debug was not turned off after a leak: %v", ran)
+	}
+}
+
+// The marker Keep writes is not itself a leak: a secret that spells a piece of
+// it cannot fail a clean capture.
+func TestDeviceDebugMarkerIsNotALeak(t *testing.T) {
+	f := deviceDebugFilter{Platform: "eos", Secrets: func() []string { return []string{"acted", "ong"} }}
+	k, err := f.Keep(ddFacility["eos"] + "acted here " + strings.Repeat("Zz", 14) + " ong")
+	if err != nil {
+		t.Fatalf("a clean capture failed closed: %v", err)
+	}
+	if strings.Contains(string(k), "acted") && !strings.Contains(string(k), "<redacted>") {
+		t.Errorf("not redacted: %q", k)
+	}
+}
+
 func TestDeviceDebugUnknownPlatformKeepsNothing(t *testing.T) {
-	f := deviceDebugFilter{Platform: "nope", Groups: []string{"port49"}}
-	if got := ddKeep(f, strings.Join(ddCases[1].kept, "\n")); got != "" {
+	if got := ddKeep(t, deviceDebugFilter{Platform: "nope"}, ddFacility["eos"]+"anything"); got != "" {
 		t.Errorf("kept %d bytes for an unknown platform", len(got))
 	}
 }
 
-// A hex run or a long token with no keyword is dropped or masked, in a shape
-// the allow-list would admit.
-func TestDeviceDebugHexAndLongRuns(t *testing.T) {
-	f := ddTestFilter("eos")
-	for _, in := range []string{
-		"Oct 22 05:00:14.001 Aaa: Sending authentication request 1a 2b 3c 4d 5e 6f 70 81 92 to 172.100.100.1",
-		"Oct 22 05:00:14.002 Aaa: Sending authentication request 1234567812345678 to 172.100.100.1",
-	} {
-		if got := ddKeep(f, in); got != "" {
-			t.Errorf("kept %q", got)
-		}
-	}
-	long := "Oct 22 05:00:14.003 Aaa: User " + strings.Repeat("Qq", 20) + " authenticating via method list default"
-	if got := ddKeep(f, long); got != "" {
-		t.Errorf("a line with a long token was kept")
-	}
-	// Sixteen contiguous hex digits drop the line even where the shape and the
-	// lab list admit the value.
-	h := deviceDebugFilter{Platform: "eos", Groups: []string{"0123456789abcdef"}}
-	if got := ddKeep(h, "Oct 22 05:00:14.005 Aaa: Using server group 0123456789abcdef"); got != "" {
-		t.Errorf("a lab value that is a hex run was kept")
-	}
-	// A base64-looking run drops the line even where the shape admits it:
-	// here the lab's own group name is the long run.
-	g := deviceDebugFilter{Platform: "eos", Groups: []string{strings.Repeat("Zz", 14)}}
-	if got := ddKeep(g, "Oct 22 05:00:14.004 Aaa: Using server group "+strings.Repeat("Zz", 14)); got != "" {
-		t.Errorf("a lab value that is a long run was kept")
+func TestDeviceDebugNilSecretsStillScrubsByShape(t *testing.T) {
+	got := ddKeep(t, deviceDebugFilter{Platform: "eos"}, ddFacility["eos"]+"x $9$qf3nCtu1hSyKvLx y")
+	if strings.Contains(got, "qf3nCtu1hSyKvLx") {
+		t.Errorf("a filter without secrets skipped the shape rules")
 	}
 }
 
-func TestDeviceDebugCountersAndConnections(t *testing.T) {
-	for _, c := range ddCases {
-		f := ddTestFilter(c.platform)
-		kept := ddKeep(f, strings.Join(c.kept, "\n"))
+// The counters, over kept lines in the step 4 shapes.
+func TestDeviceDebugCounters(t *testing.T) {
+	const xr = "RP/0/RP0/CPU0:Oct 23 09:39:03.054 UTC: tacacsd[1000]: "
+	const xe = "*Oct 23 09:48:29.345: "
+	type want struct {
+		open, closed, single, dead, fallback int
+		conns                                []deviceDebugConn
+	}
+	cases := []struct {
+		platform string
+		in       []string
+		want     want
+	}{
+		{"iosxr", []string{
+			xr + "socket connected 5 172.100.100.1/49",
+			xr + "packet 0x1 start 0x2 login 3 session 0x4f server 172.100.100.1/49 fd=7",
+			xr + "packet author 0x1 start 0x2 session 17 server 172.100.100.1/49 fd=7",
+			xr + "packet 0x1 request 0x2 start 0x3 session 17 server 172.100.100.1/49 fd=7",
+			"RP/0/RP0/CPU0:Oct 23 09:39:03.099 UTC: connection closed 5 172.100.100.1 port 49",
+		}, want{open: 1, closed: 1, conns: []deviceDebugConn{{Opened: "09:39:03.054", Closed: "09:39:03.099", Authen: 1, Author: 1, Acct: 1}}}},
+		{"iosxe", []string{
+			xe + "TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 7)",
+			xe + "TPLUS: processing authentication login request id 1",
+			xe + "TPLUS: Authorization request created for 0(alice07)",
+			xe + "TAC+: Using single connection to 172.100.100.1",
+			"*Oct 23 09:48:30.001: TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)",
+		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:48:29.345", Closed: "09:48:30.001", Authen: 1, Author: 1}}}},
+		{"eos", []string{
+			ddFacility["eos"] + "Tacacs: Connecting to 172.100.100.1 port 49",
+			ddFacility["eos"] + "Sending authentication request 1 to 172.100.100.1",
+			ddFacility["eos"] + "Single connect negotiated",
+			ddFacility["eos"] + "Tacacs: Connection to 172.100.100.1:49 closed by peer",
+		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:40:00.123", Closed: "09:40:00.123", Authen: 1, Reason: "closed by peer"}}}},
+		{"junos", []string{
+			"Oct 23 09:41:00.100 vjunos tacplus[1]: connecting to server 172.100.100.1",
+			"Oct 23 09:41:00.101 vjunos tacplus[1]: sending accounting request 2",
+		}, want{open: 1, conns: []deviceDebugConn{{Opened: "09:41:00.100", Acct: 1}}}},
+		{"nxos", []string{
+			"05:00:11.100001 tacacsd: nxos_ssl_open success",
+			"05:00:11.100002 tacacsd: construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5",
+			"05:00:11.100003 aaad: Fall back method none succeeded",
+			"05:00:11.100004 tacacsd: clean_up_sock_sm_node: freeing ssl_ctx for sock_fd 32",
+			"05:00:11.100005 tacacsd: clean_up_sock_sm_node(4564): mark server(172.100.100.1) dead",
+		}, want{open: 1, closed: 1, dead: 1, fallback: 1, conns: []deviceDebugConn{{Opened: "05:00:11.100001", Closed: "05:00:11.100004", Authen: 1}}}},
+	}
+	for _, c := range cases {
+		kept := ddKeep(t, ddTestFilter(c.platform), strings.Join(c.in, "\n"))
 		s := deviceDebugSummarize(c.platform, deviceDebugKept(kept))
-		if s.Opened != c.open || s.Closed != c.closed || s.SingleConnect != c.single || s.ServerDead != c.dead || s.Fallback != c.fallback {
+		if s.Opened != c.want.open || s.Closed != c.want.closed || s.SingleConnect != c.want.single || s.ServerDead != c.want.dead || s.Fallback != c.want.fallback {
 			t.Errorf("%s: counters %+v", c.platform, s)
 		}
-		if len(s.Conns) != len(c.conns) {
-			t.Errorf("%s: %d conns, want %d", c.platform, len(s.Conns), len(c.conns))
-			continue
+		if !slices.Equal(s.Conns, c.want.conns) {
+			t.Errorf("%s: conns %+v, want %+v", c.platform, s.Conns, c.want.conns)
 		}
-		for i, w := range c.conns {
-			g := s.Conns[i]
-			if g != w {
-				t.Errorf("%s: conn %d = %+v, want %+v", c.platform, i, g, w)
-			}
-		}
+	}
+}
+
+// Junos has no close line: the summary says the close is unknown, and the arm
+// text does not print 0.
+func TestDeviceDebugJunosCloseIsUnknownNotZero(t *testing.T) {
+	kept := ddKeep(t, ddTestFilter("junos"), "Oct 23 09:41:00.100 vjunos tacplus[1]: connecting to server 172.100.100.1")
+	s := deviceDebugSummarize("junos", deviceDebugKept(kept))
+	if !s.CloseUnknown || s.Closed != 0 {
+		t.Errorf("junos summary %+v", s)
+	}
+	text := ddArmSummary("junos", "tls_token_login", deviceDebugKept(kept), 40, nil)
+	if !strings.Contains(text, "closed=unknown") || strings.Contains(text, "closed=0") {
+		t.Errorf("the arm text does not say the close is unknown:\n%s", text)
+	}
+	e := deviceDebugSummarize("eos", deviceDebugKept(ddFacility["eos"]+"Tacacs: close 5"))
+	if e.CloseUnknown || e.Closed != 1 {
+		t.Errorf("eos summary %+v", e)
+	}
+	if !strings.Contains(ddArmSummary("eos", "c", "", 0, nil), "closed=0") {
+		t.Errorf("eos arm text lost its zero")
+	}
+}
+
+func TestDeviceDebugJunosSummaryStatesTheAttribution(t *testing.T) {
+	if !strings.Contains(ddArmSummary("junos", "c", "", 0, nil), "attributed to the last connection opened in the trace") {
+		t.Errorf("the junos summary does not state how requests are attributed")
+	}
+	if strings.Contains(ddArmSummary("eos", "c", "", 0, nil), "attributed to the last connection") {
+		t.Errorf("another platform carries the junos note")
 	}
 }
 
 // Requests before any open belong to a connection opened earlier (reuse), and
 // two connections keep their own counts: the pipelining question.
 func TestDeviceDebugRequestsPerConnection(t *testing.T) {
-	f := ddTestFilter("eos")
+	p := ddFacility["eos"]
 	in := strings.Join([]string{
-		"Oct 22 05:00:01.000 Aaa: Sending authentication request 1 to 172.100.100.1",
-		"Oct 22 05:00:02.000 Tacacs: Connecting to server 172.100.100.1 port 49",
-		"Oct 22 05:00:02.100 Aaa: Sending authentication request 2 to 172.100.100.1",
-		"Oct 22 05:00:02.200 Aaa: Sending authorization request 3 to 172.100.100.1",
-		"Oct 22 05:00:03.000 Tacacs: Connecting to server 172.100.100.1 port 49",
-		"Oct 22 05:00:03.100 Aaa: Sending accounting request 4 to 172.100.100.1",
-		"Oct 22 05:00:04.000 Tacacs: Connection to 172.100.100.1:49 closed",
+		p + "Sending authentication request 1 to 172.100.100.1",
+		p + "Tacacs: Connecting to server 172.100.100.1 port 49",
+		p + "Sending authentication request 2 to 172.100.100.1",
+		p + "Sending authorization request 3 to 172.100.100.1",
+		p + "Tacacs: Connecting to server 172.100.100.1 port 49",
+		p + "Sending accounting request 4 to 172.100.100.1",
+		p + "Tacacs: Connection to 172.100.100.1:49 closed",
 	}, "\n")
-	s := deviceDebugSummarize("eos", f.Keep(in))
+	s := deviceDebugSummarize("eos", deviceDebugKept(ddKeep(t, ddTestFilter("eos"), in)))
 	want := []deviceDebugConn{{Authen: 1}, {Authen: 1, Author: 1}, {Acct: 1}}
 	if len(s.Conns) != len(want) {
 		t.Fatalf("conns %+v", s.Conns)
@@ -410,41 +470,74 @@ func TestDeviceDebugRequestsPerConnection(t *testing.T) {
 	if s.Opened != 2 || s.Closed != 1 {
 		t.Errorf("opened %d closed %d", s.Opened, s.Closed)
 	}
-	// The one still open at the end has no close.
-	if s.Conns[0].Closed != "" || s.Conns[1].Closed != "" || s.Conns[2].Closed == "" {
-		t.Errorf("a connection that never closed shows a close: %+v", s.Conns)
+}
+
+// A request counts once when IOS XE prints both the send line and the
+// request-created line for it; the created lines count when no send line of
+// that kind exists.
+func TestDeviceDebugIOSXECountsARequestOnce(t *testing.T) {
+	const xe = "*Oct 22 05:00:01.00"
+	both := strings.Join([]string{
+		xe + "0: TAC+: tacacs secure connection established with peer 172.100.100.1/49",
+		xe + "1: TPLUS: Authorization request created for 0(alice07)",
+		xe + "2: TAC+: send AUTHOR/REQ packet",
+		xe + "3: TPLUS: Accounting request created for 0(alice07)",
+		xe + "4: TPLUS: processing authentication login request id 1",
+		xe + "5: TAC+: send AUTHEN/START packet",
+	}, "\n")
+	s := deviceDebugSummarize("iosxe", deviceDebugKept(ddKeep(t, ddTestFilter("iosxe"), both)))
+	if c := s.Conns[0]; c.Authen != 1 || c.Author != 1 || c.Acct != 1 {
+		t.Errorf("both families: %+v", c)
+	}
+	only := deviceDebugSummarize("iosxe", deviceDebugKept(ddKeep(t, ddTestFilter("iosxe"),
+		strings.Join(strings.Split(both, "\n")[:2], "\n")+"\n"+xe+"6: TPLUS: Authorization request created for 0(alice07)")))
+	if c := only.Conns[0]; c.Author != 2 {
+		t.Errorf("created lines only: %+v", c)
+	}
+}
+
+// The vocabulary holds the words of the step 2 shapes and still not aaa (a hex
+// word); the sampler writes them through.
+func TestDeviceDebugArmVocabularyHasTheStep2Words(t *testing.T) {
+	for _, w := range []string{"tacacsd", "tacplus", "authd", "invalid", "syntax"} {
+		if !ddArmVocab[w] {
+			t.Errorf("%q is not in the vocabulary", w)
+		}
+	}
+	if ddArmVocab["aaa"] {
+		t.Errorf("aaa is hex letters only and must stay out of the vocabulary")
+	}
+	got := ddArmTokens("tacacsd[88]: AUTHD tacplus Invalid syntax Aaa 10.0.0.1")
+	if got != "tacacsd _ authd tacplus invalid syntax _ A" {
+		t.Errorf("tokens %q", got)
 	}
 }
 
 // Every command sequence is a fixed list, and the kept text is all the
 // collector returns; the raw output stays in the function.
 func TestDeviceDebugCollectFiltersInProcess(t *testing.T) {
-	c := ddCaseFor(t, "eos")
 	f := ddTestFilter("eos")
+	cmds := deviceDebugCmds["eos"]
 	var ran []string
-	raw := strings.Join(append(append([]string{}, c.kept...), c.attacks...), "\n")
+	raw := ddFacility["eos"] + "ok line\n" + ddFacility["eos"] + "leak " + ddSentinelKey + "\n" + "Oct 23 09:40:00.124 sshd[7]: other"
 	run := func(cmd string) (string, error) {
 		ran = append(ran, cmd)
-		if cmd == deviceDebugCmds["eos"].Collect[0] {
+		if cmd == cmds.Collect[0] {
 			return raw, nil
 		}
 		return "", nil
 	}
-	during := false
-	kept, err := captureDeviceDebug(f, run, func() error { during = true; return nil })
-	if err != nil || !during {
-		t.Fatalf("err %v during %v", err, during)
+	kept, err := captureDeviceDebug(f, run, func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, s := range ddSentinels {
-		if strings.Contains(string(kept), s) {
-			t.Errorf("a sentinel reached the collector's result")
-		}
+	if strings.Contains(string(kept), ddSentinelKey) || strings.Contains(string(kept), "sshd") || !strings.Contains(string(kept), "ok line") {
+		t.Errorf("collector result:\n%s", kept)
 	}
-	cmds := deviceDebugCmds["eos"]
 	if len(ran) == 0 || ran[0] != cmds.Enable[0] || ran[len(ran)-1] != cmds.Disable[len(cmds.Disable)-1] {
 		t.Errorf("ran %v", ran)
 	}
-	// Debug is turned off even when the cell fails or a command errors.
+	// Debug is turned off even when the cell fails.
 	ran = nil
 	_, err = captureDeviceDebug(f, run, func() error { return errors.New("cell failed") })
 	if err == nil || !slices.Contains(ran, cmds.Disable[0]) {
@@ -467,100 +560,7 @@ func TestDeviceDebugCmdsCoverEveryPlatformAndTypeNoSecret(t *testing.T) {
 	}
 }
 
-// The secret-word rule works on its own: a line a shape admits, whose lab
-// value is itself a secret word, is dropped.
-func TestDeviceDebugSecretWordDropsAnAdmittedLine(t *testing.T) {
-	f := deviceDebugFilter{Platform: "eos", Groups: []string{"password-grp"}}
-	if got := ddKeep(f, "Oct 22 05:00:15.001 Aaa: Using server group password-grp"); got != "" {
-		t.Errorf("kept %d bytes", len(got))
-	}
-	f.Groups = []string{"labgrp"}
-	if got := ddKeep(f, "Oct 22 05:00:15.002 Aaa: Using server group labgrp"); got == "" {
-		t.Errorf("lost an ordinary admitted line")
-	}
-}
-
-// ddNumberRuns puts an OTP-shaped number (6 and 8 digits) in each numeric
-// position of each line in turn, after the time prefix and outside addresses,
-// and reports every position where the number survived Keep. It returns how
-// many positions it tried.
-func ddNumberRuns(lines []string, keep func(string) string) (tried int, leaked []string) {
-	prefix := regexp.MustCompile(`\d\d:\d\d:\d\d(\.\d+)?`)
-	runs := regexp.MustCompile(`\d+`)
-	for _, ln := range lines {
-		loc := prefix.FindStringIndex(ln)
-		if loc == nil {
-			continue
-		}
-		for _, r := range runs.FindAllStringIndex(ln, -1) {
-			if r[0] < loc[1] || (r[0] > 0 && ln[r[0]-1] == '.') || (r[1] < len(ln) && ln[r[1]] == '.') {
-				continue
-			}
-			for _, otp := range []string{"481516", "48151623"} {
-				tried++
-				if strings.Contains(keep(ln[:r[0]]+otp+ln[r[1]:]), otp) {
-					leaked = append(leaked, ln[:loc[1]]+"... position "+ln[r[0]:r[1]]+" with "+otp)
-				}
-			}
-		}
-	}
-	return tried, leaked
-}
-
-// F2: a number is kept only in a named position within bounds, so a 6- or
-// 8-digit OTP-shaped number in any numeric position never survives.
-func TestDeviceDebugNumbersAreBounded(t *testing.T) {
-	for _, c := range ddCases {
-		f := ddTestFilter(c.platform)
-		tried, leaked := ddNumberRuns(c.kept, func(s string) string { return ddKeep(f, s) })
-		if tried == 0 {
-			t.Errorf("%s: no numeric positions tried", c.platform)
-		}
-		for _, l := range leaked {
-			t.Errorf("%s: a number survived at %s", c.platform, l)
-		}
-	}
-	// Ports are 1-65535, ids are written <n>.
-	f := ddTestFilter("eos")
-	for in, want := range map[string]string{
-		"Oct 22 05:00:20.001 Tacacs: Connecting to server 172.100.100.1 port 65535": "05:00:20.001 Tacacs: Connecting to server 172.100.100.1 port 65535",
-		"Oct 22 05:00:20.002 Tacacs: Connecting to server 172.100.100.1 port 65536": "",
-		"Oct 22 05:00:20.003 Tacacs: Connecting to server 172.100.100.1 port 0":     "",
-		"Oct 22 05:00:20.004 Aaa: Sending accounting request 99 to 172.100.100.1":   "05:00:20.004 Aaa: Sending accounting request <n> to 172.100.100.1",
-	} {
-		if got := ddKeep(f, in); got != want {
-			t.Errorf("%.60q: kept %q, want %q", in, got, want)
-		}
-	}
-	x := ddTestFilter("iosxe")
-	if got := ddKeep(x, "*Oct 22 05:00:20.005: TAC+: ver=1920 id=7 received AUTHEN status = PASS"); got != "" {
-		t.Errorf("a four-digit version was kept")
-	}
-}
-
-// F3: a username is kept only when the whole field is a lab name. A lab name
-// as the prefix or suffix of the field, or in another case, is masked.
-func TestDeviceDebugUserIsAnExactLabName(t *testing.T) {
-	f := ddTestFilter("eos")
-	for _, u := range []string{"alice07x", "xalice07", "breakglassx", "xbreakglass", "Alice07", "BREAKGLASS", "alice7", "alice123", "alice07.evil"} {
-		in := "Oct 22 05:00:21.001 Aaa: User " + u + " authenticating via method list default"
-		want := "05:00:21.001 Aaa: User <masked> authenticating via method list default"
-		if got := ddKeep(f, in); got != want {
-			t.Errorf("a user field was not masked: kept %d bytes", len(got))
-		}
-	}
-	for _, u := range []string{"alice07", "alice99", "breakglass"} {
-		in := "Oct 22 05:00:21.002 Aaa: User " + u + " authenticating via method list default"
-		if got := ddKeep(f, in); !strings.Contains(got, "User "+u+" ") {
-			t.Errorf("lost the lab user %s", u)
-		}
-	}
-}
-
-// F1: an error from collecting or disabling must not carry the device's
-// output. The device buffer holds the sentinel and a step fails at each of
-// the three stages; the sentinel is in neither the returned error nor
-// anything else the function returns.
+// An error from collecting or disabling must not carry the device's output.
 func TestDeviceDebugErrorsCarryNoDeviceOutput(t *testing.T) {
 	const sentinel = "fakesecret77-device-tail"
 	for _, platform := range []string{"eos", "iosxr", "junos", "iosxe"} {
@@ -588,11 +588,10 @@ func TestDeviceDebugErrorsCarryNoDeviceOutput(t *testing.T) {
 	}
 }
 
-// F7: a failed cell still yields the filtered debug, and returns its own error.
+// A failed cell still yields the filtered debug, and returns its own error.
 func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
-	c := ddCaseFor(t, "eos")
 	f := ddTestFilter("eos")
-	raw := strings.Join(append(append([]string{}, c.kept...), c.attacks...), "\n")
+	raw := ddFacility["eos"] + "ok line\nOct 23 09:40:00.124 sshd[7]: other"
 	run := func(cmd string) (string, error) {
 		if cmd == deviceDebugCmds["eos"].Collect[0] {
 			return raw, nil
@@ -604,8 +603,8 @@ func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
 	if err != cellErr {
 		t.Errorf("err %v, want the cell's", err)
 	}
-	if string(kept) != strings.Join(c.want, "\n") {
-		t.Errorf("kept %d bytes after a failed cell, want the filtered debug (%d)", len(kept), len(strings.Join(c.want, "\n")))
+	if string(kept) != ddFacility["eos"]+"ok line" {
+		t.Errorf("kept %d bytes after a failed cell", len(kept))
 	}
 	// A collect step that fails with a partial capture still keeps it, filtered.
 	run2 := func(cmd string) (string, error) {
@@ -615,29 +614,13 @@ func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
 		return "", nil
 	}
 	kept, err = captureDeviceDebug(f, run2, func() error { return nil })
-	if err == nil || string(kept) != strings.Join(c.want, "\n") {
+	if err == nil || string(kept) != ddFacility["eos"]+"ok line" {
 		t.Errorf("partial capture: err %v, %d bytes", err, len(kept))
 	}
 }
 
-// F9: the counters take kept text only. Handed text that was never filtered
-// (an explicit conversion), the close reason is still one of the fixed words.
-func TestDeviceDebugSummaryReadsNoFreeText(t *testing.T) {
-	raw := deviceDebugKept("05:00:01.000 TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5\n" +
-		"05:00:02.000 TAC+: Closing TCP/IP x connection to y (fake free text)")
-	s := deviceDebugSummarize("iosxe", raw)
-	for _, c := range s.Conns {
-		if c.Reason != "" {
-			t.Errorf("a free-text reason was read")
-		}
-	}
-	if s.Closed != 0 {
-		t.Errorf("an unlisted close was counted")
-	}
-}
-
-// F10: the raw Junos trace file is cleared after it is collected, and every
-// file a Collect reads is cleared by Disable.
+// The raw Junos trace file is cleared after it is collected, and every file a
+// Collect reads is cleared by Disable.
 func TestDeviceDebugJunosClearsTheTraceFile(t *testing.T) {
 	c := deviceDebugCmds["junos"]
 	if !slices.Contains(c.Disable, "clear log p49-tacplus.log") {
@@ -646,4 +629,9 @@ func TestDeviceDebugJunosClearsTheTraceFile(t *testing.T) {
 	if !slices.Contains(c.Collect, "show log p49-tacplus.log") {
 		t.Errorf("Collect reads another file: %v", c.Collect)
 	}
+}
+
+func ddKeepStr(t *testing.T, f deviceDebugFilter, text string) deviceDebugKept {
+	t.Helper()
+	return deviceDebugKept(ddKeep(t, f, text))
 }

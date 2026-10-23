@@ -2,6 +2,7 @@ package lab
 
 import (
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -244,4 +245,31 @@ func TestNXOSDebugNumbersAreBounded(t *testing.T) {
 			t.Errorf("%.70q: kept %q, want %q", in, got, want)
 		}
 	}
+}
+
+// ddNumberRuns puts an OTP-shaped number (6 and 8 digits) in each numeric
+// position of each line in turn, after the time prefix and outside addresses,
+// and reports every position where the number survived Keep. It returns how
+// many positions it tried.
+func ddNumberRuns(lines []string, keep func(string) string) (tried int, leaked []string) {
+	prefix := regexp.MustCompile(`\d\d:\d\d:\d\d(\.\d+)?`)
+	runs := regexp.MustCompile(`\d+`)
+	for _, ln := range lines {
+		loc := prefix.FindStringIndex(ln)
+		if loc == nil {
+			continue
+		}
+		for _, r := range runs.FindAllStringIndex(ln, -1) {
+			if r[0] < loc[1] || (r[0] > 0 && ln[r[0]-1] == '.') || (r[1] < len(ln) && ln[r[1]] == '.') {
+				continue
+			}
+			for _, otp := range []string{"481516", "48151623"} {
+				tried++
+				if strings.Contains(keep(ln[:r[0]]+otp+ln[r[1]:]), otp) {
+					leaked = append(leaked, ln[:loc[1]]+"... position "+ln[r[0]:r[1]]+" with "+otp)
+				}
+			}
+		}
+	}
+	return tried, leaked
 }
