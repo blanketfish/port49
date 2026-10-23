@@ -1,9 +1,9 @@
-device returned 440 log lines in all; the filter kept 0 of the cell's
+device returned 441 log lines in all; the filter kept 200 of the cell's
 tls connections (header-only capture): 2
-  conn port=57754 syn=10:00:24.309 hold=0.01s end=server-fin
-  conn port=44592 syn=10:00:29.064 hold=open end=open
+  conn port=36914 syn=15:49:08.343 hold=0.01s end=server-fin
+  conn port=36928 syn=15:49:08.665 hold=open end=open
 debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0
 note: this platform's two debug files are joined in order, not merged by time, so a request is attributed to the last connection opened in the trace, not necessarily the one it was sent on
 connections that carried more than one request: 0 of 0 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+lines dropped by rule: facility=247 body_word=0 hex_view=1 hex_message=0 evidence_marker=0 known_value_hex=0
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 1
-THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log

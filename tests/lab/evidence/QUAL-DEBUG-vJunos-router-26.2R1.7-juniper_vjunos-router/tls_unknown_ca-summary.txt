@@ -1,9 +1,10 @@
 device debug arm, platform junos, cell tls_unknown_ca
-device returned 270 log lines in all; the filter kept 0 of the cell's
-tls connections (header-only capture): 1
-  conn port=45208 syn=10:01:10.527 hold=0.00s end=server-rst
+device returned 249 log lines in all; the filter kept 41 of the cell's
+tls connections (header-only capture): 2
+  conn port=46160 syn=15:49:56.062 hold=0.01s end=device-fin
+  conn port=46172 syn=15:49:56.067 hold=0.00s end=server-rst
 debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0
 note: this platform's two debug files are joined in order, not merged by time, so a request is attributed to the last connection opened in the trace, not necessarily the one it was sent on
 connections that carried more than one request: 0 of 0 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+lines dropped by rule: facility=214 body_word=0 hex_view=1 hex_message=0 evidence_marker=0 known_value_hex=0
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 1
-THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log

@@ -1,1 +1,41 @@
-
+show log p49-tacplus.log
+Oct 23 15:49:45.062830 authd process starting, pid 27315 mode 2
+Oct 23 15:49:45.082326 Local : created authd local module
+Oct 23 15:49:45.082388 <LONG>: nas5g module created 0x6030820 nas5g instance 0x7a95908 authd running mode 2
+Oct 23 15:49:45.238449 <LONG>:7070: deleting vrf table
+Oct 23 15:49:45.238735 <LONG>:7000 Added VRF to table mgmt_junos; 36738
+Oct 23 15:49:45.238741 <LONG>:7010 Added VRF to index table 36738; 36738
+Oct 23 15:49:45.238934 <LONG>:7000 Added VRF to table default; 0
+Oct 23 15:49:45.238937 <LONG>:7010 Added VRF to index table 0; 0
+Oct 23 15:49:46.043144 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:46.043150 <LONG>:6198: JSRC connect()
+Oct 23 15:49:46.043272 <LONG>:Authd forcely add jipc-conn jdhcpd-client
+Oct 23 15:49:46.043289 <LONG>:Authd forcely add jipc-conn autoconfd-client
+Oct 23 15:49:46.043301 <LONG>:Authd forcely add jipc-conn dvlan-client
+Oct 23 15:49:46.043311 <LONG>:Authd forcely add jipc-conn jpppd-client
+Oct 23 15:49:46.043322 <LONG>:Authd forcely add jipc-conn essmd-client
+Oct 23 15:49:46.043332 <LONG>:Authd forcely add jipc-conn jsscd-client
+Oct 23 15:49:46.043345 <LONG>:Authd forcely add jipc-conn rpd-client
+Oct 23 15:49:46.043358 <LONG>:Authd forcely add jipc-conn hag-client
+Oct 23 15:49:46.043368 <LONG>:Authd forcely add jipc-conn rdmd-client
+Oct 23 15:49:46.043377 <LONG>:Authd forcely add jipc-conn bbe-fwsd-client
+Oct 23 15:49:46.043387 <LONG>:Authd forcely add jipc-conn authdTester-client
+Oct 23 15:49:46.043396 <LONG>:Authd forcely add jipc-conn cpcdd-client
+Oct 23 15:49:46.043406 <LONG>:Authd forcely add jipc-conn jdhcpd-test-client
+Oct 23 15:49:46.043415 <LONG>:Authd forcely add jipc-conn jpppd-test-client
+Oct 23 15:49:46.043425 <LONG>:Authd forcely add jipc-conn jl2tp-test-client
+Oct 23 15:49:46.043435 <LONG>:Authd forcely add jipc-conn nat-client
+Oct 23 15:49:47.063779 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:49.064304 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:51.065223 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:53.066334 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:55.067674 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:57.069156 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:59.069890 <LONG>:398: CONNECT FAIL CALLBACK
+Oct 23 15:49:45  srx1 authd[27315]: <LONG>: <LONG>: registering 11 rows
+Oct 23 15:49:45  srx1 authd[27315]: Startup: ISSU State is IDLE
+Oct 23 15:49:45  srx1 authd[27315]: LIBJSNMP_NS_LOG_INFO: INFO: <LONG>: NET-SNMP version 5.3.1 AgentX subagent Open-Sent!
+Oct 23 15:49:46  srx1 authd[27315]: LIBDFCD client registered.
+Oct 23 15:49:48  srx1 auditd[20326]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Oct 23 15:49:53  srx1 auditd[20326]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message
+Oct 23 15:50:00  srx1 mgd[26711]: UI_CMDLINE_READ_LINE: User 'breakglass', command 'show log p49-tacplus.log '
