@@ -39,12 +39,14 @@ var ddShapeCases = []ddCase{
 			"05:00:11.098 tacacsd: connection closed to 172.100.100.1 port 49",
 		},
 		masked: map[string]string{
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.001 UTC: tacacsd[1000]: socket created: 10.66.66.66/49":                             "05:00:12.001 tacacsd: socket created: <masked>/49",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.002 UTC: tacacsd[1000]: socket connected to 10.66.66.66/49":                         "05:00:12.002 tacacsd: socket connected to <masked>/49",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.003 UTC: tacacsd[1000]: reply: session 17 from server frobwidget":                   "05:00:12.003 tacacsd: reply: session <n> from server <masked>",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.004 UTC: tacacsd[1000]: socket bound hunter9 with mallory42 address 10.66.66.66":    "05:00:12.004 tacacsd: socket bound <masked> with <masked> address <masked>",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.005 UTC: tacacsd[1000]: connection closed to 172.100.100.1 port 65536":              "",
-			"RP/0/RP0/CPU0:Oct 22 05:00:12.006 UTC: tacacsd[1000]: packet start login session 0xfeedface server 172.100.100.1": "",
+			"RP/0/RP0/CPU0:Oct 22 05:00:12.001 UTC: tacacsd[1000]: socket created: 10.66.66.66/49":     "05:00:12.001 tacacsd: socket created: <masked>/49",
+			"RP/0/RP0/CPU0:Oct 22 05:00:12.002 UTC: tacacsd[1000]: socket connected to 10.66.66.66/49": "05:00:12.002 tacacsd: socket connected to <masked>/49",
+			// An address position holds an address (dotted quad or colon-hex), not any word.
+			"RP/0/RP0/CPU0:Oct 22 05:00:12.003 UTC: tacacsd[1000]: reply: session 17 from server frobwidget":                "",
+			"RP/0/RP0/CPU0:Oct 22 05:00:12.004 UTC: tacacsd[1000]: socket bound hunter9 with mallory42 address 10.66.66.66": "05:00:12.004 tacacsd: socket bound <masked> with <masked> address <masked>",
+			"RP/0/RP0/CPU0:Oct 22 05:00:12.005 UTC: tacacsd[1000]: connection closed to 172.100.100.1 port 65536":           "",
+			// A session id that is not a number is an opaque value.
+			"RP/0/RP0/CPU0:Oct 22 05:00:12.006 UTC: tacacsd[1000]: packet start login session 0xfeedface server 172.100.100.1": "05:00:12.006 tacacsd: packet start login session <masked> server 172.100.100.1",
 			"RP/0/RP0/CPU0:Oct 22 05:00:12.007 UTC: sshd[1000]: socket connected to 172.100.100.1/49":                          "",
 			// A secret word or a hex run in an opaque position drops the line: the rule, not the mask, holds it.
 			"RP/0/RP0/CPU0:Oct 22 05:00:12.008 UTC: tacacsd[1000]: socket bound password with local address 172.100.100.41":         "",
@@ -93,12 +95,13 @@ var ddShapeCases = []ddCase{
 			"05:00:11.209 TAC+: tacacs-secure: session: closed: tacacs secure connection closed with peer 172.100.100.1 port 49",
 		},
 		masked: map[string]string{
-			"*Oct 22 05:00:12.001: TAC+: tacacs secure connection established with peer 10.66.66.66/49":      "05:00:12.001 TAC+: tacacs secure connection established with peer <masked>/49",
-			"*Oct 22 05:00:12.002: TAC+: opened 10.66.66.66/49":                                              "05:00:12.002 TAC+: opened <masked>/49",
-			"*Oct 22 05:00:12.003: TAC+: using previously known server 172.100.100.1 from group evilgroup":   "05:00:12.003 TAC+: using previously <masked> server 172.100.100.1 from group <masked>",
-			"*Oct 22 05:00:12.004: TPLUS: Accounting request created for 0(mallory42)":                       "05:00:12.004 TPLUS: Accounting request created for <n>(<masked>)",
-			"*Oct 22 05:00:12.005: TPLUS: Accounting request created for frobwidget":                         "05:00:12.005 TPLUS: Accounting request created for <masked>",
-			"*Oct 22 05:00:12.006: TAC+: tacacs secure connection closed with peer 172.100.100.1 port 65536": "",
+			"*Oct 22 05:00:12.001: TAC+: tacacs secure connection established with peer 10.66.66.66/49":    "05:00:12.001 TAC+: tacacs secure connection established with peer <masked>/49",
+			"*Oct 22 05:00:12.002: TAC+: opened 10.66.66.66/49":                                            "05:00:12.002 TAC+: opened <masked>/49",
+			"*Oct 22 05:00:12.003: TAC+: using previously known server 172.100.100.1 from group evilgroup": "05:00:12.003 TAC+: using previously <masked> server 172.100.100.1 from group <masked>",
+			"*Oct 22 05:00:12.004: TPLUS: Accounting request created for 0(mallory42)":                     "05:00:12.004 TPLUS: Accounting request created for <n>(<masked>)",
+			"*Oct 22 05:00:12.005: TPLUS: Accounting request created for frobwidget":                       "05:00:12.005 TPLUS: Accounting request created for <masked>",
+			// A port out of range is not kept: it falls in the bounded trailing span, masked.
+			"*Oct 22 05:00:12.006: TAC+: tacacs secure connection closed with peer 172.100.100.1 port 65536": "05:00:12.006 TAC+: tacacs secure connection closed with peer 172.100.100.1 <masked> <masked>",
 			"*Oct 22 05:00:12.007: TPLUS: processing authentication login request id 0xfeedface":             "",
 			"*Oct 22 05:00:12.008: TPLUS(00000001)/0/7F1234: Processing the reply packet hunter9":            "",
 			"*Oct 22 05:00:12.009: TPLUS: connected socket secret":                                           "",
@@ -353,7 +356,7 @@ func TestDeviceDebugOpaquePositionsMaskPlainSentinels(t *testing.T) {
 		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: socket connected hunter9 to 172.100.100.1/49",
 			"05:00:11.100 tacacsd: socket connected <masked> to 172.100.100.1/49"},
 		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: socket created frobwidget to 10.66.66.66/49",
-			"05:00:11.100 tacacsd: socket created <masked> to <masked>/49"},
+			"05:00:11.100 tacacsd: socket created <masked> <masked> <masked>/49"},
 		{"iosxe", "*Oct 22 05:00:11.100: TPLUS: immediate connect frobwidget, new hunter9",
 			"05:00:11.100 TPLUS: immediate connect <masked>, new <masked>"},
 		{"iosxe", "*Oct 22 05:00:11.100: TPLUS(frobwidget)/0/hunter9/mallory42: Processing the reply packet",
@@ -389,14 +392,15 @@ func TestDeviceDebugNoFreeWordBeforeOrBetween(t *testing.T) {
 		{"eos", "2026-10-22 05:00:11.100000 21 Aaa Tacacs: frobwidget created socket 5 172.100.100.1"},
 		{"eos", "2026-10-22 05:00:11.100000 21 Aaa frobwidget: created socket 5 172.100.100.1"},
 		{"eos", "2026-10-22 05:00:11.100000 21 Aaa Tacacs: frobwidget tac_send_author"},
-		{"iosxr", xr + "packet start login frobwidget session 17 server 172.100.100.1"},
-		{"iosxr", xr + "packet start login session 17 frobwidget server 172.100.100.1"},
-		{"iosxr", xr + "packet author start frobwidget session 17 server 172.100.100.1"},
-		{"iosxr", xr + "packet author start session 17 frobwidget server 172.100.100.1"},
-		{"iosxr", xr + "packet request start frobwidget session 19 server 172.100.100.1/49"},
-		{"iosxr", xr + "packet request start session 19 frobwidget server 172.100.100.1/49"},
-		{"iosxr", xr + "packet request start frobwidget server 172.100.100.1/49"},
-		{"iosxr", xr + "session 17 packet start login frobwidget server 172.100.100.1"},
+		// Step 4 showed a `_` between most XR request words, so a value there is an
+		// opaque span (device_debug_step4b_unit_test.go); these are the positions
+		// with none: before the first word, between `packet` and `author`, and
+		// between `server` and its address.
+		{"iosxr", xr + "frobwidget packet start login session 17 server 172.100.100.1"},
+		{"iosxr", xr + "packet frobwidget author start session 17 server 172.100.100.1"},
+		{"iosxr", xr + "packet author start session 17 server frobwidget 172.100.100.1"},
+		{"iosxr", xr + "packet request start session 19 server frobwidget 172.100.100.1/49"},
+		{"iosxr", xr + "session 17 packet start login server frobwidget 172.100.100.1"},
 		{"iosxe", "*Oct 22 05:00:11.100: TPLUS: frobwidget connected socket 5"},
 		{"junos", "Oct 22 05:00:11.100000 authd[900]: frobwidget now hunter9 opened 172.100.100.1/49"},
 	} {

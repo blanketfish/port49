@@ -77,6 +77,7 @@ const (
 	ddUser   = "\x05" // a username
 	ddOpaque = "\x06" // a session id, handle or tty name: always masked
 	ddID     = "\x07" // a session or request id: kept as <n>
+	ddAddr   = "\x08" // an address in its strict form (dotted quad or colon-hex), kept only if a lab address
 )
 
 // ddProfile is one platform's line format and shapes.
@@ -88,6 +89,10 @@ type ddProfile struct {
 	open, authen, author, acct, single, dead, fallback *regexp.Regexp
 	// closed matches a close; its one group is the reason the device states.
 	closed *regexp.Regexp
+	// bare, when set, admits a line that has no process name (the line's p group
+	// is optional): only a message that matches bare is kept, so a line from
+	// another process, which names it, stays dropped.
+	bare *regexp.Regexp
 	// noClose is a platform whose debug has no close line (Junos): its summary
 	// says the close is unknown instead of counting none.
 	noClose bool
@@ -105,7 +110,10 @@ type ddProfile struct {
 // a value group is never repeated: a repeated group would report only its last
 // match, leaving the earlier ones unmasked.
 const (
-	ddGap    = `[ :,;=/_+-]{1,3}`
+	// ddPunct is the characters of a gap: punctuation and brackets, never an
+	// alphanumeric, so no value fits in one.
+	ddPunct  = `[ :,;=/_+()\[\]'"-]`
+	ddGap    = ddPunct + `{1,3}`
 	ddCI     = `(?i)`
 	ddOptOpq = `(?:` + ddGap + ddOpaque + `)?`
 	// ddTarget is an optional address after a verb, with a link word or an opaque
@@ -121,8 +129,40 @@ const (
 	ddJunosTag = `(?:` + ddOpaque + ddGap + `)?(?:` + ddOpaque + ddGap + `)?`
 )
 
-// ddSep is the punctuation between two words in a kept line, for the counters.
-const ddSep = `[ :,;=/_+-]+`
+// Spans for a shape written from a step 4 skeleton, where `_` between two
+// vocabulary words, or after the last one, is a span of unknown tokens. Each is
+// bounded: at most two opaque values (always <masked>) between gaps of
+// punctuation, never a free word, a number kept or text kept. A position the
+// skeleton showed with no `_` between two words gets no span, only ddGap or a
+// space, so a word there drops the line.
+const (
+	// ddSp stands for `_` between two words: a gap, then up to two opaque values
+	// each followed by a gap.
+	ddSp = ddGap + `(?:` + ddOpaque + ddGap + `)?(?:` + ddOpaque + ddGap + `)?`
+	// ddEnd is the punctuation that may close a line after its last value.
+	ddEnd = `[ .,;:)\]'"]{0,3}`
+	// ddTrail stands for `_` after the last word or address: up to two opaque
+	// values, each after a gap, and closing punctuation.
+	ddTrail = `(?:` + ddGap + ddOpaque + `)?(?:` + ddGap + ddOpaque + `)?` + ddEnd
+	// ddAddrP is an address, with its port after a slash.
+	ddAddrP = ddAddr + `(?:/` + ddPort + `)?`
+	// ddLink is an optional link word before an address; any other span there is
+	// a ddSp.
+	ddLink = `(?:` + ddGap + `(?:to|on|at))?`
+	// ddIDOrNone is a session id after the word `session`: a number kept as <n>,
+	// else an opaque value (a hex id), else none.
+	ddIDOrNone = `(?:` + ddGap + `(?:` + ddID + `|` + ddOpaque + `))?`
+	// ddTplus is the IOS XE TPLUS prefix with its optional context
+	// `(handle)/n/tag/tag`, which the device puts before the message.
+	ddTplus = `TPLUS(?:\(` + ddOpaque + `\)/` + ddID + `(?:/` + ddOpaque + `)?(?:/` + ddOpaque + `)?)?`
+)
+
+// ddSep is the punctuation between two words in a kept line, for the counters;
+// ddSepM also lets up to two <masked> values sit between them.
+const (
+	ddSep  = ddPunct + `+`
+	ddSepM = ddSep + `(?:<masked>` + ddSep + `){0,2}`
+)
 
 // ddW joins the words of a shape with the punctuation between them.
 func ddW(parts ...string) string { return strings.Join(parts, ddGap) }
@@ -137,14 +177,17 @@ const (
 )
 
 // ddXRReq is the request-line shapes of one IOS XR packet kind: the skeleton
-// has the session id before or after the verb words, and an optional socket and
-// tls tail. core is the verb words in the order the sample showed them.
+// has the session word before or after the verb words, `server A`, and an
+// optional `socket _ tls _` tail (step 4 skeletons `packet _ start _ login _
+// session _ server A _` and its author and request kinds, step 1 skeletons with
+// the session first). core is the verb words in the order the sample showed them.
 func ddXRReq(core string) []string {
-	tail := ddGap + `server` + ddGap + ddIP + `(?:/` + ddPort + `)?` +
-		`(?:` + ddGap + `socket` + ddOptOpq + `(?:` + ddGap + `tls` + ddOptOpq + `)?)?`
+	sess := `session` + ddIDOrNone
+	tail := ddSp + `server` + ddGap + ddAddrP +
+		`(?:` + ddSp + `socket(?:` + ddSp + `tls)?)?` + ddTrail
 	return []string{
-		ddCI + core + ddGap + `session` + ddGap + ddID + tail,
-		ddCI + `session` + ddGap + ddID + ddGap + core + tail,
+		ddCI + core + ddSp + sess + tail,
+		ddCI + sess + ddSp + core + tail,
 		ddCI + core + tail,
 	}
 }
@@ -175,15 +218,18 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Method=` + ddGroup + ` \(tacacs\+\)`,
 			`AAA/AUTHOR/(EXEC|CMD) \(` + ddOpaque + `\): (Method=` + ddGroup + ` \(tacacs\+\)|Post authorization status = ` + ddStatus + `)`,
 			`AAA/ACCT/(EXEC|CMD|NET)/(START|STOP|WATCHDOG) User ` + ddUser + `, Port ` + ddOpaque,
-			// The connection lifecycle (step 1 skeletons `tplus _ connected socket _`,
+			// The connection lifecycle (step 4 skeletons `tplus _ connected socket _`,
 			// `tplus _ immediate connect _ new _`, `tac _ opened A _` and the secure
-			// connection lines naming a peer).
-			ddCI + `TPLUS` + ddGap + `connected socket` + ddOptOpq,
-			ddCI + `TPLUS` + ddGap + `immediate connect` + ddOptOpq + ddGap + `new` + ddGap + ddOpaque,
-			ddCI + `TAC\+` + ddGap + `opened` + ddGap + ddIP + `(?:/` + ddPort + `)?`,
-			ddCI + `(?:TAC\+` + ddGap + `)?tacacs secure connection (?:established|closed) with peer ` + ddIP + `(?:/` + ddPort + `)?` + ddOptPort + `[.,;]?`,
-			ddCI + ddW(`TAC\+`, `tacacs`, `secure`, `session`, `(?:established|closed)`,
-				`tacacs secure connection (?:established|closed) with peer `+ddIP+`(?:/`+ddPort+`)?`+ddOptPort+`[.,;]?`),
+			// connection lines `tac _ tacacs _ secure _ session _ established|closed
+			// _ tacacs secure connection established|closed with peer A _`). Each `_`
+			// is a bounded span (ddSp, ddTrail); words with none between them are
+			// adjacent.
+			ddCI + ddTplus + ddGap + `connected socket` + ddTrail,
+			ddCI + ddTplus + ddGap + `immediate connect` + ddSp + `new` + ddTrail,
+			ddCI + `TAC\+` + ddSp + `opened` + ddGap + ddAddrP + ddTrail,
+			ddCI + `(?:TAC\+` + ddGap + `)?tacacs secure connection (?:established|closed) with peer` + ddGap + ddAddrP + ddOptPort + ddTrail,
+			ddCI + `TAC\+` + ddSp + `tacacs` + ddSp + `secure` + ddSp + `session` + ddSp + `(?:established|closed)` + ddSp +
+				`tacacs secure connection (?:established|closed) with peer` + ddGap + ddAddrP + ddOptPort + ddTrail,
 			// Requests, created and processed (skeletons `tplus _ accounting request
 			// created for _`, `tplus _ processing authentication _ request _`,
 			// `tplus _ processing the reply packet _`).
@@ -193,8 +239,10 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			ddCI + `TPLUS(?:\(` + ddOpaque + `\)/` + ddID + `(?:/` + ddOpaque + `)?(?:/` + ddOpaque + `)?)?` + ddGap + `processing the reply packet`,
 			ddCI + `(?:TAC\+|TPLUS)` + ddGap + `using previously` + ddOptOpq + ` server ` + ddIP + ` from group` + ddGap + ddGroup,
 		},
-		open:   regexp.MustCompile(`^TAC\+: Opening TCP/IP to|tacacs secure connection established with peer`),
-		closed: regexp.MustCompile(`(?:TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|tacacs secure connection closed with peer \S+(?: port \S+)?[.,;]?)$`),
+		// The secure lines are the device's own spelling in any case, and may carry
+		// masked values after the peer address (ddTrail), so they are not anchored at the end.
+		open:   regexp.MustCompile(`^TAC\+: Opening TCP/IP to|(?i)tacacs secure connection established with peer`),
+		closed: regexp.MustCompile(`TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$|(?i)tacacs secure connection closed with peer`),
 		// A request is counted once: from the `send KIND/` lines when the text has
 		// any of that kind, else from the processing or request-created lines. A
 		// device that prints both for one request would otherwise count it twice.
@@ -251,7 +299,10 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	"iosxr": {
 		// `node [Mon DD ]time zone: process[N]: message`; the node name follows its
 		// own colon or a space, and the zone is the capital letters before the colon.
-		line: regexp.MustCompile(`^(?:[A-Za-z0-9_/.-]+[: ] ?)?(?:[A-Z][a-z]{2} +\d+ (?:\d{4} )?)?(?P<t>\d\d:\d\d:\d\d\.\d{1,9})(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
+		// The process is optional: step 4 saw a connection-closed line with no
+		// tacacsd prefix. A line without one is kept only if bare admits its message.
+		line: regexp.MustCompile(`^(?:[A-Za-z0-9_/.-]+[: ] ?)?(?:[A-Z][a-z]{2} +\d+ (?:\d{4} )?)?(?P<t>\d\d:\d\d:\d\d\.\d{1,9})(?: [A-Z]{2,5})?: (?:(?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: )?(?P<m>.*)$`),
+		bare: regexp.MustCompile(`(?i)^connection closed\b`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: append([]string{
 			`(Opening|Opened) connection to ` + ddIP + ` port ` + ddPort,
@@ -263,25 +314,27 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			`Falling back to ` + ddMethod + ` for ` + ddKind,
 			`Using server group ` + ddGroup,
 			`User ` + ddUser + ` authenticating via method list ` + ddList,
-			// The socket lifecycle (step 1 skeletons `socket created _ A _`,
-			// `socket bound _ with _ address A _`, `socket connected _`,
-			// `socket _ A _ opened _`, `connection closed _ A port _`).
-			ddCI + `socket created` + ddTarget + ddOptPort,
+			// The socket lifecycle (step 1 skeletons `socket bound _ with _ address A
+			// _`, `socket connected _`, `socket _ A _ opened _`; step 4 skeletons
+			// `socket created _ A _` and `connection closed _ A port _`).
+			ddCI + `socket created` + ddLink + ddSp + ddAddrP + ddTrail,
 			ddCI + `socket bound` + ddOptOpq + ddGap + `with` + ddOptOpq + ddGap + `address` + ddTarget,
 			ddCI + `socket connected` + ddTarget + ddOptPort,
 			ddCI + `socket` + ddTarget + ddGap + `opened` + ddOptOpq,
-			ddCI + `connection closed` + ddTarget + ddGap + `port` + ddGap + ddPort,
-			// The replies (`reply _ session _ from server A _`).
-			ddCI + `reply` + ddOptOpq + ddGap + `session` + ddGap + ddID + ddGap + `from` + ddGap + `server` + ddGap + ddIP + `(?:/` + ddPort + `)?`,
+			ddCI + `connection closed` + ddLink + ddSp + ddAddr + ddGap + `port` + ddGap + ddPort + ddTrail,
+			// The replies (step 4 skeleton `reply _ session _ from server A _`).
+			ddCI + `reply` + ddSp + `session` + ddIDOrNone + ddSp + `from` + ddGap + `server` + ddGap + ddAddrP + ddTrail,
 		}, slices.Concat(
-			ddXRReq(`packet`+ddGap+`start`+ddGap+`login`),
-			ddXRReq(`packet`+ddGap+`author`+ddGap+`start`),
-			ddXRReq(`packet`+ddGap+`request`+ddGap+`start`))...),
-		open:     regexp.MustCompile(`^(?:Opening connection to|(?i:socket connected))`),
-		closed:   regexp.MustCompile(`^(?:Closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|(?i:connection closed)` + ddSep + `(?:\S+ )?(?:(?:to|on|at) )?\S+ port \S+)$`),
-		authen:   regexp.MustCompile(`^Sending authentication request|(?i)packet` + ddSep + `start` + ddSep + `login\b`),
-		author:   regexp.MustCompile(`^Sending authorization request|(?i)packet` + ddSep + `author` + ddSep + `start\b`),
-		acct:     regexp.MustCompile(`^Sending accounting request|(?i)packet` + ddSep + `request` + ddSep + `start\b`),
+			ddXRReq(`packet`+ddSp+`start`+ddSp+`login`),
+			ddXRReq(`packet`+ddGap+`author`+ddSp+`start`),
+			ddXRReq(`packet`+ddSp+`request`+ddSp+`start`))...),
+		open: regexp.MustCompile(`^(?:Opening connection to|(?i:socket connected))`),
+		// The kept text may hold <masked> values and closing punctuation after the
+		// port (ddTrail), so the connection-closed line is not anchored at the end.
+		closed:   regexp.MustCompile(`^(?:Closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$|(?i:connection closed)\b)`),
+		authen:   regexp.MustCompile(`^Sending authentication request|(?i)packet` + ddSepM + `start` + ddSepM + `login\b`),
+		author:   regexp.MustCompile(`^Sending authorization request|(?i)packet` + ddSepM + `author` + ddSepM + `start\b`),
+		acct:     regexp.MustCompile(`^Sending accounting request|(?i)packet` + ddSepM + `request` + ddSepM + `start\b`),
 		single:   regexp.MustCompile(`^Single connection (flag set|negotiated)`),
 		dead:     regexp.MustCompile(`marked dead|is not responding`),
 		fallback: regexp.MustCompile(`^Falling back to`),
@@ -343,13 +396,14 @@ var ddShapes = func() map[string][]ddCompiled {
 	out := map[string][]ddCompiled{}
 	repl := strings.NewReplacer(ddIP, `([0-9A-Za-z.:]{2,39})`, ddGroup, `([A-Za-z0-9_-]{0,32})`,
 		ddList, `([A-Za-z0-9_:-]{1,40})`, ddMethod, `([a-z]+)`, ddUser, `([A-Za-z0-9_.-]{1,32})`,
-		ddOpaque, `([0-9A-Za-z_.:-]{1,23})`, ddID, `(-?\d{1,12})`)
+		ddOpaque, `([0-9A-Za-z_.:-]{1,23})`, ddID, `(-?\d{1,12})`,
+		ddAddr, `((?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})`)
 	for name, p := range deviceDebugProfiles {
 		for _, s := range p.shapes {
 			var kinds []byte
 			for _, c := range s {
 				switch string(c) {
-				case ddIP:
+				case ddIP, ddAddr:
 					kinds = append(kinds, 'i')
 				case ddGroup:
 					kinds = append(kinds, 'g')
@@ -387,6 +441,10 @@ func (f deviceDebugFilter) Keep(text string) deviceDebugKept {
 			continue
 		}
 		msg := strings.TrimSpace(m[p.line.SubexpIndex("m")])
+		// A line with no process name is kept only as the profile's bare message.
+		if i := p.line.SubexpIndex("p"); p.bare != nil && i > 0 && m[i] == "" && !p.bare.MatchString(msg) {
+			continue
+		}
 		// A run of 24 or more token characters is a token or base64: the
 		// line is dropped, not masked.
 		if nxosDebugLong.MatchString(msg) {
