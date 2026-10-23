@@ -46,7 +46,7 @@ func (q *qualEnv) armed(family string) (string, bool) {
 // lines the collect commands returned and keeps a shape sample of them for the
 // case where the filter keeps nothing, and returns the raw text to
 // captureDeviceDebug alone.
-func ddArmRun(c *cliConn, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
+func ddArmRun(c *cliConn, f deviceDebugFilter, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
 	cfgMode := false
 	return func(cmd string) (string, error) {
 		var wait []string
@@ -54,7 +54,14 @@ func ddArmRun(c *cliConn, platform string, rawLines *int, sample, cmdShapes *[]s
 		out, err := c.sendExpect(cmd, 180*time.Second, wait...)
 		if strings.HasPrefix(cmd, "show log") {
 			*rawLines += strings.Count(out, "\n")
-			*sample = append(*sample, ddArmSample(out, 70)...)
+			// The shapes of what the filter drops: the lines to decide about.
+			var dropped []string
+			for _, ln := range strings.Split(out, "\n") {
+				if f.Keep(ln) == "" {
+					dropped = append(dropped, ln)
+				}
+			}
+			*sample = append(*sample, ddArmSample(strings.Join(dropped, "\n"), 70)...)
 		} else {
 			// What the enable and disable commands answered, as shapes: the
 			// first thing to learn when no debug line comes back.
@@ -98,7 +105,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
-		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, platform, &rawLines, &sample, &answers), func() error {
+		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, filter, platform, &rawLines, &sample, &answers), func() error {
 			restart()
 			body()
 			return e.l.stopDaemon()
@@ -119,9 +126,10 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	if capErr != nil {
 		sum += "capture error: " + capErr.Error() + "\n"
 	}
-	// The filter keeps nothing useful: the line shapes are wrong. The shapes
-	// the device wrote (never a value) go to the test log, not to evidence,
-	// for an implementer to read through the filtered grep.
+	// The shapes the device wrote that the filter drops (never a value) go to
+	// the test log, not to evidence, for an implementer to read through the
+	// filtered grep.
+	q.t.Logf("device debug, shapes of the lines the filter dropped, %s %s (values masked):\n  %s", platform, cell, strings.Join(sample, "\n  "))
 	masked := 0
 	for _, ln := range strings.Split(string(kept), "\n") {
 		if strings.Contains(ln, "<masked>") {
@@ -130,7 +138,6 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	}
 	if n := ddArmLineCount(kept); n == 0 || masked*10 >= n*8 {
 		sum += "THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log\n"
-		q.t.Logf("device debug shapes, %s %s (values masked):\n  %s", platform, cell, strings.Join(sample, "\n  "))
 	}
 	q.dd.files[cell+"-debug.txt"] = []byte(string(kept) + "\n")
 	q.dd.files[cell+"-summary.txt"] = []byte(l80Filter(sum))
