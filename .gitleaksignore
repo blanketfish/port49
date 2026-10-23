@@ -41,3 +41,7 @@ d4538d78e0ef5e8be6acf3f5a55108bb24ffdeb8:tests/lab/transport_test.go:generic-api
 # Device-debug filter tests: 8-char crypt-tail stubs (a real tail is 43 or 86), judged FAKE by tail length, whose salt is outside the regex entry above.
 56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:unix-crypt-hash:265
 ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:unix-crypt-hash:248
+#
+# Round 4 test fixtures (commit 7a51f17e): a type 7 and a $9$ stub in a test since removed.
+7a51f17e3c895308a903c4a623ac29a6cb23a936:tests/lab/device_debug_round4_unit_test.go:cisco-type7:51
+7a51f17e3c895308a903c4a623ac29a6cb23a936:tests/lab/device_debug_round4_unit_test.go:junos-type9:52
