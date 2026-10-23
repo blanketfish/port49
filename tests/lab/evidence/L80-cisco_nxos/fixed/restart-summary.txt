@@ -1,0 +1,115 @@
+L80 re-measure, arm fixed, cell restart, nxos106 per-request TLS, idle_timeout default
+bin/port49d: <LONG> vcs.modified=false
+session 0: login_latency_s=5.53 prompt_err=false
+  s0 "terminal length 0"  gap=0.0s took=0.25s err=false first="nx1#"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="09:33:51.303 UTC Fri Oct 23 2026"
+  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="09:33:53.562 UTC Fri Oct 23 2026"
+  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="09:33:56.572 UTC Fri Oct 23 2026"
+  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="09:33:58.829 UTC Fri Oct 23 2026"
+  s0 "show version"       gap=0.5s took=1.00s err=false first="Cisco Nexus Operating System (NX-OS) Software"
+  s0 "show users"         gap=0.5s took=5.26s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show version"       gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show version"       gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show version"       gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show version"       gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show version"       gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show clock"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show version"       gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+  s0 "show users"         gap=0.5s took=0.25s err=false first="Error: AAA authorization failed <LONG>(0x10)"
+restart: port49d's connection-event counters were reset by the restart; their deltas below are not graded
+tls connections: 2, most open at once: 1
+  conn port=52788 syn=09:33:46.868 hold=15.41s end=server-fin
+  conn port=39104 syn=09:34:02.803 hold=46.54s end=server-fin
+connection_events deltas: <LONG> idle_closed=1 refused_cap=0
+port49 records:
+  09:33:51.877 redeem permit
+  09:33:51.903 authorize_session permit
+  09:33:52.113 account
+  09:33:52.272 authorize_command permit "terminal length 0"
+  09:33:52.292 account
+  09:33:53.024 authorize_command permit "show clock"
+  09:33:53.779 authorize_command permit "show version"
+  09:33:55.282 authorize_command permit "show clock"
+  09:33:56.036 authorize_command permit "show version"
+  09:33:57.540 authorize_command deny "show users"
+  09:33:58.292 authorize_command permit "show clock"
+  09:33:59.045 authorize_command permit "show version"
+  09:34:00.549 authorize_command permit "show clock"
+  09:34:01.301 authorize_command permit "show version"
+  09:34:07.814 authorize_command deny "show users"
+  09:34:08.565 authorize_command deny "show clock"
+  09:34:09.315 authorize_command deny "show version"
+  09:34:10.067 authorize_command deny "show clock"
+  09:34:10.818 authorize_command deny "show version"
+  09:34:11.572 authorize_command deny "show users"
+  09:34:12.322 authorize_command deny "show clock"
+  09:34:13.076 authorize_command deny "show version"
+  09:34:13.829 authorize_command deny "show clock"
+  09:34:14.582 authorize_command deny "show version"
+  09:34:15.333 authorize_command deny "show users"
+  09:34:16.084 authorize_command deny "show clock"
+  09:34:16.838 authorize_command deny "show version"
+  09:34:17.590 authorize_command deny "show clock"
+  09:34:18.342 authorize_command deny "show version"
+  09:34:19.095 authorize_command deny "show users"
+  09:34:19.347 account
+typed s0 "terminal length 0" gap=0.0s asked=true denied=false
+typed s0 "show clock" gap=0.5s asked=true denied=false
+typed s0 "show version" gap=0.5s asked=true denied=false
+typed s0 "show clock" gap=0.5s asked=true denied=false
+typed s0 "show version" gap=0.5s asked=true denied=false
+typed s0 "show users" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=false
+typed s0 "show version" gap=0.5s asked=true denied=false
+typed s0 "show clock" gap=0.5s asked=true denied=false
+typed s0 "show version" gap=0.5s asked=true denied=false
+typed s0 "show users" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=true
+typed s0 "show version" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=true
+typed s0 "show version" gap=0.5s asked=true denied=true
+typed s0 "show users" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=true
+typed s0 "show version" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=true
+typed s0 "show version" gap=0.5s asked=true denied=true
+typed s0 "show users" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=true
+typed s0 "show version" gap=0.5s asked=true denied=true
+typed s0 "show clock" gap=0.5s asked=true denied=true
+typed s0 "show version" gap=0.5s asked=true denied=true
+typed s0 "show users" gap=0.5s asked=true denied=true
+debug counts: connection_active=29 fall_back_none=0 mark_server_dead=0 request_acct=7 request_authen=1 request_author=30 ssl_open_success=2 ssl_read_failed=0 tacacs_group_failed=3
+restart window: stop=09:34:02.282 up=09:34:02.537
+restart: commands: 9 asked and permitted, 17 asked and denied, 0 not asked and not run (lost), 0 not asked and run (unasked)
+restart: permitted command "show clock" typed 6.3s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show version" typed 7.0s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show clock" typed 7.8s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show version" typed 8.5s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show clock" typed 10.0s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show version" typed 10.8s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show clock" typed 11.5s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show version" typed 12.3s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show clock" typed 13.8s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show version" typed 14.5s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show clock" typed 15.3s after the stop was asked about and denied: the session did not survive the restart
+restart: permitted command "show version" typed 16.0s after the stop was asked about and denied: the session did not survive the restart
+restart: session store memory: 12 of 12 permitted commands denied after the stop were denied context_missing
+restart: while port49d was down or coming up: 0 lost, 0 unasked
+restart: connections answered by port49 after the stop: 1
+restart: connection open at the stop ended: server-fin +0.00s after the stop
+restart: close_notify: not seen in a plaintext alert; an encrypted alert is not visible in a header-only capture, so this is not evidence it was not sent
+restart: debug: ssl_read_failed=0 mark_server_dead=0 fallback_lines=0
+restart verdict: context_lost_on_memory_store
+
