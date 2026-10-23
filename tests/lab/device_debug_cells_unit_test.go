@@ -36,42 +36,87 @@ func TestDeviceDebugArmSummaryStatesWhatItCannotOrder(t *testing.T) {
 	}
 }
 
-// The shape sample keeps no value character: after it, every run of two or
-// more letters is a word of the fixed vocabulary, whatever the input held.
-func TestDeviceDebugArmSampleKeepsNoValueCharacters(t *testing.T) {
+// wantVocab is the vocabulary as the test knows it: a separate, hard-coded
+// list, so a word added to ddArmWords makes this test fail until it is reviewed.
+const wantVocab = `tac tacacs tplus connect connected connection socket server opened open closed close secure message
+	type request reply send sent receive received queued queuing processed processing created start started timeout
+	tls ssl tcp session author authorization authentication accounting group list method status error failed fail
+	established peer port host address bind bound immediate new not the and for are has was with from using
+	previously default handle name addr timer expired unavailable available detected thread sleeping seconds debug
+	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec`
+
+func TestDeviceDebugArmVocabularyIsClosed(t *testing.T) {
+	want := map[string]bool{}
+	for _, w := range strings.Fields(wantVocab) {
+		want[w] = true
+	}
+	for w := range ddArmVocab {
+		if !want[w] {
+			t.Errorf("vocabulary word %q is not in the test's list", w)
+		}
+	}
+	for w := range want {
+		if !ddArmVocab[w] {
+			t.Errorf("test's word %q is not in the vocabulary", w)
+		}
+		if !regexp.MustCompile(`^[a-z]{3,}$`).MatchString(w) {
+			t.Errorf("%q is not three or more lowercase ASCII letters", w)
+		}
+		if regexp.MustCompile(`^[0-9a-f]+$`).MatchString(w) {
+			t.Errorf("%q could be a hex value", w)
+		}
+	}
+}
+
+// Each input becomes exactly the expected tokens: no character of a value
+// survives, whatever it is made of.
+func TestDeviceDebugArmTokensAreAClosedAlphabet(t *testing.T) {
+	for in, want := range map[string]string{
+		"TAC+: Opened TCP/IP handle 0x1F to 10.149.0.2/49":   "tac _ opened tcp _ handle _ A _",
+		"tacacs server opened hunter2 for session":           "tacacs server opened _ for session",
+		"tacacs message a1b2c3d4e5 from peer":                "tacacs message _ from peer",
+		"tacacs socket data de ad be ef 0f 1a closed":        "tacacs socket _ closed",
+		"server Tr0ub4dor&3!# closed":                        "server _ closed",
+		"server dGVzdA==/Zm9v+YmFy= closed":                  "server _ closed",
+		"server \u043f\u0430\u0440\u043e\u043b\u044c closed": "server _ closed",
+		"server \uff11\uff12\uff13 closed":                   "server _ closed",
+		"server \x01\x9f\xfe\x10 closed":                     "server _ closed",
+		"server xx-server-yy closed":                         "server _ server _ closed",
+		"peer 2001:db8::1 closed":                            "peer A closed",
+		"peer fe80::abcd closed":                             "peer A closed",
+		"peer ::ffff:10.1.2.3 closed":                        "peer A closed",
+		"02:35:11.079 server closed":                         "_ server closed",
+		"SERVER Opened":                                      "server opened",
+		"server fd closed":                                   "server _ closed",
+		"open1 server xopen server":                          "_ server _ server",
+		"server user alice07 qual01 breakglass leaf3 closed": "server _ closed",
+		"  \t ": "",
+	} {
+		got := ddArmTokens(in)
+		if got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+		if !regexp.MustCompile(`^[a-zA_ ]*$`).MatchString(got) {
+			t.Errorf("%q: the output holds a character outside [a-z A _ space]: %q", in, got)
+		}
+	}
+}
+
+// A line with a secret word produces no sample line at all, and the others
+// come back in the closed alphabet, hot lines first.
+func TestDeviceDebugArmSampleDropsSecretWordLinesAndKeepsTheRest(t *testing.T) {
 	raw := strings.Join([]string{
-		"tacacs server opened hunter2 for session",          // a short lowercase-and-digit value
-		"tacacs message a1b2c3d4e5 from peer",               // letters and digits alternating
-		"tacacs socket data de ad be ef 0f 1a 2b 3c closed", // space-separated hex bytes
-		"tacacs connect user qual01 alice07 breakglass",     // lab usernames
-		"tacacs connect host leaf3-xrd1 srx1 xe1 from 172.100.100.31/24",
-		"tacacs secure value abc-def_ghi 0xdeadbe sunrise", // joined values, a short hex, a plain word
-		"TAC+: Queuing AAA Accounting request 7 for processing",
 		"password for bob is hunter2",
 		"payload(hex) 00112233",
 		"tacacs key is abcdef",
+		"cred zzz token yyy",
+		"noise line one",
+		"tacacs server opened",
+		"tacacs server opened",
 	}, "\n")
-	got := ddArmSample(raw, 20)
-	joined := strings.Join(got, "\n")
-	for _, ln := range got {
-		for _, w := range regexp.MustCompile(`[A-Za-z]{2,}`).FindAllString(ln, -1) {
-			if !ddArmVocab[strings.ToLower(w)] {
-				t.Errorf("a non-vocabulary run of letters survives: %q in %q", w, ln)
-			}
-		}
-		if regexp.MustCompile(`[0-9]`).MatchString(ln) {
-			t.Errorf("a digit survives: %q", ln)
-		}
-	}
-	for _, never := range []string{"hunter", "alice", "qual", "breakglass", "leaf", "xrd", "srx", "172", "sunrise", "deadbe", "abc", "ghi", "bob", "payload", "abcdef"} {
-		if strings.Contains(joined, never) {
-			t.Errorf("the sample carries %q:\n%s", never, joined)
-		}
-	}
-	for _, shape := range []string{"TAC+: Queuing AAA Accounting request N for processing", "from peer", "from A"} {
-		if !strings.Contains(joined, shape) {
-			t.Errorf("the shape %q is gone:\n%s", shape, joined)
-		}
+	got := ddArmSample(raw, 10)
+	if len(got) != 2 || got[0] != "tacacs server opened" || got[1] != "_" {
+		t.Errorf("sample = %q", got)
 	}
 	if n := len(ddArmSample(raw, 1)); n != 1 {
 		t.Errorf("max not honoured: %d", n)

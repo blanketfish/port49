@@ -45,7 +45,7 @@ func (q *qualEnv) armed(family string) (string, bool) {
 // lines the collect commands returned (not the echo or the prompt), keeps the
 // shapes of the lines the filter drops, and returns the raw text to
 // captureDeviceDebug alone.
-func ddArmRun(c *cliConn, f deviceDebugFilter, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
+func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
 	cfgMode := false
 	return func(cmd string) (string, error) {
 		var wait []string
@@ -60,11 +60,11 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, platform string, rawLines *int, s
 					dropped = append(dropped, ln)
 				}
 			}
-			*sample = append(*sample, ddArmSample(strings.Join(dropped, "\n"), 70)...)
+			*sample = append(*sample, ddArmSample(l73MaskAll(strings.Join(dropped, "\n"), secrets()...), 70)...)
 		} else {
 			// What the enable and disable commands answered, as shapes: the
 			// first thing to learn when no debug line comes back.
-			for _, sh := range ddArmSample(out, 6) {
+			for _, sh := range ddArmSample(l73MaskAll(out, secrets()...), 6) {
 				*cmdShapes = append(*cmdShapes, cmd+" => "+sh)
 			}
 		}
@@ -107,7 +107,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
-		run := ddArmRun(c, filter, platform, &rawLines, &sample, &answers)
+		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers)
 		kept, capErr = captureDeviceDebug(filter, run, func() error {
 			ran = true
 			finished := false
@@ -124,7 +124,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		})
 		return nil
 	})
-	q.t.Logf("%s", l73MaskAll(fmt.Sprintf("device debug command answers, %s %s (shapes):\n  %s", platform, cell, strings.Join(answers, "\n  ")), q.ddSecrets()...))
+	q.t.Logf("device debug command answers, %s %s (shapes):\n  %s", platform, cell, strings.Join(answers, "\n  "))
 	if !ran {
 		// Debug would not go on (the summary says why): the cell is still
 		// played, without it, so the run's other results stand.
@@ -147,7 +147,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	// The shapes the device wrote that the filter drops (never a value) go to
 	// the test log, not to evidence, for an implementer to read through the
 	// filtered grep.
-	q.t.Logf("%s", l73MaskAll(fmt.Sprintf("device debug, shapes of the lines the filter dropped, %s %s (class tokens only):\n  %s", platform, cell, strings.Join(sample, "\n  ")), q.ddSecrets()...))
+	q.t.Logf("device debug, shapes of the lines the filter dropped, %s %s (closed alphabet):\n  %s", platform, cell, strings.Join(sample, "\n  "))
 	masked := 0
 	for _, ln := range strings.Split(string(kept), "\n") {
 		if strings.Contains(ln, "<masked>") {

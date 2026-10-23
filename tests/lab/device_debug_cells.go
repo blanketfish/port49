@@ -2,6 +2,7 @@ package lab
 
 import (
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strings"
 )
@@ -105,90 +106,130 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 var (
 	ddArmDrop = regexp.MustCompile(`(?i)password|passwd|pass|pwd|key|token|secret|eyJ|payload|challenge|response|nonce|signature|cred|hash|md5|sha`)
 	// ddArmHot marks the lines a sample lists first: the ones about the exchange.
-	ddArmHot   = regexp.MustCompile(`(?i)tac|server|connect|session|request|reply|socket|ssl|tls|author|account|single`)
-	ddArmIP4   = regexp.MustCompile(`[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]+)?`)
-	ddArmAlnum = regexp.MustCompile(`[A-Za-z0-9]+`)
+	ddArmHot = regexp.MustCompile(`(?i)tac|server|connect|session|request|reply|socket|ssl|tls|author|account|single`)
+	// ddArmAddr finds the spans that may be an IPv4 or IPv6 address; netip
+	// decides.
+	ddArmAddr = regexp.MustCompile(`[0-9A-Fa-f:.]*[0-9A-Fa-f:][0-9A-Fa-f:.]*`)
 )
 
-// ddArmVocab is the closed list of protocol and verb words a sample may keep.
-// It is written here and never derived from device output; a run that is not
-// exactly one of these (ignoring case) is not kept.
+// ddArmWords is the closed vocabulary of a sample: protocol and verb words,
+// written here and never derived from device output. Each is lowercase ASCII
+// letters, three or more, and not made only of hex digits (a hex byte pair or
+// word must never be kept); TestDeviceDebugArmVocabularyIsClosed enforces it.
+const ddArmWords = `tac tacacs tplus connect connected connection socket server opened open closed close secure message
+	type request reply send sent receive received queued queuing processed processing created start started timeout
+	tls ssl tcp session author authorization authentication accounting group list method status error failed fail
+	established peer port host address bind bound immediate new not the and for are has was with from using
+	previously default handle name addr timer expired unavailable available detected thread sleeping seconds debug
+	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec`
+
 var ddArmVocab = map[string]bool{}
 
 func init() {
-	for _, w := range strings.Fields(`tac tacacs tplus connect connected connection socket server opened open closed close
-		secure message type request reply send sent receive received queued processed processing created start started
-		queuing timeout tls ssl session author authorization authentication accounting aaa group list method status error failed
-		fail ok up down established peer port host address bind bound immediate new no not is are the to from for on in
-		of and with by set get has was using previously default handle name addr id fd vrf timer expired unavailable
-		available detected thread sleeping seconds sec debug auth login packet create destroy free alloc state
-		transaction transactions tty cmd arg service shell exec`) {
+	for _, w := range strings.Fields(ddArmWords) {
 		ddArmVocab[w] = true
 	}
 }
 
-// ddArmClass is what one alphanumeric run becomes in a sample: itself if it is
-// exactly a vocabulary word, otherwise a class token with no value character in
-// it: N for digits only, w for letters only, x for letters and digits mixed.
-func ddArmClass(run string) string {
-	if ddArmVocab[strings.ToLower(run)] {
-		return run
-	}
-	letters, digits := false, false
-	for _, r := range run {
-		if r >= '0' && r <= '9' {
-			digits = true
-		} else {
-			letters = true
-		}
-	}
-	switch {
-	case letters && digits:
-		return "x"
-	case letters:
-		return "w"
-	}
-	return "N"
-}
-
 // ddArmSample is a shape sample of raw device text, for the case where the
-// filter keeps nothing and the line shapes must be learned. A line with a
-// secret word is dropped. In the others an IPv4 address becomes A, and every
-// alphanumeric run becomes a class token (ddArmClass) unless the whole run is
-// a word of the fixed vocabulary ddArmVocab, so no letter or digit of any
-// value (user, host, group, secret, hex byte) survives; punctuation stays.
-// Lines about the exchange come first and a repeated shape is listed once. At
-// most max lines come back, cut to 160 characters.
+// filter keeps nothing and the line shapes must be learned. Its output alphabet
+// is closed. A line holding a secret word (ddArmDrop) is dropped. In the others
+// the output is tokens joined by single spaces, each one of: a word of the fixed
+// vocabulary ddArmVocab, matched case-insensitively as a whole ASCII alphanumeric
+// run and written lowercase; A, for an IPv4 or IPv6 address; or _, for every
+// other maximal span of the input (an unknown word, a number, punctuation, a
+// non-ASCII character or a raw byte, with the spaces between them). No character
+// of any value is ever copied: the output is only [a-z], A, _ and space. "TAC+:
+// Opened TCP/IP handle 0x1F to 10.149.0.2/49" becomes "tac _ opened tcp _ handle
+// _ to A _". Lines about the exchange come first and a repeated line is listed
+// once. At most max lines come back, cut to 160 characters.
 func ddArmSample(raw string, max int) []string {
 	var hot, cold []string
 	seen := map[string]bool{}
-	for _, ln := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
-		ln = strings.TrimSpace(ln)
-		if ln == "" || ddArmDrop.MatchString(ln) {
+	for _, ln := range strings.Split(raw, "\n") {
+		if ddArmDrop.MatchString(ln) {
 			continue
 		}
-		interesting := ddArmHot.MatchString(ln)
-		ln = ddArmIP4.ReplaceAllString(ln, "\x01")
-		ln = ddArmAlnum.ReplaceAllStringFunc(ln, ddArmClass)
-		ln = strings.ReplaceAll(ln, "\x01", "A")
-		if len(ln) > 160 {
-			ln = ln[:160]
-		}
-		if seen[ln] {
+		out := ddArmTokens(ln)
+		if out == "" {
 			continue
 		}
-		seen[ln] = true
-		if interesting {
-			hot = append(hot, ln)
+		if len(out) > 160 {
+			out = out[:160]
+		}
+		if seen[out] {
+			continue
+		}
+		seen[out] = true
+		if ddArmHot.MatchString(ln) {
+			hot = append(hot, out)
 		} else {
-			cold = append(cold, ln)
+			cold = append(cold, out)
 		}
 	}
-	out := append(hot, cold...)
-	if len(out) > max {
-		out = out[:max]
+	res := append(hot, cold...)
+	if len(res) > max {
+		res = res[:max]
 	}
-	return out
+	return res
+}
+
+// ddArmTokens turns one line into the closed alphabet (see ddArmSample).
+func ddArmTokens(ln string) string {
+	var out []string
+	other := false
+	emit := func(tok string) {
+		if other {
+			out = append(out, "_")
+			other = false
+		}
+		out = append(out, tok)
+	}
+	isAlnum := func(c byte) bool {
+		return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	}
+	// text scans a stretch holding no address: alphanumeric runs and the gaps.
+	text := func(t string) {
+		for i := 0; i < len(t); {
+			j := i
+			if isAlnum(t[i]) {
+				for j < len(t) && isAlnum(t[j]) {
+					j++
+				}
+				if w := strings.ToLower(t[i:j]); ddArmVocab[w] {
+					emit(w)
+				} else {
+					other = true
+				}
+			} else {
+				for j < len(t) && !isAlnum(t[j]) {
+					j++
+				}
+				if strings.Trim(t[i:j], " \t") != "" {
+					other = true
+				}
+			}
+			i = j
+		}
+	}
+	at := 0
+	for _, m := range ddArmAddr.FindAllStringIndex(ln, -1) {
+		s, e := m[0], m[1]
+		if s > 0 && isAlnum(ln[s-1]) || e < len(ln) && isAlnum(ln[e]) {
+			continue
+		}
+		if _, err := netip.ParseAddr(ln[s:e]); err != nil {
+			continue
+		}
+		text(ln[at:s])
+		emit("A")
+		at = e
+	}
+	text(ln[at:])
+	if other {
+		out = append(out, "_")
+	}
+	return strings.Join(out, " ")
 }
 
 // ddArmCountLines is the number of device log lines in a command's output: the
