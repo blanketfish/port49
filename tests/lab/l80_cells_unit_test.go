@@ -390,3 +390,34 @@ func TestL80RestartAfterTheWindowIsNotAcross(t *testing.T) {
 		t.Errorf("%+v", g)
 	}
 }
+
+// A permitted command asked about and denied after the restart is a port49
+// finding (the session did not survive), ranked above a lost request and below
+// an unasked command; `show users` denied is the policy working.
+func TestL80RestartGradesAPermittedCommandDeniedAfterTheRestart(t *testing.T) {
+	typed := []l80Typed{typedAt("show clock", 8, true, false), typedAt("show users", 9, true, true),
+		typedAt("show version", 14, true, true), typedAt("show users", 15, true, true)}
+	g := l80GradeRestart(typed, l80Win, nil, 0, l80Conns(false))
+	if g.Verdict != l80RestartPermDenied || g.PermittedDenied != 1 || g.Denied != 3 {
+		t.Fatalf("%+v", g)
+	}
+	if !has(g.Facts, `permitted command "show version" typed 4.0s after the stop was asked about and denied: the session did not survive the restart`) {
+		t.Errorf("no per-command line: %v", g.Facts)
+	}
+	// Before the stop it is an ordinary denial; `show users` after it is the policy.
+	ord := []l80Typed{typedAt("show version", 5, true, true), typedAt("show users", 15, true, true)}
+	if g := l80GradeRestart(ord, l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartClean || g.PermittedDenied != 0 {
+		t.Errorf("%+v", g)
+	}
+	// Ranks: an unasked command is above it, a lost request below it.
+	if g := l80GradeRestart(append(typed, typedAt("show clock", 16, false, false)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartUnasked {
+		t.Errorf("unasked must stay on top: %+v", g)
+	}
+	if g := l80GradeRestart(append(typed, typedAt("show clock", 16, false, true)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartPermDenied || g.Lost != 1 {
+		t.Errorf("above a lost request: %+v", g)
+	}
+	// Unplaced: no stop recorded, no finding.
+	if g := l80GradeRestart(typed, l80RestartWindow{}, nil, 0, nil); g.PermittedDenied != 0 {
+		t.Errorf("a finding without a recorded stop: %+v", g)
+	}
+}

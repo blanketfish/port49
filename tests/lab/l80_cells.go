@@ -236,11 +236,15 @@ type l80RestartWindow struct{ StopAt, UpAt time.Time }
 
 // The restart cell's verdicts.
 const (
-	l80RestartClean    = "clean_reconnect"
-	l80RestartLost     = "lost_request"
-	l80RestartUnasked  = "unasked_command"
-	l80RestartDeadOnly = "marked_dead_no_loss"
-	l80RestartNoConn   = "no_reconnect_seen"
+	l80RestartClean = "clean_reconnect"
+	l80RestartLost  = "lost_request"
+	// l80RestartPermDenied is a port49 finding: a command port49's policy permits
+	// was asked about after the restart and denied, so the session did not
+	// survive the restart. It is not an ordinary denial.
+	l80RestartPermDenied = "permitted_denied_after_restart"
+	l80RestartUnasked    = "unasked_command"
+	l80RestartDeadOnly   = "marked_dead_no_loss"
+	l80RestartNoConn     = "no_reconnect_seen"
 )
 
 // l80RestartGrade is the restart cell graded: each typed command as asked and
@@ -251,6 +255,7 @@ type l80RestartGrade struct {
 	Verdict                          string
 	Permitted, Denied, Lost, Unasked int
 	LostAcross, UnaskedAcross        int // not asked, typed while port49d was down or coming up
+	PermittedDenied                  int // asked and denied after the stop, though the policy permits it
 	Reconnects                       int // connections port49 answered that began after the stop
 	Facts                            []string
 }
@@ -273,10 +278,16 @@ func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int
 		}
 		return !x.At.After(w.upOrOpen()) && !end.Before(w.StopAt)
 	}
+	var permDenied []string
 	for _, x := range typed {
 		switch {
 		case x.Asked && x.Denied:
 			g.Denied++
+			if placed && x.Command != "show users" && !x.At.Before(w.StopAt) {
+				g.PermittedDenied++
+				permDenied = append(permDenied, fmt.Sprintf("permitted command %q typed %.1fs after the stop was asked about and denied: the session did not survive the restart",
+					x.Command, x.At.Sub(w.StopAt).Seconds()))
+			}
 		case x.Asked:
 			g.Permitted++
 		case l80Ran(x):
@@ -302,6 +313,8 @@ func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int
 	switch {
 	case g.Unasked > 0:
 		g.Verdict = l80RestartUnasked
+	case g.PermittedDenied > 0:
+		g.Verdict = l80RestartPermDenied
 	case g.Lost > 0:
 		g.Verdict = l80RestartLost
 	case dead > 0 || fallbacks > 0:
@@ -313,6 +326,7 @@ func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int
 	}
 	g.Facts = append(g.Facts, fmt.Sprintf("commands: %d asked and permitted, %d asked and denied, %d not asked and not run (lost), %d not asked and run (unasked)",
 		g.Permitted, g.Denied, g.Lost, g.Unasked))
+	g.Facts = append(g.Facts, permDenied...)
 	if placed {
 		g.Facts = append(g.Facts, fmt.Sprintf("while port49d was down or coming up: %d lost, %d unasked", g.LostAcross, g.UnaskedAcross))
 		g.Facts = append(g.Facts, fmt.Sprintf("connections answered by port49 after the stop: %d", g.Reconnects))
