@@ -455,12 +455,15 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 		Collect: []string{"show logging"},
 	},
 	"junos": {
-		Enable: []string{"clear log p49-tacplus.log", "configure",
+		Enable: []string{"clear log p49-tacplus.log", "clear log p49-auth.log", "configure",
 			"set system processes general-authentication-service traceoptions file p49-tacplus.log",
-			"set system processes general-authentication-service traceoptions flag all", "commit and-quit"},
-		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions", "commit and-quit",
-			"clear log p49-tacplus.log"},
-		Collect: []string{"show log p49-tacplus.log"},
+			"set system processes general-authentication-service traceoptions flag all",
+			"set system syslog file p49-auth.log any any",
+			"commit and-quit"},
+		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions",
+			"delete system syslog file p49-auth.log", "commit and-quit",
+			"clear log p49-tacplus.log", "clear log p49-auth.log"},
+		Collect: []string{"show log p49-tacplus.log", "show log p49-auth.log"},
 	},
 }
 

@@ -252,6 +252,31 @@ func TestDeviceDebugEOSTracesTheAaaAgent(t *testing.T) {
 	}
 }
 
+func TestDeviceDebugJunosTracesAuthdAndLogsTheAuthFacility(t *testing.T) {
+	c := deviceDebugCmds["junos"]
+	for _, set := range []string{
+		"set system processes general-authentication-service traceoptions flag all",
+		"set system syslog file p49-auth.log any any",
+	} {
+		if !slices.Contains(c.Enable, set) {
+			t.Errorf("junos enable lacks %q", set)
+		}
+	}
+	if c.Enable[len(c.Enable)-1] != "commit and-quit" || c.Disable[len(c.Disable)-3] != "commit and-quit" {
+		t.Errorf("junos enable %q or disable %q does not commit", c.Enable, c.Disable)
+	}
+	if !slices.Equal(c.Collect, []string{"show log p49-tacplus.log", "show log p49-auth.log"}) {
+		t.Errorf("junos collect %q", c.Collect)
+	}
+	// 26.2R1.7 rejects these (syntax error at the set).
+	for _, cmd := range c.Enable {
+		if strings.Contains(cmd, "traceoptions level") || strings.Contains(cmd, "services ssh traceoptions") ||
+			strings.Contains(cmd, "tacplus-options traceoptions") {
+			t.Errorf("junos enable has %q, which 26.2R1.7 rejects", cmd)
+		}
+	}
+}
+
 // ddHasRun is whether run appears in cmds as consecutive entries.
 func ddHasRun(cmds, run []string) bool {
 	for i := 0; i+len(run) <= len(cmds); i++ {
