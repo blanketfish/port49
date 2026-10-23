@@ -240,6 +240,11 @@ func TestL80Remeasure(t *testing.T) {
 			var mu sync.Mutex
 			var typed []l80Typed
 			var wg sync.WaitGroup
+			// The restart cell stops port49d by its recorded PID and starts it
+			// again while the loop keeps typing (see l80RestartDaemon).
+			var window l80RestartWindow
+			var restartErr error
+			var restartWG sync.WaitGroup
 			for i, seq := range cell.Sessions {
 				wg.Add(1)
 				go func(i int, seq []string) {
@@ -261,6 +266,23 @@ func TestL80Remeasure(t *testing.T) {
 					mu.Unlock()
 					gap := 0.0
 					for _, cmd := range seq {
+						if cmd == "@restart" {
+							restartWG.Add(1)
+							go func() {
+								defer restartWG.Done()
+								mu.Lock()
+								window.StopAt = time.Now()
+								mu.Unlock()
+								err := l80RestartDaemon(e, l)
+								mu.Lock()
+								defer mu.Unlock()
+								restartErr = err
+								if err == nil {
+									window.UpAt = time.Now()
+								}
+							}()
+							continue
+						}
 						if g, ok := strings.CutPrefix(cmd, "@sleep "); ok {
 							gap, _ = strconv.ParseFloat(g, 64)
 							time.Sleep(time.Duration(gap * float64(time.Second)))
@@ -277,7 +299,8 @@ func TestL80Remeasure(t *testing.T) {
 							}
 						}
 						x := l80Typed{Session: i, Command: cmd, Gap: gap, Took: time.Since(b0).Seconds(),
-							Denied: strings.Contains(first, "AAA authorization failed")}
+							Denied: strings.Contains(first, "AAA authorization failed"),
+							At:     b0, Done: time.Now(), Err: err != nil}
 						mu.Lock()
 						typed = append(typed, x)
 						fmt.Fprintf(&sum, "  s%d %-20q gap=%.1fs took=%.2fs err=%v first=%q\n", i, cmd, gap, x.Took, err != nil, first)
@@ -289,6 +312,7 @@ func TestL80Remeasure(t *testing.T) {
 				}(i, seq)
 			}
 			wg.Wait()
+			restartWG.Wait()
 			time.Sleep(40 * time.Second) // holds, idle closes
 			recs := l.waitForRecords(off, 10*time.Second, func([]map[string]any) bool { return false })
 			var recorded []string
@@ -300,6 +324,11 @@ func TestL80Remeasure(t *testing.T) {
 			l80Ask(typed, recorded)
 			after := l80Events()
 			second := after["single_connect_second_connection"] - before["single_connect_second_connection"]
+			if cell.Name == "restart" {
+				// The restart reset port49d's counters: a delta across it says nothing.
+				second = 0
+				sum.WriteString("restart: port49d's connection-event counters were reset by the restart; their deltas below are not graded\n")
+			}
 			conns := stop()
 			most := l80MostOpen(conns)
 			fmt.Fprintf(&sum, "tls connections: %d, most open at once: %d\n", len(conns), most)
@@ -338,6 +367,17 @@ func TestL80Remeasure(t *testing.T) {
 			if cell.Name == "concurrent" {
 				sum.WriteString(l80Interleaving + "\n")
 			}
+			if cell.Name == "restart" {
+				if restartErr != nil {
+					sum.WriteString("restart: port49d did not come back\n")
+				}
+				g := l80GradeRestart(typed, window, cnt, len(nxosFallbacks(kept)), conns)
+				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(window.StopAt), l80Clock(window.UpAt))
+				for _, f := range g.Facts {
+					sum.WriteString("restart: " + f + "\n")
+				}
+				fmt.Fprintf(&sum, "restart verdict: %s\n", g.Verdict)
+			}
 			cellStops := l80Stops(arm, cell.Name, typed, most, second, cnt)
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
@@ -356,5 +396,41 @@ func TestL80Remeasure(t *testing.T) {
 		if len(stops) > 0 {
 			t.Fatalf("STOP (report before shipping; evidence for %s is written):\n%s", cell.Name, strings.Join(stops, "\n"))
 		}
+	}
+}
+
+// l80Clock is a time as the summary keeps it, or "never".
+func l80Clock(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.UTC().Format("15:04:05.000")
+}
+
+// l80RestartDaemon stops port49d by the harness's recorded process and starts it
+// on the cell's config again, returning once it announces its RFC 9887
+// listener. It is l73Env.startOn with errors returned, not Fatal, because the
+// restart runs beside the typing loop, off the test goroutine. It does not wait
+// on ready(): that probes through a break-glass CLI, which stops port49d.
+func l80RestartDaemon(e *l73Env, l *lab) error {
+	if err := l.stopDaemon(); err != nil {
+		return err
+	}
+	off := fileSize(l.errPath)
+	healthListen = e.listen
+	defer func() { healthListen = "" }()
+	if err := l.startDaemonWith(e.cfg, true); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		b, _ := os.ReadFile(l.errPath)
+		if int64(len(b)) > off && strings.Contains(string(b[off:]), "RFC 9887 listener on") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("port49d never announced its RFC 9887 listener")
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

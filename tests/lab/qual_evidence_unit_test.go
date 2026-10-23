@@ -938,7 +938,7 @@ func TestQualL80NoteNamesRulingTwentyAndTheBaseline(t *testing.T) {
 	if !ok {
 		t.Fatal("an observed cell writes a note")
 	}
-	for _, want := range []string{"decision 50 ruling 20", base} {
+	for _, want := range []string{"decision 50 ruling 20", base, "restart cells", "restart verdict:"} {
 		if !strings.Contains(obs, want) {
 			t.Errorf("the note lacks %q:\n%s", want, obs)
 		}

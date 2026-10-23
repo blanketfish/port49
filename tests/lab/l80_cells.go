@@ -44,7 +44,39 @@ func l80Cells(arm string) []l80Cell {
 		}
 		cells = append(cells, l80Cell{"idle" + g.gap, [][]string{seq}})
 	}
-	return append(cells, l80Cell{"concurrent", [][]string{nxosSeqE1, nxosSeqE1, nxosSeqE1}})
+	cells = append(cells, l80Cell{"concurrent", [][]string{nxosSeqE1, nxosSeqE1, nxosSeqE1}})
+	return append(cells, l80Cell{"restart", [][]string{l80RestartSeq()}})
+}
+
+// The restart cell (device-debug shapes follow-up, step 3): port49d is stopped
+// and started again in the middle of a command loop, on an offered NX-OS that
+// holds one connection between requests, to see what the device does with the
+// close_notify of the restart. The loop is l80RestartPermitted permitted
+// commands, one every half second, with `show users` (denied) after every
+// l80RestartDeniedEvery of them; "@restart" follows the l80RestartAfter-th
+// permitted command and the loop keeps typing across the restart.
+const (
+	l80RestartPermitted   = 20
+	l80RestartAfter       = 8
+	l80RestartDeniedEvery = 4
+)
+
+func l80RestartSeq() []string {
+	seq := []string{nxosSeqSpacing[0]}
+	for i := 1; i <= l80RestartPermitted; i++ {
+		cmd := "show clock"
+		if i%2 == 0 {
+			cmd = "show version"
+		}
+		seq = append(seq, "@sleep 0.5", cmd)
+		if i == l80RestartAfter {
+			seq = append(seq, "@restart")
+		}
+		if i%l80RestartDeniedEvery == 0 {
+			seq = append(seq, "@sleep 0.5", nxosSeqSpacing[1])
+		}
+	}
+	return seq
 }
 
 // l80Typed is one command as typed, and what came of it.
@@ -55,6 +87,12 @@ type l80Typed struct {
 	Took    float64 `json:"took_s"`
 	Denied  bool    `json:"denied"` // its first output line said "AAA authorization failed"
 	Asked   bool    `json:"asked"`  // an authorize_command record for it, matched in order
+	// At and Done are when it was typed and when its prompt came back; Err is
+	// that the prompt did not (a timeout or a lost session). The restart cell
+	// places a command against the restart window with them.
+	At   time.Time `json:"at,omitzero"`
+	Done time.Time `json:"done,omitzero"`
+	Err  bool      `json:"err,omitempty"`
 }
 
 // l80Ask marks each typed command asked while port49 has an unmatched
@@ -103,7 +141,10 @@ func l80Stops(arm, cell string, typed []l80Typed, mostOpen int, second float64, 
 	}
 	var out []string
 	for _, x := range typed {
-		if !x.Asked {
+		// The restart cell measures lost commands: a command port49 never saw
+		// that the device did not run is its result, not a stop. One that ran
+		// unasked is the failure L80 measures.
+		if !x.Asked && (cell != "restart" || l80Ran(x)) {
 			out = append(out, fmt.Sprintf("%s: session %d %q (after %.1fs) was never asked: lost or run unasked", cell, x.Session, x.Command, x.Gap))
 		}
 		if x.Command == "show users" && !x.Denied {
@@ -184,3 +225,141 @@ const l80DefaultIdle = 30 * time.Second
 // before an L80 cell's capture: past the default idle close of a connection
 // an offered NX-OS holds (fix round 4).
 const l80CleanPolls = 60
+
+// l80Ran is whether the device ran a typed command: it answered and did not
+// deny it.
+func l80Ran(x l80Typed) bool { return !x.Denied && !x.Err }
+
+// l80RestartWindow is when port49d was down: StopAt is when the harness began
+// stopping it, UpAt when it announced its listener again (zero if it never did).
+type l80RestartWindow struct{ StopAt, UpAt time.Time }
+
+// The restart cell's verdicts.
+const (
+	l80RestartClean    = "clean_reconnect"
+	l80RestartLost     = "lost_request"
+	l80RestartUnasked  = "unasked_command"
+	l80RestartDeadOnly = "marked_dead_no_loss"
+	l80RestartNoConn   = "no_reconnect_seen"
+)
+
+// l80RestartGrade is the restart cell graded: each typed command as asked and
+// permitted, asked and denied, or not asked (lost if the device did not run it,
+// unasked if it did), where each fell against the restart window, and the facts
+// the debug and the capture give.
+type l80RestartGrade struct {
+	Verdict                          string
+	Permitted, Denied, Lost, Unasked int
+	LostAcross, UnaskedAcross        int // not asked, typed while port49d was down or coming up
+	Reconnects                       int // connections port49 answered that began after the stop
+	Facts                            []string
+}
+
+// l80GradeRestart grades the restart cell from typed (Asked already set by
+// l80Ask), the restart window, nxosDebugCounts, the fallback count and the
+// capture's connections. A fact the records or the capture cannot place is
+// left out, never inferred: with no StopAt no command is placed against the
+// window and no connection is counted as a reconnect.
+func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int, fallbacks int, conns []l73Conn) l80RestartGrade {
+	var g l80RestartGrade
+	placed := !w.StopAt.IsZero()
+	across := func(x l80Typed) bool {
+		if !placed || x.At.IsZero() {
+			return false
+		}
+		end := x.Done
+		if end.IsZero() {
+			end = x.At
+		}
+		return !x.At.After(w.upOrOpen()) && !end.Before(w.StopAt)
+	}
+	for _, x := range typed {
+		switch {
+		case x.Asked && x.Denied:
+			g.Denied++
+		case x.Asked:
+			g.Permitted++
+		case l80Ran(x):
+			g.Unasked++
+			if across(x) {
+				g.UnaskedAcross++
+			}
+		default:
+			g.Lost++
+			if across(x) {
+				g.LostAcross++
+			}
+		}
+	}
+	if placed {
+		for _, c := range conns {
+			if !c.SYNAt.Before(w.StopAt) && c.Answer == "syn-ack" {
+				g.Reconnects++
+			}
+		}
+	}
+	dead, readFail := counts["mark_server_dead"], counts["ssl_read_failed"]
+	switch {
+	case g.Unasked > 0:
+		g.Verdict = l80RestartUnasked
+	case g.Lost > 0:
+		g.Verdict = l80RestartLost
+	case dead > 0 || fallbacks > 0:
+		g.Verdict = l80RestartDeadOnly
+	case placed && g.Reconnects == 0:
+		g.Verdict = l80RestartNoConn
+	default:
+		g.Verdict = l80RestartClean
+	}
+	g.Facts = append(g.Facts, fmt.Sprintf("commands: %d asked and permitted, %d asked and denied, %d not asked and not run (lost), %d not asked and run (unasked)",
+		g.Permitted, g.Denied, g.Lost, g.Unasked))
+	if placed {
+		g.Facts = append(g.Facts, fmt.Sprintf("while port49d was down or coming up: %d lost, %d unasked", g.LostAcross, g.UnaskedAcross))
+		g.Facts = append(g.Facts, fmt.Sprintf("connections answered by port49 after the stop: %d", g.Reconnects))
+		closing, notify := l80RestartCloses(w, conns)
+		g.Facts = append(g.Facts, closing...)
+		if notify {
+			g.Facts = append(g.Facts, "close_notify: seen as a plaintext alert from port49 on a connection open at the stop")
+		} else {
+			g.Facts = append(g.Facts, "close_notify: not seen in a plaintext alert; an encrypted alert is not visible in a header-only capture, so this is not evidence it was not sent")
+		}
+	} else {
+		g.Facts = append(g.Facts, "restart window not recorded: no command is placed against it and no reconnect is counted")
+	}
+	g.Facts = append(g.Facts, fmt.Sprintf("debug: ssl_read_failed=%d mark_server_dead=%d fallback_lines=%d", readFail, dead, fallbacks))
+	return g
+}
+
+// upOrOpen is the end of the window: UpAt, or, if port49d never came back, a
+// time past every command.
+func (w l80RestartWindow) upOrOpen() time.Time {
+	if w.UpAt.IsZero() {
+		return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return w.UpAt
+}
+
+// l80RestartCloses is how each connection open at the stop ended, and whether
+// port49 sent a plaintext close_notify on one. A connection whose end the
+// capture did not record is "open".
+func l80RestartCloses(w l80RestartWindow, conns []l73Conn) (lines []string, notify bool) {
+	for _, c := range conns {
+		if !c.SYNAt.Before(w.StopAt) || (!c.EndAt.IsZero() && c.End != "open" && c.EndAt.Before(w.StopAt)) {
+			continue
+		}
+		how := c.End
+		if !c.EndAt.IsZero() && c.End != "open" {
+			how += fmt.Sprintf(" %+.2fs after the stop", c.EndAt.Sub(w.StopAt).Seconds())
+		}
+		lines = append(lines, "connection open at the stop ended: "+how)
+		for _, a := range c.Alerts {
+			if a.Description == 0 && !a.FromDevice {
+				notify = true
+			}
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "no connection was open at the stop in the capture")
+	}
+	return lines, notify
+}

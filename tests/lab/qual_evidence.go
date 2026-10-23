@@ -767,8 +767,9 @@ func qualL80Note(notes []string, evidence string, fix qualL80Fix) (claim, obs st
 		obs += fmt.Sprintf("\n\nUnder spec §13 decision 50 ruling 20 this build offers the device single-connect over "+
 			"per-request TLS (platform.TLSServerSingleConnect), so a request NX-OS writes behind an accounting record "+
 			"is read and decided on the same connection. The before-the-fix evidence, the same sequences on the build "+
-			"before the fix, is committed under `%s` (make lab-l80 ARM=baseline); the fixed arm's idle-boundary and "+
-			"concurrent-sessions cells beside it, under `%s` (make lab-l80 ARM=fixed).",
+			"before the fix, is committed under `%s` (make lab-l80 ARM=baseline); the fixed arm's idle-boundary, "+
+			"concurrent-sessions and restart cells beside it, under `%s` (make lab-l80 ARM=fixed; the restart cell's "+
+			"summary holds its verdict, `restart verdict:`, and what port49d's restart did to the held connection).",
 			fix.Baseline, strings.TrimSuffix(fix.Baseline, "baseline/")+"fixed/")
 	}
 	return claim, obs, true
