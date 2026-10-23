@@ -85,8 +85,14 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 	for _, l := range tlsConns {
 		b.WriteString("  " + l + "\n")
 	}
-	fmt.Fprintf(&b, "debug connections opened=%d closed=%d single_connect_lines=%d server_dead_lines=%d fallback_lines=%d\n",
-		s.Opened, s.Closed, s.SingleConnect, s.ServerDead, s.Fallback)
+	// A platform whose debug has no close line says so: a count of 0 would read
+	// as "none closed".
+	closedAll := fmt.Sprint(s.Closed)
+	if s.CloseUnknown {
+		closedAll = "unknown"
+	}
+	fmt.Fprintf(&b, "debug connections opened=%d closed=%s single_connect_lines=%d server_dead_lines=%d fallback_lines=%d\n",
+		s.Opened, closedAll, s.SingleConnect, s.ServerDead, s.Fallback)
 	for i, c := range s.Conns {
 		open, closed := c.Opened, c.Closed
 		if open == "" {
@@ -94,6 +100,9 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 		}
 		if closed == "" {
 			closed = "open"
+		}
+		if s.CloseUnknown {
+			closed = "unknown"
 		}
 		fmt.Fprintf(&b, "  debug conn %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d\n",
 			i+1, open, closed, c.Reason, c.Authen, c.Author, c.Acct)
@@ -127,7 +136,8 @@ const ddArmWords = `tac tacacs tplus connect connected connection socket server 
 	tls ssl tcp session author authorization authentication accounting group list method status error failed fail
 	established peer port host address bind bound immediate new not the and for are has was with from using
 	previously default handle name addr timer expired unavailable available detected thread sleeping seconds debug
-	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec`
+	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec
+	tacacsd tacplus authd invalid syntax`
 
 var ddArmVocab = map[string]bool{}
 

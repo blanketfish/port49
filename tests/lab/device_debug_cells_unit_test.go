@@ -44,7 +44,8 @@ const wantVocab = `tac tacacs tplus connect connected connection socket server o
 	tls ssl tcp session author authorization authentication accounting group list method status error failed fail
 	established peer port host address bind bound immediate new not the and for are has was with from using
 	previously default handle name addr timer expired unavailable available detected thread sleeping seconds debug
-	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec`
+	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec
+	tacacsd tacplus authd invalid syntax`
 
 func TestDeviceDebugArmVocabularyIsClosed(t *testing.T) {
 	want := map[string]bool{}
