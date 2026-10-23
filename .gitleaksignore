@@ -34,3 +34,6 @@ c3da08adcf84b5f939166b81e610ac3dcc01d315:tests/lab/l73_device_unit_test.go:priva
 # commit d4538d78; removed 2026-09-22 (d9dcc34d). Lab-only, ruling 2026-10-23.
 d4538d78e0ef5e8be6acf3f5a55108bb24ffdeb8:tests/lab/transport_test.go:generic-api-key:77
 d4538d78e0ef5e8be6acf3f5a55108bb24ffdeb8:tests/lab/transport_test.go:generic-api-key:84
+#
+# A test word in the redaction table (not a lab constant), commit 60cf3fcb.
+60cf3fcb0616ccc0841d62eea6d8712d6a44c0bb:internal/platform/redact_test.go:tacacs-key-config-line:441
