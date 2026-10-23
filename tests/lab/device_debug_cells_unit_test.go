@@ -73,7 +73,7 @@ func TestDeviceDebugArmWaitFollowsTheJunosModes(t *testing.T) {
 	}
 	step("clear log p49-tacplus.log", "> ", false)
 	step("configure", "# ", true)
-	step("set system tacplus-options traceoptions flag all", "# ", true)
+	step("set system processes general-authentication-service traceoptions flag all", "# ", true)
 	step("commit and-quit", "> ", false)
 	step("show log p49-tacplus.log", "> ", false)
 	if w, _ := ddArmWait("iosxe", "clear logging", false, "r1#"); len(w) != 2 || w[1] != "[confirm]" {
