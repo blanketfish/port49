@@ -42,6 +42,12 @@ func ddArmWait(platform, cmd string, cfgMode bool, prompt string) (wait []string
 		return []string{"# "}, true
 	case platform == "junos":
 		return []string{"> "}, false
+	case platform == "eos" && cmd == "configure":
+		return []string{")#"}, true
+	case platform == "eos" && cmd == "end":
+		return []string{prompt}, false
+	case platform == "eos" && cfgMode:
+		return []string{")#"}, true
 	case cmd == "clear logging":
 		return []string{prompt, "[confirm]"}, false
 	}
@@ -258,4 +264,15 @@ func ddArmCountLines(out, cmd string, prompts ...string) int {
 		}
 	}
 	return n
+}
+
+// ddArmIsCollect is whether cmd is one of the platform's collect commands,
+// whose output is the debug text (sampled), not an enable or disable answer.
+func ddArmIsCollect(platform, cmd string) bool {
+	for _, c := range deviceDebugCmds[platform].Collect {
+		if c == cmd {
+			return true
+		}
+	}
+	return false
 }

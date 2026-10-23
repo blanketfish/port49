@@ -2,6 +2,7 @@ package lab
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -193,4 +194,70 @@ func TestDeviceDebugArmSampleOrdersOnTheSampledOutput(t *testing.T) {
 	if len(got) != 2 || got[0] != "tacacs server opened" {
 		t.Errorf("hot line not first: %q", got)
 	}
+}
+
+func TestDeviceDebugArmWaitFollowsTheEOSConfigMode(t *testing.T) {
+	cfg := false
+	step := func(cmd, want string, wantCfg bool) {
+		t.Helper()
+		var w []string
+		w, cfg = ddArmWait("eos", cmd, cfg, "eos1#")
+		if len(w) != 1 || w[0] != want || cfg != wantCfg {
+			t.Errorf("%q: waits for %q, config mode %v; want %q, %v", cmd, w, cfg, want, wantCfg)
+		}
+	}
+	step("terminal length 0", "eos1#", false)
+	step("configure", ")#", true)
+	step("trace Aaa setting *", ")#", true)
+	step("end", "eos1#", false)
+	step("show agent Aaa logs", "eos1#", false)
+}
+
+func TestDeviceDebugArmIsCollectNamesOnlyTheCollectCommands(t *testing.T) {
+	for _, p := range []string{"eos", "iosxr", "iosxe", "junos"} {
+		for _, c := range deviceDebugCmds[p].Collect {
+			if !ddArmIsCollect(p, c) {
+				t.Errorf("%s: %q is a collect command", p, c)
+			}
+		}
+		for _, c := range append(append([]string{}, deviceDebugCmds[p].Enable...), deviceDebugCmds[p].Disable...) {
+			if ddArmIsCollect(p, c) {
+				t.Errorf("%s: %q is not a collect command", p, c)
+			}
+		}
+	}
+}
+
+// The enable commands that worked on the lab images (shapes report, step 1):
+// EOS 4.36.3M traces the Aaa agent in config mode and reads it with
+// `show agent Aaa logs`; vJunos 26.2R1.7 traces general-authentication-service
+// and also logs every authentication-facility message to a file.
+func TestDeviceDebugEOSTracesTheAaaAgent(t *testing.T) {
+	c := deviceDebugCmds["eos"]
+	want := []string{"configure", "trace Aaa setting *", "end"}
+	if !ddHasRun(c.Enable, want) {
+		t.Errorf("eos enable %q does not hold %q in a row", c.Enable, want)
+	}
+	if !ddHasRun(c.Disable, []string{"configure", "no trace Aaa setting *", "end"}) {
+		t.Errorf("eos disable %q does not undo the trace in config mode", c.Disable)
+	}
+	if !slices.Equal(c.Collect, []string{"show agent Aaa logs"}) {
+		t.Errorf("eos collect %q", c.Collect)
+	}
+	// debug aaa and debug tacacs answer invalid input on 4.36.3M.
+	for _, cmd := range append(append([]string{}, c.Enable...), c.Disable...) {
+		if strings.HasPrefix(cmd, "debug ") || strings.HasPrefix(cmd, "no debug ") {
+			t.Errorf("eos uses %q, which 4.36.3M rejects", cmd)
+		}
+	}
+}
+
+// ddHasRun is whether run appears in cmds as consecutive entries.
+func ddHasRun(cmds, run []string) bool {
+	for i := 0; i+len(run) <= len(cmds); i++ {
+		if slices.Equal(cmds[i:i+len(run)], run) {
+			return true
+		}
+	}
+	return false
 }

@@ -51,8 +51,10 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform
 		var wait []string
 		wait, cfgMode = ddArmWait(platform, cmd, cfgMode, c.prompt)
 		out, err := c.sendExpect(cmd, 180*time.Second, wait...)
-		if strings.HasPrefix(cmd, "show log") {
-			*rawLines += ddArmCountLines(out, cmd, wait...)
+		if ddArmIsCollect(platform, cmd) {
+			n := ddArmCountLines(out, cmd, wait...)
+			*rawLines += n
+			*cmdShapes = append(*cmdShapes, fmt.Sprintf("%s => returned %d line(s)", cmd, n))
 			// The shapes of what the filter drops: the lines to decide about.
 			var dropped []string
 			for _, ln := range strings.Split(out, "\n") {
@@ -60,7 +62,9 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform
 					dropped = append(dropped, ln)
 				}
 			}
-			*sample = append(*sample, ddArmSample(l73MaskAll(strings.Join(dropped, "\n"), secrets()...), 70)...)
+			for _, sh := range ddArmSample(l73MaskAll(strings.Join(dropped, "\n"), secrets()...), 500) {
+				*sample = append(*sample, cmd+" => "+sh)
+			}
 		} else {
 			// What the enable and disable commands answered, as shapes: the
 			// first thing to learn when no debug line comes back.

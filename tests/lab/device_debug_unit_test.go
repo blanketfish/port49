@@ -426,7 +426,7 @@ func TestDeviceDebugCollectFiltersInProcess(t *testing.T) {
 	raw := strings.Join(append(append([]string{}, c.kept...), c.attacks...), "\n")
 	run := func(cmd string) (string, error) {
 		ran = append(ran, cmd)
-		if slices.Contains(deviceDebugCmds["eos"].Collect, cmd) {
+		if cmd == deviceDebugCmds["eos"].Collect[0] {
 			return raw, nil
 		}
 		return "", nil
@@ -595,7 +595,7 @@ func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
 	f := ddTestFilter("eos")
 	raw := strings.Join(append(append([]string{}, c.kept...), c.attacks...), "\n")
 	run := func(cmd string) (string, error) {
-		if slices.Contains(deviceDebugCmds["eos"].Collect, cmd) {
+		if cmd == deviceDebugCmds["eos"].Collect[0] {
 			return raw, nil
 		}
 		return "", nil
@@ -610,7 +610,7 @@ func TestDeviceDebugCollectsWhenTheCellFails(t *testing.T) {
 	}
 	// A collect step that fails with a partial capture still keeps it, filtered.
 	run2 := func(cmd string) (string, error) {
-		if slices.Contains(deviceDebugCmds["eos"].Collect, cmd) {
+		if cmd == deviceDebugCmds["eos"].Collect[0] {
 			return raw, errors.New("timeout")
 		}
 		return "", nil

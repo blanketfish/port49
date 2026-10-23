@@ -439,9 +439,9 @@ type deviceDebugCommands struct {
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
 	"eos": {
-		Enable:  []string{"terminal length 0", "clear logging", "debug aaa", "debug tacacs"},
-		Disable: []string{"no debug aaa", "no debug tacacs"},
-		Collect: []string{"show logging"},
+		Enable:  []string{"terminal length 0", "clear agent Aaa logs", "configure", "trace Aaa setting *", "end"},
+		Disable: []string{"configure", "no trace Aaa setting *", "end"},
+		Collect: []string{"show agent Aaa logs"},
 	},
 	"iosxr": {
 		Enable:  []string{"terminal length 0", "clear logging", "y", "debug tacacs", "debug aaa"},
@@ -490,7 +490,9 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	for _, c := range cmds.Collect {
 		raw, err := run(c)
 		// A partial capture is kept, filtered like the rest.
-		kept = append(kept, string(f.Keep(raw)))
+		if k := string(f.Keep(raw)); k != "" {
+			kept = append(kept, k)
+		}
 		if err != nil && collectErr == nil {
 			collectErr = ddWrap(c, err)
 		}
