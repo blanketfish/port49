@@ -93,8 +93,10 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 }
 
 var (
-	ddArmDrop   = regexp.MustCompile(`(?i)password|passwd|pass|pwd|key|token|secret|eyJ|payload|challenge|response|nonce|signature|cred|hash|md5|sha`)
-	ddArmLong   = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
+	ddArmDrop = regexp.MustCompile(`(?i)password|passwd|pass|pwd|key|token|secret|eyJ|payload|challenge|response|nonce|signature|cred|hash|md5|sha`)
+	ddArmLong = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
+	// ddArmHot marks the lines a sample lists first: the ones about the exchange.
+	ddArmHot    = regexp.MustCompile(`(?i)tac|server|connect|session|request|reply|socket|ssl|tls|author|account|single`)
 	ddArmHexish = regexp.MustCompile(`[0-9A-Fa-f]{8,}`)
 	ddArmDigits = regexp.MustCompile(`[0-9]+`)
 	ddArmWord   = regexp.MustCompile(`[A-Za-z][A-Za-z_-]*`)
@@ -104,16 +106,18 @@ var (
 // filter keeps nothing and the line shapes must be learned: lines with a
 // secret word are dropped, long and hex runs and every number are masked, and
 // every word outside the shapes' own vocabulary (anything not a lowercase
-// word of at most 12 letters) is masked. At most max lines come back. It is
+// word of at most 12 letters) is masked. Lines about the exchange come first, repeated shapes once. At most max lines come back. It is
 // the only function that sees the raw text beside captureDeviceDebug, and
 // it returns shapes, never values.
 func ddArmSample(raw string, max int) []string {
-	var out []string
+	var hot, cold []string
+	seen := map[string]bool{}
 	for _, ln := range strings.Split(strings.ReplaceAll(raw, "\r", ""), "\n") {
 		ln = strings.TrimSpace(ln)
 		if ln == "" || ddArmDrop.MatchString(ln) {
 			continue
 		}
+		interesting := ddArmHot.MatchString(ln)
 		ln = ddArmLong.ReplaceAllString(ln, "\x01")
 		ln = ddArmHexish.ReplaceAllString(ln, "\x02")
 		ln = ddArmDigits.ReplaceAllString(ln, "\x03")
@@ -127,10 +131,19 @@ func ddArmSample(raw string, max int) []string {
 		if len(ln) > 160 {
 			ln = ln[:160]
 		}
-		out = append(out, ln)
-		if len(out) >= max {
-			break
+		if seen[ln] {
+			continue
 		}
+		seen[ln] = true
+		if interesting {
+			hot = append(hot, ln)
+		} else {
+			cold = append(cold, ln)
+		}
+	}
+	out := append(hot, cold...)
+	if len(out) > max {
+		out = out[:max]
 	}
 	return out
 }

@@ -53,7 +53,7 @@ func ddArmRun(c *cliConn, platform string, rawLines *int, sample, cmdShapes *[]s
 		out, err := c.sendExpect(cmd, 180*time.Second, wait...)
 		if strings.HasPrefix(cmd, "show log") {
 			*rawLines += strings.Count(out, "\n")
-			*sample = append(*sample, ddArmSample(out, 40)...)
+			*sample = append(*sample, ddArmSample(out, 70)...)
 		} else {
 			// What the enable and disable commands answered, as shapes: the
 			// first thing to learn when no debug line comes back.
