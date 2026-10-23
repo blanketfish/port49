@@ -1,12 +1,12 @@
 # QUAL-cEOS-lab-4.36.3M — arista_ceos
 
-- **Date measured:** 2026-10-22
+- **Date measured:** 2026-10-23
 - **Platform:** arista_ceos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** cEOS-lab 4.36.3M (`ceos:4.36.3M`)
 - **Topology:** `tests/lab/topologies/ceos436.clab.yml`
-- **Capture:** `tests/lab/evidence/QUAL-cEOS-lab-4.36.3M-arista_ceos.pcap` — 1698 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-cEOS-lab-4.36.3M-arista_ceos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/QUAL-cEOS-lab-4.36.3M-arista_ceos.pcap` — 1696 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-cEOS-lab-4.36.3M-arista_ceos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `3529841e874b9b31ef9e2d5b66ce78f98fad92bf`, `PORT49_LAB_PLATFORMS=ceos436`, `-run ^TestQualify$`
+- **Run:** commit `6df5ea11f88cfc868cefbd9d3908e9a18e359b0a`, `PORT49_LAB_PLATFORMS=ceos436`, `-run ^TestQualify$`
 
 ## Claim
 
@@ -21,13 +21,13 @@ Every cell's verdict, with the rows it re-measures:
 - `command_denied` (re-measures L21): **pass**. `show users` was refused with no_permit_dominates_deny.
 - `accounting` (re-measures L6): **pass**. the login's start and stop records arrived.
 - `wrong_credential` (re-measures L13): **pass**. a random string as password was refused, and port49d denied its redeem.
-- `store_unavailable` (re-measures L4, L28): **pass**. the token login was refused; break-glass logged in true after 1.914s.
+- `store_unavailable` (re-measures L4, L28): **pass**. the token login was refused; break-glass logged in true after 2.887s.
 - `single_connection` (re-measures L15, L73): **pass**. single-connection on: on: `tacacs-server host 172.100.100.1 single-connection`.
 - `tls_token_login` (re-measures L73): **pass**. per-request (the device default): a token login over RFC 9887; `show version` permitted and `show users` denied by port49 (authorize_command records); the stop record arrived.
 - `tls_denied_command` (re-measures L80): **not_run**. per-request TLS sent port49 command authorization (tls_token_login), so port49 decided the denied command there
-- `tls_store_unavailable` (re-measures L73): **pass**. the token login was refused over TLS; break-glass logged in true after 1.914s.
+- `tls_store_unavailable` (re-measures L73): **pass**. the token login was refused over TLS; break-glass logged in true after 2.881s.
 - `tls_unknown_ca` (re-measures L73): **pass**. the handshake was refused as unknown_ca and no token was redeemed.
 - `tls_single_connection` (re-measures L15, L73): **pass**. single-connection on: a token login over RFC 9887; `show version` permitted and `show users` denied by port49 (authorize_command records); the stop record arrived.
-- TLS handshake facts: PKI: ecdsa (root, a device intermediate, an untrusted CA); port49d's server certificate subject "CN=port49 L73", issuer "CN=L73 Lab Root", dNSName [tacacs.l73.example], iPAddress [172.100.100.1], EKU [serverAuth], key ECDSA-P-256, valid 2026-10-22T16:45:41Z to 2026-10-23T17:45:41Z; the device's request (`security pki certificate generate signing-request key l73-dev.key parameters common-name leaf1`): subject "CN=leaf1", dNSName [], iPAddress [], email [], key RSA-2048, requested extensions [], requested EKU []; the lab intermediate issued subject "CN=leaf1", issuer "CN=L73 Lab Device Intermediate", dNSName [leaf1], iPAddress [172.100.100.11], EKU [clientAuth], key RSA-2048, valid 2026-10-22T16:45:58Z to 2026-10-23T17:45:58Z (the request named neither a dNSName nor an iPAddress, so the lab CA added the inventory's)
+- TLS handshake facts: PKI: ecdsa (root, a device intermediate, an untrusted CA); port49d's server certificate subject "CN=port49 L73", issuer "CN=L73 Lab Root", dNSName [tacacs.l73.example], iPAddress [172.100.100.1], EKU [serverAuth], key ECDSA-P-256, valid 2026-10-23T02:14:46Z to 2026-10-24T03:14:46Z; the device's request (`security pki certificate generate signing-request key l73-dev.key parameters common-name leaf1`): subject "CN=leaf1", dNSName [], iPAddress [], email [], key RSA-2048, requested extensions [], requested EKU []; the lab intermediate issued subject "CN=leaf1", issuer "CN=L73 Lab Device Intermediate", dNSName [leaf1], iPAddress [172.100.100.11], EKU [clientAuth], key RSA-2048, valid 2026-10-23T02:15:04Z to 2026-10-24T03:15:04Z (the request named neither a dNSName nor an iPAddress, so the lab CA added the inventory's)
 
 Evidence: `tests/lab/evidence/QUAL-cEOS-lab-4.36.3M-arista_ceos/` (whitelisted decision records, connection headers and run.json).

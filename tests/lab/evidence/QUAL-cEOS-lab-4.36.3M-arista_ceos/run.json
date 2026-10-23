@@ -3,24 +3,24 @@
   "lab_platform": "arista_ceos",
   "firmware": "cEOS-lab 4.36.3M",
   "image": "cEOS-lab 4.36.3M",
-  "commit": "3529841e874b",
-  "date": "2026-10-22",
+  "commit": "6df5ea11f88c",
+  "date": "2026-10-23",
   "transports": [
     "tcp",
     "tls"
   ],
   "cells": {
-    "accounting": "2026-10-22T17:45:26.988049347Z",
-    "command_denied": "2026-10-22T17:45:24.875612634Z",
-    "command_permitted": "2026-10-22T17:45:24.875612634Z",
-    "single_connection": "2026-10-22T17:45:39.201327418Z",
-    "store_unavailable": "2026-10-22T17:45:29.923831314Z",
-    "tls_single_connection": "2026-10-22T17:47:44.156740328Z",
-    "tls_store_unavailable": "2026-10-22T17:46:49.62286537Z",
-    "tls_token_login": "2026-10-22T17:46:35.197776685Z",
-    "tls_unknown_ca": "2026-10-22T17:47:04.156885283Z",
-    "token_login": "2026-10-22T17:45:22.846643097Z",
-    "wrong_credential": "2026-10-22T17:45:28.98941362Z"
+    "accounting": "2026-10-23T03:14:28.342325258Z",
+    "command_denied": "2026-10-23T03:14:25.836978835Z",
+    "command_permitted": "2026-10-23T03:14:25.836978835Z",
+    "single_connection": "2026-10-23T03:14:43.517993676Z",
+    "store_unavailable": "2026-10-23T03:14:31.303098869Z",
+    "tls_single_connection": "2026-10-23T03:17:04.149359774Z",
+    "tls_store_unavailable": "2026-10-23T03:16:03.118052772Z",
+    "tls_token_login": "2026-10-23T03:15:48.324838133Z",
+    "tls_unknown_ca": "2026-10-23T03:16:18.618482479Z",
+    "token_login": "2026-10-23T03:14:23.447496722Z",
+    "wrong_credential": "2026-10-23T03:14:30.723189247Z"
   },
   "registers": {
     "accounting": [
@@ -89,7 +89,7 @@
   "denied_command_asked": {},
   "tls_server_single_connect_offered": false,
   "port49d": {
-    "vcs_revision": "3529841e874b",
+    "vcs_revision": "6df5ea11f88c",
     "vcs_modified": false
   },
   "tls_capture_started_clean": true
