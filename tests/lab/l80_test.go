@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -173,18 +172,14 @@ func TestL80Remeasure(t *testing.T) {
 		}
 	}
 
-	// The debug filter keeps only the lab's own values: port49's listen
-	// address, the device's, and the server group the device is configured
-	// with (review N6).
-	var filter nxosDebugFilter
-	for _, a := range []string{l73Server, l.p.addr} {
-		addr, err := netip.ParseAddr(a)
-		if err != nil {
-			t.Fatalf("INVALID: lab address %q: %v", a, err)
-		}
-		filter.Addrs = append(filter.Addrs, addr)
-	}
-	filter.Groups = []string{l73Group}
+	// The debug filter is the NX-OS profile of the device-debug filter: facility,
+	// payload drop, redaction of every secret the run has handled (the tokens
+	// minted so far included), long-run mask, fail closed.
+	filter := deviceDebugFilter{Platform: "nxos", Secrets: func() []string {
+		mintMu.Lock()
+		defer mintMu.Unlock()
+		return append(q.ddSecrets(), minted...)
+	}}
 
 	var stops []string
 	for _, cell := range l80Cells(arm) {
@@ -354,7 +349,12 @@ func TestL80Remeasure(t *testing.T) {
 			time.Sleep(15 * time.Second)
 			at := len(c.transcript())
 			c.sendExpect("show debug logfile "+label, 180*time.Second, c.prompt)
-			kept := filter.Keep(c.transcript()[at:])
+			keptText, keepErr := filter.Keep(c.transcript()[at:])
+			if keepErr != nil {
+				c.sendExpect("undebug all", 60*time.Second, c.prompt)
+				t.Fatalf("INVALID: %s's debug capture was discarded (%v); nothing written", cell.Name, keepErr)
+			}
+			kept := string(keptText)
 			cnt := nxosDebugCounts(kept)
 			var ks []string
 			for k := range nxosDebugMarkers {
