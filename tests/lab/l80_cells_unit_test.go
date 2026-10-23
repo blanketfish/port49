@@ -48,7 +48,7 @@ func TestL80CellsAreTheDesigns(t *testing.T) {
 		}
 		for _, s := range c.Sessions {
 			for i, cmd := range s {
-				if c.Name != "restart" && strings.HasPrefix(cmd, "@sleep ") && (i+1 >= len(s) || s[i+1] != "show users") {
+				if !l80IsRestart(c.Name) && strings.HasPrefix(cmd, "@sleep ") && (i+1 >= len(s) || s[i+1] != "show users") {
 					t.Errorf("%s: a gap not followed by `show users`", c.Name)
 				}
 			}
@@ -185,8 +185,12 @@ func TestL80RestartSequenceIsTheDesigns(t *testing.T) {
 		if c.Name == "restart" {
 			seq = c.Sessions[0]
 		}
-		if c.Name != "restart" && slices.Contains(c.Sessions[0], "@restart") {
+		if !l80IsRestart(c.Name) && slices.Contains(c.Sessions[0], "@restart") {
 			t.Errorf("%s restarts port49d", c.Name)
+		}
+		// The etcd cell is the same loop on another session store.
+		if c.Name == "restart_etcd" && !slices.Equal(c.Sessions[0], l80RestartSeq()) {
+			t.Errorf("restart_etcd types a different loop from restart: %v", c.Sessions[0])
 		}
 	}
 	if seq == nil || seq[0] != "terminal length 0" {

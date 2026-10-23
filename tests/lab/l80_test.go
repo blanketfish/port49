@@ -40,30 +40,6 @@ import (
 // l80Debug are the debug lines a cell turns on (the A/B's).
 var l80Debug = []string{"debug tacacs+ all", "debug aaa events", "debug aaa errors", "debug aaa aaa-requests"}
 
-var (
-	l80SecretLine = regexp.MustCompile(`(?i)password|token|secret|eyJ|payload`)
-	l80Long       = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
-)
-
-// l80Filter is the summary's own credential filter: a line with a secret
-// word is dropped, and a run of 24 or more characters masked.
-func l80Filter(s string) string {
-	var out []string
-	for _, ln := range strings.Split(s, "\n") {
-		if l80SecretLine.MatchString(ln) {
-			continue
-		}
-		// A verdict is a closed word of the grader, not a run of key material;
-		// masked, it would leave the summary without its result.
-		if v, ok := strings.CutPrefix(strings.TrimRight(ln, "\r"), "restart verdict: "); ok && l80IsVerdict(v) {
-			out = append(out, "restart verdict: "+v)
-			continue
-		}
-		out = append(out, l80Long.ReplaceAllString(strings.TrimRight(ln, "\r"), "<LONG>"))
-	}
-	return strings.Join(out, "\n")
-}
-
 // l80Events is port49_connection_events_total by event, from the metrics
 // endpoint: counts only, no labels but the event.
 func l80Events() map[string]float64 {
