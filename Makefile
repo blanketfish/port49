@@ -360,6 +360,8 @@ bin/gitleaks:
 	tar -xzf bin/gitleaks.tar.gz -C bin gitleaks
 	rm bin/gitleaks.tar.gz
 
+# The history scan is of the checked-out branch only (--log-opts=HEAD), which is what CI scans;
+# other local branches and refs do not fail it.
 leaks: bin/gitleaks
-	bin/gitleaks git --redact --no-banner --config .gitleaks.toml .
+	bin/gitleaks git --redact --no-banner --config .gitleaks.toml --log-opts=HEAD .
 	bin/gitleaks dir --redact --no-banner --config .gitleaks.toml .
