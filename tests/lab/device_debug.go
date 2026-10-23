@@ -96,6 +96,10 @@ type ddProfile struct {
 	// closed matches a close; its one group, if it has one, is the reason the
 	// device states.
 	closed *regexp.Regexp
+	// failed matches a failed open (cEOS prints connFails after connOpens);
+	// request matches a request of unknown kind (cEOS messagesSent), counted
+	// apart from the three kinds. Both may be nil.
+	failed, request *regexp.Regexp
 	// noClose is a platform whose debug has no close line (Junos): its summary
 	// says the close is unknown instead of counting none.
 	noClose bool
@@ -130,8 +134,12 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"eos": {
 		facility: regexp.MustCompile(`\b(?:Aaa|Tacacs|TacPlus)\b`),
-		open:     regexp.MustCompile(`(?i)\b(?:connecting|connected) to\b|created socket`),
-		closed:   regexp.MustCompile(`(?i)connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)|\btacacs\b\W+close\b`),
+		// TacacsLib prints counter lines: connOpens is a connection (a refused one
+		// too, followed by connFails), messagesSent a request, connCloses a close.
+		open:     regexp.MustCompile(`(?i)\b(?:connecting|connected) to\b|created socket|\bcounter connOpens\b`),
+		closed:   regexp.MustCompile(`(?i)connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)|\btacacs\b\W+close\b|\bcounter connCloses\b`),
+		failed:   regexp.MustCompile(`(?i)\bcounter connFails\b`),
+		request:  regexp.MustCompile(`(?i)\bcounter messagesSent\b`),
 		authen:   regexp.MustCompile(`(?i)sending authentication request|tac` + ddSep + `send` + ddSep + `authen\b`),
 		author:   regexp.MustCompile(`(?i)sending authorization request|tac` + ddSep + `send` + ddSep + `author\b`),
 		acct:     regexp.MustCompile(`(?i)sending accounting request|tac` + ddSep + `send` + ddSep + `acct\b`),
@@ -146,7 +154,7 @@ var deviceDebugProfiles = map[string]*ddProfile{
 		// daemon's "connection closed ... port" line (sshd, netconf) is not kept.
 		facility: regexp.MustCompile(`(?i)\btacacsd\b|\d{2}\.\d{1,9}(?: [A-Z]{2,5})?: connection closed \d+ (?:\d{1,3}\.){3}\d{1,3} port \d+`),
 		open:     regexp.MustCompile(`(?i)opening connection to|socket connected`),
-		closed:   regexp.MustCompile(`(?i)closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|\bconnection closed\b`),
+		closed:   regexp.MustCompile(`(?i)closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|\bconnection closed\b|\bclosing the socket\b`),
 		authen:   regexp.MustCompile(`(?i)sending authentication request|\bpacket\b.*\bstart\b.*\blogin\b`),
 		author:   regexp.MustCompile(`(?i)sending authorization request|\bpacket\b.*\bauthor\b.*\bstart\b`),
 		acct:     regexp.MustCompile(`(?i)sending accounting request|\bpacket\b.*\brequest\b.*\bstart\b`),
@@ -156,8 +164,11 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"junos": {
 		facility: regexp.MustCompile(`(?i)\b(?:tacplus|authd|tacacs)\b`),
-		open:     regexp.MustCompile(`(?i)connecting to server|\bopened\b`),
-		closed:   ddNever,
+		// The tacplus trace wording below is a GUESS from the vendor documents, not
+		// measured: no tacplus line has been kept from a run yet. noClose stays set
+		// so the summary says "unknown" rather than a count nobody has verified.
+		open:     regexp.MustCompile(`(?i)connecting to server|\bopened\b|\bconnection (?:established|opened)\b`),
+		closed:   regexp.MustCompile(`(?i)\bclos(?:ing|ed) (?:the )?(?:tacplus )?(?:connection|socket)\b|\bconnection closed\b`),
 		noClose:  true,
 		authen:   regexp.MustCompile(`(?i)sending authentication request|sent tacacs` + ddSep + `authentication request message`),
 		author:   regexp.MustCompile(`(?i)sending authorization request|sent tacacs` + ddSep + `authorization request message`),
@@ -226,12 +237,15 @@ func ddHexView(line string) bool {
 
 // ddHexMessage is whether the message after the facility (first match of p) is
 // nothing but hex groups.
-func ddHexMessage(p *ddProfile, line string) bool {
+func ddHexMessage(p *ddProfile, line string, whole bool) bool {
 	loc := p.facility.FindStringIndex(line)
-	if loc == nil {
+	rest := line
+	switch {
+	case loc != nil:
+		rest = line[loc[1]:]
+	case !whole:
 		return false
 	}
-	rest := line[loc[1]:]
 	rest = rest[len(ddIndex.FindString(rest)):]
 	rest = ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(rest, "T"), " ")
 	return ddHexOnly.MatchString(strings.TrimSpace(rest))
@@ -375,8 +389,13 @@ func ddLeaks(text string, forms, hexForms []string) bool {
 
 // drop is the rule of steps 1 and 2 that drops line, or "" if none does.
 func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
+	return f.dropFrom(p, line, false)
+}
+
+// dropFrom is drop for a line of a source whose every line is TACACS (whole).
+func (f deviceDebugFilter) dropFrom(p *ddProfile, line string, whole bool) string {
 	switch {
-	case !p.facility.MatchString(line):
+	case !whole && !p.facility.MatchString(line):
 		return "facility"
 	case ddPayload.MatchString(line) || nxosDebugHexRun.MatchString(line):
 		return "payload"
@@ -384,7 +403,7 @@ func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
 		return "marker"
 	case ddHexView(line):
 		return "hex_view"
-	case ddHexMessage(p, line):
+	case ddHexMessage(p, line, whole):
 		return "hex_message"
 	}
 	return ""
@@ -421,6 +440,13 @@ func (d *ddDropCounts) count(reason string) {
 // It returns errDeviceDebugLeak, and nothing else, when a known secret
 // survives the scrub.
 func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
+	return f.KeepSource(text, false)
+}
+
+// KeepSource is Keep for text that comes from one source file. whole says that
+// every line of that file is a TACACS line (Junos's tacplus traceoptions file),
+// so the facility rule is skipped; every other rule applies to every line.
+func (f deviceDebugFilter) KeepSource(text string, whole bool) (deviceDebugKept, error) {
 	p := deviceDebugProfiles[f.Platform]
 	if p == nil {
 		return "", nil
@@ -438,7 +464,7 @@ func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
 		if ln == "" {
 			continue
 		}
-		if r := f.drop(p, ln); r != "" {
+		if r := f.dropFrom(p, ln, whole); r != "" {
 			f.Drops.count(r)
 			continue
 		}
@@ -475,13 +501,18 @@ type deviceDebugConn struct {
 	Reason         string
 	Authen, Author int
 	Acct           int
+	Requests       int // requests of unknown kind (cEOS messagesSent)
 }
+
+// Total is the connection's requests of every kind.
+func (c deviceDebugConn) Total() int { return c.Authen + c.Author + c.Acct + c.Requests }
 
 // deviceDebugSummary answers the single-connect and pipelining question from
 // kept text only.
 type deviceDebugSummary struct {
 	Conns                []deviceDebugConn
 	Opened, Closed       int
+	Failed               int  // failed opens (cEOS connFails)
 	CloseUnknown         bool // the platform's debug has no close line: Closed says nothing
 	SingleConnect        int  // lines showing single-connect negotiated or its flag
 	ServerDead, Fallback int  // server-dead and fallback lines
@@ -533,6 +564,9 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 				s.Conns[cur].Reason = m[1]
 			}
 			cur = -1
+		case p.request != nil && p.request.MatchString(msg):
+			ensure()
+			s.Conns[cur].Requests++
 		case p.authen.MatchString(msg) || altAuthen && p.authenAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Authen++
@@ -542,6 +576,9 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 		case p.acct.MatchString(msg) || altAcct && p.acctAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Acct++
+		}
+		if p.failed != nil && p.failed.MatchString(msg) {
+			s.Failed++
 		}
 		if p.single.MatchString(msg) {
 			s.SingleConnect++
@@ -562,6 +599,10 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 // not yet confirmed on the image: the lab run confirms it (task 8 report).
 type deviceDebugCommands struct {
 	Enable, Disable, Collect []string
+	// Whole names the Collect commands whose output is wholly TACACS lines
+	// (Junos's tacplus traceoptions file): every line of it is kept past the
+	// facility rule.
+	Whole []string
 }
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
@@ -591,6 +632,7 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 			"delete system syslog file p49-auth.log", "commit and-quit",
 			"clear log p49-tacplus.log", "clear log p49-auth.log"},
 		Collect: []string{"show log p49-tacplus.log", "show log p49-auth.log"},
+		Whole:   []string{"show log p49-tacplus.log"},
 	},
 }
 
@@ -621,7 +663,7 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	for _, c := range cmds.Collect {
 		raw, err := run(c)
 		// A partial capture is kept, filtered like the rest.
-		k, kerr := f.Keep(raw)
+		k, kerr := f.KeepSource(ddWithoutEcho(raw, c, slices.Contains(cmds.Whole, c)), slices.Contains(cmds.Whole, c))
 		if kerr != nil {
 			leakErr = kerr
 		} else if k != "" {
@@ -677,3 +719,24 @@ func ddKnownSecrets(parts ...[]string) []string {
 	}
 	return all
 }
+
+// ddWithoutEcho, for a whole-source collection, removes what the CLI adds around
+// the file: the echoed command and the prompt lines. Other sources go through
+// the facility rule, which drops those anyway.
+func ddWithoutEcho(raw, cmd string, whole bool) string {
+	if !whole {
+		return raw
+	}
+	var out []string
+	for _, ln := range strings.Split(raw, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.Contains(t, cmd) || ddCLIPrompt.MatchString(t) || strings.HasPrefix(t, "---(more") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ddCLIPrompt is a Junos operational or configuration prompt, `user@host> `.
+var ddCLIPrompt = regexp.MustCompile(`^\S+@\S+[>#%]\s*$`)

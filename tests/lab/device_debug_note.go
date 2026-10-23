@@ -139,7 +139,7 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		s := summary[c.Cell]
 		reqs := 0
 		for _, cn := range s.Conns {
-			reqs += cn.Authen + cn.Author + cn.Acct
+			reqs += cn.Total()
 		}
 		n := ddArmLineCount(c.Kept)
 		lifecycle := len(ddNoteLines(p, c.Kept, p.open)) + len(ddNoteLines(p, c.Kept, p.closed))
@@ -265,7 +265,7 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		s := summary[c.Cell]
 		reqs, multi := 0, 0
 		for _, cn := range s.Conns {
-			n := cn.Authen + cn.Author + cn.Acct
+			n := cn.Total()
 			reqs += n
 			if n > 1 {
 				multi++
