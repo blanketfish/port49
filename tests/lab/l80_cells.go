@@ -93,6 +93,9 @@ type l80Typed struct {
 	At   time.Time `json:"at,omitzero"`
 	Done time.Time `json:"done,omitzero"`
 	Err  bool      `json:"err,omitempty"`
+	// Reason is port49's reason code on the authorize_command record this
+	// command matched, when the device denied it (l80Reasons).
+	Reason string `json:"reason,omitempty"`
 }
 
 // l80Ask marks each typed command asked while port49 has an unmatched
@@ -108,6 +111,29 @@ func l80Ask(typed []l80Typed, recorded []string) {
 			left[typed[i].Command]--
 			typed[i].Asked = true
 		}
+	}
+}
+
+// l80Reasons sets Reason on each denied typed command from the reason of the
+// authorize_command record it matches, records taken in order as l80Ask takes
+// them. A command with no matching record keeps no reason.
+func l80Reasons(typed []l80Typed, recs []map[string]any) {
+	left := map[string][]string{}
+	for _, r := range recs {
+		if r["event"] == "authorize_command" {
+			reason, _ := r["reason"].(string)
+			left[qualVector(r)] = append(left[qualVector(r)], reason)
+		}
+	}
+	for i := range typed {
+		q := left[typed[i].Command]
+		if len(q) == 0 {
+			continue
+		}
+		if typed[i].Denied {
+			typed[i].Reason = q[0]
+		}
+		left[typed[i].Command] = q[1:]
 	}
 }
 
@@ -144,7 +170,7 @@ func l80Stops(arm, cell string, typed []l80Typed, mostOpen int, second float64, 
 		// The restart cell measures lost commands: a command port49 never saw
 		// that the device did not run is its result, not a stop. One that ran
 		// unasked is the failure L80 measures.
-		if !x.Asked && (cell != "restart" || l80Ran(x)) {
+		if !x.Asked && (!l80IsRestart(cell) || l80Ran(x)) {
 			out = append(out, fmt.Sprintf("%s: session %d %q (after %.1fs) was never asked: lost or run unasked", cell, x.Session, x.Command, x.Gap))
 		}
 		if x.Command == "show users" && !x.Denied {
@@ -245,7 +271,33 @@ const (
 	l80RestartUnasked    = "unasked_command"
 	l80RestartDeadOnly   = "marked_dead_no_loss"
 	l80RestartNoConn     = "no_reconnect_seen"
+	// l80RestartCtxLost is the memory store's documented behavior, measured: every
+	// permitted command denied after the restart was denied context_missing,
+	// because the login contexts lived in the stopped process. On etcd the same
+	// denial is a port49 finding (l80RestartPermDenied).
+	l80RestartCtxLost = "context_lost_on_memory_store"
 )
+
+// The restart cells' session stores.
+const (
+	l80StoreMemory = "memory"
+	l80StoreEtcd   = "etcd"
+)
+
+// l80ReasonContextMissing is spec §5.7's reason for a command whose login
+// context the store no longer holds.
+const l80ReasonContextMissing = "context_missing"
+
+// l80IsRestart is whether the cell is one of the restart cells.
+func l80IsRestart(cell string) bool { return cell == "restart" || cell == "restart_etcd" }
+
+// l80RestartStore is the session store a restart cell runs on.
+func l80RestartStore(cell string) string {
+	if cell == "restart_etcd" {
+		return l80StoreEtcd
+	}
+	return l80StoreMemory
+}
 
 // l80RestartGrade is the restart cell graded: each typed command as asked and
 // permitted, asked and denied, or not asked (lost if the device did not run it,
@@ -256,16 +308,17 @@ type l80RestartGrade struct {
 	Permitted, Denied, Lost, Unasked int
 	LostAcross, UnaskedAcross        int // not asked, typed while port49d was down or coming up
 	PermittedDenied                  int // asked and denied after the stop, though the policy permits it
+	ContextMissing                   int // of those, denied context_missing
 	Reconnects                       int // connections port49 answered that began after the stop
 	Facts                            []string
 }
 
-// l80GradeRestart grades the restart cell from typed (Asked already set by
+// l80GradeRestart grades the restart cell, run on the session store named, from typed (Asked already set by
 // l80Ask), the restart window, nxosDebugCounts, the fallback count and the
 // capture's connections. A fact the records or the capture cannot place is
 // left out, never inferred: with no StopAt no command is placed against the
 // window and no connection is counted as a reconnect.
-func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int, fallbacks int, conns []l73Conn) l80RestartGrade {
+func l80GradeRestart(store string, typed []l80Typed, w l80RestartWindow, counts map[string]int, fallbacks int, conns []l73Conn) l80RestartGrade {
 	var g l80RestartGrade
 	placed := !w.StopAt.IsZero()
 	across := func(x l80Typed) bool {
@@ -285,6 +338,9 @@ func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int
 			g.Denied++
 			if placed && x.Command != "show users" && !x.At.Before(w.StopAt) {
 				g.PermittedDenied++
+				if x.Reason == l80ReasonContextMissing {
+					g.ContextMissing++
+				}
 				permDenied = append(permDenied, fmt.Sprintf("permitted command %q typed %.1fs after the stop was asked about and denied: the session did not survive the restart",
 					x.Command, x.At.Sub(w.StopAt).Seconds()))
 			}
@@ -313,10 +369,12 @@ func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int
 	switch {
 	case g.Unasked > 0:
 		g.Verdict = l80RestartUnasked
-	case g.PermittedDenied > 0:
+	case g.PermittedDenied > 0 && !(store == l80StoreMemory && g.ContextMissing == g.PermittedDenied):
 		g.Verdict = l80RestartPermDenied
 	case g.Lost > 0:
 		g.Verdict = l80RestartLost
+	case g.PermittedDenied > 0:
+		g.Verdict = l80RestartCtxLost
 	case dead > 0 || fallbacks > 0:
 		g.Verdict = l80RestartDeadOnly
 	case placed && g.Reconnects == 0:
@@ -327,6 +385,10 @@ func l80GradeRestart(typed []l80Typed, w l80RestartWindow, counts map[string]int
 	g.Facts = append(g.Facts, fmt.Sprintf("commands: %d asked and permitted, %d asked and denied, %d not asked and not run (lost), %d not asked and run (unasked)",
 		g.Permitted, g.Denied, g.Lost, g.Unasked))
 	g.Facts = append(g.Facts, permDenied...)
+	if g.PermittedDenied > 0 {
+		g.Facts = append(g.Facts, fmt.Sprintf("session store %s: %d of %d permitted commands denied after the stop were denied %s",
+			store, g.ContextMissing, g.PermittedDenied, l80ReasonContextMissing))
+	}
 	if placed {
 		g.Facts = append(g.Facts, fmt.Sprintf("while port49d was down or coming up: %d lost, %d unasked", g.LostAcross, g.UnaskedAcross))
 		g.Facts = append(g.Facts, fmt.Sprintf("connections answered by port49 after the stop: %d", g.Reconnects))

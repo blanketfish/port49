@@ -268,7 +268,7 @@ func has(facts []string, sub string) bool {
 func TestL80RestartGradesACleanReconnect(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 8, true, false), typedAt("show users", 9, true, true),
 		typedAt("show version", 11, true, false), typedAt("show clock", 14, true, false)}
-	g := l80GradeRestart(typed, l80Win, map[string]int{"ssl_read_failed": 1}, 0, l80Conns(true))
+	g := l80GradeRestart(l80StoreMemory, typed, l80Win, map[string]int{"ssl_read_failed": 1}, 0, l80Conns(true))
 	if g.Verdict != l80RestartClean || g.Permitted != 3 || g.Denied != 1 || g.Lost != 0 || g.Unasked != 0 || g.Reconnects != 1 {
 		t.Fatalf("%+v", g)
 	}
@@ -286,7 +286,7 @@ func TestL80RestartGradesALostRequest(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 8, true, false),
 		typedAt("show version", 11, false, true), typedAt("show clock", 12, false, true),
 		typedAt("show clock", 16, true, false)}
-	g := l80GradeRestart(typed, l80Win, map[string]int{"ssl_read_failed": 1, "mark_server_dead": 1}, 1, l80Conns(false))
+	g := l80GradeRestart(l80StoreMemory, typed, l80Win, map[string]int{"ssl_read_failed": 1, "mark_server_dead": 1}, 1, l80Conns(false))
 	if g.Verdict != l80RestartLost || g.Lost != 2 || g.LostAcross != 2 || g.Unasked != 0 {
 		t.Fatalf("%+v", g)
 	}
@@ -308,7 +308,7 @@ func TestL80RestartGradesAnUnaskedCommand(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 8, true, false),
 		typedAt("show version", 11, false, false), typedAt("show users", 12, false, false),
 		typedAt("show clock", 14, true, false)}
-	g := l80GradeRestart(typed, l80Win, map[string]int{"mark_server_dead": 1}, 1, l80Conns(false))
+	g := l80GradeRestart(l80StoreMemory, typed, l80Win, map[string]int{"mark_server_dead": 1}, 1, l80Conns(false))
 	if g.Verdict != l80RestartUnasked || g.Unasked != 2 || g.UnaskedAcross != 2 || g.Lost != 0 {
 		t.Fatalf("%+v", g)
 	}
@@ -317,7 +317,7 @@ func TestL80RestartGradesAnUnaskedCommand(t *testing.T) {
 	}
 	// A command that did not answer is not one that ran.
 	typed[1].Err = true
-	if g := l80GradeRestart(typed, l80Win, nil, 0, l80Conns(false)); g.Unasked != 1 || g.Lost != 1 {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, l80Conns(false)); g.Unasked != 1 || g.Lost != 1 {
 		t.Errorf("an errored command: %+v", g)
 	}
 }
@@ -325,7 +325,7 @@ func TestL80RestartGradesAnUnaskedCommand(t *testing.T) {
 // What the capture and the records cannot place is absent, not inferred.
 func TestL80RestartLeavesOutWhatItCannotPlace(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 11, false, true)}
-	g := l80GradeRestart(typed, l80RestartWindow{}, nil, 0, l80Conns(true))
+	g := l80GradeRestart(l80StoreMemory, typed, l80RestartWindow{}, nil, 0, l80Conns(true))
 	if g.LostAcross != 0 || g.Reconnects != 0 || g.Verdict != l80RestartLost {
 		t.Errorf("%+v", g)
 	}
@@ -340,28 +340,28 @@ func TestL80RestartLeavesOutWhatItCannotPlace(t *testing.T) {
 	// A command whose typed time is unknown is not placed either.
 	x := typedAt("show clock", 11, false, true)
 	x.At, x.Done = time.Time{}, time.Time{}
-	if g := l80GradeRestart([]l80Typed{x}, l80Win, nil, 0, nil); g.Lost != 1 || g.LostAcross != 0 {
+	if g := l80GradeRestart(l80StoreMemory, []l80Typed{x}, l80Win, nil, 0, nil); g.Lost != 1 || g.LostAcross != 0 {
 		t.Errorf("%+v", g)
 	}
 	// A command typed and answered before the stop is not across it.
-	if g := l80GradeRestart([]l80Typed{typedAt("show clock", 2, false, true)}, l80Win, nil, 0, nil); g.LostAcross != 0 {
+	if g := l80GradeRestart(l80StoreMemory, []l80Typed{typedAt("show clock", 2, false, true)}, l80Win, nil, 0, nil); g.LostAcross != 0 {
 		t.Errorf("%+v", g)
 	}
 	// With port49d never back up, a command typed after the stop is across it.
-	if g := l80GradeRestart([]l80Typed{typedAt("show clock", 40, false, true)}, l80RestartWindow{StopAt: l80Win.StopAt}, nil, 0, nil); g.LostAcross != 1 {
+	if g := l80GradeRestart(l80StoreMemory, []l80Typed{typedAt("show clock", 40, false, true)}, l80RestartWindow{StopAt: l80Win.StopAt}, nil, 0, nil); g.LostAcross != 1 {
 		t.Errorf("%+v", g)
 	}
 }
 
 func TestL80RestartOtherVerdicts(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 8, true, false), typedAt("show clock", 14, true, false)}
-	if g := l80GradeRestart(typed, l80Win, nil, 0, l80Conns(false)[:2]); g.Verdict != l80RestartNoConn || g.Reconnects != 0 {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, l80Conns(false)[:2]); g.Verdict != l80RestartNoConn || g.Reconnects != 0 {
 		t.Errorf("no connection after the stop: %+v", g)
 	}
-	if g := l80GradeRestart(typed, l80Win, map[string]int{"mark_server_dead": 1}, 0, l80Conns(false)); g.Verdict != l80RestartDeadOnly {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, map[string]int{"mark_server_dead": 1}, 0, l80Conns(false)); g.Verdict != l80RestartDeadOnly {
 		t.Errorf("dead mark with nothing lost: %+v", g)
 	}
-	if g := l80GradeRestart(typed, l80Win, nil, 1, l80Conns(false)); g.Verdict != l80RestartDeadOnly {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 1, l80Conns(false)); g.Verdict != l80RestartDeadOnly {
 		t.Errorf("a fallback with nothing lost: %+v", g)
 	}
 }
@@ -373,12 +373,12 @@ func TestL80RestartCloseNotifyIsPort49sOnAConnectionOpenAtTheStop(t *testing.T) 
 	typed := []l80Typed{typedAt("show clock", 8, true, false)}
 	conns := l80Conns(false)
 	conns[0].Alerts = []l73Alert{{Level: 1, Description: 0, FromDevice: true}}
-	if g := l80GradeRestart(typed, l80Win, nil, 0, conns); !has(g.Facts, "close_notify: not seen") {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, conns); !has(g.Facts, "close_notify: not seen") {
 		t.Errorf("the device's own close_notify was taken for port49's: %v", g.Facts)
 	}
 	conns = l80Conns(true)
 	conns[0].EndAt = l80Win.StopAt.Add(-time.Second) // ended before the restart
-	if g := l80GradeRestart(typed, l80Win, nil, 0, conns); !has(g.Facts, "close_notify: not seen") {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, conns); !has(g.Facts, "close_notify: not seen") {
 		t.Errorf("a close before the stop was placed at it: %v", g.Facts)
 	}
 }
@@ -386,7 +386,7 @@ func TestL80RestartCloseNotifyIsPort49sOnAConnectionOpenAtTheStop(t *testing.T) 
 // A command typed after port49d was back is not across the restart.
 func TestL80RestartAfterTheWindowIsNotAcross(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 20, false, true), typedAt("show clock", 11, false, true)}
-	if g := l80GradeRestart(typed, l80Win, nil, 0, nil); g.Lost != 2 || g.LostAcross != 1 {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, nil); g.Lost != 2 || g.LostAcross != 1 {
 		t.Errorf("%+v", g)
 	}
 }
@@ -397,7 +397,7 @@ func TestL80RestartAfterTheWindowIsNotAcross(t *testing.T) {
 func TestL80RestartGradesAPermittedCommandDeniedAfterTheRestart(t *testing.T) {
 	typed := []l80Typed{typedAt("show clock", 8, true, false), typedAt("show users", 9, true, true),
 		typedAt("show version", 14, true, true), typedAt("show users", 15, true, true)}
-	g := l80GradeRestart(typed, l80Win, nil, 0, l80Conns(false))
+	g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, l80Conns(false))
 	if g.Verdict != l80RestartPermDenied || g.PermittedDenied != 1 || g.Denied != 3 {
 		t.Fatalf("%+v", g)
 	}
@@ -406,18 +406,97 @@ func TestL80RestartGradesAPermittedCommandDeniedAfterTheRestart(t *testing.T) {
 	}
 	// Before the stop it is an ordinary denial; `show users` after it is the policy.
 	ord := []l80Typed{typedAt("show version", 5, true, true), typedAt("show users", 15, true, true)}
-	if g := l80GradeRestart(ord, l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartClean || g.PermittedDenied != 0 {
+	if g := l80GradeRestart(l80StoreMemory, ord, l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartClean || g.PermittedDenied != 0 {
 		t.Errorf("%+v", g)
 	}
 	// Ranks: an unasked command is above it, a lost request below it.
-	if g := l80GradeRestart(append(typed, typedAt("show clock", 16, false, false)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartUnasked {
+	if g := l80GradeRestart(l80StoreMemory, append(typed, typedAt("show clock", 16, false, false)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartUnasked {
 		t.Errorf("unasked must stay on top: %+v", g)
 	}
-	if g := l80GradeRestart(append(typed, typedAt("show clock", 16, false, true)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartPermDenied || g.Lost != 1 {
+	if g := l80GradeRestart(l80StoreMemory, append(typed, typedAt("show clock", 16, false, true)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartPermDenied || g.Lost != 1 {
 		t.Errorf("above a lost request: %+v", g)
 	}
 	// Unplaced: no stop recorded, no finding.
-	if g := l80GradeRestart(typed, l80RestartWindow{}, nil, 0, nil); g.PermittedDenied != 0 {
+	if g := l80GradeRestart(l80StoreMemory, typed, l80RestartWindow{}, nil, 0, nil); g.PermittedDenied != 0 {
 		t.Errorf("a finding without a recorded stop: %+v", g)
+	}
+}
+
+func withReason(x l80Typed, reason string) l80Typed { x.Reason = reason; return x }
+
+func ctxMissing(typed ...l80Typed) []l80Typed {
+	for i := range typed {
+		if typed[i].Denied && typed[i].Command != "show users" {
+			typed[i].Reason = l80ReasonContextMissing
+		}
+	}
+	return typed
+}
+
+// On the memory store a restart loses every login context, so each permitted
+// command after it is denied context_missing: the documented behavior, measured,
+// and not a stop.
+func TestL80RestartMemoryStoreContextMissingIsNotAFinding(t *testing.T) {
+	typed := ctxMissing(typedAt("show clock", 8, true, false), typedAt("show users", 9, true, true),
+		typedAt("show version", 14, true, true), typedAt("show clock", 15, true, true))
+	g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, l80Conns(false))
+	if g.Verdict != l80RestartCtxLost || g.PermittedDenied != 2 || g.ContextMissing != 2 {
+		t.Fatalf("%+v", g)
+	}
+	if !has(g.Facts, "session store memory: 2 of 2 permitted commands denied after the stop were denied context_missing") {
+		t.Errorf("facts: %v", g.Facts)
+	}
+}
+
+// One denial after the restart for any other reason is the port49 finding.
+func TestL80RestartMemoryStoreAnotherReasonStaysAFinding(t *testing.T) {
+	typed := ctxMissing(typedAt("show clock", 8, true, false), typedAt("show version", 14, true, true), typedAt("show clock", 15, true, true))
+	typed[2].Reason = "policy_deny"
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartPermDenied || g.ContextMissing != 1 {
+		t.Errorf("%+v", g)
+	}
+	// A denial with no record to read a reason from is not context_missing.
+	typed[2].Reason = ""
+	if g := l80GradeRestart(l80StoreMemory, typed, l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartPermDenied {
+		t.Errorf("no reason: %+v", g)
+	}
+}
+
+// On etcd the contexts are kept, so context_missing is the finding.
+func TestL80RestartEtcdContextMissingIsAFinding(t *testing.T) {
+	typed := ctxMissing(typedAt("show clock", 8, true, false), typedAt("show version", 14, true, true))
+	if g := l80GradeRestart(l80StoreEtcd, typed, l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartPermDenied {
+		t.Errorf("%+v", g)
+	}
+	if got := l80RestartStore("restart_etcd") + l80RestartStore("restart"); got != "etcdmemory" {
+		t.Errorf("stores %q", got)
+	}
+}
+
+// The memory verdict ranks under an unasked command and a lost request, above the rest.
+func TestL80RestartContextLostRanks(t *testing.T) {
+	base := ctxMissing(typedAt("show clock", 8, true, false), typedAt("show version", 14, true, true))
+	if g := l80GradeRestart(l80StoreMemory, append(slices.Clone(base), typedAt("show clock", 16, false, false)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartUnasked {
+		t.Errorf("unasked: %+v", g)
+	}
+	if g := l80GradeRestart(l80StoreMemory, append(slices.Clone(base), typedAt("show clock", 16, false, true)), l80Win, nil, 0, l80Conns(false)); g.Verdict != l80RestartLost {
+		t.Errorf("lost: %+v", g)
+	}
+	if g := l80GradeRestart(l80StoreMemory, base, l80Win, map[string]int{"mark_server_dead": 1}, 0, l80Conns(false)); g.Verdict != l80RestartCtxLost {
+		t.Errorf("dead: %+v", g)
+	}
+}
+
+func TestL80ReasonsFollowTheRecordsInOrder(t *testing.T) {
+	rec := func(cmd, reason string) map[string]any {
+		return map[string]any{"event": "authorize_command", "reason": reason,
+			"request": map[string]any{"vector": []any{cmd}}}
+	}
+	typed := []l80Typed{{Command: "show clock"}, {Command: "show clock", Denied: true}, {Command: "show users", Denied: true}, {Command: "show clock", Denied: true}}
+	l80Reasons(typed, []map[string]any{rec("show clock", "ok"), rec("show clock", "context_missing"), rec("show users", "policy_deny"),
+		{"event": "account", "reason": "x"}, rec("show clock", "store_unavailable")})
+	got := typed[0].Reason + "|" + typed[1].Reason + "|" + typed[2].Reason + "|" + typed[3].Reason
+	if got != "|context_missing|policy_deny|store_unavailable" {
+		t.Errorf("%q", got)
 	}
 }

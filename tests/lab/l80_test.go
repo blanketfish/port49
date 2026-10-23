@@ -322,9 +322,10 @@ func TestL80Remeasure(t *testing.T) {
 				}
 			}
 			l80Ask(typed, recorded)
+			l80Reasons(typed, recs)
 			after := l80Events()
 			second := after["single_connect_second_connection"] - before["single_connect_second_connection"]
-			if cell.Name == "restart" {
+			if l80IsRestart(cell.Name) {
 				// The restart reset port49d's counters: a delta across it says nothing.
 				second = 0
 				sum.WriteString("restart: port49d's connection-event counters were reset by the restart; their deltas below are not graded\n")
@@ -368,11 +369,11 @@ func TestL80Remeasure(t *testing.T) {
 				sum.WriteString(l80Interleaving + "\n")
 			}
 			var g l80RestartGrade
-			if cell.Name == "restart" {
+			if l80IsRestart(cell.Name) {
 				if restartErr != nil {
 					sum.WriteString("restart: port49d did not come back\n")
 				}
-				g = l80GradeRestart(typed, window, cnt, len(nxosFallbacks(kept)), conns)
+				g = l80GradeRestart(l80RestartStore(cell.Name), typed, window, cnt, len(nxosFallbacks(kept)), conns)
 				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(window.StopAt), l80Clock(window.UpAt))
 				for _, f := range g.Facts {
 					sum.WriteString("restart: " + f + "\n")
@@ -380,11 +381,12 @@ func TestL80Remeasure(t *testing.T) {
 				fmt.Fprintf(&sum, "restart verdict: %s\n", g.Verdict)
 			}
 			cellStops := l80Stops(arm, cell.Name, typed, most, second, cnt)
-			if cell.Name == "restart" && restartErr != nil {
+			if l80IsRestart(cell.Name) && restartErr != nil {
 				cellStops = append(cellStops, "restart: port49d did not come back after the restart")
 			}
-			if g.PermittedDenied > 0 {
-				cellStops = append(cellStops, fmt.Sprintf("restart: %d permitted command(s) denied after the restart: the session did not survive it (a port49 finding)", g.PermittedDenied))
+			if g.Verdict == l80RestartPermDenied {
+				cellStops = append(cellStops, fmt.Sprintf("restart: %d permitted command(s) denied after the restart, %d of them not for context_missing on the memory store: the session did not survive it (a port49 finding)",
+					g.PermittedDenied, g.PermittedDenied-g.ContextMissing))
 			}
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
