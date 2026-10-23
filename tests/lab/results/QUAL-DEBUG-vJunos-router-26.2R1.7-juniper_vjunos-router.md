@@ -1,6 +1,9 @@
 # QUAL-DEBUG — juniper_vjunos-router (vjunos26, vJunos-router 26.2R1.7)
 
-Device debug around tls_token_login and tls_unknown_ca of a re-vet at port49 HEAD (4 armed runs, 3 of them with a summary written, 2026-10-23).
+Device debug around tls_token_login and tls_unknown_ca of a re-vet (4 armed runs, 3 of them with a summary written, 2026-10-23).
+The committed evidence came from the last run, built at test commit f6152a73: debug was turned on after port49d restarted
+and the readiness probe ran (before aa0a1b73 moved debug-on first, which matters for the IOS XE and XR commands but not for
+the Junos trace, which is a configuration commit), so its summaries lack the readiness-probe line later runs write.
 Evidence: `tests/lab/evidence/QUAL-DEBUG-vJunos-router-26.2R1.7-juniper_vjunos-router/` (header-only; the filter kept no
 device line). Raw captures are in the main checkout's `tests/lab/captures/QUAL-DEBUG-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap`.
 

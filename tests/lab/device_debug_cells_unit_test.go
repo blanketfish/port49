@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -35,29 +36,52 @@ func TestDeviceDebugArmSummaryStatesWhatItCannotOrder(t *testing.T) {
 	}
 }
 
-// The shape sample never carries a value: secret-word lines are dropped,
-// long and hex runs, numbers and unusual words are masked.
-func TestDeviceDebugArmSampleCarriesShapesNotValues(t *testing.T) {
+// The shape sample keeps no value character: after it, every run of two or
+// more letters is a word of the fixed vocabulary, whatever the input held.
+func TestDeviceDebugArmSampleKeepsNoValueCharacters(t *testing.T) {
 	raw := strings.Join([]string{
-		"Oct 22 05:00:11 tacacs: user alice07 from 172.100.100.31 session 1234567",
-		"Oct 22 05:00:12 tacacs: password for bob is hunter2",
-		"Oct 22 05:00:13 tacacs: Blob0123456789abcdef0123456789abcdef0123 seen",
-		"Oct 22 05:00:14 tacacs: aVeryLongIdentifierName ok deadbeef",
+		"tacacs server opened hunter2 for session",          // a short lowercase-and-digit value
+		"tacacs message a1b2c3d4e5 from peer",               // letters and digits alternating
+		"tacacs socket data de ad be ef 0f 1a 2b 3c closed", // space-separated hex bytes
+		"tacacs connect user qual01 alice07 breakglass",     // lab usernames
+		"tacacs connect host leaf3-xrd1 srx1 xe1 from 172.100.100.31/24",
+		"tacacs secure value abc-def_ghi 0xdeadbe sunrise", // joined values, a short hex, a plain word
+		"TAC+: Queuing AAA Accounting request 7 for processing",
+		"password for bob is hunter2",
 		"payload(hex) 00112233",
-		"Oct 22 05:00:15 tacacs: key is abcdef",
-		"Oct 22 05:00:16 tacacs: cred zzz",
+		"tacacs key is abcdef",
 	}, "\n")
-	got := strings.Join(ddArmSample(raw, 10), "\n")
-	for _, never := range []string{"alice07", "172", "1234567", "hunter2", "password", "0123456789abcdef", "aVeryLong", "deadbeef", "payload", "bob", "abcdef", "zzz"} {
-		if strings.Contains(got, never) {
-			t.Errorf("the sample carries %q:\n%s", never, got)
+	got := ddArmSample(raw, 20)
+	joined := strings.Join(got, "\n")
+	for _, ln := range got {
+		for _, w := range regexp.MustCompile(`[A-Za-z]{2,}`).FindAllString(ln, -1) {
+			if !ddArmVocab[strings.ToLower(w)] {
+				t.Errorf("a non-vocabulary run of letters survives: %q in %q", w, ln)
+			}
+		}
+		if regexp.MustCompile(`[0-9]`).MatchString(ln) {
+			t.Errorf("a digit survives: %q", ln)
 		}
 	}
-	if !strings.Contains(got, "tacacs:") || !strings.Contains(got, "session N") {
-		t.Errorf("the shape is gone:\n%s", got)
+	for _, never := range []string{"hunter", "alice", "qual", "breakglass", "leaf", "xrd", "srx", "172", "sunrise", "deadbe", "abc", "ghi", "bob", "payload", "abcdef"} {
+		if strings.Contains(joined, never) {
+			t.Errorf("the sample carries %q:\n%s", never, joined)
+		}
+	}
+	for _, shape := range []string{"TAC+: Queuing AAA Accounting request N for processing", "from peer", "from A"} {
+		if !strings.Contains(joined, shape) {
+			t.Errorf("the shape %q is gone:\n%s", shape, joined)
+		}
 	}
 	if n := len(ddArmSample(raw, 1)); n != 1 {
 		t.Errorf("max not honoured: %d", n)
+	}
+}
+
+func TestDeviceDebugArmCountLinesLeavesOutTheEchoAndThePrompt(t *testing.T) {
+	out := "show logging\r\nline one\r\nline two\r\nxe1#"
+	if n := ddArmCountLines(out, "show logging", "xe1#"); n != 2 {
+		t.Errorf("counted %d, want 2", n)
 	}
 }
 

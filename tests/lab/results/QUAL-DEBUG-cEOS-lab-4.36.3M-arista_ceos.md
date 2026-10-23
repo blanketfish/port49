@@ -7,3 +7,8 @@ the run was not repeated on EOS because the commands do not exist).
 
 - Pipelining over one connection: **unmeasured**. tls_token_login: eight connections, each server-fin within 0.01 s (one per
   request, as in the re-vet). EOS's own tracing (`trace Aaa ...` into an agent log) is an implementer's step.
+
+**Evidence and capture.** No `tests/lab/evidence/QUAL-DEBUG-*` directory is committed for this image: the run's directory was
+removed in error before it was committed, and no further run was made because the debug commands do not exist. The facts
+above (invalid input, 133 log lines, eight connections, server-fin within 0.01 s) are from that run's log, which is not kept.
+The run's raw captures are in the main checkout under `tests/lab/captures/QUAL-DEBUG-ceos436/`.

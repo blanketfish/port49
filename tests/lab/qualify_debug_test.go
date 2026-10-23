@@ -3,7 +3,6 @@
 package lab
 
 import (
-	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -43,8 +42,8 @@ func (q *qualEnv) armed(family string) (string, bool) {
 
 // ddArmRun is the run function captureDeviceDebug drives on the held CLI:
 // it types one line and waits for the prompt that line leaves. It counts the
-// lines the collect commands returned and keeps a shape sample of them for the
-// case where the filter keeps nothing, and returns the raw text to
+// lines the collect commands returned (not the echo or the prompt), keeps the
+// shapes of the lines the filter drops, and returns the raw text to
 // captureDeviceDebug alone.
 func ddArmRun(c *cliConn, f deviceDebugFilter, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
 	cfgMode := false
@@ -53,7 +52,7 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, platform string, rawLines *int, s
 		wait, cfgMode = ddArmWait(platform, cmd, cfgMode, c.prompt)
 		out, err := c.sendExpect(cmd, 180*time.Second, wait...)
 		if strings.HasPrefix(cmd, "show log") {
-			*rawLines += strings.Count(out, "\n")
+			*rawLines += ddArmCountLines(out, cmd, wait...)
 			// The shapes of what the filter drops: the lines to decide about.
 			var dropped []string
 			for _, ln := range strings.Split(out, "\n") {
@@ -77,15 +76,17 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, platform string, rawLines *int, s
 // when the run is armed, and plain body otherwise. restart brings port49d up
 // on the daemon the cell expects and makes the device reach it; it runs in a
 // held break-glass session, after debug is turned on (the readiness probes it
-// makes are in the log too, and the summary says how many connections they were). post, if any, makes the device reach port49d again once the
-// session has ended and port49d is back. The collection runs with port49d stopped, as L80's does.
+// makes are in the log too, and the summary says how many connections they were).
+// post, if any, makes the device reach port49d again once the session has ended
+// and port49d is back. The collection runs with port49d stopped, as L80's does.
+// A Fatal in the body still stops port49d and turns debug off (the deferred
+// disable), though that run collects nothing.
 func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) {
 	platform, ok := q.armed(e.d.Family)
 	if !ok {
 		body()
 		return
 	}
-	// post makes the device reach port49d again once the held session ends.
 	filter := deviceDebugFilter{Platform: platform, Groups: []string{l73Group}}
 	for _, a := range []string{l73Server, q.l.p.addr} {
 		addr, err := netip.ParseAddr(a)
@@ -106,15 +107,24 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
-		kept, capErr = captureDeviceDebug(filter, ddArmRun(c, filter, platform, &rawLines, &sample, &answers), func() error {
+		run := ddArmRun(c, filter, platform, &rawLines, &sample, &answers)
+		kept, capErr = captureDeviceDebug(filter, run, func() error {
 			ran = true
+			finished := false
+			defer func() {
+				if !finished { // a Fatal in the body (Goexit): debug must still go off
+					e.l.stopDaemon()
+					disableDeviceDebug(deviceDebugCmds[platform], run)
+				}
+			}()
 			restart()
 			body()
+			finished = true
 			return e.l.stopDaemon()
 		})
 		return nil
 	})
-	q.t.Logf("device debug command answers, %s %s (shapes):\n  %s", platform, cell, strings.Join(answers, "\n  "))
+	q.t.Logf("%s", l73MaskAll(fmt.Sprintf("device debug command answers, %s %s (shapes):\n  %s", platform, cell, strings.Join(answers, "\n  ")), q.ddSecrets()...))
 	if !ran {
 		// Debug would not go on (the summary says why): the cell is still
 		// played, without it, so the run's other results stand.
@@ -137,7 +147,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	// The shapes the device wrote that the filter drops (never a value) go to
 	// the test log, not to evidence, for an implementer to read through the
 	// filtered grep.
-	q.t.Logf("device debug, shapes of the lines the filter dropped, %s %s (values masked):\n  %s", platform, cell, strings.Join(sample, "\n  "))
+	q.t.Logf("%s", l73MaskAll(fmt.Sprintf("device debug, shapes of the lines the filter dropped, %s %s (class tokens only):\n  %s", platform, cell, strings.Join(sample, "\n  ")), q.ddSecrets()...))
 	masked := 0
 	for _, ln := range strings.Split(string(kept), "\n") {
 		if strings.Contains(ln, "<masked>") {
@@ -153,20 +163,39 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		cell, rawLines, ddArmLineCount(kept), len(conns)))
 }
 
-// writeDebug is an armed run's whole output, in place of write.
-func (q *qualEnv) writeDebug() {
-	q.t.Helper()
+// ddSecrets is every credential this run used, for the leak gate on what the
+// arm writes and logs.
+func (q *qualEnv) ddSecrets() []string {
 	secrets := append([]string{breakglassPassword}, q.secrets...)
 	if q.e != nil {
 		secrets = append(secrets, q.e.allSecrets()...)
 	}
+	return secrets
+}
+
+// ddArmCheck stops a run that has debug asked for and cannot give it, before
+// any lab work and before anything under evidence/ is touched.
+func (q *qualEnv) ddArmCheck() {
+	q.t.Helper()
+	d, ok := l73Dialects[q.l.p.name]
+	if !ok || d.HelpOnly || !optInPlatforms[q.l.p.sel] {
+		q.t.Fatalf("INVALID: %s=1, but %s has no TLS cells to put debug around", ddArmEnv, q.l.p.sel)
+	}
+	if _, ok := ddArmPlatform(d.Family); !ok {
+		q.t.Fatalf("INVALID: %s=1, but %s has no device-debug profile (NX-OS has its own arm, L80)", ddArmEnv, q.l.p.sel)
+	}
+}
+
+// writeDebug is an armed run's whole output, in place of write.
+func (q *qualEnv) writeDebug() {
+	q.t.Helper()
+	if len(q.dd.files) == 0 {
+		q.t.Fatal("INVALID: an armed run collected no debug; the committed evidence is untouched")
+	}
 	dir := filepath.Join(root, "tests", "lab", "evidence", "QUAL-DEBUG-"+q.slug+"-"+q.l.p.name)
 	note := "Device debug around the TLS cells of a re-vet:\n" + strings.Join(q.dd.notes, "\n")
-	if bad := qualWriteEvidence(dir, q.dd.files, note, secrets); len(bad) > 0 {
+	if bad := qualWriteEvidence(dir, q.dd.files, note, q.ddSecrets()); len(bad) > 0 {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
-	}
-	if len(q.dd.files) == 0 {
-		q.t.Fatal(errors.New("INVALID: an armed run collected no debug"))
 	}
 	q.t.Logf("wrote %s", dir)
 }

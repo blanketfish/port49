@@ -159,6 +159,9 @@ func (q *qualEnv) guard() {
 // play starts port49d on the conformance config, opens the broker session as
 // the slice does, and plays each cell under one capture.
 func (q *qualEnv) play() {
+	if os.Getenv(ddArmEnv) == "1" {
+		q.ddArmCheck()
+	}
 	q.guard()
 	// The broker's server certificate must exist when port49d starts, and a
 	// later write would mint a new CA the running daemon does not trust.
