@@ -107,6 +107,10 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 		fmt.Fprintf(&b, "  debug conn %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d\n",
 			i+1, open, closed, c.Reason, c.Authen, c.Author, c.Acct)
 	}
+	if s.CloseUnknown {
+		b.WriteString("note: this platform's two debug files are joined in order, not merged by time, so a request is " +
+			"attributed to the last connection opened in the trace, not necessarily the one it was sent on\n")
+	}
 	pipel := 0
 	for _, c := range s.Conns {
 		if n := c.Authen + c.Author + c.Acct; n > 1 {

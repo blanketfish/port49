@@ -341,3 +341,129 @@ func TestDeviceDebugArmVocabularyHasTheStep2Words(t *testing.T) {
 		t.Errorf("alphabet %q", got)
 	}
 }
+
+// A plain sentinel in each opaque position comes out <masked>: the opaque kind,
+// not the shape's wording, is what hides it.
+func TestDeviceDebugOpaquePositionsMaskPlainSentinels(t *testing.T) {
+	for _, c := range []struct{ platform, in, want string }{
+		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: socket 12 172.100.100.1/49 opened frobwidget",
+			"05:00:11.100 tacacsd: socket <masked> 172.100.100.1/49 opened <masked>"},
+		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: packet: start: login session 17 server 172.100.100.1/49 socket frobwidget tls hunter9",
+			"05:00:11.100 tacacsd: packet: start: login session <n> server 172.100.100.1/49 socket <masked> tls <masked>"},
+		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: socket connected hunter9 to 172.100.100.1/49",
+			"05:00:11.100 tacacsd: socket connected <masked> to 172.100.100.1/49"},
+		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: socket created frobwidget to 10.66.66.66/49",
+			"05:00:11.100 tacacsd: socket created <masked> to <masked>/49"},
+		{"iosxe", "*Oct 22 05:00:11.100: TPLUS: immediate connect frobwidget, new hunter9",
+			"05:00:11.100 TPLUS: immediate connect <masked>, new <masked>"},
+		{"iosxe", "*Oct 22 05:00:11.100: TPLUS(frobwidget)/0/hunter9/mallory42: Processing the reply packet",
+			"05:00:11.100 TPLUS(<masked>)/<n>/<masked>/<masked> Processing the reply packet"},
+		{"eos", "2026-10-22 05:00:11.100000 21 Aaa Tacacs: tls session frobwidget for hunter9 default",
+			"05:00:11.100000 Tacacs: tls session <masked> for <masked> default"},
+		{"eos", "2026-10-22 05:00:11.100000 21 Aaa Tacacs: accounting request frobwidget exec hunter9",
+			"05:00:11.100000 Tacacs: accounting request <masked> exec <masked>"},
+		{"junos", "Oct 22 05:00:11.100000 authd[900]: frobwidget hunter9 opened 172.100.100.1/49",
+			"05:00:11.100000 authd: <masked> <masked> opened 172.100.100.1/49"},
+		{"junos", "Oct 22 05:00:11.100000 authd[900]: frobwidget connection state hunter9",
+			"05:00:11.100000 authd: <masked> connection state <masked>"},
+		{"junos", "Oct 22 05:00:11.100000 authd[900]: server frobwidget name hunter9",
+			"05:00:11.100000 authd: server <masked> name <masked>"},
+	} {
+		got := ddKeep(ddTestFilter(c.platform), c.in)
+		if got != c.want {
+			t.Errorf("%s: %.60q...\n kept %q\n want %q", c.platform, c.in, got, c.want)
+		}
+		for _, s := range ddSentinels {
+			if strings.Contains(got, s) {
+				t.Errorf("%s: a sentinel survived", c.platform)
+			}
+		}
+	}
+}
+
+// A free word before a shape, or between a request's verbs and its tail, drops
+// the line: a shape is a fixed sequence, not a prefix.
+func TestDeviceDebugNoFreeWordBeforeOrBetween(t *testing.T) {
+	xr := "RP/0/RP0/CPU0:Oct 22 05:00:11.100 UTC: tacacsd[1000]: "
+	for _, c := range []struct{ platform, in string }{
+		{"eos", "2026-10-22 05:00:11.100000 21 Aaa Tacacs: frobwidget created socket 5 172.100.100.1"},
+		{"eos", "2026-10-22 05:00:11.100000 21 Aaa frobwidget: created socket 5 172.100.100.1"},
+		{"eos", "2026-10-22 05:00:11.100000 21 Aaa Tacacs: frobwidget tac_send_author"},
+		{"iosxr", xr + "packet start login frobwidget session 17 server 172.100.100.1"},
+		{"iosxr", xr + "packet start login session 17 frobwidget server 172.100.100.1"},
+		{"iosxr", xr + "packet author start frobwidget session 17 server 172.100.100.1"},
+		{"iosxr", xr + "packet author start session 17 frobwidget server 172.100.100.1"},
+		{"iosxr", xr + "packet request start frobwidget session 19 server 172.100.100.1/49"},
+		{"iosxr", xr + "packet request start session 19 frobwidget server 172.100.100.1/49"},
+		{"iosxr", xr + "packet request start frobwidget server 172.100.100.1/49"},
+		{"iosxr", xr + "session 17 packet start login frobwidget server 172.100.100.1"},
+		{"iosxe", "*Oct 22 05:00:11.100: TPLUS: frobwidget connected socket 5"},
+		{"junos", "Oct 22 05:00:11.100000 authd[900]: frobwidget now hunter9 opened 172.100.100.1/49"},
+	} {
+		if got := ddKeep(ddTestFilter(c.platform), c.in); got != "" {
+			t.Errorf("%s: %.70q... was kept (%d bytes)", c.platform, c.in, len(got))
+		}
+	}
+}
+
+// The clock in the line prefix is copied to the output, so its fraction is
+// bounded: an OTP-shaped number glued to the clock digits drops the line.
+func TestDeviceDebugClockFractionIsBounded(t *testing.T) {
+	for _, c := range []struct{ platform, pre, post string }{
+		{"iosxr", "RP/0/RP0/CPU0:Oct 22 05:00:11.", " UTC: tacacsd[1000]: socket connected to 172.100.100.1/49"},
+		{"iosxe", "*Oct 22 05:00:11.", ": TAC+: opened 172.100.100.1/49"},
+		{"eos", "Oct 22 05:00:11.", " Tacacs: created socket 5 172.100.100.1"},
+		{"junos", "Oct 22 05:00:11.", " authd[900]: opened 172.100.100.1/49"},
+	} {
+		f := ddTestFilter(c.platform)
+		if got := ddKeep(f, c.pre+"123456789"+c.post); got == "" {
+			t.Errorf("%s: a nine-digit fraction was dropped", c.platform)
+		}
+		for _, otp := range []string{"1234567481516", "123456748151623", "1234567890"} {
+			if got := ddKeep(f, c.pre+otp+c.post); got != "" {
+				t.Errorf("%s: a %d-digit fraction was kept", c.platform, len(otp))
+			}
+		}
+	}
+	if got := nxosTestFilter.Keep("05:00:11.123456481516 tacacsd: avstr=cmd=show"); got != "" {
+		t.Errorf("nxos: a long fraction was kept")
+	}
+	if got := nxosTestFilter.Keep("05:00:11.123456 tacacsd: avstr=cmd=show"); got == "" {
+		t.Errorf("nxos: an ordinary fraction was dropped")
+	}
+}
+
+// A request counts once when the device prints both the send line and the
+// request-created line for it; the created lines count when no send line of
+// that kind exists.
+func TestDeviceDebugIOSXECountsARequestOnce(t *testing.T) {
+	f := ddTestFilter("iosxe")
+	both := strings.Join([]string{
+		"*Oct 22 05:00:01.000: TAC+: tacacs secure connection established with peer 172.100.100.1/49",
+		"*Oct 22 05:00:01.001: TPLUS: Authorization request created for 0(alice07)",
+		"*Oct 22 05:00:01.002: TAC+: send AUTHOR/REQ packet",
+		"*Oct 22 05:00:01.003: TPLUS: Accounting request created for 0(alice07)",
+		"*Oct 22 05:00:01.004: TPLUS: processing authentication login request id 1",
+		"*Oct 22 05:00:01.005: TAC+: send AUTHEN/START packet",
+	}, "\n")
+	s := deviceDebugSummarize("iosxe", f.Keep(both))
+	// authen and author have send lines (counted once each); acct has none, so
+	// its created line counts.
+	if c := s.Conns[0]; c.Authen != 1 || c.Author != 1 || c.Acct != 1 {
+		t.Errorf("both families: %+v", c)
+	}
+	only := deviceDebugSummarize("iosxe", f.Keep(strings.Join(strings.Split(both, "\n")[:2], "\n")+"\n"+
+		"*Oct 22 05:00:01.006: TPLUS: Authorization request created for 0(alice07)"))
+	if c := only.Conns[0]; c.Author != 2 {
+		t.Errorf("created lines only: %+v", c)
+	}
+}
+
+func TestDeviceDebugJunosSummaryStatesTheAttribution(t *testing.T) {
+	if !strings.Contains(ddArmSummary("junos", "c", "", 0, nil), "attributed to the last connection opened in the trace") {
+		t.Errorf("the junos summary does not state how requests are attributed")
+	}
+	if strings.Contains(ddArmSummary("eos", "c", "", 0, nil), "attributed to the last connection") {
+		t.Errorf("another platform carries the junos note")
+	}
+}

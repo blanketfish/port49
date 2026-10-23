@@ -91,6 +91,9 @@ type ddProfile struct {
 	// noClose is a platform whose debug has no close line (Junos): its summary
 	// says the close is unknown instead of counting none.
 	noClose bool
+	// authenAlt, authorAlt and acctAlt count a request kind only when no line of
+	// the text matches the kind's primary regexp (see deviceDebugSummarize).
+	authenAlt, authorAlt, acctAlt *regexp.Regexp
 }
 
 // Building blocks for shapes written from a sampled skeleton, where `_` is a
@@ -148,7 +151,7 @@ func ddXRReq(core string) []string {
 
 var deviceDebugProfiles = map[string]*ddProfile{
 	"iosxe": {
-		line: regexp.MustCompile(`^[*.]?(?:[A-Z][a-z]{2} +\d+(?: \d{4})? )?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<m>.*)$`),
+		line: regexp.MustCompile(`^[*.]?(?:[A-Z][a-z]{2} +\d+(?: \d{4})? )?(?P<t>\d\d:\d\d:\d\d\.\d{1,9})(?: [A-Z]{2,5})?: (?P<m>.*)$`),
 		av:   regexp.MustCompile(`^(TAC\+: +)(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
 			`TPLUS: Queuing AAA (Authentication|Authorization|Accounting) request ` + ddID + ` for processing`,
@@ -190,20 +193,26 @@ var deviceDebugProfiles = map[string]*ddProfile{
 			ddCI + `TPLUS(?:\(` + ddOpaque + `\)/` + ddID + `(?:/` + ddOpaque + `)?(?:/` + ddOpaque + `)?)?` + ddGap + `processing the reply packet`,
 			ddCI + `(?:TAC\+|TPLUS)` + ddGap + `using previously` + ddOptOpq + ` server ` + ddIP + ` from group` + ddGap + ddGroup,
 		},
-		open:     regexp.MustCompile(`^TAC\+: Opening TCP/IP to|tacacs secure connection established with peer`),
-		closed:   regexp.MustCompile(`(?:TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|tacacs secure connection closed with peer \S+(?: port \S+)?[.,;]?)$`),
-		authen:   regexp.MustCompile(`send AUTHEN/|(?i)TPLUS` + ddSep + `processing authentication\b`),
-		author:   regexp.MustCompile(`send AUTHOR/|(?i)TPLUS` + ddSep + `authorization request created`),
-		acct:     regexp.MustCompile(`send ACCT/|(?i)TPLUS` + ddSep + `accounting request created`),
-		single:   regexp.MustCompile(`Using single connection`),
-		dead:     regexp.MustCompile(`Server \S+ (marked|is) DEAD`),
-		fallback: regexp.MustCompile(`Method=(LOCAL|NONE)`),
+		open:   regexp.MustCompile(`^TAC\+: Opening TCP/IP to|tacacs secure connection established with peer`),
+		closed: regexp.MustCompile(`(?:TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|tacacs secure connection closed with peer \S+(?: port \S+)?[.,;]?)$`),
+		// A request is counted once: from the `send KIND/` lines when the text has
+		// any of that kind, else from the processing or request-created lines. A
+		// device that prints both for one request would otherwise count it twice.
+		authen:    regexp.MustCompile(`send AUTHEN/`),
+		author:    regexp.MustCompile(`send AUTHOR/`),
+		acct:      regexp.MustCompile(`send ACCT/`),
+		authenAlt: regexp.MustCompile(`(?i)TPLUS` + ddSep + `processing authentication\b`),
+		authorAlt: regexp.MustCompile(`(?i)TPLUS` + ddSep + `authorization request created`),
+		acctAlt:   regexp.MustCompile(`(?i)TPLUS` + ddSep + `accounting request created`),
+		single:    regexp.MustCompile(`Using single connection`),
+		dead:      regexp.MustCompile(`Server \S+ (marked|is) DEAD`),
+		fallback:  regexp.MustCompile(`Method=(LOCAL|NONE)`),
 	},
 	"eos": {
 		// `[date ]time[tz][ thread][ host] Agent|Facility[N]: message`. The trace
 		// facility (Tacacs) may come after the agent name (Aaa); a shape starts with
 		// ddEOSFac to take it.
-		line: regexp.MustCompile(`^(?:\d{4}-\d\d-\d\d[ T]|[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?)(?:[+-]\d\d:\d\d|Z)?(?: +\d+)?(?: +[A-Za-z0-9_.-]+)? *(?P<p>Aaa|Tacacs|TacPlus)(?:\[\d+\])?(?:: *| +)(?P<m>.*)$`),
+		line: regexp.MustCompile(`^(?:\d{4}-\d\d-\d\d[ T]|[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d{1,9})?)(?:[+-]\d\d:\d\d|Z)?(?: +\d+)?(?: +[A-Za-z0-9_.-]+)? *(?P<p>Aaa|Tacacs|TacPlus)(?:\[\d+\])?(?:: *| +)(?P<m>.*)$`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
 			`(Connecting|Connected) to (TACACS\+ )?server ` + ddIP + `( port |:)` + ddPort,
@@ -242,7 +251,7 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	"iosxr": {
 		// `node [Mon DD ]time zone: process[N]: message`; the node name follows its
 		// own colon or a space, and the zone is the capital letters before the colon.
-		line: regexp.MustCompile(`^(?:[A-Za-z0-9_/.-]+[: ] ?)?(?:[A-Z][a-z]{2} +\d+ (?:\d{4} )?)?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
+		line: regexp.MustCompile(`^(?:[A-Za-z0-9_/.-]+[: ] ?)?(?:[A-Z][a-z]{2} +\d+ (?:\d{4} )?)?(?P<t>\d\d:\d\d:\d\d\.\d{1,9})(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: append([]string{
 			`(Opening|Opened) connection to ` + ddIP + ` port ` + ddPort,
@@ -280,7 +289,7 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	"junos": {
 		// `[Mon DD ]time [host ]process[N]: message`. The authd trace file and the
 		// syslog file both use it.
-		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?) (?:\S+ )?(?P<p>mgd|sshd|login|tacplus|authd)(?:\[\d+\])?: (?P<m>.*)$`),
+		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d{1,9})?) (?:\S+ )?(?P<p>mgd|sshd|login|tacplus|authd)(?:\[\d+\])?: (?P<m>.*)$`),
 		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
 		shapes: []string{
 			`(connecting|connected) to server ` + ddIP + ` port ` + ddPort,
@@ -507,6 +516,12 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 	if kept == "" {
 		return s
 	}
+	// A kind with an alternative family is counted from the primary lines when
+	// the text has any, else from the alternative, so one request counts once.
+	useAlt := func(primary, alt *regexp.Regexp) bool {
+		return alt != nil && !primary.MatchString(string(kept))
+	}
+	altAuthen, altAuthor, altAcct := useAlt(p.authen, p.authenAlt), useAlt(p.author, p.authorAlt), useAlt(p.acct, p.acctAlt)
 	cur := -1 // the index in s.Conns of the connection requests go to
 	ensure := func() {
 		if cur < 0 {
@@ -533,13 +548,13 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 				s.Conns[cur].Reason = m[1]
 			}
 			cur = -1
-		case p.authen.MatchString(msg):
+		case p.authen.MatchString(msg) || altAuthen && p.authenAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Authen++
-		case p.author.MatchString(msg):
+		case p.author.MatchString(msg) || altAuthor && p.authorAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Author++
-		case p.acct.MatchString(msg):
+		case p.acct.MatchString(msg) || altAcct && p.acctAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Acct++
 		}
