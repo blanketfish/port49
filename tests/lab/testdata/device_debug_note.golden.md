@@ -5,7 +5,7 @@ Platform cisco_iosxe, image Test Router 1.2.3. Debug on: `terminal length 0`, `t
 ### What the filter kept
 
 - `tls_token_login`: the device returned 700 log lines and the filter kept 7 (3 connection open/close, 3 request, 1 other); the capture holds 2 TLS connection(s).
-  Lines dropped by rule: facility=0 payload=0 hex_view=0 hex_message=0 evidence_marker=0 stripped_secret_hex=0.
+  Lines dropped by rule: facility=0 body_word=0 hex_view=0 hex_message=0 evidence_marker=0 known_value_hex=0.
   - debug connections opened=2 closed=1 single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
   - debug connection 1: opened=09:48:29.345 closed=09:48:30.001 reason="" authen=1 author=0 acct=1.
   - debug connection 2: opened=09:48:30.100 closed=open reason="" authen=0 author=1 acct=0.
@@ -13,7 +13,7 @@ Platform cisco_iosxe, image Test Router 1.2.3. Debug on: `terminal length 0`, `t
   - capture: `conn port=57532 syn=09:48:30.090 hold=open end=open`
   - readiness probe connections after debug went on, before the cell (in the log, not in the cell's TLS connections): 1.
 - `tls_unknown_ca`: the device returned 400 log lines and the filter kept 2 (1 connection open/close, 0 request, 1 other); the capture holds 1 TLS connection(s).
-  Lines dropped by rule: facility=0 payload=0 hex_view=0 hex_message=0 evidence_marker=0 stripped_secret_hex=0.
+  Lines dropped by rule: facility=0 body_word=0 hex_view=0 hex_message=0 evidence_marker=0 known_value_hex=0.
   - debug connections opened=0 closed=1 single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
   - debug connection 1: opened=before closed=09:49:01.050 reason="" authen=0 author=0 acct=0.
   - capture: `conn port=57600 syn=09:49:00.990 hold=0.08s end=server-rst`

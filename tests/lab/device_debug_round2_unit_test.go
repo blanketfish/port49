@@ -405,3 +405,64 @@ func TestDeviceDebugShortSecretInPrefixedHexNeverSurvives(t *testing.T) {
 		}
 	}
 }
+
+// N1: the drop counts survive l80Filter, which drops lines that say payload or secret.
+func TestDeviceDebugDropCountsSurviveTheSummaryFilter(t *testing.T) {
+	line := "lines dropped by rule: " + (ddDropCounts{Facility: 1, Payload: 2, StrippedSecret: 3}).String()
+	if got := l80Filter(line); got != line {
+		t.Errorf("the drop-count line did not survive l80Filter: %q", got)
+	}
+}
+
+// N2: a tail of two or three byte tokens in comma, dash or \x form is dropped too.
+func TestDeviceDebugDropsShortByteListTails(t *testing.T) {
+	for _, p := range ddPlatforms {
+		for name, body := range map[string]string{
+			"comma": "6b,2d,31", "dash": "6b-2d-31", "backslash_x": `\x6b\x2d\x31`, "x_prefix": "0x6b 0x2d", "comma_two": "6b,2d",
+		} {
+			if got := ddKeepOrLeak(ddTestFilter(p), ddFacility[p]+body); got != "" {
+				t.Errorf("%s: the tail %s was kept", p, name)
+			}
+		}
+	}
+}
+
+// N3: a known secret's hex in any punctuation layout, or with prefixes and no
+// separator at all, is found by the stripped view.
+func TestDeviceDebugKnownSecretHexInAnyPunctuationNeverSurvives(t *testing.T) {
+	spell := func(sep, pre string) string {
+		var parts []string
+		for _, b := range []byte(ddSentinelShort) {
+			parts = append(parts, fmt.Sprintf("%s%02x", pre, b))
+		}
+		return strings.Join(parts, sep)
+	}
+	for name, body := range map[string]string{
+		"slash":       spell("/", ""),
+		"pipe":        spell("|", ""),
+		"underscore":  spell("_", ""),
+		"brackets":    "[" + spell("][", "") + "]",
+		"semicolon":   spell(";", ""),
+		"dot":         spell(".", ""),
+		"x_no_sep":    spell("", "0x"),
+		"upper_x":     spell("", "0X"),
+		"bs_x_no_sep": spell("", `\x`),
+	} {
+		for _, p := range ddPlatforms {
+			if got := ddKeepOrLeak(ddTestFilter(p), ddFacility[p]+"v "+body+" end"); got != "" {
+				t.Errorf("%s: the %s layout of a known secret survived", p, name)
+			}
+		}
+	}
+}
+
+// A marker keeps two pieces of hex apart in the stripped view: they are not a secret.
+func TestDeviceDebugMarkerDoesNotJoinHexInTheStrippedView(t *testing.T) {
+	hf := ddHexForms([]string{ddSentinelShort})
+	if ddLeaks("x 7a <redacted> 7137 y", nil, hf) {
+		t.Errorf("two pieces either side of a marker joined into a known hex form")
+	}
+	if !ddLeaks("x 7a 71 37 y", nil, hf) {
+		t.Errorf("a spaced known hex form was not found")
+	}
+}

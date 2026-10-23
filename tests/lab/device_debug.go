@@ -82,7 +82,7 @@ type ddDropCounts struct {
 
 // String is the counts as `name=n` words, for the summary and the note.
 func (d ddDropCounts) String() string {
-	return fmt.Sprintf("facility=%d payload=%d hex_view=%d hex_message=%d evidence_marker=%d stripped_secret_hex=%d",
+	return fmt.Sprintf("facility=%d body_word=%d hex_view=%d hex_message=%d evidence_marker=%d known_value_hex=%d",
 		d.Facility, d.Payload, d.HexView, d.HexMessage, d.Marker, d.StrippedSecret)
 }
 
@@ -205,10 +205,11 @@ var (
 	ddHexTok   = `(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,2})`
 	ddHexChain = regexp.MustCompile(`(?:^|[ \t:,-])(?:` + ddHexTok + `[ \t:,-]+){3,}` + ddHexTok + `(?:[ \t:,-]|$)`)
 	ddHexRun   = regexp.MustCompile(`[0-9A-Fa-f]{8,}`)
-	ddHexOnly  = regexp.MustCompile(`^(?:(?:0x)?[0-9A-Fa-f]{1,8}(?:[ \t:.]+|$)){2,}$`)
+	ddHexOnly  = regexp.MustCompile(`^(?:[0-9A-Fa-f]{1,8}(?:[ \t:.,-]+|$)){2,}$`)
 	ddIndex    = regexp.MustCompile(`^\s*(?:\[\d+\]|\(\w+\))?[\s:+]*`)
-	// ddSepStrip removes the separators of a spelled-out hex string.
-	ddSepStrip = regexp.MustCompile(`[\s:.,;-]`)
+	// ddSepStrip removes what can sit between the bytes of a spelled-out hex
+	// string: every 0x or \x and all punctuation and blanks.
+	ddSepStrip = regexp.MustCompile(`(?i)\\x|0x|[^0-9a-z]`)
 	// ddBytePrefix is the 0x or \x in front of a byte, C and Python style.
 	ddBytePrefix = regexp.MustCompile(`(?i)\\x|\b0x`)
 	// ddMarker is what an evidence file must not hold, so the line goes rather
@@ -232,7 +233,8 @@ func ddHexMessage(p *ddProfile, line string) bool {
 	}
 	rest := line[loc[1]:]
 	rest = rest[len(ddIndex.FindString(rest)):]
-	return ddHexOnly.MatchString(ddClock.ReplaceAllString(rest, "T"))
+	rest = ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(rest, "T"), " ")
+	return ddHexOnly.MatchString(strings.TrimSpace(rest))
 }
 
 const ddRedacted = "<redacted>"
@@ -340,7 +342,7 @@ func ddStrippedHex(line string, hexForms []string) bool {
 	if len(hexForms) == 0 {
 		return false
 	}
-	low := strings.ToLower(ddSepStrip.ReplaceAllString(ddBytePrefix.ReplaceAllString(line, " "), ""))
+	low := strings.ToLower(ddSepStrip.ReplaceAllString(line, ""))
 	for _, f := range hexForms {
 		if strings.Contains(low, f) {
 			return true
@@ -361,7 +363,9 @@ func ddLeaks(text string, forms, hexForms []string) bool {
 			return true
 		}
 	}
-	for _, ln := range strings.Split(low, "\n") {
+	// A letter outside the hex digits stands for a marker here, so two pieces on
+	// either side of one cannot join in the stripped view.
+	for _, ln := range strings.Split(strings.ReplaceAll(low, "\x00", "g"), "\n") {
 		if ddStrippedHex(ln, hexForms) {
 			return true
 		}
@@ -407,7 +411,7 @@ func (d *ddDropCounts) count(reason string) {
 		d.HexView++
 	case "hex_message":
 		d.HexMessage++
-	case "stripped_secret_hex":
+	case "known_value_hex":
 		d.StrippedSecret++
 	}
 }
@@ -439,7 +443,7 @@ func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
 			continue
 		}
 		if ddStrippedHex(ln, hexForms) {
-			f.Drops.count("stripped_secret_hex")
+			f.Drops.count("known_value_hex")
 			continue
 		}
 		// Long runs are masked before the redaction too, so a redaction cannot
