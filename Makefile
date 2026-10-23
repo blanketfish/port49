@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke leaks
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -345,3 +345,21 @@ image:
 # never needs Docker.
 compose-smoke:
 	go test -tags compose ./tests/compose/ -count=1 -v -timeout 20m
+
+# Secret scanning (.gitleaks.toml). The pinned release is downloaded into bin/ and
+# verified by sha256; the CI `leaks` job pins the same version and checksum. --redact
+# on every run: a finding's value is never printed. Never re-run a finding without it.
+GITLEAKS_VERSION ?= 8.30.1
+GITLEAKS_SHA256_LINUX_X64 = 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+bin/gitleaks:
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install gitleaks $(GITLEAKS_VERSION) yourself and put it at bin/gitleaks"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v$(GITLEAKS_VERSION)/gitleaks_$(GITLEAKS_VERSION)_linux_x64.tar.gz
+	echo "$(GITLEAKS_SHA256_LINUX_X64)  bin/gitleaks.tar.gz" | sha256sum -c -
+	tar -xzf bin/gitleaks.tar.gz -C bin gitleaks
+	rm bin/gitleaks.tar.gz
+
+leaks: bin/gitleaks
+	bin/gitleaks git --redact --no-banner --config .gitleaks.toml .
+	bin/gitleaks dir --redact --no-banner --config .gitleaks.toml .

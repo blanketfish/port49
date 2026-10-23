@@ -1,0 +1,46 @@
+# Secret scanning (`make leaks`, and the `leaks` CI job). The default rules plus the
+# credential shapes network devices and this repo's lab produce. Run with --redact:
+# a finding's value is never printed.
+#
+# Allowlist entries are narrow on purpose (one file or one regex each) and each says why
+# it exists. tests/lab/evidence/ and tests/lab/results/ are NOT allowlisted as a whole:
+# a real leak from a lab run would land there.
+title = "port49"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "junos-type9"
+description = "Junos $9$ reversible-encrypted secret"
+regex = '''\$9\$[A-Za-z0-9./]{8,}'''
+keywords = ["$9$"]
+
+[[rules]]
+id = "unix-crypt-hash"
+description = "Unix crypt hash ($1$, $5$, $6$, $8$)"
+regex = '''\$(1|5|6|8)\$[^\s$]+\$[A-Za-z0-9./]{8,}'''
+keywords = ["$1$", "$5$", "$6$", "$8$"]
+
+[[rules]]
+id = "cisco-type7"
+description = "Cisco type 7 reversible password"
+regex = '''(?i)(?:key|password|secret) 7 [0-9]{2}[0-9A-Fa-f]{4,}'''
+keywords = [" 7 "]
+
+[[rules]]
+id = "tacacs-key-config-line"
+description = "TACACS+ shared key in a device config line"
+regex = '''(?i)(?:tacacs-server (?:host \S+ )?key|tacacs\S*[^\n]{0,80}\skey|\bkey 0)\s+(?:[0-7]\s+)?[^\s"'<>$%{}()\[\]]{4,}'''
+keywords = ["key"]
+
+# To add an entry: one [[allowlists]] block, one file (paths) or one regex, a `description`
+# that says why the value is deliberate. Never a directory. `make leaks` runs in CI on
+# every push and PR (.github/workflows/leaks.yml). Run it with --redact only.
+[[allowlists]]
+description = "RFC 7515 appendix A.2 and A.3 example JWS: public test vectors from the RFC, used to test signature verification"
+condition = "OR"
+paths = [
+  '''^internal/oidc/testdata/rfc7515-a2\.json$''',
+  '''^internal/oidc/testdata/rfc7515-a3\.json$''',
+]
