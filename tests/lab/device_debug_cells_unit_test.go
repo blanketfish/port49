@@ -254,14 +254,13 @@ func TestDeviceDebugEOSTracesTheAaaAgent(t *testing.T) {
 }
 
 // Junos traces authd (general-authentication-service) into tacacs-traceoptions with
-// flag all and level all, reads the flag help once without committing it, and logs
+// flag all, reads the flag help once without committing it, and logs
 // the syslog file for auditd's accounting line and the process tags.
 func TestDeviceDebugJunosTracesAuthdAndLogsTheAuthFacility(t *testing.T) {
 	c := deviceDebugCmds["junos"]
 	for _, set := range []string{
 		"set system processes general-authentication-service traceoptions file tacacs-traceoptions",
 		"set system processes general-authentication-service traceoptions flag all",
-		"set system processes general-authentication-service traceoptions level all",
 		"set system syslog file p49-auth.log any any",
 	} {
 		if !slices.Contains(c.Enable, set) {
@@ -276,6 +275,14 @@ func TestDeviceDebugJunosTracesAuthdAndLogsTheAuthFacility(t *testing.T) {
 		!slices.Contains(c.Disable, "delete system processes general-authentication-service traceoptions") ||
 		!slices.Contains(c.Disable, "clear log tacacs-traceoptions") {
 		t.Errorf("junos enable %q or disable %q does not commit or undo the trace", c.Enable, c.Disable)
+	}
+	// `level` is not valid under general-authentication-service traceoptions.
+	for _, list := range [][]string{c.Enable, c.Disable} {
+		for _, cmd := range list {
+			if strings.Contains(cmd, "traceoptions level") {
+				t.Errorf("junos uses %q: level is not valid under general-authentication-service", cmd)
+			}
+		}
 	}
 	if !slices.Contains(c.Enable, "clear log tacacs-traceoptions") {
 		t.Errorf("the trace file is not cleared before the cell")

@@ -639,9 +639,8 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 	},
 	"junos": {
 		// authd (general-authentication-service) is the process whose trace this
-		// reads. The first trace on this image held only startup lines, so the
-		// trace now also sets `level all`. A set the CLI rejects does not stop the
-		// others from committing. The flag help is read once in configure mode
+		// reads (Juniper's TACACS+ troubleshooting points at it). `level` is not
+		// valid under its traceoptions, so only file and flag all are set. The flag help is read once in configure mode
 		// (`?` shows the words and nothing is committed by it) to learn whether
 		// this release has a TACACS or login flag. The syslog file stays for
 		// auditd's accounting line and the process tags.
@@ -649,7 +648,6 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 			ddJunosFlagHelp,
 			"set system processes general-authentication-service traceoptions file tacacs-traceoptions",
 			"set system processes general-authentication-service traceoptions flag all",
-			"set system processes general-authentication-service traceoptions level all",
 			"set system syslog file p49-auth.log any any",
 			"commit and-quit"},
 		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions",
