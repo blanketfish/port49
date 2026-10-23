@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // Device debug capture for EOS, IOS XR, Junos, IOS XE and NX-OS (post-11b fix
@@ -19,22 +21,37 @@ import (
 //
 //  1. Keep by facility. A line is kept only if it carries the platform's
 //     TACACS/AAA facility (ddProfile.facility). Everything else is dropped.
-//  2. Drop payload lines. A line that says payload, or holds a hex-dump run
-//     (nxosDebugHexRun: eight or more spaced hex bytes, or sixteen contiguous
-//     hex digits), is dropped whole: it is the packet body.
-//  3. Redact the run's known secrets: the TACACS+ key, the lab passwords, the
+//  2. Drop payload and hex-dump lines. A line that says payload, or has a hex
+//     layout (ddHexView: a run of eight or more hex digits, or four or more
+//     groups of one, two or four hex digits in a row, separated by blanks or
+//     colons, a clock aside; ddHexMessage: a message of nothing but hex groups;
+//     nxosDebugHexRun), is dropped whole: it is the packet body. A line whose
+//     separator-stripped copy holds the hex of a known secret is dropped too,
+//     because a spaced form cannot be redacted in place.
+//  3. Mask every run of 24 or more token characters as <LONG> (and again after
+//     step 5, so a redaction cannot split a run and unmask the rest).
+//  4. Redact the run's known secrets: the TACACS+ key, the lab passwords, the
 //     tokens and TOTP codes the run handled. Every value is replaced by
-//     <redacted> in its literal, hex, base64 (standard and URL, padded and not)
-//     and Cisco type 7 forms (all 16 salts), matched without regard to case.
-//  4. Redact reversible encodings and crypt hashes by shape: Junos $9$, crypt
-//     $1$ $5$ $6$ $8$, and `key|password|secret` followed by a type 7 value or
-//     a 0, 6, 8 or 9 encoding. The shape is judged without knowing the secret,
-//     so an encoding of a secret nobody told us about is still redacted.
-//  5. Mask every run of 24 or more token characters as <LONG>.
+//     <redacted> in its literal, hex, base64 (standard and URL, padded and not,
+//     at the three alignments) and Cisco type 7 forms (all 16 salts), matched
+//     without regard to case, longest first.
+//  5. Redact reversible encodings and crypt hashes by shape: Junos $9$, crypt
+//     $1$ $5$ $6$ $8$, and `key|key-string|password|secret` followed by a type
+//     7 value or a 0, 6, 8 or 9 encoding, quoted or not. The shape is judged
+//     without knowing the secret, so an encoding of a secret nobody told us
+//     about is still redacted.
 //  6. Fail closed. The kept text is checked once more for every secret in every
-//     form. If any survives, the whole capture is discarded: Keep returns
+//     form, and every line for the hex of one with its separators stripped. If
+//     any survives, the whole capture is discarded: Keep returns
 //     errDeviceDebugLeak, which names no device text, and the cell is graded
 //     unmeasured.
+//
+// Limits, stated: a fragment of a secret of under 24 characters can survive a
+// line wrap or an overlap of two secrets (the redaction matches whole values);
+// the capture sets a wide terminal where the CLI has one. The facilities are
+// coarse words (Junos `tacplus` also appears in an echoed `set ... tacplus-server`
+// command, IOS XE `TAC` anywhere in a line), which is safe only while the harness
+// types nothing but known secrets.
 //
 // Nothing the device prints is decoded: type 7 and $9$ values are redacted, never
 // read. Only our own known secrets are encoded, to know what to look for. The
@@ -111,8 +128,10 @@ var deviceDebugProfiles = map[string]*ddProfile{
 	},
 	"iosxr": {
 		// The close line has no process name (step 4 sample `_ connection closed _
-		// A port _`), so the facility also takes it.
-		facility: regexp.MustCompile(`(?i)\btacacsd\b|\bconnection closed\b.*\bport\b`),
+		// A port _`), so the facility also takes that one shape: straight after the
+		// clock and zone, no process slot, a number, an address, `port`. Another
+		// daemon's "connection closed ... port" line (sshd, netconf) is not kept.
+		facility: regexp.MustCompile(`(?i)\btacacsd\b|\d{2}\.\d{1,9}(?: [A-Z]{2,5})?: connection closed \d+ (?:\d{1,3}\.){3}\d{1,3} port \d+`),
 		open:     regexp.MustCompile(`(?i)opening connection to|socket connected`),
 		closed:   regexp.MustCompile(`(?i)closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|\bconnection closed\b`),
 		authen:   regexp.MustCompile(`(?i)sending authentication request|\bpacket\b.*\bstart\b.*\blogin\b`),
@@ -157,12 +176,46 @@ var (
 		re   *regexp.Regexp
 		repl string
 	}{
-		{regexp.MustCompile(`\$[15689]\$[A-Za-z0-9./$=]+`), ddRedacted},
-		{regexp.MustCompile(`(?i)\b(key|password|secret) 7 [0-9]{2}[0-9A-Fa-f]+`), "${1} 7 " + ddRedacted},
-		{regexp.MustCompile(`(?i)\b(key|password|secret) ([0689]) \S+`), "${1} ${2} " + ddRedacted},
+		// The Junos $9$ alphabet includes `-`, so the value runs to a space or quote.
+		{regexp.MustCompile(`\$[15689]\$[^\s"']+`), ddRedacted},
+		// The reversible and clear types of a key, password or secret: any
+		// whitespace, the quoted NX-OS form or a bare word, the whole value.
+		{regexp.MustCompile(`(?i)\b(key(?:-string)?|password|secret)\s+(7|[0689])\s+("[^"]*"|\S+)`), "${1} ${2} " + ddRedacted},
 	}
 	ddClock = regexp.MustCompile(`\d\d:\d\d:\d\d(?:\.\d{1,9})?`)
+
+	// The hex-dump views. ddHexChain is four or more groups of one, two or four
+	// hex digits in a row, separated by blanks or colons; ddHexRun a contiguous
+	// run of eight or more; ddHexOnly a message that is nothing but hex groups.
+	// A clock is replaced by T first, so `09:39:03` is not a dump, and a dotted
+	// address never is one (the dot is no separator).
+	ddHexTok   = `(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,2})`
+	ddHexChain = regexp.MustCompile(`(?:^|[ \t:])(?:` + ddHexTok + `[ \t:]+){3,}` + ddHexTok + `(?:[ \t:]|$)`)
+	ddHexRun   = regexp.MustCompile(`[0-9A-Fa-f]{8,}`)
+	ddHexOnly  = regexp.MustCompile(`^(?:(?:0x)?[0-9A-Fa-f]{1,8}(?:[ \t:.]+|$)){2,}$`)
+	ddIndex    = regexp.MustCompile(`^\s*(?:\[\d+\]|\(\w+\))?[\s:+]*`)
+	// ddSepStrip removes the separators of a spelled-out hex string.
+	ddSepStrip = regexp.MustCompile(`[\s:.,;-]`)
 )
+
+// ddHexView is whether line, a clock aside, has a hex-dump layout: a run of
+// eight or more hex digits, or four or more hex groups in a row.
+func ddHexView(line string) bool {
+	v := ddClock.ReplaceAllString(line, "T")
+	return ddHexRun.MatchString(v) || ddHexChain.MatchString(v)
+}
+
+// ddHexMessage is whether the message after the facility (first match of p) is
+// nothing but hex groups.
+func ddHexMessage(p *ddProfile, line string) bool {
+	loc := p.facility.FindStringIndex(line)
+	if loc == nil {
+		return false
+	}
+	rest := line[loc[1]:]
+	rest = rest[len(ddIndex.FindString(rest)):]
+	return ddHexOnly.MatchString(ddClock.ReplaceAllString(rest, "T"))
+}
 
 const ddRedacted = "<redacted>"
 
@@ -182,8 +235,12 @@ func ddType7(s string, salt int) string {
 }
 
 // ddSecretForms are the strings that must not survive in the kept text, one per
-// form of each secret, lowercase and longest first (so a longer form is matched
-// before a prefix of it).
+// form of each secret, lowercase and longest first. Besides the literal, hex,
+// base64 (both alphabets, padded or not) and type 7 forms, the base64 of a
+// secret at the three alignments it can have in a longer encoded string is
+// covered by the stable inner part of each: the encoding of the secret alone
+// (a partial last character cut), and of the secret behind one and two zero
+// bytes (the characters that mix in the neighbour's bits cut).
 func ddSecretForms(secrets []string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -193,6 +250,12 @@ func ddSecretForms(secrets []string) []string {
 			out = append(out, s)
 		}
 	}
+	addInner := func(s string) {
+		if len(s) >= 4 {
+			add(s)
+		}
+	}
+	encs := []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding}
 	for _, s := range secrets {
 		if s == "" {
 			continue
@@ -200,8 +263,22 @@ func ddSecretForms(secrets []string) []string {
 		b := []byte(s)
 		add(s)
 		add(hex.EncodeToString(b))
-		for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
+		for _, enc := range encs {
 			add(enc.EncodeToString(b))
+		}
+		for _, enc := range encs[:2] {
+			for off := 0; off < 3; off++ {
+				e := strings.TrimRight(enc.EncodeToString(append(make([]byte, off), b...)), "=")
+				head := [3]int{0, 2, 3}[off]
+				if head >= len(e) {
+					continue
+				}
+				e = e[head:]
+				if (off+len(b))%3 != 0 && len(e) > 0 {
+					e = e[:len(e)-1] // the last character mixes in the next byte
+				}
+				addInner(e)
+			}
 		}
 		for salt := 0; salt < 16; salt++ {
 			add(ddType7(s, salt))
@@ -211,26 +288,42 @@ func ddSecretForms(secrets []string) []string {
 	return out
 }
 
-// ddRedactSecrets replaces every form of every secret in text with <redacted>.
-// It is a variable so the fail-closed test can break it.
-var ddRedactSecrets = func(text string, forms []string) string {
+// ddHexForms are the lowercase hex of each secret of three bytes or more, for
+// the check on a line with its separators stripped.
+func ddHexForms(secrets []string) []string {
+	var out []string
+	for _, s := range secrets {
+		if len(s) >= 3 {
+			out = append(out, strings.ToLower(hex.EncodeToString([]byte(s))))
+		}
+	}
+	return out
+}
+
+// ddRedactSecrets compiles forms once into a function that replaces every one
+// of them in a line with <redacted>, leftmost and longest. It is a variable so
+// the fail-closed test can break it.
+var ddRedactSecrets = func(forms []string) func(string) string {
 	if len(forms) == 0 {
-		return text
+		return func(s string) string { return s }
 	}
 	quoted := make([]string, len(forms))
 	for i, f := range forms {
 		quoted[i] = regexp.QuoteMeta(f)
 	}
-	return regexp.MustCompile(`(?i)`+strings.Join(quoted, "|")).ReplaceAllLiteralString(text, ddRedacted)
+	re := regexp.MustCompile(`(?i)` + strings.Join(quoted, "|"))
+	re.Longest()
+	return func(s string) string { return re.ReplaceAllLiteralString(s, ddRedacted) }
 }
 
-// ddLeaks reports whether any form of any secret is in text. The markers Keep
-// writes are replaced by a separator first, so a secret that happens to spell
-// part of one cannot fail a clean capture, and two pieces on either side of a
-// marker cannot join into a form.
-func ddLeaks(text string, forms []string) bool {
-	low := strings.NewReplacer("<redacted>", "\x00", "<long>", "\x00").Replace(strings.ToLower(text))
-	for _, f := range forms {
+// ddStrippedHex is whether line, its separators removed, holds the hex of a
+// known secret: a secret spelled in spaced, coloured or oddly grouped hex.
+func ddStrippedHex(line string, hexForms []string) bool {
+	if len(hexForms) == 0 {
+		return false
+	}
+	low := strings.ToLower(ddSepStrip.ReplaceAllString(line, ""))
+	for _, f := range hexForms {
 		if strings.Contains(low, f) {
 			return true
 		}
@@ -238,9 +331,31 @@ func ddLeaks(text string, forms []string) bool {
 	return false
 }
 
-// keeps is whether line passes the facility and payload rules (steps 1 and 2).
+// ddLeaks reports whether any form of any secret is in text, or the hex of one in
+// a line of it with its separators stripped. The markers Keep writes are replaced
+// by a separator first, so a secret that happens to spell part of one cannot
+// fail a clean capture, and two pieces on either side of a marker cannot join
+// into a form.
+func ddLeaks(text string, forms, hexForms []string) bool {
+	low := strings.NewReplacer("<redacted>", "\x00", "<long>", "\x00").Replace(strings.ToLower(text))
+	for _, f := range forms {
+		if strings.Contains(low, f) {
+			return true
+		}
+	}
+	for _, ln := range strings.Split(low, "\n") {
+		if ddStrippedHex(ln, hexForms) {
+			return true
+		}
+	}
+	return false
+}
+
+// keeps is whether line passes the facility, payload and hex-dump rules (steps 1
+// and 2).
 func (f deviceDebugFilter) keeps(p *ddProfile, line string) bool {
-	return p.facility.MatchString(line) && !ddPayload.MatchString(line) && !nxosDebugHexRun.MatchString(line)
+	return p.facility.MatchString(line) && !ddPayload.MatchString(line) && !nxosDebugHexRun.MatchString(line) &&
+		!ddHexView(line) && !ddHexMessage(p, line)
 }
 
 // Keep is text (the device's debug output, as `show logging` or `show log`
@@ -256,21 +371,26 @@ func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
 	if f.Secrets != nil {
 		secrets = f.Secrets()
 	}
-	forms := ddSecretForms(secrets)
+	forms, hexForms := ddSecretForms(secrets), ddHexForms(secrets)
+	redact := ddRedactSecrets(forms)
 	var out []string
 	for _, ln := range strings.Split(nxosDebugANSI.ReplaceAllString(text, ""), "\n") {
 		ln = strings.TrimSpace(ln)
-		if ln == "" || !f.keeps(p, ln) {
+		// A secret spelled in separated hex cannot be redacted in place: the line goes.
+		if ln == "" || !f.keeps(p, ln) || ddStrippedHex(ln, hexForms) {
 			continue
 		}
-		ln = ddRedactSecrets(ln, forms)
+		// Long runs are masked before the redaction too, so a redaction cannot
+		// split a run and leave the rest of it unmasked.
+		ln = nxosDebugLong.ReplaceAllString(ln, "<LONG>")
+		ln = redact(ln)
 		for _, s := range ddShapeRedact {
 			ln = s.re.ReplaceAllString(ln, s.repl)
 		}
 		out = append(out, nxosDebugLong.ReplaceAllString(ln, "<LONG>"))
 	}
 	kept := strings.Join(out, "\n")
-	if ddLeaks(kept, forms) {
+	if ddLeaks(kept, forms, hexForms) {
 		return "", errDeviceDebugLeak
 	}
 	return deviceDebugKept(kept), nil
@@ -380,23 +500,23 @@ type deviceDebugCommands struct {
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
 	"eos": {
-		Enable:  []string{"terminal length 0", "clear agent Aaa logs", "configure", "trace Aaa setting *", "end"},
+		Enable:  []string{"terminal length 0", "terminal width 511", "clear agent Aaa logs", "configure", "trace Aaa setting *", "end"},
 		Disable: []string{"configure", "no trace Aaa setting *", "end"},
 		Collect: []string{"show agent Aaa logs"},
 	},
 	"iosxr": {
-		Enable:  []string{"terminal length 0", "clear logging", "y", "debug tacacs", "debug aaa"},
+		Enable:  []string{"terminal length 0", "terminal width 512", "clear logging", "y", "debug tacacs", "debug aaa"},
 		Disable: []string{"undebug all"},
 		Collect: []string{"show logging"},
 	},
 	"iosxe": {
-		Enable: []string{"terminal length 0", "clear logging", "", "debug tacacs", "debug aaa authentication",
+		Enable: []string{"terminal length 0", "terminal width 511", "clear logging", "", "debug tacacs", "debug aaa authentication",
 			"debug aaa authorization", "debug aaa accounting"},
 		Disable: []string{"undebug all"},
 		Collect: []string{"show logging"},
 	},
 	"junos": {
-		Enable: []string{"clear log p49-tacplus.log", "clear log p49-auth.log", "configure",
+		Enable: []string{"set cli screen-width 300", "clear log p49-tacplus.log", "clear log p49-auth.log", "configure",
 			"set system processes general-authentication-service traceoptions file p49-tacplus.log",
 			"set system processes general-authentication-service traceoptions flag all",
 			"set system syslog file p49-auth.log any any",
@@ -480,4 +600,14 @@ func disableDeviceDebug(cmds deviceDebugCommands, run func(string) (string, erro
 		}
 	}
 	return first
+}
+
+// ddKnownSecrets is every secret list a debug cell redacts, joined, always with
+// the lab TACACS+ key (never only through a device env).
+func ddKnownSecrets(parts ...[]string) []string {
+	all := []string{labcreds.Key}
+	for _, p := range parts {
+		all = append(all, p...)
+	}
+	return all
 }

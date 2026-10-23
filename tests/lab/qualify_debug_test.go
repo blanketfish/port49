@@ -150,13 +150,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	// the test log, not to evidence, for an implementer to read through the
 	// filtered grep.
 	q.t.Logf("device debug, shapes of the lines the filter dropped, %s %s (closed alphabet):\n  %s", platform, cell, strings.Join(sample, "\n  "))
-	masked := 0
-	for _, ln := range strings.Split(string(kept), "\n") {
-		if strings.Contains(ln, "<masked>") {
-			masked++
-		}
-	}
-	if n := ddArmLineCount(kept); n == 0 || masked*10 >= n*8 {
+	if ddArmLineCount(kept) == 0 {
 		sum += "THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log\n"
 	}
 	q.dd.profile = platform
@@ -171,11 +165,11 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 // ddSecrets is every credential this run used, for the leak gate on what the
 // arm writes and logs.
 func (q *qualEnv) ddSecrets() []string {
-	secrets := append([]string{breakglassPassword}, q.secrets...)
+	var fromEnv []string
 	if q.e != nil {
-		secrets = append(secrets, q.e.allSecrets()...)
+		fromEnv = q.e.allSecrets()
 	}
-	return secrets
+	return ddKnownSecrets([]string{breakglassPassword}, q.secrets, fromEnv)
 }
 
 // ddArmCheck stops a run that has debug asked for and cannot give it, before

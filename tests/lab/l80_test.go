@@ -165,6 +165,14 @@ func TestL80Remeasure(t *testing.T) {
 				}
 			}
 		}
+		// The debug file is Keep's output: it gets its own gate, after the filter.
+		for name, body := range files {
+			if strings.HasSuffix(name, "-debug.txt") {
+				if bad := qualGate(map[string][]byte{name: []byte(body)}, append(q.ddSecrets(), minted...)); len(bad) > 0 {
+					t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
+				}
+			}
+		}
 		for name, body := range files {
 			if err := os.WriteFile(filepath.Join(out, name), []byte(body+"\n"), 0o644); err != nil {
 				t.Fatal(err)

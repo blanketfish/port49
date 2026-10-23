@@ -1,6 +1,6 @@
 What cisco_iosxe's own TACACS+ debug says about the TLS cells of a qualification run on Test Router 1.2.3: which debug line marks a connection, how many requests ride one connection, and how a connection ends. Every line quoted is one the platform's debug filter kept: it carries the platform's TACACS+/AAA facility, and the run's secrets, reversible encodings and long runs were redacted or masked in it.
 
-Platform cisco_iosxe, image Test Router 1.2.3. Debug on: `terminal length 0`, `clear logging`, `<enter>`, `debug tacacs`, `debug aaa authentication`, `debug aaa authorization`, `debug aaa accounting` (read with `show logging`; off with `undebug all`).
+Platform cisco_iosxe, image Test Router 1.2.3. Debug on: `terminal length 0`, `terminal width 511`, `clear logging`, `<enter>`, `debug tacacs`, `debug aaa authentication`, `debug aaa authorization`, `debug aaa accounting` (read with `show logging`; off with `undebug all`).
 
 ### What the filter kept
 

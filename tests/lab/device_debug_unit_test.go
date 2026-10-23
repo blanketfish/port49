@@ -24,10 +24,13 @@ const (
 	ddSentinelType7 = "zq-42"
 	ddSentinelToken = "faketok-1x"
 	ddSentinelOTP   = "424242"
+	// ddSentinelShort is three bytes: its hex is six digits, under the eight the
+	// hex-dump rule drops, so the hex form of a secret is redacted by its own rule.
+	ddSentinelShort = "zq7"
 )
 
 func ddTestSecrets() []string {
-	return []string{ddSentinelKey, ddSentinelPass, ddSentinelType7, ddSentinelToken, ddSentinelOTP}
+	return []string{ddSentinelKey, ddSentinelPass, ddSentinelType7, ddSentinelToken, ddSentinelOTP, ddSentinelShort}
 }
 
 func ddTestFilter(platform string) deviceDebugFilter {
@@ -98,10 +101,8 @@ func TestDeviceDebugFixturesAreMeaningful(t *testing.T) {
 	if e["base64_std"] == e["base64_url"] {
 		t.Errorf("the password's standard and URL base64 are the same, so the URL form tests nothing")
 	}
-	for _, s := range []string{ddSentinelKey, ddSentinelPass, ddSentinelType7, ddSentinelOTP} {
-		if nxosDebugHexRun.MatchString(ddEncodings(s)["hex_lower"]) || nxosDebugHexRun.MatchString(ddType7(s, 5)) && s != ddSentinelKey && s != ddSentinelPass {
-			t.Errorf("the payload rule would drop the fixture's own encoding of a secret before the redaction is tried")
-		}
+	if ddHexView(ddEncodings(ddSentinelShort)["hex_lower"]) {
+		t.Errorf("the hex-dump rule would drop the fixture's own hex before the redaction is tried")
 	}
 }
 
@@ -123,7 +124,7 @@ func TestDeviceDebugKeepsTheStep4Shapes(t *testing.T) {
 		"iosxe": {
 			xe + "TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 7)",
 			xe + "TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)",
-			xe + "TPLUS(00000001)/0/7F1234: connected socket 5",
+			xe + "TPLUS(1A2B)/0/7F12: connected socket 5",
 			xe + "TPLUS: immediate connect 3, new 0x7F12",
 			xe + "TAC+: (1234): opened 172.100.100.1/49 ok",
 		},
@@ -206,33 +207,49 @@ func TestDeviceDebugNoKnownSecretSurvives(t *testing.T) {
 	}
 }
 
-// The forms the payload rule does not drop must be redacted by their own rule:
-// one case per form, so dropping a form turns exactly this test red.
+// The redaction itself, below the hex-dump rule (which drops a line holding eight
+// or more hex digits before the redaction runs, so most hex and every type 7
+// form never reach it): each form of a secret is redacted by its own entry in
+// the form list, so dropping a form turns exactly this test red.
 func TestDeviceDebugEachFormIsRedactedByItsOwnRule(t *testing.T) {
+	redact := ddRedactSecrets(ddSecretForms([]string{ddSentinelPass}))
 	for _, form := range []string{"literal", "upper", "hex_lower", "hex_upper", "base64_std", "base64_url", "base64_raw"} {
+		enc := ddEncodings(ddSentinelPass)[form]
+		got := redact("x " + enc + " y")
+		if got != "x <redacted> y" {
+			t.Errorf("the %s form was not redacted by the form list: %q", form, got)
+		}
+	}
+	// and end to end: the hex of a known secret, contiguous or not, drops the
+	// line (a spaced form cannot be redacted in place, so none is)
+	for _, form := range []string{"hex_lower", "hex_upper"} {
 		for _, p := range ddPlatforms {
-			enc := ddEncodings(ddSentinelPass)[form]
-			if form == "hex_lower" || form == "hex_upper" {
-				enc = ddEncodings(ddSentinelKey)[form]
-			}
-			got := ddKeep(t, ddTestFilter(p), ddFacility[p]+"x "+enc+" y")
-			if !strings.Contains(got, "<redacted>") || strings.Contains(strings.ToLower(got), strings.ToLower(enc)) {
-				t.Errorf("%s: the %s form was not redacted", p, form)
+			enc := ddEncodings(ddSentinelShort)[form]
+			if got := ddKeepOrLeak(ddTestFilter(p), ddFacility[p]+"x "+enc+" y"); got != "" {
+				t.Errorf("%s: a line with the %s form of a secret was kept", p, form)
 			}
 		}
 	}
 }
 
-// Type 7: the encodings of a known secret at every salt are redacted by the
-// 16-salt enumeration, wherever they appear.
+// Type 7: the encodings of a known secret at every salt are in the form list, so
+// the redaction and the post-check both cover them.
 func TestDeviceDebugRedactsEverySaltOfTypeSeven(t *testing.T) {
+	forms := ddSecretForms([]string{ddSentinelType7})
+	redact := ddRedactSecrets(forms)
+	for salt := 0; salt < 16; salt++ {
+		enc := ddType7(ddSentinelType7, salt)
+		if got := redact("cfg " + enc + " end"); got != "cfg <redacted> end" {
+			t.Errorf("the type 7 encoding at salt %d was not redacted: %q", salt, got)
+		}
+		if !ddLeaks("cfg "+enc+" end", forms, nil) {
+			t.Errorf("the post-check does not know the type 7 encoding at salt %d", salt)
+		}
+	}
+	// a type 7 line is dropped by the hex-dump rule before it gets that far
 	for _, p := range ddPlatforms {
-		for salt := 0; salt < 16; salt++ {
-			enc := ddType7(ddSentinelType7, salt)
-			got := ddKeep(t, ddTestFilter(p), ddFacility[p]+"cfg "+enc+" end")
-			if strings.Contains(strings.ToLower(got), strings.ToLower(enc)) {
-				t.Errorf("%s: the type 7 encoding at salt %d survived", p, salt)
-			}
+		if got := ddKeep(t, ddTestFilter(p), ddFacility[p]+"cfg "+ddType7(ddSentinelType7, 5)+" end"); got != "" {
+			t.Errorf("%s: a type 7 line was kept", p)
 		}
 	}
 }
@@ -245,13 +262,13 @@ func TestDeviceDebugRedactsReversibleEncodingsByShape(t *testing.T) {
 		for name, c := range map[string]struct{ in, gone string }{
 			"junos_9":      {"set secret " + j9, j9},
 			"junos_9_bare": {"x " + j9 + " y", j9},
-			"crypt_1":      {"hash $1$salt$abc12345 here", "abc12345"},
-			"crypt_5":      {"hash $5$salt$abc12345 here", "abc12345"},
-			"crypt_6":      {"hash $6$salt$abc12345 here", "abc12345"},
-			"crypt_8":      {"hash $8$salt$abc12345 here", "abc12345"},
-			"type7_key":    {"tacacs-server key 7 0822455D0A16", "0822455D0A16"},
-			"type7_pass":   {"username x password 7 0822455D0A16", "0822455D0A16"},
-			"type7_secret": {"enable secret 7 0822455D0A16", "0822455D0A16"},
+			"crypt_1":      {"hash $1$salt$abcxyz12 here", "abcxyz12"},
+			"crypt_5":      {"hash $5$salt$abcxyz12 here", "abcxyz12"},
+			"crypt_6":      {"hash $6$salt$abcxyz12 here", "abcxyz12"},
+			"crypt_8":      {"hash $8$salt$abcxyz12 here", "abcxyz12"},
+			"type7_key":    {"tacacs-server key 7 08224A", "08224A"},
+			"type7_pass":   {"username x password 7 08224A", "08224A"},
+			"type7_secret": {"enable secret 7 08224A", "08224A"},
 			"key_0":        {"tacacs-server key 0 plainvalue", "plainvalue"},
 			"key_6":        {"tacacs-server key 6 plainvalue", "plainvalue"},
 			"pass_8":       {"password 8 plainvalue", "plainvalue"},
@@ -285,7 +302,7 @@ func TestDeviceDebugMasksLongRuns(t *testing.T) {
 func TestDeviceDebugFailsClosed(t *testing.T) {
 	broken := ddRedactSecrets
 	t.Cleanup(func() { ddRedactSecrets = broken })
-	ddRedactSecrets = func(text string, forms []string) string { return text } // a redaction that does nothing
+	ddRedactSecrets = func([]string) func(string) string { return func(s string) string { return s } } // a redaction that does nothing
 	for _, p := range ddPlatforms {
 		in := ddFacility[p] + "benign line one\n" + ddFacility[p] + "leak " + ddSentinelKey + " end\n" + ddFacility[p] + "benign line two"
 		kept, err := ddTestFilter(p).Keep(in)
@@ -297,12 +314,13 @@ func TestDeviceDebugFailsClosed(t *testing.T) {
 			t.Errorf("%s: the error names device text", p)
 		}
 	}
-	// A broken type 7 enumeration is caught the same way.
-	ddRedactSecrets = func(text string, forms []string) string {
-		return broken(text, slices.DeleteFunc(slices.Clone(forms), func(f string) bool { return f == strings.ToLower(ddType7(ddSentinelType7, 3)) }))
+	// A redaction that misses one form is caught the same way.
+	std := ddEncodings(ddSentinelPass)["base64_std"]
+	ddRedactSecrets = func(forms []string) func(string) string {
+		return broken(slices.DeleteFunc(slices.Clone(forms), func(f string) bool { return f != strings.ToLower(ddSentinelPass) }))
 	}
-	if _, err := ddTestFilter("eos").Keep(ddFacility["eos"] + "cfg " + ddType7(ddSentinelType7, 3)); !errors.Is(err, errDeviceDebugLeak) {
-		t.Errorf("a surviving type 7 form did not fail closed: %v", err)
+	if _, err := ddTestFilter("eos").Keep(ddFacility["eos"] + "cfg " + std); !errors.Is(err, errDeviceDebugLeak) {
+		t.Errorf("a surviving base64 form did not fail closed: %v", err)
 	}
 }
 
@@ -311,7 +329,7 @@ func TestDeviceDebugFailsClosed(t *testing.T) {
 func TestDeviceDebugCollectDiscardsAfterALeak(t *testing.T) {
 	broken := ddRedactSecrets
 	t.Cleanup(func() { ddRedactSecrets = broken })
-	ddRedactSecrets = func(text string, forms []string) string { return text }
+	ddRedactSecrets = func([]string) func(string) string { return func(s string) string { return s } }
 	cmds := deviceDebugCmds["eos"]
 	var ran []string
 	run := func(cmd string) (string, error) {

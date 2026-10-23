@@ -251,6 +251,10 @@ func qualGate(files map[string][]byte, secrets []string) []string {
 		if len(labcreds.Contains(b, secrets)) > 0 {
 			bad = append(bad, name+": holds a credential this run used")
 		}
+		if strings.HasSuffix(name, "-debug.txt") {
+			bad = append(bad, qualDebugGate(name, b)...)
+			continue
+		}
 		for _, f := range qualForbidden {
 			if strings.Contains(string(b), f) {
 				bad = append(bad, fmt.Sprintf("%s: holds %q", name, f))
@@ -258,6 +262,39 @@ func qualGate(files map[string][]byte, secrets []string) []string {
 		}
 		for _, h := range l73SummaryLeaks(string(b)) {
 			bad = append(bad, name+": holds "+h)
+		}
+	}
+	return bad
+}
+
+// qualDebugGate is the gate for a device-debug evidence file (QUAL-DEBUG and
+// L80 `-debug.txt`), which is deviceDebugFilter.Keep's output. That text may say
+// "password" or "secret" (its values are redacted), so it is not refused for the
+// words; it is refused for what Keep drops or masks and must therefore not hold:
+// a payload word, a hex layout or a long run, a key, password or secret
+// followed by anything but <redacted>, a $9$ or crypt hash, a `_sha256` key and
+// a PEM block. The messages name the file and the kind, never the content.
+func qualDebugGate(name string, b []byte) []string {
+	var bad []string
+	for _, f := range []string{"_sha256", "BEGIN "} {
+		if strings.Contains(string(b), f) {
+			bad = append(bad, fmt.Sprintf("%s: holds %q", name, f))
+		}
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if !ddNoteKeptSafe(ln) {
+			bad = append(bad, name+": holds a payload word, a hex layout or a long run")
+			break
+		}
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		redacted := ln
+		for _, s := range ddShapeRedact {
+			redacted = s.re.ReplaceAllString(redacted, s.repl)
+		}
+		if redacted != ln {
+			bad = append(bad, name+": holds a key, password, secret or hash that is not redacted")
+			break
 		}
 	}
 	return bad

@@ -55,7 +55,7 @@ func ddNoteSafe(s string) bool {
 // "challenge" without holding one, so this second gate is the payload word, a
 // hex run and a long run: what Keep drops or masks, so none can be here.
 func ddNoteKeptSafe(s string) bool {
-	return !ddPayload.MatchString(s) && !nxosDebugHexRun.MatchString(s) && !nxosDebugLong.MatchString(s)
+	return !ddPayload.MatchString(s) && !nxosDebugHexRun.MatchString(s) && !ddHexView(s) && !nxosDebugLong.MatchString(s)
 }
 
 // ddNoteLines are the kept lines of cell whose message matches re.
