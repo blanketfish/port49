@@ -1,14 +1,14 @@
-device returned 315 log lines in all; the filter kept 0 of the cell's
+device returned 741 log lines in all; the filter kept 90 of the cell's
 tls connections (header-only capture): 9
-  conn port=60912 syn=01:56:05.680 hold=0.02s end=server-fin
-  conn port=60926 syn=01:56:05.708 hold=0.03s end=server-fin
-  conn port=60942 syn=01:56:05.734 hold=0.03s end=server-fin
-  conn port=60952 syn=01:56:06.066 hold=0.03s end=server-fin
-  conn port=60966 syn=01:56:06.092 hold=0.02s end=server-fin
-  conn port=60974 syn=01:56:06.317 hold=0.02s end=server-fin
-  conn port=60988 syn=01:56:06.345 hold=0.02s end=server-fin
-  conn port=60990 syn=01:56:06.567 hold=0.02s end=server-fin
-  conn port=32772 syn=01:56:06.711 hold=0.03s end=server-fin
+  conn port=34430 syn=02:10:15.369 hold=0.03s end=server-fin
+  conn port=34432 syn=02:10:15.397 hold=0.02s end=server-fin
+  conn port=34440 syn=02:10:15.422 hold=0.03s end=server-fin
+  conn port=34442 syn=02:10:15.756 hold=0.02s end=server-fin
+  conn port=34446 syn=02:10:15.782 hold=0.03s end=server-fin
+  conn port=34448 syn=02:10:16.005 hold=0.03s end=server-fin
+  conn port=34454 syn=02:10:16.035 hold=0.02s end=server-fin
+  conn port=34460 syn=02:10:16.253 hold=0.02s end=server-fin
+  conn port=34468 syn=02:10:16.400 hold=0.02s end=server-fin
 debug connections opened=0 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
 connections that carried more than one request: 0 of 0 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
-THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log
+readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 2

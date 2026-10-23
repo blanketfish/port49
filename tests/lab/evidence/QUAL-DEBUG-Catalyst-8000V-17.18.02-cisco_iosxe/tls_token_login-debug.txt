@@ -1,1 +1,90 @@
-
+02:09:27.567 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:27.567 TPLUS: processing accounting request id <n>
+02:09:27.567 TPLUS: Using server 172.100.100.1
+02:09:27.567 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:27.567 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:27.830 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:27.830 TPLUS: processing accounting request id <n>
+02:09:27.830 TPLUS: Using server 172.100.100.1
+02:09:27.830 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:27.830 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:27.843 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:27.843 TPLUS: processing accounting request id <n>
+02:09:27.843 TPLUS(<masked>)/1/<masked>/<masked>: Started 5 sec timeout
+02:09:27.843 TPLUS(<masked>)/1/<masked>/<masked>: Started 5 sec timeout
+02:09:28.062 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:28.062 TPLUS: processing accounting request id <n>
+02:09:28.062 TPLUS: Using server 172.100.100.1
+02:09:28.062 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:28.062 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:28.063 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:28.063 TPLUS: processing accounting request id <n>
+02:09:28.063 TPLUS(<masked>)/1/<masked>/<masked>: Started 5 sec timeout
+02:09:28.063 TPLUS(<masked>)/1/<masked>/<masked>: Started 5 sec timeout
+02:09:28.312 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:28.312 TPLUS: processing accounting request id <n>
+02:09:28.312 TPLUS: Using server 172.100.100.1
+02:09:28.312 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:28.312 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:09:28.315 TPLUS: Queuing AAA Accounting request <n> for processing
+02:09:28.315 TPLUS: processing accounting request id <n>
+02:09:28.315 TPLUS(<masked>)/1/<masked>/<masked>: Started 5 sec timeout
+02:09:28.315 TPLUS(<masked>)/1/<masked>/<masked>: Started 5 sec timeout
+02:09:29.830 AAA/AUTHEN/LOGIN (<masked>): Pick method list 'default'
+02:09:29.830 TPLUS: Queuing AAA Authentication request <n> for processing
+02:09:29.830 TPLUS: processing authentication start request id <n>
+02:09:29.830 TPLUS: Authentication start packet created for <n>(breakglass)
+02:09:46.168 AAA/AUTHEN/LOGIN (<masked>): Pick method list 'default'
+02:09:46.168 TPLUS: Queuing AAA Authentication request <n> for processing
+02:09:46.168 TPLUS: processing authentication start request id <n>
+02:09:46.168 TPLUS: Authentication start packet created for <n>(breakglass)
+02:10:02.507 AAA/AUTHEN/LOGIN (<masked>): Pick method list 'default'
+02:10:02.507 TPLUS: Queuing AAA Authentication request <n> for processing
+02:10:02.507 TPLUS: processing authentication start request id <n>
+02:10:02.507 TPLUS: Authentication start packet created for <n>(breakglass)
+02:10:02.507 TPLUS: Using server 172.100.100.1
+02:10:02.507 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:02.507 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:02.537 TPLUS: Queuing AAA Authentication request <n> for processing
+02:10:02.537 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:05.040 AAA/AUTHEN/LOGIN (<masked>): Pick method list 'default'
+02:10:05.040 TPLUS: Queuing AAA Authentication request <n> for processing
+02:10:05.040 TPLUS: processing authentication start request id <n>
+02:10:05.040 TPLUS: Authentication start packet created for <n>(breakglass)
+02:10:05.040 TPLUS: Using server 172.100.100.1
+02:10:05.040 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:05.041 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:05.066 TPLUS: Queuing AAA Authentication request <n> for processing
+02:10:05.066 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.353 AAA/AUTHEN/LOGIN (<masked>): Pick method list 'default'
+02:10:15.353 TPLUS: Queuing AAA Authentication request <n> for processing
+02:10:15.353 TPLUS: processing authentication start request id <n>
+02:10:15.353 TPLUS: Authentication start packet created for <n>(<masked>)
+02:10:15.353 TPLUS: Using server 172.100.100.1
+02:10:15.353 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.353 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.378 TPLUS: Queuing AAA Authentication request <n> for processing
+02:10:15.378 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.381 TPLUS: Queuing AAA Authorization request <n> for processing
+02:10:15.381 TPLUS: processing authorization request id <n>
+02:10:15.381 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.381 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.406 TPLUS: Queuing AAA Accounting request <n> for processing
+02:10:15.406 TPLUS: processing accounting request id <n>
+02:10:15.406 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.406 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.766 TAC+: (<n>): received author response status = PASS_ADD
+02:10:15.767 TPLUS: Queuing AAA Accounting request <n> for processing
+02:10:15.767 TPLUS: processing accounting request id <n>
+02:10:15.767 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:15.767 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:16.016 TAC+: (<n>): received author response status = PASS_ADD
+02:10:16.016 TPLUS: Queuing AAA Accounting request <n> for processing
+02:10:16.016 TPLUS: processing accounting request id <n>
+02:10:16.016 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:16.016 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:16.262 TAC+: (<n>): received author response status = FAIL
+02:10:16.384 TPLUS: Queuing AAA Accounting request <n> for processing
+02:10:16.384 TPLUS: processing accounting request id <n>
+02:10:16.384 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
+02:10:16.384 TPLUS(<masked>)/0/<masked>/<masked>: Started 5 sec timeout
