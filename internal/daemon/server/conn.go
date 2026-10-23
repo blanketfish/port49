@@ -293,6 +293,17 @@ func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 	s.backoff(ctx, "malformed_backoff")
 }
 
+// badTLSHeader holds the backoff for a header on the RFC 9887 listener that
+// fails ValidateTLS for a reason other than the obfuscated flag. As in
+// protocolError, the TLS handle is dropped before the hold, so a shutdown
+// during it sends no close_notify either.
+func (s *conn) badTLSHeader(ctx context.Context, h wire.Header) {
+	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
+	s.tlsc.Store(nil)
+	s.c = s.raw
+	s.backoff(ctx, "malformed_backoff")
+}
+
 func (s *conn) serve(ctx context.Context) {
 	// s.c becomes the TLS connection after a handshake: Close it as it is
 	// then, so a TLS peer gets close_notify. An offer is released first, so
@@ -395,8 +406,7 @@ func (s *conn) serve(ctx context.Context) {
 					s.obfuscatedOverTLS(h)
 					return
 				}
-				s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
-				s.backoff(ctx, "malformed_backoff")
+				s.badTLSHeader(ctx, h)
 				return
 			}
 		} else if err := h.Validate(); err != nil {

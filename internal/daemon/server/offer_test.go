@@ -750,3 +750,36 @@ func TestProtocolErrorClearsTheTLSHandleBeforeItsHold(t *testing.T) {
 		t.Fatal("the TLS handle is still set during the backoff hold: a shutdown now would send close_notify")
 	}
 }
+
+// A header that fails ValidateTLS drops the TLS handle before its hold, as
+// protocolError does, so the two paths for a device sending garbage over TLS
+// end alike.
+func TestBadTLSHeaderClearsTheTLSHandleBeforeItsHold(t *testing.T) {
+	var deps *Deps
+	log := &syncBuffer{}
+	newTestServerWith(t, log, seededStore(t), nil, func(d *Deps) {
+		d.Limits = slowBackoff()
+		deps = d
+	})
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	s := &conn{d: *deps, c: a, raw: a, src: loopback}
+	s.tlsc.Store(tls.Client(a, &tls.Config{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); s.badTLSHeader(ctx, wire.Header{Type: wire.TypeAuthen, SeqNo: 1}) }()
+	defer func() { cancel(); <-done }()
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"not_tacacs"`) }) {
+		t.Fatal("no unvalidated record")
+	}
+	time.Sleep(50 * time.Millisecond) // well inside slowBackoff's 5 s hold
+	select {
+	case <-done:
+		t.Fatal("the backoff did not hold")
+	default:
+	}
+	if s.tlsc.Load() != nil {
+		t.Fatal("the TLS handle is still set during the backoff hold: a shutdown now would send close_notify")
+	}
+}
