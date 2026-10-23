@@ -6,7 +6,7 @@
 - **Topology:** `tests/lab/topologies/vjunos26.clab.yml`
 - **Capture:** `tests/lab/evidence/QUAL-DEBUG-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap` — 1016 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/QUAL-DEBUG-vJunos-router-26.2R1.7-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
-- **Run:** commit `657c057edf50ac8ead06911b8c18be230ab6cb9c`, `PORT49_LAB_PLATFORMS=vjunos26`, `-run ^TestQualify$`
+- **Run:** commit `7a51f17e3c895308a903c4a623ac29a6cb23a936`, `PORT49_LAB_PLATFORMS=vjunos26`, `-run ^TestQualify$`
 
 ## Claim
 
@@ -18,25 +18,42 @@ Platform juniper_vjunos-router, image vJunos-router 26.2R1.7. Debug on: `set cli
 
 ### What the filter kept
 
-- `tls_token_login`: the device returned 441 log lines and the filter kept 200 (0 connection open/close, 0 request, 200 other); the capture holds 2 TLS connection(s).
-  Lines dropped by rule: facility=247 body_word=0 hex_view=1 hex_message=0 evidence_marker=0 known_value_hex=0.
-  - debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
-  - capture: `conn port=36914 syn=15:49:08.343 hold=0.01s end=server-fin`
-  - capture: `conn port=36928 syn=15:49:08.665 hold=open end=open`
+- `tls_token_login`: the device returned 438 log lines and the filter kept 312 (8 connection open/close, 0 request, 304 other); the capture holds 2 TLS connection(s).
+  Lines dropped by rule: facility=125 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0.
+  - debug connections opened=8 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
+  - debug connection 1: opened=16:35:25.666815 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 2: opened=16:35:25.667148 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 3: opened=16:35:25.667158 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 4: opened=16:35:25.667172 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 5: opened=16:35:25.667181 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 6: opened=16:35:25.667190 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 7: opened=16:35:25.667199 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 8: opened=16:35:25.667207 closed=unknown reason="" authen=0 author=0 acct=0.
+  - capture: `conn port=39402 syn=16:40:41.323 hold=0.01s end=server-fin`
+  - capture: `conn port=39416 syn=16:40:46.074 hold=open end=open`
   - readiness probe connections after debug went on, before the cell (in the log, not in the cell's TLS connections): 1.
-- `tls_unknown_ca`: the device returned 249 log lines and the filter kept 41 (0 connection open/close, 0 request, 41 other); the capture holds 2 TLS connection(s).
-  Lines dropped by rule: facility=214 body_word=0 hex_view=1 hex_message=0 evidence_marker=0 known_value_hex=0.
-  - debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
-  - capture: `conn port=46160 syn=15:49:56.062 hold=0.01s end=device-fin`
-  - capture: `conn port=46172 syn=15:49:56.067 hold=0.00s end=server-rst`
+- `tls_unknown_ca`: the device returned 255 log lines and the filter kept 157 (8 connection open/close, 0 request, 149 other); the capture holds 3 TLS connection(s).
+  Lines dropped by rule: facility=97 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0.
+  - debug connections opened=8 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0.
+  - debug connection 1: opened=16:41:18.151527 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 2: opened=16:41:18.151568 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 3: opened=16:41:18.151592 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 4: opened=16:41:18.151601 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 5: opened=16:41:18.151609 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 6: opened=16:41:18.151619 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 7: opened=16:41:18.151627 closed=unknown reason="" authen=0 author=0 acct=0.
+  - debug connection 8: opened=16:41:18.151635 closed=unknown reason="" authen=0 author=0 acct=0.
+  - capture: `conn port=38636 syn=16:41:28.629 hold=0.01s end=device-fin`
+  - capture: `conn port=38638 syn=16:41:28.634 hold=0.00s end=server-rst`
+  - capture: `conn port=38654 syn=16:41:28.638 hold=0.00s end=server-rst`
   - readiness probe connections after debug went on, before the cell (in the log, not in the cell's TLS connections): 1.
 
 This platform's two debug files are joined in order, not merged by time, so a request is attributed to the last connection opened in the trace, not necessarily the one it was sent on; and neither file has a close line.
 
 ### Open questions
 
-- **Which debug line marks a connection open?** Unmeasured: no kept line is a connection open.
-- **tls_token_login: why does the device open a second connection?** Unmeasured: the capture holds 2 connections and the kept debug marks 0 open(s).
+- **Which debug line marks a connection open?** `tls_token_login`: `Oct 23 16:35:25.666815 <LONG> opened` (8 in the cell); `tls_unknown_ca`: `Oct 23 16:41:18.151527 <LONG> opened` (8 in the cell).
+- **tls_token_login: why does the device open a second connection?** The debug shows the second open at `Oct 23 16:35:25.667148 <LONG> opened`, after `Oct 23 16:35:25.666826 Read persistent Address Reservations  encodeType 3`. That is the line that comes before it, not a stated cause.
 - **How does a connection end?** Unmeasured: this platform's debug has no close line, and no kept line states a TLS failure.
 - **Do requests ride one connection together (pipelining)?** Unmeasured: no kept line is a request.
 
@@ -77,7 +94,7 @@ Closed alphabet: a vocabulary word, `A` for an address and `_` for any other spa
 - `show log p49-tacplus.log => _ sent _`
 - `show log p49-tacplus.log => _ default _ default _ default _`
 
-`tls_unknown_ca`: 54 shape(s), the first 30
+`tls_unknown_ca`: 52 shape(s), the first 30
 
 - `show log p49-tacplus.log => _ server _ name _`
 - `show log p49-tacplus.log => _ accounting _`
