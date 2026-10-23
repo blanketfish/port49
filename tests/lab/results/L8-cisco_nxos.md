@@ -1,11 +1,12 @@
 # L8 — cisco_nxos
 
-- **Date measured:** 2026-09-23
+- **Date measured:** 2026-10-23
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/evidence/L8-cisco_nxos.pcap` — 730 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L8-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L8-cisco_nxos.pcap` — 712 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L8-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
+- **Run:** commit `2ebd3b3026ccb01b30ffd3fd3a54a69c985b4eff`, `PORT49_LAB_PLATFORMS=nxos`, `-run ^TestL8PasswordLength$`
 
 ## Claim
 
