@@ -34,9 +34,13 @@ description = "TACACS+ shared key in a device config line"
 regex = '''(?i)(?:tacacs-server (?:host \S+ )?key|tacacs\S*[^\n]{0,80}\skey|\bkey 0)\s+(?:[0-7]\s+)?[^\s"'<>$%{}()\[\]]{4,}'''
 keywords = ["key"]
 
-# To add an entry: one [[allowlists]] block, one file (paths) or one regex, a `description`
-# that says why the value is deliberate. Never a directory. `make leaks` runs in CI on
-# every push and PR (.github/workflows/leaks.yml). Run it with --redact only.
+# To add an entry: one [[allowlists]] block with a `description` that says why the value is
+# deliberate. Prefer one regex, or one file (paths); never a directory. For a finding that
+# exists only in history, or a single line, prefer a commit-scoped fingerprint in
+# .gitleaksignore (`<full sha>:<file>:<rule>:<line>`). NEVER add a fingerprint without a
+# commit: it hides that line in every future commit. A fingerprint holds no value; get it from
+# a `--redact` JSON report's Fingerprint field. `make leaks` runs in CI on every push and PR
+# (.github/workflows/leaks.yml). Run it with --redact only.
 [[allowlists]]
 description = "RFC 7515 appendix A.2 and A.3 example JWS: public test vectors from the RFC, used to test signature verification"
 condition = "OR"
@@ -115,7 +119,6 @@ paths = [
   '''^docs/design/2026-08-26-spec-review-findings\.md$''',
   '''^docs/superpowers/plans/2026-09-30-06b-inventory-service\.md$''',
   '''^docs/superpowers/plans/2026-10-19-11b-qualification-suite\.md$''',
-  '''^tests/lab/results/L4-error-arista_eos\.md$''',
   '''^tests/lab/device_debug_unit_test\.go$''',
   '''^tests/lab/l71_unit_test\.go$''',
   '''^tests/lab/l73_dialect_unit_test\.go$''',
@@ -201,12 +204,6 @@ paths = [
 description = "unix-crypt-hash: crypt of the lab break-glass password in the vJunos startup config"
 targetRules = ["unix-crypt-hash"]
 paths = ['''^tests/lab/configs/vjunos-startup\.conf$''']
-
-# Pre-minting static lab seed tokens (labcreds.TokenPrefix), history only; removed 2026-09-22.
-[[allowlists]]
-description = "generic-api-key: pre-minting static lab seed tokens in tests/lab/transport_test.go history"
-targetRules = ["generic-api-key"]
-paths = ['''^tests/lab/transport_test\.go$''']
 
 # The English word in prose ("a $9$-encrypted value"). The hyphen in the junos-type9 class
 # makes the rule read it as a $9$ secret; the exact word is not one.
