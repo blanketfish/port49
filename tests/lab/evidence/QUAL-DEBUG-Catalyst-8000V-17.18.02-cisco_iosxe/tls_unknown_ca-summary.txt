@@ -1,7 +1,7 @@
 device debug arm, platform iosxe, cell tls_unknown_ca
 device returned 517 log lines in all; the filter kept 66 of the cell's
 tls connections (header-only capture): 1
-  conn port=44054 syn=02:11:39.522 hold=0.06s end=device-fin
+  conn port=48130 syn=02:44:50.306 hold=0.06s end=server-rst
 debug connections opened=0 closed=0 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
 connections that carried more than one request: 0 of 0 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 2
