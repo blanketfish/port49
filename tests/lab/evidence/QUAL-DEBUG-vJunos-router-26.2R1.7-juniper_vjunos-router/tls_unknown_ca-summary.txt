@@ -1,13 +1,15 @@
 device debug arm, platform junos, cell tls_unknown_ca
-device returned 246 log lines in all; the filter kept 157 of the cell's
+device returned 248 log lines in all; the filter kept 159 of the cell's
 tls connections (header-only capture): 2
-  conn port=41408 syn=04:02:44.612 hold=0.01s end=server-rst
-  conn port=41416 syn=04:02:44.618 hold=0.00s end=server-rst
+  conn port=32798 syn=05:47:16.358 hold=0.01s end=server-rst
+  conn port=32808 syn=05:47:16.364 hold=0.00s end=server-rst
 debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0
-  debug conn 1: opened=before closed=unknown reason="" authen=0 author=0 acct=2
+  debug conn 1: opened=before closed=unknown reason="" authen=0 author=0 acct=2 requests=2
 note: this platform's two debug files are joined in order, not merged by time, so a request is attributed to the last connection opened in the trace, not necessarily the one it was sent on
-connections that carried more than one request: 1 of 1 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+requests not placed on a connection: 2 (no kept open line starts them; they are not a connection)
+connections that carried more than one request: unmeasured (this platform's trace requests cannot be placed on a connection)
 lines dropped by rule: facility=88 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0
-traceoptions flag words: address-assignment all configuration framework gx-plus jsrc ldap lib-stats local-authentication nas-5g nasreq ocs-backup profile-db radius s6a saml session-db syntax user-access
-syslog process tags (counts only): mgd=38 sshd=35 jlaunchd=9 authd=5 auditd=2 clear-log=2 alarmd=1 kernel=1 nas5g=1 recovery=1 sync-event=1 other=155
+traceoptions flag words: address-assignment all configuration framework gx-plus jsrc ldap lib-stats local-authentication nas-5g nasreq ocs-backup profile-db radius s6a saml session-db user-access
+<LONG>
+syslog process tags (counts only): mgd=38 sshd=35 jlaunchd=9 authd=5 auditd=4 alarmd=1 clear-log=1 kernel=1 other=4
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 1

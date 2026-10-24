@@ -1,12 +1,14 @@
-device returned 450 log lines in all; the filter kept 314 of the cell's
+device returned 446 log lines in all; the filter kept 314 of the cell's
 tls connections (header-only capture): 2
-  conn port=56862 syn=04:01:57.178 hold=0.01s end=server-fin
-  conn port=56870 syn=04:01:57.395 hold=open end=open
+  conn port=35362 syn=05:46:21.192 hold=0.01s end=server-fin
+  conn port=35374 syn=05:46:25.673 hold=open end=open
 debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0
-  debug conn 1: opened=before closed=unknown reason="" authen=0 author=0 acct=5
+  debug conn 1: opened=before closed=unknown reason="" authen=0 author=0 acct=3 requests=3
 note: this platform's two debug files are joined in order, not merged by time, so a request is attributed to the last connection opened in the trace, not necessarily the one it was sent on
-connections that carried more than one request: 1 of 1 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
-lines dropped by rule: facility=135 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0
-traceoptions flag words: address-assignment all configuration framework gx-plus jsrc ldap lib-stats local-authentication nas-5g nasreq ocs-backup profile-db radius s6a saml session-db syntax user-access
-syslog process tags (counts only): mgd=60 jlaunchd=28 sshd=26 authd=6 auditd=5 rpd=4 kernel=3 alarmd=2 ppmd=2 nas5g=1 recovery=1 sdk-vmmd=1 sync-event=1 other=315
+requests not placed on a connection: 3 (no kept open line starts them; they are not a connection)
+connections that carried more than one request: unmeasured (this platform's trace requests cannot be placed on a connection)
+lines dropped by rule: facility=131 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0
+traceoptions flag words: address-assignment all configuration framework gx-plus jsrc ldap lib-stats local-authentication nas-5g nasreq ocs-backup profile-db radius s6a saml session-db user-access
+<LONG>
+syslog process tags (counts only): mgd=60 sshd=26 jlaunchd=24 authd=6 auditd=5 rpd=4 kernel=3 alarmd=2 ppmd=2 sdk-vmmd=1 other=10
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 1
