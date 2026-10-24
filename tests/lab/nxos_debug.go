@@ -72,19 +72,33 @@ func nxosDebugCounts(kept string) map[string]int {
 // harness was setting up, which say nothing about the cell.
 var nxosSetupMarkers = []string{"mark_server_dead", "fall_back_none", "ssl_open_failed", "ssl_open_retry"}
 
-// nxosCellWindow splits kept at the cell's first `nxos_ssl_open success`: what
-// came before is the setup phase. The setup's own request line (`aaa type:`) and
-// its failed opens and dead lines come before it, while port49d is stopped, and
-// the setup never succeeds in opening. With no such line the window is unmeasured
-// (ok is false) and nothing is graded from it.
+// nxosCellWindow splits kept at the cell's request: the last `aaa type:` line at
+// or before the cell's first `nxos_ssl_open success`. What came before is the
+// setup phase. The setup's own request, failed opens and dead lines come first,
+// while port49d is stopped; the cell's request line comes before its open (a
+// retry can sit between them), so the first success alone would lose the retry.
+// With no success the window is unmeasured (ok is false) and nothing is graded
+// from it.
 func nxosCellWindow(kept string) (setup, cell string, ok bool) {
 	lines := strings.Split(kept, "\n")
+	first := -1
 	for i, ln := range lines {
 		if nxosDebugMarkers["ssl_open_success"].MatchString(ln) {
-			return strings.Join(lines[:i], "\n"), strings.Join(lines[i:], "\n"), true
+			first = i
+			break
 		}
 	}
-	return kept, "", false
+	if first < 0 {
+		return kept, "", false
+	}
+	start := first
+	for i := first; i >= 0; i-- {
+		if strings.Contains(lines[i], "aaa type:") {
+			start = i
+			break
+		}
+	}
+	return strings.Join(lines[:start], "\n"), strings.Join(lines[start:], "\n"), true
 }
 
 // nxosWindowedCounts is nxosDebugCounts over the cell window (window_unmeasured=1

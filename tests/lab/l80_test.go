@@ -374,6 +374,7 @@ func TestL80Remeasure(t *testing.T) {
 			for _, k := range nxosSetupMarkers {
 				ks = append(ks, fmt.Sprintf("setup_%s=%d", k, cnt["setup_"+k]))
 			}
+			ks = append(ks, fmt.Sprintf("window_unmeasured=%d", cnt["window_unmeasured"]))
 			slices.Sort(ks)
 			sum.WriteString("debug counts: " + strings.Join(ks, " ") + "\n")
 			// Each fallback with the request before it, for the note's

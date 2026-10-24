@@ -105,9 +105,24 @@ func nxosRestartFixture() string {
 		t("05:00:01.000002", "nxos_ssl_open failed"),
 		t("05:00:01.000003", "aaa_mark_server_dead 1"),
 		t("05:00:01.000004", "aaa_mark_server_dead :  Idle time is 0. Server will not be monitored"),
-		t("05:00:46.000001", "nxos_ssl_open success"),
-		t("05:00:46.000002", "construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5"),
-		t("05:00:46.000003", "nxos_ssl_retry_open"),
+		// the cell: its request, the first open fails, the retry 5 s later succeeds
+		t("05:00:46.000001", "construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5"),
+		t("05:00:46.000002", "after nxos_ssl_open rc -1"),
+		t("05:00:51.000002", "nxos_ssl_retry_open"),
+		t("05:00:51.000003", "nxos_ssl_open success"),
+	}, "\n")
+}
+
+// nxosDeadInCellFixture is a cell whose own first open marks the server dead
+// before a later success: that dead line belongs to the cell.
+func nxosDeadInCellFixture() string {
+	t := func(clock, msg string) string { return clock + " tacacsd: " + msg }
+	return strings.Join([]string{
+		t("05:00:01.000001", "construct_tac_req(1563):aaa session id: 3, aaa type: 3, user_len=5"),
+		t("05:00:46.000001", "construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5"),
+		t("05:00:46.000002", "after nxos_ssl_open rc -1"),
+		t("05:00:46.000003", "aaa_mark_server_dead 1"),
+		t("05:00:51.000003", "nxos_ssl_open success"),
 	}, "\n")
 }
 
@@ -128,8 +143,12 @@ func TestNXOSCountsAreOverTheCellWindowAndSetupApart(t *testing.T) {
 	if c["mark_server_dead"] != 0 || c["setup_mark_server_dead"] != 1 || c["ssl_open_failed"] != 0 || c["setup_ssl_open_failed"] != 1 {
 		t.Errorf("setup lines leaked into the cell counts: %v", c)
 	}
-	if c["ssl_open_retry"] != 1 || c["ssl_open_success"] != 1 || c["request_authen"] != 1 || c["request_acct"] != 0 {
+	if c["ssl_open_retry"] != 1 || c["setup_ssl_open_retry"] != 0 || c["ssl_open_success"] != 1 || c["request_authen"] != 1 || c["request_acct"] != 0 {
 		t.Errorf("cell counts: %v", c)
+	}
+	d := nxosWindowedCounts(nxosDeadInCellFixture())
+	if d["mark_server_dead"] != 1 || d["setup_mark_server_dead"] != 0 {
+		t.Errorf("the cell's own dead line was put in setup: %v", d)
 	}
 	// no open of the cell: the window is unmeasured, not the whole file
 	if c := nxosWindowedCounts("05:00:01.000002 tacacsd: aaa_mark_server_dead 1"); c["window_unmeasured"] != 1 || c["mark_server_dead"] != 0 {
