@@ -1,474 +1,528 @@
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Dispatching Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Invoke api for Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: author Options send : 64
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Option : 64
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Reuse address option set on socket
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Dispatching Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Invoke api for Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: AUTH Options send : 0
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Option : 0
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:33.989 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Dispatching Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Invoke api for Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: author Options send : 64
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Option : 64
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:33.995 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: ACCT Options send : 128
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Option : 128
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:33.999 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: ACCT Options send : 131
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Option : 131
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:34.012 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:34.013 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:34.013 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: ACCT Options send : 131
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Option : 131
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:34.014 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:35.078 UTC: tacacsd[1139]: Errno set as :Resource temporarily unavailable
-RP/0/RP0/CPU0:Oct 23 16:52:35.342 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe thread failed in socket connect (errno=110) Connection timed out, sleeping for 20 seconds
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Dispatching Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Invoke api for Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: AUTH Options send : 0
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Option : 0
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:50.402 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Dispatching Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Invoke api for Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: author Options send : 64
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Option : 64
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:50.408 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: ACCT Options send : 128
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Option : 128
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:50.412 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: ACCT Options send : 131
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Option : 131
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:50.426 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: ACCT Options send : 131
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Option : 131
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:52:50.428 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:52:55.342 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe attempt 2
-RP/0/RP0/CPU0:Oct 23 16:52:55.343 UTC: tacacsd[1139]: [172.100.100.1/300] Socket created (prob) : 1000083
-RP/0/RP0/CPU0:Oct 23 16:52:55.344 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
-RP/0/RP0/CPU0:Oct 23 16:52:55.405 UTC: tacacsd[1139]: TACACS+ server 172.100.100.1/300 is now UP
-RP/0/RP0/CPU0:Oct 23 16:52:55.405 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe counter reset after successful connection, server marked UP
-RP/0/RP0/CPU0:Oct 23 16:52:55.405 UTC: tacacsd[1139]: Found thread structure pointer in cancellation routine
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Dispatching Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Invoke api for Message type : 3
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: AUTH Options send : 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Option : 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.082 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Reuse address option set on socket
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Keepalive option set on socket
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Connection success!!
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Socket connected successfully
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Socket 1000084 to 172.100.100.1/300 opened
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Connection ready status : Success[0][opt0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: [AUTHEN] Remove the terminating null char
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: Server present in the HostQ
-RP/0/RP0/CPU0:Oct 23 16:53:03.083 UTC: tacacsd[1139]: [<LONG>] Add entry in timer->list: 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [tacacs_connect_handler] enter
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [<LONG>] bytes to write : 34 cnt : 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :34 : action : 1 sock_fd:1000084
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] reading data: 30
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] Exit bytes read : 34
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: Attach socket handler for condition 0x10A [fd: 1000084]
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :1
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.134 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: %<LONG> : SSL_write operation with TACACS+ server 172.100.100.1/300 failed [server-private: No], SSL Error:System call error.
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: Enter free/remove timer
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: No more TACACS+ servers to try
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'Invalid Argument'
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: queue trylock- success
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: conditional var destroy : [0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: register for detach
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [<LONG>] Entry action : 2
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [<LONG>] bytes to write : 8 cnt : 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :8 : action : 2 sock_fd:1000084
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] reading data: 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] Exit bytes read : 8
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation for fd: 1000084
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: closing the socket 1000084
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:0)
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :2
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.416 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Dispatching Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Invoke api for Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: author Options send : 64
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Option : 64
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Reuse address option set on socket
-RP/0/RP0/CPU0:Oct 23 16:53:03.475 UTC: tacacsd[1139]: Keepalive option set on socket
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Connection success!!
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Socket connected successfully
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Socket 1000085 to 172.100.100.1/300 opened
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Connection ready status : Success[0][opt64]
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: [AUTHOR] Remove the terminating null char
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Unsupported method <notset>
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: [AUTHOR] Authen vars mthd 0 meth 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Server present in the HostQ
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: [session 1B] packet AUTHOR/START selected server 172.100.100.1/300 socket 1000085 TLS: Enabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: Encrypted: [session 1B] packet AUTHOR/START selected server 172.100.100.1/300 socket 1000085 TLS: Enabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.476 UTC: tacacsd[1139]: [<LONG>] Add entry in timer->list: 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_connect_handler] enter
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_connect_handler] event for sock 1000085 ev 2 session_id 27
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_connect_handler] Checking req 27 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: Session_id is 27
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: Session_id is 27
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [<LONG>] bytes to write : 28 cnt : 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :28 : action : 1 sock_fd:1000085
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] reading data: 24
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] Exit bytes read : 28
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [<LONG>] Session_id is 27
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: Attach socket handler for condition 0x10A [fd: 1000085]
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :1
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.527 UTC: tacacsd[1139]: [tacacs_sock_handler] event for sock 1000085 ev 2 session_id 27
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: %<LONG> : Connection to TACACS+ server 172.100.100.1/300 failed [server-private: No], SSL Error:System call error.
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: Failed to connect to server 172.100.100.1/300 socket 1000085 - Success
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe attempt 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: Enter free/remove timer
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: No more TACACS+ servers to try
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'Invalid Argument'
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: queue trylock- success
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: conditional var destroy : [0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: register for detach
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [<LONG>] Entry action : 2
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [<LONG>] bytes to write : 8 cnt : 0
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :8 : action : 2 sock_fd:1000085
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] reading data: 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] Exit bytes read : 8
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation for fd: 1000085
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: closing the socket 1000085
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:0)
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :2
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] reading : 4
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
-RP/0/RP0/CPU0:Oct 23 16:53:03.538 UTC: tacacsd[1139]: [172.100.100.1/300] Socket created (prob) : 1000086
-RP/0/RP0/CPU0:Oct 23 16:53:03.539 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: ACCT Options send : 128
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Option : 128
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:53:03.543 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: ACCT Options send : 131
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Option : 131
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:53:03.556 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Dispatching Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Invoke api for Message type : 7
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: ACCT Options send : 131
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Option : 131
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.557 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
-RP/0/RP0/CPU0:Oct 23 16:53:03.558 UTC: tacacsd[1139]: Delete session_id entry in timer_db
-RP/0/RP0/CPU0:Oct 23 16:53:03.590 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe counter reset after successful connection, server marked UP
-RP/0/RP0/CPU0:Oct 23 16:53:03.590 UTC: tacacsd[1139]: Found thread structure pointer in cancellation routine
-RP/0/RP0/CPU0:Oct 23 16:53:08.476 UTC: tacacsd[1139]: Errno set as :Resource temporarily unavailable
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Dispatching Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Invoke api for Message type : 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: author Options send : 64
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Enter enque function
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Option : 64
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
-RP/0/RP0/CPU0:Oct 23 16:53:08.808 UTC: tacacsd[1139]: Keepalive option set on socket
-RP/0/RP0/CPU0:xrd1#RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: Connection success!!
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: Socket connected successfully
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: Socket 1000087 to 172.100.100.1/300 opened
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: Connection ready status : Success[0][opt64]
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: [AUTHOR] Remove the terminating null char
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: [AUTHOR] Authen vars mthd 2 meth 5
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: Server present in the HostQ
-RP/0/RP0/CPU0:Oct 23 16:53:08.809 UTC: tacacsd[1139]: [<LONG>] Add entry in timer->list: 0
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [tacacs_connect_handler] enter
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [<LONG>] bytes to write : 34 cnt : 0
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :34 : action : 1 sock_fd:1000087
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [read_data] Entry
-RP/0/RP0/CPU0:Oct 23 16:53:08.860 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Dispatching Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Invoke api for Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: author Options send : 64
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Option : 64
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Reuse address option set on socket
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Dispatching Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Invoke api for Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: AUTH Options send : 0
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Option : 0
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:36.616 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Dispatching Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Invoke api for Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: author Options send : 64
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Option : 64
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.623 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.624 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.624 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:36.624 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: ACCT Options send : 128
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Option : 128
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:36.627 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: ACCT Options send : 131
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Option : 131
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:36.640 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: ACCT Options send : 131
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Option : 131
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:36.643 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:37.693 UTC: tacacsd[1139]: Errno set as :Resource temporarily unavailable
+RP/0/RP0/CPU0:Oct 24 05:17:37.914 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe thread failed in socket connect (errno=110) Connection timed out, sleeping for 20 seconds
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Dispatching Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Invoke api for Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: AUTH Options send : 0
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Option : 0
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:53.053 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Dispatching Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Invoke api for Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: author Options send : 64
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Option : 64
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:53.061 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: ACCT Options send : 128
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Option : 128
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:53.065 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: ACCT Options send : 131
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Option : 131
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:53.078 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: ACCT Options send : 131
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Option : 131
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:17:53.080 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:17:57.914 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe attempt 2
+RP/0/RP0/CPU0:Oct 24 05:17:57.915 UTC: tacacsd[1139]: [172.100.100.1/300] Socket created (prob) : 1000084
+RP/0/RP0/CPU0:Oct 24 05:17:57.916 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:Oct 24 05:17:57.977 UTC: tacacsd[1139]: TACACS+ server 172.100.100.1/300 is now UP
+RP/0/RP0/CPU0:Oct 24 05:17:57.977 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe counter reset after successful connection, server marked UP
+RP/0/RP0/CPU0:Oct 24 05:17:57.977 UTC: tacacsd[1139]: Found thread structure pointer in cancellation routine
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Dispatching Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Invoke api for Message type : 3
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: AUTH Options send : 0
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Option : 0
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Reuse address option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Keepalive option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Connection success!!
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Socket connected successfully
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Socket 1000085 to 172.100.100.1/300 opened
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Connection ready status : Success[0][opt0]
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: [AUTHEN] Remove the terminating null char
+RP/0/RP0/CPU0:Oct 24 05:18:05.736 UTC: tacacsd[1139]: Server present in the HostQ
+RP/0/RP0/CPU0:Oct 24 05:18:05.737 UTC: tacacsd[1139]: [<LONG>] Add entry in timer->list: 0
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [tacacs_connect_handler] enter
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [<LONG>] bytes to write : 34 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :34 : action : 1 sock_fd:1000085
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] reading data: 30
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] Exit bytes read : 34
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: Attach socket handler for condition 0x10A [fd: 1000085]
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :1
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:05.788 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: Incrementing Authentication counter
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [<LONG>] bytes to write : 34 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :34 : action : 1 sock_fd:1000085
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] reading data: 30
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] Exit bytes read : 34
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: Attach socket handler for condition 0x109 [fd: 1000085]
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :1
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: %<LONG> : SSL_read operation with TACACS+ server 172.100.100.1/300 failed [server-private: No], SSL Error:System call error.
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: Incrementing timeout counter for authentication
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [<LONG>] Entry action : 2
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [<LONG>] bytes to write : 8 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:06.070 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :8 : action : 2 sock_fd:1000085
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: Reuse address option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: Keepalive option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: Connection success!!
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: Socket connected successfully
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: Socket 1000086 to 172.100.100.1/300 opened
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] reading data: 4
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] Exit bytes read : 8
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation for fd: 1000085
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: closing the socket 1000085
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: CHECK_LIMIT current: 1 (qsize:0)
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :2
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:06.071 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: Errno set as :Resource temporarily unavailable
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: Timer hit for TACACS_REQ_TIMER
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [<LONG>] sock_st->socket = 1000086, sock_st->attach_progress value 2
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [<LONG>] return global holddown time
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [<LONG>] No Holddown required for 172.100.100.1/300, calling timeout probe, time = 0
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [tacacs_timeout_probe] Server is up!
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [tacacs_timeout_probe] probe creation success
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [<LONG>] Timer Stoped for key:
+RP/0/RP0/CPU0:Oct 24 05:18:11.071 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe attempt 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.072 UTC: tacacsd[1139]: [172.100.100.1/300] Socket created (prob) : 1000087
+RP/0/RP0/CPU0:Oct 24 05:18:11.072 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:Oct 24 05:18:11.124 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe counter reset after successful connection, server marked UP
+RP/0/RP0/CPU0:Oct 24 05:18:11.124 UTC: tacacsd[1139]: Found thread structure pointer in cancellation routine
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: queue trylock- success
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: conditional var destroy : [0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: register for detach
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [<LONG>] Entry action : 2
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [<LONG>] bytes to write : 8 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :8 : action : 2 sock_fd:1000086
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: Enter free/remove timer
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: No more TACACS+ servers to try
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'Invalid Argument'
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] reading data: 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] Exit bytes read : 8
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation for fd: 1000086
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: closing the socket 1000086
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:0)
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :2
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.171 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Dispatching Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Invoke api for Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: author Options send : 64
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Option : 64
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Reuse address option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Keepalive option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Connection success!!
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Socket connected successfully
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Socket 1000088 to 172.100.100.1/300 opened
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Connection ready status : Success[0][opt64]
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: [AUTHOR] Remove the terminating null char
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Unsupported method <notset>
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: [AUTHOR] Authen vars mthd 0 meth 0
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Server present in the HostQ
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: [session 1A] packet AUTHOR/START selected server 172.100.100.1/300 socket 1000088 TLS: Enabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: Encrypted: [session 1A] packet AUTHOR/START selected server 172.100.100.1/300 socket 1000088 TLS: Enabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.179 UTC: tacacsd[1139]: [<LONG>] Add entry in timer->list: 0
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_connect_handler] enter
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_connect_handler] event for sock 1000088 ev 2 session_id 26
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_connect_handler] Checking req 26 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: Session_id is 26
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: Session_id is 26
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [<LONG>] bytes to write : 28 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :28 : action : 1 sock_fd:1000088
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] reading data: 24
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] Exit bytes read : 28
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [<LONG>] Session_id is 26
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: Attach socket handler for condition 0x10A [fd: 1000088]
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :1
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.230 UTC: tacacsd[1139]: [tacacs_sock_handler] event for sock 1000088 ev 2 session_id 26
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: %<LONG> : Connection to TACACS+ server 172.100.100.1/300 failed [server-private: No], SSL Error:System call error.
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: Failed to connect to server 172.100.100.1/300 socket 1000088 - Success
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe attempt 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: Enter free/remove timer
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: No more TACACS+ servers to try
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'Invalid Argument'
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: queue trylock- success
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: conditional var destroy : [0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: register for detach
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [<LONG>] Entry action : 2
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [<LONG>] bytes to write : 8 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :8 : action : 2 sock_fd:1000088
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] reading data: 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] Exit bytes read : 8
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Detach operation for fd: 1000088
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: closing the socket 1000088
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:0)
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Done with action :2
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] reading : 4
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [read_data] reading : 4 attempt: 1
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Exit, No data available to read from fd :193
+RP/0/RP0/CPU0:Oct 24 05:18:11.240 UTC: tacacsd[1139]: [172.100.100.1/300] Socket created (prob) : 1000089
+RP/0/RP0/CPU0:Oct 24 05:18:11.241 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: ACCT Options send : 128
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Option : 128
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:18:11.244 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: ACCT Options send : 131
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Option : 131
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:18:11.258 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Dispatching Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Invoke api for Message type : 7
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: ACCT Options send : 131
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Option : 131
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: [tacacs_get_next_server] Look for server [port : 0][private:0][port org:300]
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: [tacacs_get_next_server] Selected server [private:0][port org:300] tls disabled
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Sending error message to client - 'TACACS' detected the 'fatal' condition 'No server available to send the request'
+RP/0/RP0/CPU0:Oct 24 05:18:11.260 UTC: tacacsd[1139]: Delete session_id entry in timer_db
+RP/0/RP0/CPU0:Oct 24 05:18:11.292 UTC: tacacsd[1139]: [tacacs_server_probe] 172.100.100.1/300: Probe counter reset after successful connection, server marked UP
+RP/0/RP0/CPU0:Oct 24 05:18:11.292 UTC: tacacsd[1139]: Found thread structure pointer in cancellation routine
+RP/0/RP0/CPU0:Oct 24 05:18:16.179 UTC: tacacsd[1139]: Errno set as :Resource temporarily unavailable
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: [msg_call_back] Message recieved from client : tacacs
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Dispatching Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Invoke api for Message type : 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: author Options send : 64
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Enter enque function
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Option : 64
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: [tacacs_req_enqueue] Enqueuing request cnt: 0 : CHECK_LIMIT
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: CHECK_LIMIT current: 0 (qsize:1)
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Checking server 172.100.100.1 ...
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: New server selected [up: 1][del: 0]
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Selected server - 172.100.100.1/300
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Keepalive option set on socket
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Socket bound successfully with source address 0.0.0.0
+RP/0/RP0/CPU0:xrd1#RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Connection success!!
+RP/0/RP0/CPU0:Oct 24 05:18:16.503 UTC: tacacsd[1139]: Socket connected successfully
+RP/0/RP0/CPU0:Oct 24 05:18:16.504 UTC: tacacsd[1139]: Socket 1000090 to 172.100.100.1/300 opened
+RP/0/RP0/CPU0:Oct 24 05:18:16.504 UTC: tacacsd[1139]: Connection ready status : Success[0][opt64]
+RP/0/RP0/CPU0:Oct 24 05:18:16.504 UTC: tacacsd[1139]: [AUTHOR] Remove the terminating null char
+RP/0/RP0/CPU0:Oct 24 05:18:16.504 UTC: tacacsd[1139]: [AUTHOR] Authen vars mthd 2 meth 5
+RP/0/RP0/CPU0:Oct 24 05:18:16.504 UTC: tacacsd[1139]: Server present in the HostQ
+RP/0/RP0/CPU0:Oct 24 05:18:16.504 UTC: tacacsd[1139]: [<LONG>] Add entry in timer->list: 0
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [tacacs_connect_handler] enter
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [<LONG>] Entry action : 1
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [<LONG>] bytes to write : 34 cnt : 0
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [<LONG>] exit bytes written  :34 : action : 1 sock_fd:1000090
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [tacacs_sock_modify_hdlr] Entry :193
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [read_data] Entry
+RP/0/RP0/CPU0:Oct 24 05:18:16.555 UTC: tacacsd[1139]: [read_data] reading : 4

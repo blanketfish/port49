@@ -1,13 +1,18 @@
 device debug arm, platform iosxr, cell tls_unknown_ca
-device returned 608 log lines in all; the filter kept 474 of the cell's
-tls connections (header-only capture): 3
-  conn port=19761 syn=16:53:03.134 hold=0.28s end=server-rst
-  conn port=17896 syn=16:53:03.526 hold=0.00s end=server-rst
-  conn port=41920 syn=16:53:03.589 hold=0.00s end=server-rst
-debug connections opened=3 closed=2 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
-  debug conn 1: opened=16:53:03.083 closed=16:53:03.416 reason="" authen=0 author=0 acct=0
-  debug conn 2: opened=16:53:03.476 closed=16:53:03.538 reason="" authen=0 author=2 acct=0
-  debug conn 3: opened=16:53:08.809 closed=open reason="" authen=0 author=0 acct=0
-connections that carried more than one request: 1 of 3 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
-lines dropped by rule: facility=14 body_word=0 hex_view=121 hex_message=0 evidence_marker=0 known_value_hex=0
+device returned 683 log lines in all; the filter kept 528 of the cell's
+tls connections (header-only capture): 5
+  conn port=56273 syn=05:18:05.787 hold=0.28s end=server-rst
+  conn port=60828 syn=05:18:06.121 hold=0.00s end=server-rst
+  conn port=21658 syn=05:18:11.123 hold=0.00s end=device-fin
+  conn port=58329 syn=05:18:11.230 hold=0.00s end=server-rst
+  conn port=47224 syn=05:18:11.291 hold=0.00s end=server-rst
+debug connections opened=4 closed=3 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
+  debug conn 1: opened=05:18:05.736 closed=open reason="" authen=0 author=0 acct=0 requests=0
+  debug conn 2: opened=05:18:06.071 closed=05:18:06.071 reason="" authen=0 author=0 acct=0 requests=0
+  debug conn 3: opened=before closed=05:18:11.171 reason="" authen=0 author=0 acct=0 requests=0
+  debug conn 4: opened=05:18:11.179 closed=05:18:11.240 reason="" authen=0 author=0 acct=0 requests=0
+  debug conn 5: opened=05:18:16.503 closed=open reason="" authen=0 author=0 acct=0 requests=0
+requests not placed on a connection: 0 (no kept open line starts them; they are not a connection)
+connections that carried more than one request: unmeasured (the debug kept 4 open(s) for the capture's 5 connection(s))
+lines dropped by rule: facility=14 body_word=0 hex_view=142 hex_message=0 evidence_marker=0 known_value_hex=0
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 0
