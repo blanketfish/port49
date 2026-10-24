@@ -366,7 +366,7 @@ func TestL80Remeasure(t *testing.T) {
 			// Counts are over the cell's window; the setup phase (port49d stopped,
 			// the harness setting up) is counted apart as setup_*.
 			cnt := nxosWindowedCounts(kept)
-			_, cellText := nxosCellWindow(kept)
+			_, cellText, _ := nxosCellWindow(kept)
 			var ks []string
 			for k := range nxosDebugMarkers {
 				ks = append(ks, fmt.Sprintf("%s=%d", k, cnt[k]))

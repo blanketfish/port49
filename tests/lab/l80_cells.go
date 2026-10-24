@@ -278,12 +278,15 @@ const (
 	// because the login contexts lived in the stopped process. On etcd the same
 	// denial is a port49 finding (l80RestartPermDenied).
 	l80RestartCtxLost = "context_lost_on_memory_store"
+	// l80RestartWindowUnmeasured: the debug has no open of the cell, so the cell's
+	// dead and fallback lines cannot be told from the setup's; nothing is graded from them.
+	l80RestartWindowUnmeasured = "debug_window_unmeasured"
 )
 
 // l80IsVerdict is whether v is one of the restart cell's verdict words.
 func l80IsVerdict(v string) bool {
 	return slices.Contains([]string{l80RestartClean, l80RestartLost, l80RestartPermDenied, l80RestartUnasked,
-		l80RestartDeadOnly, l80RestartNoConn, l80RestartCtxLost}, v)
+		l80RestartDeadOnly, l80RestartNoConn, l80RestartCtxLost, l80RestartWindowUnmeasured}, v)
 }
 
 // The restart cells' session stores.
@@ -387,6 +390,8 @@ func l80GradeRestart(store string, typed []l80Typed, w l80RestartWindow, counts 
 		g.Verdict = l80RestartLost
 	case g.PermittedDenied > 0:
 		g.Verdict = l80RestartCtxLost
+	case counts["window_unmeasured"] > 0:
+		g.Verdict = l80RestartWindowUnmeasured
 	case dead > 0 || fallbacks > 0:
 		g.Verdict = l80RestartDeadOnly
 	case placed && g.Reconnects == 0:

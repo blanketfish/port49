@@ -100,13 +100,14 @@ func TestDeviceDebugPipeliningIsUnmeasuredWhenOpensAreMissing(t *testing.T) {
 func nxosRestartFixture() string {
 	t := func(clock, msg string) string { return clock + " tacacsd: " + msg }
 	return strings.Join([]string{
-		t("05:00:01.000001", "nxos_ssl_open failed"),
-		t("05:00:01.000002", "aaa_mark_server_dead 1"),
-		t("05:00:01.000003", "aaa_mark_server_dead :  Idle time is 0. Server will not be monitored"),
-		t("05:00:46.000001", "construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5"),
-		t("05:00:46.000002", "after nxos_ssl_open rc -1"),
-		t("05:00:51.000002", "nxos_ssl_retry_open"),
-		t("05:00:51.000003", "nxos_ssl_open success"),
+		// the setup's own accounting request, sent while port49d is stopped
+		t("05:00:01.000001", "construct_tac_req(1563):aaa session id: 3, aaa type: 3, user_len=5"),
+		t("05:00:01.000002", "nxos_ssl_open failed"),
+		t("05:00:01.000003", "aaa_mark_server_dead 1"),
+		t("05:00:01.000004", "aaa_mark_server_dead :  Idle time is 0. Server will not be monitored"),
+		t("05:00:46.000001", "nxos_ssl_open success"),
+		t("05:00:46.000002", "construct_tac_req(1762):aaa session id: 7, aaa type: 1, user_len=5"),
+		t("05:00:46.000003", "nxos_ssl_retry_open"),
 	}, "\n")
 }
 
@@ -127,12 +128,12 @@ func TestNXOSCountsAreOverTheCellWindowAndSetupApart(t *testing.T) {
 	if c["mark_server_dead"] != 0 || c["setup_mark_server_dead"] != 1 || c["ssl_open_failed"] != 0 || c["setup_ssl_open_failed"] != 1 {
 		t.Errorf("setup lines leaked into the cell counts: %v", c)
 	}
-	if c["ssl_open_retry"] != 1 || c["ssl_open_success"] != 1 || c["request_authen"] != 1 {
+	if c["ssl_open_retry"] != 1 || c["ssl_open_success"] != 1 || c["request_authen"] != 1 || c["request_acct"] != 0 {
 		t.Errorf("cell counts: %v", c)
 	}
-	// no request line: no window, everything is the cell
-	if c := nxosWindowedCounts("05:00:01.000002 tacacsd: aaa_mark_server_dead 1"); c["mark_server_dead"] != 1 {
-		t.Errorf("without a request line the dead line was hidden in setup: %v", c)
+	// no open of the cell: the window is unmeasured, not the whole file
+	if c := nxosWindowedCounts("05:00:01.000002 tacacsd: aaa_mark_server_dead 1"); c["window_unmeasured"] != 1 || c["mark_server_dead"] != 0 {
+		t.Errorf("a file with no open was graded as a window: %v", c)
 	}
 }
 
@@ -142,8 +143,15 @@ func TestL80RestartGradePrintsTheOpenRetry(t *testing.T) {
 	if !strings.Contains(joined, "ssl_open_retry=1") || !strings.Contains(joined, "mark_server_dead=0") {
 		t.Errorf("facts: %s", joined)
 	}
-	if g.Verdict == l80RestartDeadOnly {
-		t.Errorf("a setup-phase dead line decided the restart verdict")
+	if g.Verdict != l80RestartClean {
+		t.Errorf("the real order graded %s, want %s", g.Verdict, l80RestartClean)
+	}
+	if c := nxosWindowedCounts(nxosRestartFixture()); c["setup_mark_server_dead"] != 1 {
+		t.Errorf("the setup's dead line is not in setup_*: %v", c)
+	}
+	g = l80GradeRestart(l80StoreMemory, nil, l80RestartWindow{}, nxosWindowedCounts("tacacsd: aaa_mark_server_dead 1"), 0, nil)
+	if g.Verdict != l80RestartWindowUnmeasured {
+		t.Errorf("no cell open graded %s", g.Verdict)
 	}
 }
 

@@ -72,24 +72,30 @@ func nxosDebugCounts(kept string) map[string]int {
 // harness was setting up, which say nothing about the cell.
 var nxosSetupMarkers = []string{"mark_server_dead", "fall_back_none", "ssl_open_failed", "ssl_open_retry"}
 
-// nxosCellWindow splits kept at the cell's first request line (`aaa type:`, the
-// device's own order): what came before is the setup phase. With no request line
-// there is no window and all of kept is the cell, so nothing is hidden.
-func nxosCellWindow(kept string) (setup, cell string) {
+// nxosCellWindow splits kept at the cell's first `nxos_ssl_open success`: what
+// came before is the setup phase. The setup's own request line (`aaa type:`) and
+// its failed opens and dead lines come before it, while port49d is stopped, and
+// the setup never succeeds in opening. With no such line the window is unmeasured
+// (ok is false) and nothing is graded from it.
+func nxosCellWindow(kept string) (setup, cell string, ok bool) {
 	lines := strings.Split(kept, "\n")
 	for i, ln := range lines {
-		if strings.Contains(ln, "aaa type:") {
-			return strings.Join(lines[:i], "\n"), strings.Join(lines[i:], "\n")
+		if nxosDebugMarkers["ssl_open_success"].MatchString(ln) {
+			return strings.Join(lines[:i], "\n"), strings.Join(lines[i:], "\n"), true
 		}
 	}
-	return "", kept
+	return kept, "", false
 }
 
-// nxosWindowedCounts is nxosDebugCounts over the cell window, plus setup_<marker>
+// nxosWindowedCounts is nxosDebugCounts over the cell window (window_unmeasured=1
+// and zero counts when there is none), plus setup_<marker>
 // for the markers in nxosSetupMarkers counted over the setup phase.
 func nxosWindowedCounts(kept string) map[string]int {
-	setup, cell := nxosCellWindow(kept)
+	setup, cell, ok := nxosCellWindow(kept)
 	counts := nxosDebugCounts(cell)
+	if !ok {
+		counts["window_unmeasured"] = 1
+	}
 	for k, n := range nxosDebugCounts(setup) {
 		if slices.Contains(nxosSetupMarkers, k) {
 			counts["setup_"+k] = n
