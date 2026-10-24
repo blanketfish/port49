@@ -88,6 +88,9 @@ func l80EtcdUp(t *testing.T, l *lab, q *qualEnv, e *l73Env) *l80EtcdStack {
 	if err := s.broker.start(); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
+	// A broker that never becomes ready is not returned to the caller's defer, so
+	// it is stopped here (stop is idempotent): left running it would hold :8449.
+	t.Cleanup(s.stop)
 	if err := waitProc(s.broker, 90*time.Second, func() bool { return httpOK("http://" + splitMetricsBroker + "/readyz") }); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
