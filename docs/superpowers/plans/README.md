@@ -7511,10 +7511,14 @@ when Task 14's review found a security-relevant device fact.
       kept decision log on the next run.
     - Parked minors: Task 3's `-run-<12hex>` and `KEY=value` masks; Task 13's sub-5 ms delay rounding to
       0; Task 8's DelayFlight on a second ClientHello after an HRR.
-    - **L80 restart cell (final review M1):** restart port49d during an NX-OS command loop and count
-      lost or unasked commands under device debug. Shutdown sends close_notify on an offered
-      connection, and only the idle close (`idle35`) is measured. Until it closes, the plan 12 NX-OS
-      TLS reference config should name two servers.
+    - **L80 restart cell (final review M1), measured 2026-10-23:** port49d restarted during an NX-OS
+      command loop under device debug. On etcd, three runs: a clean reconnect, 0 lost, 0 unasked, 0
+      denied, `ssl_read_failed=0`, `mark_server_dead=0`; on the memory store the device reconnects
+      the same way, but every later command is denied `context_missing` until the operator logs in
+      again (spec §15 L80; `tests/lab/evidence/L80-cisco_nxos/fixed/restart-summary.txt`,
+      `restart_etcd-summary.txt`). The plan 12 NX-OS TLS reference config need not name two servers
+      for a restart; its operator notes should say a restart on the memory store ends every live
+      NX-OS session's commands until a new login.
 
 ## Plan 12 — Deployment (§19 step 12)
 

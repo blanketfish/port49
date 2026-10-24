@@ -4,9 +4,9 @@ package lab
 
 import (
 	"fmt"
-	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -17,7 +17,10 @@ import (
 // summary are written, to tests/lab/evidence/QUAL-DEBUG-<slug>-<platform>/.
 // An armed run is a measurement of its own: it writes no QUAL evidence and no
 // QUAL note, so a re-vet's committed evidence is never replaced by a run that
-// had debug on. Everything the arm writes passes deviceDebugFilter.Keep (in
+// had debug on. Its results note, tests/lab/results/QUAL-DEBUG-<slug>-<platform>.md,
+// is written by the harness from the same run (qualWriteDebug): platform and image
+// from the run, each open question answered by a kept debug line or unmeasured.
+// Everything the arm writes passes deviceDebugFilter.Keep (in
 // captureDeviceDebug) first; the raw collect text is held in memory only.
 
 // ddArmEnv is the opt-in variable.
@@ -29,6 +32,9 @@ type ddArmState struct {
 	notes []string          // one line per cell, for the results note
 	conns map[string][]l73Conn
 	ready int // connections of the readiness probe that ran after debug went on
+	// profile and cells are what the results note is written from (qualWriteDebug).
+	profile string
+	cells   []ddNoteCell
 }
 
 // armed is whether this run is a device-debug run on a platform that has a
@@ -45,28 +51,57 @@ func (q *qualEnv) armed(family string) (string, bool) {
 // lines the collect commands returned (not the echo or the prompt), keeps the
 // shapes of the lines the filter drops, and returns the raw text to
 // captureDeviceDebug alone.
-func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes *[]string) func(string) (string, error) {
+func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes, flags *[]string, authd *[2]int) func(string) (string, error) {
 	cfgMode := false
 	return func(cmd string) (string, error) {
 		var wait []string
 		wait, cfgMode = ddArmWait(platform, cmd, cfgMode, c.prompt)
-		out, err := c.sendExpect(cmd, 180*time.Second, wait...)
-		if strings.HasPrefix(cmd, "show log") {
-			*rawLines += ddArmCountLines(out, cmd, wait...)
+		if platform == "junos" && !cfgMode && authd != nil {
+			// The enable restarts authd or not: the id before the first enable command
+			// and after the commit tells which. Only the number is kept.
+			if cmd == deviceDebugCmds["junos"].Enable[0] {
+				o, _ := c.sendExpect(ddAuthdProbe, 60*time.Second, c.prompt)
+				authd[0] = ddAuthdPID(o)
+			}
+		}
+		var out string
+		var err error
+		if cmd == ddJunosFlagHelp {
+			// The ? and a kill-line, no newline: nothing is submitted.
+			out, err = c.sendKeysExpect(ddJunosFlagHelpKeys, 180*time.Second, wait...)
+		} else {
+			out, err = c.sendExpect(cmd, 180*time.Second, wait...)
+		}
+		if ddArmIsCollect(platform, cmd) {
+			n := ddArmCountLines(out, cmd, wait...)
+			*rawLines += n
+			*cmdShapes = append(*cmdShapes, fmt.Sprintf("%s => returned %d line(s)", cmd, n))
 			// The shapes of what the filter drops: the lines to decide about.
 			var dropped []string
-			for _, ln := range strings.Split(out, "\n") {
-				if f.Keep(ln) == "" {
+			// The same path the capture takes: the whole-file rule and the echo strip
+			// included, so a kept trace line is not sampled as dropped.
+			whole := slices.Contains(deviceDebugCmds[platform].Whole, cmd)
+			for _, ln := range strings.Split(ddWithoutEcho(out, cmd, whole), "\n") {
+				if f.dropFrom(deviceDebugProfiles[platform], strings.TrimSpace(ln), whole) != "" {
 					dropped = append(dropped, ln)
 				}
 			}
-			*sample = append(*sample, ddArmSample(l73MaskAll(strings.Join(dropped, "\n"), secrets()...), 70)...)
+			for _, sh := range ddArmSample(l73MaskAll(strings.Join(dropped, "\n"), secrets()...), 500) {
+				*sample = append(*sample, cmd+" => "+sh)
+			}
+		} else if cmd == ddJunosFlagHelp {
+			// The flag names only (ddFlagWords): the rest of the help is not kept.
+			*flags = ddFlagWords(out)
 		} else {
 			// What the enable and disable commands answered, as shapes: the
 			// first thing to learn when no debug line comes back.
 			for _, sh := range ddArmSample(l73MaskAll(out, secrets()...), 6) {
 				*cmdShapes = append(*cmdShapes, cmd+" => "+sh)
 			}
+		}
+		if platform == "junos" && authd != nil && authd[1] == 0 && cmd == "commit and-quit" && authd[0] != 0 {
+			o, _ := c.sendExpect(ddAuthdProbe, 60*time.Second, c.prompt)
+			authd[1] = ddAuthdPID(o)
 		}
 		return out, err
 	}
@@ -87,19 +122,22 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		body()
 		return
 	}
-	filter := deviceDebugFilter{Platform: platform, Groups: []string{l73Group}}
-	for _, a := range []string{l73Server, q.l.p.addr} {
-		addr, err := netip.ParseAddr(a)
-		if err != nil {
-			q.t.Fatalf("INVALID: lab address %q: %v", a, err)
-		}
-		filter.Addrs = append(filter.Addrs, addr)
+	drops := &ddDropCounts{}
+	filter := deviceDebugFilter{Platform: platform, Secrets: q.ddSecrets, Drops: drops}
+	// Junos: count the syslog process tags of what the device returned, to learn
+	// which process writes the login path (numbers only).
+	var tags *ddTagCounts
+	if platform == "junos" {
+		tags = &ddTagCounts{}
+		filter.Tags = tags
 	}
 	var (
 		kept     deviceDebugKept
 		capErr   error
 		rawLines int
 		sample   []string
+		flags    []string
+		authd    [2]int
 		answers  []string
 		ran      bool
 	)
@@ -107,7 +145,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
-		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers)
+		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers, &flags, &authd)
 		kept, capErr = captureDeviceDebug(filter, run, func() error {
 			ran = true
 			finished := false
@@ -140,6 +178,20 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		conns = append(conns, l80ConnLine(cn))
 	}
 	sum := ddArmSummary(platform, cell, kept, rawLines, conns)
+	sum += "lines dropped by rule: " + drops.String() + "\n"
+	if len(flags) > 0 {
+		sum += "traceoptions flag words: " + strings.Join(flags, " ") + "\n"
+	}
+	authdChange := ""
+	if platform == "junos" {
+		authdChange = ddAuthdPIDChange(authd[0], authd[1])
+		sum += "authd_pid_changed=" + authdChange + "\n"
+	}
+	tagCounts := ""
+	if tags != nil {
+		tagCounts = tags.String()
+		sum += "syslog process tags (counts only): " + tagCounts + "\n"
+	}
 	sum += fmt.Sprintf("readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): %d\n", q.dd.ready)
 	if capErr != nil {
 		sum += "capture error: " + capErr.Error() + "\n"
@@ -148,15 +200,12 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	// the test log, not to evidence, for an implementer to read through the
 	// filtered grep.
 	q.t.Logf("device debug, shapes of the lines the filter dropped, %s %s (closed alphabet):\n  %s", platform, cell, strings.Join(sample, "\n  "))
-	masked := 0
-	for _, ln := range strings.Split(string(kept), "\n") {
-		if strings.Contains(ln, "<masked>") {
-			masked++
-		}
-	}
-	if n := ddArmLineCount(kept); n == 0 || masked*10 >= n*8 {
+	if ddArmLineCount(kept) == 0 {
 		sum += "THE FILTER KEPT NOTHING USEFUL: the line shapes are in the test log\n"
 	}
+	q.dd.profile = platform
+	q.dd.cells = append(q.dd.cells, ddNoteCell{Cell: cell, Kept: kept, RawLines: rawLines, Shapes: sample, TLSConns: conns,
+		Ready: q.dd.ready, CaptureErr: capErr != nil, Drops: *drops, Tags: tagCounts, Flags: flags, AuthdPID: authdChange})
 	q.dd.files[cell+"-debug.txt"] = []byte(string(kept) + "\n")
 	q.dd.files[cell+"-summary.txt"] = []byte(l80Filter(sum))
 	q.dd.notes = append(q.dd.notes, fmt.Sprintf("- `%s`: %d device log lines, the filter kept %d, %d tls connection(s).",
@@ -166,11 +215,11 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 // ddSecrets is every credential this run used, for the leak gate on what the
 // arm writes and logs.
 func (q *qualEnv) ddSecrets() []string {
-	secrets := append([]string{breakglassPassword}, q.secrets...)
+	var fromEnv []string
 	if q.e != nil {
-		secrets = append(secrets, q.e.allSecrets()...)
+		fromEnv = q.e.allSecrets()
 	}
-	return secrets
+	return ddKnownSecrets([]string{breakglassPassword}, q.secrets, fromEnv)
 }
 
 // ddArmCheck stops a run that has debug asked for and cannot give it, before
@@ -198,4 +247,13 @@ func (q *qualEnv) writeDebug() {
 		q.t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
 	}
 	q.t.Logf("wrote %s", dir)
+	// The results note is written from the same run, never by hand. Platform and
+	// image are the run's.
+	run := ddNoteRun{Platform: q.l.p.name, Profile: q.dd.profile, Image: q.run.Image, Cells: q.dd.cells}
+	err := qualWriteDebug(run, q.ddSecrets(), func(claim, obs string) {
+		q.l.result(q.t, "QUAL-DEBUG-"+q.slug, claim, obs)
+	})
+	if err != nil {
+		q.t.Fatalf("%v", err)
+	}
 }

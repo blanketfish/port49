@@ -42,6 +42,12 @@ func ddArmWait(platform, cmd string, cfgMode bool, prompt string) (wait []string
 		return []string{"# "}, true
 	case platform == "junos":
 		return []string{"> "}, false
+	case platform == "eos" && cmd == "configure":
+		return []string{")#"}, true
+	case platform == "eos" && cmd == "end":
+		return []string{prompt}, false
+	case platform == "eos" && cfgMode:
+		return []string{")#"}, true
 	case cmd == "clear logging":
 		return []string{prompt, "[confirm]"}, false
 	}
@@ -79,8 +85,17 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 	for _, l := range tlsConns {
 		b.WriteString("  " + l + "\n")
 	}
-	fmt.Fprintf(&b, "debug connections opened=%d closed=%d single_connect_lines=%d server_dead_lines=%d fallback_lines=%d\n",
-		s.Opened, s.Closed, s.SingleConnect, s.ServerDead, s.Fallback)
+	// A platform whose debug has no close line says so: a count of 0 would read
+	// as "none closed".
+	closedAll := fmt.Sprint(s.Closed)
+	if s.CloseUnknown {
+		closedAll = "unknown"
+	}
+	fmt.Fprintf(&b, "debug connections opened=%d closed=%s single_connect_lines=%d server_dead_lines=%d fallback_lines=%d\n",
+		s.Opened, closedAll, s.SingleConnect, s.ServerDead, s.Fallback)
+	if s.Failed > 0 {
+		fmt.Fprintf(&b, "debug connections failed_opens=%d\n", s.Failed)
+	}
 	for i, c := range s.Conns {
 		open, closed := c.Opened, c.Closed
 		if open == "" {
@@ -89,17 +104,28 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 		if closed == "" {
 			closed = "open"
 		}
-		fmt.Fprintf(&b, "  debug conn %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d\n",
-			i+1, open, closed, c.Reason, c.Authen, c.Author, c.Acct)
-	}
-	pipel := 0
-	for _, c := range s.Conns {
-		if n := c.Authen + c.Author + c.Acct; n > 1 {
-			pipel++
+		if s.CloseUnknown {
+			closed = "unknown"
 		}
+		fmt.Fprintf(&b, "  debug conn %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d requests=%d\n",
+			i+1, open, closed, c.Reason, c.Authen, c.Author, c.Acct, c.Total())
 	}
-	fmt.Fprintf(&b, "connections that carried more than one request: %d of %d (a count of requests per connection, not of "+
-		"writes without a read between them: the kept lines do not order those)\n", pipel, len(s.Conns))
+	if s.CloseUnknown {
+		b.WriteString("note: this platform's two debug files are joined in order, not merged by time, so a request is " +
+			"attributed to the last connection opened in the trace, not necessarily the one it was sent on\n")
+	}
+	fmt.Fprintf(&b, "requests not placed on a connection: %d (no kept open line starts them; they are not a connection)\n", s.Unplaced)
+	placed, _, multi := s.Placed()
+	switch {
+	case s.CloseUnknown:
+		b.WriteString("connections that carried more than one request: unmeasured (this platform's trace requests cannot be placed on a connection)\n")
+	case s.Opened < len(tlsConns):
+		fmt.Fprintf(&b, "connections that carried more than one request: unmeasured (the debug kept %d open(s) for the capture's %d connection(s))\n",
+			s.Opened, len(tlsConns))
+	default:
+		fmt.Fprintf(&b, "connections that carried more than one request: %d of %d with a kept open (a count of requests per connection, "+
+			"not of writes without a read between them: the kept lines do not order those)\n", multi, placed)
+	}
 	return b.String()
 }
 
@@ -121,7 +147,8 @@ const ddArmWords = `tac tacacs tplus connect connected connection socket server 
 	tls ssl tcp session author authorization authentication accounting group list method status error failed fail
 	established peer port host address bind bound immediate new not the and for are has was with from using
 	previously default handle name addr timer expired unavailable available detected thread sleeping seconds debug
-	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec`
+	auth login packet create destroy free alloc state transaction transactions cmd arg service shell exec
+	tacacsd tacplus authd invalid syntax`
 
 var ddArmVocab = map[string]bool{}
 
@@ -258,4 +285,15 @@ func ddArmCountLines(out, cmd string, prompts ...string) int {
 		}
 	}
 	return n
+}
+
+// ddArmIsCollect is whether cmd is one of the platform's collect commands,
+// whose output is the debug text (sampled), not an enable or disable answer.
+func ddArmIsCollect(platform, cmd string) bool {
+	for _, c := range deviceDebugCmds[platform].Collect {
+		if c == cmd {
+			return true
+		}
+	}
+	return false
 }

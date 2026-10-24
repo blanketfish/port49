@@ -37,3 +37,47 @@ d4538d78e0ef5e8be6acf3f5a55108bb24ffdeb8:tests/lab/transport_test.go:generic-api
 #
 # A test word in the redaction table (not a lab constant), commit 60cf3fcb.
 60cf3fcb0616ccc0841d62eea6d8712d6a44c0bb:internal/platform/redact_test.go:tacacs-key-config-line:441
+#
+# Device-debug filter tests: 8-char crypt-tail stubs (a real tail is 43 or 86), judged FAKE by tail length, whose salt is outside the regex entry above.
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:unix-crypt-hash:265
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:unix-crypt-hash:248
+#
+# Round 4 test fixtures (commit 7a51f17e): a type 7 and a $9$ stub in a test since removed.
+7a51f17e3c895308a903c4a623ac29a6cb23a936:tests/lab/device_debug_round4_unit_test.go:cisco-type7:51
+7a51f17e3c895308a903c4a623ac29a6cb23a936:tests/lab/device_debug_round4_unit_test.go:junos-type9:52
+#
+# Round 4 test fixtures restored (commit aad300f2): a type 7 and a $9$ stub in the Junos trace-file test.
+aad300f2a03db528f710a8ad3458264fd66f1cd5:tests/lab/device_debug_round4_unit_test.go:cisco-type7:142
+aad300f2a03db528f710a8ad3458264fd66f1cd5:tests/lab/device_debug_round4_unit_test.go:junos-type9:143
+#
+# Final fix wave: device-debug unit-test fixtures (obvious sentinels, type 7 / $9$ / crypt stubs) in the commits that
+# introduced them. Scoped to the commit, file, rule and line, not to the path, so a later real secret in these files is caught.
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:cisco-type7:269
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:cisco-type7:270
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:cisco-type7:271
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:unix-crypt-hash:266
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:unix-crypt-hash:267
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:unix-crypt-hash:268
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:269
+e40213ccacda7e9bd7ace9efd4a1d02a6ba725f6:tests/lab/nxos_debug_unit_test.go:generic-api-key:41
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:junos-type9:106
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:junos-type9:165
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:tacacs-key-config-line:118
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:tacacs-key-config-line:121
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:tacacs-key-config-line:122
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:tacacs-key-config-line:123
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:cisco-type7:122
+56acabe5e32463e22ed0587ae95a53a39ec6d766:tests/lab/device_debug_round2_unit_test.go:cisco-type7:164
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:junos-type9:242
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:252
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:255
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:256
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:cisco-type7:252
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:cisco-type7:253
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:cisco-type7:254
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:unix-crypt-hash:249
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:unix-crypt-hash:250
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:unix-crypt-hash:251
+ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:junos-type9:353
+3ddba0021bf72abf7c4ead384c7c6eb6d9b8487f:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:115
+3ddba0021bf72abf7c4ead384c7c6eb6d9b8487f:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:151

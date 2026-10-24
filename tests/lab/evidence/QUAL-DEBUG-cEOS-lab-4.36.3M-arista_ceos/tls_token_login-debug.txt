@@ -1,0 +1,152 @@
+show agent Aaa logs
+===> /var/log/agents/Aaa-954 Sat Oct 24 06:14:51 2026 <===
+===== Output from /usr/bin/Aaa [] (PID=954) started Oct 24 06:13:11.677149 ===
+initializing per-process SM for main agent Aaa
+2026-10-24 06:14:33.858225  1006 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False
+2026-10-24 06:14:34.105544  1006 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:34.105772  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:34.105962  1006 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:34.106049  1006 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-10-24 06:14:34.106117  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:34.106245  1006 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:34.106329  1006 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-10-24 06:14:34.106370  1006 Tacacs               0 closing tacacs+ connection
+2026-10-24 06:14:34.106506  1006 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= False
+2026-10-24 06:14:35.754372  5526 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user breakglass
+2026-10-24 06:14:35.754479  5526 Aaa                  6 service is: sshd
+2026-10-24 06:14:35.754513  5526 Aaa                  6 method list is: group port49,local
+2026-10-24 06:14:35.754566  5526 Aaa                  6 In _startNewAuthenticator
+2026-10-24 06:14:35.754601  5526 Aaa                  6 find next plugin starting 0 total 2
+2026-10-24 06:14:35.754685  5526 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:35.754726  5526 AaaPlugin::TacacsAaa 2 Tacacs Authenticator service sshd remoteHost 172.100.100.1 remoteUser  tty ssh user breakglass privLevel 0
+2026-10-24 06:14:35.755083  5526 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:35.757477  5526 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:35.757697  5526 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:35.757749  5526 Tacacs               2 tac_send_authen returned 261 status: 5 noecho: True
+2026-10-24 06:14:35.757847  5526 Aaa                  2 authenticator returned status inProgress user breakglass
+2026-10-24 06:14:35.757867  5526 Aaa                  1 maybeLogFailure inProgress
+2026-10-24 06:14:35.760966  5526 Aaa                  2 continueAuthenticate for authenStateId 24
+2026-10-24 06:14:35.761205  5526 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:36.262934  5526 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:36.263101  5526 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:36.263395  5526 Tacacs               2 tac_send_authen returned 2 status: 2 noecho: False
+2026-10-24 06:14:36.263514  5526 Tacacs               0 closing tacacs+ connection
+2026-10-24 06:14:36.263654  5526 Aaa                  2 authenticator returned status fail user breakglass
+2026-10-24 06:14:36.263678  5526 Aaa                  1 maybeLogFailure fail
+2026-10-24 06:14:36.263705  5526 Aaa                  0 user breakglass login failed from 172.100.100.1 sshd Authentication failed - Error in authentication
+2026-10-24 06:14:36.263734  5526 Aaa                  4 SendFailedShellAcct user =  breakglass  remoteAddr =  172.100.100.1  authenSource =  authenSourcePassword  failureCause =  FAIL: Authentication failed - Error in authentication
+2026-10-24 06:14:44.088732  5851 Aaa                  2 startAuthenticate for type authnTypeLogin service sshd tty ssh sessionId None user qual01
+2026-10-24 06:14:44.088845  5851 Aaa                  6 service is: sshd
+2026-10-24 06:14:44.088879  5851 Aaa                  6 method list is: group port49,local
+2026-10-24 06:14:44.088928  5851 Aaa                  6 In _startNewAuthenticator
+2026-10-24 06:14:44.088961  5851 Aaa                  6 find next plugin starting 0 total 2
+2026-10-24 06:14:44.089038  5851 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:44.089076  5851 AaaPlugin::TacacsAaa 2 Tacacs Authenticator service sshd remoteHost 172.100.100.1 remoteUser  tty ssh user qual01 privLevel 0
+2026-10-24 06:14:44.089321  5851 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:44.090869  5851 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:44.091024  5851 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:44.091122  5851 Tacacs               2 tac_send_authen returned 261 status: 5 noecho: True
+2026-10-24 06:14:44.091266  5851 Aaa                  2 authenticator returned status inProgress user qual01
+2026-10-24 06:14:44.091318  5851 Aaa                  1 maybeLogFailure inProgress
+2026-10-24 06:14:44.093949  5851 Aaa                  2 continueAuthenticate for authenStateId 25
+2026-10-24 06:14:44.094079  5851 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:44.094589  5851 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:44.094707  5851 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:44.095009  5851 Tacacs               2 tac_send_authen returned 1 status: 1 noecho: False
+2026-10-24 06:14:44.095093  5851 Tacacs               6 cur server 0
+2026-10-24 06:14:44.095272  5851 Aaa                  2 authenticator returned status success user qual01
+2026-10-24 06:14:44.095306  5851 Aaa                  6 handleUser qual01 via group port49
+2026-10-24 06:14:44.095405  5851 Aaa                  2 Adding pending session for user: qual01 service: sshd method: group port49 session id: 25 session data: None
+2026-10-24 06:14:44.095533  5851 Aaa                  1 maybeLogFailure success
+2026-10-24 06:14:45.749797  5929 Aaa                  5 openSession for id 25
+2026-10-24 06:14:45.749912  5929 Aaa                  4 sendShellAcct user = qual01 sessionId = 25 action = start
+2026-10-24 06:14:45.750369  1006 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:45.750611  1006 Tacacs               6 cur server 0
+2026-10-24 06:14:45.750954  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.752908  1006 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.753259  1006 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.753421  1006 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.753465  1006 Tacacs               4 tac_send_acct returned 1
+2026-10-24 06:14:45.753508  1006 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
+2026-10-24 06:14:45.837705  5932 Aaa                  3 authorizeShell for user qual01 sessionId 25 sessionPid 0 shellPid 5931 tty
+2026-10-24 06:14:45.837910  5932 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:45.837995  5932 Tacacs               6 cur server 0
+2026-10-24 06:14:45.838105  5932 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-10-24 06:14:45.838193  5932 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.839976  5932 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.840408  5932 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.840587  5932 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.840651  5932 Tacacs               3 tac_send_author returned 513 , status: 1 msg  av_count: 2
+2026-10-24 06:14:45.840682  5932 Tacacs               6 av pair 0 : priv-lvl=15
+2026-10-24 06:14:45.840702  5932 Tacacs               6 av pair 1 : roles=network-admin
+2026-10-24 06:14:45.840773  5932 Aaa                  3 authorizeShell 0 privilegeLevel 15
+2026-10-24 06:14:45.840810  5932 Aaa                  3 authorizeShell 1 roles ['network-admin']
+2026-10-24 06:14:45.883930  5940 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:45.884133  5940 Tacacs               6 cur server 0
+2026-10-24 06:14:45.884261  5940 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-10-24 06:14:45.884414  5940 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.886406  5940 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.886635  5940 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.886934  5940 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.887020  5940 Tacacs               3 tac_send_author returned 1 , status: 1 msg  av_count: 0
+2026-10-24 06:14:45.887699  1006 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:45.887870  1006 Tacacs               6 cur server 0
+2026-10-24 06:14:45.888103  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.889437  1006 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.889739  1006 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.889892  1006 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.889941  1006 Tacacs               4 tac_send_acct returned 1
+2026-10-24 06:14:45.889986  1006 Aaa                  9 Dispatched accounting request mlname= command15 _sendFunc= _sendCommandAcct result= True
+2026-10-24 06:14:45.945696  5942 Aaa                  3 authorizeShell for user qual01 sessionId 25 sessionPid 0 shellPid 5941 tty
+2026-10-24 06:14:45.945896  5942 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:45.945978  5942 Tacacs               6 cur server 0
+2026-10-24 06:14:45.946042  5942 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-10-24 06:14:45.946132  5942 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.948589  5942 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.948961  5942 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.949114  5942 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.949158  5942 Tacacs               3 tac_send_author returned 513 , status: 1 msg  av_count: 2
+2026-10-24 06:14:45.949175  5942 Tacacs               6 av pair 0 : priv-lvl=15
+2026-10-24 06:14:45.949190  5942 Tacacs               6 av pair 1 : roles=network-admin
+2026-10-24 06:14:45.949256  5942 Aaa                  3 authorizeShell 0 privilegeLevel 15
+2026-10-24 06:14:45.949282  5942 Aaa                  3 authorizeShell 1 roles ['network-admin']
+2026-10-24 06:14:45.993441  5945 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:45.993619  5945 Tacacs               6 cur server 0
+2026-10-24 06:14:45.993738  5945 Tacacs               3 tac_create_author: authenMethod: 6 authenType: 1 authenService: 1
+2026-10-24 06:14:45.993875  5945 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.995756  5945 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.996088  5945 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.996247  5945 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:45.996290  5945 Tacacs               3 tac_send_author returned 16 , status: 16 msg port49: denied by qual_denies_other (show users) - see 'port49 explain' av_count: 0
+2026-10-24 06:14:45.996402  5945 Aaa                  0 authorization from command15 denied
+2026-10-24 06:14:45.996448  5945 Aaa                  9 getPwEnt: found account group port49
+2026-10-24 06:14:45.996665  5945 Aaa                  4 SendFailedCommandAcct user =  qual01  sessionId =  25  tokens =  ['show', 'users']  authzDetail =  FAIL: authorization failed: port49: denied by qual_denies_other (show users) - see 'port49 explain'
+2026-10-24 06:14:46.018042  5946 Aaa                  5 closeSession for session id 25
+2026-10-24 06:14:46.018117  5946 Aaa                  4 sendShellAcct user = qual01 sessionId = 25 action = stop
+2026-10-24 06:14:46.018586  1006 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:46.019026  1006 Tacacs               6 cur server 0
+2026-10-24 06:14:46.019188  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:46.021015  1006 TacacsLib            6 TACACS+ counter messagesSent host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:46.021285  1006 TacacsLib            6 TACACS+ counter messagesReceived host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:46.021428  1006 TacacsLib            6 TACACS+ counter connCloses host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:46.021476  1006 Tacacs               4 tac_send_acct returned 1
+2026-10-24 06:14:46.021524  1006 Aaa                  9 Dispatched accounting request mlname= exec _sendFunc= _sendShellAcct result= True
+2026-10-24 06:14:51.327018  5394 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:51.327084  5394 AaaPlugin::TacacsAaa 3 authorizeShellCommand for method group port49 user breakglass mode ('Exec', None, None) privlevel 15 tokens ['show', 'agent', 'Aaa', 'logs']
+2026-10-24 06:14:51.327253  5394 Tacacs               3 tac_create_author: authenMethod: 5 authenType: 1 authenService: 1
+2026-10-24 06:14:51.327403  5394 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:51.327777  5394 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:51.327938  5394 Tacacs               0 tac_send_author failed: connect: Connection refused
+2026-10-24 06:14:51.327973  5394 Tacacs               0 closing tacacs+ connection
+2026-10-24 06:14:51.328091  5394 Aaa                  0 authorization from command15 authzUnavailable
+2026-10-24 06:14:51.328187  5394 Aaa                  6 plugin found by name for method local
+2026-10-24 06:14:51.328203  5394 AaaPlugin::LocalUser 3 authorizeShellCommand for method local user breakglass mode ('Exec', None, None) privlevel 15 tokens ['show', 'agent', 'Aaa', 'logs']
+2026-10-24 06:14:51.328253  5394 AaaPlugin::LocalUser 9 sessionData <entity('<LONG>') of type Aaa::SessionProperty (non-const)>
+2026-10-24 06:14:51.329014  1006 Aaa                  6 plugin found to handle method group port49
+2026-10-24 06:14:51.329270  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:51.329432  1006 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:51.329505  1006 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-10-24 06:14:51.329578  1006 TacacsLib            6 TACACS+ counter connOpens host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:51.329731  1006 TacacsLib            0 TACACS+ counter connFails host 172.100.100.1:300/0/Tacacs+ TLS
+2026-10-24 06:14:51.329834  1006 Tacacs               0 tac_send_acct failed: connect: Connection refused
+2026-10-24 06:14:51.329869  1006 Tacacs               0 closing tacacs+ connection

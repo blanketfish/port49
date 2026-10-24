@@ -2,6 +2,7 @@ package lab
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -44,7 +45,40 @@ func l80Cells(arm string) []l80Cell {
 		}
 		cells = append(cells, l80Cell{"idle" + g.gap, [][]string{seq}})
 	}
-	return append(cells, l80Cell{"concurrent", [][]string{nxosSeqE1, nxosSeqE1, nxosSeqE1}})
+	cells = append(cells, l80Cell{"concurrent", [][]string{nxosSeqE1, nxosSeqE1, nxosSeqE1}})
+	cells = append(cells, l80Cell{"restart", [][]string{l80RestartSeq()}})
+	return append(cells, l80Cell{"restart_etcd", [][]string{l80RestartSeq()}})
+}
+
+// The restart cell (device-debug shapes follow-up, step 3): port49d is stopped
+// and started again in the middle of a command loop, on an offered NX-OS that
+// holds one connection between requests, to see what the device does with the
+// close_notify of the restart. The loop is l80RestartPermitted permitted
+// commands, one every half second, with `show users` (denied) after every
+// l80RestartDeniedEvery of them; "@restart" follows the l80RestartAfter-th
+// permitted command and the loop keeps typing across the restart.
+const (
+	l80RestartPermitted   = 20
+	l80RestartAfter       = 8
+	l80RestartDeniedEvery = 4
+)
+
+func l80RestartSeq() []string {
+	seq := []string{nxosSeqSpacing[0]}
+	for i := 1; i <= l80RestartPermitted; i++ {
+		cmd := "show clock"
+		if i%2 == 0 {
+			cmd = "show version"
+		}
+		seq = append(seq, "@sleep 0.5", cmd)
+		if i == l80RestartAfter {
+			seq = append(seq, "@restart")
+		}
+		if i%l80RestartDeniedEvery == 0 {
+			seq = append(seq, "@sleep 0.5", nxosSeqSpacing[1])
+		}
+	}
+	return seq
 }
 
 // l80Typed is one command as typed, and what came of it.
@@ -55,6 +89,15 @@ type l80Typed struct {
 	Took    float64 `json:"took_s"`
 	Denied  bool    `json:"denied"` // its first output line said "AAA authorization failed"
 	Asked   bool    `json:"asked"`  // an authorize_command record for it, matched in order
+	// At and Done are when it was typed and when its prompt came back; Err is
+	// that the prompt did not (a timeout or a lost session). The restart cell
+	// places a command against the restart window with them.
+	At   time.Time `json:"at,omitzero"`
+	Done time.Time `json:"done,omitzero"`
+	Err  bool      `json:"err,omitempty"`
+	// Reason is port49's reason code on the authorize_command record this
+	// command matched, when the device denied it (l80Reasons).
+	Reason string `json:"reason,omitempty"`
 }
 
 // l80Ask marks each typed command asked while port49 has an unmatched
@@ -70,6 +113,29 @@ func l80Ask(typed []l80Typed, recorded []string) {
 			left[typed[i].Command]--
 			typed[i].Asked = true
 		}
+	}
+}
+
+// l80Reasons sets Reason on each denied typed command from the reason of the
+// authorize_command record it matches, records taken in order as l80Ask takes
+// them. A command with no matching record keeps no reason.
+func l80Reasons(typed []l80Typed, recs []map[string]any) {
+	left := map[string][]string{}
+	for _, r := range recs {
+		if r["event"] == "authorize_command" {
+			reason, _ := r["reason"].(string)
+			left[qualVector(r)] = append(left[qualVector(r)], reason)
+		}
+	}
+	for i := range typed {
+		q := left[typed[i].Command]
+		if len(q) == 0 {
+			continue
+		}
+		if typed[i].Denied {
+			typed[i].Reason = q[0]
+		}
+		left[typed[i].Command] = q[1:]
 	}
 }
 
@@ -103,7 +169,10 @@ func l80Stops(arm, cell string, typed []l80Typed, mostOpen int, second float64, 
 	}
 	var out []string
 	for _, x := range typed {
-		if !x.Asked {
+		// The restart cell measures lost commands: a command port49 never saw
+		// that the device did not run is its result, not a stop. One that ran
+		// unasked is the failure L80 measures.
+		if !x.Asked && (!l80IsRestart(cell) || l80Ran(x)) {
 			out = append(out, fmt.Sprintf("%s: session %d %q (after %.1fs) was never asked: lost or run unasked", cell, x.Session, x.Command, x.Gap))
 		}
 		if x.Command == "show users" && !x.Denied {
@@ -184,3 +253,231 @@ const l80DefaultIdle = 30 * time.Second
 // before an L80 cell's capture: past the default idle close of a connection
 // an offered NX-OS holds (fix round 4).
 const l80CleanPolls = 60
+
+// l80Ran is whether the device ran a typed command: it answered and did not
+// deny it.
+func l80Ran(x l80Typed) bool { return !x.Denied && !x.Err }
+
+// l80RestartWindow is when port49d was down: StopAt is when the harness began
+// stopping it, UpAt when it announced its listener again (zero if it never did).
+type l80RestartWindow struct{ StopAt, UpAt time.Time }
+
+// The restart cell's verdicts.
+const (
+	l80RestartClean = "clean_reconnect"
+	l80RestartLost  = "lost_request"
+	// l80RestartPermDenied is a port49 finding: a command port49's policy permits
+	// was asked about after the restart and denied, so the session did not
+	// survive the restart. It is not an ordinary denial.
+	l80RestartPermDenied = "permitted_denied_after_restart"
+	l80RestartUnasked    = "unasked_command"
+	l80RestartDeadOnly   = "marked_dead_no_loss"
+	l80RestartNoConn     = "no_reconnect_seen"
+	// l80RestartCtxLost is the memory store's documented behavior, measured: every
+	// permitted command denied after the restart was denied context_missing,
+	// because the login contexts lived in the stopped process. On etcd the same
+	// denial is a port49 finding (l80RestartPermDenied).
+	l80RestartCtxLost = "context_lost_on_memory_store"
+	// l80RestartWindowUnmeasured: the debug has no open of the cell, so the cell's
+	// dead and fallback lines cannot be told from the setup's; nothing is graded from them.
+	l80RestartWindowUnmeasured = "debug_window_unmeasured"
+)
+
+// l80IsVerdict is whether v is one of the restart cell's verdict words.
+func l80IsVerdict(v string) bool {
+	return slices.Contains([]string{l80RestartClean, l80RestartLost, l80RestartPermDenied, l80RestartUnasked,
+		l80RestartDeadOnly, l80RestartNoConn, l80RestartCtxLost, l80RestartWindowUnmeasured}, v)
+}
+
+// The restart cells' session stores.
+const (
+	l80StoreMemory = "memory"
+	l80StoreEtcd   = "etcd"
+)
+
+// l80ReasonContextMissing is spec §5.7's reason for a command whose login
+// context the store no longer holds.
+const l80ReasonContextMissing = "context_missing"
+
+// l80IsRestart is whether the cell is one of the restart cells.
+func l80IsRestart(cell string) bool { return cell == "restart" || cell == "restart_etcd" }
+
+// l80RestartStore is the session store a restart cell runs on.
+func l80RestartStore(cell string) string {
+	if cell == "restart_etcd" {
+		return l80StoreEtcd
+	}
+	return l80StoreMemory
+}
+
+// l80RestartGrade is the restart cell graded: each typed command as asked and
+// permitted, asked and denied, or not asked (lost if the device did not run it,
+// unasked if it did), where each fell against the restart window, and the facts
+// the debug and the capture give.
+type l80RestartGrade struct {
+	Verdict                          string
+	Permitted, Denied, Lost, Unasked int
+	LostAcross, UnaskedAcross        int // not asked, typed while port49d was down or coming up
+	PermittedDenied                  int // asked and denied after the stop, though the policy permits it
+	ContextMissing                   int // of those, denied context_missing
+	Reconnects                       int // connections port49 answered that began after the stop
+	InWindow                         int // commands typed (permitted, denied or not asked) while port49d was down or coming up
+	Facts                            []string
+}
+
+// l80GradeRestart grades the restart cell, run on the session store named, from typed (Asked already set by
+// l80Ask), the restart window, nxosDebugCounts, the fallback count and the
+// capture's connections. A fact the records or the capture cannot place is
+// left out, never inferred: with no StopAt no command is placed against the
+// window and no connection is counted as a reconnect.
+func l80GradeRestart(store string, typed []l80Typed, w l80RestartWindow, counts map[string]int, fallbacks int, conns []l73Conn) l80RestartGrade {
+	var g l80RestartGrade
+	placed := !w.StopAt.IsZero()
+	across := func(x l80Typed) bool {
+		if !placed || x.At.IsZero() {
+			return false
+		}
+		end := x.Done
+		if end.IsZero() {
+			end = x.At
+		}
+		return !x.At.After(w.upOrOpen()) && !end.Before(w.StopAt)
+	}
+	var permDenied []string
+	for _, x := range typed {
+		if across(x) {
+			g.InWindow++
+		}
+		switch {
+		case x.Asked && x.Denied:
+			g.Denied++
+			if placed && x.Command != "show users" && !x.At.Before(w.StopAt) {
+				g.PermittedDenied++
+				if x.Reason == l80ReasonContextMissing {
+					g.ContextMissing++
+				}
+				permDenied = append(permDenied, fmt.Sprintf("permitted command %q typed %.1fs after the stop was asked about and denied: the session did not survive the restart",
+					x.Command, x.At.Sub(w.StopAt).Seconds()))
+			}
+		case x.Asked:
+			g.Permitted++
+		case l80Ran(x):
+			g.Unasked++
+			if across(x) {
+				g.UnaskedAcross++
+			}
+		default:
+			g.Lost++
+			if across(x) {
+				g.LostAcross++
+			}
+		}
+	}
+	if placed {
+		for _, c := range conns {
+			if !c.SYNAt.Before(w.StopAt) && c.Answer == "syn-ack" {
+				g.Reconnects++
+			}
+		}
+	}
+	dead, readFail := counts["mark_server_dead"], counts["ssl_read_failed"]
+	switch {
+	case g.Unasked > 0:
+		g.Verdict = l80RestartUnasked
+	case g.PermittedDenied > 0 && !(store == l80StoreMemory && g.ContextMissing == g.PermittedDenied):
+		g.Verdict = l80RestartPermDenied
+	case g.Lost > 0:
+		g.Verdict = l80RestartLost
+	case g.PermittedDenied > 0:
+		g.Verdict = l80RestartCtxLost
+	case counts["window_unmeasured"] > 0:
+		g.Verdict = l80RestartWindowUnmeasured
+	case dead > 0 || fallbacks > 0:
+		g.Verdict = l80RestartDeadOnly
+	case placed && g.Reconnects == 0:
+		g.Verdict = l80RestartNoConn
+	default:
+		g.Verdict = l80RestartClean
+	}
+	g.Facts = append(g.Facts, fmt.Sprintf("commands: %d asked and permitted, %d asked and denied, %d not asked and not run (lost), %d not asked and run (unasked)",
+		g.Permitted, g.Denied, g.Lost, g.Unasked))
+	g.Facts = append(g.Facts, permDenied...)
+	if g.PermittedDenied > 0 {
+		g.Facts = append(g.Facts, fmt.Sprintf("session store %s: %d of %d permitted commands denied after the stop were denied %s",
+			store, g.ContextMissing, g.PermittedDenied, l80ReasonContextMissing))
+	}
+	if placed {
+		g.Facts = append(g.Facts, fmt.Sprintf("commands typed in the window: %d", g.InWindow))
+		g.Facts = append(g.Facts, fmt.Sprintf("while port49d was down or coming up: %d lost, %d unasked", g.LostAcross, g.UnaskedAcross))
+		g.Facts = append(g.Facts, fmt.Sprintf("connections answered by port49 after the stop: %d", g.Reconnects))
+		closing, notify := l80RestartCloses(w, conns)
+		g.Facts = append(g.Facts, closing...)
+		if notify {
+			g.Facts = append(g.Facts, "close_notify: seen as a plaintext alert from port49 on a connection open at the stop")
+		} else {
+			g.Facts = append(g.Facts, "close_notify: not seen in a plaintext alert; an encrypted alert is not visible in a header-only capture, so this is not evidence it was not sent")
+		}
+	} else {
+		g.Facts = append(g.Facts, "restart window not recorded: no command is placed against it and no reconnect is counted")
+	}
+	g.Facts = append(g.Facts, fmt.Sprintf("debug: ssl_read_failed=%d mark_server_dead=%d fallback_lines=%d ssl_open_retry=%d", readFail, dead, fallbacks, counts["ssl_open_retry"]))
+	return g
+}
+
+// upOrOpen is the end of the window: UpAt, or, if port49d never came back, a
+// time past every command.
+func (w l80RestartWindow) upOrOpen() time.Time {
+	if w.UpAt.IsZero() {
+		return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return w.UpAt
+}
+
+// l80RestartCloses is how each connection open at the stop ended, and whether
+// port49 sent a plaintext close_notify on one. A connection whose end the
+// capture did not record is "open".
+func l80RestartCloses(w l80RestartWindow, conns []l73Conn) (lines []string, notify bool) {
+	for _, c := range conns {
+		if !c.SYNAt.Before(w.StopAt) || (!c.EndAt.IsZero() && c.End != "open" && c.EndAt.Before(w.StopAt)) {
+			continue
+		}
+		how := c.End
+		if !c.EndAt.IsZero() && c.End != "open" {
+			how += fmt.Sprintf(" %+.2fs after the stop", c.EndAt.Sub(w.StopAt).Seconds())
+		}
+		lines = append(lines, "connection open at the stop ended: "+how)
+		for _, a := range c.Alerts {
+			if a.Description == 0 && !a.FromDevice {
+				notify = true
+			}
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "no connection was open at the stop in the capture")
+	}
+	return lines, notify
+}
+
+var (
+	l80SecretLine = regexp.MustCompile(`(?i)password|token|secret|eyJ|payload`)
+	l80Long       = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
+)
+
+// l80Filter is the summary's own credential filter: a line with a secret
+// word is dropped, and a run of 24 or more characters masked.
+func l80Filter(s string) string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if l80SecretLine.MatchString(ln) {
+			continue
+		}
+		// A verdict is a closed word of the grader, not a run of key material;
+		// masked, it would leave the summary without its result.
+		if v, ok := strings.CutPrefix(strings.TrimRight(ln, "\r"), "restart verdict: "); ok && l80IsVerdict(v) {
+			out = append(out, "restart verdict: "+v)
+			continue
+		}
+		out = append(out, l80Long.ReplaceAllString(strings.TrimRight(ln, "\r"), "<LONG>"))
+	}
+	return strings.Join(out, "\n")
+}

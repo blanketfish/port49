@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,23 +38,6 @@ import (
 
 // l80Debug are the debug lines a cell turns on (the A/B's).
 var l80Debug = []string{"debug tacacs+ all", "debug aaa events", "debug aaa errors", "debug aaa aaa-requests"}
-
-var (
-	l80SecretLine = regexp.MustCompile(`(?i)password|token|secret|eyJ|payload`)
-	l80Long       = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
-)
-
-// l80Filter is the summary's own credential filter: a line with a secret
-// word is dropped, and a run of 24 or more characters masked.
-func l80Filter(s string) string {
-	var out []string
-	for _, ln := range strings.Split(s, "\n") {
-		if !l80SecretLine.MatchString(ln) {
-			out = append(out, l80Long.ReplaceAllString(strings.TrimRight(ln, "\r"), "<LONG>"))
-		}
-	}
-	return strings.Join(out, "\n")
-}
 
 // l80Events is port49_connection_events_total by event, from the metrics
 // endpoint: counts only, no labels but the event.
@@ -142,6 +124,10 @@ func TestL80Remeasure(t *testing.T) {
 	}
 	q.startDaemon(q.cfg)
 	defer q.restoreDaemon()
+	// The restart_etcd cell's broker and etcd: stopped before the standing
+	// config comes back (defers run last in, first out), which needs :8449.
+	var stack *l80EtcdStack
+	defer func() { stack.stop() }()
 	q.start = l.mark()
 	q.login()
 	defer q.stopAgent()
@@ -179,6 +165,14 @@ func TestL80Remeasure(t *testing.T) {
 				}
 			}
 		}
+		// The debug file is Keep's output: it gets its own gate, after the filter.
+		for name, body := range files {
+			if strings.HasSuffix(name, "-debug.txt") {
+				if bad := qualGate(map[string][]byte{name: []byte(body)}, append(q.ddSecrets(), minted...)); len(bad) > 0 {
+					t.Fatalf("INVALID: nothing written:\n  %s", strings.Join(bad, "\n  "))
+				}
+			}
+		}
 		for name, body := range files {
 			if err := os.WriteFile(filepath.Join(out, name), []byte(body+"\n"), 0o644); err != nil {
 				t.Fatal(err)
@@ -186,18 +180,14 @@ func TestL80Remeasure(t *testing.T) {
 		}
 	}
 
-	// The debug filter keeps only the lab's own values: port49's listen
-	// address, the device's, and the server group the device is configured
-	// with (review N6).
-	var filter nxosDebugFilter
-	for _, a := range []string{l73Server, l.p.addr} {
-		addr, err := netip.ParseAddr(a)
-		if err != nil {
-			t.Fatalf("INVALID: lab address %q: %v", a, err)
-		}
-		filter.Addrs = append(filter.Addrs, addr)
-	}
-	filter.Groups = []string{l73Group}
+	// The debug filter is the NX-OS profile of the device-debug filter: facility,
+	// payload drop, redaction of every secret the run has handled (the tokens
+	// minted so far included), long-run mask, fail closed.
+	filter := deviceDebugFilter{Platform: "nxos", Secrets: func() []string {
+		mintMu.Lock()
+		defer mintMu.Unlock()
+		return append(q.ddSecrets(), minted...)
+	}}
 
 	var stops []string
 	for _, cell := range l80Cells(arm) {
@@ -216,7 +206,19 @@ func TestL80Remeasure(t *testing.T) {
 			}
 			// e.cli stopped port49d for this break-glass session; the cell
 			// runs against it started again, debug held on here.
-			q.tlsDaemon(e, "l80", daemon)
+			if l80RestartStore(cell.Name) == l80StoreEtcd {
+				// The conformance config's broker moves out of the daemon, which
+				// runs on etcd beside port49-broker (see l80_etcd.go).
+				if stack == nil {
+					stack = l80EtcdUp(t, l, q, e)
+				}
+				memText := q.cfgText
+				q.cfgText = stack.daemonText
+				q.tlsDaemon(e, "l80", daemon)
+				q.cfgText = memText
+			} else {
+				q.tlsDaemon(e, "l80", daemon)
+			}
 			q.login()
 			time.Sleep(40 * time.Second)
 			// Every cell opens on a fresh connection: wait, without probing,
@@ -237,9 +239,20 @@ func TestL80Remeasure(t *testing.T) {
 			var sum strings.Builder
 			fmt.Fprintf(&sum, "L80 re-measure, arm %s, cell %s, nxos106 per-request TLS, idle_timeout default\n", arm, cell.Name)
 			fmt.Fprintf(&sum, "bin/port49d: vcs.revision=%s vcs.modified=%v\n", vcs.recorded().Revision, vcs.Modified)
+			if l80IsRestart(cell.Name) {
+				fmt.Fprintf(&sum, "session store: %s\n", l80RestartStore(cell.Name))
+			}
+			if l80RestartStore(cell.Name) == l80StoreEtcd {
+				fmt.Fprintf(&sum, "etcd: %s, a single member; keys under /port49/ at the start: %s\n", stack.version, stack.keyCount())
+			}
 			var mu sync.Mutex
 			var typed []l80Typed
 			var wg sync.WaitGroup
+			// The restart cell stops port49d by its recorded PID and starts it
+			// again while the loop keeps typing (see l80RestartDaemon).
+			var window l80RestartWindow
+			var restartErr error
+			var restartWG sync.WaitGroup
 			for i, seq := range cell.Sessions {
 				wg.Add(1)
 				go func(i int, seq []string) {
@@ -261,6 +274,23 @@ func TestL80Remeasure(t *testing.T) {
 					mu.Unlock()
 					gap := 0.0
 					for _, cmd := range seq {
+						if cmd == "@restart" {
+							restartWG.Add(1)
+							go func() {
+								defer restartWG.Done()
+								mu.Lock()
+								window.StopAt = time.Now()
+								mu.Unlock()
+								err := l80RestartDaemon(e, l)
+								mu.Lock()
+								defer mu.Unlock()
+								restartErr = err
+								if err == nil {
+									window.UpAt = time.Now()
+								}
+							}()
+							continue
+						}
 						if g, ok := strings.CutPrefix(cmd, "@sleep "); ok {
 							gap, _ = strconv.ParseFloat(g, 64)
 							time.Sleep(time.Duration(gap * float64(time.Second)))
@@ -277,7 +307,8 @@ func TestL80Remeasure(t *testing.T) {
 							}
 						}
 						x := l80Typed{Session: i, Command: cmd, Gap: gap, Took: time.Since(b0).Seconds(),
-							Denied: strings.Contains(first, "AAA authorization failed")}
+							Denied: strings.Contains(first, "AAA authorization failed"),
+							At:     b0, Done: time.Now(), Err: err != nil}
 						mu.Lock()
 						typed = append(typed, x)
 						fmt.Fprintf(&sum, "  s%d %-20q gap=%.1fs took=%.2fs err=%v first=%q\n", i, cmd, gap, x.Took, err != nil, first)
@@ -289,6 +320,7 @@ func TestL80Remeasure(t *testing.T) {
 				}(i, seq)
 			}
 			wg.Wait()
+			restartWG.Wait()
 			time.Sleep(40 * time.Second) // holds, idle closes
 			recs := l.waitForRecords(off, 10*time.Second, func([]map[string]any) bool { return false })
 			var recorded []string
@@ -298,8 +330,14 @@ func TestL80Remeasure(t *testing.T) {
 				}
 			}
 			l80Ask(typed, recorded)
+			l80Reasons(typed, recs)
 			after := l80Events()
 			second := after["single_connect_second_connection"] - before["single_connect_second_connection"]
+			if l80IsRestart(cell.Name) {
+				// The restart reset port49d's counters: a delta across it says nothing.
+				second = 0
+				sum.WriteString("restart: port49d's connection-event counters were reset by the restart; their deltas below are not graded\n")
+			}
 			conns := stop()
 			most := l80MostOpen(conns)
 			fmt.Fprintf(&sum, "tls connections: %d, most open at once: %d\n", len(conns), most)
@@ -319,12 +357,24 @@ func TestL80Remeasure(t *testing.T) {
 			time.Sleep(15 * time.Second)
 			at := len(c.transcript())
 			c.sendExpect("show debug logfile "+label, 180*time.Second, c.prompt)
-			kept := filter.Keep(c.transcript()[at:])
-			cnt := nxosDebugCounts(kept)
+			keptText, keepErr := filter.Keep(c.transcript()[at:])
+			if keepErr != nil {
+				c.sendExpect("undebug all", 60*time.Second, c.prompt)
+				t.Fatalf("INVALID: %s's debug capture was discarded (%v); nothing written", cell.Name, keepErr)
+			}
+			kept := string(keptText)
+			// Counts are over the cell's window; the setup phase (port49d stopped,
+			// the harness setting up) is counted apart as setup_*.
+			cnt := nxosWindowedCounts(kept)
+			_, cellText, _ := nxosCellWindow(kept)
 			var ks []string
 			for k := range nxosDebugMarkers {
 				ks = append(ks, fmt.Sprintf("%s=%d", k, cnt[k]))
 			}
+			for _, k := range nxosSetupMarkers {
+				ks = append(ks, fmt.Sprintf("setup_%s=%d", k, cnt["setup_"+k]))
+			}
+			ks = append(ks, fmt.Sprintf("window_unmeasured=%d", cnt["window_unmeasured"]))
 			slices.Sort(ks)
 			sum.WriteString("debug counts: " + strings.Join(ks, " ") + "\n")
 			// Each fallback with the request before it, for the note's
@@ -338,7 +388,29 @@ func TestL80Remeasure(t *testing.T) {
 			if cell.Name == "concurrent" {
 				sum.WriteString(l80Interleaving + "\n")
 			}
+			var g l80RestartGrade
+			if l80IsRestart(cell.Name) {
+				if l80RestartStore(cell.Name) == l80StoreEtcd {
+					fmt.Fprintf(&sum, "etcd: keys under /port49/ at the end: %s\n", stack.keyCount())
+				}
+				if restartErr != nil {
+					sum.WriteString("restart: port49d did not come back\n")
+				}
+				g = l80GradeRestart(l80RestartStore(cell.Name), typed, window, cnt, len(nxosFallbacks(cellText)), conns)
+				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(window.StopAt), l80Clock(window.UpAt))
+				for _, f := range g.Facts {
+					sum.WriteString("restart: " + f + "\n")
+				}
+				fmt.Fprintf(&sum, "restart verdict: %s\n", g.Verdict)
+			}
 			cellStops := l80Stops(arm, cell.Name, typed, most, second, cnt)
+			if l80IsRestart(cell.Name) && restartErr != nil {
+				cellStops = append(cellStops, "restart: port49d did not come back after the restart")
+			}
+			if g.Verdict == l80RestartPermDenied {
+				cellStops = append(cellStops, fmt.Sprintf("restart: %d permitted command(s) denied after the restart, %d of them not for context_missing on the memory store: the session did not survive it (a port49 finding)",
+					g.PermittedDenied, g.PermittedDenied-g.ContextMissing))
+			}
 			for _, s := range cellStops {
 				sum.WriteString("STOP: " + s + "\n")
 			}
@@ -356,5 +428,41 @@ func TestL80Remeasure(t *testing.T) {
 		if len(stops) > 0 {
 			t.Fatalf("STOP (report before shipping; evidence for %s is written):\n%s", cell.Name, strings.Join(stops, "\n"))
 		}
+	}
+}
+
+// l80Clock is a time as the summary keeps it, or "never".
+func l80Clock(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.UTC().Format("15:04:05.000")
+}
+
+// l80RestartDaemon stops port49d by the harness's recorded process and starts it
+// on the cell's config again, returning once it announces its RFC 9887
+// listener. It is l73Env.startOn with errors returned, not Fatal, because the
+// restart runs beside the typing loop, off the test goroutine. It does not wait
+// on ready(): that probes through a break-glass CLI, which stops port49d.
+func l80RestartDaemon(e *l73Env, l *lab) error {
+	if err := l.stopDaemon(); err != nil {
+		return err
+	}
+	off := fileSize(l.errPath)
+	healthListen = e.listen
+	defer func() { healthListen = "" }()
+	if err := l.startDaemonWith(e.cfg, true); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		b, _ := os.ReadFile(l.errPath)
+		if int64(len(b)) > off && strings.Contains(string(b[off:]), "RFC 9887 listener on") {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("port49d never announced its RFC 9887 listener")
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

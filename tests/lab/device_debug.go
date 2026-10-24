@@ -1,356 +1,517 @@
 package lab
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
-// Device debug capture for EOS, IOS XR, Junos and IOS XE (post-11b fix PR,
-// task 8; spec §13 decision 50 ruling 20). The same filter as NX-OS
-// (nxos_debug.go), per platform: debug output can carry the request, the
-// reply and the credential, so nothing from the device is kept as it is.
-// deviceDebugFilter.Keep filters each line before anything reaches disk:
+// Device debug capture for EOS, IOS XR, Junos, IOS XE and NX-OS (post-11b fix
+// PR, task 8; spec §13 decision 50 ruling 20). Debug output can carry the
+// request, the reply and the credential, so nothing from the device is kept as
+// it is. deviceDebugFilter.Keep scrubs the text in-process, before anything
+// reaches disk, in this order:
 //
-//  1. Drop the line if it holds a secret word or a hex run (the NX-OS rules,
-//     nxosDebugSecret and nxosDebugHexRun). Payload lines are the packet body.
-//  2. Drop the line if it holds a run of 24 or more token characters
-//     (nxosDebugLong: a token or base64). NX-OS masks such a run; here the
-//     line is dropped, as the task brief says.
-//  3. Keep the line only if one anchored shape of the platform's profile
-//     admits it. A shape admits a count, a status word, a verb or an address,
-//     never a free-text field, so a debug line of a shape nobody listed is
-//     lost rather than kept. An unknown platform keeps nothing.
-//  4. Every value field is allow-listed: an address only if it is one of the
-//     lab's (Addrs), a server group only from Groups, a method list only from
-//     deviceDebugLists, a fallback method only none or local, a username only
-//     from the lab's (deviceDebugUser), and an opaque id (a session, handle or
-//     tty name) is always <masked>. A number is kept only in a named position
-//     and within bounds: a port 1-65535, a version or small counter of three
-//     digits at most; a session or request id is written <n>. An attribute line keeps its key only for
-//     service, cmd, cmd-arg and priv-lvl, with the NX-OS word lists
-//     (nxosDebugServices, nxosDebugWords, priv-lvl 0-15); any other value is
-//     <masked>, any other key drops the line.
+//  1. Keep by facility. A line is kept only if it carries the platform's
+//     TACACS/AAA facility (ddProfile.facility). Everything else is dropped.
+//  2. Drop payload and hex-dump lines. A line that says payload, or has a hex
+//     layout (ddHexView: a run of eight or more hex digits, or four or more
+//     groups of one, two or four hex digits in a row, separated by blanks or
+//     colons, a clock aside; ddHexMessage: a message of nothing but hex groups;
+//     nxosDebugHexRun), is dropped whole: it is the packet body. A line whose
+//     separator-stripped copy holds the hex of a known secret is dropped too,
+//     because a spaced form cannot be redacted in place.
+//  3. Mask every run of 24 or more token characters as <LONG> (and again after
+//     step 5, so a redaction cannot split a run and unmask the rest).
+//  4. Redact the run's known secrets: the TACACS+ key, the lab passwords, the
+//     tokens and TOTP codes the run handled. Every value is replaced by
+//     <redacted> in its literal, hex, base64 (standard and URL, padded and not,
+//     at the three alignments) and Cisco type 7 forms (all 16 salts), matched
+//     without regard to case, longest first.
+//  5. Redact reversible encodings and crypt hashes by shape: Junos $9$, crypt
+//     $1$ $5$ $6$ $8$, and `key|key-string|password|secret` followed by a type
+//     7 value or a 0, 6, 8 or 9 encoding, quoted or not. The shape is judged
+//     without knowing the secret, so an encoding of a secret nobody told us
+//     about is still redacted.
+//  6. Fail closed. The kept text is checked once more for every secret in every
+//     form, and every line for the hex of one with its separators stripped. If
+//     any survives, the whole capture is discarded: Keep returns
+//     errDeviceDebugLeak, which names no device text, and the cell is graded
+//     unmeasured.
 //
-// The line shapes are plausible wording, not measured: the lab run confirms
-// them, and a wrong guess costs masked or missing lines, never a leak. No body
-// byte is decoded and no line is kept unfiltered. The collector
-// (captureDeviceDebug) filters in-process, so the raw output never reaches
-// disk.
+// Limits, stated: a fragment of a secret of under 24 characters can survive a
+// line wrap or an overlap of two secrets (the redaction matches whole values);
+// a truncation of 12 characters or more is a form of its own, but one of under
+// 12 characters, or cut from the middle, is not known;
+// the capture sets a wide terminal where the CLI has one. The facilities are
+// coarse words (Junos `tacplus` also appears in an echoed `set ... tacplus-server`
+// command, IOS XE `TAC` anywhere in a line), which is safe only while the harness
+// types nothing but known secrets.
+//
+// Nothing the device prints is decoded: type 7 and $9$ values are redacted, never
+// read. Only our own known secrets are encoded, to know what to look for. The
+// collector (captureDeviceDebug) filters in-process, so the raw output never
+// reaches disk.
 
-var errUnknownDebugPlatform = errors.New("device debug: unknown platform")
-
-// deviceDebugLists are the method-list names kept: NX-OS's own (the
-// `req <kind>:<list>` form), and `default`, the only list the other lab
-// configs carry (`aaa authentication login default group port49 local`).
-var deviceDebugLists = append([]string{"default"}, nxosDebugLists...)
-
-// deviceDebugUsers are the usernames kept: the lab's break-glass account and
-// the alice01..alice99 token users.
-var deviceDebugUser = regexp.MustCompile(`^(` + regexp.QuoteMeta(labcreds.BreakglassUser) + `|alice[0-9]{2})$`)
+var (
+	errUnknownDebugPlatform = errors.New("device debug: unknown platform")
+	// errDeviceDebugLeak is the fail-closed error. It names no device text.
+	errDeviceDebugLeak = errors.New("device debug: a known secret survived the scrub; the whole capture was discarded and the cell is unmeasured")
+)
 
 // deviceDebugFilter is the capture filter for one platform ("eos", "iosxr",
-// "junos", "iosxe") in one lab: the addresses and server group names a kept
-// line may name. Anything else in those fields is <masked>.
+// "junos", "iosxe", "nxos") in one lab. Secrets, if set, is called at each
+// Keep for the values the run has handled so far (tokens and codes are minted
+// during a cell).
 type deviceDebugFilter struct {
 	Platform string
-	Addrs    []netip.Addr // port49's listen address and the device's management address
-	Groups   []string     // the lab's TACACS+ server group names
+	Secrets  func() []string
+	// Drops, if set, counts the lines Keep drops, by reason. Numbers only.
+	Drops *ddDropCounts
+	// Tags, if set, counts the syslog process tag of each line Keep reads before
+	// the facility rule (ddTagCounts). Numbers only.
+	Tags *ddTagCounts
 }
 
-// Placeholders in a shape: each becomes one capturing group, judged by kind.
-const (
-	ddIP     = "\x01" // an address, kept only if a lab address
-	ddGroup  = "\x02" // a server group name
-	ddList   = "\x03" // a method list name
-	ddMethod = "\x04" // a fallback method: none or local
-	ddUser   = "\x05" // a username
-	ddOpaque = "\x06" // a session id, handle or tty name: always masked
-	ddID     = "\x07" // a session or request id: kept as <n>
-)
+// ddDropCounts is how many lines Keep dropped, by the rule that dropped them.
+type ddDropCounts struct {
+	Facility, Payload, HexView, HexMessage, Marker, StrippedSecret int
+}
 
-// ddProfile is one platform's line format and shapes.
+// String is the counts as `name=n` words, for the summary and the note.
+func (d ddDropCounts) String() string {
+	return fmt.Sprintf("facility=%d body_word=%d hex_view=%d hex_message=%d evidence_marker=%d known_value_hex=%d",
+		d.Facility, d.Payload, d.HexView, d.HexMessage, d.Marker, d.StrippedSecret)
+}
+
+// ddProfile is one platform's facility and counters. The counters read kept
+// lines, which are whole scrubbed lines, so they are coarse and unanchored.
 type ddProfile struct {
-	line   *regexp.Regexp // splits a line into t (time), p (process, optional), m (message)
-	av     *regexp.Regexp // an attribute line: the fixed prefix, key and value
-	shapes []string
-	// What the counters read in a kept message.
+	// facility selects the lines to keep: those it matches.
+	facility *regexp.Regexp
+	// What the counters read in a kept line.
 	open, authen, author, acct, single, dead, fallback *regexp.Regexp
-	// closed matches a close; its one group is the reason the device states.
+	// closed matches a close; its one group, if it has one, is the reason the
+	// device states.
 	closed *regexp.Regexp
+	// failed matches a failed open (cEOS prints connFails after connOpens);
+	// request matches a request of unknown kind (cEOS messagesSent), counted
+	// apart from the three kinds. Both may be nil.
+	failed, request *regexp.Regexp
+	// noClose is a platform whose debug has no close line (Junos): its summary
+	// says the close is unknown instead of counting none.
+	noClose bool
+	// authenAlt, authorAlt and acctAlt count a request kind only when no line of
+	// the text matches the kind's primary regexp (see deviceDebugSummarize).
+	authenAlt, authorAlt, acctAlt *regexp.Regexp
 }
 
-const (
-	// ddSmall is a version or small counter (three digits at most); ddPort is
-	// a port, 1 to 65535. A session or request id is kept as <n> (ddID).
-	ddSmall  = `\d{1,3}`
-	ddPort   = `(?:6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|[1-9]\d{0,3})`
-	ddStatus = `(PASS|FAIL|FAILURE|ERROR|GETUSER|GETPASS|GETDATA|RESTART|FOLLOW|PASS_ADD|PASS_REPL|SUCCESS)`
-	ddKind   = `(authentication|authorization|accounting)`
-)
+// ddNever matches nothing.
+var ddNever = regexp.MustCompile(`\z\A`)
+
+// ddSep is the punctuation between two words of a device's debug line.
+const ddSep = `[\W_]+`
 
 var deviceDebugProfiles = map[string]*ddProfile{
 	"iosxe": {
-		line: regexp.MustCompile(`^[*.]?(?:[A-Z][a-z]{2} +\d+(?: \d{4})? )?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^(TAC\+: +)(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
-		shapes: []string{
-			`TPLUS: Queuing AAA (Authentication|Authorization|Accounting) request ` + ddID + ` for processing`,
-			`TPLUS: processing (authentication|authorization|accounting) (start )?request id ` + ddID,
-			`TPLUS: Authentication start packet created for ` + ddID + `\(` + ddUser + `\)`,
-			`TPLUS: (Using|Choosing next) server ` + ddIP,
-			`TPLUS\(` + ddOpaque + `\)/` + ddSmall + `/` + ddOpaque + `/` + ddOpaque + `: Started ` + ddSmall + ` sec timeout`,
-			`TPLUS\(` + ddOpaque + `\) login timer (started ` + ddSmall + ` sec timeout|stopped)`,
-			`TAC\+: Opening TCP/IP to ` + ddIP + `/` + ddPort + ` timeout=` + ddSmall,
-			`TAC\+: Opened TCP/IP handle ` + ddOpaque + ` to ` + ddIP + `/` + ddPort,
-			`TAC\+: Closing TCP/IP ` + ddOpaque + ` connection to ` + ddIP + `/` + ddPort + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
-			`TAC\+: Using single connection to ` + ddIP,
-			`TAC\+: Server ` + ddIP + ` (marked|is) (DEAD|ALIVE)`,
-			`TAC\+: Using default tacacs server-group "` + ddGroup + `"`,
-			`TAC\+: send (AUTHEN|AUTHOR|ACCT)/(START|CONT|REQ|REQUEST) packet`,
-			`TAC\+: ver=` + ddSmall + ` id=` + ddID + ` received (AUTHEN|AUTHOR|ACCT) status = ` + ddStatus,
-			`TAC\+: \(` + ddID + `\): received (authen|author|acct) response status = ` + ddStatus,
-			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Pick method list '` + ddList + `'`,
-			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Status = ` + ddStatus,
-			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Method=(LOCAL|NONE)`,
-			`AAA/AUTHEN/LOGIN \(` + ddOpaque + `\): Method=` + ddGroup + ` \(tacacs\+\)`,
-			`AAA/AUTHOR/(EXEC|CMD) \(` + ddOpaque + `\): (Method=` + ddGroup + ` \(tacacs\+\)|Post authorization status = ` + ddStatus + `)`,
-			`AAA/ACCT/(EXEC|CMD|NET)/(START|STOP|WATCHDOG) User ` + ddUser + `, Port ` + ddOpaque,
-		},
-		open:     regexp.MustCompile(`TAC\+: Opening TCP/IP to`),
-		closed:   regexp.MustCompile(`TAC\+: Closing TCP/IP \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$`),
-		authen:   regexp.MustCompile(`send AUTHEN/`),
-		author:   regexp.MustCompile(`send AUTHOR/`),
-		acct:     regexp.MustCompile(`send ACCT/`),
-		single:   regexp.MustCompile(`Using single connection`),
-		dead:     regexp.MustCompile(`Server \S+ (marked|is) DEAD`),
-		fallback: regexp.MustCompile(`Method=(LOCAL|NONE)`),
+		facility: regexp.MustCompile(`(?i)\b(?:TPLUS|TAC)\b`),
+		open:     regexp.MustCompile(`(?i)\bopening tcp/ip to\b|tacacs secure connection established with peer`),
+		closed:   regexp.MustCompile(`(?i)closing tcp/ip \S+ connection to \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|tacacs secure connection closed with peer`),
+		// A request is counted once: from the `send KIND/` lines when the text has
+		// any of that kind, else from the processing or request-created lines. A
+		// device that prints both for one request would otherwise count it twice.
+		authen:    regexp.MustCompile(`(?i)send AUTHEN/`),
+		author:    regexp.MustCompile(`(?i)send AUTHOR/`),
+		acct:      regexp.MustCompile(`(?i)send ACCT/`),
+		authenAlt: regexp.MustCompile(`(?i)TPLUS` + ddSep + `processing authentication\b`),
+		authorAlt: regexp.MustCompile(`(?i)TPLUS` + ddSep + `authorization request created`),
+		acctAlt:   regexp.MustCompile(`(?i)TPLUS` + ddSep + `accounting request created`),
+		single:    regexp.MustCompile(`(?i)using single connection`),
+		dead:      regexp.MustCompile(`(?i)server \S+ (?:marked|is) dead`),
+		fallback:  regexp.MustCompile(`(?i)method=(?:local|none)`),
 	},
 	"eos": {
-		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ |\d{4}-\d\d-\d\dT)?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?)(?:[+-]\d\d:\d\d|Z)? (?:\S+ )?(?P<p>Aaa|Tacacs|TacPlus)(?:\[\d+\])?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
-		shapes: []string{
-			`(Connecting|Connected) to (TACACS\+ )?server ` + ddIP + `( port |:)` + ddPort,
-			`Connection to ` + ddIP + `:` + ddPort + ` (closed|closed by peer|closed by server|closed idle timeout|reset|timed out)`,
-			`Sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP + `(:` + ddPort + `)?`,
-			`Received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
-			`Single connect (flag set|negotiated|not supported)`,
-			`Server ` + ddIP + ` (marked dead|marked alive|is not responding)`,
-			`Falling back to ` + ddMethod + ` for ` + ddKind,
-			`Using server group ` + ddGroup,
-			`User ` + ddUser + ` authenticating via method list ` + ddList,
-		},
-		open:     regexp.MustCompile(`^(Connecting|Connected) to`),
-		closed:   regexp.MustCompile(`^Connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)$`),
-		authen:   regexp.MustCompile(`^Sending authentication request`),
-		author:   regexp.MustCompile(`^Sending authorization request`),
-		acct:     regexp.MustCompile(`^Sending accounting request`),
-		single:   regexp.MustCompile(`^Single connect (flag set|negotiated)`),
-		dead:     regexp.MustCompile(`marked dead|is not responding`),
-		fallback: regexp.MustCompile(`^Falling back to`),
+		facility: regexp.MustCompile(`\b(?:Aaa|Tacacs|TacPlus)\b`),
+		// TacacsLib prints counter lines: connOpens is a connection (a refused one
+		// too, followed by connFails), messagesSent a request, connCloses a close.
+		open:    regexp.MustCompile(`(?i)\b(?:connecting|connected) to\b|created socket|\bcounter connOpens\b`),
+		closed:  regexp.MustCompile(`(?i)connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)|\btacacs\b\W+close\b|\bcounter connCloses\b`),
+		failed:  regexp.MustCompile(`(?i)\bcounter connFails\b`),
+		request: regexp.MustCompile(`(?i)\bcounter messagesSent\b`),
+		// The tac_send_* result lines (returned, failed) are never requests: a
+		// failed one never went out, and one printed after connCloses would open a
+		// connection that is not there. messagesSent is the request.
+		authen:   regexp.MustCompile(`(?i)sending authentication request`),
+		author:   regexp.MustCompile(`(?i)sending authorization request`),
+		acct:     regexp.MustCompile(`(?i)sending accounting request`),
+		single:   regexp.MustCompile(`(?i)single connect(?:ion)? (?:flag set|negotiated)`),
+		dead:     regexp.MustCompile(`(?i)marked dead|is not responding`),
+		fallback: regexp.MustCompile(`(?i)falling back to`),
 	},
 	"iosxr": {
-		line: regexp.MustCompile(`^(?:RP/\d+/\S+:)?(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d\.\d+)(?: [A-Z]{2,5})?: (?P<p>tacacsd|aaad|tac_plus)(?:\[\d+\])?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
-		shapes: []string{
-			`(Opening|Opened) connection to ` + ddIP + ` port ` + ddPort,
-			`Closing connection to ` + ddIP + ` port ` + ddPort + `( \((idle timeout|remote reset|timeout|error|closed by server)\))?`,
-			`Sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP,
-			`Received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
-			`Single connection (flag set|negotiated|not supported)`,
-			`Server ` + ddIP + ` (marked dead|marked alive|is not responding)`,
-			`Falling back to ` + ddMethod + ` for ` + ddKind,
-			`Using server group ` + ddGroup,
-			`User ` + ddUser + ` authenticating via method list ` + ddList,
-		},
-		open:     regexp.MustCompile(`^Opening connection to`),
-		closed:   regexp.MustCompile(`^Closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?$`),
-		authen:   regexp.MustCompile(`^Sending authentication request`),
-		author:   regexp.MustCompile(`^Sending authorization request`),
-		acct:     regexp.MustCompile(`^Sending accounting request`),
-		single:   regexp.MustCompile(`^Single connection (flag set|negotiated)`),
-		dead:     regexp.MustCompile(`marked dead|is not responding`),
-		fallback: regexp.MustCompile(`^Falling back to`),
+		// The close line has no process name (step 4 sample `_ connection closed _
+		// A port _`), so the facility also takes that one shape: straight after the
+		// clock and zone, no process slot, a number, an address, `port`. Another
+		// daemon's "connection closed ... port" line (sshd, netconf) is not kept.
+		facility: regexp.MustCompile(`(?i)\btacacsd\b|\d{2}\.\d{1,9}(?: [A-Z]{2,5})?: connection closed \d+ (?:\d{1,3}\.){3}\d{1,3} port \d+`),
+		open:     regexp.MustCompile(`(?i)opening connection to|socket connected`),
+		closed:   regexp.MustCompile(`(?i)closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|\bconnection closed\b|\bclosing the socket\b`),
+		// One request prints three lines (the selected server, the Encrypted line and
+		// the Packet line); only the last has "(session N) to server" and counts.
+		authen:   regexp.MustCompile(`(?i)^.*\bPacket AUTHEN/\w+ \(session \d+\) to server\b`),
+		author:   regexp.MustCompile(`(?i)^.*\bPacket AUTHOR/\w+ \(session \d+\) to server\b`),
+		acct:     regexp.MustCompile(`(?i)^.*\bPacket ACCT/\w+ \(session \d+\) to server\b`),
+		single:   regexp.MustCompile(`(?i)single connection (?:flag set|negotiated)`),
+		dead:     regexp.MustCompile(`(?i)marked dead|is not responding`),
+		fallback: regexp.MustCompile(`(?i)falling back to`),
 	},
 	"junos": {
-		line: regexp.MustCompile(`^(?:[A-Z][a-z]{2} +\d+ )?(?P<t>\d\d:\d\d:\d\d(?:\.\d+)?) (?:\S+ )?(?P<p>mgd|sshd|login|tacplus|authd)(?:\[\d+\])?: (?P<m>.*)$`),
-		av:   regexp.MustCompile(`^()(priv-lvl|service|cmd-arg|cmd)=(.*)$`),
-		shapes: []string{
-			`(connecting|connected) to server ` + ddIP + ` port ` + ddPort,
-			`connection to ` + ddIP + ` (closed|closed by server|closed idle timeout|reset|timed out)`,
-			`sending ` + ddKind + ` request ` + ddID + ` to ` + ddIP,
-			`received ` + ddKind + ` reply ` + ddID + ` status ` + ddStatus,
-			`single-connect (flag set|negotiated|not offered)`,
-			`server ` + ddIP + ` (marked dead|marked alive|timed out)`,
-			`falling back to ` + ddMethod,
-			`using server group ` + ddGroup,
-			`user ` + ddUser + ` authenticating via method list ` + ddList,
-		},
-		open:     regexp.MustCompile(`^connecting to server`),
-		closed:   regexp.MustCompile(`^connection to \S+ (closed(?: by server| idle timeout)?|reset|timed out)$`),
-		authen:   regexp.MustCompile(`^sending authentication request`),
-		author:   regexp.MustCompile(`^sending authorization request`),
-		acct:     regexp.MustCompile(`^sending accounting request`),
-		single:   regexp.MustCompile(`^single-connect (flag set|negotiated)`),
-		dead:     regexp.MustCompile(`marked dead`),
-		fallback: regexp.MustCompile(`^falling back to`),
+		facility: regexp.MustCompile(`(?i)\b(?:tacplus|authd|tacacs)\b`),
+		// Only the auditd accounting line is measured (step 4d). No connection or
+		// authentication line has been kept: the login path's syslog tag is not
+		// known yet (see ddTagCounts), so they are unmeasured, not guessed, and the
+		// close stays unknown. The reservation-file "opened" lines of authd are not
+		// connections and are not counted.
+		open:     ddNever,
+		closed:   ddNever,
+		noClose:  true,
+		authen:   ddNever,
+		author:   ddNever,
+		acct:     regexp.MustCompile(`(?i)successfully sent tacacs\+ accounting-request message`),
+		single:   regexp.MustCompile(`(?i)single-connect (?:flag set|negotiated)`),
+		dead:     regexp.MustCompile(`(?i)marked dead`),
+		fallback: regexp.MustCompile(`(?i)falling back to`),
+	},
+	"nxos": {
+		facility: regexp.MustCompile(`(?i)\b(?:tacacsd|aaad)\b`),
+		open:     regexp.MustCompile(`(?i)nxos_ssl_open success`),
+		closed:   regexp.MustCompile(`(?i)freeing ssl_ctx for sock_fd`),
+		authen:   regexp.MustCompile(`(?i)aaa type: *1\b`),
+		author:   regexp.MustCompile(`(?i)aaa type: *2\b`),
+		acct:     regexp.MustCompile(`(?i)aaa type: *3\b`),
+		single:   ddNever,
+		dead:     regexp.MustCompile(`(?i)mark server\(.*\) dead|aaa_mark_server_dead \d`),
+		fallback: regexp.MustCompile(`(?i)fall back method`),
 	},
 }
 
-// ddCompiled are a platform's shapes with their value kinds, compiled once.
-type ddCompiled struct {
-	re    *regexp.Regexp
-	kinds []byte // per capturing group: 'i' address, 'g' group, 'l' method list, 'm' fallback method, 'u' user, 'x' opaque, 'n' id
+var (
+	ddPayload = regexp.MustCompile(`(?i)payload`)
+	// ddShapeRedact are the reversible encodings and hashes redacted by shape,
+	// unconditionally, each with its replacement. The Junos $9$ and the crypt
+	// $1$ $5$ $6$ $8$ forms go whole; a `key|password|secret` word keeps its
+	// word (and its type) and loses its value.
+	ddShapeRedact = []struct {
+		re   *regexp.Regexp
+		repl string
+	}{
+		// The Junos $9$ alphabet includes `-`, so the value runs to a space or quote.
+		{regexp.MustCompile(`\$[15689]\$[^\s"']+`), ddRedacted},
+		// The reversible and clear types of a key, password or secret: any
+		// whitespace, the quoted NX-OS form or a bare word, the whole value.
+		{regexp.MustCompile(`(?i)\b(key(?:-string)?|password|secret)\s+(7|[0689])\s+("[^"]*"|\S+)`), "${1} ${2} " + ddRedacted},
+	}
+	ddClock = regexp.MustCompile(`\d\d:\d\d:\d\d(?:\.\d{1,9})?`)
+
+	// The hex-dump views. ddHexChain is four or more groups of one, two or four
+	// hex digits in a row, separated by blanks or colons; ddHexRun a contiguous
+	// run of eight or more; ddHexOnly a message that is nothing but hex groups.
+	// A clock is replaced by T first, so `09:39:03` is not a dump, and a dotted
+	// address never is one (the dot is no separator).
+	ddHexTok   = `(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{1,2})`
+	ddHexChain = regexp.MustCompile(`(?:^|[ \t:,-])(?:` + ddHexTok + `[ \t:,-]+){3,}` + ddHexTok + `(?:[ \t:,-]|$)`)
+	ddHexRun   = regexp.MustCompile(`[0-9A-Fa-f]{8,}`)
+	ddHexOnly  = regexp.MustCompile(`^(?:[0-9A-Fa-f]{1,8}(?:[ \t:.,-]+|$)){2,}$`)
+	ddIndex    = regexp.MustCompile(`^\s*(?:\[\d+\]|\(\w+\))?[\s:+]*`)
+	// ddSepStrip removes what can sit between the bytes of a spelled-out hex
+	// string: every 0x or \x and all punctuation and blanks.
+	ddSepStrip = regexp.MustCompile(`(?i)\\x|0x|[^0-9a-z]`)
+	// ddBytePrefix is the 0x or \x in front of a byte, C and Python style.
+	ddBytePrefix = regexp.MustCompile(`(?i)\\x|\b0x`)
+	// ddMarker is what an evidence file must not hold, so the line goes rather
+	// than the whole run turning INVALID at the gate.
+	ddMarker = regexp.MustCompile(`(?i:_sha256)|BEGIN `)
+)
+
+// ddHexView is whether line, a clock aside, has a hex-dump layout: a run of
+// eight or more hex digits, or four or more hex groups in a row.
+func ddHexView(line string) bool {
+	v := ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(line, "T"), " ")
+	return ddHexRun.MatchString(v) || ddHexChain.MatchString(v)
 }
 
-var ddShapes = func() map[string][]ddCompiled {
-	out := map[string][]ddCompiled{}
-	repl := strings.NewReplacer(ddIP, `([0-9A-Za-z.:]{2,39})`, ddGroup, `([A-Za-z0-9_-]{0,32})`,
-		ddList, `([A-Za-z0-9_:-]{1,40})`, ddMethod, `([a-z]+)`, ddUser, `([A-Za-z0-9_.-]{1,32})`,
-		ddOpaque, `([0-9A-Za-z_.:-]{1,23})`, ddID, `(-?\d{1,12})`)
-	for name, p := range deviceDebugProfiles {
-		for _, s := range p.shapes {
-			var kinds []byte
-			for _, c := range s {
-				switch string(c) {
-				case ddIP:
-					kinds = append(kinds, 'i')
-				case ddGroup:
-					kinds = append(kinds, 'g')
-				case ddList:
-					kinds = append(kinds, 'l')
-				case ddMethod:
-					kinds = append(kinds, 'm')
-				case ddUser:
-					kinds = append(kinds, 'u')
-				case ddOpaque:
-					kinds = append(kinds, 'x')
-				case ddID:
-					kinds = append(kinds, 'n')
+// ddHexMessage is whether the message after the facility (first match of p) is
+// nothing but hex groups.
+func ddHexMessage(p *ddProfile, line string, whole bool) bool {
+	loc := p.facility.FindStringIndex(line)
+	rest := line
+	switch {
+	case loc != nil:
+		rest = line[loc[1]:]
+	case !whole:
+		return false
+	}
+	rest = rest[len(ddIndex.FindString(rest)):]
+	rest = ddBytePrefix.ReplaceAllString(ddClock.ReplaceAllString(rest, "T"), " ")
+	return ddHexOnly.MatchString(strings.TrimSpace(rest))
+}
+
+const ddRedacted = "<redacted>"
+
+// ddXlat is the Cisco type 7 translation table.
+const ddXlat = "dsfd;kfoA,.iyewrkldJKDHSUBsgvca69834ncxv9873254k;fg87"
+
+// ddType7 is s as Cisco type 7 encodes it with salt (0 to 15): the two-digit
+// salt, then each byte xor the table, in hex. Only our own known secrets are
+// encoded, to know what to look for; no value the device prints is decoded.
+func ddType7(s string, salt int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%02d", salt)
+	for i := 0; i < len(s); i++ {
+		fmt.Fprintf(&b, "%02X", s[i]^ddXlat[(salt+i)%len(ddXlat)])
+	}
+	return b.String()
+}
+
+// ddSecretForms are the strings that must not survive in the kept text, one per
+// form of each secret, lowercase and longest first. Besides the literal, hex,
+// base64 (both alphabets, padded or not) and type 7 forms, the base64 of a
+// secret at the three alignments it can have in a longer encoded string is
+// covered by the stable inner part of each: the encoding of the secret alone
+// (a partial last character cut), and of the secret behind one and two zero
+// bytes (the characters that mix in the neighbour's bits cut).
+func ddSecretForms(secrets []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		if s = strings.ToLower(s); s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	addInner := func(s string) {
+		if len(s) >= 4 {
+			add(s)
+		}
+	}
+	encs := []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding}
+	for _, s := range secrets {
+		if s == "" {
+			continue
+		}
+		b := []byte(s)
+		add(s)
+		add(hex.EncodeToString(b))
+		// A device often prints a truncated value (%.16s): every prefix of 12
+		// characters or more is a form, in literal and in hex. Past 64 characters
+		// a prefix is a long run, which the mask takes anyway.
+		for n := 12; n < len(b) && n <= 64; n++ {
+			add(s[:n])
+			add(hex.EncodeToString(b[:n]))
+		}
+		for _, enc := range encs {
+			add(enc.EncodeToString(b))
+		}
+		for _, enc := range encs[:2] {
+			for off := 0; off < 3; off++ {
+				e := strings.TrimRight(enc.EncodeToString(append(make([]byte, off), b...)), "=")
+				head := [3]int{0, 2, 3}[off]
+				if head >= len(e) {
+					continue
 				}
+				e = e[head:]
+				if (off+len(b))%3 != 0 && len(e) > 0 {
+					e = e[:len(e)-1] // the last character mixes in the next byte
+				}
+				addInner(e)
 			}
-			re := repl.Replace(nxosNonCapturing(s))
-			out[name] = append(out[name], ddCompiled{re: regexp.MustCompile(`^` + re + `$`), kinds: kinds})
+		}
+		for salt := 0; salt < 16; salt++ {
+			add(ddType7(s, salt))
+		}
+	}
+	slices.SortFunc(out, func(a, b string) int { return len(b) - len(a) })
+	return out
+}
+
+// ddHexForms are the lowercase hex of each secret of three bytes or more, for
+// the check on a line with its separators stripped.
+func ddHexForms(secrets []string) []string {
+	var out []string
+	for _, s := range secrets {
+		if len(s) >= 3 {
+			out = append(out, strings.ToLower(hex.EncodeToString([]byte(s))))
 		}
 	}
 	return out
-}()
+}
+
+// ddRedactSecrets compiles forms once into a function that replaces every one
+// of them in a line with <redacted>, leftmost and longest. It is a variable so
+// the fail-closed test can break it.
+var ddRedactSecrets = func(forms []string) func(string) string {
+	if len(forms) == 0 {
+		return func(s string) string { return s }
+	}
+	quoted := make([]string, len(forms))
+	for i, f := range forms {
+		quoted[i] = regexp.QuoteMeta(f)
+	}
+	re := regexp.MustCompile(`(?i)` + strings.Join(quoted, "|"))
+	re.Longest()
+	return func(s string) string { return re.ReplaceAllLiteralString(s, ddRedacted) }
+}
+
+// ddStrippedHex is whether line, its separators removed, holds the hex of a
+// known secret: a secret spelled in spaced, coloured or oddly grouped hex.
+func ddStrippedHex(line string, hexForms []string) bool {
+	if len(hexForms) == 0 {
+		return false
+	}
+	low := strings.ToLower(ddSepStrip.ReplaceAllString(line, ""))
+	for _, f := range hexForms {
+		if strings.Contains(low, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// ddLeaks reports whether any form of any secret is in text, or the hex of one in
+// a line of it with its separators stripped. The markers Keep writes are replaced
+// by a separator first, so a secret that happens to spell part of one cannot
+// fail a clean capture, and two pieces on either side of a marker cannot join
+// into a form.
+func ddLeaks(text string, forms, hexForms []string) bool {
+	low := strings.NewReplacer("<redacted>", "\x00", "<long>", "\x00").Replace(strings.ToLower(text))
+	for _, f := range forms {
+		if strings.Contains(low, f) {
+			return true
+		}
+	}
+	// A letter outside the hex digits stands for a marker here, so two pieces on
+	// either side of one cannot join in the stripped view.
+	for _, ln := range strings.Split(strings.ReplaceAll(low, "\x00", "g"), "\n") {
+		if ddStrippedHex(ln, hexForms) {
+			return true
+		}
+	}
+	return false
+}
+
+// drop is the rule of steps 1 and 2 that drops line, or "" if none does.
+func (f deviceDebugFilter) drop(p *ddProfile, line string) string {
+	return f.dropFrom(p, line, false)
+}
+
+// dropFrom is drop for a line of a source file whose every line is a line of the
+// AAA daemon's own trace (whole): the facility rule is skipped for it.
+func (f deviceDebugFilter) dropFrom(p *ddProfile, line string, whole bool) string {
+	switch {
+	case !whole && !p.facility.MatchString(line):
+		return "facility"
+	case ddPayload.MatchString(line) || nxosDebugHexRun.MatchString(line):
+		return "payload"
+	case ddMarker.MatchString(line):
+		return "marker"
+	case ddHexView(line):
+		return "hex_view"
+	case ddHexMessage(p, line, whole):
+		return "hex_message"
+	}
+	return ""
+}
+
+func (d *ddDropCounts) count(reason string) {
+	if d == nil {
+		return
+	}
+	switch reason {
+	case "facility":
+		d.Facility++
+	case "payload":
+		d.Payload++
+	case "marker":
+		d.Marker++
+	case "hex_view":
+		d.HexView++
+	case "hex_message":
+		d.HexMessage++
+	case "known_value_hex":
+		d.StrippedSecret++
+	}
+}
 
 // Keep is text (the device's debug output, as `show logging` or `show log`
-// prints it) cut to the lines the rules above keep, one per line, in the form
-// `time [process:] message`.
-func (f deviceDebugFilter) Keep(text string) deviceDebugKept {
+// prints it) cut to the lines the rules above keep and scrubbed, one per line.
+// It returns errDeviceDebugLeak, and nothing else, when a known secret
+// survives the scrub.
+func (f deviceDebugFilter) Keep(text string) (deviceDebugKept, error) {
+	return f.KeepSource(text, false)
+}
+
+// KeepSource is Keep for text that comes from one source file. whole says that
+// the file is the AAA daemon's own trace (Junos's authd traceoptions file): its
+// lines are kept past the facility rule, which they need not carry. The file is
+// the whole authd trace, not TACACS+ alone (local, RADIUS and LDAP
+// authentication too), so what protects it is the scrub: every other rule
+// applies to every line, and the fail-closed check runs on all of it.
+func (f deviceDebugFilter) KeepSource(text string, whole bool) (deviceDebugKept, error) {
 	p := deviceDebugProfiles[f.Platform]
 	if p == nil {
-		return ""
+		return "", nil
 	}
+	var secrets []string
+	if f.Secrets != nil {
+		secrets = f.Secrets()
+	}
+	forms, hexForms := ddSecretForms(secrets), ddHexForms(secrets)
+	redact := ddRedactSecrets(forms)
 	var out []string
 	for _, ln := range strings.Split(nxosDebugANSI.ReplaceAllString(text, ""), "\n") {
-		m := p.line.FindStringSubmatch(ln)
-		if m == nil || nxosDebugSecret.MatchString(ln) || nxosDebugHexRun.MatchString(ln) {
+		ln = strings.TrimSpace(ln)
+		// A secret spelled in separated hex cannot be redacted in place: the line goes.
+		if ln == "" {
 			continue
 		}
-		msg := strings.TrimSpace(m[p.line.SubexpIndex("m")])
-		// A run of 24 or more token characters is a token or base64: the
-		// line is dropped, not masked.
-		if nxosDebugLong.MatchString(msg) {
+		if f.Tags != nil {
+			f.Tags.add(ln)
+		}
+		if r := f.dropFrom(p, ln, whole); r != "" {
+			f.Drops.count(r)
 			continue
 		}
-		// An attribute line is judged by key before the mask, which would
-		// otherwise swallow `key=` with its value.
-		var ok bool
-		if av := p.av.FindStringSubmatch(msg); av != nil {
-			msg, ok = ddAV(av)
-		} else {
-			msg, ok = f.admitted(f.Platform, msg)
-		}
-		if !ok {
+		if ddStrippedHex(ln, hexForms) {
+			f.Drops.count("known_value_hex")
 			continue
 		}
-		prefix := m[p.line.SubexpIndex("t")]
-		if i := p.line.SubexpIndex("p"); i > 0 && m[i] != "" {
-			prefix += " " + m[i] + ":"
+		// Long runs are masked before the redaction too, so a redaction cannot
+		// split a run and leave the rest of it unmasked.
+		ln = nxosDebugLong.ReplaceAllString(ln, "<LONG>")
+		ln = redact(ln)
+		for _, s := range ddShapeRedact {
+			ln = s.re.ReplaceAllString(ln, s.repl)
 		}
-		out = append(out, prefix+" "+msg)
+		out = append(out, nxosDebugLong.ReplaceAllString(ln, "<LONG>"))
 	}
-	return deviceDebugKept(strings.Join(out, "\n"))
+	kept := strings.Join(out, "\n")
+	if ddLeaks(kept, forms, hexForms) {
+		return "", errDeviceDebugLeak
+	}
+	return deviceDebugKept(kept), nil
 }
 
 // deviceDebugKept is text Keep has filtered. The counters take only this type,
 // so a raw capture cannot reach them without an explicit conversion.
 type deviceDebugKept string
-
-// ddAV is an attribute message as kept: priv-lvl keeps 0-15, service a listed
-// service, cmd and cmd-arg a listed word, and any other value is <masked>. The
-// av pattern admits only those four keys; any other key reaches the shapes,
-// which have none for it, so the line is dropped.
-func ddAV(av []string) (string, bool) {
-	prefix, key, val := av[1], av[2], av[3]
-	var ok bool
-	switch key {
-	case "priv-lvl":
-		ok = nxosDebugPrivLvl.MatchString(val)
-	case "service":
-		ok = slices.Contains(nxosDebugServices, val)
-	case "cmd", "cmd-arg":
-		ok = slices.Contains(nxosDebugWords, val)
-	}
-	if !ok {
-		val = "<masked>"
-	}
-	return prefix + key + "=" + val, true
-}
-
-// admitted is msg as kept, its value fields judged, or false when no shape of
-// the platform admits it.
-func (f deviceDebugFilter) admitted(platform, msg string) (string, bool) {
-	for _, sh := range ddShapes[platform] {
-		idx := sh.re.FindStringSubmatchIndex(msg)
-		if idx == nil {
-			continue
-		}
-		// Replace from the last field back, so earlier offsets stay right.
-		for g := len(sh.kinds) - 1; g >= 0; g-- {
-			a, b := idx[2*g+2], idx[2*g+3]
-			if a < 0 {
-				continue
-			}
-			if sh.kinds[g] == 'n' {
-				msg = msg[:a] + "<n>" + msg[b:]
-				continue
-			}
-			if f.allowed(sh.kinds[g], msg[a:b]) {
-				continue
-			}
-			msg = msg[:a] + "<masked>" + msg[b:]
-		}
-		return msg, true
-	}
-	return "", false
-}
-
-// allowed reports whether v, a field of kind, is one of the lab's values.
-func (f deviceDebugFilter) allowed(kind byte, v string) bool {
-	switch kind {
-	case 'i':
-		a, err := netip.ParseAddr(v)
-		return err == nil && slices.ContainsFunc(f.Addrs, func(x netip.Addr) bool { return x.Unmap() == a.Unmap() })
-	case 'g':
-		return v == "" || slices.Contains(f.Groups, v)
-	case 'l':
-		return slices.Contains(deviceDebugLists, v)
-	case 'm':
-		return slices.Contains(nxosDebugMethods, v)
-	case 'u':
-		return deviceDebugUser.MatchString(v)
-	}
-	return false // 'x': an opaque id is never kept
-}
 
 // deviceDebugConn is one connection the kept debug shows: when it opened
 // and closed (the device's own time; "" for none), the reason it states for
@@ -361,15 +522,49 @@ type deviceDebugConn struct {
 	Reason         string
 	Authen, Author int
 	Acct           int
+	Requests       int // requests of unknown kind (cEOS messagesSent)
+	// Placed is whether a kept open line started this connection. A request
+	// with no open in force sits in an unplaced bucket (Opened "") that gathers
+	// every request between two kept opens: it is not a connection.
+	Placed bool
 }
+
+// Total is the connection's requests of every kind.
+func (c deviceDebugConn) Total() int { return c.Authen + c.Author + c.Acct + c.Requests }
 
 // deviceDebugSummary answers the single-connect and pipelining question from
 // kept text only.
 type deviceDebugSummary struct {
 	Conns                []deviceDebugConn
 	Opened, Closed       int
-	SingleConnect        int // lines showing single-connect negotiated or its flag
-	ServerDead, Fallback int // server-dead and fallback lines
+	Failed               int  // failed opens (cEOS connFails)
+	CloseUnknown         bool // the platform's debug has no close line: Closed says nothing
+	SingleConnect        int  // lines showing single-connect negotiated or its flag
+	ServerDead, Fallback int  // server-dead and fallback lines
+	Unplaced             int  // requests not placed on a connection (no kept open)
+}
+
+// Placed is the connections that a kept open started: how many, their requests,
+// and how many carried more than one. Only these can answer the pipelining
+// question.
+func (s deviceDebugSummary) Placed() (conns, requests, multi int) {
+	for _, c := range s.Conns {
+		if !c.Placed {
+			continue
+		}
+		conns++
+		requests += c.Total()
+		if c.Total() > 1 {
+			multi++
+		}
+	}
+	return
+}
+
+// ddKeptMsg splits a kept line into the device's clock (its first time of day,
+// "" if it shows none) and the line, which is what the counters read.
+func ddKeptMsg(ln string) (at, msg string) {
+	return ddClock.FindString(ln), ln
 }
 
 // deviceDebugSummarize reads the counters out of kept, which Keep has already
@@ -377,9 +572,19 @@ type deviceDebugSummary struct {
 func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSummary {
 	var s deviceDebugSummary
 	p := deviceDebugProfiles[platform]
-	if p == nil || kept == "" {
+	if p == nil {
 		return s
 	}
+	s.CloseUnknown = p.noClose
+	if kept == "" {
+		return s
+	}
+	// A kind with an alternative family is counted from the primary lines when
+	// the text has any, else from the alternative, so one request counts once.
+	useAlt := func(primary, alt *regexp.Regexp) bool {
+		return alt != nil && !primary.MatchString(string(kept))
+	}
+	altAuthen, altAuthor, altAcct := useAlt(p.authen, p.authenAlt), useAlt(p.author, p.authorAlt), useAlt(p.acct, p.acctAlt)
 	cur := -1 // the index in s.Conns of the connection requests go to
 	ensure := func() {
 		if cur < 0 {
@@ -388,33 +593,35 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 		}
 	}
 	for _, ln := range strings.Split(string(kept), "\n") {
-		at, msg, _ := strings.Cut(ln, " ")
-		// Cut the process name off a `time proc: message` line.
-		if proc, rest, ok := strings.Cut(msg, ": "); ok && !strings.Contains(proc, " ") && p.line.SubexpIndex("p") > 0 {
-			msg = rest
-		}
+		at, msg := ddKeptMsg(ln)
 		switch {
 		case p.open.MatchString(msg):
 			s.Opened++
-			s.Conns = append(s.Conns, deviceDebugConn{Opened: at})
+			s.Conns = append(s.Conns, deviceDebugConn{Opened: at, Placed: true})
 			cur = len(s.Conns) - 1
 		case p.closed.MatchString(msg):
 			s.Closed++
 			ensure()
 			s.Conns[cur].Closed = at
-			if m := p.closed.FindStringSubmatch(msg); m != nil {
+			if m := p.closed.FindStringSubmatch(msg); len(m) > 1 {
 				s.Conns[cur].Reason = m[1]
 			}
 			cur = -1
-		case p.authen.MatchString(msg):
+		case p.request != nil && p.request.MatchString(msg):
+			ensure()
+			s.Conns[cur].Requests++
+		case p.authen.MatchString(msg) || altAuthen && p.authenAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Authen++
-		case p.author.MatchString(msg):
+		case p.author.MatchString(msg) || altAuthor && p.authorAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Author++
-		case p.acct.MatchString(msg):
+		case p.acct.MatchString(msg) || altAcct && p.acctAlt.MatchString(msg):
 			ensure()
 			s.Conns[cur].Acct++
+		}
+		if p.failed != nil && p.failed.MatchString(msg) {
+			s.Failed++
 		}
 		if p.single.MatchString(msg) {
 			s.SingleConnect++
@@ -426,41 +633,104 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 			s.Fallback++
 		}
 	}
+	for _, c := range s.Conns {
+		if !c.Placed {
+			s.Unplaced += c.Total()
+		}
+	}
 	return s
 }
 
 // deviceDebugCommands is how one platform's debug is turned on, collected and
 // turned off. Enable and Disable are run in order, Collect's output is the
-// debug text. The syntax is from vendor documentation and the lab notes,
-// not yet confirmed on the image: the lab run confirms it (task 8 report).
+// debug text. The syntax is from vendor documentation and the lab notes and
+// has run on the images in tests/lab/results/QUAL-DEBUG-*.md; a platform with
+// no such note has not been run.
 type deviceDebugCommands struct {
 	Enable, Disable, Collect []string
+	// Whole names the Collect commands whose output is a daemon's own trace file
+	// (Junos's authd traceoptions): every line of it is kept past the facility
+	// rule.
+	Whole []string
+	// TagFrom names the Collect commands whose lines are syslog lines, the only
+	// ones the process-tag counter reads.
+	TagFrom []string
 }
+
+// ddAuthdProbe is how the authd process id is read, before and after the enable.
+const ddAuthdProbe = "show system processes | match authd"
+
+// ddAuthdPID is the process id out of the probe's answer: the first field of the
+// first line that names authd, once the echoed command is removed, parsed as an
+// int. It returns 0 when there is none. The line itself is never kept.
+func ddAuthdPID(out string) int {
+	for _, ln := range strings.Split(ddWithoutEcho(out, ddAuthdProbe, false), "\n") {
+		f := strings.Fields(ln)
+		if len(f) < 2 || !strings.Contains(ln, "authd") {
+			continue
+		}
+		if n, err := strconv.Atoi(f[0]); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// ddAuthdPIDChange is yes or no when both ids were read, otherwise unmeasured.
+func ddAuthdPIDChange(before, after int) string {
+	switch {
+	case before == 0 || after == 0:
+		return "unmeasured"
+	case before != after:
+		return "yes"
+	}
+	return "no"
+}
+
+// ddJunosFlagHelp lists the traceoptions flags this release has.
+const ddJunosFlagHelp = "set system processes general-authentication-service traceoptions flag ?"
+
+// ddJunosFlagHelpKeys is what is typed to ask: the ? (which the CLI answers at
+// once) and ctrl-U to kill the line, with no newline, so nothing is submitted.
+const ddJunosFlagHelpKeys = ddJunosFlagHelp + "\x15"
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
 	"eos": {
-		Enable:  []string{"terminal length 0", "clear logging", "debug aaa", "debug tacacs"},
-		Disable: []string{"no debug aaa", "no debug tacacs"},
-		Collect: []string{"show logging"},
+		Enable:  []string{"terminal length 0", "terminal width 511", "clear agent Aaa logs", "configure", "trace Aaa setting *", "end"},
+		Disable: []string{"configure", "no trace Aaa setting *", "end"},
+		Collect: []string{"show agent Aaa logs"},
 	},
 	"iosxr": {
-		Enable:  []string{"terminal length 0", "clear logging", "y", "debug tacacs", "debug aaa"},
+		Enable:  []string{"terminal length 0", "terminal width 512", "clear logging", "y", "debug tacacs", "debug aaa"},
 		Disable: []string{"undebug all"},
 		Collect: []string{"show logging"},
 	},
 	"iosxe": {
-		Enable: []string{"terminal length 0", "clear logging", "", "debug tacacs", "debug aaa authentication",
+		Enable: []string{"terminal length 0", "terminal width 511", "clear logging", "", "debug tacacs", "debug aaa authentication",
 			"debug aaa authorization", "debug aaa accounting"},
 		Disable: []string{"undebug all"},
 		Collect: []string{"show logging"},
 	},
 	"junos": {
-		Enable: []string{"clear log p49-tacplus.log", "configure",
-			"set system processes general-authentication-service traceoptions file p49-tacplus.log",
-			"set system processes general-authentication-service traceoptions flag all", "commit and-quit"},
-		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions", "commit and-quit",
-			"clear log p49-tacplus.log"},
-		Collect: []string{"show log p49-tacplus.log"},
+		// authd (general-authentication-service) is the process whose trace this
+		// reads (Juniper's TACACS+ troubleshooting points at it). `level` is not
+		// valid under its traceoptions, so only file and flag all are set. The flag
+		// help is read once in configure mode (`?` shows the words and nothing is
+		// committed by it) to learn whether this release has a TACACS or login
+		// flag. The syslog file stays for auditd's accounting line and the
+		// process tags.
+		Enable: []string{"set cli screen-width 300", "clear log tacacs-traceoptions", "clear log p49-auth.log", "configure",
+			ddJunosFlagHelp,
+			"set system processes general-authentication-service traceoptions file tacacs-traceoptions",
+			"set system processes general-authentication-service traceoptions flag all",
+			"set system syslog file p49-auth.log any any",
+			"commit and-quit"},
+		Disable: []string{"configure", "delete system processes general-authentication-service traceoptions",
+			"delete system syslog file p49-auth.log", "commit and-quit",
+			"clear log tacacs-traceoptions", "clear log p49-auth.log"},
+		Collect: []string{"show log tacacs-traceoptions", "show log p49-auth.log"},
+		Whole:   []string{"show log tacacs-traceoptions"},
+		TagFrom: []string{"show log p49-auth.log"},
 	},
 }
 
@@ -469,10 +739,11 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 // debug is collected and debug turned off even when during or a step fails: it
 // is wanted most when a cell goes wrong. run sends one line to the device and
 // returns its output. The collected text is filtered here, in-process: the raw
-// text is never returned, so a caller cannot write it to disk. An error from
-// run can hold the device's output (a prompt timeout prints the whole tail),
-// so each is replaced by ddWrap's text; during's error is the caller's own and
-// is returned first, unchanged.
+// text is never returned, so a caller cannot write it to disk. A known secret
+// that survives the scrub discards the whole capture (errDeviceDebugLeak). An
+// error from run can hold the device's output (a prompt timeout prints the whole
+// tail), so each is replaced by ddWrap's text; during's error is the caller's
+// own and is returned first, unchanged.
 func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error), during func() error) (deviceDebugKept, error) {
 	cmds, ok := deviceDebugCmds[f.Platform]
 	if !ok {
@@ -486,11 +757,20 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	}
 	cellErr := during()
 	var kept []string
-	var collectErr error
+	var collectErr, leakErr error
 	for _, c := range cmds.Collect {
 		raw, err := run(c)
 		// A partial capture is kept, filtered like the rest.
-		kept = append(kept, string(f.Keep(raw)))
+		ff := f
+		if !slices.Contains(cmds.TagFrom, c) {
+			ff.Tags = nil
+		}
+		k, kerr := ff.KeepSource(ddWithoutEcho(raw, c, slices.Contains(cmds.Whole, c)), slices.Contains(cmds.Whole, c))
+		if kerr != nil {
+			leakErr = kerr
+		} else if k != "" {
+			kept = append(kept, string(k))
+		}
 		if err != nil && collectErr == nil {
 			collectErr = ddWrap(c, err)
 		}
@@ -498,10 +778,16 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	disableErr := disableDeviceDebug(cmds, run)
 	err := cellErr
 	if err == nil {
+		err = leakErr
+	}
+	if err == nil {
 		err = collectErr
 	}
 	if err == nil {
 		err = disableErr
+	}
+	if leakErr != nil {
+		return "", err
 	}
 	return deviceDebugKept(strings.Join(kept, "\n")), err
 }
@@ -525,3 +811,124 @@ func disableDeviceDebug(cmds deviceDebugCommands, run func(string) (string, erro
 	}
 	return first
 }
+
+// ddKnownSecrets is every secret list a debug cell redacts, joined, always with
+// the lab TACACS+ key (never only through a device env).
+func ddKnownSecrets(parts ...[]string) []string {
+	all := []string{labcreds.Key}
+	for _, p := range parts {
+		all = append(all, p...)
+	}
+	return all
+}
+
+// ddTagRe captures the syslog process tag: `Oct 23 15:31:11 host tag[pid]: `.
+var ddTagRe = regexp.MustCompile(`^\S+\s+\S+\s+\S+\s+\S+\s+([a-z][a-z0-9_-]{1,23})(\[[0-9]+\])?:`)
+
+// ddJunosDaemons is the closed list of syslog process names ddTagCounts reports:
+// the tags seen on the images so far and the daemons a login or a TACACS+
+// request is likely to touch. Anything else counts as other, so what the counter
+// writes is a fixed alphabet and never a word the device chose.
+var ddJunosDaemons = []string{"mgd", "jlaunchd", "sshd", "authd", "auditd", "rpd", "kernel", "alarmd", "ppmd", "nas5g", "recovery",
+	"sdk-vmmd", "sync-event", "clear-log", "login", "sshd-session", "cron", "inetd", "eventd", "chassisd", "dcd", "mib2d", "snmpd"}
+
+// ddTagCounts counts the lines of the syslog file per process tag, to learn
+// which process writes the login path. It holds counts only, under the names in
+// ddJunosDaemons; a line whose tag is not on the list, or that has none, counts
+// as other.
+type ddTagCounts struct {
+	tags  map[string]int
+	other int
+}
+
+func (t *ddTagCounts) add(line string) {
+	m := ddTagRe.FindStringSubmatch(line)
+	if m == nil || !slices.Contains(ddJunosDaemons, m[1]) {
+		t.other++
+		return
+	}
+	if t.tags == nil {
+		t.tags = map[string]int{}
+	}
+	t.tags[m[1]]++
+}
+
+// String is `daemon=n ... other=n`, the most frequent first.
+func (t *ddTagCounts) String() string {
+	names := make([]string, 0, len(t.tags))
+	for n := range t.tags {
+		names = append(names, n)
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		if t.tags[a] != t.tags[b] {
+			return t.tags[b] - t.tags[a]
+		}
+		return strings.Compare(a, b)
+	})
+	var parts []string
+	for _, n := range names {
+		parts = append(parts, fmt.Sprintf("%s=%d", n, t.tags[n]))
+	}
+	return strings.Join(append(parts, fmt.Sprintf("other=%d", t.other)), " ")
+}
+
+// ddWithoutEcho, for a whole-file collection, removes what the CLI adds around
+// the file: the echoed command, the prompt lines and the pager prompt. Other
+// sources go through the facility rule, which drops those anyway.
+func ddWithoutEcho(raw, cmd string, whole bool) string {
+	if !whole {
+		return raw
+	}
+	var out []string
+	for _, ln := range strings.Split(raw, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.Contains(t, cmd) || ddCLIPrompt.MatchString(t) || strings.HasPrefix(t, "---(more") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ddCLIPrompt is a Junos operational or configuration prompt, `user@host> `.
+var ddCLIPrompt = regexp.MustCompile(`^\S+@\S+[>#%]\s*$`)
+
+// ddFlagWord is what a traceoptions flag name looks like. Only such a word is
+// ever written from the CLI's flag help.
+var ddFlagWord = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
+
+// ddFlagWords reads the flag names out of the CLI's `?` help for flag: the first
+// word of each line under "Possible completions:" that matches ddFlagWord, once
+// each, sorted, at most 100. Nothing else of the help is kept.
+func ddFlagWords(help string) []string {
+	var words []string
+	in := false
+	for _, ln := range strings.Split(help, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "Possible completions:") {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		// The list ends at the first line that is not an indented `word  text`
+		// pair: an error line, the [edit] marker, a prompt or a blank.
+		m := ddFlagLine.FindStringSubmatch(ln)
+		if m == nil {
+			break
+		}
+		if ddFlagWord.MatchString(m[1]) && !slices.Contains(words, m[1]) {
+			words = append(words, m[1])
+		}
+	}
+	slices.Sort(words)
+	if len(words) > 100 {
+		words = words[:100]
+	}
+	return words
+}
+
+// ddFlagLine is one line of the completion list: indented, a word, then two or
+// more blanks and its description.
+var ddFlagLine = regexp.MustCompile(`^\s+(\S+)\s{2,}\S`)
