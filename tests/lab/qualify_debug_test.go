@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -55,15 +56,25 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform
 	return func(cmd string) (string, error) {
 		var wait []string
 		wait, cfgMode = ddArmWait(platform, cmd, cfgMode, c.prompt)
-		out, err := c.sendExpect(cmd, 180*time.Second, wait...)
+		var out string
+		var err error
+		if cmd == ddJunosFlagHelp {
+			// The ? and a kill-line, no newline: nothing is submitted.
+			out, err = c.sendKeysExpect(ddJunosFlagHelpKeys, 180*time.Second, wait...)
+		} else {
+			out, err = c.sendExpect(cmd, 180*time.Second, wait...)
+		}
 		if ddArmIsCollect(platform, cmd) {
 			n := ddArmCountLines(out, cmd, wait...)
 			*rawLines += n
 			*cmdShapes = append(*cmdShapes, fmt.Sprintf("%s => returned %d line(s)", cmd, n))
 			// The shapes of what the filter drops: the lines to decide about.
 			var dropped []string
-			for _, ln := range strings.Split(out, "\n") {
-				if !f.keeps(deviceDebugProfiles[platform], ln) {
+			// The same path the capture takes: the whole-file rule and the echo strip
+			// included, so a kept trace line is not sampled as dropped.
+			whole := slices.Contains(deviceDebugCmds[platform].Whole, cmd)
+			for _, ln := range strings.Split(ddWithoutEcho(out, cmd, whole), "\n") {
+				if f.dropFrom(deviceDebugProfiles[platform], strings.TrimSpace(ln), whole) != "" {
 					dropped = append(dropped, ln)
 				}
 			}

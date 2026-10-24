@@ -48,6 +48,8 @@ import (
 //
 // Limits, stated: a fragment of a secret of under 24 characters can survive a
 // line wrap or an overlap of two secrets (the redaction matches whole values);
+// a truncation of 12 characters or more is a form of its own, but one of under
+// 12 characters, or cut from the middle, is not known;
 // the capture sets a wide terminal where the CLI has one. The facilities are
 // coarse words (Junos `tacplus` also appears in an echoed `set ... tacplus-server`
 // command, IOS XE `TAC` anywhere in a line), which is safe only while the harness
@@ -307,6 +309,13 @@ func ddSecretForms(secrets []string) []string {
 		b := []byte(s)
 		add(s)
 		add(hex.EncodeToString(b))
+		// A device often prints a truncated value (%.16s): every prefix of 12
+		// characters or more is a form, in literal and in hex. Past 64 characters
+		// a prefix is a long run, which the mask takes anyway.
+		for n := 12; n < len(b) && n <= 64; n++ {
+			add(s[:n])
+			add(hex.EncodeToString(b[:n]))
+		}
 		for _, enc := range encs {
 			add(enc.EncodeToString(b))
 		}
@@ -420,12 +429,6 @@ func (f deviceDebugFilter) dropFrom(p *ddProfile, line string, whole bool) strin
 	return ""
 }
 
-// keeps is whether line passes the facility, payload and hex-dump rules (steps 1
-// and 2).
-func (f deviceDebugFilter) keeps(p *ddProfile, line string) bool {
-	return f.drop(p, line) == ""
-}
-
 func (d *ddDropCounts) count(reason string) {
 	if d == nil {
 		return
@@ -479,7 +482,7 @@ func (f deviceDebugFilter) KeepSource(text string, whole bool) (deviceDebugKept,
 			continue
 		}
 		if f.Tags != nil {
-			f.Tags.add(ln, forms, hexForms)
+			f.Tags.add(ln)
 		}
 		if r := f.dropFrom(p, ln, whole); r != "" {
 			f.Drops.count(r)
@@ -639,18 +642,26 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 
 // deviceDebugCommands is how one platform's debug is turned on, collected and
 // turned off. Enable and Disable are run in order, Collect's output is the
-// debug text. The syntax is from vendor documentation and the lab notes,
-// not yet confirmed on the image: the lab run confirms it (task 8 report).
+// debug text. The syntax is from vendor documentation and the lab notes and
+// has run on the images in tests/lab/results/QUAL-DEBUG-*.md; a platform with
+// no such note has not been run.
 type deviceDebugCommands struct {
 	Enable, Disable, Collect []string
 	// Whole names the Collect commands whose output is a daemon's own trace file
 	// (Junos's authd traceoptions): every line of it is kept past the facility
 	// rule.
 	Whole []string
+	// TagFrom names the Collect commands whose lines are syslog lines, the only
+	// ones the process-tag counter reads.
+	TagFrom []string
 }
 
 // ddJunosFlagHelp lists the traceoptions flags this release has.
 const ddJunosFlagHelp = "set system processes general-authentication-service traceoptions flag ?"
+
+// ddJunosFlagHelpKeys is what is typed to ask: the ? (which the CLI answers at
+// once) and ctrl-U to kill the line, with no newline, so nothing is submitted.
+const ddJunosFlagHelpKeys = ddJunosFlagHelp + "\x15"
 
 var deviceDebugCmds = map[string]deviceDebugCommands{
 	"eos": {
@@ -672,10 +683,11 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 	"junos": {
 		// authd (general-authentication-service) is the process whose trace this
 		// reads (Juniper's TACACS+ troubleshooting points at it). `level` is not
-		// valid under its traceoptions, so only file and flag all are set. The flag help is read once in configure mode
-		// (`?` shows the words and nothing is committed by it) to learn whether
-		// this release has a TACACS or login flag. The syslog file stays for
-		// auditd's accounting line and the process tags.
+		// valid under its traceoptions, so only file and flag all are set. The flag
+		// help is read once in configure mode (`?` shows the words and nothing is
+		// committed by it) to learn whether this release has a TACACS or login
+		// flag. The syslog file stays for auditd's accounting line and the
+		// process tags.
 		Enable: []string{"set cli screen-width 300", "clear log tacacs-traceoptions", "clear log p49-auth.log", "configure",
 			ddJunosFlagHelp,
 			"set system processes general-authentication-service traceoptions file tacacs-traceoptions",
@@ -687,6 +699,7 @@ var deviceDebugCmds = map[string]deviceDebugCommands{
 			"clear log tacacs-traceoptions", "clear log p49-auth.log"},
 		Collect: []string{"show log tacacs-traceoptions", "show log p49-auth.log"},
 		Whole:   []string{"show log tacacs-traceoptions"},
+		TagFrom: []string{"show log p49-auth.log"},
 	},
 }
 
@@ -717,7 +730,11 @@ func captureDeviceDebug(f deviceDebugFilter, run func(cmd string) (string, error
 	for _, c := range cmds.Collect {
 		raw, err := run(c)
 		// A partial capture is kept, filtered like the rest.
-		k, kerr := f.KeepSource(ddWithoutEcho(raw, c, slices.Contains(cmds.Whole, c)), slices.Contains(cmds.Whole, c))
+		ff := f
+		if !slices.Contains(cmds.TagFrom, c) {
+			ff.Tags = nil
+		}
+		k, kerr := ff.KeepSource(ddWithoutEcho(raw, c, slices.Contains(cmds.Whole, c)), slices.Contains(cmds.Whole, c))
 		if kerr != nil {
 			leakErr = kerr
 		} else if k != "" {
@@ -777,38 +794,35 @@ func ddKnownSecrets(parts ...[]string) []string {
 // ddTagRe captures the syslog process tag: `Oct 23 15:31:11 host tag[pid]: `.
 var ddTagRe = regexp.MustCompile(`^\S+\s+\S+\s+\S+\s+\S+\s+([a-z][a-z0-9_-]{1,23})(\[[0-9]+\])?:`)
 
-// ddMaxTags is how many distinct tags ddTagCounts reports; the rest count as other.
-const ddMaxTags = 30
+// ddJunosDaemons is the closed list of syslog process names ddTagCounts reports:
+// the tags seen on the images so far and the daemons a login or a TACACS+
+// request is likely to touch. Anything else counts as other, so what the counter
+// writes is a fixed alphabet and never a word the device chose.
+var ddJunosDaemons = []string{"mgd", "jlaunchd", "sshd", "authd", "auditd", "rpd", "kernel", "alarmd", "ppmd", "nas5g", "recovery",
+	"sdk-vmmd", "sync-event", "clear-log", "login", "sshd-session", "cron", "inetd", "eventd", "chassisd", "dcd", "mib2d", "snmpd"}
 
-// ddTagCounts counts lines per syslog process tag, to learn which process
-// writes the login path. It holds only counts: a tag that is not a short
-// lower-case word of at most 24 characters, that holds a known secret in any
-// form or looks like hex counts as other, and no text is kept. A line that does not
-// match counts as other.
+// ddTagCounts counts the lines of the syslog file per process tag, to learn
+// which process writes the login path. It holds counts only, under the names in
+// ddJunosDaemons; a line whose tag is not on the list, or that has none, counts
+// as other.
 type ddTagCounts struct {
 	tags  map[string]int
 	other int
 }
 
-func (t *ddTagCounts) add(line string, forms, hexForms []string) {
+func (t *ddTagCounts) add(line string) {
 	m := ddTagRe.FindStringSubmatch(line)
-	if m == nil {
-		t.other++
-		return
-	}
-	tag := m[1]
-	if ddLeaks(tag, forms, hexForms) || ddHexView(tag) {
+	if m == nil || !slices.Contains(ddJunosDaemons, m[1]) {
 		t.other++
 		return
 	}
 	if t.tags == nil {
 		t.tags = map[string]int{}
 	}
-	t.tags[tag]++
+	t.tags[m[1]]++
 }
 
-// String is `tag=n ... other=n`, the most frequent tags first, at most ddMaxTags
-// of them; the rest are in other.
+// String is `daemon=n ... other=n`, the most frequent first.
 func (t *ddTagCounts) String() string {
 	names := make([]string, 0, len(t.tags))
 	for n := range t.tags {
@@ -820,18 +834,11 @@ func (t *ddTagCounts) String() string {
 		}
 		return strings.Compare(a, b)
 	})
-	other := t.other
-	if len(names) > ddMaxTags {
-		for _, n := range names[ddMaxTags:] {
-			other += t.tags[n]
-		}
-		names = names[:ddMaxTags]
-	}
 	var parts []string
 	for _, n := range names {
 		parts = append(parts, fmt.Sprintf("%s=%d", n, t.tags[n]))
 	}
-	return strings.Join(append(parts, fmt.Sprintf("other=%d", other)), " ")
+	return strings.Join(append(parts, fmt.Sprintf("other=%d", t.other)), " ")
 }
 
 // ddWithoutEcho, for a whole-file collection, removes what the CLI adds around
@@ -874,8 +881,14 @@ func ddFlagWords(help string) []string {
 		if !in {
 			continue
 		}
-		if f := strings.Fields(t); len(f) > 0 && ddFlagWord.MatchString(f[0]) && !slices.Contains(words, f[0]) {
-			words = append(words, f[0])
+		// The list ends at the first line that is not an indented `word  text`
+		// pair: an error line, the [edit] marker, a prompt or a blank.
+		m := ddFlagLine.FindStringSubmatch(ln)
+		if m == nil {
+			break
+		}
+		if ddFlagWord.MatchString(m[1]) && !slices.Contains(words, m[1]) {
+			words = append(words, m[1])
 		}
 	}
 	slices.Sort(words)
@@ -884,3 +897,7 @@ func ddFlagWords(help string) []string {
 	}
 	return words
 }
+
+// ddFlagLine is one line of the completion list: indented, a word, then two or
+// more blanks and its description.
+var ddFlagLine = regexp.MustCompile(`^\s+(\S+)\s{2,}\S`)

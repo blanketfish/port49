@@ -145,3 +145,91 @@ func TestL80RestartGradePrintsTheOpenRetry(t *testing.T) {
 		t.Errorf("a setup-phase dead line decided the restart verdict")
 	}
 }
+
+// M1: the flag words stop at the first line that is not an indented
+// `word  description` pair, so an error line is not read as a flag.
+func TestDeviceDebugFlagWordsStopAtTheEndOfTheList(t *testing.T) {
+	help := strings.Join([]string{
+		"Possible completions:",
+		"  all                  Trace everything",
+		"  authentication       Trace authentication",
+		"syntax error, expecting <data>.",
+		"  later                Trace later",
+	}, "\n")
+	if got := strings.Join(ddFlagWords(help), " "); got != "all authentication" {
+		t.Errorf("flag words %q", got)
+	}
+	if got := ddFlagWords("Possible completions:\n  all   Trace\n\n  other   Trace"); len(got) != 1 {
+		t.Errorf("a blank line did not end the list: %v", got)
+	}
+}
+
+// M1: the help is asked with the ? and a kill-line, no newline, so nothing is submitted.
+func TestDeviceDebugFlagHelpKeysSubmitNothing(t *testing.T) {
+	if !strings.HasPrefix(ddJunosFlagHelpKeys, ddJunosFlagHelp) || !strings.HasSuffix(ddJunosFlagHelpKeys, "\x15") ||
+		strings.ContainsAny(ddJunosFlagHelpKeys, "\r\n") {
+		t.Errorf("flag help keys %q", ddJunosFlagHelpKeys)
+	}
+}
+
+// M2: the tag counter's output is a closed alphabet: a fixed list of Junos
+// daemon names and other, and only the syslog file is counted.
+func TestDeviceDebugTagsAreAFixedListOfDaemons(t *testing.T) {
+	var tags ddTagCounts
+	f := ddTestFilter("junos")
+	f.Tags = &tags
+	in := strings.Join([]string{
+		"Oct 24 10:00:01 srx1 mgd[1]: x",
+		"Oct 24 10:00:02 srx1 sshd-session[2]: x",
+		"Oct 24 10:00:03 srx1 zqvhorsestaple[3]: x", // an unknown word
+		"Oct 24 10:00:04 srx1 sdk-vmmd: x",
+	}, "\n")
+	if _, err := f.Keep(in); err != nil {
+		t.Fatal(err)
+	}
+	if got := tags.String(); got != "mgd=1 sdk-vmmd=1 sshd-session=1 other=1" {
+		t.Errorf("tags %q", got)
+	}
+}
+
+func TestDeviceDebugOnlyTheSyslogFileIsTagCounted(t *testing.T) {
+	var tags ddTagCounts
+	f := ddTestFilter("junos")
+	f.Tags = &tags
+	run := func(cmd string) (string, error) {
+		switch cmd {
+		case "show log tacacs-traceoptions":
+			return "Oct 24 10:00:01 srx1 authd[1]: trace line\nOct 24 10:00:01 srx1 authd[1]: trace line two\n", nil
+		case "show log p49-auth.log":
+			return "Oct 24 10:00:02 srx1 auditd[2]: x\n", nil
+		}
+		return "", nil
+	}
+	if _, err := captureDeviceDebug(f, run, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := tags.String(); got != "auditd=1 other=0" {
+		t.Errorf("tags %q: the trace file was counted", got)
+	}
+}
+
+// M5: a truncated value (%.16s) of a long secret is redacted.
+func TestDeviceDebugRedactsATruncatedSecret(t *testing.T) {
+	long := "zzlong-" + strings.Repeat("q7", 15) // 37 characters
+	for _, p := range ddPlatforms {
+		for _, n := range []int{12, 16, 19} {
+			f := ddTestFilter(p)
+			f.Secrets = func() []string { return []string{long} }
+			got, err := f.Keep(ddFacility[p] + "tok=" + long[:n] + " end")
+			if err != nil || strings.Contains(string(got), long[:n]) || !strings.Contains(string(got), "<redacted>") {
+				t.Errorf("%s: a %d character prefix was kept (err %v)", p, n, err)
+			}
+		}
+		// a prefix under 12 characters is not a known form, and says so in the limit
+		f := ddTestFilter(p)
+		f.Secrets = func() []string { return []string{long} }
+		if got, _ := f.Keep(ddFacility[p] + "tok=" + long[:8] + " end"); !strings.Contains(string(got), long[:8]) {
+			t.Errorf("%s: an 8 character prefix was redacted; the 12 character floor moved", p)
+		}
+	}
+}

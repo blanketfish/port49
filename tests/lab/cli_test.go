@@ -74,6 +74,16 @@ func (c *cliConn) send(line string) error {
 	return err
 }
 
+// sendKeysExpect types keys exactly as given, with no newline added, and waits
+// for any of want. It is for keystrokes the CLI acts on at once (a `?`, ctrl-U).
+func (c *cliConn) sendKeysExpect(keys string, within time.Duration, want ...string) (string, error) {
+	from := len(c.out.String())
+	if _, err := fmt.Fprint(c.in, keys); err != nil {
+		return c.out.String(), err
+	}
+	return c.expectFrom(from, within, want...)
+}
+
 // expectFrom waits for any of want to appear in what the device has said since
 // offset from, and returns that tail either way.
 //
