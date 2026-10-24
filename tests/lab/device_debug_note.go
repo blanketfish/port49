@@ -28,6 +28,7 @@ type ddNoteCell struct {
 	Drops      ddDropCounts // lines dropped, by rule (numbers only)
 	Tags       string       // the syslog process tag counts (Junos), numbers only
 	Flags      []string     // the traceoptions flag words the CLI offered (Junos), each ddFlagWord
+	AuthdPID   string       // ddAuthdPIDChange: yes, no or unmeasured (Junos), never the process line
 }
 
 // ddNoteRun is an armed run: the platform, the image and its cells.
@@ -159,6 +160,9 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		}
 		if len(c.Flags) > 0 {
 			fmt.Fprintf(&b, "  - traceoptions flag words the CLI offered: %s.\n", strings.Join(c.Flags, " "))
+		}
+		if c.AuthdPID != "" {
+			fmt.Fprintf(&b, "  - authd_pid_changed=%s (the authd process id before and after the trace was enabled).\n", c.AuthdPID)
 		}
 		if c.Tags != "" {
 			fmt.Fprintf(&b, "  - syslog process tags (counts only): %s.\n", c.Tags)

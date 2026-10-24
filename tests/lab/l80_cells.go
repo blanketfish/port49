@@ -318,6 +318,7 @@ type l80RestartGrade struct {
 	PermittedDenied                  int // asked and denied after the stop, though the policy permits it
 	ContextMissing                   int // of those, denied context_missing
 	Reconnects                       int // connections port49 answered that began after the stop
+	InWindow                         int // commands typed (permitted, denied or not asked) while port49d was down or coming up
 	Facts                            []string
 }
 
@@ -341,6 +342,9 @@ func l80GradeRestart(store string, typed []l80Typed, w l80RestartWindow, counts 
 	}
 	var permDenied []string
 	for _, x := range typed {
+		if across(x) {
+			g.InWindow++
+		}
 		switch {
 		case x.Asked && x.Denied:
 			g.Denied++
@@ -398,6 +402,7 @@ func l80GradeRestart(store string, typed []l80Typed, w l80RestartWindow, counts 
 			store, g.ContextMissing, g.PermittedDenied, l80ReasonContextMissing))
 	}
 	if placed {
+		g.Facts = append(g.Facts, fmt.Sprintf("commands typed in the window: %d", g.InWindow))
 		g.Facts = append(g.Facts, fmt.Sprintf("while port49d was down or coming up: %d lost, %d unasked", g.LostAcross, g.UnaskedAcross))
 		g.Facts = append(g.Facts, fmt.Sprintf("connections answered by port49 after the stop: %d", g.Reconnects))
 		closing, notify := l80RestartCloses(w, conns)

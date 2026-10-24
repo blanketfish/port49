@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/rhwendt/port49/tests/lab/labcreds"
@@ -654,6 +655,36 @@ type deviceDebugCommands struct {
 	// TagFrom names the Collect commands whose lines are syslog lines, the only
 	// ones the process-tag counter reads.
 	TagFrom []string
+}
+
+// ddAuthdProbe is how the authd process id is read, before and after the enable.
+const ddAuthdProbe = "show system processes | match authd"
+
+// ddAuthdPID is the process id out of the probe's answer: the first field of the
+// first line that names authd, once the echoed command is removed, parsed as an
+// int. It returns 0 when there is none. The line itself is never kept.
+func ddAuthdPID(out string) int {
+	for _, ln := range strings.Split(ddWithoutEcho(out, ddAuthdProbe, false), "\n") {
+		f := strings.Fields(ln)
+		if len(f) < 2 || !strings.Contains(ln, "authd") {
+			continue
+		}
+		if n, err := strconv.Atoi(f[0]); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// ddAuthdPIDChange is yes or no when both ids were read, otherwise unmeasured.
+func ddAuthdPIDChange(before, after int) string {
+	switch {
+	case before == 0 || after == 0:
+		return "unmeasured"
+	case before != after:
+		return "yes"
+	}
+	return "no"
 }
 
 // ddJunosFlagHelp lists the traceoptions flags this release has.

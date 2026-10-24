@@ -3,6 +3,7 @@ package lab
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // Final fix wave. The fixtures take the three line shapes the final review quoted,
@@ -231,5 +232,51 @@ func TestDeviceDebugRedactsATruncatedSecret(t *testing.T) {
 		if got, _ := f.Keep(ddFacility[p] + "tok=" + long[:8] + " end"); !strings.Contains(string(got), long[:8]) {
 			t.Errorf("%s: an 8 character prefix was redacted; the 12 character floor moved", p)
 		}
+	}
+}
+
+// M7: the authd process id is read as a number from the probe's answer.
+func TestDeviceDebugAuthdPIDIsANumberOnly(t *testing.T) {
+	out := ddAuthdProbe + "\n 4821  -  S      0:03.12 /usr/sbin/authd -N\n 4830  -  S      0:00.01 grep authd\nsrx1@vjunos> "
+	if got := ddAuthdPID(out); got != 4821 {
+		t.Errorf("pid %d", got)
+	}
+	if got := ddAuthdPID(ddAuthdProbe + "\nsrx1@vjunos> "); got != 0 {
+		t.Errorf("no authd line gave pid %d", got)
+	}
+	for _, c := range []struct {
+		b, a int
+		want string
+	}{{4821, 4821, "no"}, {4821, 5000, "yes"}, {0, 5000, "unmeasured"}, {4821, 0, "unmeasured"}} {
+		if got := ddAuthdPIDChange(c.b, c.a); got != c.want {
+			t.Errorf("change(%d,%d) = %s", c.b, c.a, got)
+		}
+	}
+}
+
+func TestDeviceDebugNoteStatesAuthdPIDChange(t *testing.T) {
+	run := ddNoteFixtureRun(t)
+	run.Cells[0].AuthdPID = "no"
+	claim, obs, err := ddDebugNote(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(claim+obs, "authd_pid_changed=no") {
+		t.Errorf("the note lacks authd_pid_changed")
+	}
+}
+
+// M8: the restart grade says how many commands were typed in the window.
+func TestL80RestartGradeCountsCommandsInTheWindow(t *testing.T) {
+	stop := time.Date(2026, 10, 24, 10, 0, 5, 0, time.UTC)
+	w := l80RestartWindow{StopAt: stop, UpAt: stop.Add(time.Second)}
+	typed := []l80Typed{
+		{Command: "show clock", At: stop.Add(-time.Second), Done: stop.Add(-time.Second), Asked: true},
+		{Command: "show clock", At: stop.Add(300 * time.Millisecond), Done: stop.Add(400 * time.Millisecond), Asked: true},
+		{Command: "show version", At: stop.Add(500 * time.Millisecond), Done: stop.Add(600 * time.Millisecond), Asked: true},
+	}
+	g := l80GradeRestart(l80StoreEtcd, typed, w, map[string]int{}, 0, nil)
+	if !strings.Contains(strings.Join(g.Facts, "\n"), "commands typed in the window: 2") {
+		t.Errorf("facts: %v", g.Facts)
 	}
 }

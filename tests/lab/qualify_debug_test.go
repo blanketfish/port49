@@ -51,11 +51,19 @@ func (q *qualEnv) armed(family string) (string, bool) {
 // lines the collect commands returned (not the echo or the prompt), keeps the
 // shapes of the lines the filter drops, and returns the raw text to
 // captureDeviceDebug alone.
-func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes, flags *[]string) func(string) (string, error) {
+func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform string, rawLines *int, sample, cmdShapes, flags *[]string, authd *[2]int) func(string) (string, error) {
 	cfgMode := false
 	return func(cmd string) (string, error) {
 		var wait []string
 		wait, cfgMode = ddArmWait(platform, cmd, cfgMode, c.prompt)
+		if platform == "junos" && !cfgMode && authd != nil {
+			// The enable restarts authd or not: the id before the first enable command
+			// and after the commit tells which. Only the number is kept.
+			if cmd == deviceDebugCmds["junos"].Enable[0] {
+				o, _ := c.sendExpect(ddAuthdProbe, 60*time.Second, c.prompt)
+				authd[0] = ddAuthdPID(o)
+			}
+		}
 		var out string
 		var err error
 		if cmd == ddJunosFlagHelp {
@@ -91,6 +99,10 @@ func ddArmRun(c *cliConn, f deviceDebugFilter, secrets func() []string, platform
 				*cmdShapes = append(*cmdShapes, cmd+" => "+sh)
 			}
 		}
+		if platform == "junos" && authd != nil && authd[1] == 0 && cmd == "commit and-quit" && authd[0] != 0 {
+			o, _ := c.sendExpect(ddAuthdProbe, 60*time.Second, c.prompt)
+			authd[1] = ddAuthdPID(o)
+		}
 		return out, err
 	}
 }
@@ -125,6 +137,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		rawLines int
 		sample   []string
 		flags    []string
+		authd    [2]int
 		answers  []string
 		ran      bool
 	)
@@ -132,7 +145,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 		// Debug goes on first, while port49d is stopped and the session is the
 		// local one: with port49d up, the device sends this session's commands
 		// to it and they are refused ("this session was not ... by port49").
-		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers, &flags)
+		run := ddArmRun(c, filter, q.ddSecrets, platform, &rawLines, &sample, &answers, &flags, &authd)
 		kept, capErr = captureDeviceDebug(filter, run, func() error {
 			ran = true
 			finished := false
@@ -169,6 +182,11 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	if len(flags) > 0 {
 		sum += "traceoptions flag words: " + strings.Join(flags, " ") + "\n"
 	}
+	authdChange := ""
+	if platform == "junos" {
+		authdChange = ddAuthdPIDChange(authd[0], authd[1])
+		sum += "authd_pid_changed=" + authdChange + "\n"
+	}
 	tagCounts := ""
 	if tags != nil {
 		tagCounts = tags.String()
@@ -187,7 +205,7 @@ func (q *qualEnv) debugCell(e *l73Env, cell string, restart, post, body func()) 
 	}
 	q.dd.profile = platform
 	q.dd.cells = append(q.dd.cells, ddNoteCell{Cell: cell, Kept: kept, RawLines: rawLines, Shapes: sample, TLSConns: conns,
-		Ready: q.dd.ready, CaptureErr: capErr != nil, Drops: *drops, Tags: tagCounts, Flags: flags})
+		Ready: q.dd.ready, CaptureErr: capErr != nil, Drops: *drops, Tags: tagCounts, Flags: flags, AuthdPID: authdChange})
 	q.dd.files[cell+"-debug.txt"] = []byte(string(kept) + "\n")
 	q.dd.files[cell+"-summary.txt"] = []byte(l80Filter(sum))
 	q.dd.notes = append(q.dd.notes, fmt.Sprintf("- `%s`: %d device log lines, the filter kept %d, %d tls connection(s).",
