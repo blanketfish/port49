@@ -79,12 +79,25 @@ func ddNoteLines(p *ddProfile, kept deviceDebugKept, re *regexp.Regexp) []string
 // ddNoteRequest matches a request line of any kind.
 func ddNoteRequest(p *ddProfile) *regexp.Regexp {
 	var alts []string
-	for _, re := range []*regexp.Regexp{p.authen, p.author, p.acct, p.authenAlt, p.authorAlt, p.acctAlt} {
-		if re != nil {
+	// The same patterns deviceDebugSummarize counts requests with, so a request it
+	// counts is a line the note can quote (cEOS's request is p.request alone).
+	for _, re := range []*regexp.Regexp{p.request, p.authen, p.author, p.acct, p.authenAlt, p.authorAlt, p.acctAlt} {
+		if re != nil && re != ddNever {
 			alts = append(alts, "(?:"+re.String()+")")
 		}
 	}
+	if len(alts) == 0 {
+		return nil
+	}
 	return regexp.MustCompile(strings.Join(alts, "|"))
+}
+
+// ddQuoteFirst is the first of lines quoted, or none when there is no line.
+func ddQuoteFirst(lines []string, none string, quote func(string) string) string {
+	if len(lines) == 0 {
+		return none
+	}
+	return quote(lines[0])
 }
 
 func ddNoteCode(ln string) string { return "`" + ln + "`" }
@@ -291,9 +304,9 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 			fmt.Fprintf(&b, "Unmeasured: the debug kept %d open(s) for the capture's %d connection(s), so a request cannot be placed on every connection; "+
 				"%d request line(s) are not placed on a connection.\n", s.Opened, len(c.TLSConns), s.Unplaced)
 		default:
-			first := ddNoteLines(p, c.Kept, reqRe)
+			quoted := ddQuoteFirst(ddNoteLines(p, c.Kept, reqRe), "no request line to quote", quote)
 			fmt.Fprintf(&b, "%d of %d debug connection(s) with a kept open carried more than one request (%d placed request line(s)); "+
-				"requests not placed on a connection: %d; first request line %s.\n", multi, placedConns, placedReqs, s.Unplaced, quote(first[0]))
+				"requests not placed on a connection: %d; first request line %s.\n", multi, placedConns, placedReqs, s.Unplaced, quoted)
 		}
 	}
 

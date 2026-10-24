@@ -307,3 +307,49 @@ func TestL80RestartGradeCountsCommandsInTheWindow(t *testing.T) {
 		t.Errorf("facts: %v", g.Facts)
 	}
 }
+
+// The note names a request line for the Q4 answer from the same patterns the
+// summarizer counts with. Each platform's real request shape, one connection, one
+// kept open: the answer must be reached and must quote a line, not panic.
+func TestDeviceDebugNoteQuotesARequestLineOnEveryPlatform(t *testing.T) {
+	cases := map[string][]string{
+		"eos": {"TACACS+ counter connOpens host 192.0.2.1:300/0/Tacacs+ TLS", "TACACS+ counter messagesSent host 192.0.2.1:300/0/Tacacs+ TLS"},
+		"iosxr": {"Socket connected successfully", "Packet AUTHEN/START (session 13) to server 192.0.2.1/300",
+			"closing the socket 1000084"},
+		"iosxe": {"TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 192.0.2.1/300 (fd 7)",
+			"TPLUS: processing authentication login request id 1"},
+	}
+	for p, msgs := range cases {
+		var in []string
+		for _, m := range msgs {
+			in = append(in, ddFacility[p]+m)
+		}
+		kept := ddKeep(t, ddTestFilter(p), strings.Join(in, "\n"))
+		run := ddNoteRun{Platform: "p_" + p, Profile: p, Image: "Test 1.0", Cells: []ddNoteCell{{
+			Cell: "tls_token_login", Kept: deviceDebugKept(kept), RawLines: 10, TLSConns: []string{"conn port=1 syn=09:48:29.345 hold=0.03s end=server-fin"}}}}
+		claim, obs, err := ddDebugNote(run)
+		if err != nil {
+			t.Errorf("%s: %v", p, err)
+			continue
+		}
+		if got := claim + obs; !strings.Contains(got, "first request line `") {
+			t.Errorf("%s: the note quotes no request line:\n%s", p, got)
+		}
+	}
+}
+
+func TestDeviceDebugNoteRequestPatternIsTheSummarizersOwn(t *testing.T) {
+	re := ddNoteRequest(deviceDebugProfiles["eos"])
+	if re == nil || !re.MatchString("TACACS+ counter messagesSent host x") || re.MatchString("tac_send_authen returned 2") {
+		t.Errorf("the eos note pattern is not the summarizer's request pattern")
+	}
+}
+
+func TestDeviceDebugQuoteFirstNeverIndexesAnEmptyList(t *testing.T) {
+	if got := ddQuoteFirst(nil, "no request line to quote", strings.ToUpper); got != "no request line to quote" {
+		t.Errorf("got %q", got)
+	}
+	if got := ddQuoteFirst([]string{"a b"}, "none", strings.ToUpper); got == "none" {
+		t.Errorf("a line was not quoted")
+	}
+}
