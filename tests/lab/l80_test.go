@@ -363,10 +363,16 @@ func TestL80Remeasure(t *testing.T) {
 				t.Fatalf("INVALID: %s's debug capture was discarded (%v); nothing written", cell.Name, keepErr)
 			}
 			kept := string(keptText)
-			cnt := nxosDebugCounts(kept)
+			// Counts are over the cell's window; the setup phase (port49d stopped,
+			// the harness setting up) is counted apart as setup_*.
+			cnt := nxosWindowedCounts(kept)
+			_, cellText := nxosCellWindow(kept)
 			var ks []string
 			for k := range nxosDebugMarkers {
 				ks = append(ks, fmt.Sprintf("%s=%d", k, cnt[k]))
+			}
+			for _, k := range nxosSetupMarkers {
+				ks = append(ks, fmt.Sprintf("setup_%s=%d", k, cnt["setup_"+k]))
 			}
 			slices.Sort(ks)
 			sum.WriteString("debug counts: " + strings.Join(ks, " ") + "\n")
@@ -389,7 +395,7 @@ func TestL80Remeasure(t *testing.T) {
 				if restartErr != nil {
 					sum.WriteString("restart: port49d did not come back\n")
 				}
-				g = l80GradeRestart(l80RestartStore(cell.Name), typed, window, cnt, len(nxosFallbacks(kept)), conns)
+				g = l80GradeRestart(l80RestartStore(cell.Name), typed, window, cnt, len(nxosFallbacks(cellText)), conns)
 				fmt.Fprintf(&sum, "restart window: stop=%s up=%s\n", l80Clock(window.StopAt), l80Clock(window.UpAt))
 				for _, f := range g.Facts {
 					sum.WriteString("restart: " + f + "\n")

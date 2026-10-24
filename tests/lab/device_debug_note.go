@@ -174,8 +174,8 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 			if s.CloseUnknown {
 				end = "unknown"
 			}
-			fmt.Fprintf(&b, "  - debug connection %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d.\n",
-				i+1, open, end, cn.Reason, cn.Authen, cn.Author, cn.Acct)
+			fmt.Fprintf(&b, "  - debug connection %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d requests=%d.\n",
+				i+1, open, end, cn.Reason, cn.Authen, cn.Author, cn.Acct, cn.Total())
 		}
 		for _, l := range c.TLSConns {
 			if !ddNoteSafe(l) {
@@ -274,14 +274,8 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 		b.WriteString("Unmeasured: the cell was not run armed.\n")
 	} else {
 		s := summary[c.Cell]
-		reqs, multi := 0, 0
-		for _, cn := range s.Conns {
-			n := cn.Total()
-			reqs += n
-			if n > 1 {
-				multi++
-			}
-		}
+		placedConns, placedReqs, multi := s.Placed()
+		reqs := placedReqs + s.Unplaced
 		switch {
 		case reqs == 0:
 			b.WriteString("Unmeasured: no kept line is a request.\n")
@@ -289,10 +283,13 @@ func ddDebugNote(in ddNoteRun) (claim, obs string, err error) {
 			fmt.Fprintf(&b, "Unmeasured: %d request line(s) were kept but no connection open, so none can be assigned to a connection.\n", reqs)
 		case p.noClose:
 			fmt.Fprintf(&b, "Unmeasured: %d request line(s) were kept, but the trace's requests cannot be assigned to a connection (see above).\n", reqs)
+		case s.Opened < len(c.TLSConns):
+			fmt.Fprintf(&b, "Unmeasured: the debug kept %d open(s) for the capture's %d connection(s), so a request cannot be placed on every connection; "+
+				"%d request line(s) are not placed on a connection.\n", s.Opened, len(c.TLSConns), s.Unplaced)
 		default:
 			first := ddNoteLines(p, c.Kept, reqRe)
-			fmt.Fprintf(&b, "%d of %d debug connection(s) carried more than one request (%d request line(s)); first request line %s.\n",
-				multi, len(s.Conns), reqs, quote(first[0]))
+			fmt.Fprintf(&b, "%d of %d debug connection(s) with a kept open carried more than one request (%d placed request line(s)); "+
+				"requests not placed on a connection: %d; first request line %s.\n", multi, placedConns, placedReqs, s.Unplaced, quote(first[0]))
 		}
 	}
 

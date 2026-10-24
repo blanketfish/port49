@@ -2,6 +2,7 @@ package lab
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -66,11 +67,49 @@ func nxosDebugCounts(kept string) map[string]int {
 	return counts
 }
 
+// nxosSetupMarkers are the markers also counted over the setup phase, apart: the
+// lines before the cell's first request, while port49d was stopped and the
+// harness was setting up, which say nothing about the cell.
+var nxosSetupMarkers = []string{"mark_server_dead", "fall_back_none", "ssl_open_failed", "ssl_open_retry"}
+
+// nxosCellWindow splits kept at the cell's first request line (`aaa type:`, the
+// device's own order): what came before is the setup phase. With no request line
+// there is no window and all of kept is the cell, so nothing is hidden.
+func nxosCellWindow(kept string) (setup, cell string) {
+	lines := strings.Split(kept, "\n")
+	for i, ln := range lines {
+		if strings.Contains(ln, "aaa type:") {
+			return strings.Join(lines[:i], "\n"), strings.Join(lines[i:], "\n")
+		}
+	}
+	return "", kept
+}
+
+// nxosWindowedCounts is nxosDebugCounts over the cell window, plus setup_<marker>
+// for the markers in nxosSetupMarkers counted over the setup phase.
+func nxosWindowedCounts(kept string) map[string]int {
+	setup, cell := nxosCellWindow(kept)
+	counts := nxosDebugCounts(cell)
+	for k, n := range nxosDebugCounts(setup) {
+		if slices.Contains(nxosSetupMarkers, k) {
+			counts["setup_"+k] = n
+		}
+	}
+	for _, k := range nxosSetupMarkers {
+		if _, ok := counts["setup_"+k]; !ok {
+			counts["setup_"+k] = 0
+		}
+	}
+	return counts
+}
+
 // nxosDebugMarkers are the L80 measures, plus the request types by number
 // and the TLS socket calls.
 var nxosDebugMarkers = map[string]*regexp.Regexp{
 	"ssl_read_failed":     regexp.MustCompile(`nxos_ssl_read\(\) failed`),
-	"mark_server_dead":    regexp.MustCompile(`mark server\(.*\) dead`),
+	"mark_server_dead":    regexp.MustCompile(`mark server\(.*\) dead|aaa_mark_server_dead \d`),
+	"ssl_open_failed":     regexp.MustCompile(`nxos_ssl_open failed`),
+	"ssl_open_retry":      regexp.MustCompile(`nxos_ssl_retry_open`),
 	"fall_back_none":      regexp.MustCompile(`Fall back method none`),
 	"tacacs_group_failed": regexp.MustCompile(`protocol TACACS failed with server group`),
 	"connection_active":   regexp.MustCompile(`connection is Active`),

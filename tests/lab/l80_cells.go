@@ -410,7 +410,7 @@ func l80GradeRestart(store string, typed []l80Typed, w l80RestartWindow, counts 
 	} else {
 		g.Facts = append(g.Facts, "restart window not recorded: no command is placed against it and no reconnect is counted")
 	}
-	g.Facts = append(g.Facts, fmt.Sprintf("debug: ssl_read_failed=%d mark_server_dead=%d fallback_lines=%d", readFail, dead, fallbacks))
+	g.Facts = append(g.Facts, fmt.Sprintf("debug: ssl_read_failed=%d mark_server_dead=%d fallback_lines=%d ssl_open_retry=%d", readFail, dead, fallbacks, counts["ssl_open_retry"]))
 	return g
 }
 

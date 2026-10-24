@@ -389,24 +389,24 @@ func TestDeviceDebugCounters(t *testing.T) {
 	}{
 		{"iosxr", []string{
 			xr + "socket connected 5 172.100.100.1/49",
-			xr + "packet 0x1 start 0x2 login 3 session 0x4f server 172.100.100.1/49 fd=7",
-			xr + "packet author 0x1 start 0x2 session 17 server 172.100.100.1/49 fd=7",
-			xr + "packet 0x1 request 0x2 start 0x3 session 17 server 172.100.100.1/49 fd=7",
+			xr + "Packet AUTHEN/START (session 3) to server 172.100.100.1/49",
+			xr + "Packet AUTHOR/START (session 4) to server 172.100.100.1/49",
+			xr + "Packet ACCT/START (session 5) to server 172.100.100.1/49",
 			"RP/0/RP0/CPU0:Oct 23 09:39:03.099 UTC: connection closed 5 172.100.100.1 port 49",
-		}, want{open: 1, closed: 1, conns: []deviceDebugConn{{Opened: "09:39:03.054", Closed: "09:39:03.099", Authen: 1, Author: 1, Acct: 1}}}},
+		}, want{open: 1, closed: 1, conns: []deviceDebugConn{{Opened: "09:39:03.054", Closed: "09:39:03.099", Authen: 1, Author: 1, Acct: 1, Placed: true}}}},
 		{"iosxe", []string{
 			xe + "TAC+: tacacs-secure: session: established: TACACS secure connection established with peer 172.100.100.1/49 (fd 7)",
 			xe + "TPLUS: processing authentication login request id 1",
 			xe + "TPLUS: Authorization request created for 0(alice07)",
 			xe + "TAC+: Using single connection to 172.100.100.1",
 			"*Oct 23 09:48:30.001: TAC+: tacacs-secure: session: closed: TACACS secure connection closed with peer 172.100.100.1/49 (fd 7)",
-		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:48:29.345", Closed: "09:48:30.001", Authen: 1, Author: 1}}}},
+		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:48:29.345", Closed: "09:48:30.001", Authen: 1, Author: 1, Placed: true}}}},
 		{"eos", []string{
 			ddFacility["eos"] + "Tacacs: Connecting to 172.100.100.1 port 49",
 			ddFacility["eos"] + "Sending authentication request 1 to 172.100.100.1",
 			ddFacility["eos"] + "Single connect negotiated",
 			ddFacility["eos"] + "Tacacs: Connection to 172.100.100.1:49 closed by peer",
-		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:40:00.123", Closed: "09:40:00.123", Authen: 1, Reason: "closed by peer"}}}},
+		}, want{open: 1, closed: 1, single: 1, conns: []deviceDebugConn{{Opened: "09:40:00.123", Closed: "09:40:00.123", Authen: 1, Reason: "closed by peer", Placed: true}}}},
 		{"junos", []string{
 			"Oct 23 09:41:00.101 vjunos auditd[1]: AUDITD_TACPLUS_MSG_SENT: successfully sent tacacs+ Accounting-Request message",
 		}, want{conns: []deviceDebugConn{{Acct: 1}}}},
@@ -416,7 +416,7 @@ func TestDeviceDebugCounters(t *testing.T) {
 			"05:00:11.100003 aaad: Fall back method none succeeded",
 			"05:00:11.100004 tacacsd: clean_up_sock_sm_node: freeing ssl_ctx for sock_fd 32",
 			"05:00:11.100005 tacacsd: clean_up_sock_sm_node(4564): mark server(172.100.100.1) dead",
-		}, want{open: 1, closed: 1, dead: 1, fallback: 1, conns: []deviceDebugConn{{Opened: "05:00:11.100001", Closed: "05:00:11.100004", Authen: 1}}}},
+		}, want{open: 1, closed: 1, dead: 1, fallback: 1, conns: []deviceDebugConn{{Opened: "05:00:11.100001", Closed: "05:00:11.100004", Authen: 1, Placed: true}}}},
 	}
 	for _, c := range cases {
 		kept := ddKeep(t, ddTestFilter(c.platform), strings.Join(c.in, "\n"))

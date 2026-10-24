@@ -139,13 +139,16 @@ var deviceDebugProfiles = map[string]*ddProfile{
 		facility: regexp.MustCompile(`\b(?:Aaa|Tacacs|TacPlus)\b`),
 		// TacacsLib prints counter lines: connOpens is a connection (a refused one
 		// too, followed by connFails), messagesSent a request, connCloses a close.
-		open:     regexp.MustCompile(`(?i)\b(?:connecting|connected) to\b|created socket|\bcounter connOpens\b`),
-		closed:   regexp.MustCompile(`(?i)connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)|\btacacs\b\W+close\b|\bcounter connCloses\b`),
-		failed:   regexp.MustCompile(`(?i)\bcounter connFails\b`),
-		request:  regexp.MustCompile(`(?i)\bcounter messagesSent\b`),
-		authen:   regexp.MustCompile(`(?i)sending authentication request|tac` + ddSep + `send` + ddSep + `authen\b`),
-		author:   regexp.MustCompile(`(?i)sending authorization request|tac` + ddSep + `send` + ddSep + `author\b`),
-		acct:     regexp.MustCompile(`(?i)sending accounting request|tac` + ddSep + `send` + ddSep + `acct\b`),
+		open:    regexp.MustCompile(`(?i)\b(?:connecting|connected) to\b|created socket|\bcounter connOpens\b`),
+		closed:  regexp.MustCompile(`(?i)connection to \S+ (closed(?: by peer| by server| idle timeout)?|reset|timed out)|\btacacs\b\W+close\b|\bcounter connCloses\b`),
+		failed:  regexp.MustCompile(`(?i)\bcounter connFails\b`),
+		request: regexp.MustCompile(`(?i)\bcounter messagesSent\b`),
+		// The tac_send_* result lines (returned, failed) are never requests: a
+		// failed one never went out, and one printed after connCloses would open a
+		// connection that is not there. messagesSent is the request.
+		authen:   regexp.MustCompile(`(?i)sending authentication request`),
+		author:   regexp.MustCompile(`(?i)sending authorization request`),
+		acct:     regexp.MustCompile(`(?i)sending accounting request`),
 		single:   regexp.MustCompile(`(?i)single connect(?:ion)? (?:flag set|negotiated)`),
 		dead:     regexp.MustCompile(`(?i)marked dead|is not responding`),
 		fallback: regexp.MustCompile(`(?i)falling back to`),
@@ -158,9 +161,11 @@ var deviceDebugProfiles = map[string]*ddProfile{
 		facility: regexp.MustCompile(`(?i)\btacacsd\b|\d{2}\.\d{1,9}(?: [A-Z]{2,5})?: connection closed \d+ (?:\d{1,3}\.){3}\d{1,3} port \d+`),
 		open:     regexp.MustCompile(`(?i)opening connection to|socket connected`),
 		closed:   regexp.MustCompile(`(?i)closing connection to \S+ port \S+(?: \((idle timeout|remote reset|timeout|error|closed by server)\))?|\bconnection closed\b|\bclosing the socket\b`),
-		authen:   regexp.MustCompile(`(?i)sending authentication request|\bpacket\b.*\bstart\b.*\blogin\b`),
-		author:   regexp.MustCompile(`(?i)sending authorization request|\bpacket\b.*\bauthor\b.*\bstart\b`),
-		acct:     regexp.MustCompile(`(?i)sending accounting request|\bpacket\b.*\brequest\b.*\bstart\b`),
+		// One request prints three lines (the selected server, the Encrypted line and
+		// the Packet line); only the last has "(session N) to server" and counts.
+		authen:   regexp.MustCompile(`(?i)^.*\bPacket AUTHEN/\w+ \(session \d+\) to server\b`),
+		author:   regexp.MustCompile(`(?i)^.*\bPacket AUTHOR/\w+ \(session \d+\) to server\b`),
+		acct:     regexp.MustCompile(`(?i)^.*\bPacket ACCT/\w+ \(session \d+\) to server\b`),
 		single:   regexp.MustCompile(`(?i)single connection (?:flag set|negotiated)`),
 		dead:     regexp.MustCompile(`(?i)marked dead|is not responding`),
 		fallback: regexp.MustCompile(`(?i)falling back to`),
@@ -190,7 +195,7 @@ var deviceDebugProfiles = map[string]*ddProfile{
 		author:   regexp.MustCompile(`(?i)aaa type: *2\b`),
 		acct:     regexp.MustCompile(`(?i)aaa type: *3\b`),
 		single:   ddNever,
-		dead:     regexp.MustCompile(`(?i)mark server\(.*\) dead`),
+		dead:     regexp.MustCompile(`(?i)mark server\(.*\) dead|aaa_mark_server_dead \d`),
 		fallback: regexp.MustCompile(`(?i)fall back method`),
 	},
 }
@@ -514,6 +519,10 @@ type deviceDebugConn struct {
 	Authen, Author int
 	Acct           int
 	Requests       int // requests of unknown kind (cEOS messagesSent)
+	// Placed is whether a kept open line started this connection. A request
+	// with no open in force sits in an unplaced bucket (Opened "") that gathers
+	// every request between two kept opens: it is not a connection.
+	Placed bool
 }
 
 // Total is the connection's requests of every kind.
@@ -528,6 +537,24 @@ type deviceDebugSummary struct {
 	CloseUnknown         bool // the platform's debug has no close line: Closed says nothing
 	SingleConnect        int  // lines showing single-connect negotiated or its flag
 	ServerDead, Fallback int  // server-dead and fallback lines
+	Unplaced             int  // requests not placed on a connection (no kept open)
+}
+
+// Placed is the connections that a kept open started: how many, their requests,
+// and how many carried more than one. Only these can answer the pipelining
+// question.
+func (s deviceDebugSummary) Placed() (conns, requests, multi int) {
+	for _, c := range s.Conns {
+		if !c.Placed {
+			continue
+		}
+		conns++
+		requests += c.Total()
+		if c.Total() > 1 {
+			multi++
+		}
+	}
+	return
 }
 
 // ddKeptMsg splits a kept line into the device's clock (its first time of day,
@@ -566,7 +593,7 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 		switch {
 		case p.open.MatchString(msg):
 			s.Opened++
-			s.Conns = append(s.Conns, deviceDebugConn{Opened: at})
+			s.Conns = append(s.Conns, deviceDebugConn{Opened: at, Placed: true})
 			cur = len(s.Conns) - 1
 		case p.closed.MatchString(msg):
 			s.Closed++
@@ -600,6 +627,11 @@ func deviceDebugSummarize(platform string, kept deviceDebugKept) deviceDebugSumm
 		}
 		if p.fallback.MatchString(msg) {
 			s.Fallback++
+		}
+	}
+	for _, c := range s.Conns {
+		if !c.Placed {
+			s.Unplaced += c.Total()
 		}
 	}
 	return s

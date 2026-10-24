@@ -30,7 +30,7 @@ func TestDeviceDebugArmLineCount(t *testing.T) {
 func TestDeviceDebugArmSummaryStatesWhatItCannotOrder(t *testing.T) {
 	s := ddArmSummary("junos", "tls_token_login", "", 12, []string{"conn port=1 syn=x hold=0.01s end=server-fin"})
 	for _, want := range []string{"device returned 12 log lines", "kept 0", "tls connections (header-only capture): 1",
-		"conn port=1", "connections that carried more than one request: 0 of 0", "do not order those"} {
+		"conn port=1", "connections that carried more than one request: unmeasured", "requests not placed on a connection: 0"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("summary lacks %q:\n%s", want, s)
 		}

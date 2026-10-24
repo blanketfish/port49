@@ -107,21 +107,25 @@ func ddArmSummary(platform, cell string, kept deviceDebugKept, rawLines int, tls
 		if s.CloseUnknown {
 			closed = "unknown"
 		}
-		fmt.Fprintf(&b, "  debug conn %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d\n",
-			i+1, open, closed, c.Reason, c.Authen, c.Author, c.Acct)
+		fmt.Fprintf(&b, "  debug conn %d: opened=%s closed=%s reason=%q authen=%d author=%d acct=%d requests=%d\n",
+			i+1, open, closed, c.Reason, c.Authen, c.Author, c.Acct, c.Total())
 	}
 	if s.CloseUnknown {
 		b.WriteString("note: this platform's two debug files are joined in order, not merged by time, so a request is " +
 			"attributed to the last connection opened in the trace, not necessarily the one it was sent on\n")
 	}
-	pipel := 0
-	for _, c := range s.Conns {
-		if n := c.Total(); n > 1 {
-			pipel++
-		}
+	fmt.Fprintf(&b, "requests not placed on a connection: %d (no kept open line starts them; they are not a connection)\n", s.Unplaced)
+	placed, _, multi := s.Placed()
+	switch {
+	case s.CloseUnknown:
+		b.WriteString("connections that carried more than one request: unmeasured (this platform's trace requests cannot be placed on a connection)\n")
+	case s.Opened < len(tlsConns):
+		fmt.Fprintf(&b, "connections that carried more than one request: unmeasured (the debug kept %d open(s) for the capture's %d connection(s))\n",
+			s.Opened, len(tlsConns))
+	default:
+		fmt.Fprintf(&b, "connections that carried more than one request: %d of %d with a kept open (a count of requests per connection, "+
+			"not of writes without a read between them: the kept lines do not order those)\n", multi, placed)
 	}
-	fmt.Fprintf(&b, "connections that carried more than one request: %d of %d (a count of requests per connection, not of "+
-		"writes without a read between them: the kept lines do not order those)\n", pipel, len(s.Conns))
 	return b.String()
 }
 
