@@ -1,12 +1,13 @@
 device debug arm, platform iosxe, cell tls_unknown_ca
 device returned 492 log lines in all; the filter kept 199 of the cell's
 tls connections (header-only capture): 1
-  conn port=51294 syn=17:00:39.421 hold=0.06s end=server-rst
+  conn port=44882 syn=05:36:18.751 hold=0.05s end=server-rst
 debug connections opened=2 closed=2 single_connect_lines=0 server_dead_lines=0 fallback_lines=0
-  debug conn 1: opened=before closed=open reason="" authen=3 author=0 acct=14
-  debug conn 2: opened=17:00:26.309 closed=17:00:26.812 reason="" authen=1 author=0 acct=0
-  debug conn 3: opened=before closed=open reason="" authen=3 author=0 acct=0
-  debug conn 4: opened=17:00:39.469 closed=17:00:39.469 reason="" authen=0 author=0 acct=0
-connections that carried more than one request: 2 of 4 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+  debug conn 1: opened=before closed=open reason="" authen=3 author=0 acct=14 requests=17
+  debug conn 2: opened=05:36:05.645 closed=05:36:06.149 reason="" authen=1 author=0 acct=0 requests=1
+  debug conn 3: opened=before closed=open reason="" authen=3 author=0 acct=0 requests=3
+  debug conn 4: opened=05:36:18.790 closed=05:36:18.791 reason="" authen=0 author=0 acct=0 requests=0
+requests not placed on a connection: 20 (no kept open line starts them; they are not a connection)
+connections that carried more than one request: 0 of 2 with a kept open (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
 lines dropped by rule: facility=197 body_word=0 hex_view=96 hex_message=0 evidence_marker=2 known_value_hex=0
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 2
