@@ -1,19 +1,13 @@
 device debug arm, platform junos, cell tls_unknown_ca
-device returned 255 log lines in all; the filter kept 157 of the cell's
-tls connections (header-only capture): 3
-  conn port=38636 syn=16:41:28.629 hold=0.01s end=device-fin
-  conn port=38638 syn=16:41:28.634 hold=0.00s end=server-rst
-  conn port=38654 syn=16:41:28.638 hold=0.00s end=server-rst
-debug connections opened=8 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0
-  debug conn 1: opened=16:41:18.151527 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 2: opened=16:41:18.151568 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 3: opened=16:41:18.151592 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 4: opened=16:41:18.151601 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 5: opened=16:41:18.151609 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 6: opened=16:41:18.151619 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 7: opened=16:41:18.151627 closed=unknown reason="" authen=0 author=0 acct=0
-  debug conn 8: opened=16:41:18.151635 closed=unknown reason="" authen=0 author=0 acct=0
+device returned 246 log lines in all; the filter kept 157 of the cell's
+tls connections (header-only capture): 2
+  conn port=41408 syn=04:02:44.612 hold=0.01s end=server-rst
+  conn port=41416 syn=04:02:44.618 hold=0.00s end=server-rst
+debug connections opened=0 closed=unknown single_connect_lines=0 server_dead_lines=0 fallback_lines=0
+  debug conn 1: opened=before closed=unknown reason="" authen=0 author=0 acct=2
 note: this platform's two debug files are joined in order, not merged by time, so a request is attributed to the last connection opened in the trace, not necessarily the one it was sent on
-connections that carried more than one request: 0 of 8 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
-lines dropped by rule: facility=97 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0
+connections that carried more than one request: 1 of 1 (a count of requests per connection, not of writes without a read between them: the kept lines do not order those)
+lines dropped by rule: facility=88 body_word=0 hex_view=6 hex_message=0 evidence_marker=0 known_value_hex=0
+traceoptions flag words: address-assignment all configuration framework gx-plus jsrc ldap lib-stats local-authentication nas-5g nasreq ocs-backup profile-db radius s6a saml session-db syntax user-access
+syslog process tags (counts only): mgd=38 sshd=35 jlaunchd=9 authd=5 auditd=2 clear-log=2 alarmd=1 kernel=1 nas5g=1 recovery=1 sync-event=1 other=155
 readiness probe connections after debug went on, before the cell (in the log, not in the cell's tls connections): 1
