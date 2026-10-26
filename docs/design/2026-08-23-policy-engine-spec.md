@@ -4906,8 +4906,9 @@ policy file's `sha256:` and the inventory's canonical form — its devices in na
 device's addresses sorted, its key groups if the inventory file still carries any — so every
 port49d reading the same two files names the same bundle, and a reformatted inventory file is
 the same bundle. The policy file's own hash is kept beside it, and port49d's lines name both.
-The name does not cover port49d.yaml's `keys:`: two daemons holding different key names load
-the same bundle and may refuse different devices (below), and each says so at load.
+The policy's `keys:` block is part of the policy file's hash, so two daemons on one bundle name
+hold the same key sets and refuse the same devices (below). A port49d with no policy has no bundle
+name to compare, and its `keys:` is its own.
 The loaded policy carries the admission index, the device table and the quarantine with it, and
 one pointer swaps all four (§13, decision 28).
 
@@ -5002,18 +5003,18 @@ with host bits set is refused.
 
 **A `key_ref` is a name: `^[a-z][a-z0-9_]{0,63}$`**, lowercase letters, digits and `_`, starting
 with a letter, at most 64 characters. The shape holds wherever one is written: a key under
-port49d.yaml's `keys:`, a key group in either file, and a pin on a device record. Every report
-prints a `key_ref` (`port49 keys status`, the start notices, the decision log), so one that is not
-a name, most likely a secret pasted where the name goes, is refused without being printed: a key
-under `keys:` refuses the file by its line, a key group refuses its file by its position, and a
-pin refuses that device alone (below). A secret that is all lowercase hex and 64 characters or
-fewer matches the shape and cannot be told from a name; the shape narrows the mistake, it does not
-close it.
+`keys:` (the policy's, or port49d.yaml's with no policy), a key group in either file, and a pin on a
+device record. Every report prints a `key_ref` (`port49 keys status`, the start notices, the
+decision log), so one that is not a name, most likely a secret pasted where the name goes, is
+refused without being printed: a key under `keys:` refuses the file by its line, a key group refuses
+its file by its position, and a pin refuses that device alone (below). A secret that is all
+lowercase hex and 64 characters or fewer matches the shape and cannot be told from a name; the shape
+narrows the mistake, it does not close it.
 
 **A device is refused on its own, never the daemon.** A device no group admits, one two groups tie
-on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref` that
-is not a name (above; the pin is not printed), and one whose `transport` is neither `tcp` nor
-`tls` (below), are each refused admission: named at start and at every reload that loads,
+on (below), one assigned a `key_ref` the policy's `keys:` block defines no key for, one pinning a
+`key_ref` that is not a name (above; the pin is not printed), and one whose `transport` is neither
+`tcp` nor `tls` (below), are each refused admission: named at start and at every reload that loads,
 counted in `port49_devices_admission_refused`, and each connection from them closed after its first header,
 with nothing decrypted, no reply, no strike, and the report bucket `admission_refused`, and their
 next connections refused at Accept inside a decline window (below). The rest of the
@@ -5165,8 +5166,9 @@ measured on four images: the session survives, and a key miss's next connections
 strike's backoff as L28 measured (§15 L29, `tests/lab/results/L29-reload-*.md`); the reset at the
 date itself is tested in code with an injected clock. A reload that retires or removes the version
 an open connection speaks resets it at its next packet with no strike, as every reload's
-withdrawal does (decision 53 ruling 4); only the date strikes. port49d says at start and after every reload, and `port49 policy test`
-reports, a version whose date has passed and an `accept` version with none.
+withdrawal does (decision 53 ruling 4); only the date strikes. port49d says at start and after
+every reload, and `port49 policy test` reports, a version whose date has passed and an `accept`
+version with none.
 
 The key sets, `retire_after` included, live in the policy file's `keys:` block beside the
 `key_groups` that assign them, each version naming its secret by `secret_ref` (decision 53). The
@@ -6443,8 +6445,9 @@ rotation is driven by, and its output belongs in the pull request that retires a
 **`port49 keys diagnose <device>`** asks port49d, over `admin_socket`, to try every key it holds
 on the last packet from that device that did not validate, and names the group and version that
 matched; it is manual because the equivalent automatic probe would be a CPU amplifier on an
-unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory <file> <device>`** resolves which `key_ref` a device matches, by which tier and group,
-and, from the policy's `keys:` block, which version to provision; rendering the secret itself is a
+unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory <file>
+<device>`** resolves which `key_ref` a device matches, by which tier and group, and, from the
+policy's `keys:` block, which version to provision; rendering the secret itself is a
 separately-authorized operation this build does not offer, since a group key is shared across the
 devices in its group. `keys show` and `keys status` name a key by its `key_ref` and version only, and
 a `key_ref` has §10's shape (`^[a-z][a-z0-9_]{0,63}$`): one that is not a name is refused, not
@@ -6693,8 +6696,8 @@ port49d runs two bounded reloads; the diff shows each order step by step, each r
 marked as that swap logs them, and exits 1 when neither order takes both, and when either order
 takes its first file and refuses the second: port49d then stays on the bundle between until the
 first file changes again. A bundle with no key groups admits only pinned
-devices, as port49d reads it. An inventory decode error is printed as its line and a fixed category, and a bad
-address or CIDR by its position, never its text.
+devices, as port49d reads it. An inventory decode error is printed as its line and a fixed
+category, and a bad address or CIDR by its position, never its text.
 
 **`port49 inventory sync --service <url> --ca <file> --cert <file> --key <file>`** asks the
 inventory service to sync now (`POST /v1/sync`, the `syncers` right) and prints its outcome:
@@ -6729,8 +6732,9 @@ declared: a tie, and a device no group admits, since port49d serves neither. It 
 naming a device the inventory does not have, which a load no longer refuses (§10).
 **`port49 policy diff`** fails on a device the new policy refuses admission or newly quarantines
 and the old kept in service, naming it: the edit port49d's reload would refuse over
-`inventory.max_removed_percent`, which counts the two together (§10). It fails on a version both files hold whose `secret_ref`
-differs: a version's secret never changes, so add a version (decision 53 ruling 3).
+`inventory.max_removed_percent`, which counts the two together (§10). It fails on a version both
+files hold whose `secret_ref` differs: a version's secret never changes, so add a version (decision
+53 ruling 3).
 
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
@@ -7246,7 +7250,8 @@ redirect at all, filter in the service, take primary addresses, and interface ad
 named, leave an attribute a device does not give unset, and pass an unrecognized platform through,
 said. A device left with no address counts against the bound in
 the service and in port49d. A source of truth is `https` with a named CA, its token and
-webhook secret named by `token_secret_ref` and `webhook_secret_ref` (decision 53), and never printed.
+webhook secret named by `token_secret_ref` and `webhook_secret_ref` (decision 53), and never
+printed.
 A webhook arrives on its own TLS listener, since no product can present a client certificate, and
 is authenticated by HMAC-SHA512 of its body; it carries nothing into the bundle and only triggers a
 debounced sync of its source, so its order is irrelevant and its `timestamp` is read for freshness
@@ -7267,12 +7272,12 @@ connections, and a new one closes the oldest of its own certificate, else the pr
 so dead connections never lock their owner out, one certificate cannot fill the listener, and a
 flood from one certificate churns only its own slots. A source is one address (an IPv6 /64 is not
 one source), and the global cap is taken before the per-source check, so at global saturation
-connections wait in the backlog; plan 12 owns the global cap. A revocation by principal or by
-certificate is a mark that stands until an operator lifts it, because the agent reconnects on its
-own. A principal is compared as the broker spells it (`user:` and the lower-cased email), one
-without a known prefix is refused, and a mark no subject names is written with a warning. The mark
-is written first, and a mark that cannot be written revokes nothing and says so, naming the
-fallback (remove the principal's grants from `broker.policy_file`, live within two watch
+connections wait in the backlog; plan 12a owns the global cap (decision 53 ruling 8). A revocation
+by principal or by certificate is a mark that stands until an operator lifts it, because the agent
+reconnects on its own. A principal is compared as the broker spells it (`user:` and the lower-cased
+email), one without a known prefix is refused, and a mark no subject names is written with a
+warning. The mark is written first, and a mark that cannot be written revokes nothing and says so,
+naming the fallback (remove the principal's grants from `broker.policy_file`, live within two watch
 intervals, or stop port49d); then held connections
 are closed, unspent tokens deleted, contexts marked and receipts deleted, and the contexts read and
 marked a second time, catching a redemption in flight; the broker's listener holds the marks in
@@ -10880,7 +10885,8 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   it" (design §11). Each shed counts in `port49_connections_shed_total{reason="global_cap"}`, and
   §12's shedding lines are said when shedding begins and then at most once a minute. Default: the
   open-file limit less 1024, or half of it where that is less; an explicit value must leave 256.
-  `port49_connections_max`. Decision 32's backlog wait is the broker listener's and stays.
+  The cap is exported in `port49_connections_max`. Decision 32's backlog wait is the broker
+  listener's and stays.
 - **9. The etcd floor.** At each server start, after the roles check, every configured endpoint is
   asked its version at once, each within `call_timeout`. A member below 3.4.24, 3.5.8 or 3.6
   refuses the start; one that does not answer is said and left unchecked until the next start. At
