@@ -37,7 +37,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
-var signInTestKeys = crypt.Keys{Current: crypt.Key{ID: "k", Bytes: [32]byte{9}}}
+var signInTestKeys = crypt.Keys{Current: crypt.NewKey("k", [32]byte{9})}
 
 // signInConfig is brokerConfig with a directory_password verifier, a
 // directory and a state directory of its own, the enrollment store in the

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -26,7 +27,7 @@ func TestAVersionPastItsDateIdentifiesAndNeverAdmits(t *testing.T) {
 	h.Length = uint32(len(body))
 	obf := wire.Obfuscate(h, []byte("old"), body)
 	at := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
-	set := Set{Ref: "prod_key", Versions: []Version{{Number: 3, Secret: []byte("new")}, {Number: 2, Secret: []byte("old"), RetireAt: at}}}
+	set := Set{Ref: "prod_key", Versions: []Version{{Number: 3, Secret: secretref.Of([]byte("new"))}, {Number: 2, Secret: secretref.Of([]byte("old")), RetireAt: at}}}
 	if r := set.Resolve(h, obf, at.Add(-time.Second)); r.Diagnosis != DiagValidated || r.Version != 2 {
 		t.Fatalf("before the instant: %+v", r)
 	}

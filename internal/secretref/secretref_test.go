@@ -221,3 +221,20 @@ func TestAFileRefIsBoundToItsOwnDirectory(t *testing.T) {
 		t.Fatal("within the link's own directory the target is outside")
 	}
 }
+
+type secretHolder struct{ s Secret }
+
+// A Secret in an unexported field, where fmt cannot call Format, prints no
+// value under any verb, the unknown ones included (%s, %q, %t, %c print what a
+// single pointer points at) (re-review 2).
+func TestASecretInAnUnexportedFieldPrintsNoValue(t *testing.T) {
+	h := secretHolder{Of([]byte("fake-secret-value"))}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%d", "%q", "%t", "%c"} {
+		out := fmt.Sprintf(verb, h) + fmt.Sprintf(verb, &h) + fmt.Sprintf(verb, []secretHolder{h})
+		for _, f := range []string{"fake-secret", "66 97 107 101", "66616b65", "0x66"} {
+			if strings.Contains(out, f) {
+				t.Errorf("%s carries the value (form %q)", verb, f)
+			}
+		}
+	}
+}

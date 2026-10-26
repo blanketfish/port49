@@ -1508,10 +1508,7 @@ func key32(id, secret string) (crypt.Key, error) {
 	if len(secret) != 32 {
 		return crypt.Key{}, fmt.Errorf("config: encryption key %q: secret must be exactly 32 bytes, got %d", id, len(secret))
 	}
-	var k crypt.Key
-	k.ID = id
-	copy(k.Bytes[:], secret)
-	return k, nil
+	return crypt.NewKey(id, [32]byte([]byte(secret))), nil
 }
 
 // staleSeedKeys refuses a `secret:` or `kind:` under lab.seed_tokens and names
@@ -1548,7 +1545,7 @@ func staleSeedKeys(raw []byte) error {
 
 // Keyring resolves every key set to its secrets, ordered current, accept, retired.
 func (c Config) Keyring() map[string]keyring.Set {
-	return keyset.Keyring(c.Keys, func(ref string) []byte { return bytes.Clone(c.secrets[ref].Bytes()) })
+	return keyset.Keyring(c.Keys, func(ref string) []byte { return c.secrets[ref].Bytes() })
 }
 
 // KeySets reads port49d.yaml's keys: block as Load does, without reading a

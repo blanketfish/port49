@@ -23,7 +23,7 @@ func TestKeyring(t *testing.T) {
 	}
 	ring := Keyring(sets, func(ref string) []byte { return []byte("s-" + ref) })
 	vs := ring["k"].Versions
-	if len(vs) != 3 || vs[0].Number != 3 || string(vs[0].Secret) != "s-env:K3" || vs[1].RetireAt.IsZero() ||
+	if len(vs) != 3 || vs[0].Number != 3 || string(vs[0].Secret.Bytes()) != "s-env:K3" || vs[1].RetireAt.IsZero() ||
 		!vs[2].Retired {
 		t.Fatalf("got %d versions, wrong numbers, dates or flags (secrets not printed)", len(vs))
 	}

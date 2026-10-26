@@ -121,7 +121,7 @@ func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
 		t.Fatalf("%+v", c.Accounting)
 	}
 	ks := c.Keyring()["prod_key"]
-	if len(ks.Versions) != 3 || string(ks.Versions[0].Secret) != "three" || !ks.Versions[2].Retired {
+	if len(ks.Versions) != 3 || string(ks.Versions[0].Secret.Bytes()) != "three" || !ks.Versions[2].Retired {
 		t.Fatalf("%+v", ks)
 	}
 	if c.Lab == nil || len(c.Lab.SeedTokens) != 1 || c.Lab.SeedTokens[0].Username != "alice" {
@@ -561,10 +561,10 @@ token: {candidate_cap: 4}
 		t.Fatal(err)
 	}
 	k, err := c.EncryptionKeys()
-	if err != nil || k.Current.ID != "v2" || k.Previous == nil || k.Previous.ID != "v1" || k.Current.Bytes[0] != '2' {
+	if err != nil || k.Current.ID != "v2" || k.Previous == nil || k.Previous.ID != "v1" || k.Current.Bytes()[0] != '2' {
 		t.Fatalf("%+v %v", k, err)
 	}
-	if k.Previous.Bytes[0] != '1' {
+	if k.Previous.Bytes()[0] != '1' {
 		t.Fatalf("the previous key must be its own bytes, not a second copy of the current one: %+v", k.Previous)
 	}
 	if c.Session.StalenessCeiling != 5*time.Minute || c.Session.GraceWindow != 10*time.Minute ||
@@ -591,7 +591,7 @@ func TestPreviousEncryptionKeyIsOptional(t *testing.T) {
 	if k.Previous != nil {
 		t.Fatalf("a config naming no previous key must produce none, got %+v", k.Previous)
 	}
-	if k.Current.ID != "v2" || k.Current.Bytes != [32]byte([]byte("22222222222222222222222222222222")) {
+	if k.Current.ID != "v2" || k.Current.Bytes() != [32]byte([]byte("22222222222222222222222222222222")) {
 		t.Fatalf("%+v", k.Current)
 	}
 }
@@ -698,7 +698,7 @@ func TestKey32RefusesAShortSecretRatherThanZeroPadding(t *testing.T) {
 		t.Fatal("an over-long secret must be an error, never a silent truncation")
 	}
 	k, err := key32("v2", strings.Repeat("x", 32))
-	if err != nil || k.ID != "v2" || k.Bytes[31] != 'x' {
+	if err != nil || k.ID != "v2" || k.Bytes()[31] != 'x' {
 		t.Fatalf("%+v %v", k, err)
 	}
 }
@@ -1439,7 +1439,7 @@ func TestSecretsLoadFromFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Keyring()["prod_key"].Versions[0].Secret; string(got) != "three" {
+	if got := c.Keyring()["prod_key"].Versions[0].Secret.Bytes(); string(got) != "three" {
 		t.Fatalf("the file: key: got %d bytes, want 5", len(got)) // never the value
 	}
 	if _, err := c.EncryptionKeys(); err != nil {
@@ -1523,9 +1523,9 @@ func TestKeyringReturnsCopies(t *testing.T) {
 	}
 	// current, accept and retired versions alike
 	for i, v := range c.Keyring()["prod_key"].Versions {
-		want := string(v.Secret)
-		v.Secret[0] ^= 0xff
-		if got := c.Keyring()["prod_key"].Versions[i].Secret; string(got) != want {
+		want := string(v.Secret.Bytes())
+		v.Secret.Bytes()[0] ^= 0xff
+		if got := c.Keyring()["prod_key"].Versions[i].Secret.Bytes(); string(got) != want {
 			t.Fatalf("a write through version %d's returned secret changed the next Keyring (%d bytes)", i, len(got))
 		}
 	}

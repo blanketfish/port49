@@ -59,24 +59,36 @@ func Parse(s string) (Ref, error) {
 
 // Secret is a resolved secret. It prints as <redacted> under every fmt verb
 // and in JSON; Bytes is the one way to the value, at the one place that uses
-// it. The value sits behind a pointer, so a Secret reached through an
-// unexported field prints as an address (sot.Secret's rule).
-type Secret struct{ p *[]byte }
+// it. The value sits behind two pointers, so a Secret reached through an
+// unexported field, where fmt cannot call Format, prints as an address under
+// every verb: fmt prints what one pointer to a slice points at under a verb it
+// does not know (%s, %q), and stops at a pointer to a pointer.
+type Secret struct{ p **[]byte }
 
-func newSecret(b []byte) Secret { return Secret{&b} }
+func newSecret(b []byte) Secret {
+	p := &b
+	return Secret{&p}
+}
+
+// Of is a Secret holding a copy of b, for a holder that is given its value
+// by something other than a Resolver (a keyring built from a test's fixture).
+func Of(b []byte) Secret { return newSecret(bytes.Clone(b)) }
 
 // Bytes is the value; nil for none.
 func (s Secret) Bytes() []byte {
 	if s.p == nil {
 		return nil
 	}
-	return *s.p
+	return **s.p
 }
 
 func (Secret) Format(f fmt.State, _ rune)   { io.WriteString(f, "<redacted>") }
 func (Secret) String() string               { return "<redacted>" }
 func (Secret) GoString() string             { return "<redacted>" }
 func (Secret) MarshalJSON() ([]byte, error) { return []byte(`"<redacted>"`), nil }
+
+// MarshalYAML withholds the value from yaml.Marshal.
+func (Secret) MarshalYAML() (any, error) { return "<redacted>", nil }
 
 // maxSecret bounds a file: read: a shared key or a token is far smaller.
 const maxSecret = 1 << 20

@@ -64,9 +64,28 @@ import (
 var ErrUnknownKey = errors.New("crypt: sealed under an unknown key")
 
 // Key is one AES-256 key and the id that travels with every record it seals.
+//
+// The bytes sit behind two pointers, so a Key reached through an unexported
+// field, where fmt cannot call Format, prints as an address under every verb:
+// under one it does not know (%s, %q) fmt prints what a single pointer to an
+// array points at, and stops at a pointer to a pointer.
 type Key struct {
 	ID    string
-	Bytes [32]byte
+	bytes **[32]byte
+}
+
+// NewKey is the key id holds b.
+func NewKey(id string, b [32]byte) Key {
+	p := &b
+	return Key{ID: id, bytes: &p}
+}
+
+// Bytes is the key material; zero for a Key that was given none.
+func (k Key) Bytes() [32]byte {
+	if k.bytes == nil {
+		return [32]byte{}
+	}
+	return **k.bytes
 }
 
 // String is the key as it prints: its id, never its bytes.
@@ -81,6 +100,14 @@ func (k Key) Format(f fmt.State, _ rune) { fmt.Fprint(f, k.String()) }
 // MarshalJSON withholds the bytes.
 func (k Key) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct{ ID, Bytes string }{k.ID, "<redacted>"})
+}
+
+// MarshalYAML withholds the bytes.
+func (k Key) MarshalYAML() (any, error) {
+	return struct {
+		ID    string `yaml:"id"`
+		Bytes string `yaml:"bytes"`
+	}{k.ID, "<redacted>"}, nil
 }
 
 // Keys is the rotation window: everything is written under Current, and reads
@@ -107,7 +134,8 @@ func seal(key Key, plaintext, bound []byte) ([]byte, error) {
 	if len(key.ID) == 0 || len(key.ID) > 255 {
 		return nil, errors.New("crypt: key id must be 1..255 bytes")
 	}
-	block, err := aes.NewCipher(key.Bytes[:])
+	kb := key.Bytes()
+	block, err := aes.NewCipher(kb[:])
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +185,8 @@ func (k Keys) open(sealed, bound []byte) ([]byte, error) {
 	default:
 		return nil, ErrUnknownKey
 	}
-	block, err := aes.NewCipher(key.Bytes[:])
+	kb := key.Bytes()
+	block, err := aes.NewCipher(kb[:])
 	if err != nil {
 		return nil, err
 	}

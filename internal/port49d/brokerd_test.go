@@ -767,7 +767,7 @@ func TestTheBrokersStoresShareOneSayer(t *testing.T) {
 	go func() { defer close(followDone); bs.followContexts(fctx) }()
 	defer func() { stopFollow(); <-followDone }()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
-	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
+	retired := crypt.Keys{Current: crypt.NewKey("retired", [32]byte{7})}
 	if err := crypt.Wrap(bs.raw, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",
 		Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()}, time.Hour); err != nil {
 		t.Fatal(err)

@@ -30,9 +30,7 @@ func onEtcd(t *testing.T, f *fixture) (*etcd.Store, store.Store, *clientv3.Clien
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { es.Close() })
-	var k crypt.Key
-	k.ID = "v1"
-	copy(k.Bytes[:], "broker-test-context-key-32-bytes")
+	k := crypt.NewKey("v1", [32]byte([]byte("broker-test-context-key-32-bytes")))
 	sealed := crypt.Wrap(es, crypt.Keys{Current: k}, nil)
 	f.b.Store = sealed
 	f.b.Sessions = session.New(sealed, f.b.Now, time.Hour, time.Hour)

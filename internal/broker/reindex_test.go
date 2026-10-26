@@ -327,8 +327,7 @@ func TestReindexContextsRevokesOneListedThatWillNotOpen(t *testing.T) {
 
 // testKeys is a sealing key set whose one key is id's.
 func testKeys(id string) crypt.Keys {
-	k := crypt.Key{ID: id}
-	copy(k.Bytes[:], id+"-broker-test-context-key-32-bytes")
+	k := crypt.NewKey(id, [32]byte([]byte(id+"-broker-test-context-key-32-bytes")))
 	return crypt.Keys{Current: k}
 }
 

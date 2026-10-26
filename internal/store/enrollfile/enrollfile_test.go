@@ -25,7 +25,7 @@ func keys() crypt.Keys {
 	var a, b [32]byte
 	copy(a[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	copy(b[:], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	return crypt.Keys{Current: crypt.Key{ID: "v2", Bytes: a}, Previous: &crypt.Key{ID: "v1", Bytes: b}}
+	return crypt.Keys{Current: crypt.NewKey("v2", a), Previous: kp(crypt.NewKey("v1", b))}
 }
 
 func v1Only() crypt.Keys { return crypt.Keys{Current: *keys().Previous} }
@@ -33,7 +33,7 @@ func v1Only() crypt.Keys { return crypt.Keys{Current: *keys().Previous} }
 func v0Only() crypt.Keys {
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
-	return crypt.Keys{Current: crypt.Key{ID: "v0", Bytes: c}}
+	return crypt.Keys{Current: crypt.NewKey("v0", c)}
 }
 
 // dirFor is an empty directory only this user can write.
@@ -497,3 +497,5 @@ func TestTheFileHoldsEveryEnrollmentProperty(t *testing.T) {
 			return crypt.WrapEnrollments(f, keys(), nil), f
 		}})
 }
+
+func kp(k crypt.Key) *crypt.Key { return &k }

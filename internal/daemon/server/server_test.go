@@ -33,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -217,7 +218,7 @@ func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz auth
 	go func() { defer close(spoolDone); sp.Run(spoolCtx) }()
 	var ids atomic.Int64
 	d := Deps{Admission: trie,
-		Keys: map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
+		Keys: map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), Retired: true}}}},
 		// The e2e credentials here are not token-shaped, so the tag check never
 		// fires; the key only has to be non-nil and stable.
 		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
@@ -1757,7 +1758,7 @@ func TestKeyVersionsAreMarkedAndADatePastRefuses(t *testing.T) {
 	var seen keyring.Seen
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: time.Now().Add(-time.Hour)}}}}
+			{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), RetireAt: time.Now().Add(-time.Hour)}}}}
 		d.KeySeen = seen.Mark
 	})
 	c := dial(t, ts.addr, []byte("k2"))
@@ -1786,7 +1787,7 @@ func TestAnOpenConnectionDoesNotOutliveItsVersionsDate(t *testing.T) {
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: at}}}}
+			{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), RetireAt: at}}}}
 		d.Now = now
 	})
 	c := dial(t, ts.addr, []byte("k1"))
@@ -1871,7 +1872,7 @@ func TestAPacketPastItsDateIsClosedWithAReset(t *testing.T) {
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: at}}}}
+			{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), RetireAt: at}}}}
 		d.Now = now
 		d.Limits = slowBackoff()
 	})
@@ -1989,7 +1990,7 @@ func reloadFrom(t *testing.T, first admission.Resolved, reload func(*swapAdmitte
 	adm.swap(t, first)
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		d.Admission = adm
-		d.Keys["new_key"] = keyring.Set{Ref: "new_key", Versions: []keyring.Version{{Number: 1, Secret: []byte("n1")}}}
+		d.Keys["new_key"] = keyring.Set{Ref: "new_key", Versions: []keyring.Version{{Number: 1, Secret: secretref.Of([]byte("n1"))}}}
 		d.Limits = slowBackoff()
 	})
 	c := dial(t, ts.addr, []byte("k2"))

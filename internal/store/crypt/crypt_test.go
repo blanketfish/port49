@@ -24,7 +24,7 @@ func keys() Keys {
 	var a, b [32]byte
 	copy(a[:], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	copy(b[:], "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	return Keys{Current: Key{ID: "v2", Bytes: a}, Previous: &Key{ID: "v1", Bytes: b}}
+	return Keys{Current: NewKey("v2", a), Previous: kp(NewKey("v1", b))}
 }
 
 // A second factor's secret, entry and source are sealed bound to the
@@ -52,7 +52,7 @@ func TestASecondFactorUnderAnUnknownKeyIsAnError(t *testing.T) {
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
 	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
-	unread, err := WrapEnrollments(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, failures).GetSecondFactor(ctx, f.Principal)
+	unread, err := WrapEnrollments(inner, Keys{Current: NewKey("v0", c)}, failures).GetSecondFactor(ctx, f.Principal)
 	if err == nil || errors.Is(err, store.ErrNotFound) || !errors.Is(err, ErrUnknownKey) ||
 		testutil.ToFloat64(failures.WithLabelValues("second factor")) != 1 {
 		t.Fatalf("a record under no held key read as %v", err)
@@ -173,7 +173,7 @@ func TestAnEnrollmentExportUnderAnUnknownKeyIsRefusedByName(t *testing.T) {
 	}
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
-	dst := WrapEnrollments(memory.NewEnrollments(time.Now), Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	dst := WrapEnrollments(memory.NewEnrollments(time.Now), Keys{Current: NewKey("v0", c)}, nil)
 	_, _, err = dst.Import(ctx, exp, true)
 	if !errors.Is(err, ErrUnknownKey) || !strings.Contains(err.Error(), `"v2"`) {
 		t.Fatalf("an export under a key not held: %v", err)
@@ -216,7 +216,7 @@ func TestSealOpenRoundTripAndRotation(t *testing.T) {
 	}
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
-	s3, _ := Keys{Current: Key{ID: "v0", Bytes: c}}.Seal([]byte("gone"))
+	s3, _ := Keys{Current: NewKey("v0", c)}.Seal([]byte("gone"))
 	if _, err := k.Open(s3); !errors.Is(err, ErrUnknownKey) {
 		t.Fatalf("retired key: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestSealOpenRoundTripAndRotation(t *testing.T) {
 	// key's generation. Both ids here carry the same key bytes deliberately:
 	// the bytes cannot be what rejects the re-labelled record, so only the AAD
 	// can, and dropping the AAD argument fails this and nothing else.
-	twin := Keys{Current: Key{ID: "v2", Bytes: k.Current.Bytes}, Previous: &Key{ID: "v1", Bytes: k.Current.Bytes}}
+	twin := Keys{Current: NewKey("v2", k.Current.Bytes()), Previous: kp(NewKey("v1", k.Current.Bytes()))}
 	relabel, err := Keys{Current: *twin.Previous}.Seal([]byte("v1 payload"))
 	if err != nil {
 		t.Fatal(err)
@@ -440,7 +440,7 @@ func TestTokenUnderRetiredKeyIsDroppedNotReturned(t *testing.T) {
 	inner := memory.New(time.Now)
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
-	retired := Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	retired := Wrap(inner, Keys{Current: NewKey("v0", c)}, nil)
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
 	if _, err := retired.PutToken(ctx, k, store.Token{ID: "t", Secret: []byte("s"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
@@ -479,7 +479,7 @@ func TestUnopenableRecordIsNotReportedAsMissing(t *testing.T) {
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
-	Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil).PutContext(ctx, ck,
+	Wrap(inner, Keys{Current: NewKey("v0", c)}, nil).PutContext(ctx, ck,
 		store.Context{CtxID: "ctx1", Username: "alice"}, time.Hour)
 
 	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
@@ -617,7 +617,7 @@ func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	var c [32]byte
 	copy(c[:], "cccccccccccccccccccccccccccccccc")
-	retired := Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	retired := Wrap(inner, Keys{Current: NewKey("v0", c)}, nil)
 	if err := retired.PutContext(ctx, ck, store.Context{CtxID: "ctx_old", Principal: "user:alice@example.com",
 		Username: "alice", PrivLvl: 15}, time.Hour); err != nil {
 		t.Fatal(err)
@@ -785,7 +785,7 @@ func TestARevocationOfAnUnopenableContextNeedsNoKey(t *testing.T) {
 	now := time.Unix(1_000_000, 0).UTC()
 	inner := memory.New(func() time.Time { return now })
 	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
-	old := Wrap(inner, Keys{Current: Key{ID: "gone", Bytes: [32]byte{9}}}, nil)
+	old := Wrap(inner, Keys{Current: NewKey("gone", [32]byte{9})}, nil)
 	if err := old.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "p", Username: "alice"}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -1816,8 +1816,8 @@ func twoLoginsEndOutOfOrder(t *testing.T) (store.Store, store.Store, store.Conte
 func TestAnUnopenableRecordNamesItsKey(t *testing.T) {
 	now := time.Unix(1000, 0)
 	inner := memory.New(func() time.Time { return now })
-	old := Keys{Current: Key{ID: "enc2", Bytes: [32]byte{2}}}
-	cur := Keys{Current: Key{ID: "enc3", Bytes: [32]byte{3}}}
+	old := Keys{Current: NewKey("enc2", [32]byte{2})}
+	cur := Keys{Current: NewKey("enc3", [32]byte{3})}
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
 	if _, err := Wrap(inner, old, nil).PutToken(context.Background(), k, store.Token{ID: "t", Secret: []byte("s"),
 		ExpiresAt: now.Add(time.Minute)}); err != nil {
@@ -2245,3 +2245,5 @@ func TestATokenSealedWithoutMFAFreshReadsNotFresh(t *testing.T) {
 		t.Fatalf("the old token's proof: MFAFresh %v, method %q, at %v", c.MFAFresh, c.MFAMethod, c.MFAAt)
 	}
 }
+
+func kp(k Key) *Key { return &k }

@@ -185,12 +185,12 @@ func Keyring(sets map[string]Set, secret func(secretRef string) []byte) map[stri
 	out := make(map[string]keyring.Set, len(sets))
 	for ref, ks := range sets {
 		set := keyring.Set{Ref: ref}
-		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: secret(ks.Current.SecretRef)})
+		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: secretref.Of(secret(ks.Current.SecretRef))})
 		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: secret(v.SecretRef), RetireAt: v.RetireAt})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: secretref.Of(secret(v.SecretRef)), RetireAt: v.RetireAt})
 		}
 		for _, v := range ks.Retired {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: secret(v.SecretRef), Retired: true})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: secretref.Of(secret(v.SecretRef)), Retired: true})
 		}
 		out[ref] = set
 	}

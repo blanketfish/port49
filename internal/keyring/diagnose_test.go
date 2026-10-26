@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -24,8 +25,8 @@ func heldUnder(t *testing.T, secret string) *Held {
 }
 
 var sets = map[string]Set{
-	"prod_key": {Ref: "prod_key", Versions: []Version{{Number: 3, Secret: []byte("new")}, {Number: 2, Secret: []byte("old"), Retired: true}}},
-	"lab_key":  {Ref: "lab_key", Versions: []Version{{Number: 1, Secret: []byte("lab")}}},
+	"prod_key": {Ref: "prod_key", Versions: []Version{{Number: 3, Secret: secretref.Of([]byte("new"))}, {Number: 2, Secret: secretref.Of([]byte("old")), Retired: true}}},
+	"lab_key":  {Ref: "lab_key", Versions: []Version{{Number: 1, Secret: secretref.Of([]byte("lab"))}}},
 }
 
 // Spec §10: keys diagnose names the group and version that match, retired
@@ -57,8 +58,8 @@ func TestDiagnoseNamesWhatTheDeviceHolds(t *testing.T) {
 func TestAFindingCarriesNoSecretAndNoBody(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	secrets := map[string]Set{
-		"prod_key": {Ref: "prod_key", Versions: []Version{{Number: 3, Secret: []byte("S3CR3T-NEW")}, {Number: 2, Secret: []byte("S3CR3T-OLD"), Retired: true}}},
-		"lab_key":  {Ref: "lab_key", Versions: []Version{{Number: 1, Secret: []byte("S3CR3T-LAB")}}},
+		"prod_key": {Ref: "prod_key", Versions: []Version{{Number: 3, Secret: secretref.Of([]byte("S3CR3T-NEW"))}, {Number: 2, Secret: secretref.Of([]byte("S3CR3T-OLD")), Retired: true}}},
+		"lab_key":  {Ref: "lab_key", Versions: []Version{{Number: 1, Secret: secretref.Of([]byte("S3CR3T-LAB"))}}},
 	}
 	for _, secret := range []string{"S3CR3T-OLD", "S3CR3T-LAB", "S3CR3T-NONE"} {
 		held := heldUnder(t, secret)
@@ -82,8 +83,8 @@ func TestAFindingCarriesNoSecretAndNoBody(t *testing.T) {
 func TestDiagnoseReadsTheAssignedGroupFirst(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	shared := map[string]Set{
-		"a_key":    {Ref: "a_key", Versions: []Version{{Number: 1, Secret: []byte("old")}}},
-		"prod_key": {Ref: "prod_key", Versions: []Version{{Number: 3, Secret: []byte("new")}, {Number: 2, Secret: []byte("old"), Retired: true}}},
+		"a_key":    {Ref: "a_key", Versions: []Version{{Number: 1, Secret: secretref.Of([]byte("old"))}}},
+		"prod_key": {Ref: "prod_key", Versions: []Version{{Number: 3, Secret: secretref.Of([]byte("new"))}, {Number: 2, Secret: secretref.Of([]byte("old")), Retired: true}}},
 	}
 	f, _ := Diagnose(heldUnder(t, "old"), shared, "leaf-19", "prod_key", now)
 	if s := f.Text(now); len(f.Matches) != 2 || !strings.Contains(s, "missed in the rotation") || strings.Contains(s, "another group's") {

@@ -911,10 +911,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// derivation avoids on restart, triggered by a rotation instead. With the
 	// window, a tag retires when its key leaves the window, and not before —
 	// one rule for the record and for the tag on it.
-	tagKey := token.TagKey(keys.Current.Bytes[:])
+	cur := keys.Current.Bytes()
+	tagKey := token.TagKey(cur[:])
 	tags := token.NewTagWindow(tagKey)
 	if keys.Previous != nil {
-		tags = token.NewTagWindow(tagKey, token.TagKey(keys.Previous.Bytes[:]))
+		prev := keys.Previous.Bytes()
+		tags = token.NewTagWindow(tagKey, token.TagKey(prev[:]))
 	}
 	// port49_revocations_in_force is the marks this process enforces, and
 	// nothing else sets it (review M3). Metrics are the run's, and the last

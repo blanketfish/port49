@@ -232,10 +232,8 @@ func TestATokenUnderTheReplacedBundleIsDeleted(t *testing.T) {
 func TestAnUnreadableTokenUnderAChangedKeyIsDeleted(t *testing.T) {
 	f := newFixture(t, 8)
 	ctx := context.Background()
-	var ours, theirs crypt.Key
-	ours.ID, theirs.ID = "v1", "other"
-	copy(ours.Bytes[:], "broker-test-token-key-32-bytes-a")
-	copy(theirs.Bytes[:], "broker-test-token-key-32-bytes-b")
+	ours := crypt.NewKey("v1", [32]byte([]byte("broker-test-token-key-32-bytes-a")))
+	theirs := crypt.NewKey("other", [32]byte([]byte("broker-test-token-key-32-bytes-b")))
 	if _, err := crypt.Wrap(f.st, crypt.Keys{Current: theirs}, nil).PutToken(ctx, aliceOnNX1, store.Token{ID: "sealed",
 		Secret: []byte("secret-sealed"), Kind: store.KindLogin, ExpiresAt: f.now.Add(time.Minute),
 		Principal: alice, Username: "alice", MintedAt: f.now}); err != nil {
@@ -587,9 +585,7 @@ func TestAFreshProofKeepsItsTokenWhateverReuseFor(t *testing.T) {
 // crypt over memory, etcd's plaintext record, and sealed over etcd, which is
 // what port49d runs.
 func TestAFreshProofSurvivesEveryEncoding(t *testing.T) {
-	var k crypt.Key
-	k.ID = "v1"
-	copy(k.Bytes[:], "broker-test-token-key-32-bytes-a")
+	k := crypt.NewKey("v1", [32]byte([]byte("broker-test-token-key-32-bytes-a")))
 	onEtcd := func(t *testing.T, f *mfaFixture) *etcd.Store {
 		srv := etcdtest.Start(t, etcdtest.Options{})
 		es, err := etcd.Open(etcd.Config{Endpoints: []string{srv.Endpoint}, Prefix: "/port49-settle/", Now: f.b.Now})

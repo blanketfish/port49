@@ -441,7 +441,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// The tag key binds a token to the device it was minted for, derived
 	// from the current encryption key as port49d derives the window it
 	// accepts (runOnce).
-	tagKey := token.TagKey(keys.Current.Bytes[:])
+	cur := keys.Current.Bytes()
+	tagKey := token.TagKey(cur[:])
 	// port49_revocations_in_force is the marks this replica enforces, set
 	// before they load, or the gauge reads 0 (final review 7e-1).
 	marks := store.NewMarks()

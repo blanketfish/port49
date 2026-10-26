@@ -9,12 +9,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 type Version struct {
 	Number  int
-	Secret  []byte
+	Secret  secretref.Secret
 	Retired bool // kept for diagnosis; never admits, never builds a reply
 	// RetireAt is the first instant this version is refused: past it, it
 	// identifies a device and never admits one, as a retired version does
@@ -43,6 +44,16 @@ func (v Version) MarshalJSON() ([]byte, error) {
 		Retired  bool
 		RetireAt time.Time
 	}{v.Number, "<redacted>", v.Retired, v.RetireAt})
+}
+
+// MarshalYAML withholds the secret.
+func (v Version) MarshalYAML() (any, error) {
+	return struct {
+		Number   int       `yaml:"number"`
+		Secret   string    `yaml:"secret"`
+		Retired  bool      `yaml:"retired"`
+		RetireAt time.Time `yaml:"retire_at"`
+	}{v.Number, "<redacted>", v.Retired, v.RetireAt}, nil
 }
 
 // Set is one key_ref's versions, ordered current, accepted..., retired...
@@ -87,7 +98,7 @@ func (s Set) Resolve(h wire.Header, obfuscated []byte, now time.Time) Result {
 		return Result{Diagnosis: DiagNotTACACS}
 	}
 	for i, v := range s.Versions {
-		body := wire.Obfuscate(h, v.Secret, obfuscated)
+		body := wire.Obfuscate(h, v.Secret.Bytes(), obfuscated)
 		if !Validates(h, body) {
 			continue
 		}
@@ -116,7 +127,7 @@ func (s Set) State(i int, now time.Time) string {
 func (s Set) Secret(version int) []byte {
 	for _, v := range s.Versions {
 		if v.Number == version && !v.Retired {
-			return v.Secret
+			return v.Secret.Bytes()
 		}
 	}
 	return nil

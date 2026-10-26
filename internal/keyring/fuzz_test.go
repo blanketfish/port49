@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -22,9 +23,9 @@ import (
 // one, and a retired one kept for diagnosis.
 func seedSet() Set {
 	return Set{Ref: "prod_key", Versions: []Version{
-		{Number: 3, Secret: []byte("current")},
-		{Number: 2, Secret: []byte("accepted")},
-		{Number: 1, Secret: []byte("retired"), Retired: true},
+		{Number: 3, Secret: secretref.Of([]byte("current"))},
+		{Number: 2, Secret: secretref.Of([]byte("accepted"))},
+		{Number: 1, Secret: secretref.Of([]byte("retired")), Retired: true},
 	}}
 }
 
