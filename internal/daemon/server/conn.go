@@ -489,7 +489,25 @@ func (s *conn) serve(ctx context.Context) {
 // connection's version ends it without a strike.
 func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]byte, bool) {
 	if s.version == 0 {
+		// The first packet is judged against the key set in force now, never the
+		// one this connection was accepted with: a reload may have withdrawn a
+		// version since, often because its key leaked. The Accept-time set only
+		// classifies a miss below (re-review 6, Task 7 ruling).
+		accepted := s.keys
+		s.keys = s.d.keysFor(s.dev.KeyRef)
 		r := s.keys.Resolve(h, obf, s.d.Now())
+		if r.Diagnosis != keyring.DiagValidated {
+			if w := accepted.Resolve(h, obf, s.d.Now()); w.Diagnosis == keyring.DiagValidated {
+				// It would have validated under a version the reload took out
+				// of service: port49d's change, not the device's. As a withdrawal
+				// mid-connection: the record, the count, a reset, no strike.
+				s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(w.Version),
+					string(keyring.DiagMatchesRetired)).Inc()
+				s.unvalidated(h, obf, keyring.DiagMatchesRetired, w.Version)
+				s.reset()
+				return nil, false
+			}
+		}
 		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing

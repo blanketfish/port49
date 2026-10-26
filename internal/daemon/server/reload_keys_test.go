@@ -205,3 +205,62 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 		t.Fatal("a reload's own withdrawal struck the device")
 	}
 }
+
+// A connection accepted before a reload, and idle until its first packet, is
+// judged against the key set in force at that packet, never the one it was
+// accepted with (Task 7 ruling): a version the reload withdrew is not
+// validated under, the connection is reset with no strike and nothing is
+// answered; a version it added validates at once; a wrong key is struck as
+// ever.
+func TestAFirstPacketIsJudgedAgainstTheSetInForceNow(t *testing.T) {
+	v3 := fakeVersion(3, "k3", false)
+	type want struct{ reset, strike bool }
+	for name, c := range map[string]struct {
+		reload func(*liveSets)
+		key    string
+		want   want
+	}{
+		"the version retired":    {func(l *liveSets) { l.put("prod_key", v3, fakeVersion(2, "k2", true)) }, "k2", want{true, false}},
+		"the version removed":    {func(l *liveSets) { l.put("prod_key", v3) }, "k2", want{true, false}},
+		"the key_ref removed":    {func(l *liveSets) { l.put("prod_key") }, "k2", want{true, false}},
+		"a version added":        {func(l *liveSets) { l.put("prod_key", v3, fakeVersion(2, "k2", false)) }, "k3", want{false, false}},
+		"a wrong key":            {func(l *liveSets) { l.put("prod_key", v3) }, "k-wrong", want{true, true}},
+		"a wrong key, no reload": {func(l *liveSets) {}, "k-wrong", want{true, true}},
+		"the old key, no reload": {func(l *liveSets) {}, "k2", want{false, false}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var log syncBuffer
+			sets := &liveSets{m: map[string]keyring.Set{}}
+			sets.put("prod_key", fakeVersion(2, "k2", false))
+			st := memory.New(time.Now)
+			putLogin(t, st, "p49_first")
+			ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
+			cl := dial(t, ts.addr, []byte(c.key))
+			if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")) == 1 }) {
+				t.Fatal("the connection was not accepted")
+			}
+			c.reload(sets)
+			cl.send(t, wire.TypeAuthen, loginStart("p49_first"), wire.FlagSingleConnect)
+			if !c.want.reset {
+				cl.recv(t)
+				return
+			}
+			closedAtOnce(t, cl)
+			miss := func() float64 {
+				return testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("key_miss_closed"))
+			}
+			if c.want.strike {
+				if !waitFor(t, func() bool { return miss() == 1 && ts.limits.Holding(netip.MustParseAddr("127.0.0.1")) }) {
+					t.Fatal("a wrong key was not struck")
+				}
+				return
+			}
+			if !waitFor(t, func() bool { return log.contains(`"diagnosis":"matches_retired"`) }) {
+				t.Fatalf("no matches_retired record: %s", log.String())
+			}
+			if miss() != 0 || ts.limits.Holding(netip.MustParseAddr("127.0.0.1")) {
+				t.Fatal("a reload's own withdrawal struck the device")
+			}
+		})
+	}
+}
