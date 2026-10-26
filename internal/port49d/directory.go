@@ -33,7 +33,9 @@ func openDirectory(cfg config.Config, st store.Store, live *policy.Live, m *metr
 		return nil, nil
 	}
 	d := cfg.Broker.Directory
-	cr, err := directory.LoadCredentials(d.Bind, cfg.ResolveSecret)
+	cr, err := directory.LoadCredentials(d.Bind, func(ref string) ([]byte, error) {
+		return cfg.ResolveSecret("broker.directory.bind.password_secret_ref", ref)
+	})
 	if err != nil {
 		// The error names the key (keytab_file, tls_cert_file, password_secret_ref,
 		// the realm, the KDC), never the secret; the start stops on it, as

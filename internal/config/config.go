@@ -655,14 +655,16 @@ type Config struct {
 	keyRefs []string
 
 	// encCurrent and encPrevious are the key references, not the keys: the
-	// bytes live in secrets, which Load fills by reading each reference, so a
-	// Config that is printed or logged carries no key material.
+	// bytes live in secrets, which Load fills by reading each reference. A
+	// secretref.Secret prints as <redacted> under every fmt verb, which fmt
+	// reaches through unexported fields, so a Config that is printed or
+	// logged carries no key material.
 	encCurrent, encPrevious encKeyYAML
 	hasPrevious             bool
 
 	// secrets is keyed by the reference's text: Parse accepts one spelling
 	// of each reference, so nothing is canonicalised.
-	secrets map[string]string
+	secrets map[string]secretref.Secret
 
 	// Secrets is the resolver Load built (decision 53): how port49d reads
 	// its policy's key secrets at each swap, and the directory's bind
@@ -888,7 +890,7 @@ func load(path string, role Role) (Config, error) {
 		encCurrent:  f.Encryption.Current,
 		encPrevious: f.Encryption.Previous,
 		hasPrevious: f.Encryption.Previous.SecretRef != "",
-		secrets:     map[string]string{},
+		secrets:     map[string]secretref.Secret{},
 		Secrets:     secretref.New(),
 	}
 	switch role {
@@ -1082,7 +1084,7 @@ func load(path string, role Role) (Config, error) {
 		if err := c.resolveInto(fmt.Sprintf("%s.secret_ref (id %q)", k.what, k.ref.ID), k.ref.SecretRef); err != nil {
 			return Config{}, err
 		}
-		if s := c.secrets[k.ref.SecretRef]; len(s) != 32 {
+		if s := c.secrets[k.ref.SecretRef].Bytes(); len(s) != 32 {
 			return Config{}, fmt.Errorf("config: %s (id %q): the secret %s names must be exactly 32 bytes for "+
 				"AES-256, got %d", k.what, k.ref.ID, k.ref.SecretRef, len(s))
 		}
@@ -1509,13 +1511,13 @@ func (c Config) KeyRefs() []string {
 // EncryptionKeys is the two-key window: writes use Current, reads try Current
 // then Previous. Retiring Previous is a config change, never code (design §8).
 func (c Config) EncryptionKeys() (crypt.Keys, error) {
-	cur, err := key32(c.encCurrent.ID, c.secrets[c.encCurrent.SecretRef])
+	cur, err := key32(c.encCurrent.ID, string(c.secrets[c.encCurrent.SecretRef].Bytes()))
 	if err != nil {
 		return crypt.Keys{}, err
 	}
 	keys := crypt.Keys{Current: cur}
 	if c.hasPrevious {
-		p, err := key32(c.encPrevious.ID, c.secrets[c.encPrevious.SecretRef])
+		p, err := key32(c.encPrevious.ID, string(c.secrets[c.encPrevious.SecretRef].Bytes()))
 		if err != nil {
 			return crypt.Keys{}, err
 		}
@@ -1575,13 +1577,13 @@ func (c Config) Keyring() map[string]keyring.Set {
 	out := make(map[string]keyring.Set, len(c.Keys))
 	for ref, ks := range c.Keys {
 		set := keyring.Set{Ref: ref}
-		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: []byte(c.secrets[ks.Current.SecretRef])})
+		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: c.secrets[ks.Current.SecretRef].Bytes()})
 		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretRef]),
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: c.secrets[v.SecretRef].Bytes(),
 				RetireAt: v.RetireAt})
 		}
 		for _, v := range ks.Retired {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretRef]), Retired: true})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: c.secrets[v.SecretRef].Bytes(), Retired: true})
 		}
 		out[ref] = set
 	}
@@ -2313,18 +2315,19 @@ func (c *Config) resolveInto(at, text string) error {
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	c.secrets[text] = string(s.Bytes())
+	c.secrets[text] = s
 	return nil
 }
 
-// ResolveSecret reads one secret_ref for a reader outside Load: the
-// directory's bind password, read when the directory opens.
-func (c Config) ResolveSecret(text string) ([]byte, error) {
+// ResolveSecret reads one secret_ref for a reader outside Load (the
+// directory's bind password, read when the directory opens), its errors
+// beginning with at, the key that holds the reference.
+func (c Config) ResolveSecret(at, text string) ([]byte, error) {
 	res := c.Secrets
 	if res == nil {
 		res = secretref.New() // a Config built by hand, as tests build one
 	}
-	_, s, err := res.ResolveText("broker.directory.bind.password_secret_ref", text)
+	_, s, err := res.ResolveText(at, text)
 	return s.Bytes(), err
 }
 

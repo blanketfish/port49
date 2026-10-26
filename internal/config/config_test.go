@@ -1483,3 +1483,32 @@ func TestAPastedSecretInSecretRefIsNotPrinted(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// A Config that is printed or logged carries no key material: fmt prints
+// unexported fields, so the resolved secrets are held as secretref.Secret,
+// which prints as <redacted> under every verb.
+func TestAPrintedConfigCarriesNoSecret(t *testing.T) {
+	setKeyEnv(t)
+	const device, enc = "fake-device-key-zzz-1", "fake-encryption-key-32-bytes!!!!"
+	t.Setenv("T_PROD_V3", device)
+	t.Setenv("PORT49_ENC_V2", enc)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, write(t, "inventory.yaml", inv))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		out := fmt.Sprintf(verb, c)
+		if strings.Contains(out, device) || strings.Contains(out, enc) {
+			t.Errorf("a Config printed with %s carries a resolved secret", verb) // the verb, never the value
+		}
+	}
+}
+
+// ResolveSecret names the key the caller reads, not a fixed one.
+func TestResolveSecretNamesTheCallersKey(t *testing.T) {
+	_, err := Config{}.ResolveSecret("keys.k.current.secret_ref", "env:T_RESOLVE_SECRET_UNSET")
+	if err == nil || !strings.Contains(err.Error(), "keys.k.current.secret_ref env:T_RESOLVE_SECRET_UNSET") ||
+		strings.Contains(err.Error(), "bind") {
+		t.Fatalf("%v", err)
+	}
+}
