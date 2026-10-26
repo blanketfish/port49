@@ -93,8 +93,10 @@ func New() *Resolver {
 	return &Resolver{lookupEnv: os.LookupEnv, readFile: fence.ReadSecret}
 }
 
-// Resolve reads ref. A file: reference, and every link on its way, must stay
-// inside within, or inside its own directory when within is "". An error
+// Resolve reads ref. A file: reference, followed through any links, must
+// resolve to a file inside within, or inside its own directory when within is
+// "". An env: value is taken exactly as set, with no trim: a variable is set
+// on purpose, while a file loses one trailing newline (an echo's). An error
 // names the reference and why, never a value.
 func (r *Resolver) Resolve(ref Ref, within string) (Secret, error) {
 	var raw []byte

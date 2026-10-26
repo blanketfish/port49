@@ -678,3 +678,80 @@ func TestASecretFileOfAnotherOwnerIsRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// plainSecretDir is a directory holding one 0440 secret file "k", the
+// directory at mode: the Vault Agent injector renders into a tmpfs emptyDir
+// that is 01777.
+func plainSecretDir(t *testing.T, mode fs.FileMode) (dir, file string) {
+	t.Helper()
+	dir = filepath.Join(t.TempDir(), "keys")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file = filepath.Join(dir, "k")
+	if err := os.WriteFile(file, []byte("s3cret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		t.Fatal(err)
+	}
+	return dir, file
+}
+
+// The directory holding the secret is held to Read's rule: one others can
+// write could have its file swapped, so group- and world-write are refused,
+// with or without a read-only mount's excuse (which this directory never
+// gets). Only the sticky bit excuses it, below.
+func TestASecretInADirectoryOthersCanWriteIsRefused(t *testing.T) {
+	for _, mode := range []fs.FileMode{0o775, 0o757, 0o777} {
+		dir, file := plainSecretDir(t, mode)
+		if _, err := ReadSecret(file, dir, 1<<20); err == nil || !strings.Contains(err.Error(), "chmod go-w") {
+			t.Errorf("directory mode %v: %v", mode, err)
+		}
+	}
+}
+
+// A sticky directory we or root own passes: under the sticky bit only the
+// file's owner, the directory's owner or root can rename or unlink the file,
+// and the file itself must be ours or root's, so a name squatted before the
+// first render is refused (denial of service) and never substituted. This is
+// the Vault Agent injector's tmpfs (01777), and ruling 11's ancestor excuse.
+func TestASecretInAStickyDirectoryIsRead(t *testing.T) {
+	dir, file := plainSecretDir(t, 0o777|fs.ModeSticky)
+	if raw, err := ReadSecret(file, dir, 1<<20); err != nil || len(raw) != 7 {
+		t.Fatalf("%d bytes, %v", len(raw), err)
+	}
+}
+
+// The sticky excuse is for a directory we or root own, not any sticky one.
+func TestAStickyDirectoryOfAnotherOwnerIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root owns every directory it makes")
+	}
+	dir, file := plainSecretDir(t, 0o777|fs.ModeSticky)
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
+	real := FileOwner
+	FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if fi.IsDir() {
+			return uint32(os.Geteuid() + 1), true
+		}
+		return real(fi)
+	}
+	if _, err := ReadSecret(file, dir, 1<<20); err == nil || !strings.Contains(err.Error(), "chown it") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// within is a directory: absolute and clean, or the working directory would
+// stand in for it, and "/" would bound nothing.
+func TestAWithinThatBoundsNothingIsRefused(t *testing.T) {
+	dir, file := plainSecretDir(t, 0o700)
+	for _, within := range []string{"", "keys", dir + "/../keys", "/"} {
+		if _, err := ReadSecret(file, within, 1<<20); err == nil {
+			t.Errorf("within %q was accepted", within)
+		}
+	}
+	if _, err := ReadSecret("/k", "/", 1<<20); err == nil || !strings.Contains(err.Error(), "outside the allowed directory") {
+		t.Errorf("a file under /: %v", err)
+	}
+}

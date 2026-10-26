@@ -154,7 +154,9 @@ func TestAllowance(t *testing.T) {
 func TestAnEmptySecretIsRefused(t *testing.T) {
 	t.Setenv("T_SECRETREF_EMPTY", "")
 	p := filepath.Join(secretDir(t), "s")
-	os.WriteFile(p, []byte("\n"), 0o600)
+	if err := os.WriteFile(p, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r := New()
 	for _, text := range []string{"env:T_SECRETREF_EMPTY", "file:" + p} {
 		if _, _, err := r.ResolveText("k", text); err == nil || !strings.Contains(err.Error(), "empty") &&
@@ -189,5 +191,33 @@ func TestNoResolveErrorCarriesTheSecret(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprintf("%+v", r), "hunter2") {
 		t.Fatal("the resolver printed a secret under the plus-v verb")
+	}
+}
+
+// A file: reference is read within its own directory unless the caller names
+// another: a link beside one secret that reaches a file in a different
+// directory (the TLS key, say) is refused, and read only where the caller's
+// within takes it in. The default is the bound on every secret that is not a
+// policy key (decision 53 ruling 1).
+func TestAFileRefIsBoundToItsOwnDirectory(t *testing.T) {
+	dirA, dirB := secretDir(t), secretDir(t)
+	if err := os.WriteFile(filepath.Join(dirB, "s"), []byte("shared-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dirB, "s"), filepath.Join(dirA, "k")); err != nil {
+		t.Fatal(err)
+	}
+	r := New()
+	_, _, err := r.ResolveText("k", "file:"+filepath.Join(dirA, "k"))
+	if err == nil || !strings.Contains(err.Error(), "outside") || strings.Contains(err.Error(), "shared-key") {
+		t.Fatalf("a link out of the reference's directory: %v", err)
+	}
+	ref, _ := Parse("file:" + filepath.Join(dirA, "k"))
+	if s, err := r.Resolve(ref, dirB); err != nil || string(s.Bytes()) != "shared-key" {
+		t.Fatalf("within the target's directory: %d bytes, %v", len(s.Bytes()), err)
+	}
+	// and the other way: a within that does not hold the target refuses
+	if _, err := r.Resolve(ref, dirA); err == nil {
+		t.Fatal("within the link's own directory the target is outside")
 	}
 }

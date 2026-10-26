@@ -91,17 +91,31 @@ func Read(path string, max int64, what string) ([]byte, error) {
 
 // ReadSecret reads a secret file a `file:` reference names (spec §13
 // decision 53 rulings 1 and 12). It is Read's fence with a reader's rule for
-// the file. A link is followed, as a ConfigMap's is, only while the path
-// resolves inside within: a Kubernetes Secret or CSI volume's
-// name -> ..data/name chain does, and a link out of the directory, to the
-// TLS key or the keytab, is refused. Every link's directory (and, decision 53
-// ruling 11, every ancestor) is held to the fence's rule by
-// resolvePolicyPath; the directory holding the file to Read's, never excused
-// by a read-only mount. The file must be owned by this process's user or
-// root, writable by its owner alone, and carry no world bit: group-read is
-// allowed, which fsGroup and an agent's perms = "0440" give. No error
-// carries the file's bytes.
+// the file. A link is followed, as a ConfigMap's is, and the file it comes to
+// must lie inside within: a Kubernetes Secret or CSI volume's
+// name -> ..data/name chain does, and a link to the TLS key or the keytab,
+// outside the directory, is refused. Only the final, fully resolved target is
+// tested against within; a chain that leaves the directory and comes back is
+// read, which is safe because the directory holding every link on the way is
+// held to the fence's rule by resolvePolicyPath (a writer who could plant the
+// middle link is refused there). The ancestors of those directories are
+// walked from Task 15 of plan 12a (decision 53 ruling 11), not by this
+// function alone; until then keep the key directory where only root can
+// rename its parents. The directory holding the file is held to Read's rule,
+// never excused by a read-only mount, except for a sticky directory we or
+// root own (secretDirWritableByUsAlone). within must be absolute, clean and
+// not "/". The file must be owned by this process's user or root, writable by
+// its owner alone, and carry no world bit: group-read is allowed, which
+// fsGroup and an agent's perms = "0440" give. No error carries the file's
+// bytes.
 func ReadSecret(path, within string, max int64) ([]byte, error) {
+	if !filepath.IsAbs(within) || filepath.Clean(within) != within {
+		return nil, fmt.Errorf("%s: the directory a secret file must stay inside is not an absolute, clean path", path)
+	}
+	if within == "/" {
+		return nil, fmt.Errorf("%s is outside the allowed directory: a secret file is kept in a directory of its "+
+			"own, never directly under /", path)
+	}
 	target, err := resolvePolicyPath(path)
 	if err != nil {
 		return nil, err
@@ -135,8 +149,27 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 				"writable by anyone but its owner - chmod 0440 or 0600 it, or, on a mounted volume, set the "+
 				"mode where it is rendered (Kubernetes defaultMode and fsGroup, Vault Agent's perms)", target, perm)
 		}
-		return writableByUsAlone("the directory "+dir, di)
+		return secretDirWritableByUsAlone("the directory "+dir, di)
 	})
+}
+
+// secretDirWritableByUsAlone is writableByUsAlone for the directory holding a
+// secret file, with ruling 11's sticky excuse for a directory we or root own:
+// the Vault Agent injector renders into a tmpfs emptyDir that is 01777. It is
+// sound because the file itself must be owned by us or root, and under the
+// sticky bit only the file's owner, the directory's owner or root can rename
+// or unlink it; others can squat a name before the first render, which the
+// file's owner check then refuses, never substitutes. The sticky bit is the
+// inode's own mode, so the host sees it too, unlike a read-only bind, whose
+// excuse is never extended here.
+func secretDirWritableByUsAlone(what string, fi fs.FileInfo) error {
+	if err := ownedByUsOrRoot(what, fi); err != nil {
+		return err
+	}
+	if fi.Mode()&fs.ModeSticky != 0 {
+		return nil
+	}
+	return notWritableByOthers(what, fi)
 }
 
 // ReadNoLink is Read for a file this process writes itself, whose own name is
