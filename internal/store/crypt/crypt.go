@@ -69,6 +69,20 @@ type Key struct {
 	Bytes [32]byte
 }
 
+// String is the key as it prints: its id, never its bytes.
+func (k Key) String() string { return fmt.Sprintf("crypt.Key{ID: %q, Bytes: <redacted>}", k.ID) }
+
+// GoString is String, for %#v.
+func (k Key) GoString() string { return k.String() }
+
+// Format prints String under every verb, so %x and %s cannot reach Bytes.
+func (k Key) Format(f fmt.State, _ rune) { fmt.Fprint(f, k.String()) }
+
+// MarshalJSON withholds the bytes.
+func (k Key) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct{ ID, Bytes string }{k.ID, "<redacted>"})
+}
+
 // Keys is the rotation window: everything is written under Current, and reads
 // accept Previous as well so a rotation does not invalidate live records.
 // Previous is nil when no key is being retired.

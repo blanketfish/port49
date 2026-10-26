@@ -1512,3 +1512,21 @@ func TestResolveSecretNamesTheCallersKey(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// Keyring hands out copies: a write through a returned secret changes nothing
+// the next swap reads.
+func TestKeyringReturnsCopies(t *testing.T) {
+	setKeyEnv(t)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, write(t, "inventory.yaml", inv))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// current, accept and retired versions alike
+	for i, v := range c.Keyring()["prod_key"].Versions {
+		want := string(v.Secret)
+		v.Secret[0] ^= 0xff
+		if got := c.Keyring()["prod_key"].Versions[i].Secret; string(got) != want {
+			t.Fatalf("a write through version %d's returned secret changed the next Keyring (%d bytes)", i, len(got))
+		}
+	}
+}

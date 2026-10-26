@@ -655,10 +655,11 @@ type Config struct {
 	keyRefs []string
 
 	// encCurrent and encPrevious are the key references, not the keys: the
-	// bytes live in secrets, which Load fills by reading each reference. A
-	// secretref.Secret prints as <redacted> under every fmt verb, which fmt
-	// reaches through unexported fields, so a Config that is printed or
-	// logged carries no key material.
+	// bytes live in secrets, which Load fills by reading each reference. fmt
+	// cannot call a method on an unexported field, so it prints each Secret
+	// there as its pointer address, never the value (an exported Secret prints
+	// as <redacted>): a Config that is printed or logged carries no key
+	// material.
 	encCurrent, encPrevious encKeyYAML
 	hasPrevious             bool
 
@@ -1577,13 +1578,13 @@ func (c Config) Keyring() map[string]keyring.Set {
 	out := make(map[string]keyring.Set, len(c.Keys))
 	for ref, ks := range c.Keys {
 		set := keyring.Set{Ref: ref}
-		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: c.secrets[ks.Current.SecretRef].Bytes()})
+		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: bytes.Clone(c.secrets[ks.Current.SecretRef].Bytes())})
 		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: c.secrets[v.SecretRef].Bytes(),
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: bytes.Clone(c.secrets[v.SecretRef].Bytes()),
 				RetireAt: v.RetireAt})
 		}
 		for _, v := range ks.Retired {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: c.secrets[v.SecretRef].Bytes(), Retired: true})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: bytes.Clone(c.secrets[v.SecretRef].Bytes()), Retired: true})
 		}
 		out[ref] = set
 	}

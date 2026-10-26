@@ -4,7 +4,9 @@
 package keyring
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -18,6 +20,29 @@ type Version struct {
 	// identifies a device and never admits one, as a retired version does
 	// (spec §10, "Retirement is enforced"). Zero is never.
 	RetireAt time.Time
+}
+
+// String is the version as it prints: everything but the secret, which no
+// verb and no encoding of a Version carries.
+func (v Version) String() string {
+	return fmt.Sprintf("keyring.Version{Number: %d, Secret: <redacted>, Retired: %t, RetireAt: %s}", v.Number, v.Retired,
+		v.RetireAt.Format(time.RFC3339))
+}
+
+// GoString is String, for %#v.
+func (v Version) GoString() string { return v.String() }
+
+// Format prints String under every verb, so %x and %s cannot reach Secret.
+func (v Version) Format(f fmt.State, _ rune) { fmt.Fprint(f, v.String()) }
+
+// MarshalJSON withholds the secret.
+func (v Version) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Number   int
+		Secret   string
+		Retired  bool
+		RetireAt time.Time
+	}{v.Number, "<redacted>", v.Retired, v.RetireAt})
 }
 
 // Set is one key_ref's versions, ordered current, accepted..., retired...
