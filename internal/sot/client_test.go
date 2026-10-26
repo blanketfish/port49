@@ -3,14 +3,22 @@ package sot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/egress"
 
 	"github.com/rhwendt/port49/internal/sot/sottest"
 )
@@ -246,4 +254,144 @@ func writeCA(t *testing.T) string {
 	t.Helper()
 	_, ca := sottest.TLS(t, http.NotFoundHandler())
 	return ca
+}
+
+// connectProxy is an HTTP CONNECT proxy that counts its tunnels and keeps the
+// Authorization header of each CONNECT it saw; with upstream it dials that
+// address whatever host the CONNECT names.
+func connectProxy(t *testing.T, upstream string) (*url.URL, *atomic.Int64, *atomic.Value) {
+	t.Helper()
+	var n atomic.Int64
+	var auth atomic.Value
+	auth.Store("")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
+			return
+		}
+		n.Add(1)
+		if a := r.Header.Get("Authorization") + r.Header.Get("Proxy-Authorization"); a != "" {
+			auth.Store("a credential header on CONNECT")
+		}
+		to := r.Host
+		if upstream != "" {
+			to = upstream // a name that is not the server's, to reach it under another host
+		}
+		up, err := net.Dial("tcp", to)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		down, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			up.Close()
+			return
+		}
+		go func() { io.Copy(up, down); up.Close() }()
+		io.Copy(down, up)
+		down.Close()
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL)
+	return u, &n, &auth
+}
+
+// Through an egress proxy the source is reached by CONNECT, its certificate
+// still checked against ca_file, read at the dial (decision 53 ruling 7), and
+// the token travels inside the tunnel only, never on the CONNECT.
+func TestASourceIsReachedThroughTheProxy(t *testing.T) {
+	pu, tunnels, connectAuth := connectProxy(t, "")
+	was := proxy
+	t.Cleanup(func() { proxy = was })
+	proxy = http.ProxyURL(pu)
+	var sawToken atomic.Bool
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawToken.Store(strings.HasSuffix(r.Header.Get("Authorization"), token))
+		w.Write([]byte(`{}`))
+	}))
+	cl, err := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err != nil || tunnels.Load() != 1 {
+		t.Fatalf("%v; tunnels %d", err, tunnels.Load())
+	}
+	if !sawToken.Load() {
+		t.Fatal("the source did not get the token inside the tunnel")
+	}
+	if got := connectAuth.Load().(string); got != "" {
+		t.Fatalf("the proxy saw %s", got)
+	}
+	// A CA that does not issue the source's certificate is refused through
+	// the tunnel as it is directly.
+	cl, _ = newClient(srv.URL, writeCA(t), NewSecret(token), "netbox")
+	if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err == nil {
+		t.Fatal("a source the CA file does not trust was read through the proxy")
+	}
+}
+
+// A rotated CA reaches the next dial through the proxy as it does directly:
+// the file is read at the handshake, not at the client's construction.
+func TestARotatedCAReachesTheNextDialThroughTheProxy(t *testing.T) {
+	pu, _, _ := connectProxy(t, "")
+	was := proxy
+	t.Cleanup(func() { proxy = was })
+	proxy = http.ProxyURL(pu)
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	good, err := os.ReadFile(ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := writeCA(t) // another source's CA: the file starts out wrong
+	cl, err := newClient(srv.URL, live, NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err == nil {
+		t.Fatal("read through the proxy under a CA that does not issue the certificate")
+	}
+	if err := os.WriteFile(live, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err != nil {
+		t.Fatalf("the rotated CA was not read at the next dial: %v", err)
+	}
+}
+
+// An HTTPS_PROXY the transport would misread is refused, never dialled, and
+// the error carries none of it.
+func TestABadProxyEnvironmentRefusesTheFetchWithoutPrintingIt(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://svc:FAKE-pw#x@proxy.example.com:3128")
+	srv, ca := sottest.TLS(t, http.NotFoundHandler())
+	cl, err := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	err = cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v)
+	if !errors.Is(err, egress.ErrBadProxy) || strings.Contains(err.Error(), "FAKE-pw") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// The source's name is checked through the tunnel as it is directly: the
+// certificate of another host is refused even when its chain is trusted.
+func TestAServerOfAnotherNameIsRefusedThroughTheProxy(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	pu, _, _ := connectProxy(t, strings.TrimPrefix(srv.URL, "https://"))
+	was := proxy
+	t.Cleanup(func() { proxy = was })
+	proxy = http.ProxyURL(pu)
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "https://"))
+	cl, err := newClient("https://netbox.example.com:"+port, ca, NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err == nil {
+		t.Fatal("a certificate that does not name the source's host was accepted through the proxy")
+	}
 }

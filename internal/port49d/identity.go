@@ -17,6 +17,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/egress"
 	"github.com/rhwendt/port49/internal/k8sid"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/policy"
@@ -282,8 +283,8 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 			}
 		}
 		how := "directly (no HTTPS_PROXY)"
-		if u, err := oidc.ProxyFor(target); err == nil {
-			how = oidc.DescribeProxy(u)
+		if u, err := egress.ProxyFor(target); err == nil {
+			how = egress.Describe(u)
 		} else {
 			// The transport takes the environment's proxy as it parses it: a
 			// value that does not is dropped or misread, never refused (final

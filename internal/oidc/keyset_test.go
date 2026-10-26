@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -127,12 +126,11 @@ func TestTheClientUsesTheEnvironmentsProxy(t *testing.T) {
 	if !ok || tr.Proxy == nil {
 		t.Fatal("the provider's client ignores HTTPS_PROXY: a site whose egress is a proxy never fetches a key")
 	}
-	u := &url.URL{Scheme: "http", User: url.UserPassword("svc", "proxy-secret"), Host: "proxy.example.com:3128"}
-	if got := oidc.DescribeProxy(u); strings.Contains(got, "proxy-secret") || !strings.Contains(got, "proxy.example.com:3128") {
-		t.Fatalf("DescribeProxy(%v) = %q", u, got)
-	}
-	if got := oidc.DescribeProxy(nil); got != "directly (no HTTPS_PROXY)" {
-		t.Fatalf("no proxy: %q", got)
+	// A proxy value the transport would misread is refused, never dialled.
+	t.Setenv("HTTPS_PROXY", "http://svc:FAKE-pw#x@proxy.example.com:3128")
+	req, _ := http.NewRequest(http.MethodGet, "https://idp.example.com/", nil)
+	if u, err := tr.Proxy(req); u != nil || err == nil || strings.Contains(err.Error(), "FAKE-pw") {
+		t.Fatalf("a bad HTTPS_PROXY: %v, %v", u, err)
 	}
 }
 
@@ -681,44 +679,6 @@ func TestTheFailureCounterExistsFromTheStart(t *testing.T) {
 		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m})
 	if n := testutil.CollectAndCount(m.OIDCKeysFetchFailures); n != 1 {
 		t.Fatalf("%d failure series before any failure", n)
-	}
-}
-
-// Review I1: a proxy URL that does not parse as one is refused without
-// saying any of it, and the start line names scheme and host only.
-func TestAProxyURLIsValidatedAndNeverPrinted(t *testing.T) {
-	const pw = "fake-pw"
-	for _, raw := range []string{
-		"http://svc:" + pw + "#x@proxy.example.com:3128",
-		"http://svc:" + pw + "/x@proxy.example.com:3128",
-		"http://svc:" + pw + "?x@proxy.example.com:3128",
-		"http://svc:" + pw + "@proxy.example.com:3128:badport",
-		"http://svc:" + pw + "@proxy.example.com:badport",
-		"http://svc:" + pw + "%zz@proxy.example.com:3128",
-		"http://svc:" + pw + "@proxy.example.com:3128/path",
-	} {
-		u, err := oidc.ParseProxyForTest(raw)
-		if err == nil || strings.Contains(err.Error(), pw) {
-			t.Errorf("%q: %v, %v", strings.ReplaceAll(raw, pw, "***"), u, err)
-		}
-		t.Setenv("HTTPS_PROXY", raw)
-		if got, err := oidc.ProxyFor("https://idp.example.com"); err == nil || got != nil || strings.Contains(err.Error(), pw) {
-			t.Errorf("ProxyFor with %q: %v, %v", strings.ReplaceAll(raw, pw, "***"), got, err)
-		}
-	}
-	for raw, want := range map[string]string{
-		"http://svc:" + pw + "@proxy.example.com:3128": "through the proxy http://proxy.example.com:3128 (with credentials) (HTTPS_PROXY)",
-		"http://proxy.example.com:3128":                "through the proxy http://proxy.example.com:3128 (HTTPS_PROXY)",
-		"proxy.example.com:3128":                       "through the proxy http://proxy.example.com:3128 (HTTPS_PROXY)",
-	} {
-		u, err := oidc.ParseProxyForTest(raw)
-		if err != nil {
-			t.Errorf("%q: %v", strings.ReplaceAll(raw, pw, "***"), err)
-			continue
-		}
-		if got := oidc.DescribeProxy(u); got != want || strings.Contains(got, pw) {
-			t.Errorf("DescribeProxy = %q, want %q", got, want)
-		}
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/egress"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -57,6 +58,9 @@ const (
 	maxPages   = 1000
 	maxDevices = 100_000
 )
+
+// proxy is the transport's proxy (egress.Proxy); a variable for the tests.
+var proxy = egress.Proxy
 
 // dialTimeout bounds a dial and a TLS handshake; the sync's deadline bounds
 // the rest. A variable for the tests.
@@ -118,29 +122,36 @@ func newClient(base, caFile string, token Secret, product string) (*client, erro
 		scheme = "Bearer "
 	}
 	host := u.Hostname()
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{Timeout: dialTimeout}
 	tr := &http.Transport{
-		// Each connection's TLS config is built at its dial from the CA file
-		// as it is then; RootCAs is never nil, so never the host's roots
-		// unless the CA file is the host's bundle.
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			pool, err := readCA(caFile)
-			if err != nil {
-				return nil, err
-			}
-			ctx, cancel := context.WithTimeout(ctx, dialTimeout)
-			defer cancel()
-			raw, err := dialer.DialContext(ctx, network, addr)
-			if err != nil {
-				return nil, err
-			}
-			conn := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: host})
-			if err := conn.HandshakeContext(ctx); err != nil {
-				raw.Close()
-				return nil, err
-			}
-			return conn, nil
-		},
+		Proxy:       proxy,
+		DialContext: dialer.DialContext,
+		// The CA file is read at each handshake, direct or through the
+		// proxy's tunnel, so a rotated CA needs no restart. A proxied HTTPS
+		// request never calls DialTLSContext: the transport dials the proxy,
+		// sends CONNECT, then handshakes with this config. InsecureSkipVerify
+		// only hands verification to VerifyConnection, which verifies the
+		// chain against that pool and the name against the source's host:
+		// RootCAs is never nil, so never the host's roots unless the CA file
+		// is the host's bundle.
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, InsecureSkipVerify: true,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				pool, err := readCA(caFile)
+				if err != nil {
+					return err
+				}
+				if len(cs.PeerCertificates) == 0 {
+					return errors.New("the source sent no certificate")
+				}
+				inter := x509.NewCertPool()
+				for _, c := range cs.PeerCertificates[1:] {
+					inter.AddCert(c)
+				}
+				_, err = cs.PeerCertificates[0].Verify(x509.VerifyOptions{Roots: pool, Intermediates: inter,
+					DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+				return err
+			}},
+		TLSHandshakeTimeout:   dialTimeout,
 		ResponseHeaderTimeout: 2 * time.Minute, MaxIdleConnsPerHost: 2,
 		// DefaultTransport's: port49 closes an idle connection before the
 		// source, or a proxy in front of it, does, and a rotated CA reaches
