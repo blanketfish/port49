@@ -89,6 +89,56 @@ func Read(path string, max int64, what string) ([]byte, error) {
 	return readIn(filepath.Dir(target), filepath.Base(target), max, what)
 }
 
+// ReadSecret reads a secret file a `file:` reference names (spec §13
+// decision 53 rulings 1 and 12). It is Read's fence with a reader's rule for
+// the file. A link is followed, as a ConfigMap's is, only while the path
+// resolves inside within: a Kubernetes Secret or CSI volume's
+// name -> ..data/name chain does, and a link out of the directory, to the
+// TLS key or the keytab, is refused. Every link's directory (and, decision 53
+// ruling 11, every ancestor) is held to the fence's rule by
+// resolvePolicyPath; the directory holding the file to Read's, never excused
+// by a read-only mount. The file must be owned by this process's user or
+// root, writable by its owner alone, and carry no world bit: group-read is
+// allowed, which fsGroup and an agent's perms = "0440" give. No error
+// carries the file's bytes.
+func ReadSecret(path, within string, max int64) ([]byte, error) {
+	target, err := resolvePolicyPath(path)
+	if err != nil {
+		return nil, err
+	}
+	w, err := resolvePolicyPath(within)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(target, w+"/") {
+		return nil, fmt.Errorf("%s resolves to %s, outside %s: a secret file, and every link to it, stays "+
+			"inside that directory", path, target, w)
+	}
+	dir, base := filepath.Dir(target), filepath.Base(target)
+	d, di, err := openDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	fd, err := syscall.Openat(int(d.Fd()), base, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), target)
+	defer f.Close()
+	return readChecked(f, target, max, "secret file", func(fi fs.FileInfo) error {
+		if err := ownedByUsOrRoot("the secret file "+target, fi); err != nil {
+			return err
+		}
+		if perm := fi.Mode().Perm(); perm&0o027 != 0 {
+			return fmt.Errorf("%s is mode %v: a secret file may be group-readable, never world-readable or "+
+				"writable by anyone but its owner - chmod 0440 or 0600 it, or, on a mounted volume, set the "+
+				"mode where it is rendered (Kubernetes defaultMode and fsGroup, Vault Agent's perms)", target, perm)
+		}
+		return writableByUsAlone("the directory "+dir, di)
+	})
+}
+
 // ReadNoLink is Read for a file this process writes itself, whose own name is
 // never a link: the inventory service's state, the trust anchor for its
 // sequence. A link in its place is refused, not followed, so nobody can point

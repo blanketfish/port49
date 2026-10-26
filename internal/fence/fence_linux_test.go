@@ -608,3 +608,73 @@ func TestCheckDirAsksOfTheDirectoryAlone(t *testing.T) {
 		t.Fatalf("a directory others can write: %v", err)
 	}
 }
+
+// secretVolume lays a secret out as a Kubernetes Secret or CSI volume does,
+// in the configMap layout: dir/k -> ..data/k, ..data -> ..2026_…, the file
+// 0440 in the timestamped directory. It returns dir.
+func secretVolume(t *testing.T) string {
+	t.Helper()
+	dir := configMap(t) // policy.yaml in it stands for any file
+	stamped, _ := filepath.EvalSymlinks(filepath.Join(dir, "..data"))
+	if err := os.WriteFile(filepath.Join(stamped, "k"), []byte("s3cret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("..data/k", filepath.Join(dir, "k")); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// A secret volume's chain of links is followed while it stays inside the
+// directory, so a key added to a whole-volume mount is read with no restart
+// (decision 53 ruling 1).
+func TestASecretLinkInsideTheDirectoryIsFollowed(t *testing.T) {
+	dir := secretVolume(t)
+	if raw, err := ReadSecret(filepath.Join(dir, "k"), dir, 1<<20); err != nil || len(raw) != 7 {
+		t.Fatalf("%d bytes, %v", len(raw), err)
+	}
+}
+
+// A link that leaves the directory is refused, naming both paths: a policy
+// writer who can place a link must not reach the host's other secrets
+// (Review Focus 2; decision 53 ruling 12).
+func TestALinkOutOfTheDirectoryIsRefused(t *testing.T) {
+	dir := secretVolume(t)
+	other := filepath.Join(t.TempDir(), "tls-key.pem")
+	if err := os.WriteFile(other, []byte("hunter2-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(dir, "out")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadSecret(filepath.Join(dir, "out"), dir, 1<<20)
+	if err != nil && strings.Contains(err.Error(), "hunter2") {
+		t.Fatal("the refusal carries the target's content")
+	}
+	if err == nil || !strings.Contains(err.Error(), other) || !strings.Contains(err.Error(), "outside "+dir) {
+		t.Fatalf("%v", err)
+	}
+	if _, err := ReadSecret(other, dir, 1<<20); err == nil {
+		t.Fatal("a file outside the directory was read")
+	}
+}
+
+// The file is held to a reader's rule: owned by us or root, written by its
+// owner alone, no world bit; another owner is refused.
+func TestASecretFileOfAnotherOwnerIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root owns every file it writes")
+	}
+	dir := secretVolume(t)
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
+	real := FileOwner
+	FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if fi.Mode().IsRegular() {
+			return uint32(os.Geteuid() + 1), true // the Vault Agent injector's uid 100, say
+		}
+		return real(fi)
+	}
+	if _, err := ReadSecret(filepath.Join(dir, "k"), dir, 1<<20); err == nil || !strings.Contains(err.Error(), "chown it") {
+		t.Fatalf("%v", err)
+	}
+}
