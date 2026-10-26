@@ -2442,7 +2442,7 @@ func TestAPagedLoadRetriesACompaction(t *testing.T) {
 	n := 0
 	err := pagedLoad(context.Background(), &out, "marks", func() error {
 		if n++; n == 1 {
-			return fmt.Errorf("store: reading the revocations in force: %w", store.ErrCompacted)
+			return store.ErrCompacted
 		}
 		return nil
 	})
@@ -2467,7 +2467,7 @@ func TestACompactionRetryWaitsBetweenTries(t *testing.T) {
 	n := 0
 	err := pagedLoad(ctx, &out, "ledger", func() error {
 		n++
-		return fmt.Errorf("store: reading the live contexts for the ledger: %w", store.ErrCompacted)
+		return store.ErrCompacted
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("%v", err)
@@ -2479,5 +2479,57 @@ func TestACompactionRetryWaitsBetweenTries(t *testing.T) {
 	}
 	if got := strings.Count(out.String(), "trying again in 50ms"); got != n-1 && got != n {
 		t.Fatalf("%d lines for %d tries\n%s", got, n, out.String())
+	}
+}
+
+// A load that meets a compaction again and again says once, in fixed text,
+// what to change, and keeps trying; one compaction says nothing of the sort.
+// The error line names the load without a doubled "store:" prefix (Task 13
+// review m1).
+func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
+	was := startRetryWait
+	startRetryWait = time.Millisecond
+	t.Cleanup(func() { startRetryWait = was })
+	const remedy = "raise etcd's --auto-compaction-retention, or raise bulk_timeout"
+	var out bytes.Buffer
+	n := 0
+	err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n++; n <= 4 {
+			return store.ErrCompacted
+		}
+		return nil
+	})
+	if err != nil || n != 5 {
+		t.Fatalf("%v after %d tries", err, n)
+	}
+	if got := strings.Count(out.String(), remedy); got != 1 {
+		t.Fatalf("the remedy was said %d times:\n%s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "port49-broker: reading the marks: store: the feed's revision was compacted;") ||
+		strings.Contains(out.String(), "store: reading") {
+		t.Fatalf("the retry line's prefix:\n%s", out.String())
+	}
+	out.Reset()
+	n = 0
+	if err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n++; n == 1 {
+			return store.ErrCompacted
+		}
+		return nil
+	}); err != nil || strings.Contains(out.String(), "auto-compaction-retention") {
+		t.Fatalf("one compaction said the remedy: %v\n%s", err, out.String())
+	}
+	// A compaction, a different outage, a compaction: not two in a row.
+	out.Reset()
+	seq := []error{store.ErrCompacted, store.ErrUnavailable, store.ErrCompacted}
+	n = 0
+	if err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n < len(seq) {
+			n++
+			return seq[n-1]
+		}
+		return nil
+	}); err != nil || strings.Contains(out.String(), "auto-compaction-retention") {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 }

@@ -136,14 +136,36 @@ var pagedLoadFault func(name string) error
 // reads the whole load again (11a final review N1), after the same wait as
 // an outage, so it never loops hot.
 func pagedLoad(ctx context.Context, out io.Writer, name string, f func() error) error {
+	compacted := 0 // in a row
 	return startRetry(ctx, out, func() error {
-		if pagedLoadFault != nil {
-			if err := pagedLoadFault(name); err != nil {
-				return err
-			}
+		err := pagedLoadTry(name, f)
+		if err == nil {
+			return nil
 		}
-		return f()
+		err = fmt.Errorf("reading the %s: %w", name, err)
+		if !errors.Is(err, store.ErrCompacted) {
+			compacted = 0
+			return err
+		}
+		// Twice in a row means the load takes longer than etcd keeps
+		// revisions; say once what to change. It keeps trying: nothing is
+		// refused, and the retry line below still names each wait.
+		if compacted++; compacted == 2 {
+			fmt.Fprintf(out, "port49-broker: the %s load keeps meeting a compaction before it finishes: raise "+
+				"etcd's --auto-compaction-retention, or raise bulk_timeout if the load is slow\n", name)
+		}
+		return err
 	}, store.ErrCompacted)
+}
+
+// pagedLoadTry is one try of the load name: its fault (a test's), else f.
+func pagedLoadTry(name string, f func() error) error {
+	if pagedLoadFault != nil {
+		if err := pagedLoadFault(name); err != nil {
+			return err
+		}
+	}
+	return f()
 }
 
 // openBroker waits for etcd on the broker's identity alone, as port49d's
@@ -243,7 +265,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		var err error
 		bs.ctxRev, known, recorded, err = crypt.LoadLedger(lctx, b, b, keys, ledger)
 		if err != nil {
-			return fmt.Errorf("store: reading the live contexts for the ledger: %w", err)
+			return err
 		}
 		fmt.Fprintf(out, "port49-broker: ledger: %d context key(s) known (%d from the ledger record); following "+
 			"the store from revision %d\n", known, recorded, bs.ctxRev)
@@ -260,7 +282,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		var err error
 		if bs.markRev, err = store.LoadMarks(lctx, feed, marks, nil); err != nil {
-			return fmt.Errorf("store: reading the revocations in force: %w", err)
+			return err
 		}
 		return nil
 	}); err != nil {

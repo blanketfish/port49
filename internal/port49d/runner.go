@@ -1152,7 +1152,7 @@ func (r *runner) reachFollowed(ctx context.Context) {
 						"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
 						r.brk.FollowedLogoutByHand(l.Logout, rep))
 				} else {
-					line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v", f.n,
+					line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v (the remedy was said with the first failure)", f.n,
 						printsafe.Line(err.Error(), 300), wait)
 				}
 				r.retryLogout(ctx, l, wait)

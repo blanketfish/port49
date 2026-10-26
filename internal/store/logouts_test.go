@@ -115,3 +115,66 @@ func TestLogoutSetMergeNeverErasesALiveLogout(t *testing.T) {
 		t.Fatalf("Len counts %d lapsed logouts, want only the live", s.Len())
 	}
 }
+
+// compactedFeed's first watch fails with ErrCompacted, as etcd's does when a
+// compaction lands between the load and the watch's start; the load after it
+// holds what was written in that window.
+type compactedFeed struct {
+	mu      sync.Mutex
+	loads   int
+	watches int
+	second  []LogoutEntry
+}
+
+func (f *compactedFeed) Logouts(context.Context) (uint64, []LogoutEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loads++
+	if f.loads == 1 {
+		return 5, nil, nil
+	}
+	return 9, f.second, nil
+}
+
+func (f *compactedFeed) WatchLogouts(ctx context.Context, _ uint64, _ func(LogoutEntry, bool, uint64),
+	_ func(uint64)) error {
+	f.mu.Lock()
+	f.watches++
+	n := f.watches
+	f.mu.Unlock()
+	if n == 1 {
+		return ErrCompacted
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A compaction between the load and the watch's start makes the watch fail
+// with ErrCompacted; the follow loads again, holds what was written in that
+// window, and tells on each: a logout is never lost to it (Task 13 review m3).
+func TestAFollowReloadsWhenTheWatchIsCompactedAndHoldsTheLogoutFromTheGap(t *testing.T) {
+	now := time.Now()
+	set := NewLogoutSet(time.Now)
+	f := &compactedFeed{second: []LogoutEntry{
+		{Logout: Logout{Key: "made-in-the-gap", At: now, Origin: "o1"}, Until: now.Add(time.Hour)}}}
+	told := make(chan string, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowLogouts(ctx, f, set, 0, func(e LogoutEntry) { told <- e.Key }, func(bool) {}, func(string, ...any) {})
+	select {
+	case k := <-told:
+		if k != "made-in-the-gap" {
+			t.Fatalf("told %q", k)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the logout made between the load and the watch was never told")
+	}
+	if _, ok := set.Get("made-in-the-gap"); !ok {
+		t.Fatal("the logout made in the gap is not held")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.loads != 2 {
+		t.Fatalf("%d loads, want 2 (the compacted watch reloads)", f.loads)
+	}
+}

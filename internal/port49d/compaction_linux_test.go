@@ -2,7 +2,6 @@ package port49d
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -28,7 +27,7 @@ func TestTheBrokerStartRetriesACompactionInItsMarksAndLogouts(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		if hit[name]++; hit[name] == 1 && (name == "marks" || name == "logouts") {
-			return fmt.Errorf("store: reading the %s: %w", name, store.ErrCompacted)
+			return store.ErrCompacted
 		}
 		return nil
 	}
@@ -76,7 +75,7 @@ func TestALogoutIsNotLostAcrossACompaction(t *testing.T) {
 		defer mu.Unlock()
 		if name == "logouts" {
 			if hit++; hit == 1 {
-				return fmt.Errorf("store: reading the logouts: %w", store.ErrCompacted)
+				return store.ErrCompacted
 			}
 		}
 		return nil

@@ -376,6 +376,55 @@ func TestAFailedLogoutReachIsTriedAgain(t *testing.T) {
 	}
 }
 
+// A logout whose reach failed and then succeeded starts afresh: a later
+// logout for the same key that fails says its remedy again, since the first
+// line is long gone (Task 13 review m2), and the later lines point back at it
+// (m4).
+func TestARecoveredLogoutSaysItsRemedyAgainWhenItFailsAgain(t *testing.T) {
+	was := logoutRetryFirst
+	logoutRetryFirst = time.Hour // the test sends each try itself
+	t.Cleanup(func() { logoutRetryFirst = was })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	var mu sync.Mutex
+	results := []error{fmt.Errorf("%w: no quorum", store.ErrUnavailable), nil, fmt.Errorf("%w: no quorum", store.ErrUnavailable),
+		fmt.Errorf("%w: no quorum", store.ErrUnavailable)}
+	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+		followedLogouts: make(chan store.LogoutEntry, 8)}
+	r.reach = func(context.Context, store.Logout) (broker.RevokeReport, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		err := results[0]
+		results = results[1:]
+		return broker.RevokeReport{Principals: []string{"user:alice@example.com"}}, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	key := store.OIDCKey(store.OIDCSub, "https://idp.example", "sub-alice")
+	for _, origin := range []string{"origin-1", "origin-2", "origin-3", "origin-4"} {
+		r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: key, Origin: origin}, Until: time.Now().Add(time.Hour)}
+		waitWithin(t, &out, "a logout made elsewhere ("+origin+")", 5*time.Second)
+	}
+	said := 0
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, "port49 revoke --principal user:alice@example.com") {
+			said++
+		}
+	}
+	if said != 2 {
+		t.Fatalf("the remedy was said on %d lines, want 2 (the first failure, and the first after the success):\n%s",
+			said, out.String())
+	}
+	if got := strings.Count(out.String(), "still not reached after 2 tries (store: unavailable: no quorum); tried again in "+
+		"2h0m0s (the remedy was said with the first failure)"); got != 1 {
+		t.Fatalf("%d pointer lines, want 1:\n%s", got, out.String())
+	}
+}
+
 // A logout that lapses while its reach keeps failing leaves no entry behind
 // in the failure count.
 func TestALapsedLogoutLeavesNoFailureCount(t *testing.T) {
