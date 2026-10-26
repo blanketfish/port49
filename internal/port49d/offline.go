@@ -251,7 +251,7 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 	}
 	run.noPolicy = noPolicy
 	m := metrics.New(prometheus.NewRegistry())
-	b, err := attempt(ctx, cfg, sessionRef(cfg), m, out)
+	b, err := attempt(ctx, cfg, sessionRef(cfg), m, out, false)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return offlineRun{}, errors.New("stopped")
@@ -264,7 +264,7 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 		crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now)))
 	closeAll := func() { b.Close() }
 	if !cfg.Stores.Shared {
-		d, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		d, err := attempt(ctx, cfg, directoryRef(cfg), m, out, false)
 		if err != nil {
 			b.Close()
 			if errors.Is(err, context.Canceled) {

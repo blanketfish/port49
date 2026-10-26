@@ -171,7 +171,7 @@ func TestAWrongCAIsAStoreFaultNotAnOutage(t *testing.T) {
 	cfg := config.Config{Role: config.RoleBroker}
 	ref := storeRef{at: "stores.directory", dir: true, cfg: config.StoreConfig{Backend: "etcd", Etcd: &config.EtcdConfig{
 		Endpoints: []string{srv.Endpoint}, CAFile: caFile, Prefix: "/port49/", Broker: &id, CallTimeout: 200 * time.Millisecond}}}
-	_, err = attempt(context.Background(), cfg, ref, metrics.New(prometheus.NewRegistry()), io.Discard)
+	_, err = attempt(context.Background(), cfg, ref, metrics.New(prometheus.NewRegistry()), io.Discard, true)
 	var fault *storeFault
 	if !errors.As(err, &fault) || errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("a server this CA does not verify: %v", err)

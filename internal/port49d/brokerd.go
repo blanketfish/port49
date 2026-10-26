@@ -175,7 +175,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if cfg.Stores.Shared {
 		bs.dir.set(b)
 	} else {
-		dirRaw, derr := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		dirRaw, derr := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
 		switch {
 		case derr == nil:
 			sayUnenforced(out, cfg, directoryRef(cfg))

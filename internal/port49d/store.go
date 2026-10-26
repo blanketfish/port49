@@ -187,7 +187,7 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 		deadline = time.Now().Add(e.StartTimeout)
 	}
 	for {
-		s, err := attempt(ctx, cfg, ref, m, out)
+		s, err := attempt(ctx, cfg, ref, m, out, true)
 		if err == nil {
 			sayUnenforced(out, cfg, ref)
 			return s, nil
@@ -355,7 +355,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		// check ran in attempt: the daemon's read is confined to the marks and
 		// the key window.
 		de := cfg.Stores.Directory.Etcd
-		dd, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		dd, err := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
 		switch {
 		case err == nil:
 			sayUnenforced(out, cfg, directoryRef(cfg))
@@ -549,7 +549,7 @@ func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metri
 	proc string, check func(*etcdstore.Store) error) error {
 	said := ""
 	for {
-		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
 		if err == nil {
 			if check != nil {
 				err = check(s)
@@ -801,7 +801,7 @@ func checkSealKeysAs(ctx context.Context, proc string, s *etcdstore.Store, keys 
 // An outage is store.ErrUnavailable; a configuration fault is a
 // *storeFault naming what is wrong. Each start says the certificate's
 // expiry, once it succeeds.
-func attempt(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer) (*etcdstore.Store, error) {
+func attempt(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer, floor bool) (*etcdstore.Store, error) {
 	e := ref.cfg.Etcd
 	at := ref.at + ".etcd"
 	now := time.Now()
@@ -832,6 +832,12 @@ func attempt(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Me
 			err = checkRoles(ctx, nil, s, e, leaves, ref)
 		} else {
 			err = checkRoles(ctx, s, nil, e, leaves, ref)
+		}
+		// A server start holds the store to the version floor (decision 53
+		// ruling 9); the offline paths do not, so an emergency revoke against
+		// an old cluster still runs.
+		if err == nil && floor {
+			err = checkFloor(endpointVersions(s, ctx, e.Endpoints, e.CallTimeout), ref.what(), out, procOf(cfg))
 		}
 	}
 	if err != nil {
