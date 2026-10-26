@@ -30,7 +30,11 @@ type liveKeys struct {
 	allow secretref.Allowance // key_secret_refs: where a reference may point
 	mu    sync.Mutex
 	held  map[string]secretref.Secret // reference text → secret
-	in    atomic.Pointer[keyBuild]
+	// seen is every version's reference this process has had in force, by
+	// key_ref and version: a version dropped and added back with another
+	// reference is a re-key too. References only, never a secret.
+	seen map[string]map[int]string
+	in   atomic.Pointer[keyBuild]
 }
 
 // keyBuild is one policy's keys, ready to put in force: the keyring by
@@ -54,20 +58,19 @@ func newLiveKeys(res *secretref.Resolver, allow secretref.Allowance) *liveKeys {
 		// env: and file: still read.
 		res = secretref.New()
 	}
-	k := &liveKeys{res: res, allow: allow.WithDefaults(), held: map[string]secretref.Secret{}}
+	k := &liveKeys{res: res, allow: allow.WithDefaults(), held: map[string]secretref.Secret{}, seen: map[string]map[int]string{}}
 	k.in.Store(&keyBuild{sets: map[string]keyring.Set{}, refs: map[string]map[int]string{}})
 	return k
 }
 
 // build reads every reference pol names that is not held, and refuses a
-// version whose reference differs from the one in force for that version.
+// version whose reference differs from the one this process has had for it.
 // It changes nothing in force; put does.
 func (k *liveKeys) build(pol *policy.Policy) (keyBuild, error) {
 	if k == nil {
 		return keyBuild{}, nil
 	}
 	sets := pol.KeySets()
-	in := k.in.Load()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	b := keyBuild{refs: map[string]map[int]string{}}
@@ -87,7 +90,7 @@ func (k *liveKeys) build(pol *policy.Policy) (keyBuild, error) {
 				return keyBuild{}, fmt.Errorf("%s %s is outside key_secret_refs (%s): a policy names only the "+
 					"secrets port49d.yaml allows it (decision 53 ruling 12)", at, text, k.allow)
 			}
-			if was, ok := in.refs[ref][v.Version]; ok && was != text {
+			if was, ok := k.seen[ref][v.Version]; ok && was != text {
 				return keyBuild{}, fmt.Errorf("keys.%s version %d names secret_ref %s, and the policy in force names "+
 					"%s for it: a version's secret never changes (spec §10), so add a version instead", ref, v.Version,
 					text, was)
@@ -121,9 +124,13 @@ func (k *liveKeys) put(b keyBuild) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	named := map[string]bool{}
-	for _, vs := range b.refs {
-		for _, text := range vs {
+	for ref, vs := range b.refs {
+		if k.seen[ref] == nil {
+			k.seen[ref] = map[int]string{}
+		}
+		for n, text := range vs {
 			named[text] = true
+			k.seen[ref][n] = text
 		}
 	}
 	for text := range k.held {

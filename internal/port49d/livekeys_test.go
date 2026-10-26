@@ -80,6 +80,38 @@ func TestAReloadThatRekeysAVersionIsRefused(t *testing.T) {
 	}
 }
 
+// A version dropped by one reload and added back by a later one with another
+// reference is a re-key too (re-review 7, M4): an open connection on it with
+// no packet between the two would decrypt with the new secret. The process
+// remembers each version's reference, not only those in force.
+func TestAVersionRemovedAndAddedBackWithAnotherReferenceIsRefused(t *testing.T) {
+	t.Setenv("T_LK_A", "a")
+	t.Setenv("T_LK_B", "b")
+	t.Setenv("T_LK_C", "c")
+	k := newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "T_LK_", FileDir: safeDir(t)})
+	for _, body := range []string{
+		"keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_C}\n    accept: [{version: 1, secret_ref: env:T_LK_A, retire_after: 2099-01-01}]\n",
+		"keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_C}\n", // version 1 removed
+	} {
+		kb, err := k.build(keyedPolicy(t, body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		k.put(kb)
+	}
+	_, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_C}\n"+
+		"    accept: [{version: 1, secret_ref: env:T_LK_B, retire_after: 2099-01-01}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "env:T_LK_A") || !strings.Contains(err.Error(), "env:T_LK_B") ||
+		!strings.Contains(err.Error(), "add a version") {
+		t.Fatalf("a removed version came back re-keyed: %v", err)
+	}
+	// The same reference comes back as it was: nothing was re-keyed.
+	if _, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_C}\n"+
+		"    accept: [{version: 1, secret_ref: env:T_LK_A, retire_after: 2099-01-01}]\n")); err != nil {
+		t.Fatalf("the same reference back was refused: %v", err)
+	}
+}
+
 // A policy names only what port49d.yaml allows (Review Focus 2; decision 53
 // ruling 12): the encryption key's variable, the bind password's, and a file
 // outside file_dir are each refused before anything is read, naming the
