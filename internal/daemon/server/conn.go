@@ -508,7 +508,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 				return nil, false
 			}
 		}
-		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
+		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
 			// more: no admission, no reply. The strike is counted, and the next
@@ -551,7 +551,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		// retire_after; this packet is not trial-decrypted, since nothing it
 		// could say would change the answer (spec §10). It is closed as a
 		// first-packet miss is: struck, and reset at once.
-		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(s.version),
+		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(s.version),
 			string(keyring.DiagMatchesRetired)).Inc()
 		s.keyMiss(h, obf, keyring.DiagMatchesRetired, s.version)
 		return nil, false

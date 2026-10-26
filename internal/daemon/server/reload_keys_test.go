@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -139,6 +140,9 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 	var wg sync.WaitGroup
 	ended := make(chan error, conns)
 	var served sync.WaitGroup // each connection has had three replies
+	// retired is set once the retiring put has returned: a request written
+	// after that is read by the server after it, so it must get no reply.
+	var retired, lateReplies atomic.Int32
 	served.Add(conns)
 	for i := range conns {
 		conn, err := net.Dial("tcp", ts.addr)
@@ -153,6 +157,7 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 			for n := 0; ; n++ {
 				// A PAP login with a wrong credential: each is answered and its
 				// session is over, so the connection can carry as many as it likes.
+				afterPut := retired.Load() == 1
 				body := loginStart("p49_wrong")
 				h := wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen, SeqNo: 1, Flags: wire.FlagSingleConnect,
 					SessionID: c.sid + uint32(n)<<16, Length: uint32(len(body))}
@@ -169,6 +174,9 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 						ended <- err
 					}
 					return
+				}
+				if afterPut {
+					lateReplies.Add(1)
 				}
 				rh, _ := wire.DecodeHeader(hb)
 				if _, err := io.ReadFull(conn, make([]byte, rh.Length)); err != nil {
@@ -189,6 +197,7 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 		sets.put("prod_key", fakeVersion(2, "k2", false))
 	}
 	sets.put("prod_key", fakeVersion(3, "k3", false), fakeVersion(2, "k2", true))
+	retired.Store(1)
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
 	select {
@@ -200,6 +209,9 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 		if err := <-ended; err != nil {
 			t.Fatalf("a connection ended with %v, not a close", err)
 		}
+	}
+	if n := lateReplies.Load(); n != 0 {
+		t.Fatalf("%d replies came to requests sent after the retiring reload returned", n)
 	}
 	if ts.limits.Holding(netip.MustParseAddr("127.0.0.1")) {
 		t.Fatal("a reload's own withdrawal struck the device")
@@ -219,19 +231,30 @@ func TestAFirstPacketIsJudgedAgainstTheSetInForceNow(t *testing.T) {
 		reload func(*liveSets)
 		key    string
 		want   want
+		// retired starts k2 listed retired: a key already withdrawn at Accept.
+		retired bool
 	}{
-		"the version retired":    {func(l *liveSets) { l.put("prod_key", v3, fakeVersion(2, "k2", true)) }, "k2", want{true, false}},
-		"the version removed":    {func(l *liveSets) { l.put("prod_key", v3) }, "k2", want{true, false}},
-		"the key_ref removed":    {func(l *liveSets) { l.put("prod_key") }, "k2", want{true, false}},
-		"a version added":        {func(l *liveSets) { l.put("prod_key", v3, fakeVersion(2, "k2", false)) }, "k3", want{false, false}},
-		"a wrong key":            {func(l *liveSets) { l.put("prod_key", v3) }, "k-wrong", want{true, true}},
-		"a wrong key, no reload": {func(l *liveSets) {}, "k-wrong", want{true, true}},
-		"the old key, no reload": {func(l *liveSets) {}, "k2", want{false, false}},
+		"the version retired":    {func(l *liveSets) { l.put("prod_key", v3, fakeVersion(2, "k2", true)) }, "k2", want{true, false}, false},
+		"the version removed":    {func(l *liveSets) { l.put("prod_key", v3) }, "k2", want{true, false}, false},
+		"the key_ref removed":    {func(l *liveSets) { l.put("prod_key") }, "k2", want{true, false}, false},
+		"a version added":        {func(l *liveSets) { l.put("prod_key", v3, fakeVersion(2, "k2", false)) }, "k3", want{false, false}, false},
+		"a wrong key":            {func(l *liveSets) { l.put("prod_key", v3) }, "k-wrong", want{true, true}, false},
+		"a wrong key, no reload": {func(l *liveSets) {}, "k-wrong", want{true, true}, false},
+		"the old key, no reload": {func(l *liveSets) {}, "k2", want{false, false}, false},
+		// A key retired before the connection was accepted is the leaked-key case: an
+		// ordinary miss, struck, whatever else reloads (re-review 7, I1).
+		"retired at Accept, no reload": {func(l *liveSets) {}, "k2", want{true, true}, true},
+		"retired at Accept, an unrelated reload": {func(l *liveSets) { l.put("other_key", fakeVersion(1, "o1", false)) },
+			"k2", want{true, true}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var log syncBuffer
 			sets := &liveSets{m: map[string]keyring.Set{}}
-			sets.put("prod_key", fakeVersion(2, "k2", false))
+			if c.retired {
+				sets.put("prod_key", v3, fakeVersion(2, "k2", true))
+			} else {
+				sets.put("prod_key", fakeVersion(2, "k2", false))
+			}
 			st := memory.New(time.Now)
 			putLogin(t, st, "p49_first")
 			ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
@@ -262,5 +285,30 @@ func TestAFirstPacketIsJudgedAgainstTheSetInForceNow(t *testing.T) {
 				t.Fatal("a reload's own withdrawal struck the device")
 			}
 		})
+	}
+}
+
+// A first packet that misses after a reload removed the device's key_ref is
+// counted under that key_ref, not under the empty name of the absent set
+// (re-review 7, M2): one spelling for every key_validations series.
+func TestAFirstPacketMissOnARemovedKeyRefIsCountedUnderItsName(t *testing.T) {
+	var log syncBuffer
+	sets := &liveSets{m: map[string]keyring.Set{}}
+	sets.put("prod_key", fakeVersion(2, "k2", false))
+	st := memory.New(time.Now)
+	putLogin(t, st, "p49_first")
+	ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
+	cl := dial(t, ts.addr, []byte("k-wrong"))
+	if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")) == 1 }) {
+		t.Fatal("the connection was not accepted")
+	}
+	sets.put("prod_key")
+	cl.send(t, wire.TypeAuthen, loginStart("p49_first"), wire.FlagSingleConnect)
+	closedAtOnce(t, cl)
+	count := func(ref string) float64 {
+		return testutil.ToFloat64(ts.metrics.KeyValidations.WithLabelValues(ref, "0", "no_known_key_matches"))
+	}
+	if !waitFor(t, func() bool { return count("prod_key") == 1 }) || count("") != 0 {
+		t.Fatalf("under prod_key %v, under the empty name %v", count("prod_key"), count(""))
 	}
 }
