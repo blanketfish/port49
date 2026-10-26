@@ -1,6 +1,8 @@
 package yamlfault
 
 import (
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -34,6 +36,30 @@ func TestOfNamesTheLineAndCategoryOnly(t *testing.T) {
 		got := Of(err).Error()
 		if !strings.Contains(got, c.want) || strings.Contains(got, secret[:6]) {
 			t.Errorf("%q: got %q, want %q and no document text", c.body, got, c.want)
+		}
+	}
+}
+
+// OneDocument refuses anything after the first document, and quotes none of
+// it: a second document that does not even parse is still refused as one.
+func TestOneDocumentRefusesASecondDocument(t *testing.T) {
+	for _, c := range []struct {
+		raw  string
+		want error
+	}{
+		{"a: 1\n", nil},
+		{"", nil},
+		{"a: 1\n---\nb: 2\n", ErrSecondDocument},
+		{"a: 1\n---\n[unclosed\n", ErrSecondDocument},
+	} {
+		dec := yaml.NewDecoder(strings.NewReader(c.raw))
+		var v map[string]any
+		if err := dec.Decode(&v); err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("%q: the first document: %v", c.raw, err)
+		}
+		err := OneDocument(dec)
+		if !errors.Is(err, c.want) || (err != nil && strings.Contains(err.Error(), "unclosed")) {
+			t.Errorf("%q: %v, want %v", c.raw, err, c.want)
 		}
 	}
 }

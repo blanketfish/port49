@@ -1397,3 +1397,29 @@ func TestNoBrokerModeAdmitsATLSDeviceWithNoKeyGroup(t *testing.T) {
 		}
 	}
 }
+
+// A second YAML document in port49d.yaml is refused, not ignored, by Load and
+// by every reader of the file's bytes (plan 6b final review Minor 7;
+// decision 53 ruling 6). The refusal quotes nothing after the separator.
+func TestASecondYAMLDocumentIsRefused(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	raw := fmt.Sprintf(sample, invPath) + "---\nlimits: {per_nas_connections: 9999}\n"
+	p := write(t, "port49d.yaml", raw)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "more than one YAML document") ||
+		strings.Contains(err.Error(), "9999") {
+		t.Fatalf("Load: %v", err)
+	}
+	for name, read := range map[string]func([]byte) error{
+		"MaxSessionAge":      func(b []byte) error { _, err := MaxSessionAge(b); return err },
+		"InventoryBound":     func(b []byte) error { _, err := InventoryBound(b); return err },
+		"RevocationsFile":    func(b []byte) error { _, err := RevocationsFile(b); return err },
+		"KeySets":            func(b []byte) error { _, err := KeySets(b); return err },
+		"InventoryServiceOf": func(b []byte) error { _, err := InventoryServiceOf(b); return err },
+		"StoresBlocks":       func(b []byte) error { _, err := StoresBlocks(b); return err },
+	} {
+		if err := read([]byte(raw)); err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

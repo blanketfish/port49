@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/rhwendt/port49/internal/yamlfault"
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,6 +55,9 @@ func loadManifestFile(path, spec string) (Manifest, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil {
+		return m, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := yamlfault.OneDocument(dec); err != nil {
 		return m, fmt.Errorf("%s: %w", path, err)
 	}
 	specText, err := os.ReadFile(spec)

@@ -288,3 +288,19 @@ func TestADeviceFactIsAMeasuredClaimFromAClosedVocabulary(t *testing.T) {
 	refused(t, tlsFact("tls_per_request_no_command_authorization", "unmeasured", true), "a device fact is measured")
 	refused(t, tlsFact("tls_per_request_no_command_authorization", "measured", false), "needs transport tls")
 }
+
+// A profile is one document: the credential scan reads only the first, so a
+// second is refused rather than carried unscanned.
+func TestASecondProfileDocumentIsRefused(t *testing.T) {
+	first, err := os.ReadFile("testdata/profiles/fixture_plain.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "two.yaml")
+	if err := os.WriteFile(p, append(append(first, []byte("\n---\n")...), first...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(p, root); err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+		t.Fatalf("%v", err)
+	}
+}

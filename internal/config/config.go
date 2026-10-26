@@ -697,10 +697,8 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 		return 0, err
 	}
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return 0, fmt.Errorf("config: %w", err)
 	}
 	d := orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge)
 	if d <= 0 {
@@ -715,10 +713,8 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 // never the default.
 func InventoryBound(raw []byte) (int, error) {
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return 0, fmt.Errorf("config: %w", err)
 	}
 	return inventoryBound(f.InventoryOpts)
 }
@@ -742,10 +738,8 @@ func inventoryBound(o inventoryYAML) (int, error) {
 // the policy will be (pre-flight M10).
 func RevocationsFile(raw []byte) (string, error) {
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return "", fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return "", fmt.Errorf("config: %w", err)
 	}
 	if f.Broker == nil || f.Broker.RevocationsFile == "" {
 		return "", errors.New("config: no broker.revocations_file: init-revocations is for a port49d with a broker")
@@ -826,10 +820,8 @@ func load(path string, role Role) (Config, error) {
 	// turns `per_nas_conections: 4` into the default 32 and `retire:` into a
 	// dropped key version — both invisible until a device is affected by them.
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return Config{}, fmt.Errorf("config: %s: %w", path, err)
 	}
 	// `tls_listener:` with nothing under it decodes to nil, the same as no
 	// block: an operator who wrote the key meant a listener, so it is said.
@@ -1656,10 +1648,8 @@ func checkKeySets(keys map[string]KeySet, raw []byte) (map[string]KeySet, error)
 // policy test --config` read, in CI or anywhere else no key is.
 func KeySets(raw []byte) (map[string]KeySet, error) {
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	return checkKeySets(f.Keys, raw)
 }
@@ -2001,15 +1991,28 @@ func VerifyKeys(files []string) ([]ed25519.PublicKey, error) {
 // secret.
 func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	if f.InventoryOpts.Service == nil {
 		return nil, nil
 	}
 	return checkService(*f.InventoryOpts.Service)
+}
+
+// decodeFile decodes raw, a port49d.yaml, into f as strictly as Load does:
+// an unknown key is refused, and so is a second YAML document, which a single
+// Decode would ignore (decision 53 ruling 6). Neither error quotes the file.
+func decodeFile(raw []byte, f *fileConfig) error {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(f); err != nil && err != io.EOF {
+		return fmt.Errorf("%w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	if err := yamlfault.OneDocument(dec); err != nil {
+		return fmt.Errorf("%w; port49d.yaml is one document: remove the `---` and everything after it", err)
+	}
+	return nil
 }
 
 // decodeFault is a port49d.yaml decode error as it is shown: each fault's

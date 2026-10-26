@@ -481,3 +481,14 @@ func TestTLSNameClashes(t *testing.T) {
 		t.Error("leaf-02 was refused with them")
 	}
 }
+
+// The inventory is one document: a device list after `---` is refused,
+// never silently dropped from admission.
+func TestASecondInventoryDocumentIsRefused(t *testing.T) {
+	raw := "devices:\n  - {name: a, platform: arista_eos, addresses: [10.0.0.1]}\n---\ndevices:\n" +
+		"  - {name: b, platform: arista_eos, addresses: [10.0.0.2]}\n"
+	if _, err := ParseFile([]byte(raw), "inv.yaml"); err == nil ||
+		!strings.Contains(err.Error(), "more than one YAML document") {
+		t.Fatalf("%v", err)
+	}
+}

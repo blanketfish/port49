@@ -789,3 +789,12 @@ func TestAWordStartingWithASeparatorIsStillSplit(t *testing.T) {
 		t.Errorf("a leading-separator keyword word: %q", got)
 	}
 }
+
+// The redaction table is one document: a list after `---` is refused, never
+// dropped.
+func TestASecondRedactionDocumentIsRefused(t *testing.T) {
+	_, err := LoadRedactions([]byte("default: [{match: [x], from: 1}]\n---\nother: []\n"))
+	if err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+		t.Fatalf("%v", err)
+	}
+}

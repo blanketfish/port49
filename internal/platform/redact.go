@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/rhwendt/port49/internal/yamlfault"
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/platforms"
@@ -87,6 +88,9 @@ func LoadRedactions(raw []byte) (map[string][]Redaction, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&out); err != nil {
 		return nil, err
+	}
+	if err := yamlfault.OneDocument(dec); err != nil {
+		return nil, fmt.Errorf("the redaction table %w", err)
 	}
 	if len(out["default"]) == 0 {
 		return nil, errors.New("the redaction table has no default list")

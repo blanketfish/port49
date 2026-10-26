@@ -1,15 +1,11 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/url"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // storesYAML mirrors the stores block (plan 11a; spec §13 decision 51).
@@ -217,11 +213,8 @@ func StoresBlocks(raw []byte) (StoresConfig, error) {
 		return StoresConfig{}, err
 	}
 	var f fileConfig
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return StoresConfig{}, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema",
-			decodeFault(err))
+	if err := decodeFile(raw, &f); err != nil {
+		return StoresConfig{}, fmt.Errorf("config: %w", err)
 	}
 	s, err := checkStores(f.Stores, checkStoreShape)
 	if err != nil {
