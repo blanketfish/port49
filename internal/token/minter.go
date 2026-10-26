@@ -12,6 +12,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/username"
 )
@@ -365,7 +366,7 @@ type Minter struct {
 	store  store.Store
 	log    decision.Emitter
 	rand   io.Reader
-	tagKey []byte
+	tagKey secretref.Secret
 	now    func() time.Time
 	cap    int
 }
@@ -373,7 +374,7 @@ type Minter struct {
 // NewMinter builds a Minter over a store, a record emitter, a source of
 // randomness, the device-tag key, a clock, and the candidate-set cap.
 func NewMinter(s store.Store, e decision.Emitter, r io.Reader, tagKey []byte, now func() time.Time, cap int) *Minter {
-	return &Minter{store: s, log: e, rand: r, tagKey: tagKey, now: now, cap: cap}
+	return &Minter{store: s, log: e, rand: r, tagKey: secretref.Of(tagKey), now: now, cap: cap}
 }
 
 // Mint issues a login token, and an enable token beside it when the caller
@@ -507,11 +508,11 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	var hashes []string
 
 	mint := func(kind string) (string, error) {
-		secret, err := New(m.rand, m.tagKey, r.Device)
+		secret, err := New(m.rand, m.tagKey.Bytes(), r.Device)
 		if err != nil {
 			return "", err
 		}
-		id, err := New(m.rand, m.tagKey, r.Device) // any random string is a removal handle
+		id, err := New(m.rand, m.tagKey.Bytes(), r.Device) // any random string is a removal handle
 		if err != nil {
 			return "", err
 		}

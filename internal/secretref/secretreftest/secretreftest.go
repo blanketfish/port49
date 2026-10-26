@@ -25,9 +25,9 @@ func Forms(secret []byte) [][]byte {
 	}
 	forms := []string{string(secret), hex.EncodeToString(secret), base64.StdEncoding.EncodeToString(secret),
 		base64.RawURLEncoding.EncodeToString(secret), fmt.Sprintf("%q", secret), fmt.Sprintf("%#v", secret),
-		strings.Join(dec, " "), strings.Join(dec[:4], " "), strings.Join(dec, ", "),
-		strings.Join(hexList, ", "), strings.Join(hexList[:2], ", "), strings.Join(hexList[:2], " "),
-		string(secret[:6]), hex.EncodeToString(secret[:4])}
+		strings.Join(dec, " "), strings.Join(dec[:min(4, len(dec))], " "), strings.Join(dec, ", "),
+		strings.Join(hexList, ", "), strings.Join(hexList[:min(2, len(hexList))], ", "), strings.Join(hexList[:min(2, len(hexList))], " "),
+		string(secret[:min(6, len(secret))]), hex.EncodeToString(secret[:min(4, len(secret))])}
 	out := make([][]byte, len(forms))
 	for i, f := range forms {
 		out[i] = []byte(f)
