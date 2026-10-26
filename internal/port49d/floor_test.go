@@ -112,3 +112,21 @@ func TestTheOfflineBrokerOpensAMemberBelowTheFloor(t *testing.T) {
 		t.Fatalf("the offline broker asked the floor:\n%s", out.String())
 	}
 }
+
+// A member on a release candidate of a floor release is refused, naming the
+// version and saying why: the text is fixed apart from the parsed version.
+func TestAFloorReleaseCandidateIsRefusedWithAFixedReason(t *testing.T) {
+	var out bytes.Buffer
+	err := checkFloor([]etcdstore.EndpointVersion{{Endpoint: "https://e1:2379", Version: "3.5.8-rc.0"}},
+		"session store", &out, "port49d")
+	if err == nil || !strings.Contains(err.Error(), "version 3.5.8-rc.0, below the floor") ||
+		!strings.Contains(err.Error(), "a pre-release is older than its release") ||
+		!strings.Contains(err.Error(), etcdstore.VersionFloor) {
+		t.Fatalf("%v", err)
+	}
+	out.Reset()
+	if err := checkFloor([]etcdstore.EndpointVersion{{Endpoint: "https://e1:2379", Version: "3.5.9-rc.0"}},
+		"session store", &out, "port49d"); err != nil || !strings.Contains(out.String(), "3.5.9-rc.0") {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+}

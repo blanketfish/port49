@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,15 +35,21 @@ func BelowFloor(version string) bool {
 	for i := range n {
 		n[i], _ = strconv.Atoi(m[i+1])
 	}
+	// Semver orders a pre-release below its release, and a release candidate
+	// may not carry the fix the floor exists for: 3.5.8-rc.0 is below 3.5.8.
+	// A pre-release of a later release is not below the floor.
+	pre := strings.Contains(version, "-")
 	switch {
 	case n[0] != 3:
 		return n[0] < 3
-	case n[1] >= 6:
+	case n[1] > 6:
 		return false
+	case n[1] == 6:
+		return pre && n[2] == 0
 	case n[1] == 5:
-		return n[2] < 8
+		return n[2] < 8 || (pre && n[2] == 8)
 	case n[1] == 4:
-		return n[2] < 24
+		return n[2] < 24 || (pre && n[2] == 24)
 	}
 	return true
 }

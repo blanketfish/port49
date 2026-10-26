@@ -10,10 +10,26 @@ func TestBelowFloor(t *testing.T) {
 	for v, below := range map[string]bool{
 		"3.4.23": true, "3.4.24": false, "3.4.30": false, "3.5.7": true, "3.5.8": false, "3.5.21": false,
 		"3.6.0": false, "3.6.15": false, "3.7.0": false, "4.0.0": false, "3.3.25": true, "2.3.8": true,
-		"3.6.0-alpha.0": false, "": true, "garbage": true, "3.5": true,
+		"": true, "garbage": true, "3.5": true,
 	} {
 		if BelowFloor(v) != below {
 			t.Errorf("%q: %v", v, !below)
+		}
+	}
+}
+
+// Semver orders 3.5.8-rc.0 below 3.5.8, and a release candidate may not carry
+// the fix the floor exists for: a pre-release of a floor release is below the
+// floor, and one of a later release (3.5.9-rc.0, 3.6.1-rc.0, 3.7.0-alpha.0) is
+// not. Security wins over leniency.
+func TestAPreReleaseOfAFloorReleaseIsBelowTheFloor(t *testing.T) {
+	for v, below := range map[string]bool{
+		"3.5.8-rc.0": true, "3.4.24-rc.1": true, "3.6.0-rc.0": true, "3.6.0-alpha.0": true,
+		"3.5.9-rc.0": false, "3.4.25-rc.0": false, "3.6.1-rc.0": false, "3.7.0-alpha.0": false, "4.0.0-rc.1": false,
+		"3.5.7-rc.9": true, "3.4.23-rc.1": true, "3.5.8": false, "3.4.24": false, "3.6.0": false,
+	} {
+		if BelowFloor(v) != below {
+			t.Errorf("%q: below the floor is %v, want %v", v, !below, below)
 		}
 	}
 }

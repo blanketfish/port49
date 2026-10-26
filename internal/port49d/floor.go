@@ -35,9 +35,13 @@ func checkFloor(vs []etcdstore.EndpointVersion, what string, out io.Writer, proc
 				"floor it needs (%s): the feed fence rests on a guarantee older releases do not make; check the "+
 				"member's version", what, v.Endpoint, etcdstore.VersionFloor)
 		case etcdstore.BelowFloor(v.Version):
-			return fmt.Errorf("%s: etcd at %s is version %s, below the floor port49 needs (%s): the feed fence "+
+			note := ""
+			if strings.Contains(v.Version, "-") {
+				note = " (a pre-release is older than its release, and may lack the fix)"
+			}
+			return fmt.Errorf("%s: etcd at %s is version %s, below the floor port49 needs (%s)%s: the feed fence "+
 				"rests on a guarantee older releases do not make; upgrade the member", what, v.Endpoint, v.Version,
-				etcdstore.VersionFloor)
+				etcdstore.VersionFloor, note)
 		default:
 			ok = append(ok, v.Endpoint+" "+v.Version)
 		}
