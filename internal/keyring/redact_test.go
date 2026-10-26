@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/rhwendt/port49/internal/secretref/secretreftest"
 )
 
 // A Version prints no key bytes under any verb or as JSON, in any spelling
@@ -62,17 +63,13 @@ type holderSlice struct{ vs []Version }
 func TestAVersionInAnUnexportedFieldPrintsNoSecret(t *testing.T) {
 	secret := []byte("fake-device-key-zzz-2")
 	v := Version{Number: 3, Secret: secretref.Of(secret)}
-	forms := [][]byte{secret, []byte(hex.EncodeToString(secret)), []byte(base64.StdEncoding.EncodeToString(secret)),
-		[]byte(fmt.Sprint(secret)), []byte(fmt.Sprintf("%#v", secret)), []byte("0x66, 0x61"), []byte("0x66 0x61")}
+	forms := secretreftest.Forms(secret)
 	holders := map[string]any{"value": holder{v}, "pointer": holderPtr{&v}, "slice": holderSlice{[]Version{v}},
 		"map": map[string]holder{"k": {v}}}
 	for hn, h := range holders {
-		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%d", "%q", "%t", "%c"} {
-			out := []byte(fmt.Sprintf(verb, h))
-			for i, f := range forms {
-				if bytes.Contains(out, f) {
-					t.Errorf("%s %s carries the secret (form %d)", hn, verb, i)
-				}
+		for _, verb := range secretreftest.Verbs {
+			if l := secretreftest.Leak([]byte(fmt.Sprintf(verb, h)), forms); l != "" {
+				t.Errorf("%s %s carries the secret (%s)", hn, verb, l)
 			}
 		}
 	}
@@ -81,10 +78,8 @@ func TestAVersionInAnUnexportedFieldPrintsNoSecret(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i, f := range forms {
-			if bytes.Contains(y, f) {
-				t.Errorf("yaml %s carries the secret (form %d)", name, i)
-			}
+		if l := secretreftest.Leak(y, forms); l != "" {
+			t.Errorf("yaml %s carries the secret (%s)", name, l)
 		}
 		if !bytes.Contains(y, []byte("<redacted>")) {
 			t.Errorf("yaml %s withholds nothing it should say", name)

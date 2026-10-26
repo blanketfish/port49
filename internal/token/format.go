@@ -8,6 +8,8 @@ import (
 	"crypto/subtle"
 	"io"
 	"math/big"
+
+	"github.com/rhwendt/port49/internal/secretref"
 )
 
 // TagLen, SecretLen, and Len are the fixed sizes of the token format: a
@@ -44,8 +46,12 @@ func TagKey(currentEncryptionKey []byte) []byte {
 //
 // Mints use the current key alone (Minter): the window is what a daemon
 // accepts, never what it issues.
+//
+// The keys are held as secretref.Secret, so a TagWindow reached through an
+// unexported field, where fmt cannot call a method, prints addresses and never
+// a derived key.
 type TagWindow struct {
-	keys [][]byte
+	keys []secretref.Secret
 }
 
 // NewTagWindow builds the window from tag keys already derived with TagKey,
@@ -56,7 +62,7 @@ func NewTagWindow(tagKeys ...[]byte) TagWindow {
 	w := TagWindow{}
 	for _, k := range tagKeys {
 		if len(k) > 0 {
-			w.keys = append(w.keys, k)
+			w.keys = append(w.keys, secretref.Of(k))
 		}
 	}
 	return w
@@ -73,7 +79,7 @@ func NewTagWindow(tagKeys ...[]byte) TagWindow {
 func (w TagWindow) Matches(tag, deviceName string) bool {
 	got := 0
 	for _, k := range w.keys {
-		got |= subtle.ConstantTimeCompare([]byte(tag), []byte(Tag(k, deviceName)))
+		got |= subtle.ConstantTimeCompare([]byte(tag), []byte(Tag(k.Bytes(), deviceName)))
 	}
 	return got == 1
 }

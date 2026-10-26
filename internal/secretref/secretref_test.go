@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/secretref/secretreftest"
 )
 
 // secretDir is a directory only its owner can write: t.TempDir is made under
@@ -228,13 +230,22 @@ type secretHolder struct{ s Secret }
 // value under any verb, the unknown ones included (%s, %q, %t, %c print what a
 // single pointer points at) (re-review 2).
 func TestASecretInAnUnexportedFieldPrintsNoValue(t *testing.T) {
-	h := secretHolder{Of([]byte("fake-secret-value"))}
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%d", "%q", "%t", "%c"} {
+	value := []byte("fake-secret-value")
+	forms := secretreftest.Forms(value)
+	h := secretHolder{Of(value)}
+	for _, verb := range secretreftest.Verbs {
 		out := fmt.Sprintf(verb, h) + fmt.Sprintf(verb, &h) + fmt.Sprintf(verb, []secretHolder{h})
-		for _, f := range []string{"fake-secret", "66 97 107 101", "66616b65", "0x66"} {
-			if strings.Contains(out, f) {
-				t.Errorf("%s carries the value (form %q)", verb, f)
-			}
+		if l := secretreftest.Leak([]byte(out), forms); l != "" {
+			t.Errorf("%s carries the value (%s)", verb, l)
+		}
+	}
+	for name, marshal := range map[string]func(any) ([]byte, error){"json": json.Marshal, "yaml": yaml.Marshal} {
+		out, err := marshal(Of(value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l := secretreftest.Leak(out, forms); l != "" || !strings.Contains(string(out), "redacted") {
+			t.Errorf("%s: carries the value (%s) or does not say it is withheld", name, l)
 		}
 	}
 }

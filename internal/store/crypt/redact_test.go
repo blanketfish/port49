@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/secretref/secretreftest"
 )
 
 // A Key prints no key bytes under any verb or as JSON, in any spelling of
@@ -63,16 +65,12 @@ func TestAKeyInAnUnexportedFieldPrintsNoBytes(t *testing.T) {
 	k := NewKey("v2", [32]byte([]byte("fake-encryption-key-32-bytes!!!!")))
 	kb := k.Bytes()
 	raw := kb[:]
-	forms := [][]byte{raw, []byte(hex.EncodeToString(raw)), []byte(base64.StdEncoding.EncodeToString(raw)),
-		[]byte(fmt.Sprint(raw)), []byte(fmt.Sprintf("%#v", raw)), []byte("0x66, 0x61"), []byte("0x66 0x61")}
+	forms := secretreftest.Forms(raw)
 	holders := map[string]any{"value": holder{k}, "pointer": holderPtr{&k}, "keys": holderKeys{Keys{Current: k, Previous: &k}}}
 	for hn, h := range holders {
-		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x", "%d", "%q", "%t", "%c"} {
-			out := []byte(fmt.Sprintf(verb, h))
-			for i, f := range forms {
-				if bytes.Contains(out, f) {
-					t.Errorf("%s %s carries the key (form %d)", hn, verb, i)
-				}
+		for _, verb := range secretreftest.Verbs {
+			if l := secretreftest.Leak([]byte(fmt.Sprintf(verb, h)), forms); l != "" {
+				t.Errorf("%s %s carries the key (%s)", hn, verb, l)
 			}
 		}
 	}
@@ -81,10 +79,8 @@ func TestAKeyInAnUnexportedFieldPrintsNoBytes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i, f := range forms {
-			if bytes.Contains(y, f) {
-				t.Errorf("yaml %s carries the key (form %d)", name, i)
-			}
+		if l := secretreftest.Leak(y, forms); l != "" {
+			t.Errorf("yaml %s carries the key (%s)", name, l)
 		}
 		if !bytes.Contains(y, []byte("<redacted>")) {
 			t.Errorf("yaml %s does not say the key is withheld", name)
