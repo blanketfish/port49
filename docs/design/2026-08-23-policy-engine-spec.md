@@ -5166,7 +5166,12 @@ measured on four images: the session survives, and a key miss's next connections
 strike's backoff as L28 measured (§15 L29, `tests/lab/results/L29-reload-*.md`); the reset at the
 date itself is tested in code with an injected clock. A reload that retires or removes the version
 an open connection speaks resets it at its next packet with no strike, as every reload's
-withdrawal does (decision 53 ruling 4); only the date strikes. port49d says at start and after
+withdrawal does (decision 53 ruling 4); only the date strikes. A connection's first packet is
+judged against the key set in force when the packet arrives, not the one the connection was
+accepted with: a packet that misses it but would have validated under a version a reload took
+out of service since Accept is that reload's withdrawal, a reset with no strike, and a packet
+that misses under both sets, a key already retired at Accept among them, is an ordinary miss,
+struck. port49d says at start and after
 every reload, and `port49 policy test` reports, a version whose date has passed and an `accept`
 version with none.
 
@@ -10868,7 +10873,12 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   validated under ends it at its next packet: one `unvalidated` record (`matches_retired`) and a
   reset, with no strike and no decline window, since the change is port49d's and not the device's
   (§10, "How a daemon refreshes its snapshot"). A version whose `retire_after` passes is still
-  struck, as §10 says.
+  struck, as §10 says. The first packet is judged against the key set in force when it arrives:
+  a miss that the set the connection was accepted with would have validated is a withdrawal,
+  with no strike, and a key already retired at Accept is an ordinary miss, struck. A version
+  dropped by one reload and added back by a later one under another reference is refused as a
+  re-key, as one in force is (ruling 3): port49d remembers each version's reference for the life
+  of the process.
 - **5. No secret-store client.** `env:` and `file:` are the only schemes (Ryan, 2026-10-25). A
   secret store reaches port49 as a file rendered by the store's own tooling (Vault Agent, External
   Secrets, the Secrets Store CSI driver, systemd credentials), which already authenticates, renews
