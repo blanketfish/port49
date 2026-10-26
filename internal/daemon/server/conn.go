@@ -484,7 +484,9 @@ func (s *conn) serve(ctx context.Context) {
 // one, so a device cannot walk the keyring packet by packet. Each packet is
 // judged at its own time: a connection opened before its version's
 // retire_after is refused at the first packet past it, so holding a
-// connection open never extends a key's life.
+// connection open never extends a key's life; and the key set in force is read
+// again at every later packet, so a reload that retires or removes the
+// connection's version ends it without a strike.
 func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]byte, bool) {
 	if s.version == 0 {
 		r := s.keys.Resolve(h, obf, s.d.Now())
@@ -509,6 +511,23 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		}
 		return r.Body, true
 	}
+	// The key set in force for this device, read again at every packet: a
+	// reload that retired or removed the version this connection speaks ends
+	// it here, wherever the packet comes in the connection's life (decision 53
+	// ruling 4). An absent key_ref is a removed version.
+	s.keys = s.d.keysFor(s.dev.KeyRef)
+	if s.withdrawnByReload(s.d.Now()) {
+		// port49d's change, not the device's: one record and a reset, with no
+		// strike, as every reload's withdrawal is (spec §10, "How a daemon
+		// refreshes its snapshot"). The device is still admitted, so there is
+		// no decline window either: its next connection is served, on the new
+		// version or struck then for the old one.
+		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(s.version),
+			string(keyring.DiagMatchesRetired)).Inc()
+		s.unvalidated(h, obf, keyring.DiagMatchesRetired, s.version)
+		s.reset()
+		return nil, false
+	}
 	if s.pastDate(s.d.Now()) {
 		// matches_retired here means the connection's version is past its
 		// retire_after; this packet is not trial-decrypted, since nothing it
@@ -526,6 +545,19 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		return nil, false
 	}
 	return body, true
+}
+
+// withdrawnByReload reports whether a reload took the version this
+// connection validated under out of service: removed it, or listed it as
+// retired before its retire_after passed. A version past its date is
+// pastDate's, and struck.
+func (s *conn) withdrawnByReload(now time.Time) bool {
+	for _, v := range s.keys.Versions {
+		if v.Number == s.version {
+			return v.Retired && (v.RetireAt.IsZero() || now.Before(v.RetireAt))
+		}
+	}
+	return true
 }
 
 // pastDate reports whether the version this connection validated under has
