@@ -2490,7 +2490,7 @@ func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
 	was := startRetryWait
 	startRetryWait = time.Millisecond
 	t.Cleanup(func() { startRetryWait = was })
-	const remedy = "raise etcd's --auto-compaction-retention, or raise bulk_timeout"
+	const remedy = "raise etcd's --auto-compaction-retention"
 	var out bytes.Buffer
 	n := 0
 	err := pagedLoad(context.Background(), &out, "marks", func() error {
@@ -2501,6 +2501,9 @@ func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
 	})
 	if err != nil || n != 5 {
 		t.Fatalf("%v after %d tries", err, n)
+	}
+	if strings.Contains(out.String(), "bulk_timeout") { // a load past it is an outage, not a compaction
+		t.Fatalf("the remedy names bulk_timeout, which does not cure a compaction:\n%s", out.String())
 	}
 	if got := strings.Count(out.String(), remedy); got != 1 {
 		t.Fatalf("the remedy was said %d times:\n%s", got, out.String())

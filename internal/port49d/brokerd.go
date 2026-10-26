@@ -152,7 +152,7 @@ func pagedLoad(ctx context.Context, out io.Writer, name string, f func() error) 
 		// refused, and the retry line below still names each wait.
 		if compacted++; compacted == 2 {
 			fmt.Fprintf(out, "port49-broker: the %s load keeps meeting a compaction before it finishes: raise "+
-				"etcd's --auto-compaction-retention, or raise bulk_timeout if the load is slow\n", name)
+				"etcd's --auto-compaction-retention\n", name)
 		}
 		return err
 	}, store.ErrCompacted)

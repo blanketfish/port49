@@ -123,6 +123,7 @@ type compactedFeed struct {
 	mu      sync.Mutex
 	loads   int
 	watches int
+	first   []LogoutEntry
 	second  []LogoutEntry
 }
 
@@ -131,7 +132,7 @@ func (f *compactedFeed) Logouts(context.Context) (uint64, []LogoutEntry, error) 
 	defer f.mu.Unlock()
 	f.loads++
 	if f.loads == 1 {
-		return 5, nil, nil
+		return 5, f.first, nil
 	}
 	return 9, f.second, nil
 }
@@ -155,19 +156,31 @@ func (f *compactedFeed) WatchLogouts(ctx context.Context, _ uint64, _ func(Logou
 func TestAFollowReloadsWhenTheWatchIsCompactedAndHoldsTheLogoutFromTheGap(t *testing.T) {
 	now := time.Now()
 	set := NewLogoutSet(time.Now)
-	f := &compactedFeed{second: []LogoutEntry{
-		{Logout: Logout{Key: "made-in-the-gap", At: now, Origin: "o1"}, Until: now.Add(time.Hour)}}}
-	told := make(chan string, 4)
+	// "remade" is held at the first load and made again, later, in the gap:
+	// the same key with a later At is told too, not only a new key.
+	f := &compactedFeed{
+		first: []LogoutEntry{{Logout: Logout{Key: "remade", At: now, Origin: "o0"}, Until: now.Add(time.Hour)}},
+		second: []LogoutEntry{
+			{Logout: Logout{Key: "made-in-the-gap", At: now, Origin: "o1"}, Until: now.Add(time.Hour)},
+			{Logout: Logout{Key: "remade", At: now.Add(time.Minute), Origin: "o2"}, Until: now.Add(time.Hour)}}}
+	told := make(chan LogoutEntry, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go FollowLogouts(ctx, f, set, 0, func(e LogoutEntry) { told <- e.Key }, func(bool) {}, func(string, ...any) {})
-	select {
-	case k := <-told:
-		if k != "made-in-the-gap" {
-			t.Fatalf("told %q", k)
+	go FollowLogouts(ctx, f, set, 0, func(e LogoutEntry) { told <- e }, func(bool) {}, func(string, ...any) {})
+	seen := map[string]string{} // key -> origin of the last told
+	for _, want := range []string{"remade", "made-in-the-gap", "remade"} {
+		select {
+		case e := <-told:
+			if e.Key != want && !(want == "made-in-the-gap" && e.Key == "remade") {
+				t.Fatalf("told %q, want %q", e.Key, want)
+			}
+			seen[e.Key] = e.Origin
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%q was never told", want)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the logout made between the load and the watch was never told")
+	}
+	if seen["remade"] != "o2" || seen["made-in-the-gap"] != "o1" {
+		t.Fatalf("told (key -> origin) %v: the logout made again in the gap, and the new one, must both be told", seen)
 	}
 	if _, ok := set.Get("made-in-the-gap"); !ok {
 		t.Fatal("the logout made in the gap is not held")
