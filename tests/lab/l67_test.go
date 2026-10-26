@@ -1566,9 +1566,6 @@ func l67BrokerFiles(dir, pki string, x *labDir, o l67BrokerOpts) map[string]stri
 metrics_listen: "127.0.0.1:0"
 admin_socket: %[1]s
 inventory_file: %[2]s
-keys:
-  lab_key:
-    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}
 encryption:
   current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %[3]s}
@@ -1617,6 +1614,9 @@ grants:
   - {subject: alice, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: lab_key}
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: env:PORT49_KEY_LAB}
 `
 	inventory := fmt.Sprintf("devices:\n  - {name: %s, platform: arista_eos, addresses: [127.0.0.1]}\n", l67Device)
 	return map[string]string{"port49d.yaml": cfg, "policy.yaml": policy, "inventory.yaml": inventory}

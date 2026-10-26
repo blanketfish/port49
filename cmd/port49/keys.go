@@ -102,7 +102,7 @@ func keysStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 keys status:", err)
 		return 1
 	}
-	p, err := files.loadWith(keyRefsOf(sets))
+	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 keys status:", err)
 		return 1
@@ -154,16 +154,14 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	var sets map[string]keyset.Set
-	var refs []string
 	if *cfgPath != "" {
 		var err error
 		if sets, err = readKeySets(*cfgPath); err != nil {
 			fmt.Fprintln(stderr, "port49 keys show:", err)
 			return 1
 		}
-		refs = keyRefsOf(sets)
 	}
-	p, err := files.loadWith(refs)
+	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 keys show:", err)
 		return 1

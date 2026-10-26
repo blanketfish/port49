@@ -37,7 +37,7 @@ grants:
   - {subject: s, scope: all_devices, roles: [r]}
   - {subject: t, scope: all_devices, roles: [long]` + expiry + `}
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
-`
+` + runKeys
 }
 
 // junosFleet is n juniper_junos devices.
@@ -355,7 +355,7 @@ grants:
   - {subject: t, scope: all_devices, roles: [low]}
   - {subject: t, scope: all_devices, roles: [r], expires: `+lapse.Format(time.RFC3339)+`}
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
-`)
+`+runKeys)
 	out := rig.out.String()
 	from := `policy: projection_refused: subject "t" on juniper_junos, from ` + decision.FormatTime(lapse) +
 		`, when grant all_devices [r] expires`
@@ -384,7 +384,7 @@ grants:
   - {subject: t, scope: all_devices, roles: [r], expires: ` + e1.UTC().Format(time.RFC3339) + `}
   - {subject: u, scope: all_devices, roles: [r], expires: ` + e2.UTC().Format(time.RFC3339) + `}
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
-`
+` + runKeys
 }
 
 // The report reads only the policy, the inventory and the clock, so a grant

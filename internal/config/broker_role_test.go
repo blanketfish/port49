@@ -21,7 +21,6 @@ func brokerRoleYAML(t *testing.T) string {
 	}
 	return strings.Join([]string{
 		"inventory_file: " + write(t, "inv.yaml", inv),
-		"key_refs: [prod_key]",
 		"encryption:",
 		"  current: {id: v2, secret_ref: env:PORT49_ENC_V2}",
 		"admin_socket: " + filepath.Join(dir, "broker.sock"),
@@ -54,7 +53,7 @@ func loadBrokerRole(t *testing.T, raw string) (Config, error) {
 func daemonRoleYAML(t *testing.T) string {
 	t.Helper()
 	dir := storeFiles(t)
-	return fmt.Sprintf(sampleHead, write(t, "inv.yaml", inv)) +
+	return withPolicy(fmt.Sprintf(sampleHead, write(t, "inv.yaml", inv))) +
 		"encryption:\n  current: {id: v2, secret_ref: env:PORT49_ENC_V2}\n" +
 		"policy: {file: /etc/port49/policy.yaml}\n" +
 		"admin_socket: " + filepath.Join(dir, "admin.sock") + "\n" +
@@ -69,21 +68,16 @@ func loadDaemonRole(t *testing.T, raw string) (Config, error) {
 	return Load(write(t, "port49d.yaml", raw))
 }
 
-// A port49-broker.yaml loads under the broker's role: key_refs are its key
-// names, its policy is broker.policy_file, and metrics default to :9050.
+// A port49-broker.yaml loads under the broker's role: its policy is
+// broker.policy_file, and metrics default to :9050. It names no key: the
+// policy's keys: block does.
 func TestABrokerConfigLoads(t *testing.T) {
 	c, err := loadBrokerRole(t, brokerRoleYAML(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Role != RoleBroker || len(c.KeyRefs()) != 1 || c.KeyRefs()[0] != "prod_key" || c.Policy == nil ||
-		c.MetricsListen != ":9050" || c.Broker.StateDir == "" {
+	if c.Role != RoleBroker || c.Policy == nil || c.MetricsListen != ":9050" || c.Broker.StateDir == "" {
 		t.Fatalf("%+v", c)
-	}
-	// KeyRefs comes back sorted, whatever order the file names them in.
-	c, err = loadBrokerRole(t, strings.Replace(brokerRoleYAML(t), "key_refs: [prod_key]", "key_refs: [zeta_key, prod_key]", 1))
-	if err != nil || strings.Join(c.KeyRefs(), " ") != "prod_key zeta_key" {
-		t.Fatalf("%q %v", c.KeyRefs(), err)
 	}
 }
 
@@ -122,7 +116,7 @@ func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 
 // port49-broker.yaml requires each of these, naming it.
 func TestTheBrokersConfigRequiresItsKeys(t *testing.T) {
-	for _, cut := range []string{"key_refs:", "state_dir:", "admin_socket:", "backend: etcd", "      broker: {",
+	for _, cut := range []string{"state_dir:", "admin_socket:", "backend: etcd", "      broker: {",
 		"  current: {id: v2"} {
 		var lines []string
 		for _, l := range strings.Split(brokerRoleYAML(t), "\n") {
@@ -205,23 +199,6 @@ func TestTheBrokersConfigRefusesWhatIsPort49dsAlone(t *testing.T) {
 	}
 }
 
-// key_refs are names, each once, and at least one. One that is not a name
-// is refused by its index and never printed: it may be a secret pasted
-// where its name goes.
-func TestTheBrokersKeyRefsAreNamesEachOnce(t *testing.T) {
-	for _, c := range []struct{ refs, want string }{
-		{"[]", "key_refs is required"},
-		{"[prod_key, prod_key]", "key_refs[1] prod_key"},
-		{"[prod_key, \"hunter2 hunter2\"]", "key_refs[1] is not a valid key_ref name"},
-	} {
-		raw := strings.Replace(brokerRoleYAML(t), "key_refs: [prod_key]", "key_refs: "+c.refs, 1)
-		_, err := loadBrokerRole(t, raw)
-		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), "hunter2") {
-			t.Errorf("key_refs: %s: %v, want %q", c.refs, err, c.want)
-		}
-	}
-}
-
 // broker.state_dir is an absolute path to a directory that exists: the
 // broker keeps its CRLs there, and a start is no time to find it missing.
 // Each refusal says which.
@@ -256,12 +233,9 @@ func TestTheBrokerRunsOnEtcd(t *testing.T) {
 	}
 }
 
-// key_refs and broker.state_dir are port49-broker.yaml's: in port49d.yaml
-// each would be ignored, so each is refused naming the key.
+// broker.state_dir is port49-broker.yaml's: in port49d.yaml it would be
+// ignored, so it is refused naming the key.
 func TestPort49BrokerYamlsKeysAreRefusedInPort49dYaml(t *testing.T) {
-	if _, err := loadWith(t, "key_refs: [prod_key]\n"); err == nil || !strings.Contains(err.Error(), "key_refs") {
-		t.Errorf("key_refs in port49d.yaml: %v", err)
-	}
 	if _, err := loadWith(t, brokerBlock+"  state_dir: /var/lib/port49\n"); err == nil ||
 		!strings.Contains(err.Error(), "broker.state_dir") {
 		t.Errorf("broker.state_dir in port49d.yaml: %v", err)

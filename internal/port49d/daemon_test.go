@@ -26,6 +26,18 @@ import (
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
+// runKeys is the keys: block a policy a started port49d reads carries: key k
+// (and lab_key, which the fixtures' inventories pin), its secret in the
+// variable the run's tests set (decision 53 ruling 3).
+const runKeys = "keys:\n  k:\n    current: {version: 1, secret_ref: env:PORT49_KEY_RUN}\n" + labKeyRun
+
+// runDaemonKeys is the keys: block of a port49d.yaml with no policy, whose
+// config alone holds the key sets (T_RUN_SECRET is what writeRunConfigWith sets).
+const runDaemonKeys = "keys:\n  k:\n    current: {version: 1, secret_ref: env:T_RUN_SECRET}\n"
+
+// labKeyRun is lab_key's set, which the fixtures' inventories pin.
+const labKeyRun = "  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_KEY_RUN}\n"
+
 // startSplitDaemon runs port49d on cfgPath until the test ends, and
 // returns the TACACS+ address of its nth run in out: startRun for a
 // daemon with no broker, waiting for the nth "port49d: listening on" line,

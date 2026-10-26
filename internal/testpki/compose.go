@@ -63,7 +63,7 @@ func WriteCompose(dir, email string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	files["port49d.env"] = []byte(fmt.Sprintf("PORT49_TACACS_KEY=%s\nPORT49_ENC_KEY=%s\n", tacacs, enc))
+	files["port49d.env"] = []byte(fmt.Sprintf("PORT49_KEY_TACACS=%s\nPORT49_ENC_KEY=%s\n", tacacs, enc))
 	files["port49-broker.env"] = []byte(fmt.Sprintf("PORT49_ENC_KEY=%s\n", enc))
 	for name, body := range files {
 		if err := writeFresh(filepath.Join(dir, name), body); err != nil {

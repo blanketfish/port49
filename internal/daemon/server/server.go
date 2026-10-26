@@ -45,7 +45,9 @@ type Deps struct {
 	// with no broker. It is asked at every packet, with Now, because a grant's
 	// expiry can start or end a quarantine while a connection is open.
 	Quarantined func(device string, now time.Time) (cause string, ok bool)
-	Keys        map[string]keyring.Set
+	// Keys is the key set in force for a key_ref: the policy's, re-read at each
+	// reload (decision 53), or port49d.yaml's with no policy; nil holds none.
+	Keys func(keyRef string) keyring.Set
 	// KeySeen marks the key version each admitted device's connection
 	// validated under (keyring.Seen.Mark); nil marks nothing.
 	KeySeen func(device, keyRef string, version int)
@@ -78,6 +80,15 @@ type Deps struct {
 	// offers is the per-source count of open offered connections
 	// (decision 50 ruling 20); nil makes a new one. A test sets it to watch.
 	offers *offers
+}
+
+// keysFor is Keys(ref), or no key set when Keys is nil (a TLS-only or test
+// Deps), as a nil map's read was.
+func (d Deps) keysFor(ref string) keyring.Set {
+	if d.Keys == nil {
+		return keyring.Set{}
+	}
+	return d.Keys(ref)
 }
 
 func Serve(ctx context.Context, ln net.Listener, d Deps) error {
@@ -196,7 +207,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
 			refused: found && dev.Refused != "", offers: offered, sessions: map[uint32]*authen.Session{}}
 		if cc.admitted && !mismatch && d.TLS == nil {
-			cc.keys = d.Keys[dev.KeyRef]
+			cc.keys = d.keysFor(dev.KeyRef)
 		}
 
 		wg.Add(1)

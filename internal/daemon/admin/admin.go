@@ -119,7 +119,7 @@ type Server struct {
 	// Nil when the process reports no stores.
 	StoreStatus func(ctx context.Context) (text string, degraded bool, err error)
 	Held        *keyring.Held
-	Keys        map[string]keyring.Set
+	Keys        func() map[string]keyring.Set
 	Assigned    func(device string) string
 	Now         func() time.Time
 	// Revoke and Revocations answer `port49 revoke` (plan 7a). Nil when
@@ -332,7 +332,7 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 			assigned = s.Assigned(req.Device)
 		}
 		now := s.Now()
-		f, ok := keyring.Diagnose(s.Held, s.Keys, req.Device, assigned, now)
+		f, ok := keyring.Diagnose(s.Held, s.Keys(), req.Device, assigned, now)
 		if !ok {
 			return Response{Error: fmt.Sprintf("port49d holds no unvalidated packet from %q since it started", req.Device)}
 		}

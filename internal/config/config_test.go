@@ -17,16 +17,22 @@ import (
 // and every other test must load one that does. Splitting it also puts
 // `encryption:` ahead of `lab:`, so TestLoadWithoutALabBlock's truncation at
 // `lab:` removes the lab block and nothing else.
-const sampleHead = `
-listen: ":4949"
-inventory_file: %s
-keys:
+const sampleKeys = `keys:
   prod_key:
     current: {version: 3, secret_ref: env:T_PROD_V3}
     accept:  [{version: 2, secret_ref: env:T_PROD_V2}]
     retired: [{version: 1, secret_ref: env:T_PROD_V1}]
-limits: {per_nas_connections: 4}
 `
+
+const sampleHead = `
+listen: ":4949"
+inventory_file: %s
+` + sampleKeys + `limits: {per_nas_connections: 4}
+`
+
+// withPolicy drops the keys: block from body, as a config with a policy has
+// none: the policy file's keys: block is where the key sets live.
+func withPolicy(body string) string { return strings.Replace(body, sampleKeys, "", 1) }
 
 const sampleLab = `lab:
   session_attributes: ["priv-lvl=15"]
@@ -868,7 +874,7 @@ func TestMaxSessionAge(t *testing.T) {
 func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	setKeyEnv(t)
 	orphan := write(t, "orphan.yaml", "devices:\n  - {name: orphan, addresses: [10.99.99.1]}\n")
-	body := fmt.Sprintf(sample, orphan) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+	body := withPolicy(fmt.Sprintf(sample, orphan)) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
 		"client_ca_file: ca, policy_file: p, revocations_file: r, " +
 		"certificate_status: {disabled: true}}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
@@ -877,9 +883,6 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	}
 	if cfg.Admission != nil {
 		t.Fatalf("admission %v", cfg.Admission)
-	}
-	if got := cfg.KeyRefs(); len(got) != 1 || got[0] != "prod_key" {
-		t.Fatalf("KeyRefs: %q", got)
 	}
 }
 
@@ -891,7 +894,7 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
 	setKeyEnv(t)
 	missing := filepath.Join(t.TempDir(), "never-read.yaml")
-	body := fmt.Sprintf(sample, missing) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+	body := withPolicy(fmt.Sprintf(sample, missing)) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
 		"client_ca_file: ca, policy_file: p, revocations_file: r, " +
 		"certificate_status: {disabled: true}}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
@@ -1527,6 +1530,91 @@ func TestKeyringReturnsCopies(t *testing.T) {
 		v.Secret.Bytes()[0] ^= 0xff
 		if got := c.Keyring()["prod_key"].Versions[i].Secret.Bytes(); string(got) != want {
 			t.Fatalf("a write through version %d's returned secret changed the next Keyring (%d bytes)", i, len(got))
+		}
+	}
+}
+
+// keys: beside a policy is refused: the policy's keys: block is the one in
+// force (decision 53 ruling 3); and port49-broker.yaml's key_refs is gone.
+func TestKeysBesideAPolicyIsRefused(t *testing.T) {
+	base := daemonRoleYAML(t)
+	for name, keys := range map[string]string{
+		"a block": sampleKeys,
+		"empty":   "keys: {}\n",
+	} {
+		raw := withPolicy(base) + keys
+		_, err := loadDaemonRole(t, raw)
+		if err == nil || !strings.Contains(err.Error(), "keys: is the policy file's") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	raw := strings.Replace(brokerRoleYAML(t), "admin_socket:", "key_refs: [k]\nadmin_socket:", 1)
+	if _, err := loadBrokerRole(t, raw); err == nil ||
+		!strings.Contains(err.Error(), "key_refs was replaced by the policy's keys: block") {
+		t.Errorf("key_refs in port49-broker.yaml: %v", err)
+	}
+}
+
+// A port49d.yaml secret a policy could name is refused (decision 53 ruling
+// 12): the allowance and port49d.yaml's own secrets never meet.
+func TestAConfigSecretInsideTheAllowanceIsRefused(t *testing.T) {
+	base := withPolicy(daemonRoleYAML(t))
+	for name, c := range map[string]struct{ raw, want string }{
+		"the encryption secret": {strings.Replace(base, "env:PORT49_ENC_V2", "env:PORT49_KEY_ENC", 1),
+			"is inside key_secret_refs"},
+		"an env_prefix that is no name": {base + "key_secret_refs: {env_prefix: P}\n", "env_prefix"},
+		"the bind password": {withPolicy(fmt.Sprintf(sample, write(t, "inv.yaml", inv))) + strings.Replace(brokerBlock, "  certificate_status: {disabled: true}\n",
+			"  certificate_status: {disabled: true}\n  directory:\n    servers:\n"+
+				"      - {uri: \"ldaps://dc-01.corp.example.com\", priority: 100}\n    ca_file: "+
+				writeTemp(t, "ca.pem", testCAPEM(t))+"\n    bind: {mechanism: simple, bind_dn: \"CN=port49,DC=corp\", "+
+				"password_secret_ref: env:PORT49_KEY_BIND}\n    base_dn: \"DC=corp,DC=example,DC=com\"\n"+
+				"    certificate_mapping: {kind: issuer_serial}\n    nested_groups: in_chain\n", 1),
+			"is inside key_secret_refs"},
+	} {
+		setKeyEnv(t)
+		t.Setenv("PORT49_KEY_ENC", "22222222222222222222222222222222")
+		t.Setenv("PORT49_KEY_BIND", "bind-not-printed")
+		_, err := Load(write(t, "port49d.yaml", c.raw))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	raw := strings.Replace(brokerRoleYAML(t), "admin_socket:", "key_secret_refs: {file_dir: /run/k}\nadmin_socket:", 1)
+	if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "key_secret_refs") {
+		t.Errorf("key_secret_refs in port49-broker.yaml: %v", err)
+	}
+}
+
+// Links and neighbours (re-review N1): the overlap is judged on resolved
+// paths, and a name that merely shares a prefix is not inside.
+func TestAKeyFileNeedsNoTextMatchToOverlapTheAllowance(t *testing.T) {
+	setKeyEnv(t)
+	real := filepath.Join(t.TempDir(), "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "keys")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	enc := filepath.Join(real, "enc")
+	if err := os.WriteFile(enc, []byte("22222222222222222222222222222222"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Replace(withPolicy(daemonRoleYAML(t)), "env:PORT49_ENC_V2", "file:"+enc, 1) +
+		"key_secret_refs: {file_dir: " + link + "}\n"
+	if _, err := Load(write(t, "port49d.yaml", raw)); err == nil || !strings.Contains(err.Error(), "is inside key_secret_refs") {
+		t.Errorf("a link to the key directory: %v", err)
+	}
+	for name, c := range map[string]struct{ dir, want string }{
+		"the key under file_dir": {"DIR", "overlaps key_secret_refs.file_dir"},
+		"a neighbour":            {"DIR/srv.k", ""},
+	} {
+		p := tlsBase(t, "listen: 127.0.0.1:0\n",
+			tlsMinimal+"policy: {file: /etc/port49/policy.yaml}\nkey_secret_refs: {file_dir: "+c.dir+"}\n")
+		_, err := Load(p)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 	}
 }

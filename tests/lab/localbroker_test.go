@@ -57,9 +57,6 @@ func localBrokerFiles(dir, pki, anchorFile, crlURL, crlIssuer string) (cfg, poli
 	cfg = fmt.Sprintf(`listen: "127.0.0.1:0"
 metrics_listen: "127.0.0.1:0"
 inventory_file: %s
-keys:
-  lab_key:
-    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}
 encryption:
   current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %s}
@@ -91,6 +88,9 @@ grants:
   - {subject: svc_oxidized, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: lab_key}
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: env:PORT49_KEY_LAB}
 `, l48ID, l48Subject)
 	inventory = fmt.Sprintf("devices:\n  - {name: %s, platform: arista_eos, addresses: [127.0.0.1]}\n", l48Device)
 	return cfg, policy, inventory
@@ -173,7 +173,7 @@ func localBrokerEnv(crlRoot string) []string {
 	if encKey == "" {
 		encKey = labEncKeyDefault
 	}
-	env := append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
+	env := append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_KEY_LAB="+key, "PORT49_KEY_RUN="+key, "PORT49_LAB_ENC_KEY="+encKey)
 	if crlRoot != "" {
 		env = append(env, "SSL_CERT_FILE="+crlRoot)
 	}

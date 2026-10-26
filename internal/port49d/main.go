@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +57,7 @@ import (
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -506,14 +509,41 @@ func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
 	return inv, engine.HashOf(raw), nil
 }
 
-// parseBundle builds the bundle from the policy file's bytes and an
-// inventory (bundle.Parse): a reload of either loads the one it read against
-// the other in force, so the version it remembers refusing is the version it
-// refused.
-func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
+// keysOf is the key set lookups port49d serves from: the policy's in force
+// (dk), or with no policy port49d.yaml's, read once at load.
+func keysOf(cfg config.Config, dk *liveKeys) (func(string) keyring.Set, func() map[string]keyring.Set) {
+	if dk != nil {
+		return dk.Set, dk.All
+	}
+	ring := cfg.Keyring()
+	return func(ref string) keyring.Set { return ring[ref] }, func() map[string]keyring.Set { return ring }
+}
+
+// compileBundle compiles raw against inv, with no keys: requirement: the
+// start guard's reading of a policy recorded before the policy carried its
+// keys (pre-flight M14). Every file port49d reads goes through parseBundle.
+func compileBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
 	pol, err := bundle.Parse(raw, inv, policyEnv(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, quotesCut{err})
+	}
+	return pol, nil
+}
+
+// parseBundle builds the bundle from the policy file's bytes and an
+// inventory (bundle.Parse): a reload of either loads the one it read against
+// the other in force, so the version it remembers refusing is the version it
+// refused. The policy must declare its keys: block, the one place port49
+// learns key names (decision 53 ruling 3).
+func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
+	pol, err := compileBundle(cfg, raw, inv)
+	if err != nil {
+		return nil, err
+	}
+	if !pol.KeysDeclared() {
+		return nil, fmt.Errorf("%s %s: the policy declares no keys: block, so %s knows no key name (decision 53 "+
+			"ruling 3); add the key sets beside key_groups, or `keys: {}` for a fleet all on TLS",
+			policyKey(cfg), cfg.Policy.File, procOf(cfg))
 	}
 	return pol, nil
 }
@@ -1039,6 +1069,24 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		sayFailClosed(procOf(cfg), pol, now, m)
 		live = policy.NewLive(pol)
 	}
+	// The device keys in force: the policy's, each secret read now and at
+	// every reload (decision 53). port49-broker serves no device: no keys.
+	var dk *liveKeys
+	if live != nil && cfg.Role == config.RoleDaemon {
+		dk = newLiveKeys(cfg.Secrets, cfg.KeySecretRefs)
+		kb, err := dk.build(live.Load())
+		if err != nil {
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, err)
+		}
+		dk.put(kb)
+		// spec §10: a version whose retire_after has passed, an accept version
+		// with none, said at start as config's notices were.
+		for _, n := range keyset.Notices(live.Load().KeySets(), time.Now()) {
+			fmt.Fprintf(stderr, "%s: %s\n", procOf(cfg), n)
+		}
+	}
 	if startDoc != nil {
 		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}
@@ -1180,12 +1228,13 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		admit = liveAdmission{live}
 		m.CountAdmissionRefused(func() int { return len(live.Load().AdmissionRefusals()) })
 	}
-	keySets := cfg.Keyring()
+	keysFor, allKeys := keysOf(cfg, dk)
 	seen := &keyring.Seen{}
 	m.WatchKeys(func() []metrics.KeySample {
 		var out []metrics.KeySample
-		for _, ref := range cfg.KeyRefs() {
-			for _, v := range keySets[ref].Versions {
+		sets := allKeys()
+		for _, ref := range slices.Sorted(maps.Keys(sets)) {
+			for _, v := range sets[ref].Versions {
 				out = append(out, metrics.KeySample{KeyRef: ref, Version: v.Number, Devices: seen.Count(ref, v.Number),
 					RetireAt: v.RetireAt})
 			}
@@ -1202,7 +1251,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
 			"context the broker stopped refreshing keeps its last answer until its own session ends")
 	}
-	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
+	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keysFor, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
@@ -1343,7 +1392,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 		}
-		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
+		srv := &admin.Server{Held: held, Keys: allKeys, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
 			StoreStatus: newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh).answer}
 		if brk != nil {
 			// The socket's deadline covers the wait and the run; one bound
@@ -1482,6 +1531,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
+		r.keys = dk
 		r.generic = newGenericRecorder(log, procOf(cfg))
 		r.generic.record(live.Load(), time.Now())
 		hookTLSReload(r, tl, cfg, live)

@@ -481,7 +481,7 @@ func unknownFieldLine(extra, want string) string {
 	if !ok {
 		return want
 	}
-	line := strings.Count(fmt.Sprintf(sample, "x"), "\n") + strings.Count(extra[:strings.Index(extra, needle)], "\n") + 1
+	line := strings.Count(withPolicy(fmt.Sprintf(sample, "x")), "\n") + strings.Count(extra[:strings.Index(extra, needle)], "\n") + 1
 	return fmt.Sprintf("line %d: an unknown field", line)
 }
 

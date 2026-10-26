@@ -273,6 +273,7 @@ func qualDaemon(t *testing.T, p *devicemock.Profile, o qualOpts) *qualRun {
 		}
 		r.key = []byte(hex.EncodeToString(kb))
 		t.Setenv("T_RUN_SECRET", string(r.key))
+		t.Setenv("PORT49_KEY_RUN", string(r.key))
 	}
 	frag, err := os.ReadFile("../../tests/qual/qual-daemon.yaml")
 	if err != nil {

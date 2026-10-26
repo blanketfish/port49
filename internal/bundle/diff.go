@@ -364,7 +364,7 @@ const reloadRemedy = "if the change is meant, " + RaiseBound + ", then lower it 
 // exact text, so a change here is caught by the test that pins both.
 const (
 	RaiseBound  = "raise inventory.max_removed_percent in port49d.yaml and send SIGHUP, which re-reads it with the reload"
-	KeyRefsFile = "the key_refs port49d.yaml defines"
+	KeyRefsFile = "the key sets the policy file's keys: block defines"
 	StopFleet   = "to take the whole fleet off deliberately, stop port49d"
 )
 
@@ -466,7 +466,7 @@ func CheckAdmissionOver(old, base, new *policy.Policy, maxRemovedPercent int, no
 // what is the file the reload read: "inventory" or "policy"; hint adds the
 // key-group move done in the wrong order, for an inventory in force that
 // carries key groups. A bundle an offline tool loaded unassessed — no key
-// groups, no key_refs — is read as port49d, always assessing, reads it: only
+// groups, no keys: block — is read as port49d, always assessing, reads it: only
 // its pinned devices are admitted (AdmissionRefusals; plan 6a, I1), as
 // `policy test` judges it.
 func admitsNone(what string, p *policy.Policy, hint bool) error {
@@ -486,7 +486,7 @@ func admitsNone(what string, p *policy.Policy, hint bool) error {
 
 // NewlyRefused is every device in both bundles that old admits and new
 // refuses, by name. A new bundle that does not assess admission — no key
-// groups, and no key_refs, as only an offline tool loads one — is read as
+// groups, and no keys: block, as only an offline tool loads one — is read as
 // port49d reads it: a device no group admits and no pin assigns is refused
 // (I1), so the edit that deletes key_groups is seen.
 func NewlyRefused(old, new *policy.Policy) []admission.Resolved {

@@ -130,7 +130,7 @@ subjects:
   - {name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}
   - {name: netops, group: netops-ro, token_ttl: 5m}
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: netops, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 	cfg := brokerConfig(t, body)
 	var out syncBuffer
 	announceDirectory(&out, "port49d", cfg, buildPolicy(t, cfg, body))
@@ -147,7 +147,7 @@ scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // buildPolicy is body compiled for cfg as a start compiles it.
 func buildPolicy(t *testing.T, cfg config.Config, body string) *policy.Policy {

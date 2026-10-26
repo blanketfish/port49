@@ -95,21 +95,22 @@ func TestInventoryDiffMarksEverySecurityChange(t *testing.T) {
 	}
 }
 
-// With --config the key_refs and the bound are port49d.yaml's, as port49d
-// reads them: a pin to a key the file does not define refuses the device, and
-// that counts against inventory.max_removed_percent.
+// The policy's keys: block defines the keys and --config's bound is
+// port49d.yaml's, as port49d reads them: a pin to a key the block does not
+// define refuses the device, and that counts against
+// inventory.max_removed_percent.
 func TestInventoryDiffReadsTheConfigAsPort49dDoes(t *testing.T) {
 	_, pol, old, write := diffFiles(t)
 	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
 		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
-	cfg := write("port49d.yaml", "keys:\n  prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}\n"+
-		"inventory: {max_removed_percent: 50}\n")
+	pol = write("policy-keyed.yaml", diffPolicy+"keys: {prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}}\n")
+	cfg := write("port49d.yaml", "inventory: {max_removed_percent: 50}\n")
 	var out, errOut bytes.Buffer
 	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg, old, new}, &out, &errOut); code != 0 ||
 		!strings.Contains(out.String(), "admission_changed leaf-02: admitted → refused") {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
 	}
-	cfg10 := write("port49d-10.yaml", "keys:\n  prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}\n")
+	cfg10 := write("port49d-10.yaml", "listen: \":49\"\n")
 	out.Reset()
 	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg10, old, new}, &out, &errOut); code != 1 ||
 		!strings.Contains(out.String(), "refused: the new inventory removes 0 of 2 devices and refuses 1 more") {

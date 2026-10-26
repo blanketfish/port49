@@ -89,7 +89,6 @@ func l75BrokerYAML(o l75Opts) string {
 	}
 	return fmt.Sprintf(`metrics_listen: "127.0.0.1:0"
 inventory_file: %[1]s/l75-inventory.yaml
-key_refs: [k]
 encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
 admin_socket: %[1]s/b%[2]d.sock
@@ -143,6 +142,9 @@ grants:
   - {subject: bob, scope: all, roles: [admin]}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: k}
+keys:
+  k:
+    current: {version: 1, secret_ref: env:PORT49_KEY_L74}
 `
 }
 
@@ -570,7 +572,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 			t.Fatal(err)
 		}
 		sr := exec.Command(w.port49d, "store-roles", "--config", stub, "--broker-config", bs[i].cfg)
-		sr.Env = append(cmdEnv, "L74_TACACS_KEY="+w.tacacsKey)
+		sr.Env = append(cmdEnv, "PORT49_KEY_L74="+w.tacacsKey)
 		out, err := sr.CombinedOutput()
 		if err != nil {
 			t.Fatalf("INVALID: port49d store-roles for L75 b%d: %v\n%s", i, err, w.leakless(string(out)))

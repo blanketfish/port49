@@ -54,11 +54,11 @@ func TestWriteComposeWritesTheStacksFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(broker), "PORT49_TACACS_KEY") {
+	if strings.Contains(string(broker), "PORT49_KEY_TACACS") {
 		t.Fatal("the broker's env file holds the device key")
 	}
 	daemon, _ := os.ReadFile(filepath.Join(dir, "port49d.env"))
-	if !strings.Contains(string(daemon), "PORT49_TACACS_KEY=") || !strings.Contains(string(daemon), "PORT49_ENC_KEY=") {
+	if !strings.Contains(string(daemon), "PORT49_KEY_TACACS=") || !strings.Contains(string(daemon), "PORT49_ENC_KEY=") {
 		t.Fatalf("port49d.env: %d bytes, missing a key", len(daemon))
 	}
 }

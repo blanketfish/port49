@@ -15,10 +15,18 @@ key_groups:
   - {match: {attributes: {site: campus}}, key_ref: campus_key}
 `
 
+// keysFor is a keys: block defining each ref, for a policy under test.
+func keysFor(refs ...string) string {
+	out := "keys:\n"
+	for _, r := range refs {
+		out += "  " + r + ":\n    current: {version: 1, secret_ref: env:PORT49_KEY_TEST}\n"
+	}
+	return out
+}
+
 func TestKeyGroupsInThePolicyAssignAndAdmit(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"campus_key", "prod_key"}
-	p, err := Parse([]byte(keyGrouped), e)
+	p, err := Parse([]byte(keyGrouped+keysFor("campus_key", "prod_key")), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +71,7 @@ func TestADeviceNoGroupAdmitsIsRefusedNotThePolicy(t *testing.T) {
 
 func TestAKeyRefPort49dDoesNotHoldRefusesTheDevice(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"prod_key"}
-	p, err := Parse([]byte(keyGrouped), e)
+	p, err := Parse([]byte(keyGrouped+keysFor("prod_key")), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,8 +282,7 @@ func TestExplainSaysADeviceIsRefusedAndWhy(t *testing.T) {
 // review M3). The key's name is in the refusal text.
 func TestADeviceRefusedForAnUnknownKeyCarriesNoKeyRef(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"prod_key"}
-	p, err := Parse([]byte(keyGrouped), e)
+	p, err := Parse([]byte(keyGrouped+keysFor("prod_key")), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,10 +300,9 @@ func TestADeviceRefusedForAnUnknownKeyCarriesNoKeyRef(t *testing.T) {
 func TestAPinThatIsNoNameRefusesThatDeviceAlone(t *testing.T) {
 	const secret = "Sx9qT4vLm2pR7zK0wYh5"
 	e := env()
-	e.KeyRefs = []string{"k"}
 	e.Devices = append(e.Devices, admission.Device{Name: "pasted", Platform: "arista_eos", KeyRef: secret,
 		Transport: admission.TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.200")}})
-	p, err := Parse([]byte(good+"key_groups:\n  - {match: {cidr: 0.0.0.0/0}, key_ref: k}\n"), e)
+	p, err := Parse([]byte(good+"key_groups:\n  - {match: {cidr: 0.0.0.0/0}, key_ref: k}\n"+keysFor("k")), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,8 +328,8 @@ func TestAPinThatIsNoNameRefusesThatDeviceAlone(t *testing.T) {
 // Owner decision 3: the pin, in the reviewed policy, by name.
 func TestAKeyGroupPinsADeviceByName(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"campus_key", "prod_key", "pin_key"}
-	p, err := Parse([]byte(keyGrouped+"  - {match: {name: campus-sw-7}, key_ref: pin_key}\n"), e)
+	p, err := Parse([]byte(keyGrouped+"  - {match: {name: campus-sw-7}, key_ref: pin_key}\n"+
+		keysFor("campus_key", "prod_key", "pin_key")), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,11 +364,10 @@ func TestANameGroupIsOneTermAndOneGroupPerName(t *testing.T) {
 
 func TestATLSDeviceIsNotRefusedForAKeyPort49dLacks(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"prod_key"}
 	e.Devices = append(e.Devices, admission.Device{Name: "tls-1", Platform: "arista_eos",
 		Transport: admission.TransportTLS, Attributes: map[string]string{"site": "campus"},
 		Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.9")}})
-	p, err := Parse([]byte(keyGrouped), e)
+	p, err := Parse([]byte(keyGrouped+keysFor("prod_key")), e)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +389,6 @@ func TestATLSDeviceIsNotRefusedForAKeyPort49dLacks(t *testing.T) {
 
 func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"prod_key"}
 	for i, n := range []string{"Leaf-01", "leaf-01", "tcp-A", "tcp-a"} {
 		tr := admission.TransportTLS
 		if i >= 2 {
@@ -394,7 +397,7 @@ func TestTwoTLSDevicesEqualUnderCaseFoldingAreBothRefused(t *testing.T) {
 		e.Devices = append(e.Devices, admission.Device{Name: n, Platform: "arista_eos", Transport: tr,
 			Addresses: []netip.Addr{netip.MustParseAddr("10.0.7." + string(rune('1'+i)))}})
 	}
-	p, err := Parse([]byte(keyGrouped), e)
+	p, err := Parse([]byte(keyGrouped+keysFor("prod_key")), e)
 	if err != nil {
 		t.Fatalf("the load must not fail: %v", err)
 	}

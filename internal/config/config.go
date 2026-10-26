@@ -526,9 +526,9 @@ type fileConfig struct {
 	AdminSocket    string                    `yaml:"admin_socket"`
 	Stores         storesYAML                `yaml:"stores"`
 	Policy         *policyYAML               `yaml:"policy"`
-	// KeyRefs is port49-broker.yaml's in place of keys: the names a policy
-	// may assign, and never a secret (plan 7e, Ruling 2).
-	KeyRefs []string `yaml:"key_refs"`
+	// KeySecretRefs is where a policy's key references may point (decision 53
+	// ruling 12); nil takes secretref.DefaultAllowance's values.
+	KeySecretRefs *secretref.Allowance `yaml:"key_secret_refs"`
 }
 
 // inventoryYAML is how port49d bounds an inventory reload (spec §10). The
@@ -636,8 +636,10 @@ type Config struct {
 	Inventory admission.Inventory
 	Admission *admission.Trie
 
-	// keyRefs is key_refs under the broker's role: the names alone.
-	keyRefs []string
+	// KeySecretRefs is where a policy's key references may point:
+	// DefaultAllowance's values where port49d.yaml names none (decision 53
+	// ruling 12). Checked at load.
+	KeySecretRefs secretref.Allowance
 
 	// encCurrent and encPrevious are the key references, not the keys: the
 	// bytes live in secrets, which Load fills by reading each reference. fmt
@@ -794,9 +796,9 @@ func ReadRegular(path string, max int64) ([]byte, error) {
 func Load(path string) (Config, error) { return load(path, RoleDaemon) }
 
 // LoadBroker reads port49-broker.yaml: port49d.yaml's schema under the
-// broker's role (plan 7e, Ruling 2). It names key_refs in place of keys:,
-// broker.state_dir in place of the revocations file, and the broker's etcd
-// identity alone, and refuses what is port49d's (brokerRefusals).
+// broker's role (plan 7e, Ruling 2). It names no key (the policy's keys: block
+// does), broker.state_dir in place of the revocations file, and the broker's
+// etcd identity alone, and refuses what is port49d's (brokerRefusals).
 func LoadBroker(path string) (Config, error) { return load(path, RoleBroker) }
 
 func load(path string, role Role) (Config, error) {
@@ -840,10 +842,6 @@ func load(path string, role Role) (Config, error) {
 		}
 	default:
 		// Each is port49-broker.yaml's, and would be ignored here.
-		if len(f.KeyRefs) > 0 {
-			return Config{}, errors.New("config: key_refs is port49-broker.yaml's: port49d names its keys, with " +
-				"their secrets, under keys:; remove it (plan 7e)")
-		}
 		if f.Broker != nil && f.Broker.StateDir != "" {
 			return Config{}, errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
 				"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
@@ -1014,12 +1012,14 @@ func load(path string, role Role) (Config, error) {
 			"move lab.seed_tokens and lab.seed_token_file into port49-broker.yaml (plan 7e)")
 	}
 
-	if role == RoleBroker {
-		if c.keyRefs, err = checkKeyRefList(f.KeyRefs); err != nil {
+	switch {
+	case f.Keys != nil && c.Policy != nil: // `keys: {}` too (pre-flight M10)
+		return Config{}, fmt.Errorf("config: keys: is the policy file's when port49d has a policy (spec §10; "+
+			"decision 53 ruling 3): move the block into %s and remove it here", c.Policy.File)
+	case role == RoleDaemon && c.Policy == nil:
+		if err := resolveKeys(&c, raw); err != nil {
 			return Config{}, err
 		}
-	} else if err := resolveKeys(&c, raw); err != nil {
-		return Config{}, err
 	}
 	// The encryption keys go into c.secrets alongside the shared secrets,
 	// because that map is the one place a secret is held and EncryptionKeys
@@ -1085,6 +1085,21 @@ func load(path string, role Role) (Config, error) {
 			"never tried", f.Encryption.Current.ID)
 	}
 
+	if role == RoleDaemon {
+		allow := secretref.Allowance{}
+		if f.KeySecretRefs != nil {
+			allow = *f.KeySecretRefs
+		}
+		c.KeySecretRefs = allow.WithDefaults()
+		if err := c.KeySecretRefs.Check(); err != nil {
+			return Config{}, fmt.Errorf("config: key_secret_refs: %w", err)
+		}
+		if c.Policy != nil {
+			if err := secretsApart(c); err != nil {
+				return Config{}, err
+			}
+		}
+	}
 	if c.Policy != nil {
 		// With a policy the inventory is live, and port49d reads it behind
 		// the policy file's fence (fencedInventory, plan 6a C2), so it is not
@@ -1399,31 +1414,6 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 	return &b, nil
 }
 
-// checkKeyRefList is key_refs, port49-broker.yaml's key names (plan 7e,
-// Ruling 2): at least one, each a key_ref name (admission.KeyRefShape) and
-// named once. One that is not a name is refused by its index and never
-// printed, as keyset.Check refuses one under keys:. It returns them sorted.
-func checkKeyRefList(refs []string) ([]string, error) {
-	if len(refs) == 0 {
-		return nil, errors.New("config: key_refs is required in port49-broker.yaml: the key_ref names a policy " +
-			"may assign, as port49d.yaml's keys: names them, never their secrets (plan 7e)")
-	}
-	seen := map[string]bool{}
-	for i, ref := range refs {
-		if !admission.KeyRefShape.MatchString(ref) {
-			return nil, fmt.Errorf("config: key_refs[%d] is not a valid key_ref name (%s): it names the key, never "+
-				"holds it", i, admission.KeyRefShapeRule)
-		}
-		if seen[ref] {
-			return nil, fmt.Errorf("config: key_refs[%d] %s is named twice; name each key once", i, ref)
-		}
-		seen[ref] = true
-	}
-	out := append([]string(nil), refs...)
-	sort.Strings(out)
-	return out, nil
-}
-
 // brokerRefusals refuses, by key, what a port49-broker.yaml must never name
 // (plan 7e, Rulings 1, 2): the broker never speaks TACACS+, never holds a
 // device key or the daemon's etcd identity, and on etcd keeps no
@@ -1440,7 +1430,8 @@ func brokerRefusals(f fileConfig) error {
 	}{
 		{"listen", f.Listen != "", "port49-broker never speaks TACACS+; that is port49d's"},
 		{"tls_listener", f.TLSListener != nil, "port49-broker never speaks TACACS+; that is port49d's"},
-		{"keys:", len(f.Keys) > 0, "device keys are port49d's alone; name the key references under key_refs"},
+		{"keys:", len(f.Keys) > 0, "device keys are the policy file's keys: block"},
+		{"key_secret_refs", f.KeySecretRefs != nil, "port49-broker reads key names, never a key's secret"},
 		{"accounting", f.Accounting != (AccountingConfig{}), "accounting is port49d's"},
 		{"limits", f.Limits != (limitsYAML{}), "TACACS+ limits are port49d's"},
 		{"receipt_idle_ttl", f.ReceiptIdleTTL != 0, "receipts are port49d's"},
@@ -1465,21 +1456,6 @@ func brokerRefusals(f fileConfig) error {
 		}
 	}
 	return nil
-}
-
-// KeyRefs names every key_ref keys defines, or under the broker's role
-// key_refs names, sorted and never nil: a device the policy assigns any
-// other is refused admission (spec §10). Names only.
-func (c Config) KeyRefs() []string {
-	if c.Role == RoleBroker {
-		return append(make([]string, 0, len(c.keyRefs)), c.keyRefs...)
-	}
-	out := make([]string, 0, len(c.Keys))
-	for ref := range c.Keys {
-		out = append(out, ref)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // EncryptionKeys is the two-key window: writes use Current, reads try Current
@@ -2179,6 +2155,7 @@ func readableFile(name, path string) error {
 var removedSecretKeys = map[string]string{
 	"secret_env":   "secret_ref (write secret_ref: env:NAME)",
 	"password_env": "password_secret_ref (write password_secret_ref: env:NAME)",
+	"key_refs":     "the policy's keys: block (decision 53 ruling 3)",
 }
 
 // resolveInto reads the secret text names, at key at, into c.secrets under

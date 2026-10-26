@@ -53,11 +53,11 @@ func openDirectory(cfg config.Config, st store.Store, live *policy.Live, m *metr
 		Declared: func() map[string]string { return live.Load().DeclaredUsernames() }}, nil
 }
 
-// policyEnv is the policy's environment in this process: the key refs, and
-// whether its broker resolves humans through a directory (Ruling 16), and
-// workloads (decision 41 ruling 1).
+// policyEnv is the policy's environment in this process: whether its broker
+// resolves humans through a directory (Ruling 16), and workloads (decision 41
+// ruling 1).
 func policyEnv(cfg config.Config) policy.Env {
-	env := policy.Env{KeyRefs: cfg.KeyRefs()}
+	env := policy.Env{}
 	switch {
 	case cfg.Broker == nil:
 	case cfg.Broker.Directory != nil:

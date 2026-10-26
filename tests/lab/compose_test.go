@@ -107,7 +107,7 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 		"port49-broker.yaml": broker,
 		"policy.yaml":        policy,
 		"inventory.yaml":     inv,
-		"port49d.env":        "PORT49_LAB_KEY=" + labKey + "\nPORT49_LAB_ENC_KEY=" + encKey + "\n",
+		"port49d.env":        "PORT49_KEY_LAB=" + labKey + "\nPORT49_LAB_ENC_KEY=" + encKey + "\n",
 		"port49-broker.env":  "PORT49_LAB_ENC_KEY=" + encKey + "\n",
 	}, nil
 }

@@ -25,9 +25,9 @@ import (
 // inventory's canonical form, so every port49d reading the same two files
 // names the same bundle, and a reformatted inventory file is the same bundle
 // (spec §10). The platform set is the policy's pin, so the policy's hash
-// covers it. port49d.yaml's keys are not in it: which key_refs port49d holds
-// keys for, and the keys themselves, are the daemon's, so two daemons with
-// different keys name one bundle and may admit differently from it (spec §10).
+// covers it, and with it the keys: block, the key names and their secret
+// references. The secrets themselves are not in it: two daemons that read
+// different secrets for one reference name one bundle (spec §10).
 func ID(policyRaw []byte, inv admission.Inventory) string {
 	sum := sha256.Sum256([]byte(engine.HashOf(policyRaw) + "\n" + engine.HashOf(Canonical(inv))))
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -105,7 +105,7 @@ func Canonical(inv admission.Inventory) []byte {
 // Parse builds the bundle: the inventory validated (admission.Validate), and
 // the policy loaded against it under the bundle's name. env's Devices,
 // InventoryKeyGroups and Bundle are set here; the caller sets the rest
-// (KeyRefs, Now).
+// (Now).
 func Parse(policyRaw []byte, inv admission.Inventory, env policy.Env) (*policy.Policy, error) {
 	if err := admission.Validate(inv.Devices); err != nil {
 		return nil, err

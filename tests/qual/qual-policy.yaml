@@ -54,3 +54,6 @@ grants:
   - {subject: qual_operator, scope: all_devices, roles: [qual_admin], max_privilege: admin}
   - {subject: qual_operator, scope: qual_junos, roles: [qual_denies_junos], max_privilege: admin}
   - {subject: qual_operator, scope: qual_other_platforms, roles: [qual_denies_other], max_privilege: admin}
+keys:
+  k:
+    current: {version: 1, secret_ref: env:PORT49_KEY_RUN}

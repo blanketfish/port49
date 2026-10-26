@@ -86,10 +86,8 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	if *newPol == "" {
 		*newPol = *polPath
 	}
-	// Without --config every key_ref is read as defined, as an offline load
-	// does; with it, a device assigned a key port49d.yaml does not define is
-	// refused, as port49d refuses it.
-	var refs []string
+	// The policy's own keys: block names the keys; --config gives the bound
+	// (Task 8 removes it).
 	bound := *maxRemoved
 	if *cfgPath != "" {
 		raw, err := os.ReadFile(*cfgPath)
@@ -97,17 +95,13 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "port49 inventory diff:", err)
 			return 1
 		}
-		sets, err := config.KeySets(raw)
-		if err == nil {
-			bound, err = config.InventoryBound(raw)
-		}
+		bound, err = config.InventoryBound(raw)
 		if err != nil {
 			fmt.Fprintf(stderr, "port49 inventory diff: %s: %v\n", *cfgPath, err)
 			return 1
 		}
-		refs = keyRefsOf(sets)
 	}
-	env := policy.Env{KeyRefs: refs}
+	env := policy.Env{}
 	oldInv, newInv := fs.Arg(0), fs.Arg(1)
 	old, err := bundle.Load(*polPath, oldInv, env)
 	if err != nil {

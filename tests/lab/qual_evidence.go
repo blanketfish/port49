@@ -501,12 +501,20 @@ func qualConfigYAML(lab, broker, fragment, policyPath string) (string, error) {
 		return "", errors.New("the lab config is empty")
 	}
 	m := doc.Content[0]
+	var content []*yaml.Node
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == "lab" {
+		switch m.Content[i].Value {
+		case "keys":
+			// The key sets are the policy's (decision 53 ruling 3), and
+			// tests/qual/qual-policy.yaml carries them.
+			continue
+		case "lab":
 			m.Content[i+1] = &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
 				{Kind: yaml.ScalarNode, Value: "fault_file"}, {Kind: yaml.ScalarNode, Value: qualFaultFile}}}
 		}
+		content = append(content, m.Content[i], m.Content[i+1])
 	}
+	m.Content = content
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
 		return "", err

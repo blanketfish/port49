@@ -117,7 +117,7 @@ func matchKey(m map[string]string) string {
 // admit decides each inventory device's admission (spec §10): its key_ref by
 // tier, or why it is refused — a transport that is neither tcp nor tls, no group
 // matches it, two tie on it (admission.Resolve), or its key_ref is not one
-// port49d.yaml defines (Env.KeyRefs). A refused device is refused alone; the
+// policy's keys: block defines. A refused device is refused alone; the
 // policy and the rest of the fleet load (plan 6a Decided 5).
 // It is a Parse step, after buildKeyGroups and before buildTests.
 func (p *Policy) admit(file) error {
@@ -131,13 +131,14 @@ func (p *Policy) admit(file) error {
 			r.Refused, r.Refusal = why, admission.RefusedTLSNameClash
 		}
 		r.WirePlatform = p.WirePlatform(d.Platform)
-		if r.Refused == "" && d.EffectiveTransport() != admission.TransportTLS && p.env.KeyRefs != nil &&
-			!slices.Contains(p.env.KeyRefs, r.KeyRef) {
-			// A refused entry carries no key_ref, since a reader takes one as
-			// admitted; the text names the key instead (Task 3 review M3).
-			r.Refused, r.Refusal = fmt.Sprintf("is assigned key_ref %s, which port49d.yaml defines no key for, so "+
-				"it fails closed (spec §10)", r.KeyRef), admission.RefusedUnknownKey
-			r.KeyRef = ""
+		if r.Refused == "" && d.EffectiveTransport() != admission.TransportTLS && p.keysDeclared {
+			if _, ok := p.keys[r.KeyRef]; !ok {
+				// A refused entry carries no key_ref, since a reader takes one as
+				// admitted; the text names the key instead (Task 3 review M3).
+				r.Refused, r.Refusal = fmt.Sprintf("is assigned key_ref %s, which the policy's keys: block does not "+
+					"define, so it fails closed (spec §10)", r.KeyRef), admission.RefusedUnknownKey
+				r.KeyRef = ""
+			}
 		}
 		// How the key_ref was chosen, for `port49 keys show`; a tie has none,
 		// and a TLS device takes no key (decision 50 ruling 3).
@@ -186,7 +187,7 @@ func (p *Policy) GenericDevices() []admission.Device {
 }
 
 // AdmissionRefusals are the inventory devices admission refuses, by name. On
-// an unassessed policy — no key groups and no Env.KeyRefs — every device not
+// an unassessed policy — no key groups and no keys: block — every device not
 // pinned on its record is refused no_key_group, which is what port49d, always
 // assessing, would refuse; an offline tool reads it so (plan 6a, I1).
 func (p *Policy) AdmissionRefusals() []admission.Resolved {
@@ -215,10 +216,10 @@ func (p *Policy) KeyGroups() []admission.KeyGroup { return slices.Clone(p.keyGro
 func (p *Policy) Notices() []string { return slices.Clone(p.notices) }
 
 // AdmissionAssessed reports whether admission decides anything here: key
-// groups are declared, in either file, or port49d's key names are known
-// (Env.KeyRefs, which port49d always sets). An offline tool given neither —
-// most of the test corpus — resolves every device as before.
-func (p *Policy) AdmissionAssessed() bool { return len(p.keyGroups) > 0 || p.env.KeyRefs != nil }
+// groups are declared, in either file, or the policy defines its key names
+// (a keys: block, `keys: {}` included; port49d requires one). A policy given
+// neither — most of the test corpus — resolves every device as before.
+func (p *Policy) AdmissionAssessed() bool { return len(p.keyGroups) > 0 || p.keysDeclared }
 
 // Raw is the policy file's bytes as loaded.
 func (p *Policy) Raw() []byte { return slices.Clone(p.raw) }

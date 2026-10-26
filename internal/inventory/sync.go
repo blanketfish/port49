@@ -520,8 +520,8 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	if err := admission.Validate(inv.Devices); err != nil {
 		return held(Result{Outcome: OutcomeRefused, Reason: oneLine(err)})
 	}
-	// The service knows no port49d's key names (Env.KeyRefs nil): key_refs are
-	// each daemon's to check (spec §10).
+	// The service judges admission with the policy's own key names (its keys:
+	// block), as port49d does (spec §10).
 	next, err := bundle.Parse(policyRaw, inv, policy.Env{})
 	if err != nil {
 		return held(Result{Outcome: OutcomeFailed, Reason: "policy_file " + s.PolicyFile + ": " + oneLine(err)})

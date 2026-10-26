@@ -115,9 +115,9 @@ subjects:
   - {name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: eos, roles: [r]}]
 key_groups: [{match: {cidr: 172.100.100.0/27}, key_ref: k}]
+keys: {k: {current: {version: 1, secret_ref: "env:PORT49_KEY_TEST"}}}
 `
-	pol, err := policy.Parse([]byte(body), policy.Env{Devices: f.b.Policy.Load().Devices(), Now: f.b.Now(),
-		KeyRefs: []string{"k"}})
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: f.b.Policy.Load().Devices(), Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

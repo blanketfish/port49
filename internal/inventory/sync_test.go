@@ -1005,8 +1005,8 @@ func TestASourceThatStripsEveryAddressIsRefused(t *testing.T) {
 // Pre-flight I2: the service's bound and port49d's count the same devices
 // out of service, so a bundle the service publishes is never refused by
 // port49d's bound for a reason the service could not see, nor the other way
-// round. Each side parses as it does in production: the service with no
-// key_refs, port49d with its own.
+// round. Each side parses as it does in production: the service with the
+// policy as written, port49d's copy with its keys: block.
 func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
 	const n, bound = 20, 10
 	prevInv := sited(devices(n), true)
@@ -1019,14 +1019,19 @@ func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
 		names[i] = d.Name
 	}
 	prev := &Published{Doc: bundle.Document{Sources: map[string][]string{"a": names}}, Inv: prevInv}
-	parse := func(inv admission.Inventory, env policy.Env) *policy.Policy {
-		p, err := bundle.Parse([]byte(attrPolicy), inv, env)
+	// The service reads the policy as written; port49d's copy carries the
+	// keys: block that defines the key the group names.
+	parse := func(inv admission.Inventory, keyed bool) *policy.Policy {
+		env, body := policy.Env{}, attrPolicy
+		if keyed {
+			body += "keys: {lab_key: {current: {version: 1, secret_ref: \"env:PORT49_KEY_TEST\"}}}\n"
+		}
+		p, err := bundle.Parse([]byte(body), inv, env)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return p
 	}
-	daemon := policy.Env{KeyRefs: []string{"lab_key"}}
 	for removed := 0; removed <= 3; removed++ {
 		for refused := 0; refused <= 3; refused++ {
 			for bare := 0; bare <= 3; bare++ {
@@ -1051,9 +1056,9 @@ func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
 				for _, d := range next.Devices {
 					now[d.Name] = true
 				}
-				service := checkSafety(prev, parse(prevInv, policy.Env{}), parse(next, policy.Env{}), now,
+				service := checkSafety(prev, parse(prevInv, false), parse(next, false), now,
 					map[string]int{"a": bound}, bound, "policy.yaml")
-				port49d := bundle.CheckFrom(parse(prevInv, daemon), parse(next, daemon), bound, "fix the source of truth")
+				port49d := bundle.CheckFrom(parse(prevInv, true), parse(next, true), bound, "fix the source of truth")
 				if (service == nil) != (port49d == nil) {
 					t.Fatalf("removed %d refused %d bare %d: the service says %v, port49d says %v", removed, refused,
 						bare, service, port49d)

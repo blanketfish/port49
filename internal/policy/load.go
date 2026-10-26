@@ -45,11 +45,6 @@ type Env struct {
 	// Devices is the inventory: the file inventory the daemon admits from,
 	// until plan 6's bundle.
 	Devices []admission.Device
-	// KeyRefs are the key_refs port49d.yaml defines keys for, by name only:
-	// a device assigned one outside them is refused admission (spec §10).
-	// nil is not known — an offline tool given no --config — and refuses no
-	// device for it.
-	KeyRefs []string
 	// InventoryKeyGroups are the key groups an inventory file still carries
 	// (admission.Inventory.KeyGroups). They apply where this file has none,
 	// with a notice; where it has its own, this file's win and the notice

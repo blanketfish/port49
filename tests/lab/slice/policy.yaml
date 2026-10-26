@@ -19,3 +19,8 @@ subjects:
      enable: token, token_ttl: 60s}
 grants:
   - {subject: slice_operator, scope: all_devices, roles: [network_admin, slice_denies], max_privilege: admin}
+# The device key sets live in the policy (decision 53 ruling 3); the lab
+# harness sets the secret for port49d.
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: env:PORT49_KEY_LAB}

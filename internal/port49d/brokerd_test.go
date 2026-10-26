@@ -117,7 +117,6 @@ func (f *fleet) brokerVia(t *testing.T, endpoint, cn, extra string) string {
 	if err := os.WriteFile(p, []byte(fmt.Sprintf(`
 metrics_listen: "127.0.0.1:0"
 inventory_file: %s
-key_refs: [k]
 encryption:
   current: {id: v1, secret_ref: env:T_RUN_ENC}
 admin_socket: %s
@@ -636,7 +635,7 @@ scopes: [{name: all_devices, match: {}, per_login_mfa: {accept: [hardware_key_to
 roles: [{name: r, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // P-1 under a per-login requirement the edit adds (R-C1): a token minted on
 // a fresh challenge 30s after the touch survives the settle pass under

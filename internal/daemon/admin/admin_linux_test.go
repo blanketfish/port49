@@ -35,7 +35,7 @@ func TestTheSocketIsPrivateAndAnswersItsOwner(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
+	s := &Server{Held: &keyring.Held{}, Keys: func() map[string]keyring.Set { return map[string]keyring.Set{} }, Now: time.Now}
 	go s.Serve(ctx, ln)
 	c, err := net.Dial("unix", p)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestAnotherUIDIsRefused(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
+	s := &Server{Held: &keyring.Held{}, Keys: func() map[string]keyring.Set { return map[string]keyring.Set{} }, Now: time.Now}
 	go s.Serve(ctx, ln)
 	cmd := exec.Command(self, "-test.run=^TestAnotherUIDIsRefused$")
 	cmd.Env = append(os.Environ(), "PORT49_ADMIN_TEST_DIAL="+p)

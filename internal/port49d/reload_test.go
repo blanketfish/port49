@@ -29,6 +29,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/token"
@@ -189,7 +190,7 @@ func TestAReloaderWithNoBrokerKeepsOnePrior(t *testing.T) {
 	rig.r.pass = nil
 	for range 50 {
 		rig.now = rig.now.Add(time.Second)
-		rig.r.swap(rig.b.Policy.Load())
+		rig.r.swap(rig.b.Policy.Load(), keyBuild{})
 		rig.r.refresh(context.Background())
 	}
 	if len(rig.r.priors) != 1 || rig.r.priors[0].Policy != rig.b.Policy.Load() || !rig.r.priors[0].At.Equal(rig.now) {
@@ -202,7 +203,7 @@ scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // An edit is loaded once two reads in a row agree on it, so a file an editor
 // is still writing is never loaded half-way; then it is in force, said, and
@@ -671,7 +672,7 @@ func TestRunWithNoBrokerSaysSIGHUPDoesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfgPath, raw[:strings.Index(string(raw), "\nbroker:")+1], 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, append(raw[:strings.Index(string(raw), "\nbroker:")+1], runDaemonKeys...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -965,7 +966,7 @@ grants:
   - {subject: s, scope: all_devices, roles: [r]}
   - {subject: b, scope: all_devices, roles: [ro]}
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
-`
+` + runKeys
 
 // A requirement whose accept holds no method this broker verifies (here none:
 // no attestation roots, no human OIDC verifier) is said, naming the devices,
@@ -1188,4 +1189,59 @@ func (rig *reloadRig) sighupWithBound(t *testing.T, percent int) {
 		t.Fatal(err)
 	}
 	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+}
+
+// A reload whose new version cannot be read is refused, said with the
+// reference, and the keys in force keep serving (Review Focus 4; decision 53
+// ruling 2).
+func TestAReloadWhoseSecretCannotBeReadKeepsTheKeysInForce(t *testing.T) {
+	t.Setenv("PORT49_KEY_RUN", "run-test-secret")
+	dir := safeDir(t)
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.keys = newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "PORT49_KEY_", FileDir: dir})
+	kb, err := rig.r.keys.build(rig.b.Policy.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.r.keys.put(kb)
+	missing := filepath.Join(dir, "absent")
+	rig.write(t, strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 2, secret_ref: file:"+
+		missing+"}\n    accept: [{version: 1, secret_ref: env:PORT49_KEY_RUN, retire_after: 2099-01-01}]\n"+labKeyRun, 1))
+	rig.pollTwice()
+	if n := testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")); n != 1 {
+		t.Fatalf("refused reloads: %v\n%s", n, rig.out.String())
+	}
+	if !strings.Contains(rig.out.String(), "keys.k version 2 secret_ref file:"+missing) {
+		t.Fatalf("the refusal does not name the reference:\n%s", rig.out.String())
+	}
+	if vs := rig.r.keys.Set("k").Versions; len(vs) != 1 || vs[0].Number != 1 || string(vs[0].Secret.Bytes()) != "run-test-secret" {
+		t.Fatalf("the keys in force changed: %d versions", len(vs))
+	}
+}
+
+// A swap that changes the key sets says which versions it added, retired and
+// removed, and the notices of spec §10 (pre-flight I8).
+func TestASwapSaysItsKeyChanges(t *testing.T) {
+	t.Setenv("PORT49_KEY_RUN", "run-test-secret")
+	t.Setenv("PORT49_KEY_RUN2", "run-test-secret-two")
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.keys = newLiveKeys(secretref.New(), secretref.Allowance{}.WithDefaults())
+	kb, err := rig.r.keys.build(rig.b.Policy.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.r.keys.put(kb)
+	rotated := strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 2, secret_ref: env:PORT49_KEY_RUN2}\n"+
+		"    accept: [{version: 1, secret_ref: env:PORT49_KEY_RUN}]\n"+labKeyRun, 1)
+	swapTo(t, rig, rotated)
+	if out := rig.out.String(); !strings.Contains(out, "keys: k: version 2 added") ||
+		!strings.Contains(out, "key k version 1 has no retire_after") {
+		t.Fatalf("the swap does not say its key changes:\n%s", out)
+	}
+	before := strings.Count(rig.out.String(), "key k version 1 has no retire_after")
+	swapTo(t, rig, strings.Replace(rotated, "token_ttl: 60s", "token_ttl: 61s", 1))
+	if strings.Count(rig.out.String(), "keys: k:") != 1 ||
+		strings.Count(rig.out.String(), "key k version 1 has no retire_after") != before+1 {
+		t.Fatalf("a swap that changed no key said the key line, or not the notice:\n%s", rig.out.String())
+	}
 }

@@ -1459,7 +1459,8 @@ func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
 	}
 	pol := write("p.yaml", strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]",
 		"key_groups: [{match: {attributes: {site: campus}}, key_ref: prod_key}, "+
-			"{match: {attributes: {role: leaf}}, key_ref: prod_key}, {match: {cidr: 192.0.2.0/24}, key_ref: lab_key}]", 1))
+			"{match: {attributes: {role: leaf}}, key_ref: prod_key}, {match: {cidr: 192.0.2.0/24}, key_ref: lab_key}]", 1)+
+		"keys: {prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}}\n")
 	inv := write("inventory.yaml", `devices:
   - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9], attributes: {site: campus, role: leaf}}
   - {name: lab-01, platform: arista_eos, addresses: [192.0.2.9]}
@@ -1494,6 +1495,14 @@ func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
 // gate fails, rather than having nothing to check.
 func TestPolicyTestReadsAnEmptyKeysBlockAsUndefined(t *testing.T) {
 	pol, inv, _, _ := keysFiles(t)
+	body, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol = filepath.Join(t.TempDir(), "policy-nokeys.yaml")
+	if err := os.WriteFile(pol, append(body, "keys: {}\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
 	if err := os.WriteFile(cfg, []byte("keys: {}\n"), 0o600); err != nil {
 		t.Fatal(err)

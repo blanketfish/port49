@@ -144,7 +144,7 @@ subjects:
   - {name: svc, identity: ["` + e2eWorkloadID + `", "` + e2eWorkload2ID + `"], username: svc-oxidized,
      token_ttl: 600s}
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: svc, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // startWorkloadDaemon runs port49d with a workload verifier; out is its
 // stderr and recs its decision log (stdout).

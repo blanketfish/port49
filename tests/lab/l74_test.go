@@ -344,7 +344,7 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 		// The configs resolve their secret_ref at load: the keys are in the
 		// command's environment, never on its argv.
 		sr := exec.Command(w.port49d, "store-roles", "--config", dcfg, "--broker-config", bcfg)
-		sr.Env = append(os.Environ(), "L74_ENC_KEY="+w.encKey, "L74_TACACS_KEY="+w.tacacsKey)
+		sr.Env = append(os.Environ(), "L74_ENC_KEY="+w.encKey, "PORT49_KEY_L74="+w.tacacsKey)
 		out, err := sr.CombinedOutput()
 		if err != nil {
 			t.Fatalf("INVALID: port49d store-roles for region %d: %v\n%s", i, err, w.leakless(string(out)))
@@ -395,6 +395,9 @@ grants:
   - {subject: alice, scope: all, roles: [admin]}
 key_groups:
   - {match: {cidr: 10.149.0.0/24}, key_ref: k}
+keys:
+  k:
+    current: {version: 1, secret_ref: env:PORT49_KEY_L74}
 `
 }
 
@@ -413,9 +416,6 @@ func (w *regionWorld) daemonYAML(i int) string {
 metrics_listen: "%[1]s:9049"
 inventory_file: %[2]s/inventory.yaml
 policy: {file: %[2]s/policy.yaml, watch_interval: 5s}
-keys:
-  k:
-    current: {version: 1, secret_ref: env:L74_TACACS_KEY}
 encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
 admin_socket: %[3]s
@@ -428,7 +428,6 @@ func (w *regionWorld) brokerYAML(i int) string {
 	os.Mkdir(state, 0o700)
 	return fmt.Sprintf(`metrics_listen: "%[1]s:9050"
 inventory_file: %[2]s/inventory.yaml
-key_refs: [k]
 encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
 admin_socket: %[3]s
