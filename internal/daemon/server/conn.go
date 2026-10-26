@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -51,7 +52,12 @@ type conn struct {
 	// tlsc is the TLS connection while a shutdown may close it with
 	// close_notify; it is cleared when a reset or a protocol error drops the
 	// connection without one. Serve's shutdown goroutine reads it.
-	tlsc     atomic.Pointer[tls.Conn]
+	tlsc atomic.Pointer[tls.Conn]
+	// wmu is held around each reply write, and by a shutdown's close, so the
+	// close never lands inside a Write: crypto/tls skips close_notify then and
+	// sends a bare FIN. The shutdown bounds a stuck write by a write deadline
+	// first (closeTLSAtShutdown).
+	wmu      sync.Mutex
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
@@ -603,11 +609,13 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 	}
 	rh := wire.Header{MajorVersion: h.MajorVersion, MinorVersion: h.MinorVersion, Type: h.Type, SeqNo: h.SeqNo + 1,
 		Flags: flags, SessionID: h.SessionID, Length: uint32(len(body))}
-	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
-		return false
-	}
 	if s.tls == nil {
 		out = wire.Obfuscate(rh, s.keys.Secret(s.version), body)
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
+		return false
 	}
 	_, err := s.c.Write(append(rh.Encode(), out...))
 	return err == nil
@@ -732,4 +740,25 @@ func authorOutcome(status uint8) string {
 	default:
 		return "fail"
 	}
+}
+
+// shutdownWriteBound is how long a shutdown waits for a reply write already
+// under way before it closes a TLS connection over it: a device that stopped
+// reading must not hold the shutdown.
+var shutdownWriteBound = 2 * time.Second
+
+// closeTLSAtShutdown closes the TLS connection with close_notify after any
+// reply write in flight has finished. A write that does not finish within
+// shutdownWriteBound (a peer that stopped reading, its send buffer full) is
+// broken by a write deadline on the TCP connection beneath, re-applied while
+// the lock is awaited so a write that starts meanwhile cannot lengthen it.
+func (s *conn) closeTLSAtShutdown(tc *tls.Conn) {
+	until := time.Now().Add(shutdownWriteBound)
+	for !s.wmu.TryLock() {
+		_ = s.raw.SetWriteDeadline(until)
+		time.Sleep(2 * time.Millisecond)
+	}
+	defer s.wmu.Unlock()
+	_ = s.raw.SetWriteDeadline(until) // the alert's own write is bounded too
+	tc.Close()
 }

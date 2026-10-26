@@ -269,7 +269,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 						reset(c)
 						c.Close()
 					} else if tc := cc.tlsc.Load(); tc != nil {
-						tc.Close()
+						cc.closeTLSAtShutdown(tc)
 					} else {
 						c.Close()
 					}
