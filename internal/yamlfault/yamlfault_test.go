@@ -66,3 +66,23 @@ func TestOneDocumentRefusesASecondDocument(t *testing.T) {
 		}
 	}
 }
+
+// A removed key is refused wherever it stands, naming its replacement and
+// its line; the same word as a value is not a key.
+func TestReplacedRefusesARemovedKeyAnywhere(t *testing.T) {
+	m := map[string]string{"secret_env": "secret_ref"}
+	for _, c := range []struct {
+		raw  string
+		want string
+	}{
+		{"keys:\n  k:\n    current: {version: 1, secret_env: X}\n", "line 3: secret_env was replaced by secret_ref"},
+		{"secret_env: X\n", "line 1: secret_env was replaced by secret_ref"},
+		{"x: secret_env\n", ""},
+		{"a: [\n", ""},
+	} {
+		err := Replaced([]byte(c.raw), m)
+		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%q: %v, want %q", c.raw, err, c.want)
+		}
+	}
+}

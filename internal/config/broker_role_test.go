@@ -23,7 +23,7 @@ func brokerRoleYAML(t *testing.T) string {
 		"inventory_file: " + write(t, "inv.yaml", inv),
 		"key_refs: [prod_key]",
 		"encryption:",
-		"  current: {id: v2, secret_env: PORT49_ENC_V2}",
+		"  current: {id: v2, secret_ref: env:PORT49_ENC_V2}",
 		"admin_socket: " + filepath.Join(dir, "broker.sock"),
 		"broker:",
 		"  listen: 127.0.0.1:0",
@@ -55,7 +55,7 @@ func daemonRoleYAML(t *testing.T) string {
 	t.Helper()
 	dir := storeFiles(t)
 	return fmt.Sprintf(sampleHead, write(t, "inv.yaml", inv)) +
-		"encryption:\n  current: {id: v2, secret_env: PORT49_ENC_V2}\n" +
+		"encryption:\n  current: {id: v2, secret_ref: env:PORT49_ENC_V2}\n" +
 		"policy: {file: /etc/port49/policy.yaml}\n" +
 		"admin_socket: " + filepath.Join(dir, "admin.sock") + "\n" +
 		"stores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://etcd-0:2379]\n" +
@@ -92,7 +92,7 @@ func TestABrokerConfigLoads(t *testing.T) {
 // the key.
 func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 	for key, extra := range map[string]string{
-		"keys:":                        "keys: {prod_key: {current: {version: 3, secret_env: T_PROD_V3}}}\n",
+		"keys:":                        "keys: {prod_key: {current: {version: 3, secret_ref: env:T_PROD_V3}}}\n",
 		"listen":                       "listen: :49\n",
 		"stores.directory.etcd.daemon": "", // added under stores.directory.etcd below
 		"stores.session.etcd.daemon":   "", // a split: a session store beside the directory's, below

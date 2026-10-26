@@ -44,7 +44,7 @@ func (c *Credentials) Who() string                { return c.who }
 // LoadCredentials reads the bind's secret once, at start. A keytab is read
 // through keyfile.ReadSecret: owned by port49's user or root, no group or
 // other bit, no link.
-func LoadCredentials(b Bind, getenv func(string) string) (*Credentials, error) {
+func LoadCredentials(b Bind, resolve func(ref string) ([]byte, error)) (*Credentials, error) {
 	c := &Credentials{mech: b.Mechanism}
 	switch b.Mechanism {
 	case "external":
@@ -99,10 +99,11 @@ func LoadCredentials(b Bind, getenv func(string) string) (*Credentials, error) {
 		c.krb = cl
 		c.who = b.Principal
 	case "simple":
-		c.password, c.who = getenv(b.PasswordEnv), b.BindDN
-		if c.password == "" {
-			return nil, fmt.Errorf("broker.directory.bind.password_env %s is not set", b.PasswordEnv)
+		pw, err := resolve(b.PasswordRef)
+		if err != nil {
+			return nil, err
 		}
+		c.password, c.who = string(pw), b.BindDN
 	default:
 		return nil, fmt.Errorf("broker.directory.bind.mechanism %q", b.Mechanism)
 	}

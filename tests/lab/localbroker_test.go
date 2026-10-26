@@ -59,9 +59,9 @@ metrics_listen: "127.0.0.1:0"
 inventory_file: %s
 keys:
   lab_key:
-    current: {version: 1, secret_env: PORT49_LAB_KEY}
+    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}
 encryption:
-  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}
+  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %s}
 token: {candidate_cap: %d}
 broker:

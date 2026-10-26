@@ -309,7 +309,7 @@ func (l *lab) serviceConfig(t *testing.T, li *labInventory, policy string) strin
 	if !strings.Contains(body, l28Anchor) {
 		t.Fatalf("%s has no standing lab_key block", base)
 	}
-	body = strings.Replace(body, l28Anchor, l28Anchor+"  lab_key2:\n    current: {version: 1, secret_env: PORT49_L28_NEW_KEY}\n", 1)
+	body = strings.Replace(body, l28Anchor, l28Anchor+"  lab_key2:\n    current: {version: 1, secret_ref: env:PORT49_L28_NEW_KEY}\n", 1)
 	pki := filepath.Join(root, "tests", "lab", "logs", "slice-pki")
 	if err := testpki.WriteLab(pki, "alice@slice.port49.test", time.Now()); err != nil {
 		t.Fatal(err)

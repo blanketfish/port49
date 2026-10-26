@@ -45,13 +45,13 @@ func TestL28KeyMiss(t *testing.T) {
 		fmt.Fprintf(&obs, "port49d built from `%s` (`make build`).\n\n%s\n\n", strings.TrimSpace(string(rev)), l28Branch)
 		for _, ph := range []struct{ name, keys, expect string }{
 			{"stopped", "", ""},
-			{"unknown", "  lab_key:\n    current: {version: 2, secret_env: PORT49_L28_NEW_KEY}\n", "no_known_key_matches"},
-			{"retired", "  lab_key:\n    current: {version: 2, secret_env: PORT49_L28_NEW_KEY}\n" +
-				"    retired: [{version: 1, secret_env: PORT49_LAB_KEY}]\n", "matches_retired"},
-			{"expired", "  lab_key:\n    current: {version: 2, secret_env: PORT49_L28_NEW_KEY}\n" +
-				"    accept: [{version: 1, secret_env: PORT49_LAB_KEY, retire_after: " + yesterday + "}]\n", "matches_retired"},
-			{"accepted", "  lab_key:\n    current: {version: 2, secret_env: PORT49_L28_NEW_KEY}\n" +
-				"    accept: [{version: 1, secret_env: PORT49_LAB_KEY, retire_after: 2999-12-31}]\n", ""},
+			{"unknown", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n", "no_known_key_matches"},
+			{"retired", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n" +
+				"    retired: [{version: 1, secret_ref: env:PORT49_LAB_KEY}]\n", "matches_retired"},
+			{"expired", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n" +
+				"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: " + yesterday + "}]\n", "matches_retired"},
+			{"accepted", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n" +
+				"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: 2999-12-31}]\n", ""},
 		} {
 			obs.WriteString(l.l28Phase(t, ph.name, ph.keys, ph.expect))
 		}
@@ -79,7 +79,7 @@ const l28Branch = "**Branch H.** port49d as first built held a key miss for the 
 	"below compares with the `stopped` phase, the device's local fall-through with nothing listening."
 
 // l28Anchor is the standing config's keys block, which each phase replaces.
-const l28Anchor = "  lab_key:\n    current: {version: 1, secret_env: PORT49_LAB_KEY}\n"
+const l28Anchor = "  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}\n"
 
 func (l *lab) l28Config(t *testing.T, name, keys string) string {
 	t.Helper()
@@ -247,8 +247,8 @@ func (l *lab) l28Rotate(t *testing.T) string {
 	if lines != nil {
 		l.carriedConfigure(t, lines...)
 	}
-	accepted := l.l28Config(t, "accepted", "  lab_key:\n    current: {version: 2, secret_env: PORT49_L28_NEW_KEY}\n"+
-		"    accept: [{version: 1, secret_env: PORT49_LAB_KEY, retire_after: 2999-12-31}]\n")
+	accepted := l.l28Config(t, "accepted", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n"+
+		"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: 2999-12-31}]\n")
 	live := l.l28Live(t, accepted)
 	stop := l.capture(t, "L28-rotation")
 	defer stop()

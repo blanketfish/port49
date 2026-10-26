@@ -91,7 +91,7 @@ func l75BrokerYAML(o l75Opts) string {
 inventory_file: %[1]s/l75-inventory.yaml
 key_refs: [k]
 encryption:
-  current: {id: l74, secret_env: L74_ENC_KEY}
+  current: {id: l74, secret_ref: env:L74_ENC_KEY}
 admin_socket: %[1]s/b%[2]d.sock
 broker:
   listen: "127.0.0.1:0"
@@ -112,7 +112,7 @@ broker:
     bind:
       mechanism: simple
       bind_dn: "%[10]s"
-      password_env: LAB_DIRECTORY_BIND_PASSWORD
+      password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD
     base_dn: "%[11]s"
     groups_base_dn: "%[12]s"
     user_filter: "%[13]s"

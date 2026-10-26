@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -34,9 +33,9 @@ func openDirectory(cfg config.Config, st store.Store, live *policy.Live, m *metr
 		return nil, nil
 	}
 	d := cfg.Broker.Directory
-	cr, err := directory.LoadCredentials(d.Bind, os.Getenv)
+	cr, err := directory.LoadCredentials(d.Bind, cfg.ResolveSecret)
 	if err != nil {
-		// The error names the key (keytab_file, tls_cert_file, password_env,
+		// The error names the key (keytab_file, tls_cert_file, password_secret_ref,
 		// the realm, the KDC), never the secret; the start stops on it, as
 		// on a config refusal (pre-flight M-3).
 		return nil, fmt.Errorf("config: %w", err)
@@ -107,7 +106,7 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 		len(d.Servers), strings.Join(servers, ", "), site, d.Bind.Mechanism, bindWho(d.Bind))
 	if d.Bind.Mechanism == "simple" {
 		fmt.Fprintf(w, "%s: directory: bind simple as %s: the weakest of the three (design §10); its password is "+
-			"read from %s\n", proc, d.Bind.BindDN, d.Bind.PasswordEnv)
+			"read from %s\n", proc, d.Bind.BindDN, d.Bind.PasswordRef)
 	}
 	mapping := "no certificate mapping (no x509 verifier)"
 	if d.Mapping.Kind != "" {

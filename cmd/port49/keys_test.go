@@ -30,8 +30,8 @@ const keysInventory = `devices:
 
 const keysConfig = `keys:
   prod_key:
-    current: {version: 3, secret_env: NEVER_READ_V3}
-    accept:  [{version: 2, secret_env: NEVER_READ_V2, retire_after: 2026-10-01}]
+    current: {version: 3, secret_ref: env:NEVER_READ_V3}
+    accept:  [{version: 2, secret_ref: env:NEVER_READ_V2, retire_after: 2026-10-01}]
 `
 
 func keysFiles(t *testing.T) (policyPath, inventoryPath, configPath, logPath string) {
@@ -124,17 +124,17 @@ func TestKeysNeverPrintASecret(t *testing.T) {
 	secrets := []string{v3, v2, alnum, tick}
 	for i, body := range []string{
 		"keys:\n  prod_key:\n    current: " + v3 + "\n",
-		"keys:\n  prod_key:\n    current: {version: " + alnum + ", secret_env: X}\n",
-		"keys:\n  prod_key:\n    current:\n      version: 3\n      secret_env: X\n      " + v3 + ": x\n",
+		"keys:\n  prod_key:\n    current: {version: " + alnum + ", secret_ref: env:X}\n",
+		"keys:\n  prod_key:\n    current:\n      version: 3\n      secret_ref: env:X\n      " + v3 + ": x\n",
 		"keys:\n  prod_key:\n    current: {version: 3, " + alnum + "}\n",
-		"keys:\n  prod_key:\n    current: {version: 3, secret_env: X}\n" +
-			"    accept: [{version: 2, secret_env: Y, retire_after: \"" + v3 + "\"}]\n",
+		"keys:\n  prod_key:\n    current: {version: 3, secret_ref: env:X}\n" +
+			"    accept: [{version: 2, secret_ref: env:Y, retire_after: \"" + v3 + "\"}]\n",
 		"keys:\n  prod_key:\n    current: *" + alnum + "\n",
 		"keys:\n  prod_key:\n    current: !" + alnum + " x\n",
 		"keys:\n  prod_key:\n    current: " + tick + "\n",
-		"keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + v3 + "\"}\n",
-		"keys:\n  prod_key:\n    current: {version: 3, secret_env: " + alnum + "}\n",
-		"keys:\n  " + alnum + ":\n    current: {version: 3, secret_env: X}\n",
+		"keys:\n  prod_key:\n    current: {version: 3, secret_ref: \"" + v3 + "\"}\n",
+		"keys:\n  prod_key:\n    current: {version: 3, secret_ref: " + alnum + "}\n",
+		"keys:\n  " + alnum + ":\n    current: {version: 3, secret_ref: env:X}\n",
 	} {
 		bad := filepath.Join(dir, fmt.Sprintf("bad-%d.yaml", i))
 		if err := os.WriteFile(bad, []byte(body), 0o600); err != nil {

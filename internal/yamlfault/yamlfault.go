@@ -8,6 +8,7 @@ package yamlfault
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -80,4 +81,35 @@ func OneDocument(dec *yaml.Decoder) error {
 		return nil
 	}
 	return ErrSecondDocument
+}
+
+// Replaced refuses a key anywhere in raw that has been removed, naming the
+// replacement and the key's line, as `receipt_ttl` is: a removed key is a
+// refusal, never an alias (decision 53 ruling 1). Only a mapping key counts, so
+// the word as a value is left alone. A file that does not parse returns nil:
+// the strict decode reports it, in its own fixed text. Nothing of the file but
+// the key's own name, which the caller chose, is quoted.
+func Replaced(raw []byte, replaced map[string]string) error {
+	var doc yaml.Node
+	if yaml.Unmarshal(raw, &doc) != nil {
+		return nil
+	}
+	return replacedIn(&doc, replaced)
+}
+
+func replacedIn(n *yaml.Node, replaced map[string]string) error {
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i]
+			if by, ok := replaced[k.Value]; ok && k.Kind == yaml.ScalarNode {
+				return fmt.Errorf("line %d: %s was replaced by %s (decision 53 ruling 1)", k.Line, k.Value, by)
+			}
+		}
+	}
+	for _, c := range n.Content {
+		if err := replacedIn(c, replaced); err != nil {
+			return err
+		}
+	}
+	return nil
 }

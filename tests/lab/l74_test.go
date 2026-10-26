@@ -341,7 +341,7 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 	for i := 1; i <= 3; i++ {
 		dcfg := write(fmt.Sprintf("r%d-port49d.yaml", i), w.daemonYAML(i))
 		bcfg := write(fmt.Sprintf("r%d-port49-broker.yaml", i), w.brokerYAML(i))
-		// The configs resolve their secret_env at load: the keys are in the
+		// The configs resolve their secret_ref at load: the keys are in the
 		// command's environment, never on its argv.
 		sr := exec.Command(w.port49d, "store-roles", "--config", dcfg, "--broker-config", bcfg)
 		sr.Env = append(os.Environ(), "L74_ENC_KEY="+w.encKey, "L74_TACACS_KEY="+w.tacacsKey)
@@ -415,9 +415,9 @@ inventory_file: %[2]s/inventory.yaml
 policy: {file: %[2]s/policy.yaml, watch_interval: 5s}
 keys:
   k:
-    current: {version: 1, secret_env: L74_TACACS_KEY}
+    current: {version: 1, secret_ref: env:L74_TACACS_KEY}
 encryption:
-  current: {id: l74, secret_env: L74_ENC_KEY}
+  current: {id: l74, secret_ref: env:L74_ENC_KEY}
 admin_socket: %[3]s
 accounting: {spool_path: %[2]s/r%[4]d-acct.jsonl}
 `, regionIP(i), w.dir, w.adminSock(i, "d"), i) + regionStoresYAML(w.pki, "daemon", regionSessionClient)
@@ -430,7 +430,7 @@ func (w *regionWorld) brokerYAML(i int) string {
 inventory_file: %[2]s/inventory.yaml
 key_refs: [k]
 encryption:
-  current: {id: l74, secret_env: L74_ENC_KEY}
+  current: {id: l74, secret_ref: env:L74_ENC_KEY}
 admin_socket: %[3]s
 broker:
   listen: "%[1]s:8443"

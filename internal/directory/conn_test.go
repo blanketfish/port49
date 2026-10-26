@@ -36,8 +36,8 @@ import (
 // A simple bind's password and a keytab's bytes never appear in any
 // formatting of the credentials (Global Constraints; Ruling 18).
 func TestCredentialsWithholdTheirSecrets(t *testing.T) {
-	cr, err := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordEnv: "P"},
-		func(string) string { return "hunter2-very-secret" })
+	cr, err := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordRef: "env:P"},
+		func(string) ([]byte, error) { return []byte("hunter2-very-secret"), nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestAGroupReadableKeytabIsRefused(t *testing.T) {
 	krb := filepath.Join(dir, "krb5.conf")
 	os.WriteFile(krb, []byte(krb5conf("127.0.0.1:88")), 0o644)
 	_, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: kt, Principal: "port49$@CORP.EXAMPLE.COM",
-		KRB5Conf: krb}, os.Getenv)
+		KRB5Conf: krb}, nil)
 	if err == nil || !strings.Contains(err.Error(), "keytab_file") || !strings.Contains(err.Error(), "mode") {
 		t.Fatalf("%v", err)
 	}
@@ -90,7 +90,7 @@ func TestGSSAPICredentialsAreCheckedAtStart(t *testing.T) {
 		"no key":      {"someone-else@CORP.EXAMPLE.COM", conf(krb5conf("127.0.0.1:88")), "no key"},
 		"no KDC":      {"port49$@CORP.EXAMPLE.COM", conf("[libdefaults]\n default_realm = CORP.EXAMPLE.COM\n[realms]\n CORP.EXAMPLE.COM = {\n }\n"), "KDC"},
 	} {
-		_, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: kt, Principal: tc.principal, KRB5Conf: tc.conf}, os.Getenv)
+		_, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: kt, Principal: tc.principal, KRB5Conf: tc.conf}, nil)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -157,8 +157,8 @@ func ldapBindServer(t *testing.T, code int64, diag string) *ldap.Conn {
 // refusal, busy a fault) and the server's diagnostic and the password are
 // in no error.
 func TestASimpleBindClassifiesItsResult(t *testing.T) {
-	cr, _ := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordEnv: "P"},
-		func(string) string { return "hunter2-very-secret" })
+	cr, _ := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordRef: "env:P"},
+		func(string) ([]byte, error) { return []byte("hunter2-very-secret"), nil })
 	for _, tc := range []struct {
 		code           int64
 		refusal, fault bool
@@ -185,8 +185,8 @@ func TestABindErrorNamesItsMechanismAndWho(t *testing.T) {
 	// bind reads only mech and who of an external credential (the
 	// certificate is the TLS handshake's).
 	external := &Credentials{mech: "external", who: "CN=port49-svc,O=lab"}
-	simple, _ := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordEnv: "P"},
-		func(string) string { return "pw" })
+	simple, _ := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordRef: "env:P"},
+		func(string) ([]byte, error) { return []byte("pw"), nil })
 	gss := gssapiCredentials(t, "127.0.0.1:1")
 	seedServiceTicket(t, gss, "dc-01.corp.example.com")
 	for _, cr := range []*Credentials{simple, external, gss} {
@@ -328,7 +328,7 @@ func gssapiCredentials(t *testing.T, kdc string) *Credentials {
 		t.Fatal(err)
 	}
 	cr, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: writeKeytab(t, dir), Principal: "port49$@CORP.EXAMPLE.COM",
-		KRB5Conf: krb}, os.Getenv)
+		KRB5Conf: krb}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,5 +692,15 @@ func TestAMidSearchCloseServesGraceAndTheNextSearchDialsFresh(t *testing.T) {
 	}
 	if res, err := q(); err != nil || len(res.Entries) != 1 || dials != 2 {
 		t.Fatalf("the next search: %v %v after %d dial(s), want one entry on a fresh dial", res, err, dials)
+	}
+}
+
+// A bind password that cannot be read stops the start, naming the reference
+// the resolver names and carrying nothing else.
+func TestASimpleBindWhosePasswordCannotBeReadIsRefused(t *testing.T) {
+	_, err := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordRef: "env:P"},
+		func(ref string) ([]byte, error) { return nil, fmt.Errorf("%s: the variable is not set", ref) })
+	if err == nil || !strings.Contains(err.Error(), "env:P: the variable is not set") {
+		t.Fatalf("%v", err)
 	}
 }

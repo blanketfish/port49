@@ -181,7 +181,7 @@ func TestTheIdentitySnippetLoads(t *testing.T) {
 	t.Setenv("EXAMPLE_ENC_V1", "22222222222222222222222222222222")
 	cfgPath := filepath.Join(dir, "port49d.yaml")
 	writeFile(t, cfgPath, fmt.Sprintf("listen: \":4949\"\ninventory_file: %s\nkeys:\n  prod_key:\n"+
-		"    current: {version: 1, secret_env: EXAMPLE_PROD_V1}\nencryption:\n  current: {id: v1, secret_env: EXAMPLE_ENC_V1}\n%s",
+		"    current: {version: 1, secret_ref: env:EXAMPLE_PROD_V1}\nencryption:\n  current: {id: v1, secret_ref: env:EXAMPLE_ENC_V1}\n%s",
 		inv, broker))
 	c, err := config.Load(cfgPath)
 	if err != nil {

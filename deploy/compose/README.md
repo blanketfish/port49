@@ -89,8 +89,8 @@ key does:
   different sites set different values.
 - `ca_file`: verifies the servers' certificates.
 - `bind`: how the broker authenticates. `gssapi` (`principal`, `keytab_file`, `krb5_conf`),
-  `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_env`, the
-  weakest: the password is an environment variable, named at the start, never printed).
+  `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_secret_ref`, the
+  weakest: the password is named by `env:NAME` or `file:/path`, read when the directory opens, never printed).
   Samba AD (lab L43): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
   breaker opens, `port49_directory_server_up` drops to 0), so use `simple` or `gssapi`; `gssapi` is refused
   under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: L44.

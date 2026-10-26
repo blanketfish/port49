@@ -1485,7 +1485,7 @@ func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
 		}
 	}
 	if strings.Contains(got, "spine-01") || strings.Contains(got, "NEVER_READ") {
-		t.Errorf("an admitted device or a secret_env is printed:\n%s", got)
+		t.Errorf("an admitted device or a secret_ref is printed:\n%s", got)
 	}
 }
 

@@ -26,7 +26,7 @@ func tlsBase(t *testing.T, top, block string) string {
 	}
 	t.Setenv("T_ENC", "33333333333333333333333333333333")
 	body := top + "metrics_listen: 127.0.0.1:0\ninventory_file: " + inv + "\n" +
-		"encryption:\n  current: {id: v1, secret_env: T_ENC}\naccounting: {spool_path: " + filepath.Join(dir, "acct.jsonl") + "}\n" +
+		"encryption:\n  current: {id: v1, secret_ref: env:T_ENC}\naccounting: {spool_path: " + filepath.Join(dir, "acct.jsonl") + "}\n" +
 		strings.ReplaceAll(block, "DIR", dir)
 	p := filepath.Join(dir, "port49d.yaml")
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {

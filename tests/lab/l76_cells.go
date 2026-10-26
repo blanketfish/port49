@@ -31,7 +31,7 @@ const (
 	l76WrongKeyEnv = "PORT49_L76_WRONG_KEY"
 	// l76KeyAnchor is port49d-lab.yaml's standing key block (l28Anchor's text;
 	// l28's is lab-tagged, so it is repeated here and tested against the file).
-	l76KeyAnchor = "  lab_key:\n    current: {version: 1, secret_env: PORT49_LAB_KEY}\n"
+	l76KeyAnchor = "  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}\n"
 	// l76LocalNameRule is srl_nokia-aaa.yang's must on server-group name.
 	l76LocalNameRule = "Server group name must be 'local' if and only if local server type is 'local'"
 	// l76AdminDefault is SR Linux's documented default admin password
@@ -736,7 +736,7 @@ func l76WrongKeyConfig(cfg string) (string, error) {
 		return "", fmt.Errorf("the lab config holds the standing lab_key block %d times, want once", n)
 	}
 	return strings.Replace(cfg, l76KeyAnchor,
-		"  lab_key:\n    current: {version: 1, secret_env: "+l76WrongKeyEnv+"}\n", 1), nil
+		"  lab_key:\n    current: {version: 1, secret_ref: env:"+l76WrongKeyEnv+"}\n", 1), nil
 }
 
 // l76Observation is the note's Observation: the schema check, then each

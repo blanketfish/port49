@@ -442,7 +442,7 @@ func TestL75BrokerYAMLHoldsNoSecret(t *testing.T) {
 	if strings.Contains(y, x.d.password) {
 		t.Error("the config holds the directory bind password")
 	}
-	if !strings.Contains(y, "password_env: LAB_DIRECTORY_BIND_PASSWORD") || !strings.Contains(y, "secret_env: L74_ENC_KEY") {
+	if !strings.Contains(y, "password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD") || !strings.Contains(y, "secret_ref: env:L74_ENC_KEY") {
 		t.Error("the config does not name the secrets by environment variable")
 	}
 	if !strings.Contains(y, "https://127.0.0.1:7002") || strings.Contains(y, regionIP(1)+":2379") {

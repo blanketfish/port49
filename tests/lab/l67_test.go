@@ -1568,9 +1568,9 @@ admin_socket: %[1]s
 inventory_file: %[2]s
 keys:
   lab_key:
-    current: {version: 1, secret_env: PORT49_LAB_KEY}
+    current: {version: 1, secret_ref: env:PORT49_LAB_KEY}
 encryption:
-  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}
+  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %[3]s}
 broker:
   listen: "127.0.0.1:0"
@@ -1594,7 +1594,7 @@ broker:
     bind:
       mechanism: simple
       bind_dn: "%[11]s"
-      password_env: LAB_DIRECTORY_BIND_PASSWORD
+      password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD
     base_dn: "%[12]s"
     groups_base_dn: "%[13]s"
     user_filter: "%[14]s"

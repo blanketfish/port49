@@ -56,7 +56,7 @@ func brokerConfigWith(t *testing.T, policyBody string, others []string) config.C
 	}
 	cfg := config.Config{
 		Session:   config.SessionConfig{MaxSessionAgeDefault: time.Hour},
-		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretEnv: "UNUSED"}}},
+		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretRef: "env:UNUSED"}}},
 		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),
@@ -467,9 +467,9 @@ metrics_listen: "127.0.0.1:0"
 inventory_file: %s
 keys:
   k:
-    current: {version: 1, secret_env: T_RUN_SECRET}
+    current: {version: 1, secret_ref: env:T_RUN_SECRET}
 encryption:
-  current: {id: v1, secret_env: T_RUN_ENC}
+  current: {id: v1, secret_ref: env:T_RUN_ENC}
 accounting: {spool_path: %s}
 broker:
   listen: %q

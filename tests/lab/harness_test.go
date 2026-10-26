@@ -2439,7 +2439,7 @@ func splitBrokerYAML(base, sliceBroker string, o splitBrokerOpts) (string, error
 		}
 	}
 	return "metrics_listen: \"" + o.Metrics + "\"\ninventory_file: " + o.Inventory + "\nkey_refs: [lab_key]\n" +
-		"encryption:\n  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}\nadmin_socket: " + o.Admin + "\n" +
+		"encryption:\n  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}\nadmin_socket: " + o.Admin + "\n" +
 		strings.Join(block, "\n") + "\n  state_dir: " + o.State + "\n  policy_watch_interval: 1s\n" +
 		o.Store + "lab:\n" + base[cut:], nil
 }

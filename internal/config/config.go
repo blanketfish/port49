@@ -37,13 +37,14 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/yamlfault"
 )
 
 type KeyVersion struct {
 	Version   int    `yaml:"version"`
-	SecretEnv string `yaml:"secret_env"`
+	SecretRef string `yaml:"secret_ref"`
 	// RetireAfter is the last day, UTC, the version admits (spec §10):
 	// accept versions only. RetireAt is it parsed, the first instant the
 	// version is refused — midnight after that day. Zero is none.
@@ -457,11 +458,11 @@ type EtcdContextCache struct {
 }
 
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
-// record it seals, and the environment variable holding its 32 bytes. The
-// secret is never inline, for the same reason no shared secret in this file is.
+// record it seals, and the secret_ref naming its 32 bytes. The secret is never
+// inline, for the same reason no shared secret in this file is.
 type encKeyYAML struct {
 	ID        string `yaml:"id"`
-	SecretEnv string `yaml:"secret_env"`
+	SecretRef string `yaml:"secret_ref"`
 }
 
 // encryptionYAML is the two-key rotation window of design §8: writes use
@@ -654,12 +655,19 @@ type Config struct {
 	keyRefs []string
 
 	// encCurrent and encPrevious are the key references, not the keys: the
-	// bytes live in secrets, which Load fills from the environment, so a
+	// bytes live in secrets, which Load fills by reading each reference, so a
 	// Config that is printed or logged carries no key material.
 	encCurrent, encPrevious encKeyYAML
 	hasPrevious             bool
 
+	// secrets is keyed by the reference's text: Parse accepts one spelling
+	// of each reference, so nothing is canonicalised.
 	secrets map[string]string
+
+	// Secrets is the resolver Load built (decision 53): how port49d reads
+	// its policy's key secrets at each swap, and the directory's bind
+	// password at start. Nil before Load.
+	Secrets *secretref.Resolver
 }
 
 const defaultWindow = 10 * time.Minute
@@ -879,8 +887,9 @@ func load(path string, role Role) (Config, error) {
 		Token:       TokenConfig{CandidateCap: orI(f.Token.CandidateCap, 8)},
 		encCurrent:  f.Encryption.Current,
 		encPrevious: f.Encryption.Previous,
-		hasPrevious: f.Encryption.Previous.SecretEnv != "",
+		hasPrevious: f.Encryption.Previous.SecretRef != "",
 		secrets:     map[string]string{},
+		Secrets:     secretref.New(),
 	}
 	switch role {
 	case RoleBroker:
@@ -1030,9 +1039,9 @@ func load(path string, role Role) (Config, error) {
 	// "", and — were it to zero-pad rather than refuse — every token, receipt
 	// and context in the store would be sealed under an all-zero AES-256 key,
 	// with no error and no panic.
-	if f.Encryption.Current.SecretEnv == "" {
+	if f.Encryption.Current.SecretRef == "" {
 		return Config{}, fmt.Errorf("config: encryption.current is required: it is the key every token, receipt " +
-			"and context is sealed under at rest (design §8); name an id and the environment variable holding " +
+			"and context is sealed under at rest (design §8); name an id and the secret_ref holding " +
 			"its 32 bytes")
 	}
 	for _, k := range []struct {
@@ -1048,42 +1057,35 @@ func load(path string, role Role) (Config, error) {
 			return Config{}, fmt.Errorf("config: %s: id must be 1 to 64 of A-Z a-z 0-9 . _ -: it is written "+
 				"into every record the key seals, and every line about a record that will not open names it", k.what)
 		}
-		if k.ref.SecretEnv == "" {
+		if k.ref.SecretRef == "" {
 			// previous is optional; current's absence was refused above. But a
 			// previous key that names an id and no variable is not "absent" to
 			// the operator who wrote it — it reads as a rotation in progress
 			// while every record still sealed under that id fails to open.
 			if k.ref.ID != "" {
-				return Config{}, fmt.Errorf("config: %s: id %q is named with no secret_env, so the key is not "+
-					"loaded and every record sealed under it fails to open; give it a secret_env or remove the block",
+				return Config{}, fmt.Errorf("config: %s: id %q is named with no secret_ref, so the key is not "+
+					"loaded and every record sealed under it fails to open; give it a secret_ref or remove the block",
 					k.what, k.ref.ID)
 			}
 			continue
-		}
-		if !envName.MatchString(k.ref.SecretEnv) {
-			return Config{}, fmt.Errorf("config: %s: secret_env is not an environment variable name (letters, "+
-				"digits and _): it names the variable holding the key, never the key", k.what)
 		}
 		if k.ref.ID == "" {
 			return Config{}, fmt.Errorf("config: %s: id is required: it is written into every record the key "+
 				"seals and is its authenticated data, so a record cannot be opened without it", k.what)
 		}
 		// Unset and wrong-length are separate errors on purpose, and each names
-		// the id as well as the variable. The length check below would absorb
+		// the id as well as the reference. The length check below would absorb
 		// an unset one — "" is not 32 bytes — and the operator would be told
 		// their key is the wrong size when what happened is that the unit never
 		// exported it. That is the difference between editing a secret and
 		// editing a systemd file at 3am.
-		s, ok := os.LookupEnv(k.ref.SecretEnv)
-		if !ok || s == "" {
-			return Config{}, fmt.Errorf("config: %s (id %q): its secret_env names an environment variable that "+
-				"is not set", k.what, k.ref.ID)
+		if err := c.resolveInto(fmt.Sprintf("%s.secret_ref (id %q)", k.what, k.ref.ID), k.ref.SecretRef); err != nil {
+			return Config{}, err
 		}
-		if len(s) != 32 {
-			return Config{}, fmt.Errorf("config: %s (id %q): the variable its secret_env names must hold exactly "+
-				"32 bytes for AES-256, got %d", k.what, k.ref.ID, len(s))
+		if s := c.secrets[k.ref.SecretRef]; len(s) != 32 {
+			return Config{}, fmt.Errorf("config: %s (id %q): the secret %s names must be exactly 32 bytes for "+
+				"AES-256, got %d", k.what, k.ref.ID, k.ref.SecretRef, len(s))
 		}
-		c.secrets[k.ref.SecretEnv] = s
 	}
 	// The id is what a sealed record is labelled with, so two keys under one id
 	// is not a rotation: Open matches the label on Current every time, Previous
@@ -1239,7 +1241,7 @@ func daemonDefaults(c *Config, f fileConfig) error {
 }
 
 // resolveKeys checks keys: and reads each version's secret from the
-// environment (port49d's role), and notes an accept version with no
+// by secret_ref (port49d's role), and notes an accept version with no
 // retire_after or one past it.
 func resolveKeys(c *Config, raw []byte) error {
 	var err error
@@ -1248,12 +1250,9 @@ func resolveKeys(c *Config, raw []byte) error {
 	}
 	for ref, ks := range c.Keys {
 		for _, v := range allVersions(ks) {
-			s, ok := os.LookupEnv(v.SecretEnv)
-			if !ok || s == "" {
-				return fmt.Errorf("config: key %s version %d: its secret_env names an environment variable "+
-					"that is not set", ref, v.Version)
+			if err := c.resolveInto(fmt.Sprintf("keys.%s version %d secret_ref", ref, v.Version), v.SecretRef); err != nil {
+				return err
 			}
-			c.secrets[v.SecretEnv] = s
 		}
 	}
 	now := time.Now()
@@ -1510,13 +1509,13 @@ func (c Config) KeyRefs() []string {
 // EncryptionKeys is the two-key window: writes use Current, reads try Current
 // then Previous. Retiring Previous is a config change, never code (design §8).
 func (c Config) EncryptionKeys() (crypt.Keys, error) {
-	cur, err := key32(c.encCurrent.ID, c.secrets[c.encCurrent.SecretEnv])
+	cur, err := key32(c.encCurrent.ID, c.secrets[c.encCurrent.SecretRef])
 	if err != nil {
 		return crypt.Keys{}, err
 	}
 	keys := crypt.Keys{Current: cur}
 	if c.hasPrevious {
-		p, err := key32(c.encPrevious.ID, c.secrets[c.encPrevious.SecretEnv])
+		p, err := key32(c.encPrevious.ID, c.secrets[c.encPrevious.SecretRef])
 		if err != nil {
 			return crypt.Keys{}, err
 		}
@@ -1576,13 +1575,13 @@ func (c Config) Keyring() map[string]keyring.Set {
 	out := make(map[string]keyring.Set, len(c.Keys))
 	for ref, ks := range c.Keys {
 		set := keyring.Set{Ref: ref}
-		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: []byte(c.secrets[ks.Current.SecretEnv])})
+		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: []byte(c.secrets[ks.Current.SecretRef])})
 		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv]),
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretRef]),
 				RetireAt: v.RetireAt})
 		}
 		for _, v := range ks.Retired {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv]), Retired: true})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretRef]), Retired: true})
 		}
 		out[ref] = set
 	}
@@ -1590,7 +1589,7 @@ func (c Config) Keyring() map[string]keyring.Set {
 }
 
 // checkKeySets validates keys without reading a secret: every version
-// numbered from 1 and once, a secret_env named, and retire_after a date on an
+// numbered from 1 and once, a secret_ref named, and retire_after a date on an
 // accept version only. It returns the sets with RetireAt filled.
 func checkKeySets(keys map[string]KeySet, raw []byte) (map[string]KeySet, error) {
 	if err := checkKeyRefs(keys, raw); err != nil {
@@ -1607,12 +1606,11 @@ func checkKeySets(keys map[string]KeySet, raw []byte) (map[string]KeySet, error)
 				return nil, fmt.Errorf("config: key %s: version %d appears twice", ref, v.Version)
 			}
 			seen[v.Version] = true
-			if v.SecretEnv == "" {
-				return nil, fmt.Errorf("config: key %s version %d: secret_env is required", ref, v.Version)
+			if v.SecretRef == "" {
+				return nil, fmt.Errorf("config: key %s version %d: secret_ref is required", ref, v.Version)
 			}
-			if !envName.MatchString(v.SecretEnv) {
-				return nil, fmt.Errorf("config: key %s version %d: secret_env is not an environment variable name "+
-					"(letters, digits and _): it names the variable holding the secret, never the secret", ref, v.Version)
+			if _, err := secretref.Parse(v.SecretRef); err != nil {
+				return nil, fmt.Errorf("config: key %s version %d: secret_ref %w", ref, v.Version, err)
 			}
 		}
 		if ks.Current.RetireAfter != "" {
@@ -2002,8 +2000,12 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 
 // decodeFile decodes raw, a port49d.yaml, into f as strictly as Load does:
 // an unknown key is refused, and so is a second YAML document, which a single
-// Decode would ignore (decision 53 ruling 6). Neither error quotes the file.
+// Decode would ignore (decision 53 ruling 6), and so is a key decision 53
+// removed, named with its replacement. No error quotes the file.
 func decodeFile(raw []byte, f *fileConfig) error {
+	if err := yamlfault.Replaced(raw, removedSecretKeys); err != nil {
+		return err
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(f); err != nil && err != io.EOF {
@@ -2297,10 +2299,34 @@ func readableFile(name, path string) error {
 	return nil
 }
 
-// envName is what an environment variable's name looks like. A secret_env
-// that is not one is refused without being printed: it is most likely the
-// secret, pasted where its variable's name goes.
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+// removedSecretKeys are the keys decision 53 ruling 1 removed, with what
+// replaces each: refused by name wherever they stand, never loaded.
+var removedSecretKeys = map[string]string{
+	"secret_env":   "secret_ref (write secret_ref: env:NAME)",
+	"password_env": "password_secret_ref (write password_secret_ref: env:NAME)",
+}
+
+// resolveInto reads the secret text names, at key at, into c.secrets under
+// that text.
+func (c *Config) resolveInto(at, text string) error {
+	_, s, err := c.Secrets.ResolveText(at, text)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	c.secrets[text] = string(s.Bytes())
+	return nil
+}
+
+// ResolveSecret reads one secret_ref for a reader outside Load: the
+// directory's bind password, read when the directory opens.
+func (c Config) ResolveSecret(text string) ([]byte, error) {
+	res := c.Secrets
+	if res == nil {
+		res = secretref.New() // a Config built by hand, as tests build one
+	}
+	_, s, err := res.ResolveText("broker.directory.bind.password_secret_ref", text)
+	return s.Bytes(), err
+}
 
 // KeyIDShape is an encryption key id: what crypt seals into every record's
 // header and what every line about a record that will not open names

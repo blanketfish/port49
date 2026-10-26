@@ -33,7 +33,7 @@ func dirYAML(t *testing.T) directoryYAML {
 			{URI: "ldaps://dc-03.corp.example.com", Priority: 50, Site: "us-east"},
 		},
 		CAFile:             ca,
-		Bind:               bindYAML{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordEnv: "PORT49_LDAP_PASSWORD"},
+		Bind:               bindYAML{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordSecretRef: "env:PORT49_LDAP_PASSWORD"},
 		BaseDN:             "DC=corp,DC=example,DC=com",
 		CertificateMapping: mappingYAML{Kind: "issuer_serial"},
 		NestedGroups:       "in_chain",
@@ -77,8 +77,8 @@ func TestDirectoryRefusals(t *testing.T) {
 			"broker.directory.servers[0].uri ldap://dc-01:389: plain LDAP is refused; use ldaps:// or set start_tls: true"},
 		{"no bind mechanism", func(d *directoryYAML) { d.Bind = bindYAML{} },
 			"broker.directory.bind.mechanism is required: external, gssapi or simple"},
-		{"a simple bind with no password in the environment", func(d *directoryYAML) { d.Bind.PasswordEnv = "UNSET_VAR" },
-			"broker.directory.bind.password_env UNSET_VAR is not set"},
+		{"a simple bind whose password_secret_ref is not a reference", func(d *directoryYAML) { d.Bind.PasswordSecretRef = "hunter2secret" },
+			"broker.directory.bind.password_secret_ref is not a secret reference"},
 		{"an unknown kind", func(d *directoryYAML) { d.CertificateMapping.Kind = "email" },
 			"broker.directory.certificate_mapping.kind email: one of issuer_serial, sid, san_upn, san_email, subject_dn, cn"},
 		{"grace too long", func(d *directoryYAML) { d.Grace = dur(25 * time.Hour) },
@@ -209,10 +209,10 @@ func TestSiteEnvIsNotThePasswordEnv(t *testing.T) {
 		d := dirYAML(t)
 		d.SiteEnv = siteEnv
 		if siteEnv == "" {
-			d.Bind.PasswordEnv = "PORT49_SITE"
+			d.Bind.PasswordSecretRef = "env:PORT49_SITE"
 		}
 		_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "hunter2secret", "PORT49_SITE": "hunter2secret"}), true)
-		if err == nil || !strings.Contains(err.Error(), "is also bind.password_env") || strings.Contains(err.Error(), "hunter2secret") {
+		if err == nil || !strings.Contains(err.Error(), "is also the password's variable") || strings.Contains(err.Error(), "hunter2secret") {
 			t.Errorf("site_env %q: %v", siteEnv, err)
 		}
 	}
@@ -254,7 +254,7 @@ func TestALoadedBrokerResolvesItsDirectory(t *testing.T) {
     servers:
       - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
     ca_file: `+ca+`
-    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_secret_ref: env:PORT49_LDAP_PASSWORD}
     base_dn: "DC=corp,DC=example,DC=com"
     certificate_mapping: {kind: issuer_serial}
     nested_groups: in_chain
@@ -293,7 +293,7 @@ func passwordBrokerOnEtcd(t *testing.T) string {
     servers:
       - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
     ca_file: `+ca+`
-    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_secret_ref: env:PORT49_LDAP_PASSWORD}
     base_dn: "DC=corp,DC=example,DC=com"
     nested_groups: in_chain
 `, 1)

@@ -119,7 +119,7 @@ metrics_listen: "127.0.0.1:0"
 inventory_file: %s
 key_refs: [k]
 encryption:
-  current: {id: v1, secret_env: T_RUN_ENC}
+  current: {id: v1, secret_ref: env:T_RUN_ENC}
 admin_socket: %s
 broker:
   listen: "127.0.0.1:0"

@@ -387,7 +387,7 @@ func TestInitRevocationsCmdReadsOnlyThePath(t *testing.T) {
 	dir := safeDir(t)
 	path := filepath.Join(dir, "revocations.json")
 	cfg := filepath.Join(dir, "port49d.yaml")
-	body := "encryption: {current: {id: k1, secret_env: PORT49_TEST_UNSET_SECRET}}\n" +
+	body := "encryption: {current: {id: k1, secret_ref: env:PORT49_TEST_UNSET_SECRET}}\n" +
 		"broker:\n  revocations_file: " + path + "\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
