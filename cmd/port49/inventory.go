@@ -112,6 +112,12 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "refused: port49d would not load the new inventory: %s\n", loadFault(err))
 		return 1
 	}
+	if !new.KeysDeclared() {
+		// port49d refuses a policy with no keys: block, whatever the inventory says.
+		fmt.Fprintln(stdout, "refused: port49d would not load the new bundle: the policy declares no keys: block "+
+			"(decision 53 ruling 3); add the key sets beside key_groups, or `keys: {}` for a fleet all on TLS")
+		return 1
+	}
 	now := time.Now()
 	if bytes.Equal(old.Raw(), new.Raw()) {
 		// One file changed: one inventory reload, against the policy in force,

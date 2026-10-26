@@ -241,6 +241,12 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
 	}
 	keyFaults := 0
+	if *cfgPath == "" && namesAReference(p) {
+		// A fleet that narrows key_secret_refs would see CI green on a policy
+		// every port49d refuses, so say which allowance this checked.
+		fmt.Fprintf(stdout, "keys: checked against the default key_secret_refs (%s); pass --config to check "+
+			"port49d.yaml's\n", allow)
+	}
 	for _, line := range keyReports(p, allow, now) {
 		if strings.HasPrefix(line, "keys: ") {
 			keyFaults++
@@ -366,6 +372,16 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// namesAReference is whether the policy's keys: block holds any version.
+func namesAReference(p *policy.Policy) bool {
+	for _, s := range p.KeySets() {
+		if len(s.All()) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // keyReports is what CI owes the key sets (spec §10; decision 53): a policy

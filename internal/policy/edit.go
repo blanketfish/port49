@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/yamlfault"
 )
 
 // Removal is what RemoveSubject took out of a policy file.
@@ -315,7 +317,7 @@ func pinnedOnce(raw []byte, version string) error {
 		PlatformSet string `yaml:"platform_set"`
 	}
 	if err := dec.Decode(&f); err != nil {
-		return fmt.Errorf("the pinned file does not read back: %v", err)
+		return fmt.Errorf("the pinned file does not read back: %v", yamlfault.Described(err))
 	}
 	if f.PlatformSet != version {
 		return fmt.Errorf("the pinned file reads back platform_set %q, not %s; write it as `platform_set: %s`",

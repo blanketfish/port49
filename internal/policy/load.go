@@ -320,18 +320,13 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		// A type error quotes the value it could not decode, and the value
-		// may be a rule or a secret in it: the line and the types say where
-		// (spec §5.8).
-		msg := yamlValue.ReplaceAllString(err.Error(), "cannot unmarshal a $1 value")
-		msg = yamlTagged.ReplaceAllString(msg, "cannot decode a $1 value")
-		msg = yamlCustom.ReplaceAllString(msg, "cannot decode a value with a custom tag")
-		msg = yamlAnchor.ReplaceAllString(msg, "an unknown anchor was referenced; quote a rule that starts with *")
-		msg = yamlField.ReplaceAllString(msg, "an unknown field in type $1")
-		msg = yamlKey.ReplaceAllString(msg, "a mapping key already defined at line $1")
-		if strings.Contains(msg, "time.Duration") {
-			return nil, fmt.Errorf("%s; durations need a unit, e.g. 60s", msg)
+		// may be a rule or a secret in it: the line and the kind of fault say
+		// where (spec §5.8; yamlfault.Described builds them from an allowlist).
+		decoded := yamlfault.Described(err)
+		if strings.Contains(decoded.Error(), "time.Duration") {
+			return nil, fmt.Errorf("%s; durations need a unit, e.g. 60s", decoded)
 		}
-		return nil, errors.New(msg)
+		return nil, decoded
 	}
 	// A second document would be ignored by a single Decode, and an ignored
 	// `---` followed by a `scopes:` block is a policy that reads as scoped and
@@ -415,22 +410,6 @@ func (p *Policy) KeySets() map[string]keyset.Set {
 
 // KeysDeclared is whether the file has a keys: block, `keys: {}` included.
 func (p *Policy) KeysDeclared() bool { return p.keysDeclared }
-
-// yamlValue is the value a YAML type error quotes, yamlTagged the one an
-// explicitly tagged scalar's does and yamlAnchor the name an alias does
-// (`deny: [*secret]`); yamlField and yamlKey the key an unknown-field or
-// duplicate-key error does. Each is replaced by what it is.
-var (
-	// The quoted value runs to the last backtick on the line, so a value
-	// holding one is cut whole; a custom tag, which is document text too, is
-	// named by what it is (re-review 8, a secret pasted into keys:).
-	yamlValue  = regexp.MustCompile("cannot unmarshal (!!\\w+) `.*`")
-	yamlTagged = regexp.MustCompile("cannot decode (!!\\w+) `.*`")
-	yamlCustom = regexp.MustCompile("cannot (?:unmarshal|decode) ![^!\\s]\\S* `.*`")
-	yamlAnchor = regexp.MustCompile(`unknown anchor '.*' referenced`)
-	yamlField  = regexp.MustCompile(`field .* not found in type (\S+)`)
-	yamlKey    = regexp.MustCompile(`mapping key ".*" already defined at line (\d+)`)
-)
 
 // refusedKeys names the plan that reads a key this build does not, before the
 // strict decode can say only that the field is unknown.

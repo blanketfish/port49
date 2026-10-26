@@ -29,6 +29,95 @@ func Of(err error) error {
 	return errors.New(strings.Join(parts, "; "))
 }
 
+// Described is err, a yaml.v3 decode error, as a strict decode of a policy
+// file shows it: the line, the kind of fault and the types involved, in words
+// built here from an allowlist. yaml.v3 quotes a value, a tag, a field name or
+// an anchor from the document in its text, so none of that text is passed
+// through, whatever it looks like: a pasted key is a value, a tag or a field
+// name to the parser (re-review 8, I1). An error the caller's own unmarshal
+// hook raised, which yaml.v3 returns as it is, passes unchanged.
+func Described(err error) error {
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		parts := make([]string, len(te.Errors))
+		for i, e := range te.Errors {
+			parts[i] = describeEntry(e)
+		}
+		return errors.New(strings.Join(parts, "; "))
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "yaml: ") {
+		return err
+	}
+	switch m := decodeAs.FindStringSubmatch(msg); {
+	case strings.HasPrefix(msg, "yaml: unknown anchor"):
+		return errors.New("an unknown anchor was referenced; quote a rule that starts with *")
+	case m != nil:
+		at := ""
+		if m[1] != "" {
+			at = "line " + m[1] + ": "
+		}
+		return errors.New(at + "cannot decode a " + coreTag(m[2]) + " value as a " + coreTag(m[3]))
+	}
+	return errors.New(faultAt(msg, syntaxCategory(msg)))
+}
+
+var (
+	// yaml.v3's own spellings of a type error, anchored at both ends so the
+	// value between can hold any text. Only the captures marked as types are
+	// ever printed, and only after the checks below.
+	entryLine    = regexp.MustCompile(`(?s)^line (\d+): (.*)$`)
+	entryValue   = regexp.MustCompile(`(?s)^cannot (unmarshal|decode) (\S*)(?: .*)? into ([^\s]+)$`)
+	entryField   = regexp.MustCompile(`(?s)^field .* not found in type ([^\s]+)$`)
+	entryKey     = regexp.MustCompile(`(?s)^mapping key .* already defined at line (\d+)$`)
+	decodeAs     = regexp.MustCompile(`(?s)^yaml: (?:line (\d+): )?cannot decode (\S*) .* as a (\S+)$`)
+	goTypeName   = regexp.MustCompile(`^[\w.*\[\]]+$`)
+	coreTagNames = map[string]bool{"!!str": true, "!!int": true, "!!bool": true, "!!float": true, "!!null": true,
+		"!!map": true, "!!seq": true, "!!timestamp": true, "!!binary": true, "!!merge": true}
+)
+
+// coreTag is tag if it is a YAML core tag, else a fixed word for a custom one.
+func coreTag(tag string) string {
+	if coreTagNames[tag] {
+		return tag
+	}
+	return "custom tag"
+}
+
+// typeName is t if it reads as a Go type name, else "a type".
+func typeName(t string) string {
+	if goTypeName.MatchString(t) {
+		return t
+	}
+	return "a type"
+}
+
+func describeEntry(e string) string {
+	m := entryLine.FindStringSubmatch(e)
+	if m == nil {
+		return "a value port49 could not decode"
+	}
+	at, rest := "line "+m[1]+": ", m[2]
+	if v := entryValue.FindStringSubmatch(rest); v != nil {
+		// The value sits between the tag and " into <Go type>": the type is
+		// what follows the last " into ", and only a type name is shown.
+		if i := strings.LastIndex(rest, " into "); i >= 0 {
+			tag := coreTag(v[2])
+			if tag == "custom tag" {
+				return at + "cannot decode a value with a custom tag"
+			}
+			return at + "cannot " + v[1] + " a " + tag + " value into " + typeName(rest[i+len(" into "):])
+		}
+	}
+	if f := entryField.FindStringSubmatch(rest); f != nil {
+		return at + "an unknown field in type " + typeName(f[1])
+	}
+	if k := entryKey.FindStringSubmatch(rest); k != nil {
+		return at + "a mapping key already defined at line " + k[1]
+	}
+	return at + "a value port49 could not decode"
+}
+
 // faultLine is the line yaml.v3 opens a message with, before any document
 // text.
 var faultLine = regexp.MustCompile(`^(?:yaml: )?line (\d+):`)

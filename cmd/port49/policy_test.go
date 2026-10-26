@@ -1955,3 +1955,38 @@ func TestPolicyDiffRefusesARekeyedVersion(t *testing.T) {
 		t.Fatalf("an unchanged key was refused:\n%s", out.String())
 	}
 }
+
+// policy test says which allowance it checked the references against when no
+// --config named port49d.yaml's: a fleet that narrows key_secret_refs would
+// otherwise see CI go green on a policy every port49d refuses (re-review 8, M1).
+const testRow = "tests:\n  - {subject: s, device: leaf-01, command: \"show version\", expect: permit}\n"
+
+func TestPolicyTestSaysWhichAllowanceItChecked(t *testing.T) {
+	write, inv := policyKeysFixture(t)
+	const head = "scopes: [{name: all_devices, match: {}}]\nroles: [{name: r, privilege: readonly, permit: [show **]}]\n" +
+		"subjects: [{name: s, identity: [\"user:alice@example.com\"], username: alice, token_ttl: 60s}]\n" +
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n" +
+		"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: k}]\n" + testRow
+	keyed := head + "keys:\n  k:\n    current: {version: 3, secret_ref: env:PORT49_KEY_NEW}\n"
+	cfg := write("port49d.yaml", "key_secret_refs: {env_prefix: PORT49_KEY_}\n")
+	const line = "keys: checked against the default key_secret_refs (env: variables starting PORT49_KEY_, file: under /run/port49/keys); " +
+		"pass --config to check port49d.yaml's"
+	for name, c := range map[string]struct {
+		policy string
+		args   []string
+		want   bool
+	}{
+		"a reference, no --config":    {keyed, nil, true},
+		"a reference, with --config":  {keyed, []string{"--config", cfg}, false},
+		"keys: {} names no reference": {head + "keys: {}\n", nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			args := append([]string{"policy", "test", "--policy", write("p.yaml", c.policy), "--inventory", inv}, c.args...)
+			code := run(args, &out, &errOut)
+			if got := strings.Contains(out.String(), line); got != c.want {
+				t.Fatalf("exit %d, line present %v, want %v:\n%s%s", code, got, c.want, out.String(), errOut.String())
+			}
+		})
+	}
+}

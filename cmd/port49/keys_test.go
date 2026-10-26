@@ -125,7 +125,7 @@ func TestKeysNeverPrintASecret(t *testing.T) {
 	// place a decode error or a key check could quote it back.
 	const alnum, tick = "Wd7ZkP2mRq9TxL4vNc8B", "H`j5Ns8!Pw3@Zb6#Fq1$Gm7"
 	secrets := []string{v3, v2, alnum, tick}
-	for i, body := range []string{
+	for i, body := range append([]string{
 		"keys:\n  prod_key:\n    current: " + v3 + "\n",
 		"keys:\n  prod_key:\n    current: {version: " + alnum + ", secret_ref: env:X}\n",
 		"keys:\n  prod_key:\n    current:\n      version: 3\n      secret_ref: env:X\n      " + v3 + ": x\n",
@@ -138,7 +138,7 @@ func TestKeysNeverPrintASecret(t *testing.T) {
 		"keys:\n  prod_key:\n    current: {version: 3, secret_ref: \"" + v3 + "\"}\n",
 		"keys:\n  prod_key:\n    current: {version: 3, secret_ref: " + alnum + "}\n",
 		"keys:\n  " + alnum + ":\n    current: {version: 3, secret_ref: env:X}\n",
-	} {
+	}, shapeBodies(alnum)...) {
 		bad := filepath.Join(dir, fmt.Sprintf("bad-%d.yaml", i))
 		if err := os.WriteFile(bad, []byte(strings.Replace(keysPolicy, keysBlock, body, 1)), 0o600); err != nil {
 			t.Fatal(err)
@@ -328,5 +328,31 @@ func TestKeysCommandsNeverReadAKeyValue(t *testing.T) {
 		if l := secretreftest.Leak(append(out.Bytes(), errOut.Bytes()...), forms); l != "" {
 			t.Errorf("%v carries a key (%s)", args[:2], l)
 		}
+	}
+}
+
+// shapeBodies is a keys: block for each way yaml.v3 can quote a pasted value
+// back (re-review 8, I1), with key where the value goes.
+func shapeBodies(key string) []string {
+	var out []string
+	for _, shape := range []string{"\"`{KEY}\"", "\"`\\n{KEY}\"", "\"a\\n{KEY}\"", "|\n      {KEY}",
+		"|\n      x\n      {KEY}", "!{KEY} x", "!!{KEY} x", "!!{KEY}-x y", "!<{KEY}> x"} {
+		out = append(out, "keys:\n  prod_key:\n    current: "+strings.ReplaceAll(shape, "{KEY}", key)+"\n")
+	}
+	return out
+}
+
+// keys show on a policy with no keys: block says port49d refuses it, as keys
+// status does, rather than naming a key_ref it cannot provision (re-review 8, M2).
+func TestKeysShowOnAPolicyWithNoKeysBlockSaysSo(t *testing.T) {
+	_, inv, _ := keysFiles(t)
+	noKeys := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(noKeys, []byte(strings.Replace(keysPolicy, keysBlock, "", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	run([]string{"keys", "show", "--policy", noKeys, "--inventory", inv, "leaf-19"}, &out, &errOut)
+	if !strings.Contains(out.String()+errOut.String(), "the policy declares no keys: block") {
+		t.Fatalf("no keys: line:\n%s%s", out.String(), errOut.String())
 	}
 }

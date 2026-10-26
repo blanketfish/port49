@@ -23,7 +23,11 @@ roles: [{name: r, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: s, scope: campus, roles: [r]}]
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]
-`
+` + diffKeys
+
+// diffKeys defines the key_refs the diff fixtures name.
+const diffKeys = "keys:\n  prod_key:\n    current: {version: 1, secret_ref: env:PORT49_KEY_NEVER_READ}\n" +
+	"  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_KEY_NEVER_READ_LAB}\n"
 
 // Spec §10, §12: the review artifact for an inventory change, the security
 // lines marked, and an exit that says whether port49d would take it.
@@ -102,8 +106,7 @@ func TestInventoryDiffMarksEverySecurityChange(t *testing.T) {
 func TestInventoryDiffReadsTheConfigAsPort49dDoes(t *testing.T) {
 	_, pol, old, write := diffFiles(t)
 	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
-		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
-	pol = write("policy-keyed.yaml", diffPolicy+"keys: {prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}}\n")
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: ghost_key}\n")
 	cfg := write("port49d.yaml", "inventory: {max_removed_percent: 50}\n")
 	var out, errOut bytes.Buffer
 	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg, old, new}, &out, &errOut); code != 0 ||
@@ -249,10 +252,9 @@ func TestInventoryDiffFailsAChangePort49dWouldHalfTake(t *testing.T) {
 // M17): a pin to a key it does not define is refused with no --config given,
 // and no verdict says the key_refs went unchecked.
 func TestInventoryDiffChecksThePolicysKeyRefs(t *testing.T) {
-	_, _, old, write := diffFiles(t)
-	pol := write("policy-keyed.yaml", diffPolicy+"keys: {prod_key: {current: {version: 1, secret_ref: env:PORT49_KEY_NEVER_READ}}}\n")
+	_, pol, old, write := diffFiles(t)
 	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
-		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: ghost_key}\n")
 	var out, errOut bytes.Buffer
 	code := run([]string{"inventory", "diff", "--policy", pol, "--max-removed-percent", "100", old, new}, &out, &errOut)
 	if !strings.Contains(out.String(), "admission_changed leaf-02: admitted → refused") {
@@ -449,5 +451,17 @@ func TestTheDiffRedactsTheGuardsRefusal(t *testing.T) {
 	}
 	if redacted(nil, pol) != nil {
 		t.Fatal("a nil error")
+	}
+}
+
+// A policy with no keys: block is one port49d refuses to load, so inventory
+// diff says so and fails, as policy test and keys status do (re-review 8, M2).
+func TestInventoryDiffFailsAPolicyWithNoKeysBlock(t *testing.T) {
+	_, _, old, write := diffFiles(t)
+	pol := write("nokeys.yaml", strings.Replace(diffPolicy, diffKeys, "", 1))
+	var out, errOut bytes.Buffer
+	code := run([]string{"inventory", "diff", "--policy", pol, old, old}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String()+errOut.String(), "the policy declares no keys: block") {
+		t.Fatalf("exit %d, want 1 with the keys: line:\n%s%s", code, out.String(), errOut.String())
 	}
 }

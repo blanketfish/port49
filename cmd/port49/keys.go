@@ -128,6 +128,10 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 keys show:", err)
 		return 1
 	}
+	if !p.KeysDeclared() {
+		fmt.Fprintln(stderr, "port49 keys show: the policy declares no keys: block, so port49d refuses it "+
+			"(decision 53 ruling 3); add the key sets beside key_groups, or `keys: {}` for a fleet all on TLS")
+	}
 	name := fs.Arg(0)
 	r, ok := p.Admitted(name)
 	if !ok {

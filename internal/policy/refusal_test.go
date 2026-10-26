@@ -83,3 +83,47 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		}
 	}
 }
+
+// leakShapes are the ways a key pasted where a keys: block names a reference
+// reaches yaml.v3's error text: a quoted value, a backtick in it, a newline
+// in it, a block literal, a custom tag, a secondary-handle tag and a verbatim
+// one (re-review 8, I1). {KEY} is the pasted secret.
+var leakShapes = []string{
+	"{KEY}",
+	"\"`{KEY}\"",
+	"\"`\\n{KEY}\"",
+	"\"a\\n{KEY}\"",
+	"|\n      {KEY}",
+	"|\n      x\n      {KEY}",
+	"!{KEY} x",
+	"!!{KEY} x",
+	"!!{KEY}-x y",
+	"!<{KEY}> x",
+}
+
+// A policy decode error carries a line and a fixed category, never a byte of
+// a value, tag or key the file holds, in any shape yaml.v3 quotes it in.
+func TestADecodeErrorCarriesNoPastedKey(t *testing.T) {
+	// A key of nine bytes or less is echoed whole by yaml.v3, so both lengths.
+	for _, key := range []string{"Wd7ZkP2mRq9TxL4vNc8B", "Wd7ZkP2mR"} {
+		testDecodeErrorCarriesNoKey(t, key)
+	}
+}
+
+func testDecodeErrorCarriesNoKey(t *testing.T, key string) {
+	t.Helper()
+	for _, shape := range leakShapes {
+		body := roleOK + subjOK + "keys:\n  k:\n    current: " + strings.ReplaceAll(shape, "{KEY}", key) + "\n"
+		_, err := Parse([]byte(body), env())
+		if err == nil {
+			t.Errorf("%q parsed", shape)
+			continue
+		}
+		for i := 0; i+4 <= len(key); i++ {
+			if strings.Contains(err.Error(), key[i:i+4]) {
+				t.Errorf("%q: the error carries the key: %s", shape, err)
+				break
+			}
+		}
+	}
+}
