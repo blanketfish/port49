@@ -74,6 +74,24 @@ func TestSlotsHoldExactlyUnderConcurrentAcquireAndRelease(t *testing.T) {
 	const cap, workers, rounds = 8, 64, 2000
 	s := NewSlots(cap, time.Now)
 	var held, over, got, refused atomic.Int64
+	// Reaching the cap is not left to the workers overlapping: cap slots are
+	// taken, the next attempt must be refused, and all are freed before the
+	// hammer (a second release of each frees nothing).
+	var releases []func()
+	for range cap {
+		release, ok := s.TryAcquire()
+		if !ok {
+			t.Fatal("a slot under the cap was refused")
+		}
+		releases = append(releases, release)
+	}
+	if _, ok := s.TryAcquire(); ok || s.InUse() != cap {
+		t.Fatalf("at the cap: acquired %v, %d in use, want a refusal at %d", ok, s.InUse(), cap)
+	}
+	for _, release := range releases {
+		release()
+		release()
+	}
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Add(1)
@@ -107,9 +125,6 @@ func TestSlotsHoldExactlyUnderConcurrentAcquireAndRelease(t *testing.T) {
 	}
 	if got.Load()+refused.Load() != workers*rounds {
 		t.Fatalf("%d slots + %d refusals != %d attempts", got.Load(), refused.Load(), workers*rounds)
-	}
-	if refused.Load() == 0 {
-		t.Fatal("the hammer never reached the cap")
 	}
 	if s.InUse() != 0 {
 		t.Fatalf("%d slots held at the end", s.InUse())
