@@ -1088,6 +1088,17 @@ func (r *runner) followLogout(e store.LogoutEntry) {
 	}
 }
 
+// failedReach is a logout's run of failed reaches: how many in a row, and
+// when its record lapses, so a lapsed one is pruned from the count.
+type failedReach struct {
+	n     int
+	until time.Time
+}
+
+// reachFailuresSeen, set by a test, is told the failure count's size after
+// each logout event; nil in production.
+var reachFailuresSeen func(n int)
+
 // reachFollowed reaches each queued mark and logout in this region's session
 // store (Broker.ReachMark, Broker.ReachLogout), one line each, until ctx
 // ends. A logout whose reach did not finish is queued again after a wait
@@ -1097,7 +1108,7 @@ func (r *runner) followLogout(e store.LogoutEntry) {
 // broker can never reach (ErrLogoutUnreachable) is not tried again; the next
 // takeover reaches every standing logout once more.
 func (r *runner) reachFollowed(ctx context.Context) {
-	failed := map[string]int{} // a logout's failed reaches in a row, by key
+	failed := map[string]failedReach{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1112,6 +1123,12 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			fmt.Fprintln(stderr, line)
 		case l := <-r.followedLogouts:
+			now := time.Now()
+			for k, f := range failed {
+				if !f.until.IsZero() && now.After(f.until) {
+					delete(failed, k) // the logout lapsed: nothing is left to reach
+				}
+			}
 			rep, err := r.reachLogout(ctx, l.Logout)
 			if err != nil && ctx.Err() != nil {
 				return // the duties ended mid-reach: the next takeover reaches it
@@ -1124,15 +1141,26 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			case errors.Is(err, broker.ErrLogoutUnreachable):
 				line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
 			default:
-				failed[l.Key]++
-				wait := logoutRetryFirst << min(failed[l.Key]-1, 6)
-				line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
-					"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
-					"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
-					r.brk.FollowedLogoutByHand(l.Logout, rep))
+				f := failed[l.Key]
+				f.n++
+				f.until = l.Until
+				failed[l.Key] = f
+				wait := logoutRetryFirst << min(f.n-1, 6)
+				if f.n == 1 {
+					line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
+						"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
+						"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
+						r.brk.FollowedLogoutByHand(l.Logout, rep))
+				} else {
+					line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v", f.n,
+						printsafe.Line(err.Error(), 300), wait)
+				}
 				r.retryLogout(ctx, l, wait)
 			}
 			fmt.Fprintln(stderr, line)
+			if reachFailuresSeen != nil {
+				reachFailuresSeen(len(failed))
+			}
 		}
 	}
 }

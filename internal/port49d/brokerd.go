@@ -99,6 +99,53 @@ type brokerStores struct {
 	logoutRev uint64
 }
 
+// startRetryWait is how long a broker start waits before reading again.
+var startRetryWait = 5 * time.Second
+
+// startRetry runs f until it succeeds, ctx ends, or it fails with an error
+// that is neither an outage nor one of also: each wait is said, since
+// nothing is served meanwhile.
+func startRetry(ctx context.Context, out io.Writer, f func() error, also ...error) error {
+	for {
+		err := f()
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		wait := errors.Is(err, store.ErrUnavailable)
+		for _, a := range also {
+			wait = wait || errors.Is(err, a)
+		}
+		if !wait {
+			return err
+		}
+		fmt.Fprintf(out, "port49-broker: %v; nothing is served yet; trying again in %v\n", err, startRetryWait)
+		if !sleepCtx(ctx, startRetryWait) {
+			return ctx.Err()
+		}
+	}
+}
+
+// pagedLoadFault, set by a test, is asked before each try of the load name
+// and its error returned in place of the load's: how a test puts a
+// compaction between pages without racing etcd's compactor. Nil in
+// production.
+var pagedLoadFault func(name string) error
+
+// pagedLoad is startRetry for a load that reads pages at one revision: the
+// ledger's contexts, the marks, the logouts. A compaction between pages
+// reads the whole load again (11a final review N1), after the same wait as
+// an outage, so it never loops hot.
+func pagedLoad(ctx context.Context, out io.Writer, name string, f func() error) error {
+	return startRetry(ctx, out, func() error {
+		if pagedLoadFault != nil {
+			if err := pagedLoadFault(name); err != nil {
+				return err
+			}
+		}
+		return f()
+	}, store.ErrCompacted)
+}
+
 // openBroker waits for etcd on the broker's identity alone, as port49d's
 // start waits (waitForStore): start_timeout, then a refusal, on a cold
 // start, and nothing served meanwhile. Then, each read bounded and an
@@ -120,25 +167,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if err != nil {
 		return brokerStores{}, err
 	}
-	retry := func(f func() error, also ...error) error {
-		for {
-			err := f()
-			if err == nil || ctx.Err() != nil {
-				return err
-			}
-			wait := errors.Is(err, store.ErrUnavailable)
-			for _, a := range also {
-				wait = wait || errors.Is(err, a)
-			}
-			if !wait {
-				return err
-			}
-			fmt.Fprintf(out, "port49-broker: %v; nothing is served yet; trying again in 5s\n", err)
-			if !sleepCtx(ctx, 5*time.Second) {
-				return ctx.Err()
-			}
-		}
-	}
+	retry := func(f func() error, also ...error) error { return startRetry(ctx, out, f, also...) }
 	var bs brokerStores
 	bs.dir = &dirHandle{}
 	fail := func(err error) (brokerStores, error) {
@@ -207,7 +236,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if !cfg.Stores.Shared {
 		markBound = cfg.Stores.Directory.Etcd.BulkTimeout
 	}
-	if err := retry(func() error {
+	if err := pagedLoad(ctx, out, "ledger", func() error {
 		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
 		defer cancel()
 		var known, recorded int
@@ -219,10 +248,10 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		fmt.Fprintf(out, "port49-broker: ledger: %d context key(s) known (%d from the ledger record); following "+
 			"the store from revision %d\n", known, recorded, bs.ctxRev)
 		return nil
-	}, store.ErrCompacted); err != nil {
+	}); err != nil {
 		return fail(err)
 	}
-	if err := retry(func() error {
+	if err := pagedLoad(ctx, out, "marks", func() error {
 		lctx, cancel := context.WithTimeout(ctx, markBound)
 		defer cancel()
 		var feed store.MarkFeed = bs.dir.get()
@@ -263,7 +292,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 				bs.logouts.Put(l) // the union keeps the later of a key's
 			}
 			bs.fresh.Seed(snap.confirmed)
-		} else if err := retry(func() error {
+		} else if err := pagedLoad(ctx, out, "logouts", func() error {
 			lctx, cancel := context.WithTimeout(ctx, de.BulkTimeout)
 			defer cancel()
 			rev, es, err := bs.dir.get().Logouts(lctx)

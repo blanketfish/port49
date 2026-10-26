@@ -337,7 +337,7 @@ func TestAFailedLogoutReachIsTriedAgain(t *testing.T) {
 		switch {
 		case l.Key == "never":
 			return broker.RevokeReport{}, fmt.Errorf("%w: no verifier", broker.ErrLogoutUnreachable)
-		case tries[l.Key] == 1:
+		case tries[l.Key] <= 3: // alice's reach fails three times in a row
 			return broker.RevokeReport{Principals: []string{"user:alice@example.com"}},
 				fmt.Errorf("%w: no quorum", store.ErrUnavailable)
 		}
@@ -352,14 +352,78 @@ func TestAFailedLogoutReachIsTriedAgain(t *testing.T) {
 	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: store.OIDCKey(store.OIDCSub, "https://idp.example",
 		"sub-alice"), Origin: "origin-alice"}, Until: until}
 	waitWithin(t, &out, "a logout made elsewhere (origin-alice) reached 1 token key(s)", 5*time.Second)
-	if !strings.Contains(out.String(), "port49 revoke --principal user:alice@example.com") {
-		t.Fatalf("the failed reach's line gives no remedy:\n%s", out.String())
+	// The remedy is said once, with the first failure; the next two say they
+	// are still not reached, without repeating it.
+	// The remedy's line itself names the command twice (end, then lift), so
+	// it is lines that are counted: one carries it.
+	said := 0
+	for _, line := range strings.Split(out.String(), "\n") {
+		if strings.Contains(line, "port49 revoke --principal user:alice@example.com") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("the remedy was said on %d lines:\n%s", said, out.String())
+	}
+	if got := strings.Count(out.String(), "still not reached after"); got != 2 {
+		t.Fatalf("%d still-not-reached lines, want 2:\n%s", got, out.String())
 	}
 	time.Sleep(100 * time.Millisecond) // ten retry periods
 	mu.Lock()
 	defer mu.Unlock()
 	if tries["never"] != 1 {
 		t.Fatalf("a logout that can never be reached was tried %d times", tries["never"])
+	}
+}
+
+// A logout that lapses while its reach keeps failing leaves no entry behind
+// in the failure count.
+func TestALapsedLogoutLeavesNoFailureCount(t *testing.T) {
+	was := logoutRetryFirst
+	logoutRetryFirst = 5 * time.Millisecond
+	t.Cleanup(func() { logoutRetryFirst = was })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	sizes := make(chan int, 256)
+	wasSeen := reachFailuresSeen
+	reachFailuresSeen = func(n int) {
+		select {
+		case sizes <- n:
+		default:
+		}
+	}
+	t.Cleanup(func() { reachFailuresSeen = wasSeen })
+	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+		followedLogouts: make(chan store.LogoutEntry, 8)}
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		if l.Key == "other" {
+			return broker.RevokeReport{TokenKeys: 1}, nil
+		}
+		return broker.RevokeReport{}, fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: "lapses", Origin: "origin-lapses"},
+		Until: time.Now().Add(30 * time.Millisecond)}
+	waitWithin(t, &out, "a logout made elsewhere (origin-lapses)", 5*time.Second)
+	time.Sleep(60 * time.Millisecond) // past Until: its retry is dropped
+	for len(sizes) > 0 {
+		<-sizes
+	}
+	r.followedLogouts <- store.LogoutEntry{Logout: store.Logout{Key: "other", Origin: "origin-other"},
+		Until: time.Now().Add(time.Hour)}
+	waitWithin(t, &out, "a logout made elsewhere (origin-other) reached 1 token key(s)", 5*time.Second)
+	select {
+	case n := <-sizes:
+		if n != 0 {
+			t.Fatalf("the failure count holds %d entries after the logout lapsed, want 0", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reachFollowed reported no failure count")
 	}
 }
 
