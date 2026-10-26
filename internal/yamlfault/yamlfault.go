@@ -57,7 +57,8 @@ func Described(err error) error {
 		if m[1] != "" {
 			at = "line " + m[1] + ": "
 		}
-		return errors.New(at + "cannot decode a " + coreTag(m[2]) + " value as a " + coreTag(m[3]))
+		return errors.New(at + "cannot decode a " + coreTag(m[2]) + " value as a " + coreTag(m[3]) +
+			"; look for an explicit !!tag")
 	}
 	return errors.New(faultAt(msg, syntaxCategory(msg)))
 }

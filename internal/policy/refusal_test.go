@@ -37,7 +37,7 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		// Task 11 re-review m5, m6: a tagged scalar and an alias quote the
 		// value too.
 		{"a tagged scalar", "roles:\n  - {name: r, deny: [!!int \"snmp-server community Hunter2\"]}\n" + subjOK,
-			"cannot decode a !!str value as a !!int"},
+			"cannot decode a !!str value as a !!int; look for an explicit !!tag"},
 		{"an unknown anchor", "roles:\n  - {name: r, deny: [*Hunter2]}\n" + subjOK, "an unknown anchor"},
 		// M4: an operator redaction pattern.
 		{"a redaction after of two words", block("redact: [{match: ['**'], after: 'psk Hunter2'}]"),
@@ -121,8 +121,33 @@ func testDecodeErrorCarriesNoKey(t *testing.T, key string) {
 		}
 		for i := 0; i+4 <= len(key); i++ {
 			if strings.Contains(err.Error(), key[i:i+4]) {
-				t.Errorf("%q: the error carries the key: %s", shape, err)
+				t.Errorf("%q: the error carries the key (window %d)", shape, i) // never the text: it holds the key
 				break
+			}
+		}
+	}
+}
+
+// The policy editors read the file as nodes, and a node decode quotes an
+// alias's name when it is unknown: a key pasted as `*KEY` or `<<: *KEY`
+// must not come back in the error `grants remove` and `platform upgrade`
+// print (re-review 8, round 2 I1).
+func TestAPolicyEditorsErrorCarriesNoAliasName(t *testing.T) {
+	const pasted = "Wd7ZkP2mRq9TxL4vNc8B"
+	for _, shape := range []string{"keys:\n  k:\n    current: *{KEY}\n", "keys:\n  k:\n    <<: *{KEY}\n"} {
+		raw := []byte(roleOK + subjOK + strings.ReplaceAll(shape, "{KEY}", pasted))
+		_, _, errRemove := RemoveSubject(raw, "s")
+		_, errSet := SetPlatformSet(raw, "1.0.0")
+		for name, err := range map[string]error{"RemoveSubject": errRemove, "SetPlatformSet": errSet} {
+			if err == nil {
+				t.Errorf("%s accepted %q", name, shape)
+				continue
+			}
+			for i := 0; i+4 <= len(pasted); i++ {
+				if strings.Contains(err.Error(), pasted[i:i+4]) {
+					t.Errorf("%s on %q: the error carries the key", name, shape) // not the error: it holds the key
+					break
+				}
 			}
 		}
 	}

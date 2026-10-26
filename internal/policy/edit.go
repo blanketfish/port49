@@ -34,7 +34,7 @@ func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	var doc, next yaml.Node
 	if err := dec.Decode(&doc); err != nil {
-		return nil, Removal{}, err
+		return nil, Removal{}, yamlfault.Described(err)
 	}
 	if err := dec.Decode(&next); err != io.EOF {
 		return nil, Removal{}, errors.New("the policy file holds more than one YAML document")
@@ -255,7 +255,7 @@ func SetPlatformSet(raw []byte, version string) ([]byte, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		return nil, err
+		return nil, yamlfault.Described(err)
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, errors.New("the policy file is not a YAML mapping")

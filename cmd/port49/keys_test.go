@@ -151,9 +151,10 @@ func TestKeysNeverPrintASecret(t *testing.T) {
 		var out, errOut bytes.Buffer
 		run(args, &out, &errOut)
 		for _, secret := range secrets {
-			for _, form := range secretForms(secret) {
+			for n, form := range secretForms(secret) {
 				if strings.Contains(out.String(), form) || strings.Contains(errOut.String(), form) {
-					t.Errorf("%v printed the secret as %q:\nstdout: %s\nstderr: %s", args[1:3], form, out.String(), errOut.String())
+					// Never the output or the form: both hold the secret.
+					t.Errorf("%v printed a form of the secret (form %d)", args[1:3], n)
 				}
 			}
 		}
