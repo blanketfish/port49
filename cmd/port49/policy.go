@@ -428,6 +428,18 @@ func keyReports(p *policy.Policy, allow secretref.Allowance, now time.Time) []st
 	return out
 }
 
+// refForRefusal is a secret_ref as a refusal prints it before the reference
+// has passed an allowance or resolved: an env: name is never printed, since a
+// secret pasted where a name goes parses as one, and this output is a CI
+// gate's. Text that does not parse prints as nothing of it.
+func refForRefusal(text string) string {
+	r, err := secretref.Parse(text)
+	if err != nil {
+		return "a secret_ref that does not parse"
+	}
+	return r.ForRefusal()
+}
+
 // rekeyed is the versions the new policy gives another secret_ref than the
 // old one does (decision 53 ruling 3): a version's secret never changes.
 func rekeyed(before, after *policy.Policy) []string {
@@ -441,7 +453,8 @@ func rekeyed(before, after *policy.Policy) []string {
 		for _, v := range now[ref].All() {
 			if w, ok := was[v.Version]; ok && w != v.SecretRef {
 				out = append(out, fmt.Sprintf("%s version %d names secret_ref %s, and the old policy %s: a version's "+
-					"secret never changes, so add a version (decision 53 ruling 3)", ref, v.Version, v.SecretRef, w))
+					"secret never changes, so add a version (decision 53 ruling 3)", ref, v.Version,
+					refForRefusal(v.SecretRef), refForRefusal(w)))
 			}
 		}
 	}

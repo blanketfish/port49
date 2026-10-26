@@ -10847,7 +10847,9 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   reference that does not parse is refused by its key and never printed, and an `env:` error names
   the key that holds the reference and never the variable: a secret pasted where a name goes parses
   as one (a 40-character hex token starting with a letter does). A reference outside ruling 12's
-  allowance is printed the same way for `env:`. It replaces, outright,
+  allowance is printed the same way for `env:`: a reference is printed only once it has passed the
+  allowance or resolved, and a re-key refusal (`policy diff`, port49d's reload) prints an `env:`
+  reference as "an env: reference". It replaces, outright,
   `secret_env` (`keys:`, `encryption:`), `broker.directory.bind.password_env` (now
   `password_secret_ref`), and port49-inventory.yaml's `token_secret_env` and `webhook_secret_env`
   (now `token_secret_ref`, `webhook_secret_ref`). A file that still names a removed key is refused

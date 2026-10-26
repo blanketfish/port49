@@ -1944,10 +1944,39 @@ func TestPolicyDiffRefusesARekeyedVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"policy", "diff", "--old", write("old.yaml", policyWith("env:PORT49_KEY_A")),
 		"--new", write("new.yaml", policyWith("env:PORT49_KEY_B")), "--inventory", inv}, &out, &errOut)
-	if code != 1 || !strings.Contains(out.String(), "REFUSED: keys: prod_key version 1 names secret_ref env:PORT49_KEY_B, "+
-		"and the old policy env:PORT49_KEY_A") {
+	// An env: reference prints as one, never by name: a secret pasted where a
+	// name goes parses as a name, and this is the CI gate's stdout.
+	if code != 1 || !strings.Contains(out.String(), "REFUSED: keys: prod_key version 1 names secret_ref an env: "+
+		"reference, and the old policy an env: reference") || strings.Contains(out.String(), "PORT49_KEY_") {
 		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
 	}
+	// A pasted token as the name, in either direction, is never printed; a
+	// file: reference, which a secret cannot be, still names its path.
+	const pasted = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+	for name, c := range map[string][2]string{
+		"pasted in the new": {"env:PORT49_KEY_A", "env:" + pasted},
+		"pasted in the old": {"env:" + pasted, "env:PORT49_KEY_A"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		code = run([]string{"policy", "diff", "--old", write("o-"+name+".yaml", policyWith(c[0])),
+			"--new", write("n-"+name+".yaml", policyWith(c[1])), "--inventory", inv}, &out, &errOut)
+		if code != 1 || !strings.Contains(out.String(), "REFUSED: keys: prod_key version 1") {
+			t.Fatalf("%s: exit %d (the re-key was not refused)", name, code)
+		}
+		if strings.Contains(out.String()+errOut.String(), pasted) {
+			t.Fatalf("%s: the pasted value was printed", name)
+		}
+	}
+	out.Reset()
+	errOut.Reset()
+	code = run([]string{"policy", "diff", "--old", write("of.yaml", policyWith("file:/run/port49/keys/a")),
+		"--new", write("nf.yaml", policyWith("file:/run/port49/keys/b")), "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String(), "secret_ref file:/run/port49/keys/b, and the old policy file:/run/port49/keys/a") {
+		t.Fatalf("a file: re-key: exit %d:\n%s", code, out.String())
+	}
+	out.Reset()
+	errOut.Reset()
 	out.Reset()
 	code = run([]string{"policy", "diff", "--old", write("old2.yaml", policyWith("env:PORT49_KEY_A")),
 		"--new", write("new2.yaml", policyWith("env:PORT49_KEY_A")), "--inventory", inv}, &out, &errOut)

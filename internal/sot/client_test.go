@@ -469,13 +469,37 @@ func TestAnUnreadableCAFileRefusesTheHandshake(t *testing.T) {
 
 // A 407 comes from the egress proxy, not from the source: the operator is told
 // whose credentials were refused, and never sees them.
+//
+// The hint follows the status code, not the proxy's wording of it: a proxy
+// that answers "407 Unauthorized" gets the same text.
 func TestAProxyThatRefusesItsCredentialsIsNamedNeverPrinted(t *testing.T) {
-	deny := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Proxy-Authenticate", `Basic realm="egress"`)
-		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
-	}))
-	t.Cleanup(deny.Close)
-	pu, _ := url.Parse(deny.URL)
+	for name, reason := range map[string]string{"standard phrase": "Proxy Authentication Required",
+		"another phrase": "Unauthorized", "no phrase": ""} {
+		t.Run(name, func(t *testing.T) { proxyRefusesCredentials(t, reason) })
+	}
+}
+
+func proxyRefusesCredentials(t *testing.T, reason string) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				io.Copy(io.Discard, io.LimitReader(c, 1)) // wait for the CONNECT
+				time.Sleep(20 * time.Millisecond)
+				fmt.Fprintf(c, "HTTP/1.1 407 %s\r\nProxy-Authenticate: Basic realm=\"egress\"\r\nContent-Length: 0\r\n\r\n", reason)
+			}()
+		}
+	}()
+	pu, _ := url.Parse("http://" + ln.Addr().String())
 	pu.User = url.UserPassword("svc-FAKE", "FAKE-proxy-pw")
 	was := proxy
 	t.Cleanup(func() { proxy = was })

@@ -151,6 +151,15 @@ func newClient(base, caFile string, token Secret, product string) (*client, erro
 					DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
 				return err
 			}},
+		// A 407 answers the CONNECT, so it is the egress proxy's, said apart
+		// from the source's own 401, which names the token. Keyed on the
+		// status code, never the proxy's reason phrase, which is its to word.
+		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, res *http.Response) error {
+			if res.StatusCode == http.StatusProxyAuthRequired {
+				return errProxyCredentials
+			}
+			return nil
+		},
 		TLSHandshakeTimeout:   dialTimeout,
 		ResponseHeaderTimeout: 2 * time.Minute, MaxIdleConnsPerHost: 2,
 		// DefaultTransport's: port49 closes an idle connection before the
@@ -160,6 +169,10 @@ func newClient(base, caFile string, token Secret, product string) (*client, erro
 	return &client{base: u, auth: NewSecret(scheme + token.Reveal()), http: &http.Client{Transport: tr,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
+
+// errProxyCredentials is fixed text, so neither the proxy's credentials nor
+// its URL print.
+var errProxyCredentials = errors.New("the egress proxy refused HTTPS_PROXY's credentials; the token was not sent")
 
 // readCA is the CA file's certificates, read bounded. A file with none is an
 // error: an empty pool is never a reason to fall back.
@@ -223,12 +236,8 @@ func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte,
 			// M3). A dial or handshake timeout reads otherwise.
 			return answer{}, fmt.Errorf("%s: no answer began within 2m: lower page_size", what(method, u))
 		}
-		if strings.Contains(err.Error(), "Proxy Authentication Required") {
-			// A 407 answers the CONNECT, so it is the egress proxy's: said
-			// apart from the source's own 401, which names the token. Fixed
-			// text, so neither the proxy's credentials nor its URL print.
-			return answer{}, fmt.Errorf("%s: the egress proxy refused HTTPS_PROXY's credentials; the token was not sent",
-				what(method, u))
+		if errors.Is(err, errProxyCredentials) {
+			return answer{}, fmt.Errorf("%s: %w", what(method, u), errProxyCredentials)
 		}
 		return answer{}, clean(what(method, u), err)
 	}
