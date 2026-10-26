@@ -134,6 +134,23 @@ func (k *liveKeys) put(b keyBuild) {
 	k.in.Store(&b)
 }
 
+// union is b with every key set in force that b does not define, the sets b
+// defines taking its versions: the build a swap puts in force first, so the
+// policy still in force finds the keys it names until the new one replaces it.
+func (k *liveKeys) union(b keyBuild) keyBuild {
+	if k == nil {
+		return b
+	}
+	in := k.in.Load()
+	u := keyBuild{sets: maps.Clone(b.sets), refs: maps.Clone(b.refs)}
+	for ref, s := range in.sets {
+		if _, ok := u.sets[ref]; !ok {
+			u.sets[ref], u.refs[ref] = s, in.refs[ref]
+		}
+	}
+	return u
+}
+
 // Set is the key set in force for ref; the zero Set for one none defines.
 func (k *liveKeys) Set(ref string) keyring.Set { return k.in.Load().sets[ref] }
 

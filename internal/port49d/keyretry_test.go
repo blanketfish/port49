@@ -2,10 +2,12 @@ package port49d
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -74,5 +76,69 @@ func TestAPolicyFaultIsNotRetried(t *testing.T) {
 	if n := strings.Count(rig.out.String(), "policy reload ("); n != 1 || rig.r.keyWait.v != "" ||
 		strings.Contains(rig.out.String(), "tried again") {
 		t.Fatalf("a policy fault was retried (%d refusals, wait %q):\n%s", n, rig.r.keyWait.v, rig.out.String())
+	}
+}
+
+// A refused reload is tried again only when its time comes: a file that
+// appears sooner waits for the next try (re-review 6, M3).
+func TestARetryWaitsForItsNextTime(t *testing.T) {
+	t.Setenv("PORT49_KEY_RUN", "run-test-secret")
+	dir := safeDir(t)
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.keys = newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "PORT49_KEY_", FileDir: dir})
+	kb, err := rig.r.keys.build(rig.b.Policy.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.r.keys.put(kb)
+	v2 := filepath.Join(dir, "v2")
+	rig.write(t, strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 2, secret_ref: file:"+
+		v2+"}\n    accept: [{version: 1, secret_ref: env:PORT49_KEY_RUN, retire_after: 2099-01-01}]\n"+labKeyRun, 1))
+	rig.pollTwice()
+	if err := os.WriteFile(v2, []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.now = rig.now.Add(keyRetryInterval / 3)
+	rig.with(func() { rig.r.poll(context.Background()) })
+	if vs := rig.r.keys.Set("k").Versions; len(vs) != 1 {
+		t.Fatalf("a retry ran before its time: %d versions\n%s", len(vs), rig.out.String())
+	}
+	rig.now = rig.now.Add(keyRetryInterval)
+	rig.with(func() { rig.r.poll(context.Background()) })
+	if vs := rig.r.keys.Set("k").Versions; len(vs) != 2 {
+		t.Fatalf("the retry at its time did not load the policy: %d versions\n%s", len(vs), rig.out.String())
+	}
+}
+
+// A wait for a policy version that is no longer the one refused is dropped,
+// and SIGHUP says a refusal at once with its count (re-review 6, M3).
+func TestAKeyWaitIsDroppedWhenTheRefusalMovesOnAndSIGHUPSaysItAtOnce(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	r := rig.r
+	r.now = rig.clock
+	unread := &keyUnreadError{errors.New("keys.k version 2 secret_ref file:/run/port49/keys/v2: not there")}
+	if say, note := r.waitForKeys("v1", "", unread); !say || !strings.Contains(note, "tried again every 30s") {
+		t.Fatalf("the first refusal: say %v note %q", say, note)
+	}
+	rig.now = rig.now.Add(keyRetryInterval)
+	if say, _ := r.waitForKeys("v1", "", unread); say {
+		t.Fatal("a second refusal inside keyRetrySayEvery was said")
+	}
+	rig.now = rig.now.Add(keyRetryInterval)
+	say, note := r.waitForKeys("v1", "SIGHUP", unread)
+	if !say || !strings.Contains(note, "still waiting: 2 tries") {
+		t.Fatalf("SIGHUP: say %v note %q", say, note)
+	}
+	// The file still holds the version waited for, so only the refusal moving
+	// on can end the wait.
+	_, v, err := policyVersion(r.cfg.Policy.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.keyWait = keyWait{v: v, next: rig.now.Add(-time.Second)}
+	r.refused = "another"
+	r.retryKeys(context.Background(), "")
+	if r.keyWait.v != "" {
+		t.Fatalf("a wait for %q outlived the refusal it was for", r.keyWait.v)
 	}
 }

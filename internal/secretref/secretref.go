@@ -174,11 +174,13 @@ func (a Allowance) WithDefaults() Allowance {
 }
 
 // Check refuses an allowance too wide to bound anything: a prefix shorter
-// than 4 characters or not a variable name's start, a directory not absolute
-// and clean.
+// than 4 characters, not a variable name's start, or not ending in "_" (a
+// prefix PORT49_KEY would admit PORT49_KEYTAB_PASS, and HTTPS, HTTPS_PROXY), a
+// directory not absolute and clean.
 func (a Allowance) Check() error {
-	if len(a.EnvPrefix) < 4 || !envName.MatchString(a.EnvPrefix) {
-		return fmt.Errorf("env_prefix %q must be at least 4 characters of an environment variable name", a.EnvPrefix)
+	if len(a.EnvPrefix) < 4 || !envName.MatchString(a.EnvPrefix) || !strings.HasSuffix(a.EnvPrefix, "_") {
+		return fmt.Errorf("env_prefix %q must be at least 4 characters of an environment variable name and end in "+
+			"_, so it names a family of variables and no neighbour", a.EnvPrefix)
 	}
 	if !filepath.IsAbs(a.FileDir) || filepath.Clean(a.FileDir) != a.FileDir || a.FileDir == "/" {
 		return fmt.Errorf("file_dir %q must be an absolute, clean path below /", a.FileDir)

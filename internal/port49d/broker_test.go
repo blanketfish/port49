@@ -545,8 +545,8 @@ func TestThePolicyOnlyDaemonAdmitsALogin(t *testing.T) {
 	}
 }
 
-// A policy with no keys: block is refused at start, by port49d and by
-// port49-broker: it is the one place port49 learns key names (decision 53
+// A policy with no keys: block is refused at start by port49d (port49-broker
+// shares startPolicy, which the same refusal passes through): it is the one place port49 learns key names (decision 53
 // ruling 3). One with a block says its notices at start (pre-flight I8).
 func TestAPolicyWithNoKeysBlockRefusesTheStart(t *testing.T) {
 	b := brokerConfig(t, minimalPolicy).Broker

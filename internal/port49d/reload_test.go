@@ -1245,3 +1245,36 @@ func TestASwapSaysItsKeyChanges(t *testing.T) {
 		t.Fatalf("a swap that changed no key said the key line, or not the notice:\n%s", rig.out.String())
 	}
 }
+
+// A swap puts the keys in force before the policy, and lets go of the old
+// policy's keys only after it (re-review N3 and 6, M1): a connection accepted
+// between the two finds the key for a device either policy assigns it.
+func TestASwapPutsTheKeysBeforeThePolicyAndDropsTheOldAfter(t *testing.T) {
+	t.Setenv("PORT49_KEY_RUN", "run-test-secret")
+	t.Setenv("PORT49_KEY_RUN2", "run-test-secret-two")
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.keys = newLiveKeys(secretref.New(), secretref.Allowance{}.WithDefaults())
+	kb, err := rig.r.keys.build(rig.b.Policy.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.r.keys.put(kb)
+	extra := "keys:\n  extra:\n    current: {version: 1, secret_ref: env:PORT49_KEY_RUN2}\n"
+	var seen []string
+	inForce := rig.b.Policy.Load()
+	rig.r.keysPut = func() {
+		seen = append(seen, fmt.Sprintf("extra=%d k=%d old_policy_in_force=%v",
+			len(rig.r.keys.Set("extra").Versions), len(rig.r.keys.Set("k").Versions), rig.b.Policy.Load() == inForce))
+	}
+	with := strings.Replace(minimalPolicy, runKeys, strings.TrimSuffix(runKeys, "\n")+"\n"+extra[len("keys:\n"):], 1)
+	swapTo(t, rig, with)
+	inForce = rig.b.Policy.Load()
+	swapTo(t, rig, minimalPolicy)
+	want := []string{"extra=1 k=1 old_policy_in_force=true", "extra=1 k=1 old_policy_in_force=true"}
+	if !slices.Equal(seen, want) {
+		t.Fatalf("between the keys and the policy: %q, want %q\n%s", seen, want, rig.out.String())
+	}
+	if n := len(rig.r.keys.Set("extra").Versions); n != 0 {
+		t.Fatalf("a key no policy in force names is still in force (%d versions)", n)
+	}
+}

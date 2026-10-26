@@ -201,6 +201,8 @@ type reloader struct {
 	// unidentifiable before any connection can be admitted under it. It must
 	// not wait. Nil tells no one.
 	beforeSwap func(pol *policy.Policy)
+	// keysPut is told once the keys are in force and the policy not yet.
+	keysPut func()
 	// mfaUnavailable is the broker's ruling 18 statement for a policy put in
 	// force (broker.Broker.MFAUnavailable), said after each swap when it is
 	// not empty. Nil with no broker in the process.
@@ -1215,10 +1217,16 @@ func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 	old := r.live.Load()
 	// The keys go in force first (re-review N3): a connection accepted
 	// between the two steps for a device the new policy assigns a new key_ref
-	// finds its key set, and is not struck for port49d's own reload. Keys the
-	// old policy alone named stay held a moment longer, which is harmless.
-	r.keys.put(kb)
+	// finds its key set, and is not struck for port49d's own reload. What the
+	// old policy alone named stays in force with it until the swap is done
+	// (re-review 6, M1), so a device the old policy still assigns it finds its
+	// key too; then the new build alone is in force.
+	r.keys.put(r.keys.union(kb))
+	if r.keysPut != nil {
+		r.keysPut()
+	}
 	r.live.Swap(pol)
+	r.keys.put(kb)
 	if r.keys != nil {
 		if line := keyChanges(old.KeySets(), pol.KeySets()); line != "" {
 			r.sayf("%s\n", line)

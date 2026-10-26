@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/secretref/secretreftest"
@@ -150,4 +152,105 @@ func TestLiveKeysPrintNoSecret(t *testing.T) {
 			}
 		}
 	}
+}
+
+// put lets go of the secret of a version no later build names (re-review 6,
+// M3): a removed version's key does not stay in memory.
+func TestPutDropsTheSecretsNoVersionNames(t *testing.T) {
+	t.Setenv("T_LK_A", "fake-a")
+	t.Setenv("T_LK_B", "fake-b")
+	k := newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "T_LK_", FileDir: safeDir(t)})
+	both, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_B}\n"+
+		"    accept: [{version: 1, secret_ref: env:T_LK_A}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.put(both)
+	if len(k.held) != 2 {
+		t.Fatalf("held %d secrets, want 2", len(k.held))
+	}
+	one, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_B}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.put(one)
+	if _, kept := k.held["env:T_LK_A"]; kept || len(k.held) != 1 {
+		t.Fatalf("a removed version's secret is still held (%d held)", len(k.held))
+	}
+}
+
+// keyChanges says a version retired and one removed, and that connections on
+// it reset: it is what tells the operator why they did (re-review 6, M3).
+func TestKeyChangesSaysRetiredAndRemoved(t *testing.T) {
+	t.Setenv("T_LK_A", "fake-a")
+	t.Setenv("T_LK_B", "fake-b")
+	t.Setenv("T_LK_C", "fake-c")
+	set := func(keys string) map[string]keyset.Set { return keyedPolicy(t, keys).KeySets() }
+	three := set("keys:\n  k:\n    current: {version: 3, secret_ref: env:T_LK_C}\n" +
+		"    accept: [{version: 2, secret_ref: env:T_LK_B}, {version: 1, secret_ref: env:T_LK_A}]\n")
+	retired := set("keys:\n  k:\n    current: {version: 3, secret_ref: env:T_LK_C}\n" +
+		"    accept: [{version: 2, secret_ref: env:T_LK_B}]\n" +
+		"    retired: [{version: 1, secret_ref: env:T_LK_A}]\n")
+	removed := set("keys:\n  k:\n    current: {version: 3, secret_ref: env:T_LK_C}\n" +
+		"    accept: [{version: 2, secret_ref: env:T_LK_B}]\n")
+	if got := keyChanges(three, retired); !strings.Contains(got, "k: version 1 retired (connections on it reset") {
+		t.Errorf("retired: %q", got)
+	}
+	if got := keyChanges(retired, removed); !strings.Contains(got, "k: version 1 removed (connections on it reset") {
+		t.Errorf("removed: %q", got)
+	}
+	if got := keyChanges(three, three); got != "" {
+		t.Errorf("no change: %q", got)
+	}
+}
+
+// A swap of keys while connections read them is race-free: Set, All and the
+// secret bytes are read as 500 builds alternate (re-review 6, M2). Run under
+// -race.
+func TestLiveKeysSwapWhileRead(t *testing.T) {
+	t.Setenv("T_LK_A", "fake-a")
+	t.Setenv("T_LK_B", "fake-b")
+	k := newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "T_LK_", FileDir: safeDir(t)})
+	a := keyedPolicy(t, "keys:\n  k:\n    current: {version: 1, secret_ref: env:T_LK_A}\n")
+	b := keyedPolicy(t, "keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_B}\n"+
+		"    accept: [{version: 1, secret_ref: env:T_LK_A}]\n")
+	first, err := k.build(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.put(first)
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for range 4 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				for _, v := range k.Set("k").Versions {
+					_ = v.Secret.Bytes()
+				}
+				for _, s := range k.All() {
+					_ = len(s.Versions)
+				}
+			}
+		}()
+	}
+	for i := range 500 {
+		pol := a
+		if i%2 == 0 {
+			pol = b
+		}
+		kb, err := k.build(pol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k.put(kb)
+	}
+	close(stop)
+	readers.Wait()
 }
