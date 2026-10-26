@@ -4800,7 +4800,7 @@ a client certificate (the webhook L27 and L30 recorded has `ssl_verification` an
 nothing that holds one), so deliveries arrive on a listener of their own, `webhook_listen`: TLS
 under the service's certificate, or `webhook_tls_cert_file`, and no client certificate; the API
 stays mutual TLS on every path. Its one route is `POST /v1/webhook/<source>`. A delivery is taken
-only for a source configured with `webhook_secret_env`, as `application/json`, at most 1 MiB, with
+only for a source configured with `webhook_secret_ref`, as `application/json`, at most 1 MiB, with
 an `X-Hook-Signature` equal to HMAC-SHA512 of the body under that secret (L27, L30), and with a
 `timestamp` within 5 minutes of the service's clock either way; one whose signature was taken in
 the last 10 minutes triggers nothing. Anything else is refused (401, 413, 415 or 400; every 401
@@ -5130,10 +5130,13 @@ A `key_ref` resolves to a set of versions, all of which the daemon accepts until
 ```yaml
 keys:
   prod_key:
-    current: {version: 3, secret_ref: vault:port49/prod/v3}
+    current: {version: 3, secret_ref: file:/run/port49/keys/prod_v3}
     accept:
-      - {version: 2, secret_ref: vault:port49/prod/v2, retire_after: 2026-10-01}
+      - {version: 2, secret_ref: file:/run/port49/keys/prod_v2, retire_after: 2026-10-01}
 ```
+
+A secret store such as Vault reaches port49 as a file its agent renders (Vault Agent, External
+Secrets, the Secrets Store CSI driver); port49 reads no store directly (decision 53 ruling 5).
 
 `current` decides only two things: what `port49 keys show <device>` renders for provisioning,
 and the order candidates are tried in. **Validation accepts any listed version**, so nothing
@@ -5160,14 +5163,17 @@ connection resets its idle timer on every packet and so can stay open indefinite
 sees the same reset a reload's withdrawal sends (below, "How a daemon refreshes its snapshot"),
 measured on four images: the session survives, and a key miss's next connections meet the
 strike's backoff as L28 measured (§15 L29, `tests/lab/results/L29-reload-*.md`); the reset at the
-date itself is tested in code with an injected clock. port49d says at start, and `port49 policy test --config`
+date itself is tested in code with an injected clock. A reload that retires or removes the version
+an open connection speaks resets it at its next packet with no strike, as every reload's
+withdrawal does (decision 53 ruling 4); only the date strikes. port49d says at start and after every reload, and `port49 policy test`
 reports, a version whose date has passed and an `accept` version with none.
 
-The key sets, `retire_after` included, live in port49d.yaml beside the references to their
-secrets (`secret_env`), where they have been since plan 1, rather than in the policy file, which
-CI and every operator can read. Retirement and extension are therefore reviewed changes of
-port49d.yaml's repository. Moving key sets into the policy repository waits on secret references
-that name no secret (`secret_ref:`, plan 12).
+The key sets, `retire_after` included, live in the policy file's `keys:` block beside the
+`key_groups` that assign them, each version naming its secret by `secret_ref` (decision 53). The
+file is read by CI and every operator, and holds no secret: a reference names where port49d reads
+it, inside the allowance port49d.yaml declares (`key_secret_refs`, decision 53 ruling 12).
+Retirement and extension are therefore reviewed changes of the policy repository, in force at the
+next reload. port49d.yaml carries `keys:` only when port49d runs with no policy.
 
 #### Phase-out has to be observable
 
@@ -5404,8 +5410,8 @@ as with port49d stopped (above, "A key miss is closed at once").
   port49d exports `port49_key_version_devices{key_ref,version}` (devices whose latest validated
   connection used the version) and `port49_key_retirement_seconds{key_ref,version}` (seconds
   until `retire_after` passes, negative once it has). The device count covers **only devices
-  seen since port49d started**. Keys are read only at start, so each step of a rotation
-  restarts port49d, and every restart resets the count to 0 until devices reconnect. The idle
+  seen since port49d started**. Keys reload with the policy, so a rotation's steps no longer
+  restart port49d; a restart still resets the count to 0 until devices reconnect. The idle
   stragglers are the ones that stay uncounted longest, and they are the devices a retirement
   locks out. A removed device keeps counting toward its last version until the next restart.
   `port49 keys status`, which reads the decision log, is the authority before a version is
@@ -5420,7 +5426,7 @@ as with port49d stopped (above, "A key miss is closed at once").
 
   Seeding the count from the decision log at start, so a restart does not blank it, is future
   work.
-- Retirement and extension are both reviewed changes, of port49d.yaml's repository (above). Extending is
+- Retirement and extension are both reviewed changes of the policy repository (above). Extending is
   legitimate; forgetting is what the date prevents.
 - CI MUST refuse a policy whose `accept` set is empty for a `key_ref` still assigned by a key
   group, and MUST report any version whose `retire_after` has already passed. `current` is
@@ -5593,7 +5599,7 @@ returns.
 # port49-inventory.yaml
 listen: ":8443"
 metrics_listen: ":9050"
-webhook_listen: ":8444"           # plan 6c: needed when a source has webhook_secret_env
+webhook_listen: ":8444"           # plan 6c: needed when a source has webhook_secret_ref
 tls_cert_file: /etc/port49-inventory/server.pem
 tls_key_file: /etc/port49-inventory/server-key.pem
 # webhook_tls_cert_file, webhook_tls_key_file: the webhook's own; default the API's
@@ -5614,8 +5620,8 @@ sync:
     type: netbox                  # or nautobot
     url: https://netbox.example.com
     ca_file: /etc/ssl/certs/ca-certificates.crt   # required; the CA that issues the source's certificate
-    token_secret_env: PORT49_NETBOX_TOKEN         # read at start, never printed; secret_ref waits for plan 12
-    webhook_secret_env: PORT49_NETBOX_WEBHOOK     # optional: turns the source's webhooks on
+    token_secret_ref: env:PORT49_NETBOX_TOKEN     # read at start, never printed (decision 53)
+    webhook_secret_ref: env:PORT49_NETBOX_WEBHOOK # optional: turns the source's webhooks on
     # profile: netbox_4           # optional override of the detected profile
     # api: auto                   # auto (GraphQL, REST on a 404), graphql, rest
     # page_size: 500
@@ -6131,6 +6137,13 @@ force. A swap's report follows that swap's refresh pass. An expiry's is made at 
 or not the refresh pass after it completes: the report reads only the policy, the inventory and
 the clock, so with the store down the gauge still moves when a grant lapses.
 
+**Connection shedding.** At `limits.max_connections` port49d resets each new TACACS+ connection at
+Accept (decision 53 ruling 8) and counts it in `port49_connections_shed_total{reason="global_cap"}`.
+It says, when shedding begins (the first shed after a minute with none): `port49d: shedding: all N
+TACACS+ connection slots (limits.max_connections) are in use; each new connection is reset at
+Accept and the device tries its next server`, and while it lasts, at most once a minute:
+`port49d: still shedding: M connections reset at Accept in the last minute; N of N slots in use`.
+
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
 
@@ -6418,20 +6431,20 @@ It is the same evaluator the daemon runs. Beyond answering an auditor, a capture
 replayed against a candidate build turns "did this release change anyone's access" into a
 diff — which is the only form of that question a reviewer can actually check.
 
-**`port49 keys status --policy <file> --inventory <file> --config <port49d.yaml> [--since D]
+**`port49 keys status --policy <file> --inventory <file> [--since D]
 <log>...`** reads the decision log (§5.7, `device.key_ref`, `device.key_version`, and the
 `unvalidated` records) and counts devices per key version, names those whose latest validated
 exchange used a version other than `current`, with when, lists inventory devices never seen, and
 lists sources whose packets validated against nothing — separating a retired version, unknown
 material, an unadmitted source, a refused device, and traffic that is not TACACS+ at all (§10).
-It reads no secret: `--config` gives the key names, versions and dates. It is the instrument a
+It reads no secret: the policy's `keys:` block gives the key names, versions and dates (decision 53
+ruling 3); a port49d with no policy has no `keys status`. It is the instrument a
 rotation is driven by, and its output belongs in the pull request that retires a version.
 **`port49 keys diagnose <device>`** asks port49d, over `admin_socket`, to try every key it holds
 on the last packet from that device that did not validate, and names the group and version that
 matched; it is manual because the equivalent automatic probe would be a CPU amplifier on an
-unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory <file> [--config
-<port49d.yaml>] <device>`** resolves which `key_ref` a device matches, by which tier and group,
-and, with `--config`, which version to provision; rendering the secret itself is a
+unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory <file> <device>`** resolves which `key_ref` a device matches, by which tier and group,
+and, from the policy's `keys:` block, which version to provision; rendering the secret itself is a
 separately-authorized operation this build does not offer, since a group key is shared across the
 devices in its group. `keys show` and `keys status` name a key by its `key_ref` and version only, and
 a `key_ref` has §10's shape (`^[a-z][a-z0-9_]{0,63}$`): one that is not a name is refused, not
@@ -6674,14 +6687,13 @@ addresses added to existing devices, `key_ref` and admission changes, and every 
 change, the `security_log` ones marked — the review artifact §10 requires. It exits 1 when
 port49d would refuse the new inventory (empty, a collision, admitting no device, or more removed
 or newly refused than `--max-removed-percent`, default 10). `--config <port49d.yaml>` reads that
-bound and the `key_ref`s the file defines instead, no secret read, so a device assigned an
-undefined key is refused as port49d refuses it. With `--new-policy` naming a different policy,
+bound instead. A device assigned a `key_ref` the policy's `keys:` block does not define is refused
+as port49d refuses it. With `--new-policy` naming a different policy,
 port49d runs two bounded reloads; the diff shows each order step by step, each reload's changes
 marked as that swap logs them, and exits 1 when neither order takes both, and when either order
 takes its first file and refuses the second: port49d then stays on the bundle between until the
-first file changes again. Without `--config`, a bundle with no key groups admits only pinned
-devices, as port49d reads it, and every verdict says the `key_ref`s went unchecked against
-port49d.yaml. An inventory decode error is printed as its line and a fixed category, and a bad
+first file changes again. A bundle with no key groups admits only pinned
+devices, as port49d reads it. An inventory decode error is printed as its line and a fixed category, and a bad
 address or CIDR by its position, never its text.
 
 **`port49 inventory sync --service <url> --ca <file> --cert <file> --key <file>`** asks the
@@ -6704,17 +6716,21 @@ keep an `--inventory` when no source is a file. The file carries no key assignme
 document can. A document that does not open, or whose sequence is not `<sequence>`, is refused and
 nothing is written.
 
-**`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
-on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
+**`port49 policy test`** makes the key checks §10 requires of CI from the policy's own `keys:`
+block: it fails on a policy with no `keys:` block, which port49d and port49-broker refuse
+(decision 53 ruling 3), on a key group naming a `key_ref` the block does not define, on a device
+assigned one, and on a reference outside `key_secret_refs` (the defaults, or `--config
+<port49d.yaml>`'s; decision 53 ruling 12). It
 reads §10's "a policy whose `accept` set is empty for a `key_ref` still assigned by a key group"
 as that case: `current` is always accepted, so the set is empty only where the key is not
 defined at all. It reports an `accept` version whose `retire_after` has passed and one with none.
-Without `--config` it still fails on every device admission refuses where key groups are
+It also fails on every device admission refuses where key groups are
 declared: a tie, and a device no group admits, since port49d serves neither. It fails on a test
 naming a device the inventory does not have, which a load no longer refuses (§10).
 **`port49 policy diff`** fails on a device the new policy refuses admission or newly quarantines
 and the old kept in service, naming it: the edit port49d's reload would refuse over
-`inventory.max_removed_percent`, which counts the two together (§10).
+`inventory.max_removed_percent`, which counts the two together (§10). It fails on a version both files hold whose `secret_ref`
+differs: a version's secret never changes, so add a version (decision 53 ruling 3).
 
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
@@ -7230,7 +7246,7 @@ redirect at all, filter in the service, take primary addresses, and interface ad
 named, leave an attribute a device does not give unset, and pass an unrecognized platform through,
 said. A device left with no address counts against the bound in
 the service and in port49d. A source of truth is `https` with a named CA, its token and
-webhook secret named by `secret_env`-style keys until plan 12's `secret_ref`, and never printed.
+webhook secret named by `token_secret_ref` and `webhook_secret_ref` (decision 53), and never printed.
 A webhook arrives on its own TLS listener, since no product can present a client certificate, and
 is authenticated by HMAC-SHA512 of its body; it carries nothing into the bundle and only triggers a
 debounced sync of its source, so its order is irrelevant and its `timestamp` is read for freshness
@@ -7780,8 +7796,9 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   record, and a stolen broker host holds no device key.
 - **The configuration.** `port49-broker.yaml` is port49d.yaml's schema under the broker's role:
   it requires `broker:` (with `broker.state_dir`, where the persisted CRLs are kept),
-  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, an inventory, `key_refs:` (the
-  names a policy may assign, no secrets) and `admin_socket`; it refuses `listen`, `keys:`,
+  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, an inventory and
+  `admin_socket`, and takes the key names a policy may assign from the policy's own `keys:` block
+  (decision 53 ruling 3); it refuses `listen`, `keys:`,
   `store.etcd.daemon`, `accounting`, `limits`, the receipt windows, `platforms`, `policy:`,
   `broker.revocations_file`, and any `lab:` key but the seed tokens. port49d.yaml on etcd
   requires `policy: {file, watch_interval}` and refuses `broker:`, `store.etcd.broker` and
@@ -9029,8 +9046,8 @@ certificate while the certificate is valid.
     a later swap of its source.
   - **Made once.** `port49d init-issuer` or `port49-broker init-issuer`, as the broker's user: a
     P-256 key and a self-signed CA certificate valid 5 years. On every further broker on one
-    store, the operator copies both files. Each start prints the CA's fingerprint; a cross-replica
-    check is carried to plan 12.
+    store, the operator copies both files. Each start prints the CA's fingerprint, and a
+    port49-broker on etcd checks it against the store's record (decision 53 ruling 10).
   - **Rotation with overlap** (R5). `rotate-issuer`, on one broker, stages `issuing-ca-next.pem`
     and `.key`. Only the certificate is copied to the other brokers, which trust it from their next
     start; the key stays on the broker that staged it until the promotion. Run again there, it
@@ -10807,6 +10824,91 @@ Ryan, 2026-10-17 and 2026-10-19).**
   ratio; one test runs the real delay against the real default.
 - **10. A conformance run re-measures rows, open or closed, and closes none.** It cites the rows each
   cell re-measures; a row closes only as §15 says.
+
+**53. Server hardening for deployment: secret references, key sets in the policy, and the start
+checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
+
+- **1. `secret_ref`.** A secret is named, never written: `env:NAME` (an environment variable) or
+  `file:/absolute/path`, one trailing newline dropped. A file is read through the write fence
+  (`fence.ReadSecret`): a link is followed only while it resolves inside one directory (the
+  reference's own, or ruling 12's `file_dir`), every link's directory and ancestor is held to the
+  fence's rule, and the file is owned by port49's user or root, writable by its owner alone, with
+  no world bit; group-read is allowed, which Kubernetes Secret volumes and agents' `perms` give. A
+  reference that does not parse is refused by its key and never printed. It replaces, outright,
+  `secret_env` (`keys:`, `encryption:`), `broker.directory.bind.password_env` (now
+  `password_secret_ref`), and port49-inventory.yaml's `token_secret_env` and `webhook_secret_env`
+  (now `token_secret_ref`, `webhook_secret_ref`). A file that still names a removed key is refused
+  naming its replacement, as `receipt_ttl` is: a refusal, not an alias.
+- **2. When.** Configuration secrets are read at load, the bind password when the directory opens;
+  the policy's key secrets at start and before every swap. Each reference is read once per process
+  and kept by its text: a version's secret never changes, so a reload reads only versions it has
+  not seen, and one naming another reference for a version in force is refused ("add a version").
+  A failure at start refuses the start; at a reload it refuses the reload, and the bundle and keys
+  in force keep serving. A reload refused because a secret could not be read is tried again at
+  every reload trigger and every 30 s (half kubelet's default Secret sync), until it loads or the
+  policy changes, said once and then at most every 10 minutes: an agent that renders the file a
+  minute after the merge needs no SIGHUP on any replica.
+- **3. `keys:` is the policy file's.** The key sets move beside `key_groups`; adding, retiring and
+  extending a version are reviewed policy edits, live at the next reload. port49d and
+  port49-broker refuse a policy with no `keys:` block (`keys: {}` for a fleet all on TLS; a bare
+  `keys:` is refused as empty); a policy with one refuses a TCP device assigned a `key_ref` it does
+  not define. port49-broker.yaml's `key_refs` is removed. port49d.yaml's `keys:` remains only for a
+  port49d with no policy, and is refused beside one, `keys: {}` included: with no policy there is
+  no policy file to hold the block (plan 1's mode, and the lab harness's, where the inventory's key
+  groups assign the keys), and beside one two blocks would each claim to be in force. port49d says
+  the key notices of §10 at start and after every swap, and each swap that changes the key sets
+  says which versions it added, retired and removed. `port49 policy diff` fails a change that
+  re-keys a version.
+- **4. Open connections.** A reload that retires or removes the version an open connection
+  validated under ends it at its next packet: one `unvalidated` record (`matches_retired`) and a
+  reset, with no strike and no decline window, since the change is port49d's and not the device's
+  (§10, "How a daemon refreshes its snapshot"). A version whose `retire_after` passes is still
+  struck, as §10 says.
+- **5. No secret-store client.** `env:` and `file:` are the only schemes (Ryan, 2026-10-25). A
+  secret store reaches port49 as a file rendered by the store's own tooling (Vault Agent, External
+  Secrets, the Secrets Store CSI driver, systemd credentials), which already authenticates, renews
+  and caches: port49 does not reimplement a secret-store client. The rendered file keeps the last
+  secret through a store outage, so a restart does not depend on the store answering.
+- **6. One document.** Every file port49 reads as one YAML document refuses a second, in fixed text.
+- **7. Egress.** The source-of-truth client honours `HTTPS_PROXY` and `NO_PROXY`, as the OIDC key
+  fetch does; a value the transport would misread is refused, never dialled; and port49-inventory's
+  start says how each source is reached.
+- **8. The global connection cap sheds.** `limits.max_connections` is one pool across both TACACS+
+  listeners, held by accepted connections only. It is taken after Accept and after the per-source
+  checks, so those bind first (design §11); with no slot free the connection is reset at once and
+  the device takes its next server, since "accept-queue pressure sheds load rather than queueing
+  it" (design §11). Each shed counts in `port49_connections_shed_total{reason="global_cap"}`, and
+  §12's shedding lines are said when shedding begins and then at most once a minute. Default: the
+  open-file limit less 1024, or half of it where that is less; an explicit value must leave 256.
+  `port49_connections_max`. Decision 32's backlog wait is the broker listener's and stays.
+- **9. The etcd floor.** At each server start, after the roles check, every configured endpoint is
+  asked its version at once, each within `call_timeout`. A member below 3.4.24, 3.5.8 or 3.6
+  refuses the start; one that does not answer is said and left unchecked until the next start. At
+  the broker's late directory open, where the process already serves from the marks it holds, a
+  member below the floor is said and the open is tried again every 5 s, as any store fault there
+  is. The offline paths (the offline revoke, `forget-issuer`) do not check it.
+- **10. One issuing CA per store.** `meta/issuer`, in the directory store, records the current and
+  previous CA fingerprints. A port49-broker with issuance records them when none is there, follows
+  a promotion its own files show, and otherwise refuses to start when its current CA is not the
+  recorded one. The CA key stays on each broker's own disk or state volume: never in the store,
+  never a read-only Secret (Ryan, 2026-10-24). `port49-broker forget-issuer` removes the record.
+  The check runs only for port49-broker on etcd. On the memory store the one broker runs inside
+  port49d, so there is no second broker to disagree with and no store to hold a record; and
+  decision 43's R4 (an issuance fault never refuses port49d's start, since port49d answers device
+  AAA in the same process) still governs it. port49-broker on etcd serves no device, so refusing
+  its start costs no AAA.
+- **11. The fence walks every ancestor.** Each directory above the file is held to the fence's rule;
+  one others can write passes only with its sticky bit set or on a read-only mount. POSIX ACLs are
+  covered by the mode's group bits (the ACL mask); NFSv4 ACLs are not read.
+- **12. port49d.yaml bounds what a policy may name (security).** A policy writer must not choose
+  which of the host's secrets becomes a TACACS+ key: put in force for a device the writer
+  controls, the encryption key, the bind password, the TLS key or the keytab would answer
+  "validated or not" to guesses. `key_secret_refs` declares the allowance, with defaults
+  `env_prefix: PORT49_KEY_` and `file_dir: /run/port49/keys`. A policy reference outside it is
+  refused at start and at reload, naming the reference and the allowance, before anything is read,
+  and is not retried. A port49d.yaml secret, key file or keytab inside the allowance, or a broker
+  state directory overlapping `file_dir`, is refused at load, compared with links resolved.
+  `port49 policy test` checks the same allowance.
 
 ---
 
