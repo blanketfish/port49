@@ -6,6 +6,7 @@ package keyset
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -47,6 +48,13 @@ type badRef struct{ err error }
 func (b badRef) Error() string        { return "secret_ref " + b.err.Error() }
 func (b badRef) Is(target error) bool { return target == ErrBadRef }
 func (b badRef) Unwrap() error        { return b.err }
+
+// Clone is a deep copy: the accept and retired lists are copied, so a caller
+// that edits one does not edit the set it was cloned from.
+func (s Set) Clone() Set {
+	s.Accept, s.Retired = slices.Clone(s.Accept), slices.Clone(s.Retired)
+	return s
+}
 
 // All is the set's versions: current, accept, then retired.
 func (s Set) All() []Version {
@@ -118,7 +126,7 @@ func Check(sets map[string]Set, raw []byte) (map[string]Set, error) {
 			accept[i] = v
 		}
 		ks.Accept = accept
-		out[ref] = ks
+		out[ref] = ks.Clone()
 	}
 	return out, nil
 }

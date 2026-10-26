@@ -102,3 +102,12 @@ func TestAllAndSortedAndNotices(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+func TestCloneIsDeep(t *testing.T) {
+	s := Set{Current: v(3, "env:A"), Accept: []Version{v(2, "env:B")}, Retired: []Version{v(1, "env:C")}}
+	c := s.Clone()
+	c.Accept[0].Version, c.Retired[0].Version = 9, 9
+	if s.Accept[0].Version != 2 || s.Retired[0].Version != 1 {
+		t.Fatal("Clone shares its lists with the original")
+	}
+}

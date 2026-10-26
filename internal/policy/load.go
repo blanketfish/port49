@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"regexp"
 	"regexp/syntax"
@@ -411,7 +410,11 @@ func (p *Policy) KeySets() map[string]keyset.Set {
 	if !p.keysDeclared {
 		return nil
 	}
-	return maps.Clone(p.keys)
+	out := make(map[string]keyset.Set, len(p.keys))
+	for ref, s := range p.keys {
+		out[ref] = s.Clone()
+	}
+	return out
 }
 
 // KeysDeclared is whether the file has a keys: block, `keys: {}` included.

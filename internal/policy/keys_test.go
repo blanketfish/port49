@@ -69,14 +69,19 @@ func TestAKeySetThePolicyCannotUseIsRefused(t *testing.T) {
 	}
 }
 
-// KeySets hands out a copy: a caller that edits it does not edit the policy.
+// KeySets hands out a deep copy: a caller that edits it, down to a version in
+// accept or retired, does not edit the policy.
 func TestKeySetsReturnsACopy(t *testing.T) {
-	p, err := Parse([]byte(keyed), env())
+	p, err := Parse([]byte(strings.Replace(keyed, "  campus_key:", "    retired: [{version: 1, secret_ref: env:OLD}]\n  campus_key:", 1)), env())
 	if err != nil {
 		t.Fatal(err)
 	}
-	delete(p.KeySets(), "prod_key")
-	if len(p.KeySets()) != 2 {
-		t.Fatal("a caller removed a key from the policy")
+	got := p.KeySets()
+	got["prod_key"].Accept[0].Version = 99
+	got["prod_key"].Retired[0].SecretRef = "env:CHANGED"
+	delete(got, "campus_key")
+	again := p.KeySets()
+	if len(again) != 2 || again["prod_key"].Accept[0].Version != 2 || again["prod_key"].Retired[0].SecretRef != "env:OLD" {
+		t.Fatal("a caller edited the policy's key sets")
 	}
 }
