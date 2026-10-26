@@ -6,6 +6,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 )
 
@@ -24,6 +25,9 @@ type file struct {
 	Tests           []fileTest              `yaml:"tests"`
 	Acknowledge     []fileAck               `yaml:"acknowledge"`
 	KeyGroups       []fileKeyGroup          `yaml:"key_groups"`
+	// Keys are the key sets (decision 53 ruling 3): names, versions, dates and
+	// references, never a secret.
+	Keys map[string]keyset.Set `yaml:"keys"`
 }
 
 // filePlatform is one block under `platforms:` (spec §8, "User-editable, day

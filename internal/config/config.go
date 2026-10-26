@@ -35,28 +35,13 @@ import (
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/yamlfault"
 )
-
-type KeyVersion struct {
-	Version   int    `yaml:"version"`
-	SecretRef string `yaml:"secret_ref"`
-	// RetireAfter is the last day, UTC, the version admits (spec §10):
-	// accept versions only. RetireAt is it parsed, the first instant the
-	// version is refused — midnight after that day. Zero is none.
-	RetireAfter string    `yaml:"retire_after"`
-	RetireAt    time.Time `yaml:"-"`
-}
-
-type KeySet struct {
-	Current KeyVersion   `yaml:"current"`
-	Accept  []KeyVersion `yaml:"accept"`
-	Retired []KeyVersion `yaml:"retired"` // diagnosis only: identifies, never admits
-}
 
 type AccountingConfig struct {
 	// SpoolCapacity is reserved by the spool (it validates `< 1`); the spool is
@@ -516,12 +501,12 @@ type sessionYAML struct {
 }
 
 type fileConfig struct {
-	Listen        string            `yaml:"listen"`
-	TLSListener   *tlsListenerYAML  `yaml:"tls_listener"`
-	MetricsListen string            `yaml:"metrics_listen"`
-	InventoryFile string            `yaml:"inventory_file"`
-	Keys          map[string]KeySet `yaml:"keys"`
-	Limits        limitsYAML        `yaml:"limits"`
+	Listen        string                `yaml:"listen"`
+	TLSListener   *tlsListenerYAML      `yaml:"tls_listener"`
+	MetricsListen string                `yaml:"metrics_listen"`
+	InventoryFile string                `yaml:"inventory_file"`
+	Keys          map[string]keyset.Set `yaml:"keys"`
+	Limits        limitsYAML            `yaml:"limits"`
 	// ReceiptTTL is kept only so Load can refuse the key by name: it was
 	// replaced by the two bounds below, and a daemon that starts on a stale
 	// config is a daemon whose receipt window is not what the operator
@@ -596,7 +581,7 @@ type Config struct {
 	// InventoryService is nil without an inventory.service block; with one,
 	// InventoryFile is empty.
 	InventoryService *InventoryServiceConfig
-	Keys             map[string]KeySet
+	Keys             map[string]keyset.Set
 	Limits           limits.Config
 	// ReceiptIdleTTL slides a receipt forward on every presentation it
 	// answers; ReceiptMaxAge caps it from the first redemption and never
@@ -1248,29 +1233,17 @@ func daemonDefaults(c *Config, f fileConfig) error {
 // retire_after or one past it.
 func resolveKeys(c *Config, raw []byte) error {
 	var err error
-	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
-		return err
+	if c.Keys, err = keyset.Check(c.Keys, raw); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
-	for ref, ks := range c.Keys {
-		for _, v := range allVersions(ks) {
+	for _, ref := range keyset.Sorted(c.Keys) {
+		for _, v := range c.Keys[ref].All() {
 			if err := c.resolveInto(fmt.Sprintf("keys.%s version %d secret_ref", ref, v.Version), v.SecretRef); err != nil {
 				return err
 			}
 		}
 	}
-	now := time.Now()
-	for _, ref := range sortedKeySets(c.Keys) {
-		for _, v := range c.Keys[ref].Accept {
-			switch {
-			case v.RetireAt.IsZero():
-				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d has no retire_after; an indefinitely "+
-					"accepted version is what rotation exists to prevent (spec §10)", ref, v.Version))
-			case !now.Before(v.RetireAt):
-				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d: retire_after %s has passed, so it "+
-					"identifies devices and admits none; move it to retired, or remove it", ref, v.Version, v.RetireAfter))
-			}
-		}
-	}
+	c.Notices = append(c.Notices, keyset.Notices(c.Keys, time.Now())...)
 	return nil
 }
 
@@ -1429,7 +1402,7 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 // checkKeyRefList is key_refs, port49-broker.yaml's key names (plan 7e,
 // Ruling 2): at least one, each a key_ref name (admission.KeyRefShape) and
 // named once. One that is not a name is refused by its index and never
-// printed, as checkKeyRefs refuses one under keys:. It returns them sorted.
+// printed, as keyset.Check refuses one under keys:. It returns them sorted.
 func checkKeyRefList(refs []string) ([]string, error) {
 	if len(refs) == 0 {
 		return nil, errors.New("config: key_refs is required in port49-broker.yaml: the key_ref names a policy " +
@@ -1575,120 +1548,22 @@ func staleSeedKeys(raw []byte) error {
 
 // Keyring resolves every key set to its secrets, ordered current, accept, retired.
 func (c Config) Keyring() map[string]keyring.Set {
-	out := make(map[string]keyring.Set, len(c.Keys))
-	for ref, ks := range c.Keys {
-		set := keyring.Set{Ref: ref}
-		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: bytes.Clone(c.secrets[ks.Current.SecretRef].Bytes())})
-		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: bytes.Clone(c.secrets[v.SecretRef].Bytes()),
-				RetireAt: v.RetireAt})
-		}
-		for _, v := range ks.Retired {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: bytes.Clone(c.secrets[v.SecretRef].Bytes()), Retired: true})
-		}
-		out[ref] = set
-	}
-	return out
-}
-
-// checkKeySets validates keys without reading a secret: every version
-// numbered from 1 and once, a secret_ref named, and retire_after a date on an
-// accept version only. It returns the sets with RetireAt filled.
-func checkKeySets(keys map[string]KeySet, raw []byte) (map[string]KeySet, error) {
-	if err := checkKeyRefs(keys, raw); err != nil {
-		return nil, err
-	}
-	out := make(map[string]KeySet, len(keys))
-	for ref, ks := range keys {
-		seen := map[int]bool{}
-		for _, v := range allVersions(ks) {
-			if v.Version < 1 {
-				return nil, fmt.Errorf("config: key %s: every version number must be 1 or greater", ref)
-			}
-			if seen[v.Version] {
-				return nil, fmt.Errorf("config: key %s: version %d appears twice", ref, v.Version)
-			}
-			seen[v.Version] = true
-			if v.SecretRef == "" {
-				return nil, fmt.Errorf("config: key %s version %d: secret_ref is required", ref, v.Version)
-			}
-			if _, err := secretref.Parse(v.SecretRef); err != nil {
-				return nil, fmt.Errorf("config: key %s version %d: secret_ref %w", ref, v.Version, err)
-			}
-		}
-		if ks.Current.RetireAfter != "" {
-			return nil, fmt.Errorf("config: key %s: current version %d has retire_after; current is what devices "+
-				"are provisioned with, so retire it by making another version current (spec §10)", ref, ks.Current.Version)
-		}
-		for _, v := range ks.Retired {
-			if v.RetireAfter != "" {
-				return nil, fmt.Errorf("config: key %s: retired version %d has retire_after; a retired version is "+
-					"refused already", ref, v.Version)
-			}
-		}
-		accept := make([]KeyVersion, len(ks.Accept))
-		for i, v := range ks.Accept {
-			if v.RetireAfter != "" {
-				day, err := time.Parse("2006-01-02", v.RetireAfter)
-				if err != nil {
-					return nil, fmt.Errorf("config: key %s version %d: retire_after is not a date (YYYY-MM-DD)",
-						ref, v.Version)
-				}
-				v.RetireAt = day.AddDate(0, 0, 1) // admits through the named day, UTC
-			}
-			accept[i] = v
-		}
-		ks.Accept = accept
-		out[ref] = ks
-	}
-	return out, nil
+	return keyset.Keyring(c.Keys, func(ref string) []byte { return bytes.Clone(c.secrets[ref].Bytes()) })
 }
 
 // KeySets reads port49d.yaml's keys: block as Load does, without reading a
 // secret: the names, versions and dates `port49 keys status` and `port49
 // policy test --config` read, in CI or anywhere else no key is.
-func KeySets(raw []byte) (map[string]KeySet, error) {
+func KeySets(raw []byte) (map[string]keyset.Set, error) {
 	var f fileConfig
 	if err := decodeFile(raw, &f); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	return checkKeySets(f.Keys, raw)
-}
-
-// checkKeyRefs refuses a key under keys: that is not a key_ref name
-// (admission.KeyRefShape), by its line in raw and never by the name: every
-// report prints a key_ref, and one that is not a name is most likely a secret.
-func checkKeyRefs(keys map[string]KeySet, raw []byte) error {
-	var bad []string
-	for ref := range keys {
-		if !admission.KeyRefShape.MatchString(ref) {
-			bad = append(bad, ref)
-		}
+	sets, err := keyset.Check(f.Keys, raw)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
-	if len(bad) == 0 {
-		return nil
-	}
-	line := 0
-	var doc yaml.Node
-	if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) == 1 {
-		top := doc.Content[0]
-		for i := 0; i+1 < len(top.Content); i += 2 {
-			if top.Content[i].Value != "keys" {
-				continue
-			}
-			for j, keys := 0, top.Content[i+1]; j+1 < len(keys.Content); j += 2 {
-				if !admission.KeyRefShape.MatchString(keys.Content[j].Value) && (line == 0 || keys.Content[j].Line < line) {
-					line = keys.Content[j].Line
-				}
-			}
-		}
-	}
-	where := "a key under keys:"
-	if line > 0 {
-		where = fmt.Sprintf("a key under keys: on line %d", line)
-	}
-	return fmt.Errorf("config: %s is not a valid key_ref name (%s): it names the key, never holds it",
-		where, admission.KeyRefShapeRule)
+	return sets, nil
 }
 
 // checkService is inventory.service checked as Load checks it. Every path is
@@ -2336,24 +2211,6 @@ func (c Config) ResolveSecret(at, text string) ([]byte, error) {
 // header and what every line about a record that will not open names
 // (crypt.LineKeyID prints anything else as "?"). Plan 7e, Ruling 15.
 var KeyIDShape = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-
-// sortedKeySets names keys' refs, sorted, so the start notices read the same
-// every time.
-func sortedKeySets(keys map[string]KeySet) []string {
-	out := make([]string, 0, len(keys))
-	for ref := range keys {
-		out = append(out, ref)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func allVersions(ks KeySet) []KeyVersion {
-	out := make([]KeyVersion, 0, 1+len(ks.Accept)+len(ks.Retired))
-	out = append(out, ks.Current)
-	out = append(out, ks.Accept...)
-	return append(out, ks.Retired...)
-}
 
 // resolveSessionServices builds c.SessionServices from the built-in table and
 // whatever `platforms:` overrides. Three things are refused rather than

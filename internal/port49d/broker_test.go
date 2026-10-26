@@ -30,6 +30,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
@@ -56,7 +57,7 @@ func brokerConfigWith(t *testing.T, policyBody string, others []string) config.C
 	}
 	cfg := config.Config{
 		Session:   config.SessionConfig{MaxSessionAgeDefault: time.Hour},
-		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretRef: "env:UNUSED"}}},
+		Keys:      map[string]keyset.Set{"lab_key": {Current: keyset.Version{Version: 1, SecretRef: "env:UNUSED"}}},
 		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),

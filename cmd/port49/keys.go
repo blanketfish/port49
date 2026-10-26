@@ -11,6 +11,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/keystatus"
 )
 
@@ -38,7 +39,7 @@ func keysCmd(args []string, stdout, stderr io.Writer) int {
 // readKeySets reads port49d.yaml's keys: block, no secret included. On
 // success the map is never nil, so a file with no keys defines none and
 // every key group's key_ref reads as undefined (M3), never as unchecked.
-func readKeySets(path string) (map[string]config.KeySet, error) {
+func readKeySets(path string) (map[string]keyset.Set, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -51,7 +52,7 @@ func readKeySets(path string) (map[string]config.KeySet, error) {
 }
 
 // keyRefsOf is the key_refs sets defines, sorted and never nil.
-func keyRefsOf(sets map[string]config.KeySet) []string {
+func keyRefsOf(sets map[string]keyset.Set) []string {
 	out := make([]string, 0, len(sets))
 	for ref := range sets {
 		out = append(out, ref)
@@ -61,7 +62,7 @@ func keyRefsOf(sets map[string]config.KeySet) []string {
 }
 
 // statusKeys is each key's versions in the roles they hold at now.
-func statusKeys(sets map[string]config.KeySet, now time.Time) []keystatus.Key {
+func statusKeys(sets map[string]keyset.Set, now time.Time) []keystatus.Key {
 	var out []keystatus.Key
 	for _, ref := range keyRefsOf(sets) {
 		ks := sets[ref]
@@ -152,7 +153,7 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	var sets map[string]config.KeySet
+	var sets map[string]keyset.Set
 	var refs []string
 	if *cfgPath != "" {
 		var err error

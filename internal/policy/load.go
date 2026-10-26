@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"regexp"
 	"regexp/syntax"
@@ -30,9 +31,11 @@ import (
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/k8sid"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/token"
+	"github.com/rhwendt/port49/internal/yamlfault"
 )
 
 // Env is what a policy is loaded against. The joint checks of spec §6 and §10
@@ -94,6 +97,10 @@ type Policy struct {
 	// raw is the file's bytes, so an inventory reload can load them again
 	// against the new inventory (plan 6a).
 	raw []byte
+	// keys are the file's key sets (decision 53 ruling 3), nil when it has no
+	// keys: block; keysDeclared tells `keys: {}` from none.
+	keys         map[string]keyset.Set
+	keysDeclared bool
 
 	// set is the platform set the policy pins (spec §8), and adapters its
 	// platforms: the built-in set, the file's `platforms:` blocks over it,
@@ -307,6 +314,13 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	if err := refusedKeys(raw); err != nil {
 		return nil, err
 	}
+	// A block moved verbatim from port49d.yaml names its replacement, not an
+	// unknown field.
+	if err := yamlfault.Replaced(raw, map[string]string{
+		"secret_env": "secret_ref (write secret_ref: env:NAME)",
+	}); err != nil {
+		return nil, err
+	}
 	var f file
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
@@ -339,7 +353,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	for _, d := range env.Devices {
 		p.devIndex[d.Name] = d
 	}
-	for _, step := range []func(file) error{p.buildPlatforms, p.buildKeyGroups, p.admit, p.buildLevels, p.checkBlockOrder, p.buildDefaults, p.buildRoles, p.buildScopes, p.buildSubjects,
+	for _, step := range []func(file) error{p.buildPlatforms, p.buildKeyGroups, p.buildKeys, p.admit, p.buildLevels, p.checkBlockOrder, p.buildDefaults, p.buildRoles, p.buildScopes, p.buildSubjects,
 		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
@@ -356,6 +370,52 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	p.sweepIndex()
 	return p, nil
 }
+
+// buildKeys checks the file's key sets (spec §10; decision 53 ruling 3). It
+// reads no secret: port49d resolves each reference when it puts the policy
+// in force.
+func (p *Policy) buildKeys(f file) error {
+	if f.Keys == nil {
+		if bareKeys(p.raw) {
+			return errors.New("keys: is empty; write `keys: {}` for a fleet all on TLS, or the key sets " +
+				"(decision 53 ruling 3)")
+		}
+		return nil // no keys: block
+	}
+	sets, err := keyset.Check(f.Keys, p.raw)
+	if errors.Is(err, keyset.ErrBadRef) {
+		// It may be the secret itself, pasted where its name goes: it is in
+		// the policy repository now, and in CI's history.
+		return fmt.Errorf("keys: %w; if what you wrote there is the secret, it is now in the policy "+
+			"repository: rotate it (add a version with a new secret)", err)
+	}
+	if err != nil {
+		return fmt.Errorf("keys: %w", err)
+	}
+	p.keys, p.keysDeclared = sets, true
+	return nil
+}
+
+// bareKeys is whether the file has a keys key with no value.
+func bareKeys(raw []byte) bool {
+	var loose map[string]any
+	if yaml.Unmarshal(raw, &loose) != nil {
+		return false
+	}
+	v, ok := loose["keys"]
+	return ok && v == nil
+}
+
+// KeySets are the policy's key sets, a copy; nil when it declares none.
+func (p *Policy) KeySets() map[string]keyset.Set {
+	if !p.keysDeclared {
+		return nil
+	}
+	return maps.Clone(p.keys)
+}
+
+// KeysDeclared is whether the file has a keys: block, `keys: {}` included.
+func (p *Policy) KeysDeclared() bool { return p.keysDeclared }
 
 // yamlValue is the value a YAML type error quotes, yamlTagged the one an
 // explicitly tagged scalar's does and yamlAnchor the name an alias does

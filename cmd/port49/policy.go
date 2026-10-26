@@ -18,9 +18,9 @@ import (
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
@@ -184,7 +184,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stderr = errOut
-	var sets map[string]config.KeySet
+	var sets map[string]keyset.Set
 	var refs []string
 	if *cfgPath != "" {
 		var err error
@@ -374,7 +374,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // a key group naming a key_ref port49d.yaml does not define fails, and an
 // accept version past its retire_after, or with none, is reported. With no
 // port49d.yaml there is nothing to check.
-func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) []string {
+func keyReports(sets map[string]keyset.Set, p *policy.Policy, now time.Time) []string {
 	if sets == nil {
 		return nil
 	}
