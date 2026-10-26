@@ -395,3 +395,108 @@ func TestAServerOfAnotherNameIsRefusedThroughTheProxy(t *testing.T) {
 		t.Fatal("a certificate that does not name the source's host was accepted through the proxy")
 	}
 }
+
+// With InsecureSkipVerify on, the CA read inside VerifyConnection is the only
+// verification there is: a CA file that cannot be read at the handshake (cut
+// short, swapped for a directory, gone mid-rotation) must refuse the fetch, in
+// no case accept whatever certificate the server sent, and the source must
+// never see the request, direct or through the proxy.
+func TestAnUnreadableCAFileRefusesTheHandshake(t *testing.T) {
+	breaks := map[string]func(t *testing.T, path string){
+		"truncated": func(t *testing.T, path string) {
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a directory": func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"removed": func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for _, via := range []string{"direct", "the proxy"} {
+		for name, brk := range breaks {
+			t.Run(via+"/"+name, func(t *testing.T) {
+				if via == "the proxy" {
+					pu, _, _ := connectProxy(t, "")
+					was := proxy
+					t.Cleanup(func() { proxy = was })
+					proxy = http.ProxyURL(pu)
+				}
+				var reached atomic.Int64
+				srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					reached.Add(1)
+					w.Write([]byte(`{}`))
+				}))
+				good, err := os.ReadFile(ca)
+				if err != nil {
+					t.Fatal(err)
+				}
+				live := filepath.Join(t.TempDir(), "ca.pem")
+				if err := os.WriteFile(live, good, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cl, err := newClient(srv.URL, live, NewSecret(token), "netbox")
+				if err != nil {
+					t.Fatal(err)
+				}
+				brk(t, live)
+				var v map[string]any
+				if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err == nil || reached.Load() != 0 {
+					t.Fatalf("a CA file that could not be read did not refuse the fetch: %v; source reached %d times",
+						err, reached.Load())
+				}
+				// Sound, not vacuous: the same client reads once the file is whole again.
+				os.RemoveAll(live)
+				if err := os.WriteFile(live, good, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v); err != nil || reached.Load() != 1 {
+					t.Fatalf("the restored CA was not read: %v; source reached %d times", err, reached.Load())
+				}
+			})
+		}
+	}
+}
+
+// A 407 comes from the egress proxy, not from the source: the operator is told
+// whose credentials were refused, and never sees them.
+func TestAProxyThatRefusesItsCredentialsIsNamedNeverPrinted(t *testing.T) {
+	deny := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="egress"`)
+		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
+	}))
+	t.Cleanup(deny.Close)
+	pu, _ := url.Parse(deny.URL)
+	pu.User = url.UserPassword("svc-FAKE", "FAKE-proxy-pw")
+	was := proxy
+	t.Cleanup(func() { proxy = was })
+	proxy = http.ProxyURL(pu)
+	var reached atomic.Int64
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached.Add(1) }))
+	cl, err := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	err = cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v)
+	if err == nil || !strings.Contains(err.Error(), "the egress proxy refused HTTPS_PROXY's credentials; the token was not sent") {
+		t.Fatalf("%v", err)
+	}
+	for _, leak := range []string{"svc-FAKE", "FAKE-proxy-pw", token, "Basic"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("the error carries a credential")
+		}
+	}
+	if reached.Load() != 0 {
+		t.Fatal("the source was reached")
+	}
+}

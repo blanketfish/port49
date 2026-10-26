@@ -223,6 +223,13 @@ func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte,
 			// M3). A dial or handshake timeout reads otherwise.
 			return answer{}, fmt.Errorf("%s: no answer began within 2m: lower page_size", what(method, u))
 		}
+		if strings.Contains(err.Error(), "Proxy Authentication Required") {
+			// A 407 answers the CONNECT, so it is the egress proxy's: said
+			// apart from the source's own 401, which names the token. Fixed
+			// text, so neither the proxy's credentials nor its URL print.
+			return answer{}, fmt.Errorf("%s: the egress proxy refused HTTPS_PROXY's credentials; the token was not sent",
+				what(method, u))
+		}
 		return answer{}, clean(what(method, u), err)
 	}
 	defer resp.Body.Close()
