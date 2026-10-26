@@ -2358,6 +2358,27 @@ func keysOf(m map[string]keyring.Set) func(string) keyring.Set {
 	return func(ref string) keyring.Set { return m[ref] }
 }
 
+// expectShed dials addr and asserts the connection is reset at Accept. On
+// loopback the server's accept-then-reset can reach the client before connect()
+// returns, so the dial itself may fail with ECONNRESET: that is the shed, as
+// in refusedAtAccept. Any other dial error fails, and a connection that is
+// served (no reset on the dial or the read) fails.
+func expectShed(t *testing.T, addr, what string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("%s: dial: %v, want a reset at Accept", what, err)
+		}
+		return
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("%s: %v, want a reset at Accept", what, err)
+	}
+}
+
 // roomyLimits is newTestServerWith's limiter with room for sixteen
 // connections per source, so a test of the global cap meets the global cap.
 func roomyLimits() *limits.Limiter {
@@ -2387,11 +2408,7 @@ func TestTheGlobalCapShedsAndSaysSo(t *testing.T) {
 	if !waitFor(t, func() bool { return slots.InUse() == 1 }) {
 		t.Fatal("the first connection holds no slot")
 	}
-	second := dial(t, ts.addr, []byte("k2"))
-	second.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := second.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
-		t.Fatalf("the second connection at the cap: %v, want a reset at once", err)
-	}
+	expectShed(t, ts.addr, "the second connection at the cap")
 	// Counted and said while the first still holds its slot.
 	if got := testutil.ToFloat64(ts.metrics.ConnectionsShed.WithLabelValues("global_cap")); got != 1 {
 		t.Fatalf("port49_connections_shed_total{reason=global_cap} = %v with the cap held", got)
@@ -2438,11 +2455,7 @@ func TestIdleListenersHoldNoSlot(t *testing.T) {
 	if !waitFor(t, func() bool { return slots.InUse() == 2 }) {
 		t.Fatalf("one connection on each listener: %d slots in use", slots.InUse())
 	}
-	c := dial(t, ln2.Addr().String(), []byte("k2"))
-	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
-		t.Fatalf("the third connection: %v, want shed", err)
-	}
+	expectShed(t, ln2.Addr().String(), "the third connection")
 	a.conn.Close()
 	b.conn.Close()
 }
@@ -2530,11 +2543,7 @@ func TestEveryRefusalAtAcceptReleasesItsSlots(t *testing.T) {
 		if !waitFor(t, func() bool { return slots.InUse() == 1 }) {
 			t.Fatal("the holder holds no slot")
 		}
-		shed := dial(t, ts.addr, []byte("k2"))
-		shed.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-		if _, err := shed.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
-			t.Fatalf("the shed connection: %v, want a reset", err)
-		}
+		expectShed(t, ts.addr, "the shed connection")
 		// The per-NAS cap is 2 and the holder has one: the shed gave its slot
 		// back before it was reset, so the other is free now, not at some
 		// idle timeout.
