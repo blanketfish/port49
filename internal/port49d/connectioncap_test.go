@@ -54,3 +54,18 @@ func TestTheStartSaysAndPublishesTheCap(t *testing.T) {
 		t.Fatalf("port49_connections_max = %v", got)
 	}
 }
+
+// When the open-file limit cannot be read the cap is sized from the 4096
+// default, and the start line says so rather than naming a limit of 0.
+func TestTheCapSourceSaysAnUnreadableLimit(t *testing.T) {
+	if got := capSource(0, 0); !strings.Contains(got, "could not be read") || !strings.Contains(got, "4096") ||
+		strings.Contains(got, "limit 0") {
+		t.Fatalf("%q", got)
+	}
+	if got := capSource(0, 1<<20); !strings.Contains(got, "open-file limit 1048576") {
+		t.Fatalf("%q", got)
+	}
+	if got := capSource(64, 0); got != "limits.max_connections" {
+		t.Fatalf("%q", got)
+	}
+}

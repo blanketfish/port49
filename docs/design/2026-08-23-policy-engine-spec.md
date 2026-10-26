@@ -6149,7 +6149,7 @@ Accept (decision 53 ruling 8) and counts it in `port49_connections_shed_total{re
 It says, when shedding begins (the first shed after a minute with none): `port49d: shedding: all N
 TACACS+ connection slots (limits.max_connections) are in use; each new connection is reset at
 Accept and the device tries its next server`, and while it lasts, at most once a minute:
-`port49d: still shedding: M connections reset at Accept in the last minute; N of N slots in use`.
+`port49d: still shedding: M connections reset at Accept in the last minute; K of N slots in use`, K being the slots held when it is said.
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
@@ -10848,8 +10848,9 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   the key that holds the reference and never the variable: a secret pasted where a name goes parses
   as one (a 40-character hex token starting with a letter does). A reference outside ruling 12's
   allowance is printed the same way for `env:`: a reference is printed only once it has passed the
-  allowance or resolved, and a re-key refusal (`policy diff`, port49d's reload) prints an `env:`
-  reference as "an env: reference". It replaces, outright,
+  allowance or resolved, and `policy diff`'s re-key refusal prints an `env:`
+  reference as "an env: reference". port49d's reload prints the name, since a reference in force has
+  passed the allowance. It replaces, outright,
   `secret_env` (`keys:`, `encryption:`), `broker.directory.bind.password_env` (now
   `password_secret_ref`), and port49-inventory.yaml's `token_secret_env` and `webhook_secret_env`
   (now `token_secret_ref`, `webhook_secret_ref`). A file that still names a removed key is refused

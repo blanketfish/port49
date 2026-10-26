@@ -1263,10 +1263,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		return fmt.Errorf("config: %w", err)
 	}
 	m.ConnectionsMax.Set(float64(capN))
-	from := "limits.max_connections"
-	if cfg.Limits.MaxConnections == 0 {
-		from = fmt.Sprintf("the open-file limit %d, less what the spool, the store and the logs keep", limit)
-	}
+	from := capSource(cfg.Limits.MaxConnections, limit)
 	fmt.Fprintf(stderr, "%s: at most %d TACACS+ connections at once (%s); past it each new connection is reset "+
 		"at Accept\n", procOf(cfg), capN, from)
 	deps := server.Deps{Slots: server.NewSlots(capN, time.Now), Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keysFor, KeySeen: seen.Mark,

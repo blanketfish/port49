@@ -475,11 +475,18 @@ func TestAnUnreadableCAFileRefusesTheHandshake(t *testing.T) {
 func TestAProxyThatRefusesItsCredentialsIsNamedNeverPrinted(t *testing.T) {
 	for name, reason := range map[string]string{"standard phrase": "Proxy Authentication Required",
 		"another phrase": "Unauthorized", "no phrase": ""} {
-		t.Run(name, func(t *testing.T) { proxyRefusesCredentials(t, reason) })
+		t.Run(name, func(t *testing.T) { proxyRefusesCredentials(t, 407, reason) })
 	}
 }
 
-func proxyRefusesCredentials(t *testing.T, reason string) {
+// Only a 407 is the proxy refusing its credentials: a 403 on the CONNECT is a
+// proxy that forbids the destination, and its hint would send the operator to
+// the wrong credentials.
+func TestAProxyThatForbidsTheDestinationIsNotBlamedOnItsCredentials(t *testing.T) {
+	proxyRefusesCredentials(t, 403, "Forbidden")
+}
+
+func proxyRefusesCredentials(t *testing.T, status int, reason string) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -495,7 +502,7 @@ func proxyRefusesCredentials(t *testing.T, reason string) {
 				defer c.Close()
 				io.Copy(io.Discard, io.LimitReader(c, 1)) // wait for the CONNECT
 				time.Sleep(20 * time.Millisecond)
-				fmt.Fprintf(c, "HTTP/1.1 407 %s\r\nProxy-Authenticate: Basic realm=\"egress\"\r\nContent-Length: 0\r\n\r\n", reason)
+				fmt.Fprintf(c, "HTTP/1.1 %d %s\r\nProxy-Authenticate: Basic realm=\"egress\"\r\nContent-Length: 0\r\n\r\n", status, reason)
 			}()
 		}
 	}()
@@ -512,8 +519,12 @@ func proxyRefusesCredentials(t *testing.T, reason string) {
 	}
 	var v map[string]any
 	err = cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v)
-	if err == nil || !strings.Contains(err.Error(), "the egress proxy refused HTTPS_PROXY's credentials; the token was not sent") {
-		t.Fatalf("%v", err)
+	if err == nil {
+		t.Fatalf("status %d: the fetch was not refused", status)
+	}
+	hint := strings.Contains(err.Error(), "the egress proxy refused HTTPS_PROXY's credentials; the token was not sent")
+	if hint != (status == 407) {
+		t.Fatalf("status %d: %v", status, err)
 	}
 	for _, leak := range []string{"svc-FAKE", "FAKE-proxy-pw", token, "Basic"} {
 		if strings.Contains(err.Error(), leak) {

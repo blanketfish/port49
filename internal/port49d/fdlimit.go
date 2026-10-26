@@ -46,3 +46,16 @@ func connectionCap(set int, nofile uint64) (int, error) {
 	}
 	return int(min(n, maxCap)), nil
 }
+
+// capSource is where the start line says the cap came from. An open-file
+// limit that could not be read is said so, with the default the cap was
+// sized from, never as a limit of 0.
+func capSource(set int, limit uint64) string {
+	switch {
+	case set != 0:
+		return "limits.max_connections"
+	case limit == 0:
+		return "the open-file limit could not be read, so 4096 is taken, less what the spool, the store and the logs keep"
+	}
+	return fmt.Sprintf("the open-file limit %d, less what the spool, the store and the logs keep", limit)
+}

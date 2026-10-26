@@ -110,6 +110,8 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	}()
 
 	var lastAcceptLog time.Time
+	// Resolved once: a flood of sheds is many Accepts, none worth a label lookup.
+	shed := d.Metrics.ConnectionsShed.WithLabelValues("global_cap")
 	offered := d.offers
 	if offered == nil {
 		offered = newOffers()
@@ -204,7 +206,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		slot, ok := d.Slots.TryAcquire()
 		if !ok {
 			release()
-			d.Metrics.ConnectionsShed.WithLabelValues("global_cap").Inc()
+			shed.Inc()
 			if line := d.Slots.Shed(); line != "" {
 				log.Print(line)
 			}

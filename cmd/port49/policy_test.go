@@ -1977,7 +1977,6 @@ func TestPolicyDiffRefusesARekeyedVersion(t *testing.T) {
 	}
 	out.Reset()
 	errOut.Reset()
-	out.Reset()
 	code = run([]string{"policy", "diff", "--old", write("old2.yaml", policyWith("env:PORT49_KEY_A")),
 		"--new", write("new2.yaml", policyWith("env:PORT49_KEY_A")), "--inventory", inv}, &out, &errOut)
 	if strings.Contains(out.String(), "REFUSED: keys:") {

@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -17,12 +16,15 @@ type Slots struct {
 	c   chan struct{}
 	now func() time.Time
 
-	// The shed line's state, all atomic: a flood of sheds is many Accepts
-	// arriving at once, and none of them waits on a lock to be counted. Only
-	// the one that wins the claim on a due line builds it.
-	lastShed  atomic.Int64 // unix nanoseconds of the last shed; 0 before any
-	said      atomic.Int64 // unix nanoseconds a shedding line was last said
-	sinceSaid atomic.Int64 // sheds since then
+	// The shed line's state. Shed runs only after a shed, off the served
+	// path, and from at most one accept loop per listener, so a mutex costs
+	// nothing and keeps the line exact: one onset line, counts that sum.
+	// The times are time.Time from the clock given, so with time.Now they
+	// carry the monotonic reading and a wall-clock step is no step.
+	mu        sync.Mutex
+	lastShed  time.Time // the last shed, to tell a new run of shedding
+	said      time.Time // when a shedding line was last said
+	sinceSaid int       // sheds since then
 }
 
 func NewSlots(n int, now func() time.Time) *Slots {
@@ -53,27 +55,30 @@ const shedQuiet = time.Minute
 // minute with the number shed since, so a cap that engages is seen the
 // moment it bites and never silently (design §11).
 func (s *Slots) Shed() string {
-	now := s.now().UnixNano()
-	prev := s.lastShed.Swap(now)
-	n := s.sinceSaid.Add(1)
-	said := s.said.Load()
-	begins := prev == 0 || now-prev >= int64(shedQuiet)
-	if !begins && now-said < int64(shedQuiet) {
-		return ""
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	// An elapsed time below zero is a clock that stepped back where the
+	// reading carries no monotonic part: a line is due, never silence.
+	due := func(since time.Time) bool {
+		d := now.Sub(since)
+		return d < 0 || d >= shedQuiet
 	}
-	// A line is due. One caller claims it; the others return nothing, and
-	// their sheds are in the count the claimant takes.
-	if !s.said.CompareAndSwap(said, now) {
-		return ""
-	}
-	if begins {
-		s.sinceSaid.Store(0)
+	begins := s.lastShed.IsZero() || due(s.lastShed)
+	s.lastShed = now
+	s.sinceSaid++
+	switch {
+	case begins:
+		s.said, s.sinceSaid = now, 0
 		return fmt.Sprintf("port49d: shedding: all %d TACACS+ connection slots (limits.max_connections) are in "+
 			"use; each new connection is reset at Accept and the device tries its next server", cap(s.c))
+	case due(s.said):
+		n := s.sinceSaid
+		s.said, s.sinceSaid = now, 0
+		return fmt.Sprintf("port49d: still shedding: %d connections reset at Accept in the last minute; %d of %d "+
+			"slots in use", n, len(s.c), cap(s.c))
 	}
-	n = s.sinceSaid.Swap(0)
-	return fmt.Sprintf("port49d: still shedding: %d connections reset at Accept in the last minute; %d of %d "+
-		"slots in use", n, len(s.c), cap(s.c))
+	return ""
 }
 
 func (s *Slots) Cap() int   { return cap(s.c) }

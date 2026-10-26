@@ -116,21 +116,41 @@ func TestSlotsHoldExactlyUnderConcurrentAcquireAndRelease(t *testing.T) {
 	}
 }
 
-// Shedding runs on, a minute passes, and many Accepts shed in the same
-// instant: exactly one says the line, and it counts every shed since the last
-// one said (the others returned nothing and lost nothing).
-func TestOneOfManyConcurrentShedsSaysTheMinuteLine(t *testing.T) {
-	for round := range 300 {
-		var clock atomic.Int64
-		clock.Store(time.Unix(1_800_000_000, 0).UnixNano())
-		s := NewSlots(2, func() time.Time { return time.Unix(0, clock.Load()) })
-		s.Shed() // shedding begins and is said
-		clock.Add(int64(10 * time.Second))
-		s.Shed()
-		clock.Add(int64(55 * time.Second)) // 65s into the run, 55s after the last shed
-		const workers = 16
-		var lines, ready atomic.Int64
-		var said atomic.Value
+// pending is the sheds counted since the last line said (the test reads it
+// once every goroutine has returned).
+func pending(s *Slots) int { s.mu.Lock(); defer s.mu.Unlock(); return s.sinceSaid }
+
+// A wall clock stepped back an hour (NTP correcting a clock that ran ahead, a
+// VM resumed) must not silence the line: shedding that goes on is still said
+// within a minute, never silently (design §11).
+func TestAWallClockStepBackStillLetsTheLineThrough(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	s := NewSlots(2, func() time.Time { return now })
+	if l := s.Shed(); !strings.Contains(l, "shedding: all 2") {
+		t.Fatalf("the first shed: %q", l)
+	}
+	now = now.Add(-time.Hour)
+	lines := 0
+	for range 60 { // ten minutes of sheds, one every 10s, on the stepped-back clock
+		if s.Shed() != "" {
+			lines++
+		}
+		now = now.Add(10 * time.Second)
+	}
+	if lines < 8 {
+		t.Fatalf("%d lines said in ten minutes of shedding after the clock stepped back an hour", lines)
+	}
+}
+
+// Many Accepts shed in the same instant as shedding begins: exactly one says
+// the onset line, and it is the onset line, not "still shedding". A minute
+// on, many more shed at once: exactly one says "still shedding", and what it
+// says plus what waits for the next line is every shed since the onset's.
+func TestConcurrentOnsetIsOneLineAndTheCountsAreExact(t *testing.T) {
+	const workers = 16
+	burst := func(s *Slots) (lines []string) {
+		var mu sync.Mutex
+		var ready atomic.Int64
 		start := make(chan struct{})
 		var wg sync.WaitGroup
 		for range workers {
@@ -140,8 +160,9 @@ func TestOneOfManyConcurrentShedsSaysTheMinuteLine(t *testing.T) {
 				ready.Add(1)
 				<-start
 				if l := s.Shed(); l != "" {
-					lines.Add(1)
-					said.Store(l)
+					mu.Lock()
+					lines = append(lines, l)
+					mu.Unlock()
 				}
 			}()
 		}
@@ -150,18 +171,39 @@ func TestOneOfManyConcurrentShedsSaysTheMinuteLine(t *testing.T) {
 		}
 		close(start)
 		wg.Wait()
-		if lines.Load() != 1 {
-			t.Fatalf("round %d: %d lines said for one minute of shedding", round, lines.Load())
+		return lines
+	}
+	for round := range 200 {
+		now := time.Unix(1_800_000_000, 0)
+		var mu sync.Mutex
+		s := NewSlots(2, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+		onset := burst(s)
+		if len(onset) != 1 || !strings.Contains(onset[0], "port49d: shedding: all 2") {
+			t.Fatalf("round %d: onset said %q", round, onset)
 		}
-		// A shed that lands after the claim is counted toward the next line,
-		// so what the line says plus what waits for the next is every shed
-		// since the last line: the 1 at +10s and the 16 at once.
+		if n := pending(s); n != workers-1 {
+			t.Fatalf("round %d: %d counted after the onset, want %d", round, n, workers-1)
+		}
+		mu.Lock()
+		now = now.Add(30 * time.Second)
+		mu.Unlock()
+		if l := s.Shed(); l != "" { // shedding goes on, inside the minute
+			t.Fatalf("round %d: a shed 30s on said %q", round, l)
+		}
+		mu.Lock()
+		now = now.Add(35 * time.Second) // 65s into the run, 35s after the last shed
+		mu.Unlock()
+		later := burst(s)
+		if len(later) != 1 || !strings.Contains(later[0], "port49d: still shedding: ") {
+			t.Fatalf("round %d: a minute on said %q", round, later)
+		}
 		var n int
-		if _, err := fmt.Sscanf(said.Load().(string), "port49d: still shedding: %d connections", &n); err != nil {
-			t.Fatalf("round %d: %q", round, said.Load())
+		if _, err := fmt.Sscanf(later[0], "port49d: still shedding: %d connections", &n); err != nil {
+			t.Fatalf("round %d: %q", round, later[0])
 		}
-		if got := int64(n) + s.sinceSaid.Load(); got != 1+workers {
-			t.Fatalf("round %d: the line says %d and %d wait: sheds were lost", round, n, s.sinceSaid.Load())
+		if got := n + pending(s); got != (workers-1)+1+workers {
+			t.Fatalf("round %d: the line says %d and %d wait: %d of %d sheds counted", round, n, pending(s), got,
+				(workers-1)+1+workers)
 		}
 	}
 }
