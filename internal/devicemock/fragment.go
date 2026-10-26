@@ -3,7 +3,10 @@ package devicemock
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
 
+	"github.com/rhwendt/port49/internal/yamlfault"
 	"gopkg.in/yaml.v3"
 )
 
@@ -12,11 +15,11 @@ import (
 // config take the shared reply-shaping settings (decision 52 ruling 5).
 func MergeFragment(base, fragment []byte) ([]byte, error) {
 	var b, f yaml.Node
-	if err := yaml.Unmarshal(base, &b); err != nil {
-		return nil, err
+	if err := oneDocument(base, &b); err != nil {
+		return nil, fmt.Errorf("devicemock: the base %w", err)
 	}
-	if err := yaml.Unmarshal(fragment, &f); err != nil {
-		return nil, err
+	if err := oneDocument(fragment, &f); err != nil {
+		return nil, fmt.Errorf("devicemock: the fragment %w", err)
 	}
 	if len(b.Content) == 0 || b.Content[0].Kind != yaml.MappingNode || len(f.Content) == 0 || f.Content[0].Kind != yaml.MappingNode {
 		return nil, errors.New("devicemock: base and fragment must both be YAML mappings")
@@ -41,4 +44,14 @@ func MergeFragment(base, fragment []byte) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// oneDocument decodes raw into n and refuses a second YAML document, which a
+// single decode would drop (decision 53 ruling 6).
+func oneDocument(raw []byte, n *yaml.Node) error {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(n); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return yamlfault.OneDocument(dec)
 }
