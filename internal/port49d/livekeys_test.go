@@ -75,7 +75,7 @@ func TestAReloadThatRekeysAVersionIsRefused(t *testing.T) {
 	k.put(kb)
 	_, err = k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 1, secret_ref: env:T_LK_B}\n"))
 	if err == nil || !strings.Contains(err.Error(), "env:T_LK_A") || !strings.Contains(err.Error(), "env:T_LK_B") ||
-		!strings.Contains(err.Error(), "add a version") {
+		!strings.Contains(err.Error(), "add a new version") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -101,8 +101,11 @@ func TestAVersionRemovedAndAddedBackWithAnotherReferenceIsRefused(t *testing.T) 
 	}
 	_, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 2, secret_ref: env:T_LK_C}\n"+
 		"    accept: [{version: 1, secret_ref: env:T_LK_B, retire_after: 2099-01-01}]\n"))
-	if err == nil || !strings.Contains(err.Error(), "env:T_LK_A") || !strings.Contains(err.Error(), "env:T_LK_B") ||
-		!strings.Contains(err.Error(), "add a version") {
+	// The old reference is no longer in the file an operator greps, so the
+	// refusal says port49d remembers it, not that the policy in force names it.
+	if err == nil || !strings.Contains(err.Error(), "port49d has held env:T_LK_A for k version 1 since it started") ||
+		!strings.Contains(err.Error(), "env:T_LK_B") || !strings.Contains(err.Error(), "add a new version") ||
+		strings.Contains(err.Error(), "policy in force") {
 		t.Fatalf("a removed version came back re-keyed: %v", err)
 	}
 	// The same reference comes back as it was: nothing was re-keyed.

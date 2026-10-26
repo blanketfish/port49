@@ -91,9 +91,9 @@ func (k *liveKeys) build(pol *policy.Policy) (keyBuild, error) {
 					"secrets port49d.yaml allows it (decision 53 ruling 12)", at, text, k.allow)
 			}
 			if was, ok := k.seen[ref][v.Version]; ok && was != text {
-				return keyBuild{}, fmt.Errorf("keys.%s version %d names secret_ref %s, and the policy in force names "+
-					"%s for it: a version's secret never changes (spec §10), so add a version instead", ref, v.Version,
-					text, was)
+				return keyBuild{}, fmt.Errorf("keys.%s version %d names secret_ref %s, but port49d has held %s for %s "+
+					"version %d since it started; a version's reference never changes (spec §10), so add a new version "+
+					"instead", ref, v.Version, text, was, ref, v.Version)
 			}
 			b.refs[ref][v.Version] = text
 			if _, ok := k.held[text]; ok {
