@@ -755,3 +755,26 @@ func TestAWithinThatBoundsNothingIsRefused(t *testing.T) {
 		t.Errorf("a file under /: %v", err)
 	}
 }
+
+// Under the sticky excuse a secret file has one name: another user who can
+// write the directory could have created the name as a hard link to a file of
+// ours or root's elsewhere. In a directory only its owner can write, a second
+// name is the owner's own doing and is not refused.
+func TestAHardLinkedSecretInAStickyDirectoryIsRefused(t *testing.T) {
+	dir, file := plainSecretDir(t, 0o777|fs.ModeSticky)
+	other := filepath.Join(dir, "l")
+	if err := os.Link(file, other); err != nil {
+		t.Skipf("no hard links here: %v", err)
+	}
+	_, err := ReadSecret(other, dir, 1<<20)
+	if err == nil || !strings.Contains(err.Error(), "more than one hard link") || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("%v", err)
+	}
+	tight, tfile := plainSecretDir(t, 0o700)
+	if err := os.Link(tfile, filepath.Join(tight, "l")); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := ReadSecret(tfile, tight, 1<<20); err != nil || len(raw) != 7 {
+		t.Fatalf("a second name in a private directory: %d bytes, %v", len(raw), err)
+	}
+}

@@ -149,7 +149,19 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 				"writable by anyone but its owner - chmod 0440 or 0600 it, or, on a mounted volume, set the "+
 				"mode where it is rendered (Kubernetes defaultMode and fsGroup, Vault Agent's perms)", target, perm)
 		}
-		return secretDirWritableByUsAlone("the directory "+dir, di)
+		excused, err := secretDirWritableByUsAlone("the directory "+dir, di)
+		if err != nil || !excused {
+			return err
+		}
+		// Under the sticky excuse another user may have created the name
+		// before the first render, as a hard link to a file of ours or
+		// root's elsewhere on the filesystem: the owner and mode checks pass
+		// it, and fs.protected_hardlinks is a sysctl, not ours. A rendered
+		// secret has one name.
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Nlink > 1 {
+			return fmt.Errorf("%s has more than one hard link; a secret file in a sticky directory has one name", target)
+		}
+		return nil
 	})
 }
 
@@ -161,15 +173,17 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 // or unlink it; others can squat a name before the first render, which the
 // file's owner check then refuses, never substitutes. The sticky bit is the
 // inode's own mode, so the host sees it too, unlike a read-only bind, whose
-// excuse is never extended here.
-func secretDirWritableByUsAlone(what string, fi fs.FileInfo) error {
+// excuse is never extended here. It reports whether the excuse was used.
+func secretDirWritableByUsAlone(what string, fi fs.FileInfo) (excused bool, err error) {
 	if err := ownedByUsOrRoot(what, fi); err != nil {
-		return err
+		return false, err
 	}
-	if fi.Mode()&fs.ModeSticky != 0 {
-		return nil
+	if err := notWritableByOthers(what, fi); err == nil {
+		return false, nil
+	} else if fi.Mode()&fs.ModeSticky == 0 {
+		return false, err
 	}
-	return notWritableByOthers(what, fi)
+	return true, nil
 }
 
 // ReadNoLink is Read for a file this process writes itself, whose own name is
