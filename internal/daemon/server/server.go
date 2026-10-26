@@ -224,13 +224,14 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		if d.TLS != nil && admitted && offered.any(src) && platform.TLSServerSingleConnect(wirePlatform(dev)) {
 			d.Metrics.ConnectionEvents.WithLabelValues("single_connect_second_connection").Inc()
 		}
-		d.Metrics.Connections.WithLabelValues("open").Inc()
-
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
 			refused: found && dev.Refused != "", offers: offered, sessions: map[uint32]*authen.Session{}}
 		if cc.admitted && !mismatch && d.TLS == nil {
 			cc.keys = d.keysFor(dev.KeyRef)
 		}
+		// Counted open once the Accept-time key set is held: a reload that
+		// lands after the count is therefore after the set it is judged by.
+		d.Metrics.Connections.WithLabelValues("open").Inc()
 
 		wg.Add(1)
 		go func() {

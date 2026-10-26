@@ -85,7 +85,7 @@ func TestAReloadThatWithdrawsTheVersionEndsItsConnectionWithoutAStrike(t *testin
 			sets.put("prod_key", fakeVersion(2, "k2", false))
 			st := memory.New(time.Now)
 			putLogin(t, st, "p49_e2e", "p49_second", "p49_third", "p49_fourth")
-			ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
+			ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get; d.Limits = slowBackoff() })
 			c := dial(t, ts.addr, []byte("k2"))
 			login := func(sid uint32, tok string) {
 				c.sid, c.seq = sid, 1
@@ -135,7 +135,7 @@ func TestAReloadWithdrawingAVersionWhilePacketsFlow(t *testing.T) {
 	sets := &liveSets{m: map[string]keyring.Set{}}
 	sets.put("prod_key", fakeVersion(2, "k2", false))
 	st := memory.New(time.Now)
-	ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
+	ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get; d.Limits = slowBackoff() })
 	const conns = 2 // the test server's per-NAS cap
 	var wg sync.WaitGroup
 	ended := make(chan error, conns)
@@ -257,7 +257,7 @@ func TestAFirstPacketIsJudgedAgainstTheSetInForceNow(t *testing.T) {
 			}
 			st := memory.New(time.Now)
 			putLogin(t, st, "p49_first")
-			ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
+			ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get; d.Limits = slowBackoff() })
 			cl := dial(t, ts.addr, []byte(c.key))
 			if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")) == 1 }) {
 				t.Fatal("the connection was not accepted")
@@ -297,7 +297,7 @@ func TestAFirstPacketMissOnARemovedKeyRefIsCountedUnderItsName(t *testing.T) {
 	sets.put("prod_key", fakeVersion(2, "k2", false))
 	st := memory.New(time.Now)
 	putLogin(t, st, "p49_first")
-	ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get })
+	ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Keys = sets.get; d.Limits = slowBackoff() })
 	cl := dial(t, ts.addr, []byte("k-wrong"))
 	if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")) == 1 }) {
 		t.Fatal("the connection was not accepted")

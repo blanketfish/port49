@@ -567,12 +567,12 @@ func TestTLSHandshakeTimeoutIsStruck(t *testing.T) {
 		d.Limits = slowBackoff()
 		d.TLS.HandshakeTimeout = time.Second
 	})
+	start := time.Now() // before the dial: the server's timer starts at its Accept, which the dial can precede
 	conn, err := net.Dial("tcp", f.ts.addr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	start := time.Now()
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Read(make([]byte, 1)); err == nil {
 		t.Fatal("the server sent something to a silent peer")
@@ -580,7 +580,10 @@ func TestTLSHandshakeTimeoutIsStruck(t *testing.T) {
 	if d := time.Since(start); d < 900*time.Millisecond || d > 3*time.Second {
 		t.Fatalf("closed after %v, want about handshake_timeout (1s)", d)
 	}
-	if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"handshake_timeout"`) }) || !f.ts.limits.Holding(loopback) {
+	// The record is emitted just before the strike: both are waited for.
+	if !waitFor(t, func() bool {
+		return log.contains(`"tls_outcome":"handshake_timeout"`) && f.ts.limits.Holding(loopback)
+	}) {
 		t.Fatalf("log: %s", log.String())
 	}
 }
