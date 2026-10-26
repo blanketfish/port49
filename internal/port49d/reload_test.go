@@ -1259,18 +1259,29 @@ func TestASwapPutsTheKeysBeforeThePolicyAndDropsTheOldAfter(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.r.keys.put(kb)
-	extra := "keys:\n  extra:\n    current: {version: 1, secret_ref: env:PORT49_KEY_RUN2}\n"
+	// The first swap re-keys k, retiring version 1 under a new current 2: a
+	// key_ref both policies define must show the new versions, with the
+	// retired flag, as soon as the keys are in force.
+	rekeyed := "keys:\n  k:\n    current: {version: 2, secret_ref: env:PORT49_KEY_RUN2}\n" +
+		"    retired: [{version: 1, secret_ref: env:PORT49_KEY_RUN}]\n" + labKeyRun +
+		"  extra:\n    current: {version: 1, secret_ref: env:PORT49_KEY_RUN2}\n"
+	versions := func(ref string) string {
+		var out []string
+		for _, v := range rig.r.keys.Set(ref).Versions {
+			out = append(out, fmt.Sprintf("%d%s", v.Number, map[bool]string{true: "r", false: ""}[v.Retired]))
+		}
+		return strings.Join(out, ",")
+	}
 	var seen []string
 	inForce := rig.b.Policy.Load()
 	rig.r.keysPut = func() {
-		seen = append(seen, fmt.Sprintf("extra=%d k=%d old_policy_in_force=%v",
-			len(rig.r.keys.Set("extra").Versions), len(rig.r.keys.Set("k").Versions), rig.b.Policy.Load() == inForce))
+		seen = append(seen, fmt.Sprintf("extra=%s k=%s old_policy_in_force=%v", versions("extra"), versions("k"),
+			rig.b.Policy.Load() == inForce))
 	}
-	with := strings.Replace(minimalPolicy, runKeys, strings.TrimSuffix(runKeys, "\n")+"\n"+extra[len("keys:\n"):], 1)
-	swapTo(t, rig, with)
+	swapTo(t, rig, strings.Replace(minimalPolicy, runKeys, rekeyed, 1))
 	inForce = rig.b.Policy.Load()
 	swapTo(t, rig, minimalPolicy)
-	want := []string{"extra=1 k=1 old_policy_in_force=true", "extra=1 k=1 old_policy_in_force=true"}
+	want := []string{"extra=1 k=2,1r old_policy_in_force=true", "extra=1 k=1 old_policy_in_force=true"}
 	if !slices.Equal(seen, want) {
 		t.Fatalf("between the keys and the policy: %q, want %q\n%s", seen, want, rig.out.String())
 	}
