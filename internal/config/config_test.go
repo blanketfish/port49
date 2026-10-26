@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/secretref"
 )
 
 // The sample config is assembled from three pieces rather than written twice,
@@ -973,10 +975,6 @@ func TestRetireAfter(t *testing.T) {
 			t.Fatalf("loaded: %s", bad)
 		}
 	}
-	sets, err := KeySets([]byte(body))
-	if err != nil || len(sets["prod_key"].Accept) != 1 || sets["prod_key"].Accept[0].RetireAt.IsZero() {
-		t.Fatalf("KeySets: %+v, %v", sets, err)
-	}
 }
 
 // The secrets the leak tests paste into port49d.yaml: one with punctuation,
@@ -1030,10 +1028,10 @@ func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
 		t.Run(sh.name, func(t *testing.T) {
 			p := write(t, "port49d.yaml", sh.body)
 			_, loadErr := Load(p)
-			_, setsErr := KeySets([]byte(sh.body))
+			_, setsErr := KeySecretRefsOf([]byte(sh.body))
 			_, ageErr := MaxSessionAge([]byte(sh.body))
 			_, boundErr := InventoryBound([]byte(sh.body))
-			for name, err := range map[string]error{"Load": loadErr, "KeySets": setsErr, "MaxSessionAge": ageErr,
+			for name, err := range map[string]error{"Load": loadErr, "KeySecretRefsOf": setsErr, "MaxSessionAge": ageErr,
 				"InventoryBound": boundErr} {
 				if err == nil {
 					continue // the shape is one only the key checks see
@@ -1041,9 +1039,6 @@ func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
 				if f := leaked(err.Error(), sh.secret); f != "" {
 					t.Errorf("%s printed %q: %v", name, f, err)
 				}
-			}
-			if setsErr == nil {
-				t.Fatal("KeySets took it")
 			}
 		})
 	}
@@ -1063,11 +1058,6 @@ func TestADecodeErrorSaysWhereAndWhat(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("want the file and %q, got %v", c.want, err)
 		}
-	}
-	_, err := KeySets([]byte("keys:\n  prod_key:\n    current: {version: 3, secret_ref: env:A}\n" +
-		"    accept: [{version: 2, secret_ref: env:B, retire_after: soon}]\n"))
-	if err == nil || !strings.Contains(err.Error(), "key prod_key version 2: retire_after is not a date") {
-		t.Errorf("retire_after: %v", err)
 	}
 }
 
@@ -1105,10 +1095,6 @@ func TestAKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
 	}
 	if f := leaked(err.Error()+strings.Join(c.Notices, "\n"), leakAlnum); f != "" {
 		t.Fatalf("printed %q: %v", f, err)
-	}
-	_, err = KeySets([]byte("keys:\n  " + leakAlnum + ":\n    current: {version: 3, secret_ref: env:X}\n"))
-	if err == nil || !strings.Contains(err.Error(), "on line 2 is not a valid key_ref name") || leaked(err.Error(), leakAlnum) != "" {
-		t.Fatalf("KeySets: %v", err)
 	}
 }
 
@@ -1409,7 +1395,7 @@ func TestASecondYAMLDocumentIsRefused(t *testing.T) {
 		"MaxSessionAge":      func(b []byte) error { _, err := MaxSessionAge(b); return err },
 		"InventoryBound":     func(b []byte) error { _, err := InventoryBound(b); return err },
 		"RevocationsFile":    func(b []byte) error { _, err := RevocationsFile(b); return err },
-		"KeySets":            func(b []byte) error { _, err := KeySets(b); return err },
+		"KeySecretRefsOf":    func(b []byte) error { _, err := KeySecretRefsOf(b); return err },
 		"InventoryServiceOf": func(b []byte) error { _, err := InventoryServiceOf(b); return err },
 		"StoresBlocks":       func(b []byte) error { _, err := StoresBlocks(b); return err },
 	} {
@@ -1467,7 +1453,7 @@ func TestARemovedSecretKeyIsRefusedNamingItsReplacement(t *testing.T) {
 		!strings.Contains(err.Error(), "password_env was replaced by password_secret_ref") {
 		t.Fatalf("%v", err)
 	}
-	if _, err := KeySets([]byte("keys:\n  k: {current: {version: 1, secret_env: X}}\n")); err == nil ||
+	if _, err := KeySecretRefsOf([]byte("keys:\n  k: {current: {version: 1, secret_env: X}}\n")); err == nil ||
 		!strings.Contains(err.Error(), "secret_env was replaced by secret_ref") {
 		t.Fatalf("a reader of the file's bytes: %v", err)
 	}
@@ -1615,6 +1601,25 @@ func TestAKeyFileNeedsNoTextMatchToOverlapTheAllowance(t *testing.T) {
 		_, err := Load(p)
 		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+// KeySecretRefsOf reads key_secret_refs alone, defaulted and checked, with no
+// secret read (Task 8): what `port49 policy test --config` holds a policy to.
+func TestKeySecretRefsOfReadsTheAllowanceAlone(t *testing.T) {
+	got, err := KeySecretRefsOf([]byte("listen: \":49\"\n"))
+	if err != nil || got != secretref.DefaultAllowance {
+		t.Fatalf("no block: %+v, %v", got, err)
+	}
+	got, err = KeySecretRefsOf([]byte("key_secret_refs: {env_prefix: PORT49_ENC_}\n"))
+	if err != nil || got.EnvPrefix != "PORT49_ENC_" || got.FileDir != secretref.DefaultAllowance.FileDir {
+		t.Fatalf("a prefix: %+v, %v", got, err)
+	}
+	for _, bad := range []string{"key_secret_refs: {env_prefix: PORT49_KEY}\n", "key_secret_refs: {file_dir: keys}\n",
+		"key_secret_refs: {file_dirr: /k}\n"} {
+		if _, err := KeySecretRefsOf([]byte(bad)); err == nil {
+			t.Errorf("accepted %q", bad)
 		}
 	}
 }

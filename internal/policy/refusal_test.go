@@ -45,6 +45,12 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		{"a redaction match word with a slash", block("redact: [{match: [crypto, 'Hunter2/x'], after: psk}]"),
 			"platforms.arista_eos.redact[0]: match word #2: a pattern is words"},
 		// The sweep: every other value a load error used to echo.
+		// A secret pasted into the keys: block: a custom tag, and a value
+		// holding a backtick, which cut the quoted text short.
+		{"a custom tag in keys", roleOK + subjOK + "keys:\n  k:\n    current: !Hunter2 x\n",
+			"cannot decode a value with a custom tag"},
+		{"a backtick in keys", roleOK + subjOK + "keys:\n  k:\n    current: Hunt`er2-pasted-here\n",
+			"cannot unmarshal a !!str value"},
 		{"a subject's enable", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, " +
 			"enable: Hunter2, token_ttl: 60s}\n", `subject "s": enable must be none, auto or token`},
 		{"a subject's api right", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, " +

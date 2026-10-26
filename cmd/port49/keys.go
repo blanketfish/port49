@@ -4,12 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"sort"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/keystatus"
@@ -36,35 +33,10 @@ func keysCmd(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-// readKeySets reads port49d.yaml's keys: block, no secret included. On
-// success the map is never nil, so a file with no keys defines none and
-// every key group's key_ref reads as undefined (M3), never as unchecked.
-func readKeySets(path string) (map[string]keyset.Set, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	sets, err := config.KeySets(raw)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return sets, nil
-}
-
-// keyRefsOf is the key_refs sets defines, sorted and never nil.
-func keyRefsOf(sets map[string]keyset.Set) []string {
-	out := make([]string, 0, len(sets))
-	for ref := range sets {
-		out = append(out, ref)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // statusKeys is each key's versions in the roles they hold at now.
 func statusKeys(sets map[string]keyset.Set, now time.Time) []keystatus.Key {
 	var out []keystatus.Key
-	for _, ref := range keyRefsOf(sets) {
+	for _, ref := range keyset.Sorted(sets) {
 		ks := sets[ref]
 		k := keystatus.Key{Ref: ref, Versions: []keystatus.Version{{Number: ks.Current.Version, State: "current"}}}
 		for _, v := range ks.Accept {
@@ -88,23 +60,22 @@ func keysStatus(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var files policyFiles
 	files.register(fs)
-	cfgPath := fs.String("config", "", "port49d.yaml: key names, versions and retire_after dates; no secret is read")
 	since := fs.Duration("since", 0, "read only the records within this long of the newest one (default: all)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if files.missing() || *cfgPath == "" || fs.NArg() == 0 || *since < 0 {
+	if files.missing() || fs.NArg() == 0 || *since < 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
-	}
-	sets, err := readKeySets(*cfgPath)
-	if err != nil {
-		fmt.Fprintln(stderr, "port49 keys status:", err)
-		return 1
 	}
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 keys status:", err)
+		return 1
+	}
+	if !p.KeysDeclared() {
+		fmt.Fprintln(stderr, "port49 keys status: the policy declares no keys: block; a port49d with no policy keeps "+
+			"its keys in port49d.yaml, and keys status reads only a policy's")
 		return 1
 	}
 	recs, unread, err := readLogs(fs.Args())
@@ -130,7 +101,7 @@ func keysStatus(args []string, stdout, stderr io.Writer) int {
 		r, _ := p.Admitted(d.Name)
 		devices = append(devices, keystatus.Device{Name: d.Name, KeyRef: r.KeyRef, Addresses: d.Addresses})
 	}
-	keystatus.Infer(recs, devices, statusKeys(sets, opt.Now), opt).Write(stdout, opt.Now)
+	keystatus.Infer(recs, devices, statusKeys(p.KeySets(), opt.Now), opt).Write(stdout, opt.Now)
 	if unread > 0 {
 		fmt.Fprintf(stderr, "port49 keys status: %d line(s) could not be read as records and were skipped\n", unread)
 	}
@@ -145,21 +116,12 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var files policyFiles
 	files.register(fs)
-	cfgPath := fs.String("config", "", "port49d.yaml, for the versions; no secret is read")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if files.missing() || fs.NArg() != 1 {
 		fmt.Fprint(stderr, usage)
 		return 2
-	}
-	var sets map[string]keyset.Set
-	if *cfgPath != "" {
-		var err error
-		if sets, err = readKeySets(*cfgPath); err != nil {
-			fmt.Fprintln(stderr, "port49 keys show:", err)
-			return 1
-		}
 	}
 	p, err := files.load()
 	if err != nil {
@@ -182,7 +144,7 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	}
 	as, _ := p.KeyAssignment(name)
 	fmt.Fprintf(stdout, "%s: key_ref %s, by the %s tier (%s)\n", name, r.KeyRef, as.Tier, as.Group)
-	if ks, ok := sets[r.KeyRef]; ok {
+	if ks, ok := p.KeySets()[r.KeyRef]; ok {
 		fmt.Fprintf(stdout, "  provision version %d (current)\n", ks.Current.Version)
 		now := keysNow()
 		for _, v := range ks.Accept {

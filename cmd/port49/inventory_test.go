@@ -245,31 +245,21 @@ func TestInventoryDiffFailsAChangePort49dWouldHalfTake(t *testing.T) {
 	}
 }
 
-// Without --config every verdict says the key_refs went unchecked (I2): a pin
-// to a key port49d.yaml does not define reads as admitted here and is refused
-// there. With --config it is not said.
-func TestInventoryDiffSaysTheKeyRefsWentUnchecked(t *testing.T) {
-	_, pol, old, write := diffFiles(t)
+// The policy's keys: block is what the key_refs are checked against (pre-flight
+// M17): a pin to a key it does not define is refused with no --config given,
+// and no verdict says the key_refs went unchecked.
+func TestInventoryDiffChecksThePolicysKeyRefs(t *testing.T) {
+	_, _, old, write := diffFiles(t)
+	pol := write("policy-keyed.yaml", diffPolicy+"keys: {prod_key: {current: {version: 1, secret_ref: env:PORT49_KEY_NEVER_READ}}}\n")
 	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
 		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
-	const note = "key_refs not checked against port49d.yaml: pass --config to check them"
 	var out, errOut bytes.Buffer
-	if code := run([]string{"inventory", "diff", "--policy", pol, old, new}, &out, &errOut); code != 0 ||
-		!strings.Contains(out.String(), "ok: port49d would take the new inventory (inventory.max_removed_percent 10%); "+note) {
-		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	code := run([]string{"inventory", "diff", "--policy", pol, "--max-removed-percent", "100", old, new}, &out, &errOut)
+	if !strings.Contains(out.String(), "admission_changed leaf-02: admitted → refused") {
+		t.Fatalf("exit %d: a pin to a key the policy does not define is not refused:\n%s%s", code, out.String(), errOut.String())
 	}
-	half := write("half.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n")
-	out.Reset()
-	if code := run([]string{"inventory", "diff", "--policy", pol, old, half}, &out, &errOut); code != 1 ||
-		!strings.Contains(out.String(), note) {
-		t.Fatalf("a refused verdict must say it too: exit %d: %s", code, out.String())
-	}
-	cfg := write("port49d.yaml", "keys:\n  prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}\n"+
-		"  lab_key: {current: {version: 1, secret_ref: env:NEVER_READ}}\n")
-	out.Reset()
-	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg, old, new}, &out, &errOut); code != 0 ||
-		strings.Contains(out.String(), note) {
-		t.Fatalf("with --config: exit %d: %s", code, out.String())
+	if strings.Contains(out.String(), "unchecked") || strings.Contains(out.String(), "not checked against port49d.yaml") {
+		t.Fatalf("a verdict says the key_refs went unchecked:\n%s", out.String())
 	}
 }
 

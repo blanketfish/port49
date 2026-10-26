@@ -324,6 +324,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 		// (spec §5.8).
 		msg := yamlValue.ReplaceAllString(err.Error(), "cannot unmarshal a $1 value")
 		msg = yamlTagged.ReplaceAllString(msg, "cannot decode a $1 value")
+		msg = yamlCustom.ReplaceAllString(msg, "cannot decode a value with a custom tag")
 		msg = yamlAnchor.ReplaceAllString(msg, "an unknown anchor was referenced; quote a rule that starts with *")
 		msg = yamlField.ReplaceAllString(msg, "an unknown field in type $1")
 		msg = yamlKey.ReplaceAllString(msg, "a mapping key already defined at line $1")
@@ -420,8 +421,12 @@ func (p *Policy) KeysDeclared() bool { return p.keysDeclared }
 // (`deny: [*secret]`); yamlField and yamlKey the key an unknown-field or
 // duplicate-key error does. Each is replaced by what it is.
 var (
-	yamlValue  = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
-	yamlTagged = regexp.MustCompile("cannot decode (!!\\w+) `[^`]*`")
+	// The quoted value runs to the last backtick on the line, so a value
+	// holding one is cut whole; a custom tag, which is document text too, is
+	// named by what it is (re-review 8, a secret pasted into keys:).
+	yamlValue  = regexp.MustCompile("cannot unmarshal (!!\\w+) `.*`")
+	yamlTagged = regexp.MustCompile("cannot decode (!!\\w+) `.*`")
+	yamlCustom = regexp.MustCompile("cannot (?:unmarshal|decode) ![^!\\s]\\S* `.*`")
 	yamlAnchor = regexp.MustCompile(`unknown anchor '.*' referenced`)
 	yamlField  = regexp.MustCompile(`field .* not found in type (\S+)`)
 	yamlKey    = regexp.MustCompile(`mapping key ".*" already defined at line (\d+)`)

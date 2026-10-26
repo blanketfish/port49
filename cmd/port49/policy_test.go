@@ -26,6 +26,9 @@ import (
 const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
 
 // policyFixture writes a small policy and inventory and returns their paths.
+// fixtureKeys is the keys: block of the fixtures whose inventories assign k.
+const fixtureKeys = "keys:\n  k:\n    current: {version: 1, secret_ref: env:PORT49_KEY_FIXTURE}\n"
+
 func policyFixture(t *testing.T) (pol, inv string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -43,7 +46,7 @@ subjects:
 grants:
   - {subject: noc, scope: all_devices, roles: [read_only, no_reload]}
   - {subject: ops, scope: all_devices, roles: [admin]}
-tests:
+`+fixtureKeys+`tests:
   - {subject: noc, device: leaf-01, command: "show version", expect: permit}
   - {subject: noc, device: leaf-01, command: "reload", expect: deny}
 `), 0o600); err != nil {
@@ -1368,8 +1371,7 @@ func TestPolicyTestJudgesAdmissionAndKeys(t *testing.T) {
 		t.Fatalf("%s", out.String())
 	}
 	out.Reset()
-	cfg := write("port49d.yaml", keysConfig)
-	code := run([]string{"policy", "test", "--policy", write("p.yaml", base), "--inventory", inv, "--config", cfg}, &out, &errOut)
+	code := run([]string{"policy", "test", "--policy", write("p.yaml", base), "--inventory", inv}, &out, &errOut)
 	if code != 1 || !strings.Contains(out.String(), "keys: key group attributes {site: lab} → lab_key names key_ref lab_key") {
 		t.Fatalf("an undefined key_ref: exit %d\n%s", code, out.String())
 	}
@@ -1459,16 +1461,14 @@ func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
 	}
 	pol := write("p.yaml", strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]",
 		"key_groups: [{match: {attributes: {site: campus}}, key_ref: prod_key}, "+
-			"{match: {attributes: {role: leaf}}, key_ref: prod_key}, {match: {cidr: 192.0.2.0/24}, key_ref: lab_key}]", 1)+
-		"keys: {prod_key: {current: {version: 1, secret_ref: env:NEVER_READ}}}\n")
+			"{match: {attributes: {role: leaf}}, key_ref: prod_key}, {match: {cidr: 192.0.2.0/24}, key_ref: lab_key}]", 1))
 	inv := write("inventory.yaml", `devices:
   - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9], attributes: {site: campus, role: leaf}}
   - {name: lab-01, platform: arista_eos, addresses: [192.0.2.9]}
   - {name: spine-01, platform: arista_eos, addresses: [10.30.0.1], attributes: {site: campus}}
 `)
-	cfg := write("port49d.yaml", keysConfig)
 	var out, errOut bytes.Buffer
-	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv, "--config", cfg}, &out, &errOut)
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
 	got := out.String() + errOut.String()
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, got)
@@ -1490,34 +1490,17 @@ func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
 	}
 }
 
-// M3: a port49d.yaml with no keys defines none (readKeySets returns an
-// empty map, never nil), so every key group's key_ref is undefined and the
-// gate fails, rather than having nothing to check.
+// M3: a policy whose keys: block is empty defines no key, so every key
+// group's key_ref is undefined and the gate fails, rather than having nothing
+// to check.
 func TestPolicyTestReadsAnEmptyKeysBlockAsUndefined(t *testing.T) {
-	pol, inv, _, _ := keysFiles(t)
-	body, err := os.ReadFile(pol)
-	if err != nil {
+	_, inv, _ := keysFiles(t)
+	pol := filepath.Join(t.TempDir(), "policy-nokeys.yaml")
+	if err := os.WriteFile(pol, []byte(strings.Replace(keysPolicy, keysBlock, "keys: {}\n", 1)), 0o600); err != nil {
 		t.Fatal(err)
-	}
-	pol = filepath.Join(t.TempDir(), "policy-nokeys.yaml")
-	if err := os.WriteFile(pol, append(body, "keys: {}\n"...), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
-	if err := os.WriteFile(cfg, []byte("keys: {}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, body := range []string{"keys: {}\n", "listen: \":49\"\n", ""} {
-		none := filepath.Join(t.TempDir(), "port49d.yaml")
-		if err := os.WriteFile(none, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if sets, err := readKeySets(none); err != nil || sets == nil {
-			t.Fatalf("%q: sets %v, err %v: a file with no keys must define none, not be unchecked", body, sets, err)
-		}
 	}
 	var out, errOut bytes.Buffer
-	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv, "--config", cfg}, &out, &errOut)
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
 	if code != 1 || !strings.Contains(out.String(), "keys: key group cidr 10.0.0.0/8 → prod_key names key_ref prod_key") ||
 		!strings.Contains(out.String(), "admission: leaf-01 (arista_eos) refused: ") {
 		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
@@ -1526,10 +1509,10 @@ func TestPolicyTestReadsAnEmptyKeysBlockAsUndefined(t *testing.T) {
 
 // I1: port49d always assesses admission, so a bundle with no key_groups in
 // either file admits only pinned devices, and none here: its start and every
-// reload refuse it. `policy test` fails it with or without --config, and
+// reload refuse it. `policy test` fails it, and
 // `policy diff` fails the edit that deletes the block, naming each device.
 func TestCIFailsWhenTheKeyGroupsBlockIsRemoved(t *testing.T) {
-	pol, inv, cfg, _ := keysFiles(t)
+	pol, inv, _ := keysFiles(t)
 	gone := filepath.Join(t.TempDir(), "nogroups.yaml")
 	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
 	if body == keysPolicy {
@@ -1538,15 +1521,15 @@ func TestCIFailsWhenTheKeyGroupsBlockIsRemoved(t *testing.T) {
 	if err := os.WriteFile(gone, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, extra := range [][]string{nil, {"--config", cfg}} {
+	{
 		var out, errOut bytes.Buffer
-		args := append([]string{"policy", "test", "--policy", gone, "--inventory", inv}, extra...)
+		args := []string{"policy", "test", "--policy", gone, "--inventory", inv}
 		code := run(args, &out, &errOut)
 		got := out.String() + errOut.String()
 		if code != 1 || !strings.Contains(got, "admission: neither the policy nor the inventory declares key_groups") ||
 			!strings.Contains(got, "port49d admits none of the 2 device(s)") ||
 			!strings.Contains(got, "admission: leaf-19 (arista_eos) refused: matches no key group") {
-			t.Fatalf("%v: exit %d:\n%s", extra, code, got)
+			t.Fatalf("exit %d:\n%s", code, got)
 		}
 	}
 	var out, errOut bytes.Buffer
@@ -1855,7 +1838,7 @@ func TestPolicyTestReportsTheSet130Reply(t *testing.T) {
 	if err := os.WriteFile(pol, []byte("platform_set: 1.3.0\nscopes: [{name: all_devices, match: {}}]\n"+
 		"roles: [{name: r, privilege: readonly, permit: [\"show **\"], deny: [\"show security **\"]}]\n"+
 		"subjects: [{name: noc, identity: \"user:noc@example.com\", username: noc, token_ttl: 60s}]\n"+
-		"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		"grants: [{subject: noc, scope: all_devices, roles: [r]}]\n"+fixtureKeys), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
@@ -1895,5 +1878,80 @@ func TestPolicyDiffPrintsTheRenderedDenyReply(t *testing.T) {
 	const want = `-> ["user-permissions=view view-configuration", "deny-commands=^( *show +cli( .*)? *(\\|.*)?| *(monitor|help|quit|exit|file|load|op|request|save|scp|set|start|test|junoscript)( .*)? *(\\|.*)?| *set +cli( .*)? *(\\|.*)?)$"]`
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("the reply line:\n%s%s", out.String(), errb.String())
+	}
+}
+
+func policyKeysFixture(t *testing.T) (write func(name, body string) string, inv string) {
+	t.Helper()
+	dir := t.TempDir()
+	write = func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	return write, write("inventory.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.20.0.7]}\n")
+}
+
+// policy test reads the key sets from the policy itself (decision 53 ruling
+// 3), and fails every policy port49d refuses for its keys: no keys: block,
+// with or without key_groups, and a reference outside key_secret_refs.
+func TestPolicyTestReadsTheKeysFromThePolicy(t *testing.T) {
+	write, inv := policyKeysFixture(t)
+	const groups = "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: k}]\n"
+	const head = "scopes: [{name: all_devices, match: {}}]\nroles: [{name: r, privilege: readonly, permit: [show **]}]\n" +
+		"subjects: [{name: s, identity: [\"user:alice@example.com\"], username: alice, token_ttl: 60s}]\n" +
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n"
+	keys := func(ref string) string {
+		return "keys:\n  k:\n    current: {version: 3, secret_ref: " + ref + "}\n" +
+			"    accept: [{version: 2, secret_ref: " + ref + "_OLD}]\n"
+	}
+	cfgFile := write("port49d.yaml", "key_secret_refs: {env_prefix: PORT49_ENC_}\n")
+	for name, c := range map[string]struct {
+		policy string
+		args   []string
+		code   int
+		want   string
+	}{
+		"a keys block": {head + groups + keys("env:PORT49_KEY_NEW"), nil, 0, "report: key k version 2 has no retire_after"},
+		"no keys block, with key_groups": {head + groups, nil, 1,
+			"keys: the policy declares no keys: block"},
+		"no keys block, no key_groups":   {head, nil, 1, "keys: the policy declares no keys: block"},
+		"a ref outside the allowance":    {head + groups + keys("env:PORT49_ENC_V2"), nil, 1, "outside key_secret_refs"},
+		"the same, --config widening it": {head + groups + keys("env:PORT49_ENC_V2"), []string{"--config", cfgFile}, 0, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			args := append([]string{"policy", "test", "--policy", write("p.yaml", c.policy), "--inventory", inv}, c.args...)
+			code := run(args, &out, &errOut)
+			got := out.String() + errOut.String()
+			if code != c.code || !strings.Contains(got, c.want) {
+				t.Fatalf("exit %d, want %d, with %q:\n%s", code, c.code, c.want, got)
+			}
+		})
+	}
+}
+
+// policy diff fails a change that names another secret for a version both
+// files hold (decision 53 ruling 3; pre-flight M9): across a restart port49d
+// has nothing to compare it against.
+func TestPolicyDiffRefusesARekeyedVersion(t *testing.T) {
+	write, inv := policyKeysFixture(t)
+	policyWith := func(ref string) string {
+		return strings.Replace(keysPolicy, keysBlock, "keys:\n  prod_key:\n    current: {version: 1, secret_ref: "+ref+"}\n", 1)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", write("old.yaml", policyWith("env:PORT49_KEY_A")),
+		"--new", write("new.yaml", policyWith("env:PORT49_KEY_B")), "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String(), "REFUSED: keys: prod_key version 1 names secret_ref env:PORT49_KEY_B, "+
+		"and the old policy env:PORT49_KEY_A") {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	code = run([]string{"policy", "diff", "--old", write("old2.yaml", policyWith("env:PORT49_KEY_A")),
+		"--new", write("new2.yaml", policyWith("env:PORT49_KEY_A")), "--inventory", inv}, &out, &errOut)
+	if strings.Contains(out.String(), "REFUSED: keys:") {
+		t.Fatalf("an unchanged key was refused:\n%s", out.String())
 	}
 }

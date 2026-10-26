@@ -76,6 +76,7 @@ const usage = `usage:
   port49 explain --device NAME [--command "LINE"] [--principal ID] [--socket PATH]
                  (asks the broker through your agent; --principal another needs api: explain_others)
   port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]
+                     (--config reads key_secret_refs alone; the key sets are the policy's)
   port49 policy replay [--line N] [--policy FILE --inventory FILE] LOGFILE|-
   port49 policy diff --old FILE --new FILE --inventory FILE
   port49 inventory diff --policy FILE [--new-policy FILE] [--max-removed-percent N | --config PORT49D_YAML]
@@ -97,8 +98,8 @@ const usage = `usage:
   port49 devices check-config --policy FILE --inventory FILE [--config PORT49D_YAML]
                               (--device NAME CONFIGFILE | --batch CONFIGFILE...)
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
-  port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
-  port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
+  port49 keys status --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
+  port49 keys show --policy FILE --inventory FILE DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
   port49 store status [--socket PATH]
                 (each store as port49d or port49-broker sees it: backend, members, reachable, the

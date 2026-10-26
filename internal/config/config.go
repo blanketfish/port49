@@ -1524,19 +1524,24 @@ func (c Config) Keyring() map[string]keyring.Set {
 	return keyset.Keyring(c.Keys, func(ref string) []byte { return c.secrets[ref].Bytes() })
 }
 
-// KeySets reads port49d.yaml's keys: block as Load does, without reading a
-// secret: the names, versions and dates `port49 keys status` and `port49
-// policy test --config` read, in CI or anywhere else no key is.
-func KeySets(raw []byte) (map[string]keyset.Set, error) {
+// KeySecretRefsOf reads key_secret_refs from a port49d.yaml's bytes, with
+// Load's defaults and checks and no secret read, as InventoryBound reads its
+// bound: what `port49 policy test --config` holds a policy's key references
+// to. A typo is an error, never the default.
+func KeySecretRefsOf(raw []byte) (secretref.Allowance, error) {
 	var f fileConfig
 	if err := decodeFile(raw, &f); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+		return secretref.Allowance{}, fmt.Errorf("config: %w", err)
 	}
-	sets, err := keyset.Check(f.Keys, raw)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+	allow := secretref.Allowance{}
+	if f.KeySecretRefs != nil {
+		allow = *f.KeySecretRefs
 	}
-	return sets, nil
+	allow = allow.WithDefaults()
+	if err := allow.Check(); err != nil {
+		return secretref.Allowance{}, fmt.Errorf("config: key_secret_refs: %w", err)
+	}
+	return allow, nil
 }
 
 // checkService is inventory.service checked as Load checks it. Every path is
