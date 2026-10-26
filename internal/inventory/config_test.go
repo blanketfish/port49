@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/secretref/secretreftest"
 )
 
 const minimalConfig = `
@@ -217,7 +219,7 @@ const netboxSource = `  - name: netbox_prod
     type: netbox
     url: https://netbox.example.com
     ca_file: /etc/i/netbox-ca.pem
-    token_secret_env: PORT49_TEST_NETBOX_TOKEN
+    token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN
 `
 
 const testToken = "0123456789abcdef0123456789abcdef01234567"
@@ -246,8 +248,8 @@ func TestANetboxSourceLoadsWithItsDefaults(t *testing.T) {
 // never.
 func TestASecretIsNamedByItsKey(t *testing.T) {
 	_, err := loadString(t, minimalConfig+netboxSource)
-	if err == nil || !strings.Contains(err.Error(), "sync[1].token_secret_env names an environment variable that is "+
-		"unset or empty") || strings.Contains(err.Error(), "PORT49_TEST_NETBOX_TOKEN") {
+	if err == nil || !strings.Contains(err.Error(), "sync[1].token_secret_ref env:PORT49_TEST_NETBOX_TOKEN: "+
+		"the variable is not set") {
 		t.Fatalf("unset: %v", err)
 	}
 	t.Setenv("PORT49_TEST_NETBOX_TOKEN", "Token "+testToken)
@@ -263,13 +265,13 @@ func TestASecretIsNamedByItsKey(t *testing.T) {
 func TestWebhookListenAndAWebhookSourceGoTogether(t *testing.T) {
 	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testToken)
 	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
-	hook := "    webhook_secret_env: PORT49_TEST_NETBOX_HOOK\n"
+	hook := "    webhook_secret_ref: env:PORT49_TEST_NETBOX_HOOK\n"
 	if _, err := loadString(t, minimalConfig+netboxSource+hook); err == nil ||
-		!strings.Contains(err.Error(), "sync[1] (netbox_prod): webhook_secret_env is set, and webhook_listen is not") {
+		!strings.Contains(err.Error(), "sync[1] (netbox_prod): webhook_secret_ref is set, and webhook_listen is not") {
 		t.Fatalf("no listener: %v", err)
 	}
 	if _, err := loadString(t, "webhook_listen: 127.0.0.1:8444\n"+minimalConfig+netboxSource); err == nil ||
-		!strings.Contains(err.Error(), "webhook_listen is set, and no source has webhook_secret_env") {
+		!strings.Contains(err.Error(), "webhook_listen is set, and no source has webhook_secret_ref") {
 		t.Fatalf("no source: %v", err)
 	}
 	c, err := loadString(t, "webhook_listen: 127.0.0.1:8444\n"+minimalConfig+netboxSource+hook)
@@ -282,8 +284,8 @@ func TestWebhookListenAndAWebhookSourceGoTogether(t *testing.T) {
 	}
 	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret[:31])
 	if _, err := loadString(t, "webhook_listen: 127.0.0.1:8444\n"+minimalConfig+netboxSource+hook); err == nil ||
-		!strings.Contains(err.Error(), "sync[1].webhook_secret_env names a variable whose value is not 32 to 255") ||
-		strings.Contains(err.Error(), testHookSecret[:31]) || strings.Contains(err.Error(), "PORT49_TEST_NETBOX_HOOK") {
+		!strings.Contains(err.Error(), "sync[1].webhook_secret_ref names a secret that is not 32 to 255") ||
+		strings.Contains(err.Error(), testHookSecret[:31]) {
 		t.Fatalf("short: %v", err)
 	}
 }
@@ -294,26 +296,26 @@ func TestWhatANetboxSourceCannotHave(t *testing.T) {
 		"http":                 {"url: https://", "url: http://", "url must be https://"},
 		"a token in the url":   {"url: https://netbox.example.com", "url: https://netbox.example.com/?t=" + testToken, "a query"},
 		"no ca_file":           {"    ca_file: /etc/i/netbox-ca.pem\n", "", "ca_file is required"},
-		"no token_secret_env":  {"    token_secret_env: PORT49_TEST_NETBOX_TOKEN\n", "", "sync[1].token_secret_env is required"},
+		"no token_secret_ref":  {"    token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN\n", "", "sync[1].token_secret_ref is required"},
 		"relative ca_file":     {"ca_file: /etc/i/netbox-ca.pem", "ca_file: netbox-ca.pem", "ca_file is required, an absolute path"},
-		"a nautobot profile":   {"token_secret_env:", "profile: nautobot_2\n    token_secret_env:", "profile must be one of netbox_3_7, netbox_4"},
-		"api":                  {"token_secret_env:", "api: soap\n    token_secret_env:", "api must be auto, graphql or rest"},
-		"page_size":            {"token_secret_env:", "page_size: 5000\n    token_secret_env:", "page_size must be between 1 and 1000"},
-		"map without platform": {"token_secret_env:", "map: {site: site.slug}\n    token_secret_env:", "map must name platform"},
-		"map path":             {"token_secret_env:", "map: {platform: platform.slug, x: tenant.slug}\n    token_secret_env:", "map.x names no path a profile reads"},
-		"map key name":         {"token_secret_env:", "map: {platform: platform.slug, name: site.slug}\n    token_secret_env:", "map has a key that is not an attribute name"},
-		"both interface rules": {"token_secret_env:", "addresses: {interfaces: [Loopback0], all_interfaces: true}\n    token_secret_env:", "one or the other"},
-		"no address":           {"token_secret_env:", "addresses: {primary: false}\n    token_secret_env:", "addresses gives no address"},
-		"a status list that keeps nothing named": {"token_secret_env:", "filter: {status: []}\n    token_secret_env:",
+		"a nautobot profile":   {"token_secret_ref:", "profile: nautobot_2\n    token_secret_ref:", "profile must be one of netbox_3_7, netbox_4"},
+		"api":                  {"token_secret_ref:", "api: soap\n    token_secret_ref:", "api must be auto, graphql or rest"},
+		"page_size":            {"token_secret_ref:", "page_size: 5000\n    token_secret_ref:", "page_size must be between 1 and 1000"},
+		"map without platform": {"token_secret_ref:", "map: {site: site.slug}\n    token_secret_ref:", "map must name platform"},
+		"map path":             {"token_secret_ref:", "map: {platform: platform.slug, x: tenant.slug}\n    token_secret_ref:", "map.x names no path a profile reads"},
+		"map key name":         {"token_secret_ref:", "map: {platform: platform.slug, name: site.slug}\n    token_secret_ref:", "map has a key that is not an attribute name"},
+		"both interface rules": {"token_secret_ref:", "addresses: {interfaces: [Loopback0], all_interfaces: true}\n    token_secret_ref:", "one or the other"},
+		"no address":           {"token_secret_ref:", "addresses: {primary: false}\n    token_secret_ref:", "addresses gives no address"},
+		"a status list that keeps nothing named": {"token_secret_ref:", "filter: {status: []}\n    token_secret_ref:",
 			"filter.status is empty"},
-		"two aliases alike in lower case": {"token_secret_env:",
-			"platform_aliases: {EOS: arista_eos, eos: arista_eos}\n    token_secret_env:", "two entries for one slug"},
-		"a pasted token": {"token_secret_env:", "token: " + testToken + "\n    token_secret_env:", "an unknown field"},
+		"two aliases alike in lower case": {"token_secret_ref:",
+			"platform_aliases: {EOS: arista_eos, eos: arista_eos}\n    token_secret_ref:", "two entries for one slug"},
+		"a pasted token": {"token_secret_ref:", "token: " + testToken + "\n    token_secret_ref:", "an unknown field"},
 		"a netbox profile on nautobot": {"type: netbox", "type: nautobot\n    profile: netbox_4",
 			"profile must be one of nautobot_1_6, nautobot_2"},
-		"rest and interfaces": {"token_secret_env:", "api: rest\n    addresses: {all_interfaces: true}\n    token_secret_env:", "REST does not give"},
-		"an alias":            {"token_secret_env:", "platform_aliases: {eos: Arista EOS}\n    token_secret_env:", "platform_aliases has an entry"},
-		"a status":            {"token_secret_env:", "filter: {status: [\"act\\u001bive\"]}\n    token_secret_env:", "filter.status[0] is not a status name"},
+		"rest and interfaces": {"token_secret_ref:", "api: rest\n    addresses: {all_interfaces: true}\n    token_secret_ref:", "REST does not give"},
+		"an alias":            {"token_secret_ref:", "platform_aliases: {eos: Arista EOS}\n    token_secret_ref:", "platform_aliases has an entry"},
+		"a status":            {"token_secret_ref:", "filter: {status: [\"act\\u001bive\"]}\n    token_secret_ref:", "filter.status[0] is not a status name"},
 	} {
 		_, err := loadString(t, minimalConfig+strings.Replace(netboxSource, c.from, c.to, 1))
 		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), testToken) {
@@ -360,7 +362,7 @@ func TestANautobotSourceLoads(t *testing.T) {
 func TestWhatAWebhookListenerCannotHave(t *testing.T) {
 	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testToken)
 	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
-	hooked := minimalConfig + netboxSource + "    webhook_secret_env: PORT49_TEST_NETBOX_HOOK\n"
+	hooked := minimalConfig + netboxSource + "    webhook_secret_ref: env:PORT49_TEST_NETBOX_HOOK\n"
 	listen := "webhook_listen: 127.0.0.1:8444\n"
 	cert, key := "webhook_tls_cert_file: /etc/i/hook.pem\n", "webhook_tls_key_file: /etc/i/hook-key.pem\n"
 	for name, c := range map[string]struct{ body, want string }{
@@ -389,5 +391,82 @@ func TestWhatAWebhookListenerCannotHave(t *testing.T) {
 	if _, err := loadString(t, listen+hooked); err == nil || !strings.Contains(err.Error(), "not 32 to 255") ||
 		strings.Contains(err.Error(), long) {
 		t.Fatalf("256: %v", err)
+	}
+}
+
+// A source's token may come from a file, read as a private key (decision 53
+// ruling 1), and token_secret_env is gone: refused by name, with no alias.
+func TestASourceTokenFromAFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil { // the fence refuses a group-writable directory
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte(testToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(minimalConfig+netboxSource, "token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN",
+		"token_secret_ref: file:"+path, 1)
+	c, err := loadString(t, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Sync[1].Token.Reveal(); len(got) != len(testToken) || got != testToken { // never print it
+		t.Fatalf("the token is %d bytes, want %d (one trailing newline trimmed)", len(got), len(testToken))
+	}
+	for _, key := range []string{"token_secret_env", "webhook_secret_env"} {
+		old := strings.Replace(minimalConfig+netboxSource, "token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN",
+			key+": PORT49_TEST_NETBOX_TOKEN", 1)
+		if _, err := loadString(t, old); err == nil ||
+			!strings.Contains(err.Error(), key+" was replaced by "+strings.Replace(key, "_env", "_ref", 1)) ||
+			!strings.Contains(err.Error(), "port49-inventory: ") {
+			t.Errorf("%s: %v", key, err)
+		}
+	}
+}
+
+// A token's text is checked as before (1 to 512 printable characters, no
+// space), whatever its source, and the check quotes no part of it.
+func TestASourceTokenOfTheWrongShapeIsNotPrinted(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil { // the fence refuses a group-writable directory
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "token")
+	const spaced = "Token-with-a-space abcdefghijklmnop"
+	if err := os.WriteFile(path, []byte(spaced+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, ref := range map[string]string{"a file": "file:" + path, "an env": "env:PORT49_TEST_NETBOX_TOKEN"} {
+		t.Setenv("PORT49_TEST_NETBOX_TOKEN", spaced)
+		body := strings.Replace(minimalConfig+netboxSource, "token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN",
+			"token_secret_ref: "+ref, 1)
+		_, err := loadString(t, body)
+		if err == nil || !strings.Contains(err.Error(), "sync[1].token_secret_ref names a secret that is not 1 to 512 "+
+			"printable characters without a space") || strings.Contains(err.Error(), "abcdef") {
+			t.Errorf("%s: wrong shape: not refused by shape, or it quotes the value", name)
+		}
+	}
+}
+
+// What a loaded config holds of a secret prints as nothing under any verb
+// (decision 53; the holder test for the source secrets).
+func TestASourceSecretsPrintAsNothing(t *testing.T) {
+	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testToken)
+	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
+	c, err := loadString(t, "webhook_listen: 127.0.0.1:8444\n"+minimalConfig+netboxSource+
+		"    webhook_secret_ref: env:PORT49_TEST_NETBOX_HOOK\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var forms [][]byte
+	forms = append(forms, secretreftest.Forms([]byte(testToken))...)
+	forms = append(forms, secretreftest.Forms([]byte(testHookSecret))...)
+	for _, verb := range secretreftest.Verbs {
+		for _, v := range []any{c, c.Sync[1], c.Sync[1].Token, c.Sync[1].WebhookSecret, &c.Sync[1]} {
+			if l := secretreftest.Leak([]byte(fmt.Sprintf(verb, v)), forms); l != "" {
+				t.Errorf("%s prints a secret (%s)", verb, l)
+			}
+		}
 	}
 }

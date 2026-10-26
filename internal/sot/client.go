@@ -93,7 +93,7 @@ func parseBase(raw string) (*url.URL, error) {
 		return nil, errors.New("url must be https://host[:port][/path]")
 	}
 	if u.User != nil {
-		return nil, errors.New("url carries user information; the source is asked with the token token_secret_env " +
+		return nil, errors.New("url carries user information; the source is asked with the token token_secret_ref " +
 			"names, so remove it")
 	}
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
@@ -254,7 +254,7 @@ func (c *client) getJSON(ctx context.Context, u *url.URL, v any) error {
 func statusError(what string, status int) error {
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return fmt.Errorf("%s answered HTTP %d: the token token_secret_env names was refused, or may not read "+
+		return fmt.Errorf("%s answered HTTP %d: the token token_secret_ref names was refused, or may not read "+
 			"devices; it is not printed", what, status)
 	case status >= 300 && status < 400:
 		return fmt.Errorf("%s answered HTTP %d, a redirect, which is not followed: set url to where it points", what,

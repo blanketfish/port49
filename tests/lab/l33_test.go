@@ -94,8 +94,8 @@ sync:
     type: %s
     url: %s
     ca_file: %s/ca.pem
-    token_secret_env: L27_TOKEN
-    webhook_secret_env: L33_WEBHOOK_SECRET
+    token_secret_ref: env:L27_TOKEN
+    webhook_secret_ref: env:L33_WEBHOOK_SECRET
     interval: 24h
     map: {%s}
 `, os.Getenv("L33_HOOK_BIND"), pki, pki, product, os.Getenv("L32_HOST_URL"), pki, strings.Join(m, ", "))

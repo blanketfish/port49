@@ -508,7 +508,7 @@ func hookFixture(t *testing.T, listen string, settle, gap time.Duration) (fixtur
 	}
 	cfg := strings.Replace(string(raw), "sync: [{name: lab_file, type: file, path: "+f.source+"}]",
 		fmt.Sprintf("webhook_listen: %s\nsync:\n  - {name: netbox_prod, type: netbox, url: %q, ca_file: %s, "+
-			"token_secret_env: PORT49_TEST_NETBOX_TOKEN, webhook_secret_env: PORT49_TEST_NETBOX_HOOK}\n", listen,
+			"token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN, webhook_secret_ref: env:PORT49_TEST_NETBOX_HOOK}\n", listen,
 			nb.URL, nb.CAFile), 1)
 	if cfg == string(raw) {
 		t.Fatal("the fixture's sync line moved; update this test")

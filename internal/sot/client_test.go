@@ -121,7 +121,7 @@ func TestARefusedTokenIsNamedNeverPrinted(t *testing.T) {
 	cl, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
 	var v map[string]any
 	err := cl.getJSON(context.Background(), cl.at("/api/status/", nil), &v)
-	if err == nil || !strings.Contains(err.Error(), "answered HTTP 403: the token token_secret_env names") ||
+	if err == nil || !strings.Contains(err.Error(), "answered HTTP 403: the token token_secret_ref names") ||
 		strings.Contains(err.Error(), token) {
 		t.Fatalf("%v", err)
 	}
