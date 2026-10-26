@@ -330,6 +330,22 @@ unmeasured and L78 open for hardware Junos; decision 48 ruling 4 is provisional 
 devices from closed lab evidence, `make lab-regress` and `make qual-vet` (Plan 11b, below).
 **11b executed 2026-10-21** on `feature/qualification-suite` (Plan 11b — As built, below): eleven
 platforms vetted, L79 closed, L80 opened and closed, L78 measured and still open for hardware Junos.
+**12a written 2026-10-24, revised 2026-10-25 after its pre-flight** (`2026-10-24-12a-server-hardening.md`,
+sixteen tasks: one spec, fourteen code, one docs; decision 53, rulings 1–12, written by its Task 1). Plan 12 is split into 12a (server code), 12b (deployment
+artifacts, release, publishing) and 12c (reference configurations, alarms, lab rows), each merged before
+the next is written (team lead, 2026-10-24). It covers:
+- `secret_ref` (`env:` and `file:` only; a secret store reaches port49 as a file its agent renders: Ryan, 2026-10-25) in place of every `*_env` secret key;
+- the key sets moved into the policy file, bounded by port49d.yaml's `key_secret_refs`, and a reload
+  waiting on a secret file retried every 30 s;
+- one YAML document per file;
+- the source-of-truth client's egress proxy;
+- the global connection cap, shedding at Accept;
+- the etcd floor at start;
+- the broker start surviving a compaction;
+- the issuing-CA record (the key stays on each broker's disk: Ryan);
+- the fence's ancestor walk.
+
+It opens no lab row.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7526,6 +7542,48 @@ Deployment artifacts, the **reference device AAA configuration per platform** (t
 disables fall-through on FAIL, design §12), load validation at the §5 target rate, the
 failure-matrix tests of design §12 and §14, observability alarms with a metric behind each
 (design §15).
+
+**Split into three plans (team lead, 2026-10-24), each merged before the next is written.** The
+inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 items, themes A–G).
+- **12a — Server hardening** (`2026-10-24-12a-server-hardening.md`).
+  - **Builds:** every server-code item. Theme B, and theme A's code half:
+    - `secret_ref` resolvers (`env:`, `file:`; no secret-store client, Ryan 2026-10-25) replacing every `*_env` secret key outright;
+    - the key sets moved into the policy file's `keys:` (port49-broker.yaml's `key_refs` removed);
+    - `token_secret_ref` and `webhook_secret_ref`;
+    - one YAML document per file;
+    - the source-of-truth client's `HTTPS_PROXY`;
+    - `limits.max_connections`, shedding at Accept (`port49_connections_shed_total`);
+    - `key_secret_refs`, bounding which secrets a policy may name;
+    - the etcd version floor at start;
+    - the broker start's paged loads retrying `ErrCompacted`;
+    - the issuing-CA record (`meta/issuer`, fingerprints only; the key stays on each broker's disk, Ryan);
+    - the write fence's ancestor walk.
+  - **Spec:** decision 53 (its Task 1); §10 and §12; decisions 31, 43 (ruling 14) and 51; design §11 and §13.
+  - **Hands on:** the configuration surface 12b's artifacts write.
+  - **Lab:** none.
+  - Status: **written 2026-10-24**, revised 2026-10-25 (`vault:` dropped; pre-flight C1, I1–I12 and M1–M19 applied); re-review READY, its 13 minors applied 2026-10-26; sixteen tasks.
+- **12b — Deployment artifacts, release and publishing.**
+  - **Builds:**
+    - the systemd and Kubernetes shapes beside 7f's container, each with its smoke test;
+    - the four requirements every shape states;
+    - etcd artifacts, single-site and multi-region examples, backups;
+    - the issuing CA's files in each shape's state volume;
+    - the release pipeline and client packages;
+    - PyPI and Galaxy;
+    - `make test`/`make vet` and `TestAnotherUIDIsRefused` in CI (Ryan lifted the workflow hold on 2026-10-24);
+    - `file:` secrets per shape: whole-volume mounts, `defaultMode`/`fsGroup`, Vault Agent's `perms`;
+    - each artifact's README (plan 13 writes the docs-site pages);
+    - anycast through MetalLB, offered only after a lab row measures `externalTrafficPolicy: Local`.
+  - Inventory themes A and E. Written after 12a merges.
+- **12c — Reference configurations, alarms and lab rows.**
+  - **Builds:**
+    - the per-platform reference AAA configurations (L73's TLS ones included);
+    - L39 (b), (c), the SR Linux ERROR row, and the Junos/NX-OS ERROR disagreement;
+    - the failure matrix;
+    - the alert rules (the global cap's shedding included);
+    - the Junos `idle-timeout` per role (pending a ruling);
+    - load validation at the §5 rate and the items sized from it.
+  - Inventory themes C, D and F. Written after 12b merges.
 
 Carried here from plan 1's review:
 
