@@ -11,6 +11,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 // A shutdown never hangs behind a reply write to a peer that stopped reading:
@@ -60,19 +62,18 @@ func TestShutdownIsNotHeldByAWriteToAPeerThatStoppedReading(t *testing.T) {
 	if err := tc.Handshake(); err != nil {
 		t.Fatal(err)
 	}
-	s := &conn{raw: raw, c: tc}
+	s := &conn{d: Deps{IdleTimeout: time.Hour}, raw: raw, c: tc, tls: &tlsSession{}}
 	writing := make(chan struct{})
-	written := make(chan error, 1)
-	go func() { // a reply write that fills the buffer and blocks, as write() does
-		s.wmu.Lock()
-		defer s.wmu.Unlock()
+	written := make(chan bool, 1)
+	go func() { // the real reply write: it holds wmu while it blocks on the full buffer
 		close(writing)
-		tc.SetWriteDeadline(time.Now().Add(time.Hour))
-		_, err := tc.Write(make([]byte, 64<<20))
-		written <- err
+		written <- s.write(wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen}, make([]byte, 64<<20))
 	}()
 	<-writing
 	time.Sleep(100 * time.Millisecond) // the write is blocked on the full buffer
+	if s.wmu.TryLock() {               // conn.write holds the lock for as long as its Write blocks
+		t.Fatal("conn.write does not hold the write lock during a blocked Write")
+	}
 	began := time.Now()
 	closed := make(chan struct{})
 	go func() { s.closeTLSAtShutdown(tc); close(closed) }()
@@ -84,7 +85,7 @@ func TestShutdownIsNotHeldByAWriteToAPeerThatStoppedReading(t *testing.T) {
 	if d := time.Since(began); d > 2*time.Second {
 		t.Fatalf("the shutdown took %v with a 300ms write bound", d)
 	}
-	if err := <-written; err == nil {
+	if ok := <-written; ok {
 		t.Fatal("the blocked write finished without error")
 	}
 }

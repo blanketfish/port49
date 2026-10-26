@@ -759,6 +759,16 @@ func (s *conn) closeTLSAtShutdown(tc *tls.Conn) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	defer s.wmu.Unlock()
-	_ = s.raw.SetWriteDeadline(until) // the alert's own write is bounded too
-	tc.Close()
+	_ = s.raw.SetWriteDeadline(until)
+	// crypto/tls sets its own 5s deadline for the alert's write, which a full
+	// send buffer would wait out; so the close runs apart, and the TCP
+	// connection is closed under it if it outlasts the bound.
+	closed := make(chan struct{})
+	go func() { tc.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(max(time.Until(until), 100*time.Millisecond)):
+		_ = s.raw.Close()
+		<-closed
+	}
 }
