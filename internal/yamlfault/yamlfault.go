@@ -72,7 +72,8 @@ var ErrSecondDocument = errors.New("holds more than one YAML document")
 // OneDocument refuses a document after the one dec has decoded: a single
 // Decode ignores everything past a `---`, and an ignored block is a file that
 // reads one way and runs another (decision 53 ruling 6). A second document
-// that does not parse is still a second document. It quotes nothing.
+// that does not parse is still a second document, and so is a read error:
+// callers pass an in-memory reader. It quotes nothing.
 func OneDocument(dec *yaml.Decoder) error {
 	var next yaml.Node
 	if err := dec.Decode(&next); errors.Is(err, io.EOF) {

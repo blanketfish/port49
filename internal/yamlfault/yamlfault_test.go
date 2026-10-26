@@ -51,6 +51,9 @@ func TestOneDocumentRefusesASecondDocument(t *testing.T) {
 		{"", nil},
 		{"a: 1\n---\nb: 2\n", ErrSecondDocument},
 		{"a: 1\n---\n[unclosed\n", ErrSecondDocument},
+		{"a: 1\n---\n", ErrSecondDocument},
+		{"a: 1\n---\n# c\n", ErrSecondDocument},
+		{"a: 1\n# c\n", nil},
 	} {
 		dec := yaml.NewDecoder(strings.NewReader(c.raw))
 		var v map[string]any
