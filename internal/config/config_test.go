@@ -1496,8 +1496,8 @@ func TestAPrintedConfigCarriesNoSecret(t *testing.T) {
 // ResolveSecret names the key the caller reads, not a fixed one.
 func TestResolveSecretNamesTheCallersKey(t *testing.T) {
 	_, err := Config{}.ResolveSecret("keys.k.current.secret_ref", "env:T_RESOLVE_SECRET_UNSET")
-	if err == nil || !strings.Contains(err.Error(), "keys.k.current.secret_ref env:T_RESOLVE_SECRET_UNSET") ||
-		strings.Contains(err.Error(), "bind") {
+	if err == nil || !strings.Contains(err.Error(), "keys.k.current.secret_ref the environment variable it names is not set") ||
+		strings.Contains(err.Error(), "T_RESOLVE_SECRET_UNSET") || strings.Contains(err.Error(), "bind") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -1620,6 +1620,25 @@ func TestKeySecretRefsOfReadsTheAllowanceAlone(t *testing.T) {
 		"key_secret_refs: {file_dirr: /k}\n"} {
 		if _, err := KeySecretRefsOf([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+// A secret pasted where an env: name goes parses as a name, so no error from
+// port49d.yaml's own references, or the broker's bind password, names the
+// variable (plan 6a Task 15; Task 9 re-review I1).
+func TestAPastedSecretAsAnEnvNameIsNeverPrinted(t *testing.T) {
+	const pasted = "FAKEtoken0123456789abcdef0123456789abcdef"
+	c := Config{Secrets: secretref.New(), secrets: map[string]secretref.Secret{}}
+	for name, err := range map[string]error{
+		"resolveInto": c.resolveInto("encryption.current.secret_ref", "env:"+pasted),
+		"ResolveSecret": func() error {
+			_, err := Config{}.ResolveSecret("broker.directory.bind.password_secret_ref", "env:"+pasted)
+			return err
+		}(),
+	} {
+		if err == nil || strings.Contains(err.Error(), "FAKEtoken") {
+			t.Errorf("%s: the refusal is missing, or names the pasted variable", name)
 		}
 	}
 }

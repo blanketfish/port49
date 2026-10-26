@@ -248,8 +248,8 @@ func TestANetboxSourceLoadsWithItsDefaults(t *testing.T) {
 // never.
 func TestASecretIsNamedByItsKey(t *testing.T) {
 	_, err := loadString(t, minimalConfig+netboxSource)
-	if err == nil || !strings.Contains(err.Error(), "sync[1].token_secret_ref env:PORT49_TEST_NETBOX_TOKEN: "+
-		"the variable is not set") {
+	if err == nil || !strings.Contains(err.Error(), "sync[1].token_secret_ref the environment variable it names is "+
+		"not set") || strings.Contains(err.Error(), "PORT49_TEST_NETBOX_TOKEN") {
 		t.Fatalf("unset: %v", err)
 	}
 	t.Setenv("PORT49_TEST_NETBOX_TOKEN", "Token "+testToken)
@@ -446,6 +446,11 @@ func TestASourceTokenOfTheWrongShapeIsNotPrinted(t *testing.T) {
 			"printable characters without a space") || strings.Contains(err.Error(), "abcdef") {
 			t.Errorf("%s: wrong shape: not refused by shape, or it quotes the value", name)
 		}
+		// A file's one trailing newline is dropped and a second counts: said for
+		// a file, in fixed words, and never the length.
+		if hint := strings.Contains(err.Error(), "a file's one trailing newline is dropped, and any more count"); hint != (name == "a file") {
+			t.Errorf("%s: the newline hint is %v", name, hint)
+		}
 	}
 }
 
@@ -467,6 +472,24 @@ func TestASourceSecretsPrintAsNothing(t *testing.T) {
 			if l := secretreftest.Leak([]byte(fmt.Sprintf(verb, v)), forms); l != "" {
 				t.Errorf("%s prints a secret (%s)", verb, l)
 			}
+		}
+	}
+}
+
+// A secret pasted where an env: name goes parses as a name, so no error names
+// the variable (plan 6a Task 15; Task 9 re-review I1), for the token and the
+// webhook secret alike.
+func TestAPastedSecretAsAnEnvNameIsNeverPrinted(t *testing.T) {
+	const pasted = "FAKEtoken0123456789abcdef0123456789abcdef"
+	for _, key := range []string{"token_secret_ref", "webhook_secret_ref"} {
+		t.Setenv("PORT49_TEST_NETBOX_TOKEN", testToken)
+		body := "webhook_listen: 127.0.0.1:8444\n" + minimalConfig + netboxSource + "    webhook_secret_ref: env:PORT49_TEST_NETBOX_HOOK\n"
+		t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
+		body = strings.Replace(body, key+": env:PORT49_TEST_NETBOX_"+map[string]string{"token_secret_ref": "TOKEN", "webhook_secret_ref": "HOOK"}[key],
+			key+": env:"+pasted, 1)
+		_, err := loadString(t, body)
+		if err == nil || strings.Contains(err.Error(), "FAKEtoken") || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s: the refusal is missing, or names the pasted variable, or not its key", key)
 		}
 	}
 }

@@ -134,7 +134,16 @@ func TestAPolicyKeyOutsideTheAllowanceIsRefused(t *testing.T) {
 			continue
 		}
 		var unread *keyUnreadError
-		if err == nil || errors.As(err, &unread) || !strings.Contains(err.Error(), ref) ||
+		// A file's path is printed, which a pasted secret cannot be; an env: name
+		// is not, which one can (Task 9 re-review I1).
+		named := ref
+		if strings.HasPrefix(ref, "env:") {
+			named = "an env: reference"
+			if err != nil && strings.Contains(err.Error(), strings.TrimPrefix(ref, "env:")) {
+				t.Errorf("%s: the refusal names the variable", ref)
+			}
+		}
+		if err == nil || errors.As(err, &unread) || !strings.Contains(err.Error(), named) ||
 			!strings.Contains(err.Error(), "outside key_secret_refs") {
 			t.Errorf("%s: %v", ref, err)
 		}
@@ -288,4 +297,15 @@ func TestLiveKeysSwapWhileRead(t *testing.T) {
 	}
 	close(stop)
 	readers.Wait()
+}
+
+// A secret pasted where an env: name goes parses as one, and is outside the
+// allowance: the refusal names the key and version and never the variable
+// (plan 6a Task 15; Task 9 re-review I1).
+func TestAPastedSecretAsAPolicyEnvNameIsNeverPrinted(t *testing.T) {
+	k := newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "T_LK_", FileDir: safeDir(t)})
+	_, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 1, secret_ref: env:FAKEtoken0123456789abcdef0123456789abcdef}\n"))
+	if err == nil || strings.Contains(err.Error(), "FAKEtoken") || !strings.Contains(err.Error(), "keys.k version 1 secret_ref") {
+		t.Fatalf("the refusal is missing, or names the pasted variable, or not the key and version")
+	}
 }

@@ -32,10 +32,25 @@ type Ref struct{ Scheme, Name string }
 // String is the reference as port49 prints it.
 func (r Ref) String() string { return r.Scheme + ":" + r.Name }
 
+// ForRefusal is the reference as an error about a reference that is not
+// allowed prints it: a file's path, which a pasted secret cannot be, and for
+// env: no name, which a pasted secret can be.
+func (r Ref) ForRefusal() string {
+	if r.Scheme == SchemeEnv {
+		return "an env: reference"
+	}
+	return r.String()
+}
+
 var (
-	envName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	errShape  = errors.New("is not a secret reference: write env:NAME or file:/absolute/path")
-	maxRefLen = 1024
+	envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// An env: error names no variable: a secret pasted where a name goes
+	// parses as one, and the operator has the name in their own file, at the
+	// key the caller puts first (plan 6a Task 15).
+	errEnvUnset = errors.New("the environment variable it names is not set")
+	errEnvEmpty = errors.New("the environment variable it names is empty")
+	errShape    = errors.New("is not a secret reference: write env:NAME or file:/absolute/path")
+	maxRefLen   = 1024
 )
 
 // Parse reads s. Its error never quotes s.
@@ -109,14 +124,15 @@ func New() *Resolver {
 // resolve to a file inside within, or inside its own directory when within is
 // "". An env: value is taken exactly as set, with no trim: a variable is set
 // on purpose, while a file loses one trailing newline (an echo's). An error
-// names the reference and why, never a value.
+// names the reference and why, never a value; an env: error names no
+// variable (see errEnvUnset).
 func (r *Resolver) Resolve(ref Ref, within string) (Secret, error) {
 	var raw []byte
 	switch ref.Scheme {
 	case SchemeEnv:
 		v, ok := r.lookupEnv(ref.Name)
 		if !ok {
-			return Secret{}, fmt.Errorf("%s: the variable is not set", ref)
+			return Secret{}, errEnvUnset
 		}
 		raw = []byte(v)
 	case SchemeFile:
@@ -132,6 +148,9 @@ func (r *Resolver) Resolve(ref Ref, within string) (Secret, error) {
 		return Secret{}, errShape
 	}
 	if len(raw) == 0 {
+		if ref.Scheme == SchemeEnv {
+			return Secret{}, errEnvEmpty
+		}
 		return Secret{}, fmt.Errorf("%s: the secret is empty", ref)
 	}
 	return newSecret(raw), nil

@@ -382,16 +382,26 @@ func secretFrom(res *secretref.Resolver, key, text string, min, max int) (sot.Se
 		// Pre-flight M12: absent, not malformed.
 		return sot.Secret{}, fmt.Errorf("port49-inventory: %s is required", key)
 	}
-	_, s, err := res.ResolveText(key, text)
+	ref, s, err := res.ResolveText(key, text)
 	if err != nil {
 		return sot.Secret{}, fmt.Errorf("port49-inventory: %w", err)
 	}
 	v := string(s.Bytes())
 	if len(v) < min || len(v) > max || strings.IndexFunc(v, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
 		return sot.Secret{}, fmt.Errorf("port49-inventory: %s names a secret that is not %d to %d printable "+
-			"characters without a space", key, min, max)
+			"characters without a space%s", key, min, max, newlineHint(ref))
 	}
 	return sot.NewSecret(v), nil
+}
+
+// newlineHint is what a refusal of a file's secret adds: one trailing newline
+// was dropped, as an echo adds one, and an editor's second counts. Fixed
+// words, never the length.
+func newlineHint(ref secretref.Ref) string {
+	if ref.Scheme == secretref.SchemeFile {
+		return "; a file's one trailing newline is dropped, and any more count"
+	}
+	return ""
 }
 
 // sotSource is a netbox or nautobot entry's connection, secrets and mapping,

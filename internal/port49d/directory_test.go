@@ -368,7 +368,8 @@ func TestABindCredentialThatDoesNotLoadStopsTheStart(t *testing.T) {
 	cfg := brokerConfig(t, directoryPolicy)
 	cfg.Broker.Directory = directoryCfg("simple")
 	err := buildWith(cfg)
-	if err == nil || !strings.Contains(err.Error(), "broker.directory.bind.password_secret_ref env:T_DIR_BIND_PW: the variable is not set") {
+	if err == nil || !strings.Contains(err.Error(), "broker.directory.bind.password_secret_ref the environment variable it names is not set") ||
+		strings.Contains(err.Error(), "T_DIR_BIND_PW") {
 		t.Fatalf("a missing password variable: %v", err)
 	}
 	cfg.Broker.Directory = directoryCfg("gssapi")

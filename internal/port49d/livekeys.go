@@ -87,8 +87,9 @@ func (k *liveKeys) build(pol *policy.Policy) (keyBuild, error) {
 			if !k.allow.Allows(r) {
 				// Before anything is read: a policy writer must not choose which of
 				// the host's secrets becomes a device key (decision 53 ruling 12).
+				// An env: name is not printed: a secret pasted where one goes parses as one.
 				return keyBuild{}, fmt.Errorf("%s %s is outside key_secret_refs (%s): a policy names only the "+
-					"secrets port49d.yaml allows it (decision 53 ruling 12)", at, text, k.allow)
+					"secrets port49d.yaml allows it (decision 53 ruling 12)", at, r.ForRefusal(), k.allow)
 			}
 			if was, ok := k.seen[ref][v.Version]; ok && was != text {
 				return keyBuild{}, fmt.Errorf("keys.%s version %d names secret_ref %s, but port49d has held %s for %s "+

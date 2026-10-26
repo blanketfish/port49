@@ -11,7 +11,7 @@ import (
 	"io"
 )
 
-// Secret is a credential read from the environment: a source's API token,
+// Secret is a credential named by a secret_ref (env: or file:): a source's API token,
 // or its webhook secret. It prints as <redacted> under every fmt verb and in
 // JSON, so a configuration printed whole — by a test, a panic, a %+v — never
 // carries it. fmt calls Format only on a value it can reach through

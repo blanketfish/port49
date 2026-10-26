@@ -1990,3 +1990,20 @@ func TestPolicyTestSaysWhichAllowanceItChecked(t *testing.T) {
 		})
 	}
 }
+
+// A secret pasted where an env: name goes is outside the allowance, and
+// policy test says which key and version, never the variable it parsed as.
+func TestPolicyTestNeverPrintsAPastedEnvName(t *testing.T) {
+	write, inv := policyKeysFixture(t)
+	body := "scopes: [{name: all_devices, match: {}}]\nroles: [{name: r, privilege: readonly, permit: [show **]}]\n" +
+		"subjects: [{name: s, identity: [\"user:alice@example.com\"], username: alice, token_ttl: 60s}]\n" +
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n" +
+		"keys:\n  k:\n    current: {version: 3, secret_ref: env:FAKEtoken0123456789abcdef0123456789abcdef}\n"
+	var out, errOut bytes.Buffer
+	run([]string{"policy", "test", "--policy", write("p.yaml", body), "--inventory", inv}, &out, &errOut)
+	got := out.String() + errOut.String()
+	if !strings.Contains(got, "key k version 3 secret_ref an env: reference is outside key_secret_refs") ||
+		strings.Contains(got, "FAKEtoken") {
+		t.Fatalf("the refusal is missing, or names the pasted variable")
+	}
+}

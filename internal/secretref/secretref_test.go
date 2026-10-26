@@ -77,10 +77,24 @@ func TestResolveEnv(t *testing.T) {
 	if err != nil || string(s.Bytes()) != "shared-key" {
 		t.Fatalf("got %d bytes, want 10; %v", len(s.Bytes()), err)
 	}
+	// The error names the key that holds the reference, and never the variable:
+	// a secret pasted where a name goes parses as one (plan 6a Task 15).
 	if _, _, err := r.ResolveText("keys.k.current.secret_ref", "env:T_SECRETREF_UNSET"); err == nil ||
-		!strings.Contains(err.Error(), "keys.k.current.secret_ref env:T_SECRETREF_UNSET") ||
-		!strings.Contains(err.Error(), "not set") {
+		!strings.HasPrefix(err.Error(), "keys.k.current.secret_ref the environment variable it names is not set") ||
+		strings.Contains(err.Error(), "T_SECRETREF_UNSET") {
 		t.Fatalf("an unset variable: %v", err)
+	}
+}
+
+// A secret pasted as an env: name is in no error, unset or empty.
+func TestAnEnvErrorNamesNoVariable(t *testing.T) {
+	const pasted = "FAKEtoken0123456789abcdef0123456789abcdef"
+	t.Setenv("T_SECRETREF_EMPTY2", "")
+	for _, text := range []string{"env:" + pasted, "env:T_SECRETREF_EMPTY2"} {
+		_, _, err := New().ResolveText("k", text)
+		if err == nil || strings.Contains(err.Error(), "FAKEtoken") || strings.Contains(err.Error(), "T_SECRETREF_EMPTY2") {
+			t.Errorf("%d-byte reference: the error is missing or names the variable", len(text))
+		}
 	}
 }
 

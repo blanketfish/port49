@@ -401,7 +401,7 @@ func keyReports(p *policy.Policy, allow secretref.Allowance, now time.Time) []st
 		for _, v := range sets[ref].All() {
 			if r, err := secretref.Parse(v.SecretRef); err == nil && !allow.Allows(r) {
 				out = append(out, fmt.Sprintf("keys: key %s version %d secret_ref %s is outside key_secret_refs "+
-					"(%s), so port49d refuses the policy (decision 53 ruling 12)", ref, v.Version, v.SecretRef, allow))
+					"(%s), so port49d refuses the policy (decision 53 ruling 12)", ref, v.Version, r.ForRefusal(), allow))
 			}
 		}
 	}
