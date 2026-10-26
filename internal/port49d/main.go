@@ -1251,7 +1251,25 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
 			"context the broker stopped refreshing keeps its last answer until its own session ends")
 	}
-	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keysFor, KeySeen: seen.Mark,
+	// The global connection cap (decision 53 ruling 8): sized from the
+	// open-file limit unless limits.max_connections sets it, said, and
+	// published, so an operator sees what binds before it does.
+	limit := openFileLimit()
+	capN, err := connectionCap(cfg.Limits.MaxConnections, limit)
+	if err != nil {
+		mln.Close()
+		stopSpool()
+		<-spoolDone
+		return fmt.Errorf("config: %w", err)
+	}
+	m.ConnectionsMax.Set(float64(capN))
+	from := "limits.max_connections"
+	if cfg.Limits.MaxConnections == 0 {
+		from = fmt.Sprintf("the open-file limit %d, less what the spool, the store and the logs keep", limit)
+	}
+	fmt.Fprintf(stderr, "%s: at most %d TACACS+ connections at once (%s); past it each new connection is reset "+
+		"at Accept\n", procOf(cfg), capN, from)
+	deps := server.Deps{Slots: server.NewSlots(capN, time.Now), Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keysFor, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.

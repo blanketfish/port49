@@ -32,14 +32,12 @@ const maxLiveSessions = 64
 // unadmittedHeaderDeadline bounds how long a source that is not in the
 // inventory may hold a connection before sending its first header. An
 // admitted device gets the configured idle timeout; an unadmitted one has no
-// claim on it, and today the only global connection cap is EMFILE — the worst
-// one there is, since it refuses admitted devices too and fails the
-// accounting spool's own file open. Thirty seconds times the per-source cap,
-// per address, is a cheap way to sit on descriptors. Admission is already
-// known at Accept, so this costs nothing to apply.
+// claim on it. Thirty seconds times the per-source cap, per address, is a
+// cheap way to sit on descriptors. Admission is already known at Accept, so
+// this costs nothing to apply.
 //
-// This is not the global cap, which is plan 12 along with its sizing and its
-// alarm. It is the part of it that is cheap to pull forward.
+// This is not the global cap, which is limits.max_connections (Slots). It
+// frees an unadmitted source's slots, global and per-source, sooner.
 const unadmittedHeaderDeadline = 5 * time.Second
 
 type conn struct {

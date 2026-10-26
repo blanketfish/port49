@@ -481,6 +481,7 @@ type PlatformConfig struct {
 // (which would mean "never reset" in the limiter, and is refused).
 type limitsYAML struct {
 	PerNASConnections    int            `yaml:"per_nas_connections"`
+	MaxConnections       int            `yaml:"max_connections"`
 	IdleTimeout          time.Duration  `yaml:"idle_timeout"`
 	MalformedBackoffBase time.Duration  `yaml:"malformed_backoff_base"`
 	MalformedBackoffMax  time.Duration  `yaml:"malformed_backoff_max"`
@@ -1218,6 +1219,7 @@ func daemonDefaults(c *Config, f fileConfig) error {
 	c.Accounting = f.Accounting
 	c.Limits = limits.Config{
 		PerNASConnections:    orI(f.Limits.PerNASConnections, 32),
+		MaxConnections:       f.Limits.MaxConnections,
 		IdleTimeout:          orD(f.Limits.IdleTimeout, 30*time.Second),
 		MalformedBackoffBase: orD(f.Limits.MalformedBackoffBase, 100*time.Millisecond),
 		MalformedBackoffMax:  orD(f.Limits.MalformedBackoffMax, 5*time.Second),
@@ -2284,6 +2286,10 @@ func window(name string, v *time.Duration) (time.Duration, error) {
 // checkPositive refuses a negative duration or connection cap that the `or`
 // defaults would otherwise pass straight through to the limiter.
 func checkPositive(c Config) error {
+	if n := c.Limits.MaxConnections; n != 0 && (n < 64 || n > 1<<20) {
+		return fmt.Errorf("config: limits.max_connections is %d: leave it out to size it from the open-file limit, "+
+			"or set 64 to 1048576", n)
+	}
 	for _, f := range []struct {
 		name string
 		d    time.Duration

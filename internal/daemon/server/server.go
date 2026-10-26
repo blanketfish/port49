@@ -54,11 +54,14 @@ type Deps struct {
 	// Held keeps each admitted device's last unvalidated packet for `port49
 	// keys diagnose` (spec §10); nil keeps nothing. port49d sets it only with
 	// admin_socket configured.
-	Held        *keyring.Held
-	Authen      *authen.Handler
-	Author      *author.Handler
-	Acct        *acct.Handler
-	Limits      *limits.Limiter
+	Held   *keyring.Held
+	Authen *authen.Handler
+	Author *author.Handler
+	Acct   *acct.Handler
+	Limits *limits.Limiter
+	// Slots is the global connection cap shared by every listener (decision 53
+	// ruling 8); nil is no cap.
+	Slots       *Slots
 	Metrics     *metrics.Metrics
 	Log         decision.Emitter
 	Now         func() time.Time
@@ -194,6 +197,23 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			}
 			d.Limits.Undecline(src)
 		}
+		// The global cap (decision 53 ruling 8), taken last so the per-source
+		// limits bind first (design §11). A full pool sheds: reset at once, so
+		// the device moves to its next server now rather than after its own
+		// timeout (L28), counted, and said when shedding begins.
+		slot, ok := d.Slots.TryAcquire()
+		if !ok {
+			release()
+			d.Metrics.ConnectionsShed.WithLabelValues("global_cap").Inc()
+			if line := d.Slots.Shed(); line != "" {
+				log.Print(line)
+			}
+			reset(c)
+			c.Close()
+			continue
+		}
+		srcRelease := release
+		release = func() { srcRelease(); slot() }
 		// A device port49 offered single-connect to keeps the one connection
 		// while it honors the offer. A second one served while an offered one
 		// is open says it ignored it: counted here, once the connection is

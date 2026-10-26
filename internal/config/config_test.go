@@ -1642,3 +1642,26 @@ func TestAPastedSecretAsAnEnvNameIsNeverPrinted(t *testing.T) {
 		}
 	}
 }
+
+// limits.max_connections is 0 (size it at start) or 64 to 1048576.
+func TestMaxConnectionsIsBounded(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, c := range []struct {
+		value string
+		ok    bool
+	}{{"0", true}, {"64", true}, {"1048576", true}, {"10", false}, {"-1", false}, {"1048577", false}} {
+		body := strings.Replace(fmt.Sprintf(sample, invPath), "limits: {per_nas_connections: 4}",
+			"limits: {per_nas_connections: 4, max_connections: "+c.value+"}", 1)
+		cfg, err := Load(write(t, "m.yaml", body))
+		if c.ok != (err == nil) {
+			t.Fatalf("max_connections %s: %v", c.value, err)
+		}
+		if err == nil && cfg.Limits.MaxConnections != map[string]int{"0": 0, "64": 64, "1048576": 1048576}[c.value] {
+			t.Fatalf("max_connections %s resolved to %d", c.value, cfg.Limits.MaxConnections)
+		}
+		if err != nil && !strings.Contains(err.Error(), "limits.max_connections") {
+			t.Fatalf("max_connections %s: unhelpful error %v", c.value, err)
+		}
+	}
+}
