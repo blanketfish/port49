@@ -374,8 +374,11 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	announceDirectory(stderr, proc, cfg, pol)
 	announceWorkloadIdentities(stderr, proc, cfg, pol)
 	announceServiceAccountIdentities(stderr, proc, cfg, pol)
+	// The key sets fetch on goroutines that outlive this build: they say
+	// through the writer held now, not the package's variable.
+	idOut := stderr
 	if b.Identity, err = openOIDC(cfg, brokerStateDir(cfg), m, func(format string, args ...any) {
-		fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
+		fmt.Fprintf(idOut, proc+": "+format+"\n", args...)
 	}); err != nil {
 		return nil, nil, nil, err
 	}
