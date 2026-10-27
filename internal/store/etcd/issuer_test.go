@@ -38,10 +38,21 @@ func TestTheIssuerRecordIsCompareAndSwap(t *testing.T) {
 	if ok, _ := s.PutIssuerRecord(ctx, IssuerRecord{Current: "sha256:d"}, rev); ok {
 		t.Fatal("an update at a revision that has passed")
 	}
-	if old, ok, err := s.DeleteIssuerRecord(ctx); !ok || err != nil || old.Current != "sha256:c" {
-		t.Fatalf("delete: %+v %v %v", old, ok, err)
+	// A delete is over the revision read: a record that changed since is kept.
+	if ok, err := s.DeleteIssuerRecord(ctx, rev); ok || err != nil {
+		t.Fatalf("a delete at a revision that has passed: %v %v", ok, err)
 	}
-	if _, ok, err := s.DeleteIssuerRecord(ctx); ok || err != nil {
+	r, rev, _ = s.IssuerRecord(ctx)
+	if r.Current != "sha256:c" {
+		t.Fatalf("the record after a refused delete: %+v", r)
+	}
+	if ok, err := s.DeleteIssuerRecord(ctx, rev); !ok || err != nil {
+		t.Fatalf("delete at its revision: %v %v", ok, err)
+	}
+	if _, rev, _ := s.IssuerRecord(ctx); rev != 0 {
+		t.Fatal("the record is still there")
+	}
+	if ok, err := s.DeleteIssuerRecord(ctx, 0); ok || err != nil {
 		t.Fatalf("delete of none: %v %v", ok, err)
 	}
 }

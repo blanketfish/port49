@@ -41,8 +41,14 @@ func issuerFiles(dir string) issuer.Files {
 // the CA's end on its gauge (0 for none). It never refuses the start (R4):
 // port49d answers device AAA in the same process.
 func openIssuer(cfg config.Config, m *metrics.Metrics, say func(string, ...any)) *issuer.CA {
+	return openIssuerFrom(cfg, m, say, loadIssuer(cfg, time.Now()))
+}
+
+// openIssuerFrom is openIssuer from a CA already read, the one the record
+// check held.
+func openIssuerFrom(cfg config.Config, m *metrics.Metrics, say func(string, ...any), l *loadedIssuer) *issuer.CA {
 	dir := brokerStateDir(cfg)
-	ca, lines := issuer.Load(issuerFiles(dir), time.Now())
+	ca, lines := l.ca, l.lines
 	for _, l := range lines {
 		say("issuance: %s", l)
 	}

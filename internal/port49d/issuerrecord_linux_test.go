@@ -3,7 +3,17 @@ package port49d
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/issuer"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
@@ -187,13 +198,27 @@ func TestForgetIssuerRemovesTheRecord(t *testing.T) {
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
+	fp := fingerprintIn(t, first)
 	var so, se bytes.Buffer
-	if code := forgetIssuer([]string{"--config", f.broker}, &so, &se); code != 0 ||
-		!strings.Contains(so.String(), "removed the issuing CA record ("+fingerprintIn(t, first)) {
+	// Forgetting re-opens the store to any CA, so it names the one forgotten:
+	// none, or another store's, deletes nothing.
+	if code := forgetIssuer([]string{"--config", f.broker}, &so, &se); code != 2 || !strings.Contains(se.String(), "--current") {
+		t.Fatalf("forget with no --current: %d %q", code, se.String())
+	}
+	se.Reset()
+	other := "sha256:" + strings.Repeat("0", 64)
+	if code := forgetIssuer([]string{"--config", f.broker, "--current", other}, &so, &se); code != 1 ||
+		!strings.Contains(se.String(), fp) || !strings.Contains(se.String(), "nothing removed") || so.Len() != 0 {
+		t.Fatalf("forget naming another CA: %d %q %q", code, so.String(), se.String())
+	}
+	se.Reset()
+	if code := forgetIssuer([]string{"--config", f.broker, "--current", fp}, &so, &se); code != 0 ||
+		!strings.Contains(so.String(), "removed the issuing CA record ("+fp) ||
+		!strings.Contains(se.String(), "forgot issuing CA "+fp+"; stop every broker on this store before starting one on another CA") {
 		t.Fatalf("forget: %d %q %q", code, so.String(), se.String())
 	}
 	so.Reset()
-	if code := forgetIssuer([]string{"--config", f.broker}, &so, &se); code != 0 ||
+	if code := forgetIssuer([]string{"--config", f.broker, "--current", fp}, &so, &se); code != 0 ||
 		!strings.Contains(so.String(), "no issuing CA record to remove") {
 		t.Fatalf("forget again: %d %q %q", code, so.String(), se.String())
 	}
@@ -204,4 +229,185 @@ func TestForgetIssuerRemovesTheRecord(t *testing.T) {
 	second := withIssuance(t, cfg2, iss)
 	startBroker(t, cfg2, &out, 1)
 	waitWithin(t, &out, "recorded the issuing CA "+fingerprintIn(t, second), 30*time.Second)
+}
+
+// certificateRequest is POST /v1/certificate on the broker at addr with a
+// fresh sign-in of alice from iss whose nonce names a new key: the status
+// and the API's error code ("" on a 200), and the certificate's PEM on one.
+func certificateRequest(t *testing.T, addr string, iss *oidctest.Issuer) (status int, code string, certPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := api.IssuanceNonce(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(api.IssueRequest{CSR: base64.RawURLEncoding.EncodeToString(der)})
+	tok := iss.IDToken(t, "k1", "port49-cli", "sub-alice", time.Now(), map[string]any{
+		"email": "alice@corp.example.com", "email_verified": true, "amr": []string{"pwd", "otp"}, "acr": "1", "nonce": nonce})
+	req, err := http.NewRequest("POST", "https://"+addr+"/v1/certificate", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	c := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} // a loopback fixture's own certificate
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == 200 {
+		var ok api.IssueResponse
+		if err := json.Unmarshal(raw, &ok); err != nil {
+			t.Fatalf("a 200 that is no certificate: %v", err)
+		}
+		return 200, "", ok.Certificate
+	}
+	var e api.Error
+	_ = json.Unmarshal(raw, &e)
+	return resp.StatusCode, e.Error, ""
+}
+
+// A broker whose directory opens late issues nothing until its CA has been
+// held to the record: a request in the window is 503 issuance_unavailable,
+// and the same request is served once the check passes; on another CA it
+// stays refused, and then the start is.
+func TestALateDirectoryHoldsIssuanceUntilTheCAIsChecked(t *testing.T) {
+	iss := oidctest.NewIssuer(t)
+	setup := func(t *testing.T) (f *fleet, out *syncBuffer, first string, own *etcdtest.Proxy) {
+		t.Helper()
+		out = &syncBuffer{}
+		e, every := stderr, snapshotEvery
+		t.Cleanup(func() { stderr, snapshotEvery = e, every })
+		stderr, snapshotEvery = out, time.Second
+		f = splitFleet(t)
+		f.twoStores(t)
+		f.judged(t)
+		first = withIssuance(t, f.broker, iss)
+		startBroker(t, f.broker, out, 1)
+		_, stopD := runSplitDaemon(t, f.daemon, out, 1)
+		t.Cleanup(func() { _ = stopD() })
+		waitSnapshots(t, f.srv, 2)
+		waitWithin(t, out, "recorded the issuing CA "+fingerprintIn(t, first), 30*time.Second)
+		own = etcdtest.NewProxy(t, strings.TrimPrefix(f.dsrv.Endpoint, "https://"))
+		own.Hang(true)
+		return f, out, first, own
+	}
+	second := func(t *testing.T, f *fleet, own *etcdtest.Proxy) (cfg, state string) {
+		t.Helper()
+		cfg = f.copyBroker(t)
+		bc, bk := f.dsrv.ClientFiles(t, "port49-broker")
+		withDirectory(t, cfg, own, f.dsrv, "broker", bc, bk)
+		state = withIssuance(t, cfg, iss)
+		return cfg, state
+	}
+	run := func(t *testing.T, cfg string, out *syncBuffer) (addr string, errc chan error, stop func()) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		errc = make(chan error, 1)
+		go func() { errc <- runBroker(ctx, cfg) }()
+		t.Cleanup(cancel)
+		waitWithin(t, out, "directory store: not answering; serving from", 60*time.Second)
+		waitWithinFrom(t, out, strings.LastIndex(out.String(), "directory store: not answering"), "port49-broker: listening on ", 30*time.Second)
+		all := brokerLine.FindAllStringSubmatch(out.String(), -1)
+		return all[len(all)-1][1], errc, cancel
+	}
+	t.Run("the same CA", func(t *testing.T) {
+		f, out, first, own := setup(t)
+		cfg2, state2 := second(t, f, own)
+		copyCA(t, first, state2)
+		addr, errc, stop := run(t, cfg2, out)
+		if st, code, _ := certificateRequest(t, addr, iss); st != 503 || code != "issuance_unavailable" {
+			t.Fatalf("a request in the window: %d %q, want 503 issuance_unavailable", st, code)
+		}
+		if n := strings.Count(out.String(), "issuance waits for the directory store"); n != 1 {
+			t.Fatalf("the hold is said %d times, want once:\n%s", n, out.String())
+		}
+		own.Hang(false)
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			st, code, cert := certificateRequest(t, addr, iss)
+			if st == 200 && cert != "" {
+				break
+			}
+			if st != 503 || time.Now().After(deadline) {
+				t.Fatalf("after the check: %d %q", st, code)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if n := strings.Count(out.String(), "issuance waits for the directory store"); n != 1 {
+			t.Fatalf("the hold is said %d times after the release, want once", n)
+		}
+		stop()
+		<-errc
+	})
+	t.Run("another CA", func(t *testing.T) {
+		f, out, first, own := setup(t)
+		cfg2, state2 := second(t, f, own)
+		addr, errc, _ := run(t, cfg2, out)
+		for range 3 {
+			if st, code, _ := certificateRequest(t, addr, iss); st != 503 || code != "issuance_unavailable" {
+				t.Fatalf("a request in the window: %d %q, want 503 issuance_unavailable", st, code)
+			}
+		}
+		own.Hang(false)
+		wantsBothFingerprints(t, <-errc, fingerprintIn(t, state2), fingerprintIn(t, first))
+	})
+}
+
+// The CA the broker issues from is the CA it checked: files swapped after the
+// check and before the issuer is built (an operator copying a CA in, a
+// rotate-issuer) change nothing, because the start reads them once.
+func TestTheIssuerIsTheCAThatWasChecked(t *testing.T) {
+	iss := oidctest.NewIssuer(t)
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	first := withIssuance(t, f.broker, iss)
+	other := safeDir(t)
+	if _, _, err := initIssuer(other, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	swapped := false
+	pagedLoadFault = func(name string) error {
+		if name == "marks" && !swapped { // after the record check, before the issuer is built
+			swapped = true
+			copyCA(t, other, first)
+		}
+		return nil
+	}
+	t.Cleanup(func() { pagedLoadFault = nil })
+	addr, _ := startBroker(t, f.broker, &out, 1)
+	if !swapped {
+		t.Fatal("the files were never swapped")
+	}
+	st, code, certPEM := certificateRequest(t, addr, iss)
+	if st != 200 {
+		t.Fatalf("a request: %d %q", st, code)
+	}
+	blk, _ := pem.Decode([]byte(certPEM))
+	cert, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fingerprintIn(t, first); got != fingerprintIn(t, other) {
+		t.Fatalf("the swap did not happen: %s", got)
+	}
+	checked, _ := os.ReadFile(filepath.Join(other, issuer.CertFile)) // the swapped-in CA, which was not checked
+	cb, _ := pem.Decode(checked)
+	swappedIn, _ := x509.ParseCertificate(cb.Bytes)
+	if cert.CheckSignatureFrom(swappedIn) == nil {
+		t.Fatal("the certificate was issued by a CA the record check never saw")
+	}
 }

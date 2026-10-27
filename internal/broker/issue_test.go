@@ -279,6 +279,30 @@ func TestIssuanceUnavailableSaysSo(t *testing.T) {
 	}
 }
 
+// A held broker issues nothing and says so apart from a broken CA: 503
+// issuance_unavailable, no record, the sign-in unspent, and no per-request
+// log line (the hold is said once, at its start). Released, the same sign-in
+// is issued (decision 53 ruling 10).
+func TestHeldIssuanceRefusesAndReleases(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	key := newECKey(t)
+	tok := f.signInFor(t, iss, key, nil)
+	f.b.HoldIssuance()
+	w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok)
+	if w.Code != 503 || w.Header().Get("Retry-After") != "60" || apiError(w) != "issuance_unavailable" ||
+		!strings.Contains(w.Body.String(), "directory store") {
+		t.Fatalf("held: %s", shown(w))
+	}
+	if n := len(eventsOf(f.records(t), decision.EventIssue)); n != 0 {
+		t.Fatalf("%d issue records for a held broker", n)
+	}
+	f.b.ReleaseIssuance()
+	if w := f.bearer(context.Background(), "POST", "/v1/certificate", csrBody(t, key), tok); w.Code != 200 {
+		t.Fatalf("released: %s", shown(w))
+	}
+}
+
 // /v1/config says the broker issues, and for how long (decision 43 ruling
 // 18).
 func TestConfigSaysTheBrokerIssues(t *testing.T) {

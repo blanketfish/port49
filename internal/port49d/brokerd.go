@@ -100,6 +100,9 @@ type brokerStores struct {
 	fresh     *store.Freshness
 	logouts   *store.LogoutSet
 	logoutRev uint64
+	// issuer is the issuing CA read once at the start: the record is checked
+	// against it and the broker issues from it (decision 53 ruling 10).
+	issuer *loadedIssuer
 }
 
 // startRetryWait is how long a broker start waits before reading again.
@@ -214,7 +217,8 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	tellFresh(bs.fresh, m)
 	// issuerCheck holds this broker's issuing CA to the one the store records
 	// (decision 53 ruling 10); nothing to check where it issues nothing.
-	held, issues := heldIssuer(cfg, time.Now())
+	bs.issuer = loadIssuer(cfg, time.Now())
+	held, issues := bs.issuer.held()
 	host, _ := os.Hostname()
 	issuerCheck := func(s *etcdstore.Store, timeout time.Duration) error {
 		if !issues {
@@ -560,7 +564,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.Saw) }()
 
 	minter := token.NewMinter(bs.st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
-	brokerSrv, brk, anchors, err := buildBrokerAnchor(cfg, inventoryFrom, bs.st, minter, log, m)
+	brokerSrv, brk, anchors, err := buildBrokerAnchorWith(cfg, inventoryFrom, bs.st, minter, log, m, bs.issuer)
 	if err != nil {
 		return err
 	}
@@ -766,6 +770,13 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if cfg.Stores.Shared {
 		close(ready)
 	} else {
+		// The record the CA is held to is in the directory: until it answers
+		// and the check passes, no certificate is issued. Said once here.
+		if _, issues := bs.issuer.held(); issues && bs.dir.get() == nil {
+			brk.HoldIssuance()
+			fmt.Fprintln(stderr, "port49-broker: issuance waits for the directory store, where the issuing CA's record "+
+				"is checked; until it answers, certificates are refused (503 issuance_unavailable)")
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -778,11 +789,14 @@ func runBroker(parent context.Context, cfgPath string) error {
 					if err := checkDirectoryKeys(ctx, "port49-broker", s, directoryRef(cfg), keys, stderr, 4*de.CallTimeout, true); err != nil {
 						return err
 					}
-					if held, issues := heldIssuer(cfg, time.Now()); issues {
+					if held, issues := bs.issuer.held(); issues {
 						host, _ := os.Hostname()
 						c, cancel := context.WithTimeout(ctx, 4*de.CallTimeout)
 						defer cancel()
-						return checkIssuerRecord(c, s, held, "port49-broker@"+host, stderr)
+						if err := checkIssuerRecord(c, s, held, "port49-broker@"+host, stderr); err != nil {
+							return err
+						}
+						brk.ReleaseIssuance()
 					}
 					return nil
 				}); err != nil {

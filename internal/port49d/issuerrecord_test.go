@@ -130,3 +130,19 @@ func (c *churnRecorder) PutIssuerRecord(context.Context, etcdstore.IssuerRecord,
 	c.puts++
 	return false, nil
 }
+
+// A rotation never goes backward: files {f1, previous f2} against a record
+// {f2, previous f1} are a broker holding the CA the rotation retired (a copied
+// or tampered file), refused as behind and never announced as a promotion.
+func TestARollbackIsRefusedAndNotTakenForAPromotion(t *testing.T) {
+	rec := &memRecorder{rec: etcdstore.IssuerRecord{Current: "sha256:f2", Previous: "sha256:f1"}, rev: 1}
+	var out bytes.Buffer
+	err := checkIssuerRecord(context.Background(), rec, heldCA{current: "sha256:f1", previous: "sha256:f2"},
+		"port49-broker@a", &out)
+	if err == nil || !strings.Contains(err.Error(), "behind a promotion") {
+		t.Fatalf("a rollback: %v", err)
+	}
+	if rec.rec.Current != "sha256:f2" || rec.rev != 1 || strings.Contains(out.String(), "promoted") {
+		t.Fatalf("the record moved or a promotion was said: %+v rev %d\n%s", rec.rec, rec.rev, out.String())
+	}
+}

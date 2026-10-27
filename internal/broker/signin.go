@@ -434,7 +434,7 @@ func (s *signInAttempt) signOf(principal, entryID string) issuer.SignIn {
 // the person's (a recorded refusal), the CA's own faults the broker's
 // (unrecorded), as issue answers them.
 func (s *signInAttempt) issuable(principal, entryID string) bool {
-	err := s.b.Issuer.CanIssue(s.signOf(principal, entryID), s.now, s.b.certificateLifetime())
+	err := s.b.canIssue(s.signOf(principal, entryID), s.now)
 	switch {
 	case err == nil:
 		return true
@@ -442,12 +442,7 @@ func (s *signInAttempt) issuable(principal, entryID string) bool {
 		s.notCertifiable(principal)
 	default:
 		s.giveBack() // the CA's fault, not the person's
-		s.b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
-		s.b.sayOnce("issuance_unavailable", sayEvery, "issuance: a sign-in of %s was not issued a certificate: %s",
-			printsafe.Line(principal, 300), printsafe.Line(err.Error(), 300))
-		s.w.Header().Set("Retry-After", "60")
-		writeError(s.w, http.StatusServiceUnavailable, "issuance_unavailable", "this broker cannot issue certificates "+
-			"now: its issuing CA is not usable; tell its operator (the broker's log says why)")
+		s.b.issuanceUnavailable(s.w, principal, err)
 	}
 	return false
 }

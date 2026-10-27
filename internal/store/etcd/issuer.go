@@ -53,14 +53,18 @@ func (s *Store) PutIssuerRecord(ctx context.Context, r IssuerRecord, over uint64
 	return resp.Succeeded, nil
 }
 
-// DeleteIssuerRecord removes meta/issuer, returning what it held.
-func (s *Store) DeleteIssuerRecord(ctx context.Context) (IssuerRecord, bool, error) {
-	r, rev, err := s.IssuerRecord(ctx)
-	if err != nil || rev == 0 {
-		return r, false, err
+// DeleteIssuerRecord removes meta/issuer when it is still at over, the
+// revision IssuerRecord read: false when it changed since (or is absent), so a
+// broker that recorded between the read and the delete keeps its record.
+func (s *Store) DeleteIssuerRecord(ctx context.Context, over uint64) (bool, error) {
+	if over == 0 {
+		return false, nil
 	}
-	if _, err := s.ctxKV.Delete(ctx, s.k.meta("issuer")); err != nil {
-		return r, false, unavailable(err)
+	key := s.k.meta("issuer")
+	resp, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(over))).
+		Then(clientv3.OpDelete(key)).Commit()
+	if err != nil {
+		return false, unavailable(err)
 	}
-	return r, true, nil
+	return resp.Succeeded, nil
 }

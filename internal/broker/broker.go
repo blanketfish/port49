@@ -101,6 +101,9 @@ type Broker struct {
 	// issues nothing and trusts no port49-issued certificate. Its CAs join
 	// the handshake's pool, for people alone (Server, CertCallerOf).
 	Issuer *issuer.CA
+	// issueHeld is HoldIssuance: set at start, cleared once the CA passed the
+	// record check.
+	issueHeld atomic.Bool
 	// CertificateLifetime is broker.identity.issuance.certificate_lifetime
 	// (decision 43 ruling 9); zero is issuer.DefaultLifetime.
 	CertificateLifetime time.Duration

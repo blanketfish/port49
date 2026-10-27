@@ -291,6 +291,13 @@ func distinctAnchors(human, workload namedAnchor) error {
 // the human one from client_ca_file, then the workload one.
 func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter,
 	log decision.Emitter, m *metrics.Metrics) (*http.Server, *broker.Broker, []namedAnchor, error) {
+	return buildBrokerAnchorWith(cfg, inventoryFrom, st, minter, log, m, nil)
+}
+
+// buildBrokerAnchorWith is buildBrokerAnchor issuing from the CA already read
+// and checked (loaded); nil reads it here.
+func buildBrokerAnchorWith(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter,
+	log decision.Emitter, m *metrics.Metrics, loaded *loadedIssuer) (*http.Server, *broker.Broker, []namedAnchor, error) {
 	if cfg.Broker == nil {
 		return nil, nil, nil, nil
 	}
@@ -388,9 +395,12 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	// The issuing CA (plan 9b; decision 43 ruling 14), before the server's
 	// pool is built from it. It never refuses the start.
 	if id := cfg.Broker.Identity; id != nil && id.Issuance != nil {
-		b.Issuer = openIssuer(cfg, m, func(format string, args ...any) {
+		if loaded == nil {
+			loaded = loadIssuer(cfg, time.Now())
+		}
+		b.Issuer = openIssuerFrom(cfg, m, func(format string, args ...any) {
 			fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
-		})
+		}, loaded)
 		b.CertificateLifetime = id.Issuance.CertificateLifetime
 	}
 	// The directory_password verifier is set before Server, which accepts a

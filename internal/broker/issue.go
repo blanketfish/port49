@@ -38,6 +38,42 @@ func issueKey(raw string) string {
 	return "issue_token " + hex.EncodeToString(sum[:])
 }
 
+// errIssuanceHeld is why a broker answers issuance_unavailable while its
+// issuing CA has not been held to the store's record (decision 53 ruling 10).
+var errIssuanceHeld = errors.New("issuance is held until the issuing CA is checked against the store's record")
+
+// HoldIssuance makes the broker issue nothing until ReleaseIssuance: a split
+// broker whose directory store has not answered cannot check its CA against
+// the record there, and a CA nobody has checked issues nothing.
+func (b *Broker) HoldIssuance() { b.issueHeld.Store(true) }
+
+// ReleaseIssuance ends HoldIssuance, once the CA has passed the check.
+func (b *Broker) ReleaseIssuance() { b.issueHeld.Store(false) }
+
+// canIssue is b.Issuer.CanIssue unless issuance is held.
+func (b *Broker) canIssue(sign issuer.SignIn, now time.Time) error {
+	if b.issueHeld.Load() {
+		return errIssuanceHeld
+	}
+	return b.Issuer.CanIssue(sign, now, b.certificateLifetime())
+}
+
+// issuanceUnavailable answers 503 issuance_unavailable, unrecorded, for the
+// CA's fault or the hold. The hold is said once at its start, never here.
+func (b *Broker) issuanceUnavailable(w http.ResponseWriter, principal string, err error) {
+	b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
+	w.Header().Set("Retry-After", "60")
+	if errors.Is(err, errIssuanceHeld) {
+		writeError(w, http.StatusServiceUnavailable, "issuance_unavailable", "this broker cannot issue certificates "+
+			"yet: it is waiting for its directory store, where its issuing CA is checked; retry shortly")
+		return
+	}
+	b.sayOnce("issuance_unavailable", sayEvery, "issuance: a sign-in of %s was not issued a certificate: %s",
+		printsafe.Line(principal, 300), printsafe.Line(err.Error(), 300))
+	writeError(w, http.StatusServiceUnavailable, "issuance_unavailable", "this broker cannot issue certificates "+
+		"now: its issuing CA is not usable; tell its operator (the broker's log says why)")
+}
+
 // certificateLifetime is broker.identity.issuance.certificate_lifetime,
 // issuer.DefaultLifetime when unset.
 func (b *Broker) certificateLifetime() time.Duration {
@@ -153,18 +189,13 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 	// stays unspent.
 	sign := issuer.SignIn{Principal: c.principal, Issuer: c.oidc.Issuer, Subject: c.oidc.Subject, Sid: c.oidc.Sid,
 		AMR: c.oidc.AMR, ACR: c.oidc.ACR, AuthTime: c.oidc.AuthTime, IssuedAt: c.oidc.IssuedAt}
-	if err := b.Issuer.CanIssue(sign, now, b.certificateLifetime()); err != nil {
+	if err := b.canIssue(sign, now); err != nil {
 		if errors.Is(err, issuer.ErrNotCertifiable) {
 			refuse(http.StatusUnauthorized, "sign_in_not_certifiable", "your sign-in's principal or claims cannot be "+
 				"carried in a certificate; tell the operator")
 			return
 		}
-		b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()
-		b.sayOnce("issuance_unavailable", sayEvery, "issuance: a sign-in of %s was not issued a certificate: %s",
-			printsafe.Line(c.principal, 300), printsafe.Line(err.Error(), 300))
-		w.Header().Set("Retry-After", "60")
-		writeError(w, http.StatusServiceUnavailable, "issuance_unavailable", "this broker cannot issue certificates "+
-			"now: its issuing CA is not usable; tell its operator (the broker's log says why)")
+		b.issuanceUnavailable(w, c.principal, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
