@@ -10913,7 +10913,17 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   previous CA fingerprints. A port49-broker with issuance records them when none is there, follows
   a promotion its own files show, and otherwise refuses to start when its current CA is not the
   recorded one. The CA key stays on each broker's own disk or state volume: never in the store,
-  never a read-only Secret (Ryan, 2026-10-24). `port49-broker forget-issuer` removes the record.
+  never a read-only Secret (Ryan, 2026-10-24). `port49-broker forget-issuer --current sha256:<hex>`
+  removes the record, and only the one that names that CA: forgetting re-opens the store to any CA,
+  so it names the CA forgotten, which prevents an accidental wipe and closes a race with a
+  concurrent promotion (the delete is over the revision read). It says on stderr "forgot issuing CA
+  sha256:…; stop every broker on this store before starting one on another CA". A broker reads its
+  CA files once, at the start, and checks and issues from that one read. A rollback to the CA a
+  rotation retired (files `{current f1, previous f2}` against a record `{f2, previous f1}`) is
+  refused as behind, never taken for a promotion. A split broker whose directory has not answered
+  holds issuance (`503 issuance_unavailable`, unrecorded, the sign-in unspent), said once at the
+  start, until the check passes at the late open; on another CA it stays held, and then the start
+  is refused.
   The check runs only for port49-broker on etcd. On the memory store the one broker runs inside
   port49d, so there is no second broker to disagree with and no store to hold a record; and
   decision 43's R4 (an issuance fault never refuses port49d's start, since port49d answers device
