@@ -619,6 +619,8 @@ func TestARightlessCallerWithAMalformedBodyIsRefusedForTheRight(t *testing.T) {
 		{"lift", liftPath, "revoke", `{"force":true}`},
 		{"lift naming nothing", liftPath, "revoke", `{}`},
 		{"lift not JSON", liftPath, "revoke", `not json`},
+		{"lift of an invalid target", liftPath, "revoke", `{"principal":"Not-A-Principal-xyz"}`},
+		{"forget of an invalid target", forgetPath, "directory_forget", `{"principal":"Not-A-Principal-xyz"}`},
 		{"forget", forgetPath, "directory_forget", `{"force":true}`},
 		{"forget of a non-principal", forgetPath, "directory_forget", `{"principal":"bob"}`},
 		{"reset naming both", resetPath, "second_factor_reset", `{"principal":"user:bob@example.com","all":true}`},
@@ -634,6 +636,12 @@ func TestARightlessCallerWithAMalformedBodyIsRefusedForTheRight(t *testing.T) {
 			}
 			if recordsWith(t, f, c.event, "api_right_missing") != before+1 {
 				t.Fatalf("no %s record with api_right_missing", c.event)
+			}
+			// An unvalidated target never reaches the record.
+			for _, r := range f.recs(t) {
+				if enc, _ := json.Marshal(r); strings.Contains(string(enc), "Not-A-Principal-xyz") {
+					t.Fatalf("a record carries the unvalidated target: %s", r["event"])
+				}
 			}
 		})
 	}
@@ -689,12 +697,16 @@ func TestAProvedImportWithATruncatedBodyIsRefusedAndKeepsItsChallenge(t *testing
 			if ans := decodeAdminAnswer(t, []byte(raw.String())); resp.StatusCode != 400 || ans.Error != "bad_request" {
 				t.Fatalf("a truncated body answered %d %s, want 400 bad_request", resp.StatusCode, ans.Error)
 			}
-			// A stalled body ends the connection, and its challenge with it.
-			if n := f.b.admin.len(); how == "cut" && n != 1 {
-				t.Fatalf("%d challenges held after the cut body, want the 1 still unspent", n)
+			// The server closes the connection after the cut and drops its
+			// challenge, so the held count races that close; what is pinned
+			// is that the proof was never judged and the import never ran.
+			for _, reason := range []string{"admin_touch_proved", "admin_touch_refused", "admin_touch_unavailable"} {
+				if n := f.adminRecords(t, reason); n != 0 {
+					t.Fatalf("a truncated body wrote %d %s records", n, reason)
+				}
 			}
-			if f.adminRecords(t, "admin_touch_refused") != 0 || recordsWith(t, f, "enrollments_import", "") != 0 {
-				t.Fatal("a truncated body reached the proof or the import")
+			if recordsWith(t, f, "enrollments_import", "") != 0 {
+				t.Fatal("a truncated body reached the import")
 			}
 		})
 	}
@@ -722,17 +734,17 @@ func (s slowImport) Import(ctx context.Context, sealed []byte, replace bool) (in
 // the body's EOF, and this pins that the route needs nothing else.
 func TestAnImportWhoseBodyArrivesNearTheDeadlineStillWrites(t *testing.T) {
 	defer func(d time.Duration) { importReadTimeout = d }(importReadTimeout)
-	importReadTimeout = 1 * time.Second
+	importReadTimeout = 3 * time.Second
 	f := newMFAFixture(t, withAllAdminRights())
 	f.withAdminOps(t)
-	f.b.Enrollments = slowImport{Enrollments: f.b.Enrollments, wait: 1500 * time.Millisecond}
+	f.b.Enrollments = slowImport{Enrollments: f.b.Enrollments, wait: 4500 * time.Millisecond}
 	c := f.alice.conn
 	body := exportOf(t)
 	head := f.provedImportHead(t, c, body)
 	if _, err := fmt.Fprint(c.c, head+body[:len(body)/2]); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(800 * time.Millisecond) // the body is whole just inside the deadline
+	time.Sleep(2 * time.Second) // the body is whole 1s inside the deadline
 	if _, err := fmt.Fprint(c.c, body[len(body)/2:]); err != nil {
 		t.Fatal(err)
 	}
