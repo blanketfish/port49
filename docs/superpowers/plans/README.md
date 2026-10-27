@@ -4732,11 +4732,11 @@ reviews found):
       the time the line prints (the logout record's life: `max_token_age` + 2 × `clock_skew`), on the serving
       process's own `--socket`.
     - **The logout wrote nothing (store error):** the line says an unconditional revoke with its
-      lift time, and the `sid` call first: `POST /v1/tokens/revoke {"sid", "issuer"}`.
+      lift time, and the `sid` call first: `port49 revoke --sid SID --sid-issuer ISSUER` (the API form `{"sid", "issuer"}`, gated by a touch).
     - **With no `admin_socket`** (the memory backend) there is no socket to name: the line says
       to cut the principal's grants in `policy_file`, restore them after the ceiling, or configure
       `admin_socket`.
-  - **`POST /v1/tokens/revoke {"sid", "issuer"}`** ends one OIDC session and needs
+  - **`port49 revoke --sid SID --sid-issuer ISSUER` (API: `POST /v1/tokens/revoke {"sid", "issuer"}`, with a touch)** ends one OIDC session and needs
     `revoke_others`; an `issuer` with no `sid` is refused, never a standing ban.
   - **A `sid` logout ends a certificate-path context an OIDC refresh extended under it.** A
     `sub` logout finds the person through the owner record's life (a day, or
