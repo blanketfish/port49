@@ -70,10 +70,18 @@ func TestShutdownIsNotHeldByAWriteToAPeerThatStoppedReading(t *testing.T) {
 		written <- s.write(wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen}, make([]byte, 64<<20))
 	}()
 	<-writing
-	time.Sleep(100 * time.Millisecond) // the write is blocked on the full buffer
-	if s.wmu.TryLock() {               // conn.write holds the lock for as long as its Write blocks
-		t.Fatal("conn.write does not hold the write lock during a blocked Write")
+	// conn.write holds the lock for as long as its Write blocks: seen held
+	// within 5s (the goroutine may not have started its Write yet).
+	for until := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if !s.wmu.TryLock() {
+			break
+		}
+		s.wmu.Unlock()
+		if time.Now().After(until) {
+			t.Fatal("conn.write does not hold the write lock during a blocked Write")
+		}
 	}
+	time.Sleep(100 * time.Millisecond) // and the Write has filled the buffer and blocked
 	began := time.Now()
 	closed := make(chan struct{})
 	go func() { s.closeTLSAtShutdown(tc); close(closed) }()

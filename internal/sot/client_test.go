@@ -283,12 +283,14 @@ func connectProxy(t *testing.T, upstream string) (*url.URL, *atomic.Int64, *atom
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		down, _, err := w.(http.Hijacker).Hijack()
+		down, brw, err := w.(http.Hijacker).Hijack()
 		if err != nil {
 			up.Close()
 			return
 		}
-		go func() { io.Copy(up, down); up.Close() }()
+		// brw holds what the client sent after the CONNECT, which the server
+		// has already read from the socket: copy from it, not from down.
+		go func() { io.Copy(up, brw); up.Close() }()
 		io.Copy(down, up)
 		down.Close()
 	}))

@@ -88,6 +88,13 @@ func TestSlotsHoldExactlyUnderConcurrentAcquireAndRelease(t *testing.T) {
 	if _, ok := s.TryAcquire(); ok || s.InUse() != cap {
 		t.Fatalf("at the cap: acquired %v, %d in use, want a refusal at %d", ok, s.InUse(), cap)
 	}
+	// A second release of the same slot frees nothing: the other cap-1 holders
+	// keep theirs, whether a wrong release would block or take another's.
+	releases[0]()
+	releases[0]()
+	if s.InUse() != cap-1 {
+		t.Fatalf("one slot released twice: %d in use, want %d", s.InUse(), cap-1)
+	}
 	for _, release := range releases {
 		release()
 		release()
