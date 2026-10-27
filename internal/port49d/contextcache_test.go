@@ -242,12 +242,19 @@ func TestAnEvictedContextIsNotServedThroughAnOutage(t *testing.T) {
 	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
 	dev.permits("alice", "show", "version")
 	root := f.srv.Client(t, "root")
+	addr := daemonMetrics(t, &out)
+	// The cache holds the entry before the delete: a series that is missing
+	// reads 0, and the wait below would be a silent no-op.
+	for deadline := time.Now().Add(10 * time.Second); metricAt(t, addr, "port49_context_cache_entries") < 1; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the context cache never held the entry the delete is to drop")
+		}
+	}
 	if _, err := root.Delete(context.Background(), "/port49/v1/c/", clientv3.WithPrefix()); err != nil {
 		t.Fatal(err)
 	}
 	// The feed delivers the delete: the cache drops the entry. Waited for on
 	// the gauge, not a sleep a slow feed outlasts.
-	addr := daemonMetrics(t, &out)
 	for deadline := time.Now().Add(10 * time.Second); metricAt(t, addr, "port49_context_cache_entries") != 0; time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the feed's delete never emptied the context cache")

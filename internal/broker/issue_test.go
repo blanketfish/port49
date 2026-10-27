@@ -303,6 +303,30 @@ func TestHeldIssuanceRefusesAndReleases(t *testing.T) {
 	}
 }
 
+// issueTo itself refuses while the hold is set, so a caller that skips
+// canIssue still cannot issue.
+func TestIssueToRefusesWhileHeld(t *testing.T) {
+	f := newFixture(t, 8)
+	f.withIssuance(t)
+	key := newECKey(t)
+	now := f.b.Now()
+	sign := issuer.SignIn{Principal: alicePrincipal, Issuer: "https://idp.example.com", Subject: "sub-alice",
+		AMR: []string{"pwd"}, AuthTime: now, IssuedAt: now}
+	f.b.HoldIssuance()
+	w := httptest.NewRecorder()
+	if f.b.issueTo(w, now, key.Public(), sign, nil, nil) || w.Code != 503 || apiError(w) != "issuance_unavailable" {
+		t.Fatalf("held: %s", shown(w))
+	}
+	if n := len(eventsOf(f.records(t), decision.EventIssue)); n != 0 {
+		t.Fatalf("%d issue records for a held broker", n)
+	}
+	f.b.ReleaseIssuance()
+	w = httptest.NewRecorder()
+	if !f.b.issueTo(w, now, key.Public(), sign, &decision.Auth{Method: "oidc"}, nil) || w.Code != 200 {
+		t.Fatalf("released: %s", shown(w))
+	}
+}
+
 // /v1/config says the broker issues, and for how long (decision 43 ruling
 // 18).
 func TestConfigSaysTheBrokerIssues(t *testing.T) {

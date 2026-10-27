@@ -232,6 +232,11 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 // has called CanIssue, and spent whatever the sign-in spends.
 func (b *Broker) issueTo(w http.ResponseWriter, now time.Time, pub crypto.PublicKey, sign issuer.SignIn,
 	auth *decision.Auth, extra *decision.SignIn) bool {
+	// A caller that skipped canIssue still issues nothing while held.
+	if b.issueHeld.Load() {
+		b.issuanceUnavailable(w, sign.Principal, errIssuanceHeld)
+		return false
+	}
 	cert, err := b.Issuer.Issue(pub, sign, now, b.certificateLifetime())
 	if err != nil {
 		b.Metrics.CertificatesIssued.WithLabelValues("unavailable").Inc()

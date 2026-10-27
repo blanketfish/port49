@@ -312,13 +312,17 @@ func TestALateDirectoryHoldsIssuanceUntilTheCAIsChecked(t *testing.T) {
 	}
 	run := func(t *testing.T, cfg string, out *syncBuffer) (addr string, errc chan error, stop func()) {
 		t.Helper()
+		// Everything is read after this mark: the first broker's lines, and a
+		// freshness line that begins like the late-open one, come before or
+		// after "listening on" and anchor nothing.
+		mark := len(out.String())
 		ctx, cancel := context.WithCancel(context.Background())
 		errc = make(chan error, 1)
 		go func() { errc <- runBroker(ctx, cfg) }()
 		t.Cleanup(cancel)
-		waitWithin(t, out, "directory store: not answering; serving from", 60*time.Second)
-		waitWithinFrom(t, out, strings.LastIndex(out.String(), "directory store: not answering"), "port49-broker: listening on ", 30*time.Second)
-		all := brokerLine.FindAllStringSubmatch(out.String(), -1)
+		waitWithinFrom(t, out, mark, "directory store: not answering; serving from", 60*time.Second)
+		waitWithinFrom(t, out, mark, "port49-broker: listening on ", 30*time.Second)
+		all := brokerLine.FindAllStringSubmatch(out.String()[mark:], -1)
 		return all[len(all)-1][1], errc, cancel
 	}
 	t.Run("the same CA", func(t *testing.T) {
