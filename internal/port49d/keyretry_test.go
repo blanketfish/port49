@@ -1,6 +1,7 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -188,5 +189,122 @@ key_groups:
 				t.Fatalf("something listens after a refused start:\n%s", out)
 			}
 		})
+	}
+}
+
+const (
+	rewriteOrig = "not-a-real-key-v1"
+	rewriteNew  = "not-a-real-key-v1-rewritten"
+)
+
+// rewriteRig is a reloader whose policy in force names keys.k version 1 as a
+// file holding rewriteOrig.
+func rewriteRig(t *testing.T) (rig *reloadRig, dir, v1 string, filePolicy func(extra string) string) {
+	t.Helper()
+	dir = safeDir(t)
+	v1 = filepath.Join(dir, "k_v1")
+	if err := os.WriteFile(v1, []byte(rewriteOrig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PORT49_KEY_RUN", "run-test-secret")
+	rig = newReloadRig(t, minimalPolicy)
+	rig.r.keys = newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "PORT49_KEY_", FileDir: dir})
+	filePolicy = func(extra string) string {
+		return strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 1, secret_ref: file:"+v1+"}\n"+
+			extra+labKeyRun, 1)
+	}
+	rig.write(t, filePolicy(""))
+	rig.pollTwice()
+	if vs := rig.r.keys.Set("k").Versions; len(vs) != 1 || string(vs[0].Secret.Bytes()) != rewriteOrig {
+		t.Fatalf("the file policy is not in force: %d versions\n%s", len(vs), rig.out.String())
+	}
+	return rig, dir, v1, filePolicy
+}
+
+// The line is said when first seen, not again inside keyRetrySayEvery, at
+// SIGHUP, and again after it; the gauge follows the file (decision 54 ruling 11).
+func TestARewriteIsSaidThenRateLimited(t *testing.T) {
+	rig, _, v1, _ := rewriteRig(t)
+	if err := os.WriteFile(v1, []byte(rewriteNew), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const line = "has changed since port49d read it"
+	count := func() int { return strings.Count(rig.out.String(), line) }
+	poll := func() { rig.with(func() { rig.r.poll(context.Background()) }) }
+	rig.now = rig.now.Add(keyRetryInterval)
+	poll()
+	if count() != 1 || !strings.Contains(rig.out.String(), "keys.k version 1:") {
+		t.Fatalf("the first sighting was not said once:\n%s", rig.out.String())
+	}
+	if g := testutil.ToFloat64(rig.m.KeySecretFilesChanged); g != 1 {
+		t.Fatalf("gauge = %v, want 1", g)
+	}
+	rig.now = rig.now.Add(keyRetryInterval)
+	poll()
+	if count() != 1 {
+		t.Fatalf("a repeat inside keyRetrySayEvery was said:\n%s", rig.out.String())
+	}
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if count() != 2 {
+		t.Fatalf("SIGHUP did not say it again:\n%s", rig.out.String())
+	}
+	rig.now = rig.now.Add(11 * time.Minute)
+	poll()
+	if count() != 3 {
+		t.Fatalf("it was not said again after keyRetrySayEvery:\n%s", rig.out.String())
+	}
+	if err := os.WriteFile(v1, []byte(rewriteOrig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.now = rig.now.Add(keyRetryInterval)
+	poll()
+	if g := testutil.ToFloat64(rig.m.KeySecretFilesChanged); g != 0 {
+		t.Fatalf("gauge = %v after the bytes were put back, want 0", g)
+	}
+}
+
+// A rewrite only warns: a policy edit that adds a version still swaps in.
+func TestARewriteNeverRefusesAReload(t *testing.T) {
+	rig, dir, v1, filePolicy := rewriteRig(t)
+	if err := os.WriteFile(v1, []byte(rewriteNew), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v2 := filepath.Join(dir, "k_v2")
+	if err := os.WriteFile(v2, []byte("not-a-real-key-v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The new current is version 2; version 1 moves to accept.
+	rig.write(t, strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 2, secret_ref: file:"+v2+"}\n"+
+		"    accept: [{version: 1, secret_ref: file:"+v1+", retire_after: 2099-01-01}]\n"+labKeyRun, 1))
+	_ = filePolicy
+	before := testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("applied"))
+	rig.now = rig.now.Add(keyRetryInterval)
+	rig.pollTwice()
+	if vs := rig.r.keys.Set("k").Versions; len(vs) != 2 {
+		t.Fatalf("the policy did not swap in beside a rewritten file: %d versions\n%s", len(vs), rig.out.String())
+	}
+	if testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("applied")) != before+1 ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("the reload was not applied cleanly:\n%s", rig.out.String())
+	}
+}
+
+func TestTheRewriteLineCarriesNoSecret(t *testing.T) {
+	rig, _, v1, _ := rewriteRig(t)
+	if err := os.WriteFile(v1, []byte(rewriteNew), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.now = rig.now.Add(keyRetryInterval)
+	rig.with(func() { rig.r.poll(context.Background()) })
+	os.Remove(v1)
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := []byte(rig.out.String())
+	if !bytes.Contains(out, []byte("can no longer be read")) {
+		t.Fatalf("the unreadable line was not said:\n%s", out)
+	}
+	for _, s := range []string{rewriteOrig, rewriteNew} {
+		if bytes.Contains(out, []byte(s)) {
+			t.Fatalf("stderr carries a secret of %d bytes", len(s))
+		}
 	}
 }

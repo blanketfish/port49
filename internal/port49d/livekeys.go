@@ -1,6 +1,7 @@
 package port49d
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"maps"
 	"slices"
@@ -222,6 +223,62 @@ func versionStates(s keyset.Set) map[int]string {
 	}
 	for _, v := range s.Retired {
 		out[v.Version] = "retired"
+	}
+	return out
+}
+
+// keyFileState is what rewritten finds a held file: reference to be.
+type keyFileState int
+
+const (
+	keyFileSame keyFileState = iota
+	keyFileChanged
+	keyFileUnreadable
+)
+
+// keyFileFinding is one key version whose held file: reference no longer
+// reads as it did. Err is set for keyFileUnreadable only; it names the
+// reference and why, never a value.
+type keyFileFinding struct {
+	Ref     string
+	Version int
+	Path    string
+	State   keyFileState
+	Err     error
+}
+
+// rewritten reads again each file: reference of the build in force and
+// reports the versions whose file differs from the secret held or cannot be
+// read, sorted by key_ref then version. It changes nothing: the secret held
+// stays in force (decision 54 ruling 11), and the bytes read are compared and
+// dropped. An env: reference is never read again. Nil holds no key.
+func (k *liveKeys) rewritten() []keyFileFinding {
+	if k == nil {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	in := k.in.Load()
+	var out []keyFileFinding
+	for _, ref := range slices.Sorted(maps.Keys(in.refs)) {
+		for _, n := range slices.Sorted(maps.Keys(in.refs[ref])) {
+			text := in.refs[ref][n]
+			r, err := secretref.Parse(text)
+			if err != nil || r.Scheme != secretref.SchemeFile {
+				continue
+			}
+			f := keyFileFinding{Ref: ref, Version: n, Path: r.Name}
+			now, err := k.res.Resolve(r, k.allow.FileDir)
+			switch held, ok := k.held[text]; {
+			case err != nil:
+				f.State, f.Err = keyFileUnreadable, err
+			case ok && subtle.ConstantTimeCompare(now.Bytes(), held.Bytes()) != 1:
+				f.State = keyFileChanged
+			default:
+				continue
+			}
+			out = append(out, f)
+		}
 	}
 	return out
 }

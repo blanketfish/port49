@@ -82,6 +82,11 @@ type reloader struct {
 	// keyWait is the policy version refused for a secret that could not be
 	// read, tried again until it loads (keyretry.go).
 	keyWait keyWait
+	// keyFilesNext is when the poll reads the held key files again, and
+	// keyFilesSaid when each finding (by "ref/version") was last said
+	// (rereadKeyFiles).
+	keyFilesNext time.Time
+	keyFilesSaid map[string]time.Time
 	// live is the policy in force, which a reload swaps; log is where its
 	// inventory_change records go.
 	live *policy.Live
@@ -430,6 +435,10 @@ func arm(timer *time.Timer, due, now time.Time) {
 // inventory file to read.
 func (r *reloader) poll(ctx context.Context) {
 	r.retryKeys(ctx, "")
+	if now := r.now(); !now.Before(r.keyFilesNext) {
+		r.keyFilesNext = now.Add(keyRetryInterval)
+		r.rereadKeyFiles("poll")
+	}
 	r.pollPolicy(ctx)
 	if r.cfg.InventoryService == nil {
 		r.pollInventory(ctx)
@@ -543,6 +552,7 @@ func (r *reloader) pollInventory(ctx context.Context) {
 func (r *reloader) reload(ctx context.Context, trigger string) {
 	r.rereadBound()
 	r.rereadVerifyKeys()
+	r.rereadKeyFiles(trigger)
 	r.together = ""
 	raw, v, err := policyVersion(r.cfg.Policy.File)
 	if err == nil && v != r.live.Load().Source && r.policyParses(raw) {
@@ -1238,6 +1248,7 @@ func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 			r.sayf("%s\n", n)
 		}
 	}
+	r.rereadKeyFiles("reload")
 	assigned := func(device string) string {
 		a, _ := pol.Admitted(device)
 		return a.KeyRef
@@ -1608,4 +1619,38 @@ func quarantinedAt(p *policy.Policy, now time.Time) int {
 		}
 	}
 	return n
+}
+
+// rereadKeyFiles reads each held file: key reference again and says, in
+// §12's words, the versions whose file has changed since port49d read it or
+// can no longer be read. It never refuses anything: the secret held stays in
+// force. A line is said when first seen, at SIGHUP, and then at most every
+// keyRetrySayEvery per reference and version; the gauge is the number of
+// findings. port49-broker holds no key and does nothing.
+func (r *reloader) rereadKeyFiles(trigger string) {
+	if r.keys == nil {
+		return
+	}
+	findings := r.keys.rewritten()
+	r.metrics.KeySecretFilesChanged.Set(float64(len(findings)))
+	now := r.now()
+	still := map[string]time.Time{}
+	for _, f := range findings {
+		id := fmt.Sprintf("%s/%d", f.Ref, f.Version)
+		last, seen := r.keyFilesSaid[id]
+		if !seen || trigger == "SIGHUP" || now.Sub(last) >= keyRetrySayEvery {
+			if f.State == keyFileUnreadable {
+				r.sayf("keys.%s version %d: %s can no longer be read (%v); port49d keeps the secret it read, "+
+					"but a restart will refuse to start until the file is back or the policy no longer names the version\n",
+					f.Ref, f.Version, f.Path, f.Err)
+			} else {
+				r.sayf("keys.%s version %d: %s has changed since port49d read it; port49d keeps the secret it read, "+
+					"and a restart would take the new one on that replica alone; a version's secret never changes (§10): "+
+					"put the new secret in a new file under a new version\n", f.Ref, f.Version, f.Path)
+			}
+			last = now
+		}
+		still[id] = last
+	}
+	r.keyFilesSaid = still
 }

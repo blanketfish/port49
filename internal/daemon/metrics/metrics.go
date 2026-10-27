@@ -419,6 +419,10 @@ type Metrics struct {
 	// 0 once a file loads or the file is put back. It is the alert: an edit
 	// someone believes is live, and is not.
 	PolicyFileRefused prometheus.Gauge
+	// port49_key_secret_files_changed: the key versions whose held file:
+	// secret has been rewritten in place or can no longer be read (spec §12,
+	// decision 54 ruling 11). The held secret stays in force.
+	KeySecretFilesChanged prometheus.Gauge
 	// port49_policy_fail_closed_compositions: how many compositions of a
 	// subject on a projected platform get the fail-closed reply under the
 	// policy in force now (projection_refused and projection_overflow,
@@ -803,6 +807,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
 			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
+		KeySecretFilesChanged: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_key_secret_files_changed",
+			Help: "Key versions whose held file: secret has changed or can no longer be read (spec §12); the held secret stays in force."}),
 		PolicyFailClosed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_fail_closed_compositions",
 			Help: "Compositions answered fail-closed under the policy in force now: those users are denied all but the allows. `port49 policy test` names them."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
@@ -931,7 +937,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.PolicyFailClosed,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
