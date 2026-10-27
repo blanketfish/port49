@@ -171,27 +171,33 @@ func (b *Broker) adminGate(w http.ResponseWriter, r *http.Request, c caller, bod
 			Principal: c.principal, Auth: c.auth(),
 			Admin: &decision.Admin{Operation: op, Target: target, ChallengeSHA256: chSHA, Why: why}})
 	}
-	refuse := func(chSHA, cause string) bool {
+	// refuse answers cause, which may quote what the caller sent, and records
+	// why alone: one fixed word of §5.7's set, never request text.
+	refuse := func(chSHA, cause, why string) bool {
 		b.Metrics.AdminTouch.WithLabelValues("refused").Inc()
-		emit(decision.VerdictDeny, decision.AdminTouchRefused, chSHA, cause)
+		emit(decision.VerdictDeny, decision.AdminTouchRefused, chSHA, why)
 		writeError(w, http.StatusUnauthorized, string(decision.AdminTouchRefused), cause)
 		return false
 	}
 	if !b.mfaTouch() {
 		b.Metrics.AdminTouch.WithLabelValues("unavailable").Inc()
-		emit(decision.VerdictDeny, decision.AdminTouchUnavailable, "", "no attestation roots")
+		emit(decision.VerdictDeny, decision.AdminTouchUnavailable, "", "no_roots")
 		writeError(w, http.StatusServiceUnavailable, string(decision.AdminTouchUnavailable),
 			"no attestation roots are configured "+
 				"(broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file); admin operations need them")
 		return false
 	}
 	if c.oidc != nil || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		why := "no_client_certificate"
+		if c.oidc != nil {
+			why = "bearer"
+		}
 		return refuse("", "an admin call is proved by a touch on a connection that presented your client "+
-			"certificate: a bearer token cannot prove, so log in and call through your agent")
+			"certificate: a bearer token cannot prove, so log in and call through your agent", why)
 	}
 	ekm, err := r.TLS.ExportKeyingMaterial(api.AdminExporterLabel, nil, 32)
 	if err != nil {
-		return refuse("", "this connection cannot export keying material")
+		return refuse("", "this connection cannot export keying material", "no_exporter")
 	}
 	request := api.AdminRequestSHA256(r.Method, r.URL.RequestURI(), body)
 	header := r.Header.Get(api.AdminProofHeader)
@@ -227,26 +233,26 @@ func (b *Broker) adminGate(w http.ResponseWriter, r *http.Request, c caller, bod
 	chSHA := hex.EncodeToString(chSum[:])
 	if err != nil || chErr != nil || len(ch) != api.MFAChallengeLen {
 		return refuse(chSHA, "the "+api.AdminProofHeader+" header is not a proof: base64url JSON with the "+
-			"challenge, the signature and three attestation certificates")
+			"challenge, the signature and three attestation certificates", "malformed_proof")
 	}
 	touch, cause := parseTouch(api.MFAProofRequest{Challenge: proof.Challenge, Signature: proof.Signature,
 		Attestation: proof.Attestation})
 	if cause != "" {
-		return refuse(chSHA, cause)
+		return refuse(chSHA, cause, "malformed_proof")
 	}
 	// The challenge is taken under this caller's, connection's and request's
 	// own key, so another's finds nothing and spends nothing.
 	if !b.admin.take(adminKey(ch, ekm, c.principal, c.cred.Fingerprint, request), now) {
 		return refuse(chSHA, "the challenge is unknown, spent or expired, or was made for another request, "+
-			"connection or caller; ask again")
+			"connection or caller; ask again", "unknown_challenge")
 	}
 	if h := b.admin.judging.Load(); h != nil {
 		(*h)()
 	}
-	if cause := b.verifyTouchMessage(r, touch, api.AdminExporterLabel, func(ekm []byte) []byte {
+	if cause, why := b.verifyTouchMessage(r, touch, api.AdminExporterLabel, func(ekm []byte) []byte {
 		return api.AdminMessage(ch, request, ekm)
 	}, now); cause != "" {
-		return refuse(chSHA, cause)
+		return refuse(chSHA, cause, why)
 	}
 	b.Metrics.AdminTouch.WithLabelValues("proved").Inc()
 	emit(decision.VerdictPermit, decision.AdminTouchProved, chSHA, "")

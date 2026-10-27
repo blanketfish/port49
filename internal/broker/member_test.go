@@ -620,6 +620,7 @@ func TestRevokeOthersThroughAGroup(t *testing.T) {
 	a := answerFor(corpAlice, "alice")
 	a.GroupNames = []string{"oncall-group"}
 	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	body := `{"principal":"user:victim@corp.example.com"}`
 	w := f.call(f.pinned(a), f.state(f.alice), "POST", "/v1/tokens/revoke", body)
 	if w.Code != 200 {

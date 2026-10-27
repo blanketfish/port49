@@ -204,9 +204,9 @@ type Broker struct {
 	ownRevoking map[string]bool
 	// admin is the admin-level calls' challenges, in memory (adminproof.go).
 	admin adminChallenges
-	// skipAdminProof lets adminGate pass every call. It is unexported and set
-	// by test fixtures alone, for tests of what a revocation does once its
-	// proof is in hand: TestNothingButTestsSkipsTheAdminProof holds that.
+	// The next field lets the admin gate pass every call. It is unexported
+	// and set by tests alone, each by name, for tests of what a revocation
+	// does once its proof is in hand; adminproof_test.go holds that.
 	skipAdminProof bool
 
 	mu sync.Mutex

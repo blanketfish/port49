@@ -705,9 +705,10 @@ var touchPolicyNames = map[byte]string{pivattest.TouchNever: "never", pivattest.
 // (decision 45 ruling 12), "" when it holds: the touch key signed this
 // challenge over this connection's exporter value (verifyTouchMessage).
 func (b *Broker) verifyTouch(r *http.Request, p *touchProof, ch []byte, now time.Time) string {
-	return b.verifyTouchMessage(r, p, api.MFAExporterLabel, func(ekm []byte) []byte {
+	cause, _ := b.verifyTouchMessage(r, p, api.MFAExporterLabel, func(ekm []byte) []byte {
 		return api.MFAMessage(ch, ekm)
 	}, now)
+	return cause
 }
 
 // verifyTouchMessage judges a touch proof over msg(ekm), ekm being the held
@@ -717,41 +718,45 @@ func (b *Broker) verifyTouch(r *http.Request, p *touchProof, ch []byte, now time
 // this connection's client key; and the touch key signed msg(ekm). The roots
 // are the operator's alone: no request certificate is added to them. A
 // per-login proof and an admin proof differ in label and message, and in
-// nothing else.
+// nothing else. A refusal returns its cause, which may quote what the caller
+// sent and belongs in the API answer alone, and why, one fixed word (§5.7's
+// admin_touch set) that is safe in a record.
 func (b *Broker) verifyTouchMessage(r *http.Request, p *touchProof, label string, msg func(ekm []byte) []byte,
-	now time.Time) string {
+	now time.Time) (cause, why string) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return "a touch proves on a held connection that presented the session key's certificate"
+		return "a touch proves on a held connection that presented the session key's certificate", "no_client_certificate"
 	}
 	ekm, err := r.TLS.ExportKeyingMaterial(label, nil, 32)
 	if err != nil {
-		return "this connection cannot export keying material"
+		return "this connection cannot export keying material", "no_exporter"
 	}
 	anchors := *b.PerLoginMFA.Anchors
 	ta, err := pivattest.Verify(anchors, p.device, p.touch, now)
 	if err != nil {
-		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300)
+		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "touch_slot_chain"
 	}
 	sa, err := pivattest.Verify(anchors, p.device, p.sessnl, now)
 	if err != nil {
-		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300)
+		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "session_slot_chain"
 	}
 	// Both slots verified against the one device certificate in the proof,
 	// so what can differ is the serial each slot certificate names.
 	if ta.Serial != sa.Serial {
-		return "the touch key and the session key are not attested by the same device"
+		return "the touch key and the session key are not attested by the same device", "device_mismatch"
 	}
 	if ta.TouchPolicy != pivattest.TouchAlways {
 		return fmt.Sprintf("the touch key's attestation must carry touch policy always (it says %s)",
-			touchPolicyNames[ta.TouchPolicy])
+			touchPolicyNames[ta.TouchPolicy]), "touch_policy"
 	}
 	eq, ok := sa.Key.(interface{ Equal(crypto.PublicKey) bool })
 	if !ok || !eq.Equal(r.TLS.PeerCertificates[0].PublicKey) {
-		return "the session slot's key is not this connection's client key: a touch proves from the token that holds it"
+		return "the session slot's key is not this connection's client key: a touch proves from the token that " +
+			"holds it", "session_key"
 	}
 	alg, ok := api.RefreshAlgorithm(ta.Key)
 	if !ok || p.touch.CheckSignature(alg, msg(ekm), p.sig) != nil {
-		return "the signature is not the touch key's over this challenge and this connection's exporter value"
+		return "the signature is not the touch key's over this challenge and this connection's exporter value",
+			"bad_signature"
 	}
-	return ""
+	return "", ""
 }

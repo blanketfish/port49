@@ -309,7 +309,6 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 	base := newFixtureWith(t, 16, mfaPolicy(o), devs...)
 	f := &mfaFixture{fixture: base, clock: mfaClock{base}, otherAgent: newAgentSession(), logs: &lockedBuffer{}, opts: o}
 	f.b.Log = decision.NewJSONLines(f.logs)
-	f.b.skipAdminProof = false // the admin proof is what these tests are about
 	f.minterClock = &stepClock{base: f.b.Now}
 	f.b.Minter = token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.minterClock.Now, 16)
 	f.store = &failStore{Store: f.st}

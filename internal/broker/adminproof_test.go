@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/pivattest"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // An admin-level call proves a touch bound to its own request (spec §5.1.6;
@@ -433,37 +436,6 @@ func TestARightlessCallerGetsNoChallenge(t *testing.T) {
 	}
 }
 
-func TestTheRecordHoldsNoProofMaterial(t *testing.T) {
-	f := newAdminFixture(t)
-	c := f.alice.conn
-	ch := f.adminAsk(t, c, revokePath, bobBody)
-	sig := f.adminSign(t, f.alice.touchKey, ch.Challenge, "POST", revokePath, bobBody, c.adminExporter(t))
-	header := adminHeader(t, ch.Challenge, sig, f.alice.atts)
-	if code, _ := f.adminSend(t, c, revokePath, bobBody, header); code != 200 {
-		t.Fatalf("the proved call: %d", code)
-	}
-	// A refused one too, with a proof that carries the attestations.
-	if code, _ := f.adminSend(t, c, revokePath, bobBody, header); code != 401 {
-		t.Fatalf("the spent proof: %d", code)
-	}
-	fields := map[string]string{"the challenge": ch.Challenge, "the signature": b64(sig), "the header": header}
-	for i, a := range f.alice.atts {
-		fields["attestation "+string(rune('1'+i))] = b64(a)
-	}
-	log := f.logs.String()
-	for name, v := range fields {
-		if strings.Contains(log, v) {
-			t.Errorf("the decision log carries %s", name)
-		}
-	}
-	if t.Failed() {
-		return
-	}
-	if f.adminRecords(t, "admin_touch_proved") != 1 || f.adminRecords(t, "admin_touch_refused") != 1 {
-		t.Fatal("the proved and refused records are not each there once")
-	}
-}
-
 // The challenge is kept two minutes.
 func TestAChallengeExpires(t *testing.T) {
 	f := newAdminFixture(t)
@@ -601,12 +573,232 @@ func hexOf(b []byte) string {
 	return string(out)
 }
 
-// skipAdminProof is a test seam: no code a process runs sets it.
+// whyWords is §5.7's closed set for an admin_touch record's why.
+var whyWords = []string{"no_roots", "bearer", "no_client_certificate", "no_exporter", "malformed_proof",
+	"unknown_challenge", "touch_slot_chain", "session_slot_chain", "device_mismatch", "touch_policy",
+	"session_key", "bad_signature"}
+
+// Every refusal path leaves a record whose why is one fixed word, and no
+// record holds the challenge, the signature, an attestation or the exporter
+// value, in any of the spellings a log could carry. The values are found by
+// absence and never printed.
+func TestTheRecordHoldsNoProofMaterial(t *testing.T) {
+	f := newAdminFixture(t)
+	c := f.alice.conn
+	material := map[string][]byte{}
+	spell := func(name string, raw []byte) {
+		material[name+" (hex)"] = []byte(hexOf(raw))
+		material[name+" (base64url)"] = []byte(b64(raw))
+		material[name+" (base64)"] = []byte(base64.StdEncoding.EncodeToString(raw))
+	}
+	ekm := c.adminExporter(t)
+	spell("the exporter value", ekm)
+	for i, a := range f.alice.atts {
+		spell("attestation "+string(rune('1'+i)), a)
+	}
+	sessPub := f.alice.cert.PrivateKey.(crypto.Signer).Public()
+	sign := func(key *ecdsa.PrivateKey, ch, body string) []byte {
+		sig := f.adminSign(t, key, ch, "POST", revokePath, body, ekm)
+		spell("a signature", sig)
+		return sig
+	}
+	attempt := func(name, why string, mk func(ch string) string) {
+		t.Helper()
+		ch := f.adminAsk(t, c, revokePath, bobBody)
+		spell("a challenge", mfaChallengeBytes(t, ch.Challenge))
+		code, raw := f.adminSend(t, c, revokePath, bobBody, mk(ch.Challenge))
+		if code != 401 || decodeAdminAnswer(t, raw).Error != "admin_touch_refused" {
+			t.Fatalf("%s: answered %d, want 401 admin_touch_refused", name, code)
+		}
+		recs := f.recs(t)
+		var last map[string]any
+		for _, r := range recs {
+			if r["event"] == "admin_touch" && r["reason"] == "admin_touch_refused" {
+				last = r
+			}
+		}
+		adm, _ := last["admin"].(map[string]any)
+		if adm == nil || adm["why"] != why {
+			t.Fatalf("%s: the record's why is %v, want %s", name, adm["why"], why)
+		}
+	}
+	good := func(ch string) string {
+		return adminHeader(t, ch, sign(f.alice.touchKey, ch, bobBody), f.alice.atts)
+	}
+	attempt("a header that is no proof", "malformed_proof", func(string) string { return "not-a-proof!" })
+	attempt("two attestations", "malformed_proof", func(ch string) string {
+		return adminHeader(t, ch, sign(f.alice.touchKey, ch, bobBody), f.alice.atts[:2])
+	})
+	attempt("a challenge never issued", "unknown_challenge", func(string) string {
+		other := make([]byte, 32)
+		_, _ = rand.Read(other)
+		spell("a challenge", other)
+		return adminHeader(t, b64(other), sign(f.alice.touchKey, b64(other), bobBody), f.alice.atts)
+	})
+	attempt("a signature over another request", "bad_signature", func(ch string) string {
+		return adminHeader(t, ch, sign(f.alice.touchKey, ch, carolBody), f.alice.atts)
+	})
+	attempt("a token that does not hold the connection's key", "session_key", func(ch string) string {
+		other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		key, atts := f.newToken(t, &other.PublicKey, pivattest.TouchAlways)
+		return adminHeader(t, ch, sign(key, ch, bobBody), atts)
+	})
+	attempt("a touch key whose policy is cached", "touch_policy", func(ch string) string {
+		key, atts := f.newToken(t, sessPub, pivattest.TouchCached)
+		return adminHeader(t, ch, sign(key, ch, bobBody), atts)
+	})
+	attempt("attestations of another root", "touch_slot_chain", func(ch string) string {
+		piv, err := testpki.NewPIV(f.b.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		touchAtt, err := piv.Slot(&key.PublicKey, pivattest.TouchAlways)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessAtt, err := piv.Slot(sessPub, pivattest.TouchNever)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return adminHeader(t, ch, sign(key, ch, bobBody), [][]byte{touchAtt.Raw, piv.Device.Raw, sessAtt.Raw})
+	})
+	attempt("slots of two devices", "device_mismatch", func(ch string) string {
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		atts := [][]byte{
+			f.slotCertSerial(t, f.device, f.deviceKey, &key.PublicKey, pivattest.TouchAlways, 12345678),
+			f.device.Raw,
+			f.slotCertSerial(t, f.device, f.deviceKey, sessPub, pivattest.TouchNever, 999),
+		}
+		return adminHeader(t, ch, sign(key, ch, bobBody), atts)
+	})
+	// A bearer, and a proved call, for the records on either side.
+	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", amr: []string{"mfa"}, authTime: f.b.Now()})
+	if w := f.bearer(context.Background(), "POST", revokePath, bobBody, tok); w.Code != 401 {
+		t.Fatalf("a bearer: %d", w.Code)
+	}
+	if code, _ := f.adminSend(t, c, revokePath, bobBody, good(f.adminAsk(t, c, revokePath, bobBody).Challenge)); code != 200 {
+		t.Fatalf("the proved call: %d", code)
+	}
+
+	log := f.logs.String()
+	for name, v := range material {
+		if strings.Contains(log, string(v)) {
+			t.Errorf("the decision log carries %s", name)
+		}
+	}
+	for _, r := range f.recs(t) {
+		if r["event"] != "admin_touch" {
+			continue
+		}
+		adm, _ := r["admin"].(map[string]any)
+		if why, ok := adm["why"].(string); ok && !slices.Contains(whyWords, why) {
+			t.Errorf("a record's why is outside the closed set")
+		}
+	}
+	if f.adminRecords(t, "admin_touch_refused") != 9 || f.adminRecords(t, "admin_touch_proved") != 1 {
+		t.Fatal("the refused and proved records are not all there")
+	}
+	if rec := f.find(t, "admin_touch", "deny", "admin_touch_refused"); rec == nil {
+		t.Fatal("no refused record")
+	}
+}
+
+func TestNoRootsRecordsItsFixedWhy(t *testing.T) {
+	f := newAdminFixture(t, withoutAttestationRoots())
+	f.alice.conn.post(t, revokePath, nil, bobBody)
+	rec := f.find(t, "admin_touch", "deny", "admin_touch_unavailable")
+	adm, _ := rec["admin"].(map[string]any)
+	if adm == nil || adm["why"] != "no_roots" {
+		t.Fatalf("the record's admin part is %v", rec["admin"])
+	}
+}
+
+// Every gated form refuses a call with no proof and runs once with one. A
+// route that lost its gate answers the first call 200, and this goes red.
+// Each new admin route joins this table.
+func TestEveryGatedFormNeedsATouch(t *testing.T) {
+	for _, form := range []struct{ name, body, op, target string }{
+		{"principal", bobBody, "revoke_principal", bobKey},
+		{"key", `{"device":"core-sw01","username":"bob"}`, "revoke_key", "core-sw01/bob"},
+		{"sid", `{"sid":"s-1"}`, "revoke_sid", "s-1 at "},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			f := newAdminFixture(t)
+			c := f.alice.conn
+			code, raw := c.post(t, revokePath, nil, form.body)
+			ans := decodeAdminAnswer(t, raw)
+			if code != 401 || ans.Error != "admin_touch_required" || ans.Admin == nil {
+				t.Fatalf("with no proof: %d %s, want 401 admin_touch_required", code, ans.Error)
+			}
+			if ans.Admin.Operation != form.op || !strings.HasPrefix(ans.Admin.Target, form.target) {
+				t.Fatalf("operation %q target %q", ans.Admin.Operation, ans.Admin.Target)
+			}
+			for _, r := range f.recs(t) {
+				if r["event"] == "revoke" {
+					t.Fatal("a call with no proof wrote a revoke record")
+				}
+			}
+			if code, _ := f.adminCall(t, f.alice, c, revokePath, form.body); code != 200 {
+				t.Fatalf("with a proof: %d, want 200", code)
+			}
+			if f.adminRecords(t, "admin_touch_proved") != 1 {
+				t.Fatal("no admin_touch_proved record")
+			}
+		})
+	}
+}
+
+// The sid form judges its proof before it takes the asker's one slot too: a
+// refused sid proof being judged does not stop the asker's own revocation.
+func TestARefusedSidProofTakesNoOwnSlot(t *testing.T) {
+	f := newAdminFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	hook := func() {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+	}
+	f.b.admin.judging.Store(&hook)
+	const sid = `{"sid":"s-1"}`
+	slow := f.alice.conn
+	ch := f.adminAsk(t, slow, revokePath, sid)
+	header := adminHeader(t, ch.Challenge, make([]byte, 64), f.alice.atts)
+	var wg sync.WaitGroup
+	var slowCode int
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		slowCode, _ = f.adminSend(t, slow, revokePath, sid, header)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the refused proof was never judged")
+	}
+	code, _ := f.dial(t, f.alice).post(t, revokePath, nil, `{"mine":true}`)
+	close(release)
+	wg.Wait()
+	if code != 200 {
+		t.Fatalf("the asker's own revocation during a sid judgment: %d, want 200", code)
+	}
+	if slowCode != 401 {
+		t.Fatalf("the refused proof was answered %d, want 401", slowCode)
+	}
+}
+
+// skipAdminProof is a test seam: no code a process runs sets it. Only its
+// declaration and the gate's one check may name it outside a test.
 func TestNothingButTestsSkipsTheAdminProof(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatal("no source files found")
 	}
+	allowed := map[string]string{"broker.go": "skipAdminProof bool", "adminproof.go": "if b.skipAdminProof {"}
+	found := map[string]int{}
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -616,9 +808,19 @@ func TestNothingButTestsSkipsTheAdminProof(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i, line := range strings.Split(string(src), "\n") {
-			if strings.Contains(line, "skipAdminProof") && name != "adminproof.go" && name != "broker.go" {
-				t.Errorf("%s:%d names skipAdminProof", name, i+1)
+			if !strings.Contains(line, "skipAdminProof") {
+				continue
 			}
+			if strings.TrimSpace(line) != allowed[name] {
+				t.Errorf("%s:%d names skipAdminProof", name, i+1)
+				continue
+			}
+			found[name]++
+		}
+	}
+	for name := range allowed {
+		if found[name] != 1 {
+			t.Errorf("%s names skipAdminProof %d times, want once", name, found[name])
 		}
 	}
 }

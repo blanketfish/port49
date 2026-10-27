@@ -129,6 +129,7 @@ func TestMineIsASelfRevocation(t *testing.T) {
 // reaches nothing of alice's.
 func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	ctx := context.Background()
 	f.mintFor(t, "alice@example.com", "leaf1")
 	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
@@ -206,6 +207,7 @@ func TestARevocationBodyIsOneForm(t *testing.T) {
 // none configured, the policy file (review M2).
 func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	f.b.Store = putRevocationFails{f.st}
 	for socket, want := range map[string]string{
 		"": "port49d has no admin_socket configured, so meanwhile have an operator remove the principal's " +
@@ -237,6 +239,7 @@ func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error
 // (pre-flight M18).
 func TestABusyRevocationIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	defer func(d time.Duration) { revokeSlotWait = d }(revokeSlotWait)
 	revokeSlotWait = 50 * time.Millisecond
 	release, err := f.b.acquireRevoke(context.Background())
@@ -281,6 +284,7 @@ func (s tokensByPrincipalHangs) TokensByPrincipal(ctx context.Context, principal
 // (ruling M4).
 func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	f.mintFor(t, "alice@example.com", "leaf1")
 	hang := tokensByPrincipalHangs{Store: f.st, principal: "user:bob@example.com", hung: &atomic.Bool{}, entered: make(chan struct{}),
 		release: make(chan struct{})}
@@ -409,6 +413,7 @@ func (f *fixture) carolToken(t *testing.T, iss *oidctest.Issuer) string {
 
 func TestRevokeBySidNeedsTheRightAndEndsTheSession(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	ctx := context.Background()
 	now := f.b.Now()
@@ -445,6 +450,7 @@ func TestRevokeBySidNeedsTheRightAndEndsTheSession(t *testing.T) {
 // the sid with its issuer, both named.
 func TestRevokeBySidTakesTheShapeTheOperatorLineNames(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	body := `{"sid": "s-sub-alice", "issuer": "` + iss.URL + `"}`
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", body, f.carolToken(t, iss)); w.Code != 200 {
@@ -456,6 +462,7 @@ func TestRevokeBySidTakesTheShapeTheOperatorLineNames(t *testing.T) {
 // slot, so a retry while one runs is 503 revocation_busy and ends nothing.
 func TestRevokeBySidHoldsTheAskersSlot(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	release, ok := f.b.holdOwnRevoke("user:carol@example.com")
 	if !ok {
@@ -470,6 +477,7 @@ func TestRevokeBySidHoldsTheAskersSlot(t *testing.T) {
 
 func TestRevokeBySidRefusesWhatItCannotName(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	carol := f.carolToken(t, iss)
 	for _, c := range []struct{ body, says string }{
@@ -502,6 +510,7 @@ func TestRevokeBySidRefusesWhatItCannotName(t *testing.T) {
 // so: 503, never a 200 "ended".
 func TestRevokeBySidWithTheStoreDownIsNotAnAnswerOfSuccess(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutLogout": func() error { return store.ErrUnavailable }}}
@@ -519,6 +528,7 @@ func TestRevokeBySidWithTheStoreDownIsNotAnAnswerOfSuccess(t *testing.T) {
 // first would end the wrong one's session.
 func TestRevokeBySidNeedsItsIssuerWithTwoProviders(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	f.addIssuer(t, oidctest.NewIssuer(t), "example.com", false)
 	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
@@ -535,6 +545,7 @@ func TestRevokeBySidNeedsItsIssuerWithTwoProviders(t *testing.T) {
 // answer names both.
 func TestRevokeBySidAnswerNamesEveryOwnerPrincipal(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	ctx := context.Background()
 	const alice2 = "user:alice2@example.com"
