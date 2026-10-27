@@ -80,9 +80,8 @@ func TestARevocationIsComparedAsTheBrokerSpellsIt(t *testing.T) {
 // M2). mine is not told.
 func TestTheCallersOwnPrincipalByNameSaysNoMarkWasMade(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
-	f.b.AdminSocket = "/run/port49/port49d.sock"
-	const first = "this is your own principal: no mark was made; to lock it, ask an operator to use port49d's " +
-		"admin socket (/run/port49/port49d.sock)\n"
+	const first = "this is your own principal: no mark was made; to lock it, ask an operator holding api: " +
+		"revoke_others to run `port49 revoke --principal <principal>`\n"
 	r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"user:alice@example.com"}`))
 	if r.By != "self" || r.Standing || !strings.HasPrefix(r.Text, first) ||
 		!strings.Contains(r.Text, "nothing stands against user:alice@example.com") {
@@ -93,12 +92,6 @@ func TestTheCallersOwnPrincipalByNameSaysNoMarkWasMade(t *testing.T) {
 	}
 	if r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true}`)); strings.Contains(r.Text, "your own principal") {
 		t.Fatalf("mine: %q", r.Text)
-	}
-	f.b.AdminSocket = ""
-	r = decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"user:alice@example.com"}`))
-	if !strings.HasPrefix(r.Text, "this is your own principal: no mark was made; to lock it, port49d needs an "+
-		"admin_socket, or an operator removes your grants from broker.policy_file\n") {
-		t.Fatalf("with no admin socket: %q", r.Text)
 	}
 }
 
@@ -159,7 +152,7 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 	}
 	mark := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`))
 	if mark.By != "principal" || !mark.Standing || mark.Saved == nil || mark.Subject != "netops" ||
-		!strings.Contains(mark.Text, "port49d has no admin_socket configured: lifting this needs port49d stopped") {
+		!strings.Contains(mark.Text, "lift it with `port49 revoke --lift` and the same principal or certificate") {
 		t.Fatalf("bob's revocation of alice: %+v", mark)
 	}
 	rv, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alicePrincipal)
@@ -170,11 +163,10 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 		!strings.Contains(w.Body.String(), "credential_revoked") {
 		t.Fatalf("alice's mint after the mark: %s", answer(w))
 	}
-	f.b.AdminSocket = "/run/port49/port49d.sock"
 	again := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"`+alice2+`"}`))
-	if !strings.HasSuffix(again.Text, "the lift is made on port49d's admin socket (/run/port49/port49d.sock), "+
-		"by port49d's user or root") {
-		t.Fatalf("a mark with an admin socket: %s", again.Text)
+	if !strings.HasSuffix(again.Text, "lift it with `port49 revoke --lift` and the same principal or certificate "+
+		"(it needs api: lift_revocations and a press of your security key)") {
+		t.Fatalf("the lift note: %s", again.Text)
 	}
 }
 
@@ -203,28 +195,19 @@ func TestARevocationBodyIsOneForm(t *testing.T) {
 
 // A revocation the store cannot record is 503 with a fixed sentence; the
 // store's error goes to the process log, not to the caller. The way out it
-// names is one that exists: port49 revoke on the admin socket, or, with
-// none configured, the policy file (review M2).
+// names is one that exists: port49 revoke through an agent, or the policy
+// file (review M2).
 func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
 	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	f.b.Store = putRevocationFails{f.st}
-	for socket, want := range map[string]string{
-		"": "port49d has no admin_socket configured, so meanwhile have an operator remove the principal's " +
-			"grants from broker.policy_file",
-		"/run/port49/port49d.sock": "ask an operator to run `port49 revoke` on port49d's admin socket " +
-			"(/run/port49/port49d.sock)",
-	} {
-		f.b.AdminSocket = socket
-		w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
-		if w.Code != 503 || !strings.Contains(w.Body.String(), "store_unavailable") ||
-			strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
-			!strings.Contains(w.Body.String(), want) {
-			t.Fatalf("admin socket %q: %d %s", socket, w.Code, w.Body)
-		}
-		if socket == "" && strings.Contains(w.Body.String(), "port49 revoke") {
-			t.Fatalf("no admin socket, yet port49 revoke is offered: %s", w.Body)
-		}
+	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "store_unavailable") ||
+		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
+		!strings.Contains(w.Body.String(), "ask an operator holding api: revoke_others to run `port49 revoke") ||
+		!strings.Contains(w.Body.String(), "remove the principal's grants from broker.policy_file") ||
+		strings.Contains(w.Body.String(), "socket") {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }
 
@@ -328,17 +311,13 @@ func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
 	}
 }
 
-// On port49-broker the notes name its admin socket and its process, not
-// port49d's: on etcd port49d's socket refuses revocations (Task 15a review
-// M-6).
-func TestTheRevokeNotesNameTheBrokersProcess(t *testing.T) {
-	for _, socket := range []string{"", "/run/port49/broker.sock"} {
-		b := &Broker{Proc: "port49-broker", AdminSocket: socket}
-		for _, note := range []string{b.unrecordedNote(), b.ownNote(), b.liftNote()} {
-			if strings.Contains(note, "port49d") || !strings.Contains(note, "port49-broker") ||
-				(socket != "" && !strings.Contains(note, "port49-broker's admin socket ("+socket+")")) {
-				t.Fatalf("admin socket %q: %s", socket, note)
-			}
+// On port49-broker the lift note and the others name the command, not a
+// process or a socket (Task 15a review M-6; plan 12b task 3d).
+func TestTheRevokeNotesNameTheCommand(t *testing.T) {
+	b := &Broker{Proc: "port49-broker"}
+	for _, note := range []string{b.unrecordedNote(), b.ownNote(), b.liftNote()} {
+		if strings.Contains(note, "socket") || !strings.Contains(note, "port49 revoke") {
+			t.Fatalf("%s", note)
 		}
 	}
 }

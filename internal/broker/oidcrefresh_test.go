@@ -472,11 +472,9 @@ func TestALogoutMarksOnlyWhatTheRefreshExtended(t *testing.T) {
 // Review N1: the operator's lines name the check and the two commands: a
 // logout is not a ban, and the person may log in again.
 func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
-	want := []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "` on",
-		"port49 revoke --principal " + alicePrincipal + " --lift",
-		"`port49 revoke --list` there shows no mark for " + alicePrincipal}
-	const sock = "/run/port49/broker.sock"
-	want = append(want, "port49-broker's admin socket ("+sock+")")
+	want := []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "`",
+		"port49 revoke --lift --principal " + alicePrincipal,
+		"`port49 revoke --list` shows no mark for " + alicePrincipal}
 	check := func(t *testing.T, said string, want []string) {
 		t.Helper()
 		for _, w := range want {
@@ -485,9 +483,9 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 			}
 		}
 	}
-	markingFails := func(t *testing.T, sock string) string {
+	markingFails := func(t *testing.T) string {
 		f, tok, iss := oidcSession(t)
-		f.b.Proc, f.b.AdminSocket = "port49-broker", sock
+		f.b.Proc = "port49-broker"
 		var said strings.Builder
 		f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
 		nonce := challenge(t, f, tok(nil))
@@ -513,22 +511,15 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 		return said.String()
 	}
 	t.Run("the marking failed", func(t *testing.T) {
-		check(t, markingFails(t, sock), want)
-	})
-	// Without an admin socket there is no revoke to run: the line names the
-	// cut there is (revoke_api.go's unrecordedNote), not a socket.
-	t.Run("no admin socket", func(t *testing.T) {
-		said := markingFails(t, "")
-		check(t, said, []string{"backchannel_logout", "port49-broker has no admin_socket configured",
-			"remove " + alicePrincipal + "'s grants from broker.policy_file", "session ceiling has passed",
-			"restore them"})
-		if strings.Contains(said, "port49 revoke") {
-			t.Fatalf("the operator's line sends them to a socket there is none of: %s", said)
+		said := markingFails(t)
+		check(t, said, want)
+		if strings.Contains(said, "socket") {
+			t.Fatalf("the operator's line names a socket: %s", said)
 		}
 	})
 	t.Run("the re-read failed", func(t *testing.T) {
 		f, tok, _ := oidcSession(t)
-		f.b.Proc, f.b.AdminSocket = "port49-broker", sock
+		f.b.Proc = "port49-broker"
 		twoContexts(t, f)
 		var said strings.Builder
 		f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }

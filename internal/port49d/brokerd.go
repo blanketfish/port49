@@ -584,7 +584,6 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Marks = marks
 	brk.RevokeTimeout = admin.OpTimeout
-	brk.AdminSocket = cfg.AdminSocket
 	brk.Proc = "port49-broker"
 	brk.OnLift = marksCopy.Lifted // a lift over the API leaves the copy as the admin socket's did
 	// MarkChanged's lines, a held connection closed and a lift a reload

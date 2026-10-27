@@ -367,40 +367,27 @@ func writeBusy(w http.ResponseWriter, detail string) {
 }
 
 // unrecordedNote says what to do when a standing mark could not be
-// written: `port49 revoke` on the serving process's admin socket, or,
-// with none configured, the one cut there is, as its start line says
-// (liftNote).
+// written: try again, or have an operator run `port49 revoke` (spec §5.1.6)
+// once the store answers; meanwhile the one cut there is.
 func (b *Broker) unrecordedNote() string {
-	if b.AdminSocket == "" {
-		return "try again; " + b.proc() + " has no admin_socket configured, so meanwhile have an operator remove " +
-			"the principal's grants from broker.policy_file"
-	}
-	return "try again, or ask an operator to run `port49 revoke` on " + b.proc() + "'s admin socket (" +
-		b.AdminSocket + ")"
+	return "try again, or ask an operator holding api: revoke_others to run `port49 revoke --principal <principal>` " +
+		"once the store answers; meanwhile have an operator remove the principal's grants from broker.policy_file"
 }
 
 // ownNote is the first line of a self revocation asked by the caller's own
 // principal's name: no mark was made, and who can make one.
 func (b *Broker) ownNote() string {
-	if b.AdminSocket == "" {
-		return "this is your own principal: no mark was made; to lock it, " + b.proc() + " needs an admin_socket, " +
-			"or an operator removes your grants from broker.policy_file"
-	}
-	return "this is your own principal: no mark was made; to lock it, ask an operator to use " + b.proc() +
-		"'s admin socket (" + b.AdminSocket + ")"
+	return "this is your own principal: no mark was made; to lock it, ask an operator holding api: revoke_others " +
+		"to run `port49 revoke --principal <principal>`"
 }
 
-// liftNote says where a standing mark made over HTTP is lifted: the
-// serving process's admin socket, or, with none configured, the only way
-// there is (pre-flight I7). Revoking stays allowed without one: it is the
+// liftNote says how a standing mark made over HTTP is lifted: the same
+// command with --lift, under lift_revocations and a press of the operator's
+// security key (spec §5.1.6). Revoking stays allowed without it: it is the
 // safe direction.
 func (b *Broker) liftNote() string {
-	if b.AdminSocket == "" {
-		return b.proc() + " has no admin_socket configured: lifting this needs " + b.proc() + " stopped, the " +
-			"entry removed from broker.revocations_file, and a start"
-	}
-	return "the lift is made on " + b.proc() + "'s admin socket (" + b.AdminSocket + "), by " + b.proc() +
-		"'s user or root"
+	return "lift it with `port49 revoke --lift` and the same principal or certificate (it needs api: " +
+		"lift_revocations and a press of your security key)"
 }
 
 // proc is Proc, "port49d" when empty.

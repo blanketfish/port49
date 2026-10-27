@@ -481,7 +481,6 @@ func TestAStoreFailedLogoutSaysAnUnconditionalRecovery(t *testing.T) {
 	f, iss, _ := oidcLoggedIn(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutLogout": func() error { return store.ErrUnavailable },
 		"TakeOnce":  func() error { return store.ErrUnavailable }}}
@@ -491,7 +490,7 @@ func TestAStoreFailedLogoutSaysAnUnconditionalRecovery(t *testing.T) {
 	}
 	out := said.String()
 	first, _, _ := strings.Cut(out, "\n")
-	if strings.Contains(out, "if the decision log has a revoke record") || !strings.Contains(out, "--lift` there only after "+lift) ||
+	if strings.Contains(out, "if the decision log has a revoke record") || !strings.Contains(out, ") only after "+lift) ||
 		!strings.Contains(out, "port49 revoke --list") || strings.Contains(out, "port49 revoke <principal>") ||
 		!strings.Contains(first, `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) || !strings.Contains(first, "(needs revoke_others)") {
 		t.Fatalf("the recovery said:\n%s", out)
@@ -504,7 +503,6 @@ func TestAPartialLogoutSaysTheRecoveryOfItsRecord(t *testing.T) {
 	f, iss, _ := oidcLoggedIn(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"TakeOnce": func() error { return store.ErrUnavailable }}}
 	st := &partialStore{Store: f.b.Store}
@@ -544,7 +542,6 @@ func TestTheAdvisedLiftTimeIsTheLogoutRecordsLife(t *testing.T) {
 	f, iss, _ := oidcLoggedIn(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	st := &ttlStore{Store: f.st}
 	f.b.Store = st
 	now := f.b.Now()
@@ -673,7 +670,6 @@ func TestABothLogoutWhoseSubRecordFailsGivesTheUnconditionalForm(t *testing.T) {
 	f, iss := twoSessions(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	calls := 0
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutLogout": func() error {
@@ -690,7 +686,7 @@ func TestABothLogoutWhoseSubRecordFailsGivesTheUnconditionalForm(t *testing.T) {
 	last := out[strings.LastIndex(strings.TrimSpace(out), "\n")+1:]
 	if strings.Contains(out, `{"sid":`) || strings.Contains(out, "if the decision log has a revoke record") ||
 		!strings.Contains(last, "for each principal the decision log's mint records name for this sub") ||
-		!strings.Contains(last, "--lift` there only after "+lift) {
+		!strings.Contains(last, ") only after "+lift) {
 		t.Fatalf("the recovery said:\n%s", out)
 	}
 	// The jti was given back: the provider's retry is applied, not replayed.
@@ -743,7 +739,6 @@ func TestABothLogoutWhoseSubHalfFailsPartWayIsPartial(t *testing.T) {
 	f, iss := twoSessions(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	f.b.Store = partialSubStore{f.st}
 	raw := logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-part-sub")
 	if w := f.postLogout(raw); w.Code != 503 {
@@ -784,7 +779,6 @@ func TestABothLogoutWhosePutOnceFailedSaysSo(t *testing.T) {
 	f, iss := twoSessions(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutOnce": func() error { return store.ErrUnavailable }}}
 	raw := logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-secret-both")
@@ -793,7 +787,7 @@ func TestABothLogoutWhosePutOnceFailedSaysSo(t *testing.T) {
 	}
 	out := said.String()
 	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
-	if !strings.Contains(out, "--lift` there only after "+lift) || strings.Contains(out, `{"sid":`) ||
+	if !strings.Contains(out, ") only after "+lift) || strings.Contains(out, `{"sid":`) ||
 		!strings.Contains(out, "for this sub") {
 		t.Fatalf("the PutOnce failure said:\n%s", out)
 	}

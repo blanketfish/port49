@@ -163,10 +163,6 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
-	// AdminSocket is the serving process's admin_socket, where a revocation
-	// is lifted; empty when none is configured. Only the HTTP revocation's
-	// answer reads it, to say where its mark is lifted (decision 34).
-	AdminSocket string
 	// Proc names the process serving the API in those answers: "port49d"
 	// when empty, "port49-broker" on the broker (Task 15a review M-6).
 	Proc string

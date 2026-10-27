@@ -1432,7 +1432,6 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			// The socket's deadline covers the wait and the run; one bound
 			// for both, so they cannot drift apart.
 			brk.RevokeTimeout = admin.OpTimeout
-			brk.AdminSocket = cfg.AdminSocket
 			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk, nil), adminRevocations(brk.Store), adminForget(brk)
 			serveSignInOps(srv, brk)
 		} else if sts.persistent {
