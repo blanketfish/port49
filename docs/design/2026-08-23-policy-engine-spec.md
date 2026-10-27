@@ -1324,11 +1324,15 @@ body's SHA-256, so the prompt shows that a replace wipes the store. The record i
 `SHA-256(challenge ‖ 0 ‖ exporter ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ request_sha256)`, so any
 other caller, connection or request misses it.
 
-**The routes.** Every admin write runs in one order: the request's own validity (400, no challenge),
-its right (403 `api_right_missing`, recorded, no challenge), whether this broker can run it at all
+**The routes.** Every admin write runs in one order: its right (403 `api_right_missing`, recorded,
+no challenge), the request's own validity (400, no challenge), whether this broker can run it at all
 (409 `admin_operation_failed`, no challenge: a forget with no `broker.directory`, a second-factor
 reset, unlock or import with no `directory_password` verifier), the body's bound, the touch, then
-the operation. So a caller without the right never blinks, learns nothing of how the broker is
+the operation. The right comes first because the route fixes it, so a caller without it is refused
+and recorded whatever it sent, and a stolen token cannot probe a route's validity unseen. The one
+exception is `POST /v1/tokens/revoke`: the form in its body decides which right applies (one's own
+token needs none, another's needs `revoke_others`), so its validity is judged first. So a caller
+without the right never blinks, learns nothing of how the broker is
 configured, and no key press is ever spent on a call that cannot run. The text of a 409 is the
 broker's own, or names a principal the broker has validated; it never quotes the body (an import
 sealed under an unknown key is told to set `encryption.previous`, without the key id the file names). The routes and their rights are §2's table. The certificate's target is its
