@@ -7828,17 +7828,16 @@ It opens no lab row.
   - Task 6, port49d and port49-broker take their device keys from the policy, read at every reload
     (`91e18f58`, `d00ad1ae`, `00affe2c`, `2b3563c9`).
   - Task 7, a reload that retires a version ends its open connections with no strike (`14c38bea`,
-    `9f646275`).
-  - Task 8, the CLIs read the key sets from the policy (`5888a143`, `cedf4e26`, `0401f359`, `f8f8e82c`,
-    `bdb1cd4b`, `29f0b4db`).
-  - Task 9, `token_secret_ref` and `webhook_secret_ref` (`9b642e86`).
-  - Task 10, the source-of-truth client's `HTTPS_PROXY` (`18a9addf`, `1527ce25`, `0530187a`).
-  - Task 11, the global connection cap (`19edef0e`, `7a23e943`, `d851cfca`).
+    `9f646275`, `cedf4e26`, `0401f359`, `bdb1cd4b`).
+  - Task 8, the CLIs read the key sets from the policy (`5888a143`, `f8f8e82c`, `29f0b4db`).
+  - Task 9, `token_secret_ref` and `webhook_secret_ref` (`9b642e86`, `1527ce25`, `7a23e943`).
+  - Task 10, the source-of-truth client's `HTTPS_PROXY` (`18a9addf`, `0530187a`).
+  - Task 11, the global connection cap (`19edef0e`, `d851cfca`).
   - Task 12, the etcd floor (`fc70ff0e`, `abb5b076`).
   - Task 13, the broker start survives a compaction (`b9379a90`, `77fe9e3b`, `07da219b`).
   - Task 14, one issuing CA per store (`aa12c822`, `eb714c21`, `37b49c2e`, `7408b94d`).
-  - Task 15, the fence's ancestor walk (`bafefe7f`).
-  - Task 16, this record.
+  - Task 15, the fence's ancestor walk (`bafefe7f`, `641f0ccb`).
+  - Task 16, this record (`35d2254a`, `6bfb7c77`, `408d96fc`).
   - Flake and race fixes found along the way: `033a532a`, `b6b04d1f`, `acbba4e3` and `da3cf8ae` (a shutdown no
     longer drops close_notify behind an in-flight reply write), `d049c197`, `72174c1b`, `a4498a61`, `babc4f6a`,
     `d61d0638`.
@@ -7850,7 +7849,19 @@ It opens no lab row.
     now names the CA it forgets and deletes over the revision it read.
   - The fence's ancestor walk found test fixtures that nested a directory under `t.TempDir()`; under umask 002
     that parent is group-writable and is now refused. They were fixed in the tests, not excused in the code.
-- **Carried forward.** The Task 6 review's M5 items; the hit-8 sleeps in `brokerd_test.go` (parked).
+- **Carried forward.**
+  - The Task 6 review's M5 items.
+  - **12b: in-place rotation.** At each reload, re-read the held `file:` references (an `env:` value cannot change in
+    process) and, when a held version's bytes differ, say a warning that the process keeps the bytes it read, that a
+    restart takes the new ones and diverges from replicas that did not restart, and to add a version; repeat it at
+    most every 10 minutes, as the key retry does. Warn, never refuse: a refused reload at 3am would block an unrelated
+    urgent edit behind a key-file mistake. The warning goes into spec §12 first.
+  - **12b: CI.** Raise `make test`'s `-timeout` to 30m (`internal/port49d` takes about 943 s against 20 m), and
+    split port49d's etcd-backed end-to-end tests into a build-tagged or separate CI job. Do not parallelise: the
+    tests swap package variables (`pagedLoadFault`, `endpointVersions`, `startRetryWait`, `stderr`, `stdout`).
+  - **12b CI hardening: flake hit 8** (`brokerd_test.go:2206`, `:2293`, also `:2114` and `split_e2e_test.go:55`):
+    add a test hook the witness follower calls with the revision it saw, and wait on it in place of each
+    `time.Sleep(2 * witnessEvery)`.
 
 #### Operator notes
 

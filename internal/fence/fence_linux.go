@@ -400,7 +400,7 @@ func ancestorWritableByUsAlone(dir, path string) error {
 		return err
 	}
 	defer d.Close()
-	what := "the directory " + dir + ", above " + path + ","
+	what := "the directory " + dir + " (above " + path + ")"
 	if di.Mode()&fs.ModeSticky != 0 {
 		return ownedByUsOrRoot(what, di)
 	}

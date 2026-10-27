@@ -62,7 +62,7 @@ type Metrics struct {
 	ConnectionsMax prometheus.Gauge
 	// port49_connections_shed_total{reason}: connections reset at Accept
 	// because a cap was full (reason global_cap). No device label: a shed
-	// is the fleet's, and its source is in the log line (design §11).
+	// is the fleet's; the shedding lines say it, by count (design §11).
 	ConnectionsShed *prometheus.CounterVec
 	// port49_tls_handshakes_total{outcome}: the RFC 9887 listener's
 	// handshakes by devicecert.Outcome, ok and resumed included (spec §13
