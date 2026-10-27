@@ -10262,16 +10262,18 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   `port49 directory forget`) is refused `failed: second_factor` with the one sentence of ruling 7
   (the caller is told nothing more), and the broker's log says once an hour which entries differ and
   names `port49 directory reset-second-factor <principal>`.
-- **13. Operator commands,** over the broker API with a security key press, as `port49 directory
-  forget` is (superseded by decision 54 ruling 15; they were on the admin socket): `port49
+- **13. Operator commands.** The directory operations (`port49 directory forget`, `reset-second-factor`,
+  `unlock` and `import`) go over the broker API with a security key press; `init-enrollments` and
+  `export-enrollments` are local subcommands on the broker host (decision 54 ruling 15, which replaced
+  the admin socket these were on): `port49
   directory reset-second-factor <principal>` makes the record `reopened` for `reopen_for` (the
   secret dropped; an enrollment begun inside the window may later hold a pending secret in the
   reopened record, ruling 4) and prints what it removed (`enrolled_at`, `enrolled_from`); with `--all` it drops
   nothing, lets every entry with no active second factor enroll for `reopen_for`, and replaces a
   lost enrollment store (an unreadable file renamed aside, never deleted). `port49 directory unlock
-  <principal>` clears the principal's attempt count. `port49 directory init-enrollments` creates the
-  enrollment store once per install (D7; refused when a store or a mark is there). `port49
-  directory export` writes the store, still sealed, to stdout; `port49 directory import [--replace]`
+  <principal>` clears the principal's attempt count. `port49-broker init-enrollments` (or `port49d init-enrollments`) creates the
+  enrollment store once per install (D7; refused when a store or a mark is there). `port49-broker
+  export-enrollments` (or `port49d export-enrollments`) writes the store, still sealed, to stdout; `port49 directory import [--replace]`
   fills it from an export (D13). None needs the directory, and none prints a secret.
 - **14. `/v1/config`.** It adds `"directory_password"` to `methods` and `sign_in: {second_factor:
   "totp"}`; its `issuance.available` already says when nothing can be issued, so the client says so
