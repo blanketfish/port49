@@ -202,6 +202,12 @@ type Broker struct {
 	// run detached, so without it one caller's retries would pile up
 	// detached runs against a slow store (ruling M4). Guarded by mu.
 	ownRevoking map[string]bool
+	// admin is the admin-level calls' challenges, in memory (adminproof.go).
+	admin adminChallenges
+	// skipAdminProof lets adminGate pass every call. It is unexported and set
+	// by test fixtures alone, for tests of what a revocation does once its
+	// proof is in hand: TestNothingButTestsSkipsTheAdminProof holds that.
+	skipAdminProof bool
 
 	mu sync.Mutex
 	// blobsSeen is which blob hashes this process has written into its

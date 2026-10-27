@@ -57,6 +57,9 @@ type Record struct {
 	// judged under, or a proof record's method and challenge hash (spec
 	// §5.7; §13 decision 45 ruling 19).
 	PerLoginMFA *PerLoginMFA `json:"per_login_mfa,omitempty"`
+	// Admin is an admin_touch record's operation, target and challenge hash
+	// (spec §5.1.6; §5.7).
+	Admin *Admin `json:"admin,omitempty"`
 	// SignIn is a directory-password sign-in's source and, on a refusal, what
 	// failed (spec §5.7; §13 decision 47).
 	SignIn *SignIn `json:"sign_in,omitempty"`
@@ -126,6 +129,17 @@ type PerLoginMFA struct {
 	ProvedAt        string   `json:"proved_at,omitempty"`
 	Reused          bool     `json:"reused,omitempty"`
 	ChallengeSHA256 string   `json:"challenge_sha256,omitempty"`
+}
+
+// Admin is what an admin_touch record says of the call: its operation and
+// target as the challenge shows them, the challenge's SHA-256 and, for a
+// refusal, a fixed cause. Never the challenge, the signature or an
+// attestation.
+type Admin struct {
+	Operation       string `json:"operation"`
+	Target          string `json:"target"`
+	ChallengeSHA256 string `json:"challenge_sha256,omitempty"`
+	Why             string `json:"why,omitempty"`
 }
 
 // Certificate is the certificate an issue record names: its serial, as

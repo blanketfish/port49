@@ -57,6 +57,7 @@ type mfaOpts struct {
 	shortCeiling  bool // alice's grant on core carries a one-hour session ceiling
 	noRequirement bool // core carries no per_login_mfa (a policy before the reload that adds one)
 	junosCore     bool // core-sw01 is on juniper_junos, which never asks about a command
+	adminRight    bool // alice's subject declares api: [revoke_others]
 }
 
 type mfaOpt func(*mfaOpts)
@@ -69,6 +70,7 @@ func withTouchOnlyCore() mfaOpt       { return func(o *mfaOpts) { o.touchOnlyCor
 func withAppliesToMachines() mfaOpt   { return func(o *mfaOpts) { o.machines = true } }
 func withShortCeiling() mfaOpt        { return func(o *mfaOpts) { o.shortCeiling = true } }
 func withJunosCore() mfaOpt           { return func(o *mfaOpts) { o.junosCore = true } }
+func withAdminRight() mfaOpt          { return func(o *mfaOpts) { o.adminRight = true } }
 func withDeviceUnderIntermediate(listed bool) mfaOpt {
 	return func(o *mfaOpts) { o.intermediate, o.listInter = true, listed }
 }
@@ -93,7 +95,10 @@ func mfaPolicy(o mfaOpts) string {
 	if o.noRequirement {
 		coreMFA = ""
 	}
-	ceilingRole, ceilingGrant := "", ""
+	ceilingRole, ceilingGrant, netopsAPI := "", "", ""
+	if o.adminRight {
+		netopsAPI = ", api: [revoke_others]"
+	}
 	if o.shortCeiling {
 		ceilingRole = "\n  - {name: short_session, max_session_age: 1h}"
 		ceilingGrant = "\n  - {subject: netops, scope: core, roles: [short_session]}"
@@ -105,7 +110,7 @@ scopes:
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}%s
 subjects:
-  - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s}
+  - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s%s}
   - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s}
   - {name: svc_oxidized, identity: ["spiffe://corp.example.com/host/oxidized-01"], username: svc-oxidized, token_ttl: 60s}
   - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}
@@ -118,7 +123,7 @@ grants:
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: edge, roles: [network_admin], max_privilege: admin}
-`, coreMFA, ceilingRole, ceilingGrant)
+`, coreMFA, ceilingRole, netopsAPI, ceilingGrant)
 }
 
 // failStore fails the named store methods, for the store-down cases.
@@ -304,6 +309,7 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 	base := newFixtureWith(t, 16, mfaPolicy(o), devs...)
 	f := &mfaFixture{fixture: base, clock: mfaClock{base}, otherAgent: newAgentSession(), logs: &lockedBuffer{}, opts: o}
 	f.b.Log = decision.NewJSONLines(f.logs)
+	f.b.skipAdminProof = false // the admin proof is what these tests are about
 	f.minterClock = &stepClock{base: f.b.Now}
 	f.b.Minter = token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.minterClock.Now, 16)
 	f.store = &failStore{Store: f.st}

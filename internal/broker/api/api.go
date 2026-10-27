@@ -153,4 +153,6 @@ type MintResponse struct {
 type Error struct {
 	Error  string `json:"error"`
 	Detail string `json:"detail,omitempty"`
+	// Admin is the challenge of a 401 admin_touch_required (spec §5.1.6).
+	Admin *AdminChallenge `json:"admin,omitempty"`
 }

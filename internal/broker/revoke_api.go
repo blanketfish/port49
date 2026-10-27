@@ -1,9 +1,11 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -63,14 +65,23 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	asker := c.principal
 	var req api.RevokeRequest
-	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
-	dec.DisallowUnknownFields()
-	err := dec.Decode(&req)
+	// The body is read once: the request an admin proof is made for is these
+	// exact bytes.
+	const maxBody = 4 << 10
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	if err == nil && len(body) > maxBody {
+		err = errors.New("body too long")
+	}
 	if err == nil {
-		// One object and nothing after it: a second one would otherwise be
-		// dropped unread, narrowing the request silently.
-		if _, terr := dec.Token(); terr != io.EOF {
-			err = errors.New("trailing data")
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		err = dec.Decode(&req)
+		if err == nil {
+			// One object and nothing after it: a second one would otherwise
+			// be dropped unread, narrowing the request silently.
+			if _, terr := dec.Token(); terr != io.EOF {
+				err = errors.New("trailing data")
+			}
 		}
 	}
 	if err != nil {
@@ -118,8 +129,11 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		b.emit(rec)
 		b.answerRefusal(w, r, ref)
 	}
+	// gate is the admin proof, asked after the right and before the slot
+	// (spec §5.1.6): it has answered the request when it returns false.
+	gate := func(op, target string) bool { return b.adminGate(w, r, c, body, op, target) }
 	if req.Sid != "" {
-		b.revokeSid(w, r, pol, asker, origin, req, mayOthers, refused)
+		b.revokeSid(w, r, pol, asker, origin, req, mayOthers, refused, gate)
 		return
 	}
 	if byKey {
@@ -140,6 +154,9 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 				rec.Principal = asker // the key names no one; whose request it was
 				refused(ref, rec)
 			case ok:
+				if !gate("revoke_key", k.NAS+"/"+k.Username) {
+					return
+				}
 				b.revokeOwnOrKey(w, pol, asker, origin, func() RevokeReport {
 					return b.RevokeKey(r.Context(), k, origin)
 				})
@@ -181,6 +198,9 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		b.refuseRight(w, rec, policy.RightRevokeOthers, "revoking another principal")
 		return
 	}
+	if !gate("revoke_principal", target) {
+		return
+	}
 	// The wait for the revocation slot is bounded; once Revoke holds it, it
 	// runs to the end detached from this request (Revoke's comment).
 	wait, cancel := context.WithTimeout(r.Context(), revokeSlotWait)
@@ -212,7 +232,8 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 // caller retrying against a slow store would otherwise stack one detached
 // logout per retry (pre-flight M-15).
 func (b *Broker) revokeSid(w http.ResponseWriter, r *http.Request, pol *policy.Policy, asker, origin string,
-	req api.RevokeRequest, mayOthers func() (bool, *BindRefusal), refused func(*BindRefusal, decision.Record)) {
+	req api.RevokeRequest, mayOthers func() (bool, *BindRefusal), refused func(*BindRefusal, decision.Record),
+	gate func(op, target string) bool) {
 	var humans []string
 	if b.Identity != nil {
 		for _, v := range b.Identity.Humans() {
@@ -248,6 +269,9 @@ func (b *Broker) revokeSid(w http.ResponseWriter, r *http.Request, pol *policy.P
 		return
 	case !ok:
 		b.refuseRight(w, rec, policy.RightRevokeOthers, "ending an OIDC session")
+		return
+	}
+	if !gate("revoke_sid", fmt.Sprintf("%s at %s", req.Sid, issuer)) {
 		return
 	}
 	release, held := b.holdOwnRevoke(asker)

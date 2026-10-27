@@ -342,6 +342,10 @@ type Metrics struct {
 	// outcome is required, proved, refused, reused or unavailable. No
 	// principal and no device.
 	PerLoginMFA *prometheus.CounterVec
+	// port49_admin_touch_total: admin-level calls by outcome (required,
+	// proved, refused, unavailable; spec §5.1.6, §5.7). No principal, no
+	// device.
+	AdminTouch *prometheus.CounterVec
 	// port49_issuing_ca_not_after_timestamp_seconds: the Unix time the
 	// issuing CA in use expires; 0 when none is loaded. Where issuance is
 	// configured, alert on 0, and on it within 90 days.
@@ -769,6 +773,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Per-login MFA requirements and proofs by method (hardware_key_touch, idp_mfa, none) and outcome " +
 				"(required, proved, refused, reused, unavailable); alert on a run of refused."},
 			[]string{"method", "outcome"}),
+		AdminTouch: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_admin_touch_total",
+			Help: "Admin-level calls by proof outcome (required, proved, refused, unavailable); alert on a run " +
+				"of refused: someone with a certificate or bearer is trying an admin call without the token."},
+			[]string{"outcome"}),
 		IssuingCANotAfter: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_not_after_timestamp_seconds",
 			Help: "The Unix time the issuing CA in use expires; 0 when none is loaded."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
@@ -944,7 +952,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
-		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.IssuingCANotAfter)
+		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)
@@ -962,6 +970,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		for _, o := range []string{"required", "proved", "refused", "reused", "unavailable"} {
 			m.PerLoginMFA.WithLabelValues(method, o)
 		}
+	}
+	// Every admin-touch outcome exists at 0 from the first scrape.
+	for _, o := range []string{"required", "proved", "refused", "unavailable"} {
+		m.AdminTouch.WithLabelValues(o)
 	}
 	// Both outcomes exist at 0 from the first scrape.
 	m.StoreHealthChecks.WithLabelValues("pass")

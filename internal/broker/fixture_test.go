@@ -123,7 +123,10 @@ func newFixtureWith(t *testing.T, candidateCap int, policyText string, extra ...
 		Minter: token.NewMinter(f.st, log, rand.Reader, token.TagKey([]byte("k")), clock, candidateCap),
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
 		MaxSessionAge: 12 * time.Hour, BatchMax: 4, Sessions: session.New(f.st, clock, time.Hour, time.Hour),
-		ContextIdleTTL: time.Hour}
+		ContextIdleTTL: time.Hour,
+		// Tests of what a revocation does skip its admin proof; the proof's
+		// own tests (adminproof_test.go) make a fixture that does not.
+		skipAdminProof: true}
 	return f
 }
 

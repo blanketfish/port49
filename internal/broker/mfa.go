@@ -701,18 +701,29 @@ func parseTouch(req api.MFAProofRequest) (*touchProof, string) {
 
 var touchPolicyNames = map[byte]string{pivattest.TouchNever: "never", pivattest.TouchCached: "cached", pivattest.TouchAlways: "always"}
 
-// verifyTouch judges a touch proof against the held connection (decision 45
-// ruling 12), "" when it holds: both slot attestations chain, through the one
-// device certificate, to the operator's roots; the touch key's policy is
-// always-touch; the session slot's key is this connection's client key; and
-// the touch key signed this challenge over this connection's exporter value.
-// The roots are the operator's alone: no request certificate is added to
-// them.
+// verifyTouch judges a per-login touch proof against the held connection
+// (decision 45 ruling 12), "" when it holds: the touch key signed this
+// challenge over this connection's exporter value (verifyTouchMessage).
 func (b *Broker) verifyTouch(r *http.Request, p *touchProof, ch []byte, now time.Time) string {
+	return b.verifyTouchMessage(r, p, api.MFAExporterLabel, func(ekm []byte) []byte {
+		return api.MFAMessage(ch, ekm)
+	}, now)
+}
+
+// verifyTouchMessage judges a touch proof over msg(ekm), ekm being the held
+// connection's exporter value under label, "" when it holds: both slot
+// attestations chain, through the one device certificate, to the operator's
+// roots; the touch key's policy is always-touch; the session slot's key is
+// this connection's client key; and the touch key signed msg(ekm). The roots
+// are the operator's alone: no request certificate is added to them. A
+// per-login proof and an admin proof differ in label and message, and in
+// nothing else.
+func (b *Broker) verifyTouchMessage(r *http.Request, p *touchProof, label string, msg func(ekm []byte) []byte,
+	now time.Time) string {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return "a touch proves on a held connection that presented the session key's certificate"
 	}
-	ekm, err := r.TLS.ExportKeyingMaterial(api.MFAExporterLabel, nil, 32)
+	ekm, err := r.TLS.ExportKeyingMaterial(label, nil, 32)
 	if err != nil {
 		return "this connection cannot export keying material"
 	}
@@ -739,7 +750,7 @@ func (b *Broker) verifyTouch(r *http.Request, p *touchProof, ch []byte, now time
 		return "the session slot's key is not this connection's client key: a touch proves from the token that holds it"
 	}
 	alg, ok := api.RefreshAlgorithm(ta.Key)
-	if !ok || p.touch.CheckSignature(alg, api.MFAMessage(ch, ekm), p.sig) != nil {
+	if !ok || p.touch.CheckSignature(alg, msg(ekm), p.sig) != nil {
 		return "the signature is not the touch key's over this challenge and this connection's exporter value"
 	}
 	return ""

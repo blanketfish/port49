@@ -145,7 +145,10 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return withHeldConn(ctx, acceptedAt(c, b.Now), mappedOf(c))
 		},
-		ConnState:         closeIdleWithoutCertificate,
+		ConnState: func(c net.Conn, s http.ConnState) {
+			closeIdleWithoutCertificate(c, s)
+			b.connClosed(c, s)
+		},
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       b.MaxSessionAge,
