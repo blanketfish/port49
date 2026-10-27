@@ -7878,8 +7878,8 @@ These are the notes the pull request body carries. Each is true of the code as b
   - **Never rewrite a version in place.** An edit of a held secret (same version, new bytes) is not re-read until
     restart. Always add a new version.
   - A start with an unreadable config secret exits. So does a port49d start whose policy names a device-key file
-    that cannot be read: `dk.build` runs once at start and its error ends the run (`internal/port49d/main.go`); no
-    test pins that start, only the reload's retry (`keyretry_test.go`). A port49-broker loads no device keys. A
+    that cannot be read: `dk.build` runs once at start and its error ends the run (`internal/port49d/main.go`),
+    pinned by `TestAStartWhoseDeviceKeyFileIsUnreadableExits`; the reload's retry is pinned in `keyretry_test.go`. A port49-broker loads no device keys. A
     reload whose secret file is not rendered yet keeps the old keys and retries every 30 s and on SIGHUP.
 - **Startup under systemd.** A refused start exits and systemd restarts it. Set `RestartSec=` and
   `StartLimitIntervalSec=`/`StartLimitBurst=` so a start the server refuses (a CA mismatch, an etcd below the
