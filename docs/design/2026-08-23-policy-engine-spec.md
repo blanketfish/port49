@@ -1324,6 +1324,27 @@ body's SHA-256, so the prompt shows that a replace wipes the store. The record i
 `SHA-256(challenge ‖ 0 ‖ exporter ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ request_sha256)`, so any
 other caller, connection or request misses it.
 
+**The routes.** Every admin write runs in one order: its right (403 `api_right_missing`, recorded,
+no challenge), the request's own validity (400, no challenge), the body's bound, the touch, then the
+operation. So a caller without the right never blinks, and a call that cannot run is never asked
+for a key press. The routes and their rights are §2's table. The certificate's target is its
+issuer, then `serial`, then the serial as the broker compares it (`CN=Example CA serial 1a2b`); an
+import's is `merge` or `replace`, a space, and the 12 hex digits. A proved call answers
+`{"text": …, "partial": …}`: `text` is what the CLI prints, unchanged, and `partial` is set where a
+step did not finish and the call is to be run again (exit 3). An operation that refuses after its
+proof (a forget with no `broker.directory`, an import that would undo a later enrollment) answers
+`409 admin_operation_failed` with the operation's own text; a lift of a mark that is not in force,
+`404 not_revoked`; a revocation or lift behind another, `503 revocation_busy`. `POST
+/v1/directory/import` takes the sealed export as its body, at most 16 MiB (413 `payload_too_large`
+over it, before any challenge), under a read deadline of its own, 120 s, since the server's 30 s
+bounds a mint and would hold a 16 MiB body to about 4.5 Mbit/s. `?replace=true|false` is the only
+parameter and is bound by the request hash. `GET /v1/revocations` answers `{"marks": […], "text":
+…}`, each mark `{kind: principal|cert, principal | cert_issuer and cert_serial, since, origin,
+landed_after_lift, lift_at, lift_revision}`: the fields `--list` prints, under `revoke_others` or
+`lift_revocations`, with no touch. A refusal for want of the right is recorded under the call's own
+event (`revoke`, `directory_forget`, `second_factor_reset`, `sign_in_unlock`,
+`enrollments_import`) as `deny api_right_missing` with the caller in `origin`.
+
 **The request binding.** `request_sha256 = SHA-256("port49 admin request v1\0" ‖ method ‖ 0 ‖
 path ‖ 0 ‖ body)`, over the exact body bytes, where `path` is `r.URL.RequestURI()` (path and query)
 on both sides, so `?replace=` is bound. The proved retry sends the same method, path and body
@@ -2647,7 +2668,7 @@ refused request named; any other path is recorded `mint`.
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`, or the principal's directory membership has not been verified for that long (§5.1.3); context retained, denies until refreshed (§5.1.1, design document §9) |
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), or an OIDC logout refuses the token's session or subject, or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and a held connection is closed; on `identity`, `explain` and `revoke`, an OIDC logout refuses the caller's token; on `refresh`, the caller's certificate is marked, or an OIDC logout refuses the caller's token, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `issue`, a mark on the principal or an OIDC logout refuses the sign-in's token, so nothing is issued; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
-| `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
+| `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2); also `directory_forget`, `second_factor_reset`, `sign_in_unlock` and `enrollments_import`, for a call under a right the subject lacks (§5.1.6). The API answers 403 `api_right_missing`; nothing is done |
 | `certificate_issued` | `issue`: the broker issued a short-lived client certificate for the key the sign-in's `nonce` names (§13 decision 43 ruling 8) |
 | `per_login_mfa_required` | `mint`: the device's per-login requirement (§5.1.5) applies and no proof covers it; the item carries a challenge, and nothing is minted for it. `refresh`: a context under a requirement no proof covers is not extended and keeps its ceiling |
 | `per_login_mfa_proved` | `per_login_mfa`: a proof posted to `POST /v1/mfa` verified (§13 decision 45 rulings 12 and 13) |
