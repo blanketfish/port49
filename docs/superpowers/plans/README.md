@@ -345,7 +345,8 @@ the next is written (team lead, 2026-10-24). It covers:
 - the issuing-CA record (the key stays on each broker's disk: Ryan);
 - the fence's ancestor walk.
 
-It opens no lab row.
+It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-server-hardening` (Plan 12a — As built, below); its
+whole-branch review and merge follow.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7561,7 +7562,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
   - **Spec:** decision 53 (its Task 1); §10 and §12; decisions 31, 43 (ruling 14) and 51; design §11 and §13.
   - **Hands on:** the configuration surface 12b's artifacts write.
   - **Lab:** none.
-  - Status: **written 2026-10-24**, revised 2026-10-25 (`vault:` dropped; pre-flight C1, I1–I12 and M1–M19 applied); re-review READY, its 13 minors applied 2026-10-26; sixteen tasks.
+  - Status: **written 2026-10-24**, revised 2026-10-25 (`vault:` dropped; pre-flight C1, I1–I12 and M1–M19 applied); re-review READY, its 13 minors applied 2026-10-26; sixteen tasks; **executed** (Plan 12a — As built, below).
 - **12b — Deployment artifacts, release and publishing.**
   - **Builds:**
     - the systemd and Kubernetes shapes beside 7f's container, each with its smoke test;
@@ -7806,6 +7807,150 @@ Every shape states the same four requirements:
 `port49 revoke` speaks to a local Unix socket, so each shape says where to run it: the host,
 `docker exec` or `kubectl exec`. Whether revocation should also be reachable over the authenticated
 API is a question for this plan; it is not decided here.
+
+### Plan 12a — As built
+
+Executed from `2026-10-24-12a-server-hardening.md` on `feature/12a-server-hardening`, each task reviewed
+(Opus 5.5 reviewers, Sonnet 5.5 implementer), most through one to three fix rounds. The ledger is
+`.superpowers/sdd/2026-10-24-12a-server-hardening/`, with each task's brief, report and review beside it.
+It opens no lab row.
+
+- **Built, with the task commits** (fixes follow the task's own commit):
+  - Task 1, spec: decision 53 (rulings 1–12), §10, §12, decisions 31, 43 and 51, design §11 and §13
+    (`a8292c0c`, `68b127da`; later amendments `2e1df7df`, `37b49c2e`).
+  - Task 2, one YAML document per file (`263ab3eb`, `0a7580ea`, `d8c7017e`).
+  - Task 3, `internal/secretref`: `env:` and `file:`, read through the write fence (`aabf04fe`, `e5a8650f`,
+    `7323dcd9`).
+  - Task 4, port49d.yaml and port49-broker.yaml name every secret by `secret_ref` (`79b3a734`, `e6af8a43`,
+    `7e14d2d9`).
+  - Task 5, `internal/keyset` and the policy file's `keys:` block (`d455dcf8`, `3a927e7d`, `4ea60277`,
+    `19e3bd2c`).
+  - Task 6, port49d and port49-broker take their device keys from the policy, read at every reload
+    (`91e18f58`, `d00ad1ae`, `00affe2c`, `2b3563c9`).
+  - Task 7, a reload that retires a version ends its open connections with no strike (`14c38bea`,
+    `9f646275`).
+  - Task 8, the CLIs read the key sets from the policy (`5888a143`, `cedf4e26`, `0401f359`, `f8f8e82c`,
+    `bdb1cd4b`, `29f0b4db`).
+  - Task 9, `token_secret_ref` and `webhook_secret_ref` (`9b642e86`).
+  - Task 10, the source-of-truth client's `HTTPS_PROXY` (`18a9addf`, `1527ce25`, `0530187a`).
+  - Task 11, the global connection cap (`19edef0e`, `7a23e943`, `d851cfca`).
+  - Task 12, the etcd floor (`fc70ff0e`, `abb5b076`).
+  - Task 13, the broker start survives a compaction (`b9379a90`, `77fe9e3b`, `07da219b`).
+  - Task 14, one issuing CA per store (`aa12c822`, `eb714c21`, `37b49c2e`, `7408b94d`).
+  - Task 15, the fence's ancestor walk (`bafefe7f`).
+  - Task 16, this record.
+  - Flake and race fixes found along the way: `033a532a`, `b6b04d1f`, `acbba4e3` and `da3cf8ae` (a shutdown no
+    longer drops close_notify behind an in-flight reply write), `d049c197`, `72174c1b`, `a4498a61`, `babc4f6a`,
+    `d61d0638`.
+- **What changed in review.**
+  - A late-directory broker issued certificates from a CA nobody had checked, because the record lives in
+    the directory: issuance is now held (`503 issuance_unavailable`, unrecorded, the sign-in unspent) until the
+    check passes, and `issueTo` itself refuses while held. A broker reads its CA files once and checks and
+    issues from that one read. A rollback to the CA a rotation retired is refused as behind. `forget-issuer`
+    now names the CA it forgets and deletes over the revision it read.
+  - The fence's ancestor walk found test fixtures that nested a directory under `t.TempDir()`; under umask 002
+    that parent is group-writable and is now refused. They were fixed in the tests, not excused in the code.
+- **Carried forward.** The Task 6 review's M5 items; the hit-8 sleeps in `brokerd_test.go` (parked).
+
+#### Operator notes
+
+These are the notes the pull request body carries. Each is true of the code as built.
+
+- **Secrets.**
+  - Every `*_env` secret key is replaced by a `secret_ref` key, with no alias; a config written for an
+    earlier build is refused, naming each removed key and what replaces it.
+  - `secret_ref` is `env:NAME` or `file:/absolute/path`. There is no `vault:` scheme (decision 53 ruling 5):
+    a secret store reaches port49 as a file its own agent renders.
+  - A `file:` secret drops one trailing newline; an `env:` secret is not trimmed.
+  - An `env:` error names the key that holds the reference and never the variable. That is deliberate.
+  - An unset directory bind password is found when the directory opens, not when the config loads.
+- **Device keys.**
+  - `keys:` moves from port49d.yaml into the policy file; port49-broker.yaml's `key_refs` goes. port49d and
+    port49-broker refuse a policy with no `keys:`. Move `keys:` into the policy and remove it from port49d.yaml
+    in the same rollout: the new build refuses either alone.
+  - A policy names only the secrets `key_secret_refs` allows: `env_prefix` (default `PORT49_KEY_`, and it must end in `_`) and
+    `file_dir` (default `/run/port49/keys`, holding device keys only). port49d.yaml's own secrets may not sit
+    inside it. The compose stack's variable is `PORT49_KEY_TACACS`.
+  - **Rotation is add, move, retire, and it is a reload, never a restart.** Add the new version (a new file or
+    variable and a policy edit), move the devices to it, and retire the old version only once
+    `port49_key_validations_total` for it has stopped counting. A reload that retires a version resets its open
+    connections with no strike.
+  - **Never rewrite a version in place.** An edit of a held secret (same version, new bytes) is not re-read until
+    restart. Always add a new version.
+  - A start with an unreadable secret exits. A reload whose secret file is not rendered yet keeps the old keys and
+    retries every 30 s and on SIGHUP.
+- **Startup under systemd.** A refused start exits and systemd restarts it. Set `RestartSec=` and
+  `StartLimitIntervalSec=`/`StartLimitBurst=` so a start the server refuses (a CA mismatch, an etcd below the
+  floor, a policy with no `keys:`) does not flap. This belongs in 12b's units; it is not written here.
+- **etcd floor.** The floor is 3.4.24, 3.5.8 or 3.6.0, and a pre-release of a floor release is below it.
+  Only the configured endpoints are asked, each within `call_timeout`: list every member's URL, never a VIP or a
+  Kubernetes Service. A member that is down at start is said and stays unchecked until the next start. At a
+  broker's late directory open a member below the floor is said and the open retried every 5 s.
+- **Compaction.** A broker's start retries a compaction between pages. A compaction that keeps recurring says,
+  once, to raise etcd's `--auto-compaction-retention`.
+- **Global cap.** `limits.max_connections` sheds: it accepts, then resets the connection with no strike. It says
+  so in one log line a minute, and the counter is `port49_connections_shed_total{reason="global_cap"}`;
+  `port49_connections_max` is the cap. Unset, the cap is sized from the open-file limit (less 1024, or half the
+  limit where that is less); an unreadable limit is taken as 4096, and the start line says so. Keep `LimitNOFILE=` generous.
+- **Egress proxy.** The inventory service's sources honour `HTTPS_PROXY` and `NO_PROXY`. Proxy credentials are
+  never printed. A 407 means the proxy refused `HTTPS_PROXY`'s credentials; the token was not sent.
+- **Issuing CA.**
+  - Every port49-broker on one etcd store must hold the same CA. Run `init-issuer` on one broker and copy its
+    `issuing-ca.pem` and `issuing-ca.key` to each other; each start prints the fingerprint. The store records the
+    fingerprint only; the key never leaves a broker's disk.
+  - A broker whose CA differs refuses to start, naming both fingerprints. One restarted before the rotation's
+    files were copied is refused as behind a promotion and told what to copy.
+  - A split broker whose directory has not answered answers `503 issuance_unavailable` until its CA is checked
+    there; it says so once at start.
+  - `port49-broker forget-issuer --current sha256:<hex>` removes the record, only when it names that CA. Stop
+    every broker on the store first, then start one on the CA you mean to keep.
+- **One YAML document.** A second document is refused in every file.
+- **The fence.** Every directory above a policy, inventory or key file must be neither group- nor
+  world-writable and owned by root or port49d's user, unless it is sticky (as `/tmp` is) and owned by root or
+  port49d's user, or sits on a read-only mount. A `/home/<someone>` path, or a umask of 002 that left a
+  group-writable parent, is refused naming the directory. POSIX ACLs show in the mode's group bits; NFSv4
+  ACLs are not read, so keep the policy off NFS.
+- **Upgrade.**
+  - Brokers that each ran their own `init-issuer` refuse after the first records its CA. Before upgrading, compare
+    the fingerprint in each broker's start line and copy one CA's files to the others.
+  - The first replica of a rollout refuses to start against an etcd member below the floor: upgrade etcd first.
+  - The start guard's first start is judged against the bundle last judged, which predates the policy's `keys:`.
+    A new policy whose `keys:` omits a key_ref a key group names takes those devices out of service, and past
+    `max_removed_percent` the start is refused. Run `port49 policy diff` between the old and new policy in CI.
+  - A pre-12a replica decodes the policy strictly, so it refuses a policy with `keys:` at reload
+    (`port49_policy_file_refused` at 1, its policy in force kept) and cannot restart on it. Roll the binary in the
+    same change.
+
+#### Hand-offs
+
+- **12b.**
+  - Each deployment shape writes `secret_ref`, and each shape's device keys live under `key_secret_refs.file_dir`
+    or in `PORT49_KEY_*` variables.
+  - `file:` secrets per shape (`fence.ReadSecret`: links followed inside the directory, owner root or port49d's
+    user, no world bit, group-read allowed):
+    - Kubernetes Secret volume: mount the whole volume at `file_dir`, never by `subPath` (kubelet updates `..data`
+      in a whole-volume mount, so a new key version reaches the next retry with no restart; a `subPath` mount never
+      sees it). `defaultMode: 0440` (or `0400`) and `fsGroup` set to port49d's group.
+    - Secrets Store CSI driver: the same whole-volume mount; its default file mode is 0644, which is refused, so set the
+      provider's file permission and `fsGroup`; measure the mode each provider writes.
+    - Vault Agent: the template's `perms = "0440"` (or `"0400"`), and the agent running as root or as port49d's user
+      (the injector's default uid 100 is refused); render into `file_dir`.
+    - Docker and systemd credentials: Docker's `secrets:` long syntax with `mode: 0440` and the gid (the default is
+      documented as 0444: measure it in the shape's smoke); systemd's `LoadCredential=` files under
+      `$CREDENTIALS_DIRECTORY`, which `key_secret_refs.file_dir` names (owner, mode and ACL unmeasured: measure first).
+    - Each shape's smoke test adds a key version by writing a new file and asserts it is in force without a restart (the 30 s retry).
+  - A secret store shown as `file:` references rendered by its agent in at least one shape.
+  - `limits.max_connections` and `LimitNOFILE=`; systemd `RestartSec=` and `StartLimit*`.
+  - The issuing CA's files on each broker's state volume, `init-issuer` once and copies to every other broker; `forget-issuer`
+    in the runbook. A broker refused "behind a promotion" on Kubernetes crash-loops, so `kubectl cp` into it cannot work: the runbook
+    copies the files with a debug pod that mounts the broker's state PVC.
+  - The etcd floor asserted in each shape's smoke test, with every member URL listed.
+  - The policy file's `keys:` in every shape's example; no NFS for the policy.
+  - Every directory above the policy, inventory and key files non-group-writable (an initContainer or the image sets it; compose's umask).
+- **12c.** An alarm on `port49_connections_shed_total{reason="global_cap"}` increasing; a warning on `port49_connections` near
+  `port49_connections_max`, sustained.
+- **Plan 13.** The `secret_ref` reference page with `key_secret_refs`; key rotation as policy edits, and the 30 s retry while a file is
+  rendered; the issuer record's three refusals at 3am; the shedding lines.
 
 ## Plan 13 — User and admin documentation
 
