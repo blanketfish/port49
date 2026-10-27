@@ -10973,9 +10973,9 @@ shapes; Kubernetes is native and never required.
   alone, `etcd.caSecret`, the CA certificate alone, in both), so no pod holds the other's etcd
   key. `LoadCredential=`, Compose `secrets:`, the Vault Agent injector and the Secrets Store CSI
   driver are named in a README only after L83 or L84 closes with them passing; rotation is a
-  reload, never a restart, and a mechanism that fails the cell "a version added reaches the
-  running process with no restart" may be named for the encryption key only, never for device
-  keys.
+  reload, never a restart (Ryan, 2026-10-26), and a mechanism that fails the cell "a version added
+  reaches the running process with no restart" may be named for the encryption key only, never for
+  device keys.
 - **3. No read-only hardening of a path the fence reads.** The fence excuses a directory's mode on
   a read-only mount, so `ProtectSystem=strict` or `full`, or `ReadOnlyPaths=/etc`, would let a
   group-writable `/etc/port49` on the host pass. The units set `ProtectSystem=true` and never
@@ -11045,11 +11045,12 @@ shapes; Kubernetes is native and never required.
   `httpGet` on each process's metrics port, readiness `/readyz` and liveness `/healthz`, needing no
   client certificate and touching neither TACACS+ nor the broker API; liveness sets
   `periodSeconds: 10` and `failureThreshold: 6` (60 s), since `/healthz` is unbound for seconds
-  between runs after a store loss and Kubernetes' default 30 s (10 s x 3) would let the kubelet kill port49d mid etcd
+  between runs after a store loss and Kubernetes'
+  default 30 s (10 s x 3) would let the kubelet kill port49d mid etcd
   outage. `issuerDiscovery.enabled` renders the `system:service-account-issuer-discovery`
   ClusterRoleBinding of `examples/kubernetes/issuer-discovery.yaml`, off by default. The
   initContainers and `copy-issuer.sh`'s pods run as root, so the namespace needs the `baseline`
-  Pod Security level. Binding 49 as non-root uses the safe pod sysctl
+  Pod Security level, not `restricted`. Binding 49 as non-root uses the safe pod sysctl
   `net.ipv4.ip_unprivileged_port_start=0`. The Services (TACACS+ 49, and the TLS listener's port,
   default 300, when `tlsListener.enabled`) set `externalTrafficPolicy: Local`; whether that keeps
   the source is L39 (b), still open and 12c's, and the README says so. An optional HPA on
@@ -11096,8 +11097,8 @@ shapes; Kubernetes is native and never required.
   or VIP, and asserts port49d's start line `etcd …, at or above the floor` names all three.
 - **Open.** An admin revocation over the authenticated API (ruling 5) is not built and may be
   overridden by Ryan; the `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
-  overridden (per-distribution RPMs, or a `%post` running `pip`). Rulings 2, 9 and 12 wait on
-  L82–L85.
+  overridden (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waits on L82–L84,
+  ruling 12 on L85, and ruling 9's Services claim on L39 (b).
 
 ---
 
