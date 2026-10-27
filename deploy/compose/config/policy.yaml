@@ -12,3 +12,8 @@ grants:
   - {subject: alice, scope: all_devices, roles: [network_admin]}
   - {subject: bob, scope: all_devices, roles: [network_admin]}
 key_groups: [{match: {cidr: 172.30.49.0/24}, key_ref: k}]
+# The device key sets live here, beside the key groups that assign them
+# (decision 53 ruling 3). The secret is read from port49d's environment.
+keys:
+  k:
+    current: {version: 1, secret_ref: env:PORT49_KEY_TACACS}

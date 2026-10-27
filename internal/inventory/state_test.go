@@ -31,8 +31,16 @@ func published(t *testing.T, key ed25519.PrivateKey, seq int64, devices ...strin
 }
 
 // stateDir is a state_dir Save creates, 0700 as the service's is: the fence
-// refuses one others can write, and t.TempDir follows the umask.
-func stateDir(t *testing.T) string { return filepath.Join(t.TempDir(), "state") }
+// refuses one others can write, and so does every directory above it, while
+// t.TempDir follows the umask.
+func stateDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(d, "state")
+}
 
 func TestSavedStateIsTheLatestAndKeepsHistory(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)

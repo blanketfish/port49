@@ -290,8 +290,9 @@ func privateDir(t *testing.T, name string) string {
 }
 
 // serviceConfig is the lab's port49d.yaml with its inventory from li: the
-// inventory_file line removed, a second key lab_key2 (the rotation key) for
-// the re-key phase, the slice's broker block on policy, and inventory.service.
+// inventory_file line removed, its keys: block removed (the policy carries
+// the key sets, lab_key2 the rotation key among them: decision 53 ruling 3),
+// the slice's broker block on policy, and inventory.service.
 // policy must be in a directory privateDir made. port49d's state_dir is
 // removed first, so each start is a cold start from the service.
 func (l *lab) serviceConfig(t *testing.T, li *labInventory, policy string) string {
@@ -304,12 +305,12 @@ func (l *lab) serviceConfig(t *testing.T, li *labInventory, policy string) strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PORT49_L28_NEW_KEY", labcreds.RotationKey)
+	t.Setenv("PORT49_KEY_L28_NEW", labcreds.RotationKey)
 	body := regexp.MustCompile(`(?m)^inventory_file: .*\n`).ReplaceAllString(string(raw), "")
 	if !strings.Contains(body, l28Anchor) {
 		t.Fatalf("%s has no standing lab_key block", base)
 	}
-	body = strings.Replace(body, l28Anchor, l28Anchor+"  lab_key2:\n    current: {version: 1, secret_env: PORT49_L28_NEW_KEY}\n", 1)
+	body = strings.Replace(body, "keys:\n"+l28Anchor, "", 1)
 	pki := filepath.Join(root, "tests", "lab", "logs", "slice-pki")
 	if err := testpki.WriteLab(pki, "alice@slice.port49.test", time.Now()); err != nil {
 		t.Fatal(err)

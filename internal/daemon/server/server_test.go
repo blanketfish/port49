@@ -33,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -217,7 +218,7 @@ func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz auth
 	go func() { defer close(spoolDone); sp.Run(spoolCtx) }()
 	var ids atomic.Int64
 	d := Deps{Admission: trie,
-		Keys: map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
+		Keys: keysOf(map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), Retired: true}}}}),
 		// The e2e credentials here are not token-shaped, so the tag check never
 		// fires; the key only has to be non-nil and stable.
 		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
@@ -1756,8 +1757,8 @@ func TestKeyVersionsAreMarkedAndADatePastRefuses(t *testing.T) {
 	log := &syncBuffer{}
 	var seen keyring.Seen
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
-		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: time.Now().Add(-time.Hour)}}}}
+		d.Keys = keysOf(map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+			{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), RetireAt: time.Now().Add(-time.Hour)}}}})
 		d.KeySeen = seen.Mark
 	})
 	c := dial(t, ts.addr, []byte("k2"))
@@ -1785,8 +1786,8 @@ func TestAnOpenConnectionDoesNotOutliveItsVersionsDate(t *testing.T) {
 	clock.Store(at.Add(-time.Minute).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
-		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: at}}}}
+		d.Keys = keysOf(map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+			{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), RetireAt: at}}}})
 		d.Now = now
 	})
 	c := dial(t, ts.addr, []byte("k1"))
@@ -1870,8 +1871,8 @@ func TestAPacketPastItsDateIsClosedWithAReset(t *testing.T) {
 	clock.Store(at.Add(-time.Minute).UnixNano())
 	now := func() time.Time { return time.Unix(0, clock.Load()) }
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
-		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: at}}}}
+		d.Keys = keysOf(map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+			{Number: 2, Secret: secretref.Of([]byte("k2"))}, {Number: 1, Secret: secretref.Of([]byte("k1")), RetireAt: at}}}})
 		d.Now = now
 		d.Limits = slowBackoff()
 	})
@@ -1989,7 +1990,13 @@ func reloadFrom(t *testing.T, first admission.Resolved, reload func(*swapAdmitte
 	adm.swap(t, first)
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		d.Admission = adm
-		d.Keys["new_key"] = keyring.Set{Ref: "new_key", Versions: []keyring.Version{{Number: 1, Secret: []byte("n1")}}}
+		base := d.Keys
+		d.Keys = func(ref string) keyring.Set {
+			if ref == "new_key" {
+				return keyring.Set{Ref: "new_key", Versions: []keyring.Version{{Number: 1, Secret: secretref.Of([]byte("n1"))}}}
+			}
+			return base(ref)
+		}
 		d.Limits = slowBackoff()
 	})
 	c := dial(t, ts.addr, []byte("k2"))
@@ -2343,5 +2350,263 @@ func TestAFailArrivesAtItsDelay(t *testing.T) {
 	if err != nil || reply.Status != wire.AuthenStatusFail || took < 300*time.Millisecond || took >= 500*time.Millisecond {
 		t.Fatalf("status %v (%v) after %v: want FAIL at the 300ms delay, the 250ms of store inside it", reply.Status,
 			err, took)
+	}
+}
+
+// keysOf is a Deps.Keys over m.
+func keysOf(m map[string]keyring.Set) func(string) keyring.Set {
+	return func(ref string) keyring.Set { return m[ref] }
+}
+
+// expectShed dials addr and asserts the connection is reset at Accept. On
+// loopback the server's accept-then-reset can reach the client before connect()
+// returns, so the dial itself may fail with ECONNRESET: that is the shed, as
+// in refusedAtAccept. Any other dial error fails, and a connection that is
+// served (no reset on the dial or the read) fails.
+func expectShed(t *testing.T, addr, what string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("%s: dial: %v, want a reset at Accept", what, err)
+		}
+		return
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("%s: %v, want a reset at Accept", what, err)
+	}
+}
+
+// roomyLimits is newTestServerWith's limiter with room for sixteen
+// connections per source, so a test of the global cap meets the global cap.
+func roomyLimits() *limits.Limiter {
+	return limits.New(limits.Config{PerNASConnections: 16, IdleTimeout: time.Second,
+		MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+		AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: time.Millisecond, AuthFailureWindow: time.Minute}, time.Now)
+}
+
+// At the cap a new connection is accepted and reset at once, counted and
+// said while the slot is still held, and the device can take its next server;
+// when the slot frees, the next connection is served (design §11; decision
+// 53 ruling 8; Review Focus 5).
+func TestTheGlobalCapShedsAndSaysSo(t *testing.T) {
+	var log syncBuffer
+	var said syncBuffer
+	defer func(w io.Writer) { stdlog.SetOutput(w) }(stdlog.Writer())
+	stdlog.SetOutput(&said)
+	st := memory.New(time.Now)
+	slots := NewSlots(1, time.Now)
+	ts := newTestServerWith(t, &log, st, nil, func(d *Deps) { d.Slots = slots })
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com",
+			ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	first := dial(t, ts.addr, []byte("k2")) // holds the one slot, idle
+	if !waitFor(t, func() bool { return slots.InUse() == 1 }) {
+		t.Fatal("the first connection holds no slot")
+	}
+	expectShed(t, ts.addr, "the second connection at the cap")
+	// Counted and said while the first still holds its slot.
+	if got := testutil.ToFloat64(ts.metrics.ConnectionsShed.WithLabelValues("global_cap")); got != 1 {
+		t.Fatalf("port49_connections_shed_total{reason=global_cap} = %v with the cap held", got)
+	}
+	if !strings.Contains(said.String(), "shedding: all 1 TACACS+ connection slots") {
+		t.Fatalf("no shedding line with the cap held:\n%s", said.String())
+	}
+	first.conn.Close()
+	if !waitFor(t, func() bool { return slots.InUse() == 0 }) {
+		t.Fatal("the slot was not freed")
+	}
+	third := dial(t, ts.addr, []byte("k2"))
+	third.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	third.recv(t) // served once the slot frees
+}
+
+// A listener waiting in Accept holds no slot: with nothing connected the
+// pool is empty, and with two listeners sharing a pool of 2, one connection
+// on each is served and a third is shed (I1).
+func TestIdleListenersHoldNoSlot(t *testing.T) {
+	var log syncBuffer
+	slots := NewSlots(2, time.Now)
+	var deps Deps
+	ts := newTestServerWith(t, &log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Slots = slots
+		d.Limits = roomyLimits() // per-source room for three, so the global cap binds
+		deps = *d
+	})
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { defer close(served); Serve(ctx, ln2, deps) }()
+	t.Cleanup(func() { cancel(); <-served })
+	time.Sleep(50 * time.Millisecond) // both loops are in Accept
+	if n := slots.InUse(); n != 0 {
+		t.Fatalf("%d slots held with nothing connected", n)
+	}
+	a := dial(t, ts.addr, []byte("k2"))
+	b := dial(t, ln2.Addr().String(), []byte("k2"))
+	if !waitFor(t, func() bool { return slots.InUse() == 2 }) {
+		t.Fatalf("one connection on each listener: %d slots in use", slots.InUse())
+	}
+	expectShed(t, ln2.Addr().String(), "the third connection")
+	a.conn.Close()
+	b.conn.Close()
+}
+
+// No refusal at Accept leaves a slot behind: the per-source refusals take
+// none, and a shed frees its per-source slot (Review Focus 5).
+func TestEveryRefusalAtAcceptReleasesItsSlots(t *testing.T) {
+	// refused_cap: a third connection past the per-NAS cap of 2.
+	t.Run("refused_cap", func(t *testing.T) {
+		var log syncBuffer
+		slots := NewSlots(4, time.Now)
+		ts := newTestServerWith(t, &log, memory.New(time.Now), nil, func(d *Deps) { d.Slots = slots })
+		c1, c2 := dial(t, ts.addr, []byte("k2")), dial(t, ts.addr, []byte("k2"))
+		c3 := dial(t, ts.addr, []byte("k2"))
+		c3.conn.SetReadDeadline(time.Now().Add(time.Second))
+		c3.conn.Read(make([]byte, 1))
+		c1.conn.Close()
+		c2.conn.Close()
+		if !waitFor(t, func() bool { return slots.InUse() == 0 }) {
+			t.Fatalf("%d slots still held with every connection closed", slots.InUse())
+		}
+		if got := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("refused_cap")); got < 1 {
+			t.Fatalf("the refused_cap path was not taken: %v", got)
+		}
+	})
+	// held_refused: a key miss, then a connection inside its backoff.
+	t.Run("held_refused", func(t *testing.T) {
+		var log syncBuffer
+		slots := NewSlots(4, time.Now)
+		ts := newTestServerWith(t, &log, memory.New(time.Now), nil, func(d *Deps) {
+			d.Slots = slots
+			d.Limits = slowBackoff()
+		})
+		miss := dial(t, ts.addr, []byte("not-the-key"))
+		miss.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+			Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+		closedAtOnce(t, miss)
+		refusedAtAccept(t, &net.Dialer{}, ts.addr)
+		if !waitFor(t, func() bool { return slots.InUse() == 0 }) {
+			t.Fatalf("%d slots still held with every connection closed", slots.InUse())
+		}
+		if got := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); got < 1 {
+			t.Fatalf("the held_refused path was not taken: %v", got)
+		}
+	})
+	// declined_refused: a source declined by admission, then refused at Accept.
+	t.Run("declined_refused", func(t *testing.T) {
+		var log syncBuffer
+		slots := NewSlots(4, time.Now)
+		refused := admission.Resolved{Device: leaf01, Refused: "matches no key group, so no key admits it (spec §10)",
+			Refusal: admission.RefusedNoGroup}
+		adm := &reloadAfterLookup{}
+		adm.swap(t, refused)
+		ts := newTestServerWith(t, &log, memory.New(time.Now), nil, func(d *Deps) {
+			d.Admission = adm
+			d.Limits = slowBackoff()
+			d.Slots = slots
+		})
+		c := dial(t, ts.addr, []byte("k2"))
+		c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+			Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+		closedAtOnce(t, c)
+		ts.slotFree(t)
+		refusedAtAccept(t, &net.Dialer{}, ts.addr)
+		if !waitFor(t, func() bool { return slots.InUse() == 0 }) {
+			t.Fatalf("%d slots still held with every connection closed", slots.InUse())
+		}
+		if got := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); got < 1 {
+			t.Fatalf("the declined_refused path was not taken: %v", got)
+		}
+	})
+	// A shed frees its per-source slot: with one holder, a per-NAS slot is
+	// free at once, and the holder closing frees the global one.
+	t.Run("shed", func(t *testing.T) {
+		var log syncBuffer
+		slots := NewSlots(1, time.Now)
+		ts := newTestServerWith(t, &log, memory.New(time.Now), nil, func(d *Deps) {
+			d.Slots = slots
+			d.Limits = limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Minute,
+				MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+				AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: time.Millisecond, AuthFailureWindow: time.Minute}, time.Now)
+			d.IdleTimeout = time.Minute // the holder is still there when the shed is checked
+		})
+		holder := dial(t, ts.addr, []byte("k2"))
+		if !waitFor(t, func() bool { return slots.InUse() == 1 }) {
+			t.Fatal("the holder holds no slot")
+		}
+		expectShed(t, ts.addr, "the shed connection")
+		// The per-NAS cap is 2 and the holder has one: the shed gave its slot
+		// back before it was reset, so the other is free now, not at some
+		// idle timeout.
+		release, ok := ts.limits.Acquire(netip.MustParseAddr("127.0.0.1"))
+		if !ok {
+			t.Fatal("a shed connection kept its per-source slot")
+		}
+		release()
+		holder.conn.Close()
+		if !waitFor(t, func() bool { return slots.InUse() == 0 }) {
+			t.Fatal("the holder's slot was not freed")
+		}
+	})
+}
+
+// Many connections dialled at once past a small cap: each is served or reset
+// at Accept, the shed counter equals the resets the clients saw, and when
+// every connection is closed no slot is left held (run under -race).
+func TestTheGlobalCapUnderAFloodLeavesNoSlotHeld(t *testing.T) {
+	var log syncBuffer
+	defer func(w io.Writer) { stdlog.SetOutput(w) }(stdlog.Writer())
+	stdlog.SetOutput(io.Discard)
+	const cap, dials = 4, 200
+	slots := NewSlots(cap, time.Now)
+	ts := newTestServerWith(t, &log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Slots = slots
+		d.Limits = limits.New(limits.Config{PerNASConnections: 1000, IdleTimeout: 300 * time.Millisecond,
+			MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+			AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: time.Millisecond, AuthFailureWindow: time.Minute}, time.Now)
+		d.IdleTimeout = 300 * time.Millisecond
+	})
+	var resets, over atomic.Int64
+	var wg sync.WaitGroup
+	for range dials {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, err := net.Dial("tcp", ts.addr)
+			if err != nil {
+				if errors.Is(err, syscall.ECONNRESET) {
+					resets.Add(1)
+				}
+				return
+			}
+			defer c.Close()
+			if slots.InUse() > cap {
+				over.Add(1)
+			}
+			c.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if _, err := c.Read(make([]byte, 1)); errors.Is(err, syscall.ECONNRESET) {
+				resets.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if over.Load() != 0 {
+		t.Fatalf("the pool held more than its cap %d times", over.Load())
+	}
+	if !waitFor(t, func() bool { return slots.InUse() == 0 }) {
+		t.Fatalf("%d slots still held with every connection closed", slots.InUse())
+	}
+	shed := testutil.ToFloat64(ts.metrics.ConnectionsShed.WithLabelValues("global_cap"))
+	if shed == 0 || int64(shed) != resets.Load() {
+		t.Fatalf("shed counter %v, resets the clients saw %d", shed, resets.Load())
 	}
 }

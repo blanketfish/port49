@@ -320,7 +320,7 @@ roles: [{name: ro, privilege: readonly, permit: [show **]}, {name: u, privilege:
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [ro]}, {subject: s, scope: dc, roles: [u]}]
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
-`
+` + runKeys
 
 // A combined reload is bounded on what its policy does (task 10 review I1):
 // the same policy text, a comment added, with an inventory that moves leaf1

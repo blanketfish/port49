@@ -4,20 +4,56 @@
 package keyring
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 type Version struct {
 	Number  int
-	Secret  []byte
+	Secret  secretref.Secret
 	Retired bool // kept for diagnosis; never admits, never builds a reply
 	// RetireAt is the first instant this version is refused: past it, it
 	// identifies a device and never admits one, as a retired version does
 	// (spec §10, "Retirement is enforced"). Zero is never.
 	RetireAt time.Time
+}
+
+// String is the version as it prints: everything but the secret, which no
+// verb and no encoding of a Version carries.
+func (v Version) String() string {
+	return fmt.Sprintf("keyring.Version{Number: %d, Secret: <redacted>, Retired: %t, RetireAt: %s}", v.Number, v.Retired,
+		v.RetireAt.Format(time.RFC3339))
+}
+
+// GoString is String, for %#v.
+func (v Version) GoString() string { return v.String() }
+
+// Format prints String under every verb, so %x and %s cannot reach Secret.
+func (v Version) Format(f fmt.State, _ rune) { fmt.Fprint(f, v.String()) }
+
+// MarshalJSON withholds the secret.
+func (v Version) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Number   int
+		Secret   string
+		Retired  bool
+		RetireAt time.Time
+	}{v.Number, "<redacted>", v.Retired, v.RetireAt})
+}
+
+// MarshalYAML withholds the secret.
+func (v Version) MarshalYAML() (any, error) {
+	return struct {
+		Number   int       `yaml:"number"`
+		Secret   string    `yaml:"secret"`
+		Retired  bool      `yaml:"retired"`
+		RetireAt time.Time `yaml:"retire_at"`
+	}{v.Number, "<redacted>", v.Retired, v.RetireAt}, nil
 }
 
 // Set is one key_ref's versions, ordered current, accepted..., retired...
@@ -62,7 +98,7 @@ func (s Set) Resolve(h wire.Header, obfuscated []byte, now time.Time) Result {
 		return Result{Diagnosis: DiagNotTACACS}
 	}
 	for i, v := range s.Versions {
-		body := wire.Obfuscate(h, v.Secret, obfuscated)
+		body := wire.Obfuscate(h, v.Secret.Bytes(), obfuscated)
 		if !Validates(h, body) {
 			continue
 		}
@@ -91,7 +127,7 @@ func (s Set) State(i int, now time.Time) string {
 func (s Set) Secret(version int) []byte {
 	for _, v := range s.Versions {
 		if v.Number == version && !v.Retired {
-			return v.Secret
+			return v.Secret.Bytes()
 		}
 	}
 	return nil

@@ -18,10 +18,6 @@ import (
 	"github.com/rhwendt/port49/internal/policy"
 )
 
-// l29KeyRefs are the key_refs the run's port49d.yaml defines (serviceConfig):
-// the lab key, and the rotation key the rekeyed phase pins a device onto.
-var l29KeyRefs = []string{"lab_key", "lab_key2"}
-
 var l29Nodes = map[string]string{"leaf1": "arista_eos", "srx1": "juniper_junos", "vsrx1": "juniper_junos",
 	"nx1": "cisco_nxos", "xe1": "cisco_iosxe"}
 
@@ -54,7 +50,7 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 				t.Fatalf("%s: %s %s", what, d.Name, why)
 			}
 		}
-		p, err := bundle.Parse(policyRaw, inv, policy.Env{KeyRefs: l29KeyRefs})
+		p, err := bundle.Parse(policyRaw, inv, policy.Env{})
 		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
@@ -158,7 +154,7 @@ func TestQuarantineSyncPolicyQuarantinesEveryLabNode(t *testing.T) {
 				t.Fatal(err)
 			}
 			for what, i := range map[string]admission.Inventory{"the dummies": before, "the sync": inv} {
-				p, err := bundle.Parse(polRaw, i, policy.Env{KeyRefs: l29KeyRefs})
+				p, err := bundle.Parse(polRaw, i, policy.Env{})
 				if err != nil {
 					t.Fatalf("%s, %s under %s: %v", node, what, file, err)
 				}

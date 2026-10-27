@@ -508,7 +508,7 @@ func hookFixture(t *testing.T, listen string, settle, gap time.Duration) (fixtur
 	}
 	cfg := strings.Replace(string(raw), "sync: [{name: lab_file, type: file, path: "+f.source+"}]",
 		fmt.Sprintf("webhook_listen: %s\nsync:\n  - {name: netbox_prod, type: netbox, url: %q, ca_file: %s, "+
-			"token_secret_env: PORT49_TEST_NETBOX_TOKEN, webhook_secret_env: PORT49_TEST_NETBOX_HOOK}\n", listen,
+			"token_secret_ref: env:PORT49_TEST_NETBOX_TOKEN, webhook_secret_ref: env:PORT49_TEST_NETBOX_HOOK}\n", listen,
 			nb.URL, nb.CAFile), 1)
 	if cfg == string(raw) {
 		t.Fatal("the fixture's sync line moved; update this test")
@@ -828,4 +828,24 @@ func TestTheWebhookListenerHasItsOwnCertificateAndACap(t *testing.T) {
 		t.Fatalf("after a slot was freed: %v", err)
 	}
 	c.Close()
+}
+
+// The start says how each source is fetched, and never the proxy's
+// credentials or a proxy value it could not read.
+func TestTheStartSaysHowEachSourceIsFetched(t *testing.T) {
+	sync := []inventory.SourceConfig{{Name: "lab_file", Type: "file"},
+		{Name: "netbox_prod", Type: "netbox", URL: "https://netbox.example.com"}}
+	for env, want := range map[string]string{
+		"": "source netbox_prod is fetched directly (no HTTPS_PROXY)",
+		"http://svc:FAKE-pw@proxy.example.com:3128":   "source netbox_prod is fetched through the proxy http://proxy.example.com:3128 (with credentials) (HTTPS_PROXY)",
+		"http://svc:FAKE-pw#x@proxy.example.com:3128": "source netbox_prod is fetched with an HTTPS_PROXY that does not parse as a proxy URL",
+	} {
+		t.Setenv("HTTPS_PROXY", env)
+		var out bytes.Buffer
+		sayEgress(&out, sync)
+		if !strings.Contains(out.String(), want) || strings.Contains(out.String(), "FAKE-pw") ||
+			strings.Contains(out.String(), "lab_file") {
+			t.Errorf("HTTPS_PROXY set %v: %q", env != "", out.String())
+		}
+	}
 }

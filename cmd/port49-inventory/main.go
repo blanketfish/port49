@@ -27,6 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/egress"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
@@ -80,6 +81,25 @@ const maxConns = 512
 // among them, before it closes their connections and cancels them.
 const grace = 5 * time.Second
 
+// sayEgress says at start how each netbox or nautobot source is fetched: the
+// environment's proxy by scheme and host, or directly. Never the proxy's
+// credentials, and never a value it could not read, which carries a password.
+func sayEgress(w io.Writer, sync []inventory.SourceConfig) {
+	for _, s := range sync {
+		if s.URL == "" {
+			continue
+		}
+		how := "directly (no HTTPS_PROXY)"
+		if u, err := egress.ProxyFor(s.URL); err == nil {
+			how = egress.Describe(u)
+		} else {
+			how = "with an HTTPS_PROXY that does not parse as a proxy URL (percent-encode '#', '/', '?' and '%' in " +
+				"its password): every sync of it fails until it is fixed"
+		}
+		fmt.Fprintf(w, prefix+"source %s is fetched %s\n", s.Name, how)
+	}
+}
+
 // run is the service from config to exit. Everything that can fail on a
 // typo fails before a listener opens, and nothing it starts outlives it.
 func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
@@ -109,6 +129,7 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	if err != nil {
 		return err
 	}
+	sayEgress(stderr, cfg.Sync)
 	// The keys its own state and mirror may be signed by besides its own:
 	// the old key's, through a rotation (pre-flight M6). Behind the fence
 	// (M3): whoever writes one decides what the service restores. The

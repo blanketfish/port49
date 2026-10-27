@@ -37,7 +37,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
-var signInTestKeys = crypt.Keys{Current: crypt.Key{ID: "k", Bytes: [32]byte{9}}}
+var signInTestKeys = crypt.Keys{Current: crypt.NewKey("k", [32]byte{9})}
 
 // signInConfig is brokerConfig with a directory_password verifier, a
 // directory and a state directory of its own, the enrollment store in the
@@ -45,7 +45,7 @@ var signInTestKeys = crypt.Keys{Current: crypt.Key{ID: "k", Bytes: [32]byte{9}}}
 func signInConfig(t *testing.T, listen string) (config.Config, string) {
 	t.Helper()
 	cfg := brokerConfig(t, directoryPolicy)
-	state := filepath.Join(t.TempDir(), "state")
+	state := filepath.Join(safeDir(t), "state")
 	if err := os.Mkdir(state, 0o700); err != nil {
 		t.Fatal(err)
 	}

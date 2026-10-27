@@ -55,8 +55,8 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	polPath := fs.String("policy", "", "the policy the old inventory is loaded against")
 	newPol := fs.String("new-policy", "", "the policy the new one is loaded against (default: --policy)")
 	maxRemoved := fs.Int("max-removed-percent", 10, "port49d.yaml's inventory.max_removed_percent")
-	cfgPath := fs.String("config", "", "port49d.yaml: the key_refs it defines and inventory.max_removed_percent, "+
-		"as port49d reads them; no secret is read")
+	cfgPath := fs.String("config", "", "port49d.yaml, for inventory.max_removed_percent as port49d reads it; "+
+		"no secret is read")
 	svc := serviceFlags(fs)
 	from := fs.Int64("from", 0, "with --service: the sequence of the bundle to diff from")
 	if err := fs.Parse(args); err != nil {
@@ -86,10 +86,7 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	if *newPol == "" {
 		*newPol = *polPath
 	}
-	// Without --config every key_ref is read as defined, as an offline load
-	// does; with it, a device assigned a key port49d.yaml does not define is
-	// refused, as port49d refuses it.
-	var refs []string
+	// The policy's own keys: block names the keys; --config gives the bound.
 	bound := *maxRemoved
 	if *cfgPath != "" {
 		raw, err := os.ReadFile(*cfgPath)
@@ -97,17 +94,13 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "port49 inventory diff:", err)
 			return 1
 		}
-		sets, err := config.KeySets(raw)
-		if err == nil {
-			bound, err = config.InventoryBound(raw)
-		}
+		bound, err = config.InventoryBound(raw)
 		if err != nil {
 			fmt.Fprintf(stderr, "port49 inventory diff: %s: %v\n", *cfgPath, err)
 			return 1
 		}
-		refs = keyRefsOf(sets)
 	}
-	env := policy.Env{KeyRefs: refs}
+	env := policy.Env{}
 	oldInv, newInv := fs.Arg(0), fs.Arg(1)
 	old, err := bundle.Load(*polPath, oldInv, env)
 	if err != nil {
@@ -119,14 +112,13 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "refused: port49d would not load the new inventory: %s\n", loadFault(err))
 		return 1
 	}
-	now := time.Now()
-	// Every admitted device rests on a key_ref; without --config none was
-	// checked against the keys port49d.yaml defines, and a pin to one it
-	// does not define is refused there, not here. Every verdict says so.
-	unchecked := ""
-	if *cfgPath == "" && len(new.AdmissionRefusals()) < len(new.Devices()) {
-		unchecked = "; key_refs not checked against port49d.yaml: pass --config to check them"
+	if !new.KeysDeclared() {
+		// port49d refuses a policy with no keys: block, whatever the inventory says.
+		fmt.Fprintln(stdout, "refused: port49d would not load the new bundle: the policy declares no keys: block "+
+			"(decision 53 ruling 3); add the key sets beside key_groups, or `keys: {}` for a fleet all on TLS")
+		return 1
 	}
+	now := time.Now()
 	if bytes.Equal(old.Raw(), new.Raw()) {
 		// One file changed: one inventory reload, against the policy in force,
 		// checked before the bundles are compared, as port49d does.
@@ -136,16 +128,14 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 			printChanges(stdout, rep, new)
 		}
 		if err := bundle.Check(old, new, bound); err != nil {
-			fmt.Fprintf(stdout, "refused: %v%s\n", err, unchecked)
+			fmt.Fprintf(stdout, "refused: %v\n", err)
 			return 1
 		}
 		if new.Bundle == old.Bundle {
-			fmt.Fprintf(stdout, "unchanged: the same inventory, respelled; bundle %s stays in force%s\n", old.Bundle,
-				unchecked)
+			fmt.Fprintf(stdout, "unchanged: the same inventory, respelled; bundle %s stays in force\n", old.Bundle)
 			return 0
 		}
-		fmt.Fprintf(stdout, "ok: port49d would take the new inventory (inventory.max_removed_percent %d%%)%s\n", bound,
-			unchecked)
+		fmt.Fprintf(stdout, "ok: port49d would take the new inventory (inventory.max_removed_percent %d%%)\n", bound)
 		return 0
 	}
 	// Both files changed: two reloads, each loading its file against the
@@ -174,8 +164,7 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		if o.stuck != nil {
 			stuck = true
 			fmt.Fprintf(stdout, "refused: if the %s file lands first, port49d takes it, then refuses the %s file (%v) "+
-				"and stays on that bundle until the %s file changes again%s\n", o.first, o.second, o.stuck, o.first,
-				unchecked)
+				"and stays on that bundle until the %s file changes again\n", o.first, o.second, o.stuck, o.first)
 		}
 	}
 	if stuck {
@@ -186,17 +175,16 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	policyFirst, inventoryFirst := orders[0].err, orders[1].err
 	switch {
 	case policyFirst == nil && inventoryFirst == nil:
-		fmt.Fprintf(stdout, "ok: port49d would take both, in either order (inventory.max_removed_percent %d%%)%s\n",
-			bound, unchecked)
+		fmt.Fprintf(stdout, "ok: port49d would take both, in either order (inventory.max_removed_percent %d%%)\n", bound)
 	case policyFirst == nil || inventoryFirst == nil:
 		first, then := "policy", "inventory"
 		if policyFirst != nil {
 			first, then = then, first
 		}
 		fmt.Fprintf(stdout, "ok: port49d would take both (inventory.max_removed_percent %d%%); if the %s file "+
-			"lands first, its reload is refused until the %s file lands%s\n", bound, then, first, unchecked)
+			"lands first, its reload is refused until the %s file lands\n", bound, then, first)
 	default:
-		fmt.Fprintf(stdout, "refused: port49d would take both files in neither order%s\n", unchecked)
+		fmt.Fprintf(stdout, "refused: port49d would take both files in neither order\n")
 		return 1
 	}
 	return 0

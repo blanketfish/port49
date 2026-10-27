@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rhwendt/port49/internal/yamlfault"
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -280,6 +281,9 @@ func Load(path, repoRoot string) (*Profile, error) {
 	var p Profile
 	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := yamlfault.OneDocument(dec); err != nil {
+		return nil, fmt.Errorf("%s: %w; a profile is one document", path, err)
 	}
 	if err := p.Validate(repoRoot); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

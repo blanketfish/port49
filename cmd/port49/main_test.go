@@ -689,9 +689,7 @@ func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 		Window: oidc.DefaultSignInWindow, TOTPLabel: "port49 (lab)"}
 	l.b.SignInDirectory, l.signIn = dir, dir
 
-	var key crypt.Key
-	key.ID = "lab"
-	copy(key.Bytes[:], bytes.Repeat([]byte{0x5a}, 32))
+	key := crypt.NewKey("lab", [32]byte(bytes.Repeat([]byte{0x5a}, 32)))
 	l.enrollKeys = crypt.Keys{Current: key}
 	l.enrollPath = filepath.Join(privateDir(t), "enrollments.json")
 	l.b.EnrollmentFile = l.enrollPath

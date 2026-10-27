@@ -117,9 +117,8 @@ func (f *fleet) brokerVia(t *testing.T, endpoint, cn, extra string) string {
 	if err := os.WriteFile(p, []byte(fmt.Sprintf(`
 metrics_listen: "127.0.0.1:0"
 inventory_file: %s
-key_refs: [k]
 encryption:
-  current: {id: v1, secret_env: T_RUN_ENC}
+  current: {id: v1, secret_ref: env:T_RUN_ENC}
 admin_socket: %s
 broker:
   listen: "127.0.0.1:0"
@@ -636,7 +635,7 @@ scopes: [{name: all_devices, match: {}, per_login_mfa: {accept: [hardware_key_to
 roles: [{name: r, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // P-1 under a per-login requirement the edit adds (R-C1): a token minted on
 // a fresh challenge 30s after the touch survives the settle pass under
@@ -767,7 +766,7 @@ func TestTheBrokersStoresShareOneSayer(t *testing.T) {
 	go func() { defer close(followDone); bs.followContexts(fctx) }()
 	defer func() { stopFollow(); <-followDone }()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
-	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
+	retired := crypt.Keys{Current: crypt.NewKey("retired", [32]byte{7})}
 	if err := crypt.Wrap(bs.raw, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",
 		Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()}, time.Hour); err != nil {
 		t.Fatal(err)
@@ -2429,5 +2428,111 @@ func padPast(t *testing.T, root *clientv3.Client, rev uint64) {
 		case err != nil:
 			time.Sleep(100 * time.Millisecond)
 		}
+	}
+}
+
+// A paged load that meets a compaction between pages reads again, as the
+// ledger's did; anything but an outage or a compaction ends the start
+// (11a final review N1).
+func TestAPagedLoadRetriesACompaction(t *testing.T) {
+	was := startRetryWait
+	startRetryWait = time.Millisecond
+	t.Cleanup(func() { startRetryWait = was })
+	var out bytes.Buffer
+	n := 0
+	err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n++; n == 1 {
+			return store.ErrCompacted
+		}
+		return nil
+	})
+	if err != nil || n != 2 || !strings.Contains(out.String(), "trying again") {
+		t.Fatalf("%v after %d tries\n%s", err, n, out.String())
+	}
+	boom := errors.New("a fault")
+	if err := pagedLoad(context.Background(), &out, "marks", func() error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A compaction that never clears is read again every startRetryWait, never in
+// a hot loop: counted over a window of several waits.
+func TestACompactionRetryWaitsBetweenTries(t *testing.T) {
+	was := startRetryWait
+	startRetryWait = 50 * time.Millisecond
+	t.Cleanup(func() { startRetryWait = was })
+	ctx, cancel := context.WithTimeout(context.Background(), 330*time.Millisecond)
+	defer cancel()
+	var out syncBuffer
+	n := 0
+	err := pagedLoad(ctx, &out, "ledger", func() error {
+		n++
+		return store.ErrCompacted
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("%v", err)
+	}
+	// One try at once, then one per 50ms: 7 in 330ms. A loop without the
+	// wait makes thousands.
+	if n < 4 || n > 9 {
+		t.Fatalf("%d tries in 330ms with a 50ms wait", n)
+	}
+	if got := strings.Count(out.String(), "trying again in 50ms"); got != n-1 && got != n {
+		t.Fatalf("%d lines for %d tries\n%s", got, n, out.String())
+	}
+}
+
+// A load that meets a compaction again and again says once, in fixed text,
+// what to change, and keeps trying; one compaction says nothing of the sort.
+// The error line names the load without a doubled "store:" prefix (Task 13
+// review m1).
+func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
+	was := startRetryWait
+	startRetryWait = time.Millisecond
+	t.Cleanup(func() { startRetryWait = was })
+	const remedy = "raise etcd's --auto-compaction-retention"
+	var out bytes.Buffer
+	n := 0
+	err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n++; n <= 4 {
+			return store.ErrCompacted
+		}
+		return nil
+	})
+	if err != nil || n != 5 {
+		t.Fatalf("%v after %d tries", err, n)
+	}
+	if strings.Contains(out.String(), "bulk_timeout") { // a load past it is an outage, not a compaction
+		t.Fatalf("the remedy names bulk_timeout, which does not cure a compaction:\n%s", out.String())
+	}
+	if got := strings.Count(out.String(), remedy); got != 1 {
+		t.Fatalf("the remedy was said %d times:\n%s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "port49-broker: reading the marks: store: the feed's revision was compacted;") ||
+		strings.Contains(out.String(), "store: reading") {
+		t.Fatalf("the retry line's prefix:\n%s", out.String())
+	}
+	out.Reset()
+	n = 0
+	if err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n++; n == 1 {
+			return store.ErrCompacted
+		}
+		return nil
+	}); err != nil || strings.Contains(out.String(), "auto-compaction-retention") {
+		t.Fatalf("one compaction said the remedy: %v\n%s", err, out.String())
+	}
+	// A compaction, a different outage, a compaction: not two in a row.
+	out.Reset()
+	seq := []error{store.ErrCompacted, store.ErrUnavailable, store.ErrCompacted}
+	n = 0
+	if err := pagedLoad(context.Background(), &out, "marks", func() error {
+		if n < len(seq) {
+			n++
+			return seq[n-1]
+		}
+		return nil
+	}); err != nil || strings.Contains(out.String(), "auto-compaction-retention") {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 }

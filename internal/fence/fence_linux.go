@@ -75,8 +75,14 @@ var ReadOnlyFS = func(f *os.File) (bool, error) {
 // in its place, and the file is opened relative to that descriptor, without
 // following one either; both checks are fstats of the descriptors, and the
 // bytes come from the file descriptor checked. A rename after the checks
-// changes nothing that was checked or read. Directories above those are not
-// walked; keep the file where only root can rename its directory.
+// changes nothing that was checked or read. Every directory above them is
+// held to the same rule, a sticky one (/tmp) and one on a read-only mount
+// excused (decision 53 ruling 11); POSIX ACLs show in the mode's group bits,
+// NFSv4 ACLs are not read. Those ancestors are checked by path, not by
+// descriptor: that is sound because swapping a component needs write on its
+// parent, which the rule has just limited to root and this process's user
+// (and, on a read-only mount, to whoever writes the mount's source, whom the
+// excuse trusts); only they could win a race against the walk.
 //
 // It is opened non-blocking, so a named pipe is refused rather than hanging a
 // start or a reload until something writes to it, and read to at most max
@@ -87,6 +93,101 @@ func Read(path string, max int64, what string) ([]byte, error) {
 		return nil, err
 	}
 	return readIn(filepath.Dir(target), filepath.Base(target), max, what)
+}
+
+// ReadSecret reads a secret file a `file:` reference names (spec §13
+// decision 53 rulings 1 and 12). It is Read's fence with a reader's rule for
+// the file. A link is followed, as a ConfigMap's is, and the file it comes to
+// must lie inside within: a Kubernetes Secret or CSI volume's
+// name -> ..data/name chain does, and a link to the TLS key or the keytab,
+// outside the directory, is refused. Only the final, fully resolved target is
+// tested against within; a chain that leaves the directory and comes back is
+// read, which is safe because the directory holding every link on the way is
+// held to the fence's rule by resolvePolicyPath (a writer who could plant the
+// middle link is refused there). Every ancestor of those directories is
+// walked too (decision 53 ruling 11). The directory holding the file is held to Read's rule,
+// never excused by a read-only mount, except for a sticky directory we or
+// root own (secretDirWritableByUsAlone). within must be absolute, clean and
+// not "/". The file must be owned by this process's user or root, writable by
+// its owner alone, and carry no world bit: group-read is allowed, which
+// fsGroup and an agent's perms = "0440" give. No error carries the file's
+// bytes.
+func ReadSecret(path, within string, max int64) ([]byte, error) {
+	if !filepath.IsAbs(within) || filepath.Clean(within) != within {
+		return nil, fmt.Errorf("%s: the directory a secret file must stay inside is not an absolute, clean path", path)
+	}
+	if within == "/" {
+		return nil, fmt.Errorf("%s is outside the allowed directory: a secret file is kept in a directory of its "+
+			"own, never directly under /", path)
+	}
+	target, err := resolvePolicyPath(path)
+	if err != nil {
+		return nil, err
+	}
+	w, err := resolvePolicyPath(within)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(target, w+"/") {
+		return nil, fmt.Errorf("%s resolves to %s, outside %s: a secret file, and every link to it, stays "+
+			"inside that directory", path, target, w)
+	}
+	dir, base := filepath.Dir(target), filepath.Base(target)
+	d, di, err := openDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	fd, err := syscall.Openat(int(d.Fd()), base, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), target)
+	defer f.Close()
+	return readChecked(f, target, max, "secret file", func(fi fs.FileInfo) error {
+		if err := ownedByUsOrRoot("the secret file "+target, fi); err != nil {
+			return err
+		}
+		if perm := fi.Mode().Perm(); perm&0o027 != 0 {
+			return fmt.Errorf("%s is mode %v: a secret file may be group-readable, never world-readable or "+
+				"writable by anyone but its owner - chmod 0440 or 0600 it, or, on a mounted volume, set the "+
+				"mode where it is rendered (Kubernetes defaultMode and fsGroup, Vault Agent's perms)", target, perm)
+		}
+		excused, err := secretDirWritableByUsAlone("the directory "+dir, di)
+		if err != nil || !excused {
+			return err
+		}
+		// Under the sticky excuse another user may have created the name
+		// before the first render, as a hard link to a file of ours or
+		// root's elsewhere on the filesystem: the owner and mode checks pass
+		// it, and fs.protected_hardlinks is a sysctl, not ours. A rendered
+		// secret has one name.
+		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Nlink > 1 {
+			return fmt.Errorf("%s has more than one hard link; a secret file in a sticky directory has one name", target)
+		}
+		return nil
+	})
+}
+
+// secretDirWritableByUsAlone is writableByUsAlone for the directory holding a
+// secret file, with ruling 11's sticky excuse for a directory we or root own:
+// the Vault Agent injector renders into a tmpfs emptyDir that is 01777. It is
+// sound because the file itself must be owned by us or root, and under the
+// sticky bit only the file's owner, the directory's owner or root can rename
+// or unlink it; others can squat a name before the first render, which the
+// file's owner check then refuses, never substitutes. The sticky bit is the
+// inode's own mode, so the host sees it too, unlike a read-only bind, whose
+// excuse is never extended here. It reports whether the excuse was used.
+func secretDirWritableByUsAlone(what string, fi fs.FileInfo) (excused bool, err error) {
+	if err := ownedByUsOrRoot(what, fi); err != nil {
+		return false, err
+	}
+	if err := notWritableByOthers(what, fi); err == nil {
+		return false, nil
+	} else if fi.Mode()&fs.ModeSticky == 0 {
+		return false, err
+	}
+	return true, nil
 }
 
 // ReadNoLink is Read for a file this process writes itself, whose own name is
@@ -228,6 +329,7 @@ func resolvePolicyPath(path string) (string, error) {
 	resolved := "/"
 	links := 0
 	checked := map[string]bool{}
+	ancestors := map[string]bool{}
 	for len(pending) > 0 {
 		comp := pending[0]
 		pending = pending[1:]
@@ -244,6 +346,15 @@ func resolvePolicyPath(path string) (string, error) {
 			return "", err
 		}
 		if fi.Mode()&fs.ModeSymlink == 0 {
+			// A directory the path passes through, not one holding a link
+			// (that one is held below, to the stricter rule that names the
+			// link).
+			if !ancestors[resolved] {
+				if err := ancestorWritableByUsAlone(resolved, abs); err != nil {
+					return "", err
+				}
+				ancestors[resolved] = true
+			}
 			resolved = next
 			continue
 		}
@@ -272,6 +383,31 @@ func resolvePolicyPath(path string) (string, error) {
 		pending = append(strings.Split(target, "/"), pending...)
 	}
 	return resolved, nil
+}
+
+// ancestorWritableByUsAlone holds a directory the path passes through to the
+// fence's rule (decision 53 ruling 11): owned by this process's user or root,
+// and writable by nobody else, unless its sticky bit is set - others can then
+// rename nothing below it that they do not own, and the next directory down
+// is checked in turn - or it is on a read-only mount, as a link's directory
+// is excused; that excuse trusts whoever writes the mount's source, so bind
+// only a directory that root or port49d's user alone can write. The refusal
+// names the directory, the path being read and the rule, never a file's
+// bytes.
+func ancestorWritableByUsAlone(dir, path string) error {
+	d, di, err := openDir(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	what := "the directory " + dir + " (above " + path + ")"
+	if di.Mode()&fs.ModeSticky != 0 {
+		return ownedByUsOrRoot(what, di)
+	}
+	// A shared ancestor (/srv, /home/team) is not ours to chmod: the way out
+	// is a directory only root or this user can write.
+	return dirWritableByUsAloneAdvising(what, d, di, fmt.Sprintf("chmod go-w it, or, if others share it, move the file "+
+		"under directories only root or uid %d can write", Geteuid()))
 }
 
 // openDir opens dir for fstat and openat alone, without following a link in
@@ -309,10 +445,16 @@ func writableByUsAlone(what string, fi fs.FileInfo) error {
 // rename a stale policy over it. Read-only is asked of the descriptor opened,
 // not a path, and the owner is still checked.
 func dirWritableByUsAlone(what string, d *os.File, fi fs.FileInfo) error {
+	return dirWritableByUsAloneAdvising(what, d, fi, "chmod go-w it")
+}
+
+// dirWritableByUsAloneAdvising is dirWritableByUsAlone with the remedy a
+// mode refusal ends on.
+func dirWritableByUsAloneAdvising(what string, d *os.File, fi fs.FileInfo, advice string) error {
 	if err := ownedByUsOrRoot(what, fi); err != nil {
 		return err
 	}
-	if err := notWritableByOthers(what, fi); err == nil {
+	if err := notWritableByOthersAdvising(what, fi, advice); err == nil {
 		return nil
 	} else if ro, rerr := ReadOnlyFS(d); rerr != nil || !ro {
 		return err
@@ -333,9 +475,22 @@ func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
 }
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {
-	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
+	return notWritableByOthersAdvising(what, fi, "chmod go-w it")
+}
+
+// notWritableByOthersAdvising refuses a group- or world-writable mode, a
+// directory's shown as one (drwxrwxrwx) and advice its last words.
+func notWritableByOthersAdvising(what string, fi fs.FileInfo, advice string) error {
+	if fi.Mode().Perm()&0o022 != 0 {
+		mode := fi.Mode().Perm().String()
+		if fi.IsDir() {
+			mode = fi.Mode().Type().String()[:1] + mode[1:]
+			if fi.Mode()&fs.ModeSticky != 0 {
+				mode += " (sticky)"
+			}
+		}
 		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write it "+
-			"decides who gets access - chmod go-w it", what, perm)
+			"decides who gets access - %s", what, mode, advice)
 	}
 	return nil
 }

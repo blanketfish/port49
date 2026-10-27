@@ -514,7 +514,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	go func() { defer close(followDone); sts.follow(fctx) }()
 	defer func() { stopFollow(); <-followDone }()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
-	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
+	retired := crypt.Keys{Current: crypt.NewKey("retired", [32]byte{7})}
 	// The daemon's role writes contexts: the test writes one under a key
 	// this port49d does not hold, as an earlier port49d would have.
 	if err := crypt.Wrap(sts.etcd, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",

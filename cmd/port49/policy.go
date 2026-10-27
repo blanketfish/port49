@@ -21,9 +21,11 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
+	"github.com/rhwendt/port49/internal/secretref"
 )
 
 // policyFiles are the two files every policy tool reads: the policy and the
@@ -42,14 +44,7 @@ func (f *policyFiles) missing() bool { return f.policy == "" || f.inventory == "
 // load builds the bundle from the two files as port49d does (bundle.Load),
 // so a bundle a tool names is the one port49d's records carry.
 func (f *policyFiles) load() (*policy.Policy, error) {
-	return f.loadWith(nil)
-}
-
-// loadWith is load with the key_refs port49d.yaml defines
-// (policy.Env.KeyRefs), so a device assigned any other is refused as port49d
-// refuses it.
-func (f *policyFiles) loadWith(keyRefs []string) (*policy.Policy, error) {
-	return bundle.Load(f.policy, f.inventory, policy.Env{KeyRefs: keyRefs})
+	return bundle.Load(f.policy, f.inventory, policy.Env{})
 }
 
 // diffFault says which side of a diff failed to load, and which of its two
@@ -163,15 +158,17 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 // exercises it, a device is quarantined now or at a later expiry, a
 // composition gets a projection's fail-closed reply (spec §8, "CI MUST refuse
 // the policy"; §13 decision 26), admission refuses a device (spec §10), or,
-// given --config (port49d.yaml, no secret read), a key group names a key_ref
-// it does not define.
+// the policy declares no keys: block, a key group names a key_ref the block
+// does not define, or a key's secret_ref is outside key_secret_refs (--config
+// names a port49d.yaml whose key_secret_refs alone is read, no secret; with
+// none the allowance is the default one).
 func policyTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var files policyFiles
 	files.register(fs)
-	cfgPath := fs.String("config", "", "port49d.yaml, for the key checks CI owes (spec §10): only its keys: block is read and "+
-		"checked, so this is not a port49d.yaml validator; no secret is read")
+	cfgPath := fs.String("config", "", "port49d.yaml, for its key_secret_refs alone (the default allowance without it): "+
+		"this is not a port49d.yaml validator; no secret is read")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -184,17 +181,18 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stderr = errOut
-	var sets map[string]config.KeySet
-	var refs []string
+	allow := secretref.DefaultAllowance
 	if *cfgPath != "" {
-		var err error
-		if sets, err = readKeySets(*cfgPath); err != nil {
-			fmt.Fprintln(stderr, "port49 policy test:", err)
+		raw, err := os.ReadFile(*cfgPath)
+		if err == nil {
+			allow, err = config.KeySecretRefsOf(raw)
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "port49 policy test: %s: %v\n", *cfgPath, err)
 			return 1
 		}
-		refs = keyRefsOf(sets)
 	}
-	p, err := files.loadWith(refs)
+	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
 		return 1
@@ -243,7 +241,13 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
 	}
 	keyFaults := 0
-	for _, line := range keyReports(sets, p, now) {
+	if *cfgPath == "" && namesAReference(p) {
+		// A fleet that narrows key_secret_refs would see CI green on a policy
+		// every port49d refuses, so say which allowance this checked.
+		fmt.Fprintf(stdout, "keys: checked against the default key_secret_refs (%s); pass --config to check "+
+			"port49d.yaml's\n", allow)
+	}
+	for _, line := range keyReports(p, allow, now) {
 		if strings.HasPrefix(line, "keys: ") {
 			keyFaults++
 		}
@@ -370,22 +374,44 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// keyReports are the key checks CI owes (spec §10, "Retirement is enforced"):
-// a key group naming a key_ref port49d.yaml does not define fails, and an
-// accept version past its retire_after, or with none, is reported. With no
-// port49d.yaml there is nothing to check.
-func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) []string {
-	if sets == nil {
-		return nil
-	}
-	var out []string
-	for _, g := range p.KeyGroups() {
-		if _, ok := sets[g.KeyRef]; !ok {
-			out = append(out, fmt.Sprintf("keys: key group %s names key_ref %s, which port49d.yaml does not define; "+
-				"every device it matches fails closed", g, g.KeyRef))
+// namesAReference is whether the policy's keys: block holds any version.
+func namesAReference(p *policy.Policy) bool {
+	for _, s := range p.KeySets() {
+		if len(s.All()) > 0 {
+			return true
 		}
 	}
-	for _, ref := range keyRefsOf(sets) {
+	return false
+}
+
+// keyReports is what CI owes the key sets (spec §10; decision 53): a policy
+// port49d would refuse for declaring none, whatever else it holds; a key
+// group naming an undefined key_ref; a reference outside the allowance; and
+// each accept version's retire_after.
+func keyReports(p *policy.Policy, allow secretref.Allowance, now time.Time) []string {
+	if !p.KeysDeclared() {
+		// Not only with key_groups: devices pinned in the inventory, or all on
+		// TLS, are refused by port49d too, so CI must not go green on it.
+		return []string{"keys: the policy declares no keys: block, so port49d and port49-broker refuse it " +
+			"(decision 53 ruling 3); add the key sets beside key_groups, or `keys: {}` for a fleet all on TLS"}
+	}
+	sets := p.KeySets()
+	var out []string
+	for _, ref := range keyset.Sorted(sets) {
+		for _, v := range sets[ref].All() {
+			if r, err := secretref.Parse(v.SecretRef); err == nil && !allow.Allows(r) {
+				out = append(out, fmt.Sprintf("keys: key %s version %d secret_ref %s is outside key_secret_refs "+
+					"(%s), so port49d refuses the policy (decision 53 ruling 12)", ref, v.Version, r.ForRefusal(), allow))
+			}
+		}
+	}
+	for _, g := range p.KeyGroups() {
+		if _, ok := sets[g.KeyRef]; !ok {
+			out = append(out, fmt.Sprintf("keys: key group %s names key_ref %s, which the policy's keys: block does "+
+				"not define; every device it matches fails closed", g, g.KeyRef))
+		}
+	}
+	for _, ref := range keyset.Sorted(sets) {
 		for _, v := range sets[ref].Accept {
 			switch {
 			case v.RetireAt.IsZero():
@@ -396,6 +422,39 @@ func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) 
 					"device", ref, v.Version, v.RetireAfter))
 			default:
 				out = append(out, fmt.Sprintf("report: key %s version %d: retire_after %s", ref, v.Version, v.RetireAfter))
+			}
+		}
+	}
+	return out
+}
+
+// refForRefusal is a secret_ref as a refusal prints it before the reference
+// has passed an allowance or resolved: an env: name is never printed, since a
+// secret pasted where a name goes parses as one, and this output is a CI
+// gate's. Text that does not parse prints as nothing of it.
+func refForRefusal(text string) string {
+	r, err := secretref.Parse(text)
+	if err != nil {
+		return "a secret_ref that does not parse"
+	}
+	return r.ForRefusal()
+}
+
+// rekeyed is the versions the new policy gives another secret_ref than the
+// old one does (decision 53 ruling 3): a version's secret never changes.
+func rekeyed(before, after *policy.Policy) []string {
+	old, now := before.KeySets(), after.KeySets()
+	var out []string
+	for _, ref := range keyset.Sorted(now) {
+		was := map[int]string{}
+		for _, v := range old[ref].All() {
+			was[v.Version] = v.SecretRef
+		}
+		for _, v := range now[ref].All() {
+			if w, ok := was[v.Version]; ok && w != v.SecretRef {
+				out = append(out, fmt.Sprintf("%s version %d names secret_ref %s, and the old policy %s: a version's "+
+					"secret never changes, so add a version (decision 53 ruling 3)", ref, v.Version,
+					refForRefusal(v.SecretRef), refForRefusal(w)))
 			}
 		}
 	}
@@ -473,6 +532,13 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			return " (from " + decision.FormatTime(at) + ")"
 		}
 		return ""
+	}
+	// A version's secret never changes (spec §10): a change that names
+	// another reference for a version both files hold is caught here, since
+	// across a restart port49d has nothing to compare it against.
+	rekeys := rekeyed(before, after)
+	for _, line := range rekeys {
+		fmt.Fprintln(stdout, "REFUSED: keys: "+line)
 	}
 	for _, u := range d.Unresolved {
 		fmt.Fprintf(stdout, "UNRESOLVED: %s; the diff cannot vouch for it\n", u)
@@ -684,7 +750,8 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		len(d.ProjectionRefusals), len(newlyRefused))
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
 		d.UnacknowledgedMFA() > 0 || d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 ||
-		len(d.Unresolved) > 0 || d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 || len(newlyRefused) > 0 {
+		len(d.Unresolved) > 0 || d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 || len(newlyRefused) > 0 ||
+		len(rekeys) > 0 {
 		return 1
 	}
 	return 0

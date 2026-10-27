@@ -57,6 +57,13 @@ type Metrics struct {
 	// count is not a fault: alert on a rate; spec §13 decision 50 rulings 16
 	// and 20).
 	ConnectionEvents *prometheus.CounterVec
+	// port49_connections_max: the global TACACS+ connection cap
+	// (limits.max_connections), across both listeners. Set at start.
+	ConnectionsMax prometheus.Gauge
+	// port49_connections_shed_total{reason}: connections reset at Accept
+	// because a cap was full (reason global_cap). No device label: a shed
+	// is the fleet's; the shedding lines say it, by count (design §11).
+	ConnectionsShed *prometheus.CounterVec
 	// port49_tls_handshakes_total{outcome}: the RFC 9887 listener's
 	// handshakes by devicecert.Outcome, ok and resumed included (spec §13
 	// decision 50 ruling 16). No device label.
@@ -625,6 +632,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Connections by state."}, []string{"state"}),
 		ConnectionEvents: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_connection_events_total",
 			Help: "Connection lifecycle events by kind."}, []string{"event"}),
+		ConnectionsMax: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_connections_max",
+			Help: "The global TACACS+ connection cap (limits.max_connections), across both listeners."}),
+		ConnectionsShed: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_connections_shed_total",
+			Help: "TACACS+ connections reset at Accept because a cap was full, by reason (global_cap)."}, []string{"reason"}),
 		TLSHandshakes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_tls_handshakes_total",
 			Help: "RFC 9887 listener handshakes by outcome."}, []string{"outcome"}),
 		AuthFailures: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_authentication_failures_total",
@@ -911,6 +922,8 @@ func New(reg prometheus.Registerer) *Metrics {
 	for _, o := range append([]devicecert.Outcome{devicecert.OK, devicecert.Resumed}, devicecert.Outcomes...) {
 		m.TLSHandshakes.WithLabelValues(string(o))
 	}
+	m.ConnectionsShed.WithLabelValues("global_cap") // the alarm's series exists before the first shed
+	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,

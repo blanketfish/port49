@@ -19,6 +19,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
@@ -73,8 +74,14 @@ func settleAfter(interval time.Duration) time.Duration {
 type reloader struct {
 	cfg config.Config
 	// proc names the process its lines are said for, procOf(cfg) when
-	// empty: tests set it, a broker's key_refs being config.Load's alone.
+	// empty: tests set it.
 	proc string
+	// keys are the device keys in force, which every swap puts in force with
+	// the policy that names them; nil in port49-broker, which serves no device.
+	keys *liveKeys
+	// keyWait is the policy version refused for a secret that could not be
+	// read, tried again until it loads (keyretry.go).
+	keyWait keyWait
 	// live is the policy in force, which a reload swaps; log is where its
 	// inventory_change records go.
 	live *policy.Live
@@ -194,6 +201,8 @@ type reloader struct {
 	// unidentifiable before any connection can be admitted under it. It must
 	// not wait. Nil tells no one.
 	beforeSwap func(pol *policy.Policy)
+	// keysPut is told once the keys are in force and the policy not yet.
+	keysPut func()
 	// mfaUnavailable is the broker's ruling 18 statement for a policy put in
 	// force (broker.Broker.MFAUnavailable), said after each swap when it is
 	// not empty. Nil with no broker in the process.
@@ -420,6 +429,7 @@ func arm(timer *time.Timer, due, now time.Time) {
 // poll reads both files, the policy first; in service mode there is no
 // inventory file to read.
 func (r *reloader) poll(ctx context.Context) {
+	r.retryKeys(ctx, "")
 	r.pollPolicy(ctx)
 	if r.cfg.InventoryService == nil {
 		r.pollInventory(ctx)
@@ -653,6 +663,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 	if err == nil {
 		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, fix)
 	}
+	var kb keyBuild
 	if err == nil {
 		// The policy's bound judges the policy's effect alone: base is the
 		// policy in force over the new inventory, so a device the inventory
@@ -669,9 +680,18 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 			err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 		}
 	}
+	if err == nil {
+		if kb, err = r.keys.build(pol); err != nil {
+			err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
+		}
+	}
 	if err != nil {
+		say, note := true, ""
 		if from != fromInventory || v == r.refused {
-			r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
+			say, note = r.waitForKeys(v, trigger, err)
+			if say {
+				r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
+			}
 			r.metrics.PolicyFileRefused.Set(1)
 			r.refused, r.pending = v, ""
 		}
@@ -686,11 +706,11 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 				r.metrics.InventoryFileRefused.Set(1)
 			}
 		}
-		if pair := v + " " + iv; pair != r.together {
+		if pair := v + " " + iv; say && (pair != r.together || note != "") {
 			r.together = pair
 			r.sayf("policy and inventory reload (%s) refused together; still serving %s "+
-				"(bundle %s): %s\n", trigger, old.Source, old.Bundle,
-				refusalLine(r.procName(), err, d == nil, old, pol))
+				"(bundle %s): %s%s\n", trigger, old.Source, old.Bundle,
+				refusalLine(r.procName(), err, d == nil, old, pol), note)
 		}
 		return false
 	}
@@ -713,7 +733,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		r.metrics.InventoryFileRefused.Set(0)
 	}
 	r.invSeen.Store(r.now().UnixNano())
-	now := r.swap(pol)
+	now := r.swap(pol, kb)
 	rep := bundle.Diff(old, pol, now)
 	r.sayf("policy and inventory reloaded together (%s): %s replaces %s; %s; %d device(s) "+
 		"quarantined now, %d before; %d refused admission\n", trigger, pol.Source, old.Source, rep.Summary(),
@@ -898,6 +918,12 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 	if err == nil {
 		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, "fix the source of truth")
 	}
+	var kb keyBuild
+	if err == nil {
+		// The policy in force, over the new devices: its references are all
+		// held, so this reads nothing.
+		kb, err = r.keys.build(pol)
+	}
 	if err != nil && opened {
 		// Opened and judged just now, but refused against the policy in
 		// force: tried with the policy's settled version not in force, if
@@ -937,13 +963,14 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 		return
 	}
 	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
-	now := r.swap(pol)
+	now := r.swap(pol, kb)
 	r.refused = ""
 	rep := bundle.Diff(old, pol, now)
 	r.sayf("inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
 		"admission\n", label, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
 	r.after(ctx, "inventory", rep, pol, now)
 	r.sayPolicyMatch()
+	r.retryKeys(ctx, "inventory reloaded")
 }
 
 // persist keeps raw as port49d's copy, atomically (persistBundle); a failure
@@ -1033,6 +1060,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.changing = 0
 	old := r.live.Load()
 	var pol *policy.Policy
+	var kb keyBuild
 	forAdmission := false
 	if err == nil && v == old.Source {
 		// The bytes in force: nothing to compile, and nothing is refused
@@ -1052,6 +1080,10 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 				// Not forAdmission: no inventory settles levels that accept no
 				// common method, so it is its own fault, said alone.
 				err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
+			} else if kb, err = r.keys.build(pol); err != nil {
+				// A secret not readable, or a reference outside key_secret_refs
+				// or re-keying a version: the keys in force keep serving.
+				err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 			}
 		}
 	} else {
@@ -1067,11 +1099,14 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 				return r.loadBoth(ctx, trigger, fromPolicy, raw, v, inv, iv, d)
 			}
 		}
-		r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
+		say, note := r.waitForKeys(v, trigger, err)
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
-		r.sayf("policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
-			old.Source, old.Bundle, refusalLine(r.procName(), err, false, old, pol))
+		if say {
+			r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
+			r.sayf("policy reload (%s) refused; still serving %s (bundle %s): %s%s\n", trigger,
+				old.Source, old.Bundle, refusalLine(r.procName(), err, false, old, pol), note)
+		}
 		return false
 	}
 	r.refused = ""
@@ -1083,7 +1118,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		return false
 	}
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
-	now := r.swap(pol)
+	now := r.swap(pol, kb)
 	// An inventory edit refused against the policy replaced — the key-group
 	// move done in the wrong order, say — is tried again against this one at
 	// the next polls (plan 6a, C3).
@@ -1106,6 +1141,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	old := r.live.Load()
 	var pol *policy.Policy
 	var inv admission.Inventory
+	var kb keyBuild
 	if err == nil {
 		inv, err = admission.ParseFile(raw, "") // the error below names the file
 		if err != nil {
@@ -1117,6 +1153,8 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 				r.loadBoth(ctx, trigger, fromInventory, praw, pv, inv, v, nil)
 				return
 			}
+		} else if kb, err = r.keys.build(pol); err != nil {
+			err = fmt.Errorf("inventory_file %s, loaded against the policy in force: %w", r.cfg.InventoryFile, err)
 		}
 	} else {
 		err = fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, err)
@@ -1140,7 +1178,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 		return
 	}
 	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
-	now := r.swap(pol)
+	now := r.swap(pol, kb)
 	// A policy edit refused against the inventory replaced is tried again
 	// against this one at the next polls, as the other way round (C3).
 	r.refused = ""
@@ -1149,6 +1187,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 		"admission\n", trigger, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now),
 		len(pol.AdmissionRefusals()))
 	r.after(ctx, "inventory", rep, pol, now)
+	r.retryKeys(ctx, "inventory reloaded")
 }
 
 // inventoryBundle is the bundle inv, the inventory file parsed, makes with
@@ -1171,11 +1210,34 @@ func (r *reloader) inventoryBundle(old *policy.Policy, inv admission.Inventory) 
 // waits for the mints in flight, which finish on the bundle they started
 // with, so the replaced bundle's span ends when it returns; the next grant
 // expiry is read from pol, a settle pass is owed, and onSwap is told.
-func (r *reloader) swap(pol *policy.Policy) time.Time {
+func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 	if r.beforeSwap != nil {
 		r.beforeSwap(pol)
 	}
+	old := r.live.Load()
+	// The keys go in force first (re-review N3): a connection accepted
+	// between the two steps for a device the new policy assigns a new key_ref
+	// finds its key set, and is not struck for port49d's own reload. What the
+	// old policy alone named stays in force with it until the swap is done
+	// (re-review 6, M1), so a device the old policy still assigns it finds its
+	// key too; then the new build alone is in force.
+	r.keys.put(r.keys.union(kb))
+	if r.keysPut != nil {
+		r.keysPut()
+	}
 	r.live.Swap(pol)
+	r.keys.put(kb)
+	if r.keys != nil {
+		if line := keyChanges(old.KeySets(), pol.KeySets()); line != "" {
+			r.sayf("%s\n", line)
+		}
+		// spec §10: the notices after every reload, the keys changed or not,
+		// so a retire_after that passes between two reloads is said at the
+		// next one (re-review N4).
+		for _, n := range keyset.Notices(pol.KeySets(), r.now()) {
+			r.sayf("%s\n", n)
+		}
+	}
 	assigned := func(device string) string {
 		a, _ := pol.Admitted(device)
 		return a.KeyRef
@@ -1481,7 +1543,6 @@ func redactedLine(err error, pols []*policy.Policy) string {
 func brokerWording(line string) string {
 	for _, r := range [][2]string{
 		{bundle.RaiseBound, strings.ReplaceAll(bundle.RaiseBound, "port49d.yaml", "port49-broker.yaml")},
-		{bundle.KeyRefsFile, strings.ReplaceAll(bundle.KeyRefsFile, "port49d.yaml", "port49-broker.yaml")},
 		{bundle.StopFleet, "to take the whole fleet off deliberately, stop every port49d (port49-broker serves no device)"},
 	} {
 		line = strings.ReplaceAll(line, r[0], r[1])

@@ -78,8 +78,8 @@ func TestL29Midnight(t *testing.T) {
 		// v1, the device's key, admits through the end of today UTC and not after
 		// (spec §10, "retire_after is a date, inclusive").
 		today := midnight.Add(-time.Hour).Format("2006-01-02")
-		live := l.l28Live(t, l.l28Config(t, "midnight", "  lab_key:\n    current: {version: 2, secret_env: PORT49_L28_NEW_KEY}\n"+
-			"    accept: [{version: 1, secret_env: PORT49_LAB_KEY, retire_after: "+today+"}]\n"))
+		live := l.l28Live(t, l.l28Config(t, "midnight", "  lab_key:\n    current: {version: 2, secret_ref: env:PORT49_L28_NEW_KEY}\n"+
+			"    accept: [{version: 1, secret_ref: env:PORT49_LAB_KEY, retire_after: "+today+"}]\n"))
 		if t.Failed() {
 			t.Fatalf("the device was not asking port49d on the midnight config (%s); this night missed its midnight", live)
 		}

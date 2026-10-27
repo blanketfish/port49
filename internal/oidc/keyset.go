@@ -13,13 +13,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/egress"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -92,67 +92,9 @@ type KeySetConfig struct {
 func NewClient(roots *x509.CertPool) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
+	tr.Proxy = egress.Proxy
 	return &http.Client{Transport: tr, Timeout: fetchTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
-
-// errBadProxy names no part of the value: a proxy URL carries a password.
-var errBadProxy = errors.New("HTTPS_PROXY does not parse as a proxy URL; percent-encode '#', '/', '?' and '%' in its password")
-
-// parseProxy reads an HTTPS_PROXY value the way the transport will, and
-// refuses what the transport would misread: a '#', '/' or '?' in a password
-// moves the credentials into the fragment, path or query, or into a host such
-// as "http:", and a proxy then fails with a host nobody configured. The error
-// never carries the value.
-func parseProxy(raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		// A bare host:port is read as http://host:port.
-		if u, err = url.Parse("http://" + raw); err != nil {
-			return nil, errBadProxy
-		}
-	}
-	switch {
-	case u.Opaque != "", u.RawQuery != "", u.ForceQuery, u.Fragment != "", u.Path != "" && u.Path != "/",
-		u.Hostname() == "", strings.HasSuffix(u.Host, ":"), strings.Contains(u.Hostname(), ":") && !strings.HasPrefix(u.Host, "["):
-		return nil, errBadProxy
-	}
-	return u, nil
-}
-
-// ProxyFor is the proxy NewClient's transport takes to reach target: the
-// environment's, or nil for none. target is the URL the fetch dials: an
-// OIDC verifier's issuer, a k8s verifier's JWKS URL. An HTTPS_PROXY that does not parse as a
-// proxy URL is an error, never "no proxy": the transport would drop it
-// silently or dial a host nobody configured.
-func ProxyFor(target string) (*url.URL, error) {
-	raw := os.Getenv("HTTPS_PROXY")
-	if raw == "" {
-		raw = os.Getenv("https_proxy")
-	}
-	if raw != "" {
-		if _, err := parseProxy(raw); err != nil {
-			return nil, err
-		}
-	}
-	req, err := http.NewRequest(http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
-	}
-	return http.ProxyFromEnvironment(req)
-}
-
-// DescribeProxy is the start line's words for u: its scheme and host, and
-// that it carries credentials, never the credentials; or directly.
-func DescribeProxy(u *url.URL) string {
-	if u == nil {
-		return "directly (no HTTPS_PROXY)"
-	}
-	with := ""
-	if u.User != nil {
-		with = " (with credentials)"
-	}
-	return "through the proxy " + u.Scheme + "://" + u.Host + with + " (HTTPS_PROXY)"
 }
 
 // WaitNotes waits for the discovery reads a fetch started, which run after

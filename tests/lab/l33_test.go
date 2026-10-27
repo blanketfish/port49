@@ -60,6 +60,7 @@ roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+keys: {lab_key: {current: {version: 1, secret_ref: env:PORT49_KEY_LAB}}}
 `
 
 // l33Secret is a random webhook secret for one run: 48 of [A-Za-z0-9].
@@ -93,8 +94,8 @@ sync:
     type: %s
     url: %s
     ca_file: %s/ca.pem
-    token_secret_env: L27_TOKEN
-    webhook_secret_env: L33_WEBHOOK_SECRET
+    token_secret_ref: env:L27_TOKEN
+    webhook_secret_ref: env:L33_WEBHOOK_SECRET
     interval: 24h
     map: {%s}
 `, os.Getenv("L33_HOOK_BIND"), pki, pki, product, os.Getenv("L32_HOST_URL"), pki, strings.Join(m, ", "))

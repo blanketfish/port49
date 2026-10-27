@@ -14,13 +14,13 @@ type Server struct {
 type BindMechanism string // "external" | "gssapi" | "simple"
 
 // Bind is the broker's bind, by mechanism. A simple bind's password is
-// named by PasswordEnv and never held here.
+// named by PasswordRef and never held here.
 type Bind struct {
 	Mechanism               BindMechanism
 	TLSCertFile, TLSKeyFile string // external
 	KeytabFile, Principal   string // gssapi
 	KRB5Conf                string // gssapi
-	BindDN, PasswordEnv     string // simple
+	BindDN, PasswordRef     string // simple
 }
 
 // MappingKind is how a client certificate finds its directory entry.

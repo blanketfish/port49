@@ -41,7 +41,7 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 			t.Errorf("port49d.yaml lacks %q:\n%s", want, d)
 		}
 	}
-	if strings.Contains(files["port49-broker.yaml"], "PORT49_LAB_KEY") {
+	if strings.Contains(files["port49-broker.yaml"], "PORT49_KEY_LAB") {
 		t.Errorf("port49-broker.yaml names the device key's secret:\n%s", files["port49-broker.yaml"])
 	}
 	if !strings.Contains(files["inventory.yaml"], composeGateway) {
@@ -60,7 +60,7 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 			t.Errorf("%s names a context cache:\n%s", name, files[name])
 		}
 	}
-	if strings.Contains(files["port49-broker.env"], "PORT49_LAB_KEY") || !strings.Contains(files["port49d.env"], "PORT49_LAB_KEY=") {
+	if strings.Contains(files["port49-broker.env"], "PORT49_KEY_LAB") || !strings.Contains(files["port49d.env"], "PORT49_KEY_LAB=") {
 		t.Errorf("the device key is not port49d's alone")
 	}
 }

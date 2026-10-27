@@ -468,6 +468,9 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 		return Inventory{}, fmt.Errorf("admission: %s%w; check the key spelling against the inventory schema", at,
 			yamlfault.Of(err))
 	}
+	if err := yamlfault.OneDocument(dec); err != nil {
+		return Inventory{}, fmt.Errorf("admission: %s%w; the inventory is one document", at, err)
+	}
 	var inv Inventory
 	for n, d := range f.Devices {
 		// An unsupported transport is kept as written: Resolve refuses the

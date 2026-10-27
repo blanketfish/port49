@@ -19,7 +19,7 @@ func TestTheLabPolicyLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := Load(filepath.Join(root, "tests", "lab", "slice", "policy.yaml"), Env{Devices: inv.Devices})
+	p, err := Load(filepath.Join(root, "tests", "lab", "slice", "policy.yaml"), Env{Devices: inv.Devices, InventoryKeyGroups: inv.KeyGroups})
 	if err != nil {
 		t.Fatal(err)
 	}

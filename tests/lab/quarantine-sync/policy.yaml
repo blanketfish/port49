@@ -29,6 +29,11 @@ grants:
   - {subject: slice_operator, scope: all_devices, roles: [network_admin], max_privilege: admin}
   - {subject: quarantine_probe, scope: lab_devices, roles: [eos_class_only], max_privilege: admin}
   - {subject: eos_probe, scope: lab_eos, roles: [unrenderable]}
+# The device key sets live in the policy (decision 53 ruling 3); the secret is
+# the one the lab harness sets for port49d.
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: env:PORT49_KEY_LAB}
 key_groups:
   - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
   - {match: {cidr: 10.99.0.0/24}, key_ref: lab_key}

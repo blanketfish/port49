@@ -47,7 +47,7 @@ type l72Env struct {
 	caFile      string
 	certs       map[string][2]string // name -> cert file, key file
 	seedFile    string
-	env         []string      // port49d's secret_env values
+	env         []string      // port49d's secret_ref variables
 	exited      chan struct{} // closed when port49d has exited
 	stopped     bool          // the test killed it
 	crl         *httptest.Server
@@ -174,9 +174,9 @@ metrics_listen: "127.0.0.1:%d"
 inventory_file: %s
 keys:
   l72:
-    current: {version: 1, secret_env: L72_KEY}
+    current: {version: 1, secret_ref: env:L72_KEY}
 encryption:
-  current: {id: v1, secret_env: L72_ENC}
+  current: {id: v1, secret_ref: env:L72_ENC}
 accounting: {spool_path: %s}
 limits:
   # A strike's backoff and a decline's window start at 2s, so a cell's

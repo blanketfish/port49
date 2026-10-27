@@ -321,3 +321,19 @@ func TestNotesRewrittenRefusesANoteOlderThanTheRun(t *testing.T) {
 		t.Fatal("a missing note passed")
 	}
 }
+
+// The manifest is one document: entries after `---` are refused, never
+// dropped from the run.
+func TestASecondManifestDocumentIsRefused(t *testing.T) {
+	first, err := os.ReadFile("../../regress.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "regress.yaml")
+	if err := os.WriteFile(p, append(first, []byte("\n---\nentries: []\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadManifestFile(p, specPath); err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+		t.Fatalf("%v", err)
+	}
+}

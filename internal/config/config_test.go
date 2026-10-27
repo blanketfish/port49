@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/secretref"
 )
 
 // The sample config is assembled from three pieces rather than written twice,
@@ -17,16 +19,22 @@ import (
 // and every other test must load one that does. Splitting it also puts
 // `encryption:` ahead of `lab:`, so TestLoadWithoutALabBlock's truncation at
 // `lab:` removes the lab block and nothing else.
+const sampleKeys = `keys:
+  prod_key:
+    current: {version: 3, secret_ref: env:T_PROD_V3}
+    accept:  [{version: 2, secret_ref: env:T_PROD_V2}]
+    retired: [{version: 1, secret_ref: env:T_PROD_V1}]
+`
+
 const sampleHead = `
 listen: ":4949"
 inventory_file: %s
-keys:
-  prod_key:
-    current: {version: 3, secret_env: T_PROD_V3}
-    accept:  [{version: 2, secret_env: T_PROD_V2}]
-    retired: [{version: 1, secret_env: T_PROD_V1}]
-limits: {per_nas_connections: 4}
+` + sampleKeys + `limits: {per_nas_connections: 4}
 `
+
+// withPolicy drops the keys: block from body, as a config with a policy has
+// none: the policy file's keys: block is where the key sets live.
+func withPolicy(body string) string { return strings.Replace(body, sampleKeys, "", 1) }
 
 const sampleLab = `lab:
   session_attributes: ["priv-lvl=15"]
@@ -38,7 +46,7 @@ const sampleLab = `lab:
 // sample is the standing config: a seed names who gets a token and carries no
 // secret, and encryption is named because Load now requires it.
 const sample = sampleHead + `encryption:
-  current: {id: v2, secret_env: PORT49_ENC_V2}
+  current: {id: v2, secret_ref: env:PORT49_ENC_V2}
 ` + sampleLab
 
 // sampleNoEncryption is sample without that block, for the one test whose
@@ -121,7 +129,7 @@ func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
 		t.Fatalf("%+v", c.Accounting)
 	}
 	ks := c.Keyring()["prod_key"]
-	if len(ks.Versions) != 3 || string(ks.Versions[0].Secret) != "three" || !ks.Versions[2].Retired {
+	if len(ks.Versions) != 3 || string(ks.Versions[0].Secret.Bytes()) != "three" || !ks.Versions[2].Retired {
 		t.Fatalf("%+v", ks)
 	}
 	if c.Lab == nil || len(c.Lab.SeedTokens) != 1 || c.Lab.SeedTokens[0].Username != "alice" {
@@ -183,7 +191,7 @@ func TestAuthFailureDelayCeilingIsUnderEveryMeasuredDeviceTimeout(t *testing.T) 
 func TestLoadRefusesMissingSecretAndUnknownKeyRef(t *testing.T) {
 	invPath := write(t, "inventory.yaml", inv)
 	if _, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, invPath))); err == nil {
-		t.Fatal("unset secret_env must fail")
+		t.Fatal("an unset secret_ref must fail")
 	}
 	setKeyEnv(t)
 	bad := write(t, "inv2.yaml", "devices: []\nkey_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: nope}]\n")
@@ -279,9 +287,9 @@ func TestLoadSurfacesAdmissionBuildError(t *testing.T) {
 listen: ":4949"
 inventory_file: %s
 keys:
-  a_key: {current: {version: 1, secret_env: T_A}}
-  b_key: {current: {version: 1, secret_env: T_B}}
-encryption: {current: {id: v1, secret_env: T_ENC}}
+  a_key: {current: {version: 1, secret_ref: env:T_A}}
+  b_key: {current: {version: 1, secret_ref: env:T_B}}
+encryption: {current: {id: v1, secret_ref: env:T_ENC}}
 lab: {session_attributes: ["priv-lvl=15"]}
 `
 	bad := write(t, "inv3.yaml", `
@@ -551,8 +559,8 @@ func TestEncryptionKeysAndSessionDefaults(t *testing.T) {
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sampleNoEncryption, invPath) + `
 encryption:
-  current:  {id: v2, secret_env: PORT49_ENC_V2}
-  previous: {id: v1, secret_env: PORT49_ENC_V1}
+  current:  {id: v2, secret_ref: env:PORT49_ENC_V2}
+  previous: {id: v1, secret_ref: env:PORT49_ENC_V1}
 session: {staleness_ceiling: 5m}
 token: {candidate_cap: 4}
 `
@@ -561,10 +569,10 @@ token: {candidate_cap: 4}
 		t.Fatal(err)
 	}
 	k, err := c.EncryptionKeys()
-	if err != nil || k.Current.ID != "v2" || k.Previous == nil || k.Previous.ID != "v1" || k.Current.Bytes[0] != '2' {
+	if err != nil || k.Current.ID != "v2" || k.Previous == nil || k.Previous.ID != "v1" || k.Current.Bytes()[0] != '2' {
 		t.Fatalf("%+v %v", k, err)
 	}
-	if k.Previous.Bytes[0] != '1' {
+	if k.Previous.Bytes()[0] != '1' {
 		t.Fatalf("the previous key must be its own bytes, not a second copy of the current one: %+v", k.Previous)
 	}
 	if c.Session.StalenessCeiling != 5*time.Minute || c.Session.GraceWindow != 10*time.Minute ||
@@ -591,7 +599,7 @@ func TestPreviousEncryptionKeyIsOptional(t *testing.T) {
 	if k.Previous != nil {
 		t.Fatalf("a config naming no previous key must produce none, got %+v", k.Previous)
 	}
-	if k.Current.ID != "v2" || k.Current.Bytes != [32]byte([]byte("22222222222222222222222222222222")) {
+	if k.Current.ID != "v2" || k.Current.Bytes() != [32]byte([]byte("22222222222222222222222222222222")) {
 		t.Fatalf("%+v", k.Current)
 	}
 }
@@ -602,7 +610,7 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	if _, err := Load(write(t, "a.yaml", fmt.Sprintf(sampleNoEncryption, invPath))); err == nil {
 		t.Fatal("a missing encryption block must fail at load, not at the first CHAP packet")
 	}
-	body := fmt.Sprintf(sampleNoEncryption, invPath) + "\nencryption: {current: {id: v2, secret_env: PORT49_ENC_V2}}\n"
+	body := fmt.Sprintf(sampleNoEncryption, invPath) + "\nencryption: {current: {id: v2, secret_ref: env:PORT49_ENC_V2}}\n"
 	// Unset, not merely short. This is the hole: a missing entry yields "",
 	// copy() into a zeroed [32]byte writes nothing, and the daemon starts and
 	// seals every token, receipt and context under an all-zero AES-256 key that
@@ -618,8 +626,8 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unset encryption secret must be refused")
 	}
-	// Not the variable's name: a secret pasted as secret_env can look like one
-	// (TestASecretEnvThatIsNoNameIsNotPrinted). The file names it at this block.
+	// Not the variable's name: a secret pasted as secret_ref can look like one
+	// (TestASecretThatIsNoRefIsNotPrinted). The file names it at this block.
 	for _, want := range []string{`"v2"`, "encryption.current", "is not set"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("an unset encryption secret must be refused by name: the error must contain %q, got %v", want, err)
@@ -643,7 +651,7 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	// hole: every read would try an all-zero key as its second guess.
 	t.Setenv("PORT49_ENC_V2", "22222222222222222222222222222222")
 	body = fmt.Sprintf(sampleNoEncryption, invPath) +
-		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v1, secret_env: PORT49_ENC_V1}\n"
+		"\nencryption:\n  current:  {id: v2, secret_ref: env:PORT49_ENC_V2}\n  previous: {id: v1, secret_ref: env:PORT49_ENC_V1}\n"
 	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "encryption.previous") ||
 		!strings.Contains(err.Error(), "is not set") {
 		t.Fatalf("a named-but-unset previous key must be refused by its block: %v", err)
@@ -656,8 +664,8 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 func TestEncryptionKeyIDIsRequired(t *testing.T) {
 	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
-	body := strings.Replace(fmt.Sprintf(sample, invPath), "{id: v2, secret_env: PORT49_ENC_V2}",
-		"{secret_env: PORT49_ENC_V2}", 1)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "{id: v2, secret_ref: env:PORT49_ENC_V2}",
+		"{secret_ref: env:PORT49_ENC_V2}", 1)
 	if _, err := Load(write(t, "c.yaml", body)); err == nil || !strings.Contains(err.Error(), "encryption.current") {
 		t.Fatalf("an encryption key with no id must be refused at load: %v", err)
 	}
@@ -672,16 +680,16 @@ func TestEncryptionRotationMustChangeTheKeyID(t *testing.T) {
 	t.Setenv("PORT49_ENC_V1", "11111111111111111111111111111111")
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sampleNoEncryption, invPath) +
-		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v2, secret_env: PORT49_ENC_V1}\n"
+		"\nencryption:\n  current:  {id: v2, secret_ref: env:PORT49_ENC_V2}\n  previous: {id: v2, secret_ref: env:PORT49_ENC_V1}\n"
 	if _, err := Load(write(t, "c.yaml", body)); err == nil || !strings.Contains(err.Error(), "id") {
 		t.Fatalf("two keys sharing one id must be refused: the previous key would never be tried: %v", err)
 	}
-	// A previous key named with no secret_env reads as a rotation and loads no
+	// A previous key named with no secret_ref reads as a rotation and loads no
 	// key at all.
 	body = fmt.Sprintf(sampleNoEncryption, invPath) +
-		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v1}\n"
-	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "secret_env") {
-		t.Fatalf("a previous key with an id and no secret_env must be refused by name: %v", err)
+		"\nencryption:\n  current:  {id: v2, secret_ref: env:PORT49_ENC_V2}\n  previous: {id: v1}\n"
+	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "secret_ref") {
+		t.Fatalf("a previous key with an id and no secret_ref must be refused by name: %v", err)
 	}
 }
 
@@ -698,7 +706,7 @@ func TestKey32RefusesAShortSecretRatherThanZeroPadding(t *testing.T) {
 		t.Fatal("an over-long secret must be an error, never a silent truncation")
 	}
 	k, err := key32("v2", strings.Repeat("x", 32))
-	if err != nil || k.ID != "v2" || k.Bytes[31] != 'x' {
+	if err != nil || k.ID != "v2" || k.Bytes()[31] != 'x' {
 		t.Fatalf("%+v %v", k, err)
 	}
 }
@@ -868,7 +876,7 @@ func TestMaxSessionAge(t *testing.T) {
 func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	setKeyEnv(t)
 	orphan := write(t, "orphan.yaml", "devices:\n  - {name: orphan, addresses: [10.99.99.1]}\n")
-	body := fmt.Sprintf(sample, orphan) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+	body := withPolicy(fmt.Sprintf(sample, orphan)) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
 		"client_ca_file: ca, policy_file: p, revocations_file: r, " +
 		"certificate_status: {disabled: true}}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
@@ -877,9 +885,6 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	}
 	if cfg.Admission != nil {
 		t.Fatalf("admission %v", cfg.Admission)
-	}
-	if got := cfg.KeyRefs(); len(got) != 1 || got[0] != "prod_key" {
-		t.Fatalf("KeyRefs: %q", got)
 	}
 }
 
@@ -891,7 +896,7 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
 	setKeyEnv(t)
 	missing := filepath.Join(t.TempDir(), "never-read.yaml")
-	body := fmt.Sprintf(sample, missing) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+	body := withPolicy(fmt.Sprintf(sample, missing)) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
 		"client_ca_file: ca, policy_file: p, revocations_file: r, " +
 		"certificate_status: {disabled: true}}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
@@ -940,8 +945,8 @@ func TestInventoryBound(t *testing.T) {
 func TestRetireAfter(t *testing.T) {
 	setKeyEnv(t)
 	i := write(t, "inv.yaml", inv)
-	body := strings.Replace(fmt.Sprintf(sample, i), "accept:  [{version: 2, secret_env: T_PROD_V2}]",
-		"accept:  [{version: 2, secret_env: T_PROD_V2, retire_after: 2000-01-01}]", 1)
+	body := strings.Replace(fmt.Sprintf(sample, i), "accept:  [{version: 2, secret_ref: env:T_PROD_V2}]",
+		"accept:  [{version: 2, secret_ref: env:T_PROD_V2, retire_after: 2000-01-01}]", 1)
 	cfg, err := Load(write(t, "a.yaml", body))
 	if err != nil {
 		t.Fatal(err)
@@ -960,19 +965,15 @@ func TestRetireAfter(t *testing.T) {
 		t.Fatalf("a missing date: %q, %v", cfg.Notices, err)
 	}
 	for _, bad := range []string{
-		strings.Replace(fmt.Sprintf(sample, i), "current: {version: 3, secret_env: T_PROD_V3}",
-			"current: {version: 3, secret_env: T_PROD_V3, retire_after: 2999-01-01}", 1),
+		strings.Replace(fmt.Sprintf(sample, i), "current: {version: 3, secret_ref: env:T_PROD_V3}",
+			"current: {version: 3, secret_ref: env:T_PROD_V3, retire_after: 2999-01-01}", 1),
 		strings.Replace(body, "retire_after: 2000-01-01", "retire_after: soon", 1),
-		strings.Replace(fmt.Sprintf(sample, i), "retired: [{version: 1, secret_env: T_PROD_V1}]",
-			"retired: [{version: 1, secret_env: T_PROD_V1, retire_after: 2999-01-01}]", 1),
+		strings.Replace(fmt.Sprintf(sample, i), "retired: [{version: 1, secret_ref: env:T_PROD_V1}]",
+			"retired: [{version: 1, secret_ref: env:T_PROD_V1, retire_after: 2999-01-01}]", 1),
 	} {
 		if _, err := Load(write(t, "c.yaml", bad)); err == nil {
 			t.Fatalf("loaded: %s", bad)
 		}
-	}
-	sets, err := KeySets([]byte(body))
-	if err != nil || len(sets["prod_key"].Accept) != 1 || sets["prod_key"].Accept[0].RetireAt.IsZero() {
-		t.Fatalf("KeySets: %+v, %v", sets, err)
 	}
 }
 
@@ -988,17 +989,17 @@ const (
 // keys block that yaml.v3 or the key checks could quote back.
 var leakShapes = []struct{ name, body, secret string }{
 	{"a value where a mapping goes", "keys:\n  prod_key:\n    current: " + leakDash + "\n", leakDash},
-	{"a value where a number goes", "keys:\n  prod_key:\n    current: {version: " + leakAlnum + ", secret_env: T_PROD_V3}\n", leakAlnum},
-	{"the secret as a key", "keys:\n  prod_key:\n    current:\n      version: 3\n      secret_env: T_PROD_V3\n      " +
+	{"a value where a number goes", "keys:\n  prod_key:\n    current: {version: " + leakAlnum + ", secret_ref: env:T_PROD_V3}\n", leakAlnum},
+	{"the secret as a key", "keys:\n  prod_key:\n    current:\n      version: 3\n      secret_ref: env:T_PROD_V3\n      " +
 		leakDash + ": x\n", leakDash},
 	{"the secret as a flow key", "keys:\n  prod_key:\n    current: {version: 3, " + leakAlnum + "}\n", leakAlnum},
-	{"the secret in retire_after", "keys:\n  prod_key:\n    current: {version: 3, secret_env: T_PROD_V3}\n" +
-		"    accept: [{version: 2, secret_env: T_PROD_V2, retire_after: \"" + leakDash + "\"}]\n", leakDash},
+	{"the secret in retire_after", "keys:\n  prod_key:\n    current: {version: 3, secret_ref: env:T_PROD_V3}\n" +
+		"    accept: [{version: 2, secret_ref: env:T_PROD_V2, retire_after: \"" + leakDash + "\"}]\n", leakDash},
 	{"the secret as an anchor", "keys:\n  prod_key:\n    current: *" + leakAlnum + "\n", leakAlnum},
 	{"the secret as a tag", "keys:\n  prod_key:\n    current: !" + leakAlnum + " x\n", leakAlnum},
 	{"the secret with a backtick", "keys:\n  prod_key:\n    current: " + leakTick + "\n", leakTick},
-	{"the secret in secret_env", "keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + leakDash + "\"}\n", leakDash},
-	{"the secret in an unclosed quote", "keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + leakDash + "\n", leakDash},
+	{"the secret in secret_ref", "keys:\n  prod_key:\n    current: {version: 3, secret_ref: \"" + leakDash + "\"}\n", leakDash},
+	{"the secret in an unclosed quote", "keys:\n  prod_key:\n    current: {version: 3, secret_ref: \"" + leakDash + "\n", leakDash},
 }
 
 // leaked is the first form of secret found in out, or "": the secret in any
@@ -1027,10 +1028,10 @@ func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
 		t.Run(sh.name, func(t *testing.T) {
 			p := write(t, "port49d.yaml", sh.body)
 			_, loadErr := Load(p)
-			_, setsErr := KeySets([]byte(sh.body))
+			_, setsErr := KeySecretRefsOf([]byte(sh.body))
 			_, ageErr := MaxSessionAge([]byte(sh.body))
 			_, boundErr := InventoryBound([]byte(sh.body))
-			for name, err := range map[string]error{"Load": loadErr, "KeySets": setsErr, "MaxSessionAge": ageErr,
+			for name, err := range map[string]error{"Load": loadErr, "KeySecretRefsOf": setsErr, "MaxSessionAge": ageErr,
 				"InventoryBound": boundErr} {
 				if err == nil {
 					continue // the shape is one only the key checks see
@@ -1038,9 +1039,6 @@ func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
 				if f := leaked(err.Error(), sh.secret); f != "" {
 					t.Errorf("%s printed %q: %v", name, f, err)
 				}
-			}
-			if setsErr == nil {
-				t.Fatal("KeySets took it")
 			}
 		})
 	}
@@ -1050,7 +1048,7 @@ func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
 func TestADecodeErrorSaysWhereAndWhat(t *testing.T) {
 	cases := []struct{ body, want string }{
 		{"keys:\n  prod_key:\n    current: x\n", "line 3: a value of the wrong type"},
-		{"keys:\n  prod_key:\n    current: {version: 3, secret_env: A}\n    bogus: 1\n", "line 4: an unknown field"},
+		{"keys:\n  prod_key:\n    current: {version: 3, secret_ref: env:A}\n    bogus: 1\n", "line 4: an unknown field"},
 		{"keys:\n  prod_key:\n    current: *nope\n", "an unknown anchor or alias"},
 		{"keys: [\n", "a yaml syntax error"},
 	}
@@ -1061,36 +1059,23 @@ func TestADecodeErrorSaysWhereAndWhat(t *testing.T) {
 			t.Errorf("want the file and %q, got %v", c.want, err)
 		}
 	}
-	_, err := KeySets([]byte("keys:\n  prod_key:\n    current: {version: 3, secret_env: A}\n" +
-		"    accept: [{version: 2, secret_env: B, retire_after: soon}]\n"))
-	if err == nil || !strings.Contains(err.Error(), "key prod_key version 2: retire_after is not a date") {
-		t.Errorf("retire_after: %v", err)
-	}
 }
 
-// A secret_env is checked as a name before it is looked up, so a secret
-// pasted there is not printed as a variable that is not set.
-func TestASecretEnvThatIsNoNameIsNotPrinted(t *testing.T) {
+// A secret_ref is parsed before it is looked up, so a secret pasted there is
+// refused by its key and never printed as a variable that is not set.
+func TestASecretThatIsNoRefIsNotPrinted(t *testing.T) {
 	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	for _, name := range []string{"PORT49_ENC_V2", "T_PROD_V3"} {
-		body := strings.Replace(fmt.Sprintf(sample, invPath), "secret_env: "+name, `secret_env: "`+leakDash+`"`, 1)
-		_, err := Load(write(t, "port49d.yaml", body))
-		if err == nil || !strings.Contains(err.Error(), "secret_env is not an environment variable name") {
-			t.Fatalf("%s: want the name refused, got %v", name, err)
-		}
-		if f := leaked(err.Error(), leakDash); f != "" {
-			t.Fatalf("%s: printed %q: %v", name, f, err)
-		}
-		// An alphanumeric secret reads as a variable's name, so it reaches the
-		// lookup; the lookup's error does not print the name either.
-		body = strings.Replace(fmt.Sprintf(sample, invPath), "secret_env: "+name, "secret_env: "+leakAlnum, 1)
-		_, err = Load(write(t, "port49d.yaml", body))
-		if err == nil || !strings.Contains(err.Error(), "is not set") {
-			t.Fatalf("%s: want the variable unset, got %v", name, err)
-		}
-		if f := leaked(err.Error(), leakAlnum); f != "" {
-			t.Fatalf("%s: printed %q: %v", name, f, err)
+		for _, pasted := range []string{leakDash, leakAlnum} {
+			body := strings.Replace(fmt.Sprintf(sample, invPath), "secret_ref: env:"+name, `secret_ref: "`+pasted+`"`, 1)
+			_, err := Load(write(t, "port49d.yaml", body))
+			if err == nil || !strings.Contains(err.Error(), "secret_ref") || !strings.Contains(err.Error(), "is not a secret reference") {
+				t.Fatalf("%s: want the reference refused, got %v", name, err)
+			}
+			if f := leaked(err.Error(), pasted); f != "" {
+				t.Fatalf("%s: printed %q: %v", name, f, err)
+			}
 		}
 	}
 }
@@ -1103,17 +1088,13 @@ func TestAKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
 	// A second key beside prod_key, so the load gets as far as the start
 	// notices, which name every key with no retire_after.
 	body := strings.Replace(fmt.Sprintf(sample, invPath), "limits:", "  "+leakAlnum+":\n"+
-		"    current: {version: 5, secret_env: T_PROD_V3}\n    accept: [{version: 4, secret_env: T_PROD_V2}]\nlimits:", 1)
+		"    current: {version: 5, secret_ref: env:T_PROD_V3}\n    accept: [{version: 4, secret_ref: env:T_PROD_V2}]\nlimits:", 1)
 	c, err := Load(write(t, "port49d.yaml", body))
 	if err == nil || !strings.Contains(err.Error(), "on line 9 is not a valid key_ref name") {
 		t.Fatalf("want the key_ref refused by line, got %v (notices %q)", err, c.Notices)
 	}
 	if f := leaked(err.Error()+strings.Join(c.Notices, "\n"), leakAlnum); f != "" {
 		t.Fatalf("printed %q: %v", f, err)
-	}
-	_, err = KeySets([]byte("keys:\n  " + leakAlnum + ":\n    current: {version: 3, secret_env: X}\n"))
-	if err == nil || !strings.Contains(err.Error(), "on line 2 is not a valid key_ref name") || leaked(err.Error(), leakAlnum) != "" {
-		t.Fatalf("KeySets: %v", err)
 	}
 }
 
@@ -1242,7 +1223,7 @@ func sampleWithKeyID(t *testing.T, id, prev string) string {
 // every line about one that will not open, which prints only the key-id
 // charset (crypt.LineKeyID). One outside it is refused at load, naming the
 // block and never echoing the id (plan 7e, Ruling 15), whether or not the
-// block names a secret_env (pre-flight M6).
+// block names a secret_ref (pre-flight M6).
 func TestAnEncryptionKeyIDOutsideTheCharsetIsRefused(t *testing.T) {
 	for _, id := range []string{"has space", "semi;colon", "émoji", strings.Repeat("a", 65), "new\nline"} {
 		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
@@ -1254,12 +1235,12 @@ func TestAnEncryptionKeyIDOutsideTheCharsetIsRefused(t *testing.T) {
 			if strings.Contains(err.Error(), id) {
 				t.Fatalf("the refusal echoes the id: %v", err)
 			}
-			// A previous block naming the id and no secret_env took the
+			// A previous block naming the id and no secret_ref took the
 			// branch that echoed it with %q before the shape was checked.
 			_, err = Load(write(t, "port49d.yaml", sampleWithKeyID(t, "v2", fmt.Sprintf("{id: %q}", id))))
 			if err == nil || !strings.Contains(err.Error(), "encryption.previous: id must be 1 to 64 of") ||
 				strings.Contains(err.Error(), id) {
-				t.Fatalf("a previous id %q with no secret_env: %v", id, err)
+				t.Fatalf("a previous id %q with no secret_ref: %v", id, err)
 			}
 		})
 	}
@@ -1323,7 +1304,7 @@ func brokerDirectory(t *testing.T, refresh, grace string) string {
     servers:
       - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
     ca_file: `+ca+`
-    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_secret_ref: env:PORT49_LDAP_PASSWORD}
     base_dn: "DC=corp,DC=example,DC=com"
     certificate_mapping: {kind: issuer_serial}
     nested_groups: in_chain
@@ -1367,7 +1348,7 @@ func TestTheBrokersLoadSkipsTheOneProcessChecks(t *testing.T) {
     servers:
       - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
     ca_file: `+ca+`
-    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_secret_ref: env:PORT49_LDAP_PASSWORD}
     base_dn: "DC=corp,DC=example,DC=com"
     certificate_mapping: {kind: issuer_serial}
     nested_groups: in_chain
@@ -1396,4 +1377,302 @@ func TestNoBrokerModeAdmitsATLSDeviceWithNoKeyGroup(t *testing.T) {
 			t.Fatalf("%s: %+v %v", a, r, ok)
 		}
 	}
+}
+
+// A second YAML document in port49d.yaml is refused, not ignored, by Load and
+// by every reader of the file's bytes (plan 6b final review Minor 7;
+// decision 53 ruling 6). The refusal quotes nothing after the separator.
+func TestASecondYAMLDocumentIsRefused(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	raw := fmt.Sprintf(sample, invPath) + "---\nlimits: {per_nas_connections: 9999}\n"
+	p := write(t, "port49d.yaml", raw)
+	if _, err := Load(p); err == nil || !strings.Contains(err.Error(), "more than one YAML document") ||
+		strings.Contains(err.Error(), "9999") {
+		t.Fatalf("Load: %v", err)
+	}
+	for name, read := range map[string]func([]byte) error{
+		"MaxSessionAge":      func(b []byte) error { _, err := MaxSessionAge(b); return err },
+		"InventoryBound":     func(b []byte) error { _, err := InventoryBound(b); return err },
+		"RevocationsFile":    func(b []byte) error { _, err := RevocationsFile(b); return err },
+		"KeySecretRefsOf":    func(b []byte) error { _, err := KeySecretRefsOf(b); return err },
+		"InventoryServiceOf": func(b []byte) error { _, err := InventoryServiceOf(b); return err },
+		"StoresBlocks":       func(b []byte) error { _, err := StoresBlocks(b); return err },
+	} {
+		if err := read([]byte(raw)); err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Every secret in port49d.yaml is named by secret_ref (decision 53 ruling 1):
+// a file: key and a file: encryption key load as their variables did.
+func TestSecretsLoadFromFiles(t *testing.T) {
+	setKeyEnv(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil { // the fence refuses a directory the group can write
+		t.Fatal(err)
+	}
+	enc := filepath.Join(dir, "enc")
+	if err := os.WriteFile(enc, []byte("22222222222222222222222222222222\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k3 := filepath.Join(dir, "k3")
+	if err := os.WriteFile(k3, []byte("three\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(strings.Replace(fmt.Sprintf(sample, invPath), "env:PORT49_ENC_V2", "file:"+enc, 1),
+		"env:T_PROD_V3", "file:"+k3, 1)
+	c, err := Load(write(t, "port49d.yaml", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Keyring()["prod_key"].Versions[0].Secret.Bytes(); string(got) != "three" {
+		t.Fatalf("the file: key: got %d bytes, want 5", len(got)) // never the value
+	}
+	if _, err := c.EncryptionKeys(); err != nil {
+		t.Fatalf("the file: encryption key: %v", err)
+	}
+}
+
+// secret_env and password_env are gone: refused, naming the replacement and
+// the line, never loaded (no deprecation before beta: a refusal, not an
+// alias). An operator upgrading four files at once is told what to write.
+func TestARemovedSecretKeyIsRefusedNamingItsReplacement(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "secret_ref: env:T_PROD_V3", "secret_env: T_PROD_V3", 1)
+	_, err := Load(write(t, "port49d.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "secret_env was replaced by secret_ref") ||
+		!strings.Contains(err.Error(), "line ") {
+		t.Fatalf("%v", err)
+	}
+	body = strings.Replace(fmt.Sprintf(sample, invPath), "secret_ref: env:T_PROD_V3", "password_env: T_PROD_V3", 1)
+	if _, err := Load(write(t, "port49d.yaml", body)); err == nil ||
+		!strings.Contains(err.Error(), "password_env was replaced by password_secret_ref") {
+		t.Fatalf("%v", err)
+	}
+	if _, err := KeySecretRefsOf([]byte("keys:\n  k: {current: {version: 1, secret_env: X}}\n")); err == nil ||
+		!strings.Contains(err.Error(), "secret_env was replaced by secret_ref") {
+		t.Fatalf("a reader of the file's bytes: %v", err)
+	}
+}
+
+// A secret pasted where the reference goes is refused by its key, unprinted.
+func TestAPastedSecretInSecretRefIsNotPrinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "env:PORT49_ENC_V2", "hunter2hunter2hunter2hunter2hunt", 1)
+	_, err := Load(write(t, "port49d.yaml", body))
+	if err != nil && strings.Contains(err.Error(), "hunter2") {
+		t.Fatal("the refusal carries the pasted secret")
+	}
+	if err == nil || !strings.Contains(err.Error(), "encryption.current.secret_ref") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A Config that is printed or logged carries no key material: fmt prints
+// unexported fields, so the resolved secrets are held as secretref.Secret,
+// which prints as <redacted> under every verb.
+func TestAPrintedConfigCarriesNoSecret(t *testing.T) {
+	setKeyEnv(t)
+	const device, enc = "fake-device-key-zzz-1", "fake-encryption-key-32-bytes!!!!"
+	t.Setenv("T_PROD_V3", device)
+	t.Setenv("PORT49_ENC_V2", enc)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, write(t, "inventory.yaml", inv))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		out := fmt.Sprintf(verb, c)
+		if strings.Contains(out, device) || strings.Contains(out, enc) {
+			t.Errorf("a Config printed with %s carries a resolved secret", verb) // the verb, never the value
+		}
+	}
+}
+
+// ResolveSecret names the key the caller reads, not a fixed one.
+func TestResolveSecretNamesTheCallersKey(t *testing.T) {
+	_, err := Config{}.ResolveSecret("keys.k.current.secret_ref", "env:T_RESOLVE_SECRET_UNSET")
+	if err == nil || !strings.Contains(err.Error(), "keys.k.current.secret_ref the environment variable it names is not set") ||
+		strings.Contains(err.Error(), "T_RESOLVE_SECRET_UNSET") || strings.Contains(err.Error(), "bind") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// Keyring hands out copies: a write through a returned secret changes nothing
+// the next swap reads.
+func TestKeyringReturnsCopies(t *testing.T) {
+	setKeyEnv(t)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, write(t, "inventory.yaml", inv))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// current, accept and retired versions alike
+	for i, v := range c.Keyring()["prod_key"].Versions {
+		want := string(v.Secret.Bytes())
+		v.Secret.Bytes()[0] ^= 0xff
+		if got := c.Keyring()["prod_key"].Versions[i].Secret.Bytes(); string(got) != want {
+			t.Fatalf("a write through version %d's returned secret changed the next Keyring (%d bytes)", i, len(got))
+		}
+	}
+}
+
+// keys: beside a policy is refused: the policy's keys: block is the one in
+// force (decision 53 ruling 3); and port49-broker.yaml's key_refs is gone.
+func TestKeysBesideAPolicyIsRefused(t *testing.T) {
+	base := daemonRoleYAML(t)
+	for name, keys := range map[string]string{
+		"a block": sampleKeys,
+		"empty":   "keys: {}\n",
+	} {
+		raw := withPolicy(base) + keys
+		_, err := loadDaemonRole(t, raw)
+		if err == nil || !strings.Contains(err.Error(), "keys: is the policy file's") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	raw := strings.Replace(brokerRoleYAML(t), "admin_socket:", "key_refs: [k]\nadmin_socket:", 1)
+	if _, err := loadBrokerRole(t, raw); err == nil ||
+		!strings.Contains(err.Error(), "key_refs was replaced by the policy's keys: block") {
+		t.Errorf("key_refs in port49-broker.yaml: %v", err)
+	}
+}
+
+// A port49d.yaml secret a policy could name is refused (decision 53 ruling
+// 12): the allowance and port49d.yaml's own secrets never meet.
+func TestAConfigSecretInsideTheAllowanceIsRefused(t *testing.T) {
+	base := withPolicy(daemonRoleYAML(t))
+	for name, c := range map[string]struct{ raw, want string }{
+		"the encryption secret": {strings.Replace(base, "env:PORT49_ENC_V2", "env:PORT49_KEY_ENC", 1),
+			"is inside key_secret_refs"},
+		"an env_prefix that is no name": {base + "key_secret_refs: {env_prefix: P}\n", "env_prefix"},
+		"the bind password": {withPolicy(fmt.Sprintf(sample, write(t, "inv.yaml", inv))) + strings.Replace(brokerBlock, "  certificate_status: {disabled: true}\n",
+			"  certificate_status: {disabled: true}\n  directory:\n    servers:\n"+
+				"      - {uri: \"ldaps://dc-01.corp.example.com\", priority: 100}\n    ca_file: "+
+				writeTemp(t, "ca.pem", testCAPEM(t))+"\n    bind: {mechanism: simple, bind_dn: \"CN=port49,DC=corp\", "+
+				"password_secret_ref: env:PORT49_KEY_BIND}\n    base_dn: \"DC=corp,DC=example,DC=com\"\n"+
+				"    certificate_mapping: {kind: issuer_serial}\n    nested_groups: in_chain\n", 1),
+			"is inside key_secret_refs"},
+	} {
+		setKeyEnv(t)
+		t.Setenv("PORT49_KEY_ENC", "22222222222222222222222222222222")
+		t.Setenv("PORT49_KEY_BIND", "bind-not-printed")
+		_, err := Load(write(t, "port49d.yaml", c.raw))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+	raw := strings.Replace(brokerRoleYAML(t), "admin_socket:", "key_secret_refs: {file_dir: /run/k}\nadmin_socket:", 1)
+	if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "key_secret_refs") {
+		t.Errorf("key_secret_refs in port49-broker.yaml: %v", err)
+	}
+}
+
+// Links and neighbours (re-review N1): the overlap is judged on resolved
+// paths, and a name that merely shares a prefix is not inside.
+func TestAKeyFileNeedsNoTextMatchToOverlapTheAllowance(t *testing.T) {
+	setKeyEnv(t)
+	real := filepath.Join(safeTemp(t), "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(safeTemp(t), "keys")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	enc := filepath.Join(real, "enc")
+	if err := os.WriteFile(enc, []byte("22222222222222222222222222222222"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Replace(withPolicy(daemonRoleYAML(t)), "env:PORT49_ENC_V2", "file:"+enc, 1) +
+		"key_secret_refs: {file_dir: " + link + "}\n"
+	if _, err := Load(write(t, "port49d.yaml", raw)); err == nil || !strings.Contains(err.Error(), "is inside key_secret_refs") {
+		t.Errorf("a link to the key directory: %v", err)
+	}
+	for name, c := range map[string]struct{ dir, want string }{
+		"the key under file_dir": {"DIR", "overlaps key_secret_refs.file_dir"},
+		"a neighbour":            {"DIR/srv.k", ""},
+	} {
+		p := tlsBase(t, "listen: 127.0.0.1:0\n",
+			tlsMinimal+"policy: {file: /etc/port49/policy.yaml}\nkey_secret_refs: {file_dir: "+c.dir+"}\n")
+		_, err := Load(p)
+		if c.want == "" && err != nil || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+// KeySecretRefsOf reads key_secret_refs alone, defaulted and checked, with no
+// secret read (Task 8): what `port49 policy test --config` holds a policy to.
+func TestKeySecretRefsOfReadsTheAllowanceAlone(t *testing.T) {
+	got, err := KeySecretRefsOf([]byte("listen: \":49\"\n"))
+	if err != nil || got != secretref.DefaultAllowance {
+		t.Fatalf("no block: %+v, %v", got, err)
+	}
+	got, err = KeySecretRefsOf([]byte("key_secret_refs: {env_prefix: PORT49_ENC_}\n"))
+	if err != nil || got.EnvPrefix != "PORT49_ENC_" || got.FileDir != secretref.DefaultAllowance.FileDir {
+		t.Fatalf("a prefix: %+v, %v", got, err)
+	}
+	for _, bad := range []string{"key_secret_refs: {env_prefix: PORT49_KEY}\n", "key_secret_refs: {file_dir: keys}\n",
+		"key_secret_refs: {file_dirr: /k}\n"} {
+		if _, err := KeySecretRefsOf([]byte(bad)); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+// A secret pasted where an env: name goes parses as a name, so no error from
+// port49d.yaml's own references, or the broker's bind password, names the
+// variable (plan 6a Task 15; Task 9 re-review I1).
+func TestAPastedSecretAsAnEnvNameIsNeverPrinted(t *testing.T) {
+	const pasted = "FAKEtoken0123456789abcdef0123456789abcdef"
+	c := Config{Secrets: secretref.New(), secrets: map[string]secretref.Secret{}}
+	for name, err := range map[string]error{
+		"resolveInto": c.resolveInto("encryption.current.secret_ref", "env:"+pasted),
+		"ResolveSecret": func() error {
+			_, err := Config{}.ResolveSecret("broker.directory.bind.password_secret_ref", "env:"+pasted)
+			return err
+		}(),
+	} {
+		if err == nil || strings.Contains(err.Error(), "FAKEtoken") {
+			t.Errorf("%s: the refusal is missing, or names the pasted variable", name)
+		}
+	}
+}
+
+// limits.max_connections is 0 (size it at start) or 64 to 1048576.
+func TestMaxConnectionsIsBounded(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, c := range []struct {
+		value string
+		ok    bool
+	}{{"0", true}, {"64", true}, {"1048576", true}, {"10", false}, {"-1", false}, {"1048577", false}} {
+		body := strings.Replace(fmt.Sprintf(sample, invPath), "limits: {per_nas_connections: 4}",
+			"limits: {per_nas_connections: 4, max_connections: "+c.value+"}", 1)
+		cfg, err := Load(write(t, "m.yaml", body))
+		if c.ok != (err == nil) {
+			t.Fatalf("max_connections %s: %v", c.value, err)
+		}
+		if err == nil && cfg.Limits.MaxConnections != map[string]int{"0": 0, "64": 64, "1048576": 1048576}[c.value] {
+			t.Fatalf("max_connections %s resolved to %d", c.value, cfg.Limits.MaxConnections)
+		}
+		if err != nil && !strings.Contains(err.Error(), "limits.max_connections") {
+			t.Fatalf("max_connections %s: unhelpful error %v", c.value, err)
+		}
+	}
+}
+
+// safeTemp is a fresh directory only its owner can write, whatever the umask:
+// the fence refuses a file under any directory others can write.
+func safeTemp(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

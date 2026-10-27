@@ -137,10 +137,10 @@ func TestRegionNoteShape(t *testing.T) {
 func TestPidWrapRunsAndRecordsTheExecedPID(t *testing.T) {
 	dir := t.TempDir()
 	pidfile, envfile, out := filepath.Join(dir, "p.pid"), filepath.Join(dir, "run.env"), filepath.Join(dir, "out")
-	if err := os.WriteFile(envfile, []byte("L74_ENC_KEY=abc123\nL74_TACACS_KEY=def456\n"), 0o600); err != nil {
+	if err := os.WriteFile(envfile, []byte("L74_ENC_KEY=abc123\nPORT49_KEY_L74=def456\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	a := pidWrap(pidfile, envfile, []string{"sh", "-c", `printf '%s %s' "$L74_ENC_KEY" "$L74_TACACS_KEY" > "$0"; sleep 30`, out})
+	a := pidWrap(pidfile, envfile, []string{"sh", "-c", `printf '%s %s' "$L74_ENC_KEY" "$PORT49_KEY_L74" > "$0"; sleep 30`, out})
 	cmd := exec.Command(a[0], a[1:]...)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -180,7 +180,7 @@ func TestRegionProcArgvHoldsNoKeyValue(t *testing.T) {
 		t.Fatalf("the env file is not a 0600 file: %v", err)
 	}
 	body, _ := os.ReadFile(envfile)
-	if !strings.Contains(string(body), "L74_ENC_KEY="+shellQuote(enc)) || !strings.Contains(string(body), "L74_TACACS_KEY="+shellQuote(tac)) {
+	if !strings.Contains(string(body), "L74_ENC_KEY="+shellQuote(enc)) || !strings.Contains(string(body), "PORT49_KEY_L74="+shellQuote(tac)) {
 		t.Fatal("the env file lacks a key")
 	}
 	for _, ns := range []string{"p49r1", ""} {
@@ -327,7 +327,7 @@ func TestRegionEnvValuesAreShellInert(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "out")
-	a := pidWrap(filepath.Join(dir, "p.pid"), envfile, []string{"sh", "-c", `printf '%s|%s' "$L74_ENC_KEY" "$L74_TACACS_KEY" > "$0"`, out})
+	a := pidWrap(filepath.Join(dir, "p.pid"), envfile, []string{"sh", "-c", `printf '%s|%s' "$L74_ENC_KEY" "$PORT49_KEY_L74" > "$0"`, out})
 	if err := exec.Command(a[0], a[1:]...).Run(); err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestL75BrokerYAMLHoldsNoSecret(t *testing.T) {
 	if strings.Contains(y, x.d.password) {
 		t.Error("the config holds the directory bind password")
 	}
-	if !strings.Contains(y, "password_env: LAB_DIRECTORY_BIND_PASSWORD") || !strings.Contains(y, "secret_env: L74_ENC_KEY") {
+	if !strings.Contains(y, "password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD") || !strings.Contains(y, "secret_ref: env:L74_ENC_KEY") {
 		t.Error("the config does not name the secrets by environment variable")
 	}
 	if !strings.Contains(y, "https://127.0.0.1:7002") || strings.Contains(y, regionIP(1)+":2379") {

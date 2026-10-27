@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -21,6 +20,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/sot"
 	"github.com/rhwendt/port49/internal/yamlfault"
 )
@@ -88,8 +88,8 @@ type sourceYAML struct {
 	Safety           safetyYAML        `yaml:"safety"`
 	URL              string            `yaml:"url"`
 	CAFile           string            `yaml:"ca_file"`
-	TokenSecretEnv   string            `yaml:"token_secret_env"`
-	WebhookSecretEnv string            `yaml:"webhook_secret_env"`
+	TokenSecretRef   string            `yaml:"token_secret_ref"`
+	WebhookSecretRef string            `yaml:"webhook_secret_ref"`
 	Profile          string            `yaml:"profile"`
 	API              string            `yaml:"api"`
 	PageSize         int               `yaml:"page_size"`
@@ -162,6 +162,12 @@ func Load(path string) (Config, error) {
 	raw, err := config.ReadRegular(path, config.MaxConfigSize)
 	if err != nil {
 		return Config{}, err
+	}
+	if err := yamlfault.Replaced(raw, map[string]string{
+		"token_secret_env":   "token_secret_ref (write token_secret_ref: env:NAME)",
+		"webhook_secret_env": "webhook_secret_ref (write webhook_secret_ref: env:NAME)",
+	}); err != nil {
+		return Config{}, fmt.Errorf("port49-inventory: %s: %w", path, err)
 	}
 	var f fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
@@ -267,6 +273,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("port49-inventory: sync must name at least one sync source")
 	}
 	seen := map[string]bool{}
+	res := secretref.New()
 	for i, s := range f.Sync {
 		if !admission.KeyRefShape.MatchString(s.Name) || seen[s.Name] {
 			return Config{}, fmt.Errorf("port49-inventory: sync[%d].name must be unique, lowercase letters, digits "+
@@ -282,15 +289,15 @@ func Load(path string) (Config, error) {
 			if !filepath.IsAbs(s.Path) {
 				return Config{}, fmt.Errorf("port49-inventory: sync[%d].path must be an absolute path", i)
 			}
-			if s.URL != "" || s.CAFile != "" || s.TokenSecretEnv != "" || s.WebhookSecretEnv != "" || s.Profile != "" ||
+			if s.URL != "" || s.CAFile != "" || s.TokenSecretRef != "" || s.WebhookSecretRef != "" || s.Profile != "" ||
 				s.API != "" || s.PageSize != 0 || s.Filter != nil || s.Map != nil || s.Addresses != nil ||
 				s.PlatformAliases != nil {
-				return Config{}, fmt.Errorf("port49-inventory: sync[%d] (%s): url, ca_file, token_secret_env, "+
-					"webhook_secret_env, profile, api, page_size, filter, map, addresses and platform_aliases are for "+
+				return Config{}, fmt.Errorf("port49-inventory: sync[%d] (%s): url, ca_file, token_secret_ref, "+
+					"webhook_secret_ref, profile, api, page_size, filter, map, addresses and platform_aliases are for "+
 					"netbox and nautobot sources", i, s.Name)
 			}
 		case "netbox", "nautobot":
-			if conn, err = sotSource(i, s); err != nil {
+			if conn, err = sotSource(res, i, s); err != nil {
 				return Config{}, err
 			}
 		default:
@@ -314,13 +321,13 @@ func Load(path string) (Config, error) {
 	// source whose deliveries it can authenticate.
 	for i, s := range c.Sync {
 		if !s.WebhookSecret.Empty() && c.WebhookListen == "" {
-			return Config{}, fmt.Errorf("port49-inventory: sync[%d] (%s): webhook_secret_env is set, and webhook_listen "+
+			return Config{}, fmt.Errorf("port49-inventory: sync[%d] (%s): webhook_secret_ref is set, and webhook_listen "+
 				"is not: no listener would take its deliveries", i, s.Name)
 		}
 	}
 	if c.WebhookListen != "" {
 		if len(c.WebhookSources()) == 0 {
-			return Config{}, fmt.Errorf("port49-inventory: webhook_listen is set, and no source has webhook_secret_env: " +
+			return Config{}, fmt.Errorf("port49-inventory: webhook_listen is set, and no source has webhook_secret_ref: " +
 				"no delivery could be authenticated")
 		}
 		if _, port, err := net.SplitHostPort(c.WebhookListen); err != nil || port == "" {
@@ -362,42 +369,46 @@ func (c Config) Bounds() map[string]int {
 }
 
 var (
-	envNameShape = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	attrShape    = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-	statusShape  = regexp.MustCompile(`^[a-z0-9][a-z0-9 _-]{0,63}$`)
+	attrShape   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	statusShape = regexp.MustCompile(`^[a-z0-9][a-z0-9 _-]{0,63}$`)
 )
 
-// secretFromEnv is the value of the environment variable name, named by key
-// in port49-inventory.yaml. Its errors name key, never the variable or its
-// value (plan 6a Task 15): the value is the secret, and a name is where one
-// gets pasted. A value is min to max printable ASCII characters without a
-// space, so it cannot split a header.
-func secretFromEnv(key, name string, min, max int) (sot.Secret, error) {
-	if name == "" {
+// secretFrom reads the secret text names, at key key (sync[i].token_secret_ref),
+// and holds it to the shape a source's secret has: min to max printable
+// characters with no space, so it cannot split a header. Nothing of the value
+// is quoted, and a malformed reference is named by key alone.
+func secretFrom(res *secretref.Resolver, key, text string, min, max int) (sot.Secret, error) {
+	if text == "" {
 		// Pre-flight M12: absent, not malformed.
 		return sot.Secret{}, fmt.Errorf("port49-inventory: %s is required", key)
 	}
-	if !envNameShape.MatchString(name) {
-		return sot.Secret{}, fmt.Errorf("port49-inventory: %s is not an environment variable name (letters, digits "+
-			"and _)", key)
+	ref, s, err := res.ResolveText(key, text)
+	if err != nil {
+		return sot.Secret{}, fmt.Errorf("port49-inventory: %w", err)
 	}
-	v, ok := os.LookupEnv(name)
-	if !ok || v == "" {
-		return sot.Secret{}, fmt.Errorf("port49-inventory: %s names an environment variable that is unset or empty",
-			key)
-	}
+	v := string(s.Bytes())
 	if len(v) < min || len(v) > max || strings.IndexFunc(v, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
-		return sot.Secret{}, fmt.Errorf("port49-inventory: %s names a variable whose value is not %d to %d printable "+
-			"characters without a space", key, min, max)
+		return sot.Secret{}, fmt.Errorf("port49-inventory: %s names a secret that is not %d to %d printable "+
+			"characters without a space%s", key, min, max, newlineHint(ref))
 	}
 	return sot.NewSecret(v), nil
+}
+
+// newlineHint is what a refusal of a file's secret adds: one trailing newline
+// was dropped, as an echo adds one, and an editor's second counts. Fixed
+// words, never the length.
+func newlineHint(ref secretref.Ref) string {
+	if ref.Scheme == secretref.SchemeFile {
+		return "; a file's one trailing newline is dropped, and any more count"
+	}
+	return ""
 }
 
 // sotSource is a netbox or nautobot entry's connection, secrets and mapping,
 // with decision 31's defaults: api auto, page_size 500, filter status
 // [active], addresses primary. An error names the key at fault; a value is
 // quoted only once it has passed its shape.
-func sotSource(i int, s sourceYAML) (SourceConfig, error) {
+func sotSource(res *secretref.Resolver, i int, s sourceYAML) (SourceConfig, error) {
 	at := fmt.Sprintf("port49-inventory: sync[%d] (%s): ", i, s.Name)
 	fail := func(format string, args ...any) (SourceConfig, error) {
 		return SourceConfig{}, fmt.Errorf(at+format, args...)
@@ -417,12 +428,12 @@ func sotSource(i int, s sourceYAML) (SourceConfig, error) {
 	}
 	c := SourceConfig{URL: s.URL, CAFile: s.CAFile, Profile: s.Profile, API: s.API, PageSize: s.PageSize}
 	var err error
-	if c.Token, err = secretFromEnv(fmt.Sprintf("sync[%d].token_secret_env", i), s.TokenSecretEnv, 1, 512); err != nil {
+	if c.Token, err = secretFrom(res, fmt.Sprintf("sync[%d].token_secret_ref", i), s.TokenSecretRef, 1, 512); err != nil {
 		return SourceConfig{}, err
 	}
-	if s.WebhookSecretEnv != "" {
+	if s.WebhookSecretRef != "" {
 		// 255 is the products' secret field (L27, L30).
-		if c.WebhookSecret, err = secretFromEnv(fmt.Sprintf("sync[%d].webhook_secret_env", i), s.WebhookSecretEnv, 32,
+		if c.WebhookSecret, err = secretFrom(res, fmt.Sprintf("sync[%d].webhook_secret_ref", i), s.WebhookSecretRef, 32,
 			255); err != nil {
 			return SourceConfig{}, err
 		}

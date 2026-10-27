@@ -304,7 +304,7 @@ func notServedBeforeTheFirstLoad(t *testing.T, cutAt, stillAt, loadedAt string) 
 // mark "absent" in a copy that has not loaded.
 func TestNothingIsServedBeforeTheDirectorysMarksLoad(t *testing.T) {
 	notServedBeforeTheFirstLoad(t, "port49-broker: ledger: ",
-		"reading the revocations in force", "revocation(s) in force from the directory store")
+		"reading the marks: store: unavailable", "revocation(s) in force from the directory store")
 }
 
 // Task 9 ruling 1: and the logout set is loaded before the router is handed

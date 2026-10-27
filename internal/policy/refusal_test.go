@@ -37,7 +37,7 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		// Task 11 re-review m5, m6: a tagged scalar and an alias quote the
 		// value too.
 		{"a tagged scalar", "roles:\n  - {name: r, deny: [!!int \"snmp-server community Hunter2\"]}\n" + subjOK,
-			"cannot decode a !!str value as a !!int"},
+			"cannot decode a !!str value as a !!int; look for an explicit !!tag"},
 		{"an unknown anchor", "roles:\n  - {name: r, deny: [*Hunter2]}\n" + subjOK, "an unknown anchor"},
 		// M4: an operator redaction pattern.
 		{"a redaction after of two words", block("redact: [{match: ['**'], after: 'psk Hunter2'}]"),
@@ -45,6 +45,12 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		{"a redaction match word with a slash", block("redact: [{match: [crypto, 'Hunter2/x'], after: psk}]"),
 			"platforms.arista_eos.redact[0]: match word #2: a pattern is words"},
 		// The sweep: every other value a load error used to echo.
+		// A secret pasted into the keys: block: a custom tag, and a value
+		// holding a backtick, which cut the quoted text short.
+		{"a custom tag in keys", roleOK + subjOK + "keys:\n  k:\n    current: !Hunter2 x\n",
+			"cannot decode a value with a custom tag"},
+		{"a backtick in keys", roleOK + subjOK + "keys:\n  k:\n    current: Hunt`er2-pasted-here\n",
+			"cannot unmarshal a !!str value"},
 		{"a subject's enable", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, " +
 			"enable: Hunter2, token_ttl: 60s}\n", `subject "s": enable must be none, auto or token`},
 		{"a subject's api right", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, " +
@@ -74,6 +80,75 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		_, err := Parse([]byte(tt.yaml), env())
 		if err == nil || !strings.Contains(err.Error(), tt.want) || strings.Contains(strings.ToLower(err.Error()), "hunt") {
 			t.Errorf("%s: %v", tt.name, err)
+		}
+	}
+}
+
+// leakShapes are the ways a key pasted where a keys: block names a reference
+// reaches yaml.v3's error text: a quoted value, a backtick in it, a newline
+// in it, a block literal, a custom tag, a secondary-handle tag and a verbatim
+// one (re-review 8, I1). {KEY} is the pasted secret.
+var leakShapes = []string{
+	"{KEY}",
+	"\"`{KEY}\"",
+	"\"`\\n{KEY}\"",
+	"\"a\\n{KEY}\"",
+	"|\n      {KEY}",
+	"|\n      x\n      {KEY}",
+	"!{KEY} x",
+	"!!{KEY} x",
+	"!!{KEY}-x y",
+	"!<{KEY}> x",
+}
+
+// A policy decode error carries a line and a fixed category, never a byte of
+// a value, tag or key the file holds, in any shape yaml.v3 quotes it in.
+func TestADecodeErrorCarriesNoPastedKey(t *testing.T) {
+	// A key of nine bytes or less is echoed whole by yaml.v3, so both lengths.
+	for _, key := range []string{"Wd7ZkP2mRq9TxL4vNc8B", "Wd7ZkP2mR"} {
+		testDecodeErrorCarriesNoKey(t, key)
+	}
+}
+
+func testDecodeErrorCarriesNoKey(t *testing.T, key string) {
+	t.Helper()
+	for _, shape := range leakShapes {
+		body := roleOK + subjOK + "keys:\n  k:\n    current: " + strings.ReplaceAll(shape, "{KEY}", key) + "\n"
+		_, err := Parse([]byte(body), env())
+		if err == nil {
+			t.Errorf("%q parsed", shape)
+			continue
+		}
+		for i := 0; i+4 <= len(key); i++ {
+			if strings.Contains(err.Error(), key[i:i+4]) {
+				t.Errorf("%q: the error carries the key (window %d)", shape, i) // never the text: it holds the key
+				break
+			}
+		}
+	}
+}
+
+// The policy editors read the file as nodes, and a node decode quotes an
+// alias's name when it is unknown: a key pasted as `*KEY` or `<<: *KEY`
+// must not come back in the error `grants remove` and `platform upgrade`
+// print (re-review 8, round 2 I1).
+func TestAPolicyEditorsErrorCarriesNoAliasName(t *testing.T) {
+	const pasted = "Wd7ZkP2mRq9TxL4vNc8B"
+	for _, shape := range []string{"keys:\n  k:\n    current: *{KEY}\n", "keys:\n  k:\n    <<: *{KEY}\n"} {
+		raw := []byte(roleOK + subjOK + strings.ReplaceAll(shape, "{KEY}", pasted))
+		_, _, errRemove := RemoveSubject(raw, "s")
+		_, errSet := SetPlatformSet(raw, "1.0.0")
+		for name, err := range map[string]error{"RemoveSubject": errRemove, "SetPlatformSet": errSet} {
+			if err == nil {
+				t.Errorf("%s accepted %q", name, shape)
+				continue
+			}
+			for i := 0; i+4 <= len(pasted); i++ {
+				if strings.Contains(err.Error(), pasted[i:i+4]) {
+					t.Errorf("%s on %q: the error carries the key", name, shape) // not the error: it holds the key
+					break
+				}
+			}
 		}
 	}
 }

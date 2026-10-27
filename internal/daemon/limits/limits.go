@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	PerNASConnections    int
+	MaxConnections       int // the global cap; 0 sizes it from the open-file limit at start (decision 53 ruling 8)
 	IdleTimeout          time.Duration
 	MalformedBackoffBase time.Duration
 	MalformedBackoffMax  time.Duration

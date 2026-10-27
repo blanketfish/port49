@@ -1199,8 +1199,9 @@ func TestARefusedDeviceIsNotMintedForAndItsContextIsRevoked(t *testing.T) {
 	f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") // an unspent token
 	old := f.b.Policy.Load()
 	// leaf1 keeps its record, and a key group now admits only nx1's range.
-	pol, err := policy.Parse([]byte(testPolicy+"key_groups: [{match: {cidr: 172.100.100.31/32}, key_ref: k}]\n"),
-		policy.Env{Devices: old.Devices(), Now: f.b.Now(), KeyRefs: []string{"k"}})
+	pol, err := policy.Parse([]byte(testPolicy+"key_groups: [{match: {cidr: 172.100.100.31/32}, key_ref: k}]\n"+
+		"keys: {k: {current: {version: 1, secret_ref: \"env:PORT49_KEY_TEST\"}}}\n"),
+		policy.Env{Devices: old.Devices(), Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1261,10 +1262,16 @@ func TestADeviceRemovedFromInventoryIsRevokedAndItsTokensGo(t *testing.T) {
 
 // swap loads body against devs, into a bundle named by fill, and swaps it in
 // as an inventory reload does, returning what the refresh compares against.
-// keyRefs are the keys port49d holds (policy.Env.KeyRefs).
+// keyRefs are the keys the policy's keys: block defines; none declares no block.
 func (f *fixture) swap(t *testing.T, body string, devs []admission.Device, keyRefs []string, fill string) []Prior {
 	t.Helper()
-	pol, err := policy.Parse([]byte(body), policy.Env{Devices: devs, KeyRefs: keyRefs, Now: f.b.Now(),
+	if keyRefs != nil {
+		body += "keys:\n"
+		for _, r := range keyRefs {
+			body += "  " + r + ": {current: {version: 1, secret_ref: \"env:PORT49_KEY_TEST\"}}\n"
+		}
+	}
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: devs, Now: f.b.Now(),
 		Bundle: "sha256:" + strings.Repeat(fill, 64)})
 	if err != nil {
 		t.Fatal(err)

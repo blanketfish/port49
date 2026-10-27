@@ -49,6 +49,9 @@ func BrokerMain(args []string) int {
 	if len(args) > 0 && args[0] == "revoke" {
 		return offlineRevoke(args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && args[0] == "forget-issuer" {
+		return forgetIssuer(args[1:], os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && (args[0] == "init-issuer" || args[0] == "rotate-issuer") {
 		return issuerCmd("port49-broker", args[0], "/etc/port49/port49-broker.yaml", config.LoadBroker, args[1:],
 			os.Stdout, os.Stderr)
@@ -63,7 +66,7 @@ func BrokerMain(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-issuer|rotate-issuer …")
+		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-issuer|rotate-issuer|forget-issuer …")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -97,6 +100,78 @@ type brokerStores struct {
 	fresh     *store.Freshness
 	logouts   *store.LogoutSet
 	logoutRev uint64
+	// issuer is the issuing CA read once at the start: the record is checked
+	// against it and the broker issues from it (decision 53 ruling 10).
+	issuer *loadedIssuer
+}
+
+// startRetryWait is how long a broker start waits before reading again.
+var startRetryWait = 5 * time.Second
+
+// startRetry runs f until it succeeds, ctx ends, or it fails with an error
+// that is neither an outage nor one of also: each wait is said, since
+// nothing is served meanwhile.
+func startRetry(ctx context.Context, out io.Writer, f func() error, also ...error) error {
+	for {
+		err := f()
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		wait := errors.Is(err, store.ErrUnavailable)
+		for _, a := range also {
+			wait = wait || errors.Is(err, a)
+		}
+		if !wait {
+			return err
+		}
+		fmt.Fprintf(out, "port49-broker: %v; nothing is served yet; trying again in %v\n", err, startRetryWait)
+		if !sleepCtx(ctx, startRetryWait) {
+			return ctx.Err()
+		}
+	}
+}
+
+// pagedLoadFault, set by a test, is asked before each try of the load name
+// and its error returned in place of the load's: how a test puts a
+// compaction between pages without racing etcd's compactor. Nil in
+// production.
+var pagedLoadFault func(name string) error
+
+// pagedLoad is startRetry for a load that reads pages at one revision: the
+// ledger's contexts, the marks, the logouts. A compaction between pages
+// reads the whole load again (11a final review N1), after the same wait as
+// an outage, so it never loops hot.
+func pagedLoad(ctx context.Context, out io.Writer, name string, f func() error) error {
+	compacted := 0 // in a row
+	return startRetry(ctx, out, func() error {
+		err := pagedLoadTry(name, f)
+		if err == nil {
+			return nil
+		}
+		err = fmt.Errorf("reading the %s: %w", name, err)
+		if !errors.Is(err, store.ErrCompacted) {
+			compacted = 0
+			return err
+		}
+		// Twice in a row means the load takes longer than etcd keeps
+		// revisions; say once what to change. It keeps trying: nothing is
+		// refused, and the retry line below still names each wait.
+		if compacted++; compacted == 2 {
+			fmt.Fprintf(out, "port49-broker: the %s load keeps meeting a compaction before it finishes: raise "+
+				"etcd's --auto-compaction-retention\n", name)
+		}
+		return err
+	}, store.ErrCompacted)
+}
+
+// pagedLoadTry is one try of the load name: its fault (a test's), else f.
+func pagedLoadTry(name string, f func() error) error {
+	if pagedLoadFault != nil {
+		if err := pagedLoadFault(name); err != nil {
+			return err
+		}
+	}
+	return f()
 }
 
 // openBroker waits for etcd on the broker's identity alone, as port49d's
@@ -120,25 +195,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if err != nil {
 		return brokerStores{}, err
 	}
-	retry := func(f func() error, also ...error) error {
-		for {
-			err := f()
-			if err == nil || ctx.Err() != nil {
-				return err
-			}
-			wait := errors.Is(err, store.ErrUnavailable)
-			for _, a := range also {
-				wait = wait || errors.Is(err, a)
-			}
-			if !wait {
-				return err
-			}
-			fmt.Fprintf(out, "port49-broker: %v; nothing is served yet; trying again in 5s\n", err)
-			if !sleepCtx(ctx, 5*time.Second) {
-				return ctx.Err()
-			}
-		}
-	}
+	retry := func(f func() error, also ...error) error { return startRetry(ctx, out, f, also...) }
 	var bs brokerStores
 	bs.dir = &dirHandle{}
 	fail := func(err error) (brokerStores, error) {
@@ -158,6 +215,19 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		bs.fresh.Need("pins", "logouts")
 	}
 	tellFresh(bs.fresh, m)
+	// issuerCheck holds this broker's issuing CA to the one the store records
+	// (decision 53 ruling 10); nothing to check where it issues nothing.
+	bs.issuer = loadIssuer(cfg, time.Now())
+	held, issues := bs.issuer.held()
+	host, _ := os.Hostname()
+	issuerCheck := func(s *etcdstore.Store, timeout time.Duration) error {
+		if !issues {
+			return nil
+		}
+		c, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return checkIssuerRecord(c, s, held, "port49-broker@"+host, out)
+	}
 	// startChecks is what a directory store of its own passes before it is
 	// used (R27, R28), and the broker writes its key window there.
 	startChecks := func(dirRaw *etcdstore.Store) error {
@@ -165,17 +235,23 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		if err := retry(func() error { return checkTwoStores(ctx, cfg, b, dirRaw, 4*de.CallTimeout) }); err != nil {
 			return err
 		}
-		return retry(func() error {
+		if err := retry(func() error {
 			return checkDirectoryKeys(ctx, "port49-broker", dirRaw, directoryRef(cfg), keys, out, 4*de.CallTimeout, true)
-		})
+		}); err != nil {
+			return err
+		}
+		return retry(func() error { return issuerCheck(dirRaw, 4*de.CallTimeout) })
 	}
 	// snap is the region's snapshot this start serves from when the
 	// directory does not answer (R19); nil when it opened.
 	var snap *snapshotView
 	if cfg.Stores.Shared {
+		if err := retry(func() error { return issuerCheck(b, 4*e.CallTimeout) }); err != nil {
+			return fail(err)
+		}
 		bs.dir.set(b)
 	} else {
-		dirRaw, derr := attempt(ctx, cfg, directoryRef(cfg), m, out)
+		dirRaw, derr := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
 		switch {
 		case derr == nil:
 			sayUnenforced(out, cfg, directoryRef(cfg))
@@ -207,22 +283,22 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	if !cfg.Stores.Shared {
 		markBound = cfg.Stores.Directory.Etcd.BulkTimeout
 	}
-	if err := retry(func() error {
+	if err := pagedLoad(ctx, out, "ledger", func() error {
 		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
 		defer cancel()
 		var known, recorded int
 		var err error
 		bs.ctxRev, known, recorded, err = crypt.LoadLedger(lctx, b, b, keys, ledger)
 		if err != nil {
-			return fmt.Errorf("store: reading the live contexts for the ledger: %w", err)
+			return err
 		}
 		fmt.Fprintf(out, "port49-broker: ledger: %d context key(s) known (%d from the ledger record); following "+
 			"the store from revision %d\n", known, recorded, bs.ctxRev)
 		return nil
-	}, store.ErrCompacted); err != nil {
+	}); err != nil {
 		return fail(err)
 	}
-	if err := retry(func() error {
+	if err := pagedLoad(ctx, out, "marks", func() error {
 		lctx, cancel := context.WithTimeout(ctx, markBound)
 		defer cancel()
 		var feed store.MarkFeed = bs.dir.get()
@@ -231,7 +307,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		var err error
 		if bs.markRev, err = store.LoadMarks(lctx, feed, marks, nil); err != nil {
-			return fmt.Errorf("store: reading the revocations in force: %w", err)
+			return err
 		}
 		return nil
 	}); err != nil {
@@ -263,7 +339,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 				bs.logouts.Put(l) // the union keeps the later of a key's
 			}
 			bs.fresh.Seed(snap.confirmed)
-		} else if err := retry(func() error {
+		} else if err := pagedLoad(ctx, out, "logouts", func() error {
 			lctx, cancel := context.WithTimeout(ctx, de.BulkTimeout)
 			defer cancel()
 			rev, es, err := bs.dir.get().Logouts(lctx)
@@ -441,7 +517,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// The tag key binds a token to the device it was minted for, derived
 	// from the current encryption key as port49d derives the window it
 	// accepts (runOnce).
-	tagKey := token.TagKey(keys.Current.Bytes[:])
+	cur := keys.Current.Bytes()
+	tagKey := token.TagKey(cur[:])
 	// port49_revocations_in_force is the marks this replica enforces, set
 	// before they load, or the gauge reads 0 (final review 7e-1).
 	marks := store.NewMarks()
@@ -487,7 +564,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.Saw) }()
 
 	minter := token.NewMinter(bs.st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
-	brokerSrv, brk, anchors, err := buildBrokerAnchor(cfg, inventoryFrom, bs.st, minter, log, m)
+	brokerSrv, brk, anchors, err := buildBrokerAnchorWith(cfg, inventoryFrom, bs.st, minter, log, m, bs.issuer)
 	if err != nil {
 		return err
 	}
@@ -693,6 +770,13 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if cfg.Stores.Shared {
 		close(ready)
 	} else {
+		// The record the CA is held to is in the directory: until it answers
+		// and the check passes, no certificate is issued. Said once here.
+		if _, issues := bs.issuer.held(); issues && bs.dir.get() == nil {
+			brk.HoldIssuance()
+			fmt.Fprintln(stderr, "port49-broker: issuance waits for the directory store, where the issuing CA's record "+
+				"is checked; until it answers, certificates are refused (503 issuance_unavailable)")
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -702,7 +786,19 @@ func runBroker(parent context.Context, cfgPath string) error {
 					if err := checkTwoStores(ctx, cfg, bs.raw, s, 4*de.CallTimeout); err != nil {
 						return err
 					}
-					return checkDirectoryKeys(ctx, "port49-broker", s, directoryRef(cfg), keys, stderr, 4*de.CallTimeout, true)
+					if err := checkDirectoryKeys(ctx, "port49-broker", s, directoryRef(cfg), keys, stderr, 4*de.CallTimeout, true); err != nil {
+						return err
+					}
+					if held, issues := bs.issuer.held(); issues {
+						host, _ := os.Hostname()
+						c, cancel := context.WithTimeout(ctx, 4*de.CallTimeout)
+						defer cancel()
+						if err := checkIssuerRecord(c, s, held, "port49-broker@"+host, stderr); err != nil {
+							return err
+						}
+						brk.ReleaseIssuance()
+					}
+					return nil
 				}); err != nil {
 					if ctx.Err() == nil {
 						dirErr <- err // ends the run: the process exits 1 saying it

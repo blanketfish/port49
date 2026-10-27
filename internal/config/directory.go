@@ -13,6 +13,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/secretref"
 )
 
 type serverYAML struct {
@@ -23,14 +24,14 @@ type serverYAML struct {
 }
 
 type bindYAML struct {
-	Mechanism   string `yaml:"mechanism"`
-	TLSCertFile string `yaml:"tls_cert_file"`
-	TLSKeyFile  string `yaml:"tls_key_file"`
-	KeytabFile  string `yaml:"keytab_file"`
-	Principal   string `yaml:"principal"`
-	KRB5Conf    string `yaml:"krb5_conf"`
-	BindDN      string `yaml:"bind_dn"`
-	PasswordEnv string `yaml:"password_env"`
+	Mechanism         string `yaml:"mechanism"`
+	TLSCertFile       string `yaml:"tls_cert_file"`
+	TLSKeyFile        string `yaml:"tls_key_file"`
+	KeytabFile        string `yaml:"keytab_file"`
+	Principal         string `yaml:"principal"`
+	KRB5Conf          string `yaml:"krb5_conf"`
+	BindDN            string `yaml:"bind_dn"`
+	PasswordSecretRef string `yaml:"password_secret_ref"`
 }
 
 type mappingYAML struct {
@@ -169,16 +170,16 @@ func checkDirectory(y directoryYAML, getenv func(string) string, x509Human bool)
 			return nil, fmt.Errorf("config: %s%s %q: %v", p, dn.key, dn.v, err)
 		}
 	}
-	b, err := checkBind(y.Bind, getenv)
+	b, err := checkBind(y.Bind)
 	if err != nil {
 		return nil, err
 	}
 	d.Bind = b
 	// The site is logged as auth.directory.site: a password must never be
 	// read from the variable it comes from.
-	if b.PasswordEnv != "" && b.PasswordEnv == or(y.SiteEnv, "PORT49_SITE") {
-		return nil, fmt.Errorf("config: %ssite_env %s is also bind.password_env: the site is logged, a password "+
-			"never is; name different variables", p, b.PasswordEnv)
+	if b.PasswordRef != "" && b.PasswordRef == "env:"+or(y.SiteEnv, "PORT49_SITE") {
+		return nil, fmt.Errorf("config: %ssite_env %s is also the password's variable: the site is logged, a "+
+			"password never is; name different variables", p, or(y.SiteEnv, "PORT49_SITE"))
 	}
 	if cm := y.CertificateMapping; x509Human || cm.Kind != "" || cm.Attribute != "" || cm.AllowWeak || len(cm.Issuers) > 0 {
 		m, err := checkMapping(cm)
@@ -251,11 +252,11 @@ func checkDirectory(y directoryYAML, getenv func(string) string, x509Human bool)
 	return d, nil
 }
 
-func checkBind(b bindYAML, getenv func(string) string) (directory.Bind, error) {
+func checkBind(b bindYAML) (directory.Bind, error) {
 	const p = "broker.directory.bind."
 	out := directory.Bind{Mechanism: directory.BindMechanism(b.Mechanism), TLSCertFile: b.TLSCertFile,
 		TLSKeyFile: b.TLSKeyFile, KeytabFile: b.KeytabFile, Principal: b.Principal, KRB5Conf: b.KRB5Conf,
-		BindDN: b.BindDN, PasswordEnv: b.PasswordEnv}
+		BindDN: b.BindDN, PasswordRef: b.PasswordSecretRef}
 	switch b.Mechanism {
 	case "external":
 		if b.TLSCertFile == "" || b.TLSKeyFile == "" {
@@ -277,11 +278,13 @@ func checkBind(b bindYAML, getenv func(string) string) (directory.Bind, error) {
 			}
 		}
 	case "simple":
-		if b.BindDN == "" || b.PasswordEnv == "" {
-			return out, fmt.Errorf("config: %sbind_dn and password_env are required for simple", p)
+		if b.BindDN == "" || b.PasswordSecretRef == "" {
+			return out, fmt.Errorf("config: %sbind_dn and password_secret_ref are required for simple", p)
 		}
-		if getenv(b.PasswordEnv) == "" {
-			return out, fmt.Errorf("config: %spassword_env %s is not set", p, b.PasswordEnv)
+		// The password is read when the directory opens, not here: a file the
+		// agent has not rendered yet must not stop a config check.
+		if _, err := secretref.Parse(b.PasswordSecretRef); err != nil {
+			return out, fmt.Errorf("config: %spassword_secret_ref %w", p, err)
 		}
 	case "":
 		return out, fmt.Errorf("config: %smechanism is required: external, gssapi or simple", p)

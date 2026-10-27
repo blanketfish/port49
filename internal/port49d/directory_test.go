@@ -49,7 +49,7 @@ func directoryCfg(mech string) *directory.Config {
 		d.Bind = directory.Bind{Mechanism: "gssapi", KeytabFile: "/etc/port49/svc.keytab",
 			Principal: "svc-port49@CORP.EXAMPLE", KRB5Conf: "/etc/port49/krb5.conf"}
 	case "simple":
-		d.Bind = directory.Bind{Mechanism: "simple", BindDN: "cn=svc,dc=corp,dc=example", PasswordEnv: "T_DIR_BIND_PW"}
+		d.Bind = directory.Bind{Mechanism: "simple", BindDN: "cn=svc,dc=corp,dc=example", PasswordRef: "env:T_DIR_BIND_PW"}
 	}
 	return d
 }
@@ -113,7 +113,7 @@ func TestASimpleBindIsSaidAsTheWeakest(t *testing.T) {
 	}
 	got := out.String()
 	if !strings.Contains(got, "bind simple as cn=svc,dc=corp,dc=example: the weakest of the three") ||
-		!strings.Contains(got, "read from T_DIR_BIND_PW") {
+		!strings.Contains(got, "read from env:T_DIR_BIND_PW") {
 		t.Errorf("the weakest bind is not said:\n%s", got)
 	}
 	if strings.Contains(got, secretBindValue) {
@@ -130,7 +130,7 @@ subjects:
   - {name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}
   - {name: netops, group: netops-ro, token_ttl: 5m}
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: netops, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 	cfg := brokerConfig(t, body)
 	var out syncBuffer
 	announceDirectory(&out, "port49d", cfg, buildPolicy(t, cfg, body))
@@ -147,7 +147,7 @@ scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // buildPolicy is body compiled for cfg as a start compiles it.
 func buildPolicy(t *testing.T, cfg config.Config, body string) *policy.Policy {
@@ -364,10 +364,12 @@ func TestTheDutiesRunWithoutADirectory(t *testing.T) {
 // (pre-flight M-3).
 func TestABindCredentialThatDoesNotLoadStopsTheStart(t *testing.T) {
 	t.Setenv("T_DIR_BIND_PW", "")
+	os.Unsetenv("T_DIR_BIND_PW")
 	cfg := brokerConfig(t, directoryPolicy)
 	cfg.Broker.Directory = directoryCfg("simple")
 	err := buildWith(cfg)
-	if err == nil || !strings.Contains(err.Error(), "broker.directory.bind.password_env T_DIR_BIND_PW is not set") {
+	if err == nil || !strings.Contains(err.Error(), "broker.directory.bind.password_secret_ref the environment variable it names is not set") ||
+		strings.Contains(err.Error(), "T_DIR_BIND_PW") {
 		t.Fatalf("a missing password variable: %v", err)
 	}
 	cfg.Broker.Directory = directoryCfg("gssapi")

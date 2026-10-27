@@ -2058,11 +2058,10 @@ func TestLoginTokenAtEnableIsKindMismatch(t *testing.T) {
 // with v1 as previous. What changes between the two halves is only which tag
 // keys the handler accepts.
 func TestRotatedEncryptionKeyKeepsItsTagUntilItLeavesTheWindow(t *testing.T) {
-	var v1, v2 crypt.Key
-	v1.ID, v2.ID = "v1", "v2"
-	copy(v1.Bytes[:], "rotation-test-key-one-32-bytes!!")
-	copy(v2.Bytes[:], "rotation-test-key-two-32-bytes!!")
-	tagV1, tagV2 := token.TagKey(v1.Bytes[:]), token.TagKey(v2.Bytes[:])
+	v1 := crypt.NewKey("v1", [32]byte([]byte("rotation-test-key-one-32-bytes!!")))
+	v2 := crypt.NewKey("v2", [32]byte([]byte("rotation-test-key-two-32-bytes!!")))
+	b1, b2 := v1.Bytes(), v2.Bytes()
+	tagV1, tagV2 := token.TagKey(b1[:]), token.TagKey(b2[:])
 	secret := token.Tag(tagV1, "leaf-01") + "tok1tok1tok1tok1tok1tok1"
 
 	// One store, two views of it: v1 current at mint, v2 current with v1
@@ -2338,10 +2337,8 @@ func TestAContextReadErrorFailsTheLoginBeforeTheTokenIsSpent(t *testing.T) {
 // because that id is sealed — and the login is refused credential_revoked,
 // because the context it wrote is revoked (spec §5.6).
 func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
-	var v0, v2 crypt.Key
-	v0.ID, v2.ID = "v0", "v2"
-	copy(v0.Bytes[:], "retired-context-key-v0-32-bytes!")
-	copy(v2.Bytes[:], "current-context-key-v2-32-bytes!")
+	v0 := crypt.NewKey("v0", [32]byte([]byte("retired-context-key-v0-32-bytes!")))
+	v2 := crypt.NewKey("v2", [32]byte([]byte("current-context-key-v2-32-bytes!")))
 	var sealed store.Store
 	f := setupStore(t, func(st *memory.Store) store.Store {
 		sealed = crypt.Wrap(st, crypt.Keys{Current: v2}, nil)
@@ -2389,10 +2386,8 @@ func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 // a back-channel logout of that sid hours later revokes whoever logged in
 // since.
 func TestAnUnreadableReplaceUnindexesWhatItDisplaced(t *testing.T) {
-	var v0, v2 crypt.Key
-	v0.ID, v2.ID = "v0", "v2"
-	copy(v0.Bytes[:], "retired-context-key-v0-32-bytes!")
-	copy(v2.Bytes[:], "current-context-key-v2-32-bytes!")
+	v0 := crypt.NewKey("v0", [32]byte([]byte("retired-context-key-v0-32-bytes!")))
+	v2 := crypt.NewKey("v2", [32]byte([]byte("current-context-key-v2-32-bytes!")))
 	var sealed store.Store
 	f := setupStore(t, func(st *memory.Store) store.Store {
 		sealed = crypt.Wrap(st, crypt.Keys{Current: v2}, nil)

@@ -45,18 +45,23 @@ type Deps struct {
 	// with no broker. It is asked at every packet, with Now, because a grant's
 	// expiry can start or end a quarantine while a connection is open.
 	Quarantined func(device string, now time.Time) (cause string, ok bool)
-	Keys        map[string]keyring.Set
+	// Keys is the key set in force for a key_ref: the policy's, re-read at each
+	// reload (decision 53), or port49d.yaml's with no policy; nil holds none.
+	Keys func(keyRef string) keyring.Set
 	// KeySeen marks the key version each admitted device's connection
 	// validated under (keyring.Seen.Mark); nil marks nothing.
 	KeySeen func(device, keyRef string, version int)
 	// Held keeps each admitted device's last unvalidated packet for `port49
 	// keys diagnose` (spec §10); nil keeps nothing. port49d sets it only with
 	// admin_socket configured.
-	Held        *keyring.Held
-	Authen      *authen.Handler
-	Author      *author.Handler
-	Acct        *acct.Handler
-	Limits      *limits.Limiter
+	Held   *keyring.Held
+	Authen *authen.Handler
+	Author *author.Handler
+	Acct   *acct.Handler
+	Limits *limits.Limiter
+	// Slots is the global connection cap shared by every listener (decision 53
+	// ruling 8); nil is no cap.
+	Slots       *Slots
 	Metrics     *metrics.Metrics
 	Log         decision.Emitter
 	Now         func() time.Time
@@ -80,6 +85,15 @@ type Deps struct {
 	offers *offers
 }
 
+// keysFor is Keys(ref), or no key set when Keys is nil (a TLS-only or test
+// Deps), as a nil map's read was.
+func (d Deps) keysFor(ref string) keyring.Set {
+	if d.Keys == nil {
+		return keyring.Set{}
+	}
+	return d.Keys(ref)
+}
+
 func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	var wg sync.WaitGroup
 	closed := make(chan struct{})
@@ -96,6 +110,8 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 	}()
 
 	var lastAcceptLog time.Time
+	// Resolved once: a flood of sheds is many Accepts, none worth a label lookup.
+	shed := d.Metrics.ConnectionsShed.WithLabelValues("global_cap")
 	offered := d.offers
 	if offered == nil {
 		offered = newOffers()
@@ -183,6 +199,23 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			}
 			d.Limits.Undecline(src)
 		}
+		// The global cap (decision 53 ruling 8), taken last so the per-source
+		// limits bind first (design §11). A full pool sheds: reset at once, so
+		// the device moves to its next server now rather than after its own
+		// timeout (L28), counted, and said when shedding begins.
+		slot, ok := d.Slots.TryAcquire()
+		if !ok {
+			release()
+			shed.Inc()
+			if line := d.Slots.Shed(); line != "" {
+				log.Print(line)
+			}
+			reset(c)
+			c.Close()
+			continue
+		}
+		srcRelease := release
+		release = func() { srcRelease(); slot() }
 		// A device port49 offered single-connect to keeps the one connection
 		// while it honors the offer. A second one served while an offered one
 		// is open says it ignored it: counted here, once the connection is
@@ -191,13 +224,14 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		if d.TLS != nil && admitted && offered.any(src) && platform.TLSServerSingleConnect(wirePlatform(dev)) {
 			d.Metrics.ConnectionEvents.WithLabelValues("single_connect_second_connection").Inc()
 		}
-		d.Metrics.Connections.WithLabelValues("open").Inc()
-
 		cc := &conn{d: d, c: c, raw: c, src: src, dev: dev, admitted: admitted, mismatch: mismatch,
 			refused: found && dev.Refused != "", offers: offered, sessions: map[uint32]*authen.Session{}}
 		if cc.admitted && !mismatch && d.TLS == nil {
-			cc.keys = d.Keys[dev.KeyRef]
+			cc.keys = d.keysFor(dev.KeyRef)
 		}
+		// Counted open once the Accept-time key set is held: a reload that
+		// lands after the count is therefore after the set it is judged by.
+		d.Metrics.Connections.WithLabelValues("open").Inc()
 
 		wg.Add(1)
 		go func() {
@@ -236,7 +270,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 						reset(c)
 						c.Close()
 					} else if tc := cc.tlsc.Load(); tc != nil {
-						tc.Close()
+						cc.closeTLSAtShutdown(tc)
 					} else {
 						c.Close()
 					}

@@ -82,7 +82,7 @@ func TestTheSealingLayerOverEtcdHoldsEveryProperty(t *testing.T) {
 	}, RaceRounds: backend.RaceRounds, Stagger: backend.Stagger})
 }
 
-var sealKeys = crypt.Keys{Current: crypt.Key{ID: "k1", Bytes: [32]byte{1}}}
+var sealKeys = crypt.Keys{Current: crypt.NewKey("k1", [32]byte{1})}
 
 // Every enrollment property against etcd, bare and through the sealing layer
 // (plan 9e, Task 4).

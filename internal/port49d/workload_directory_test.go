@@ -96,7 +96,7 @@ subjects:
   - {name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}
   - {name: backup_hosts, machine_group: backup-hosts, token_ttl: 5m}
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: backup_hosts, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 	want := "port49d: policy: 1 machine_group subjects (backup_hosts) mint for no one: no " +
 		"broker.identity.machines[].directory is configured\n"
 	cfg := brokerConfig(t, body)

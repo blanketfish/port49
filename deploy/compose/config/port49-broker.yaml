@@ -2,9 +2,8 @@
 # container (broker-etc, mounted read-only at /etc/port49).
 metrics_listen: ":9050"
 inventory_file: /etc/port49/inventory.yaml
-key_refs: [k]
 encryption:
-  current: {id: c1, secret_env: PORT49_ENC_KEY}
+  current: {id: c1, secret_ref: env:PORT49_ENC_KEY}
 admin_socket: /run/port49/port49-broker.sock
 broker:
   listen: ":8443"

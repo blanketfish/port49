@@ -13,6 +13,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -34,8 +35,10 @@ func TestKeysDiagnoseAsksTheAdminSocket(t *testing.T) {
 	h.Length = uint32(len(body))
 	held.Put("leaf-19", netip.MustParseAddr("10.20.4.9"), h, wire.Obfuscate(h, []byte("S3CR3T-OLD"), body), now.Add(-time.Minute))
 	srv := &admin.Server{Held: held, Now: func() time.Time { return now },
-		Keys: map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
-			{Number: 3, Secret: []byte("S3CR3T-NEW")}, {Number: 2, Secret: []byte("S3CR3T-OLD"), Retired: true}}}},
+		Keys: func() map[string]keyring.Set {
+			return map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+				{Number: 3, Secret: secretref.Of([]byte("S3CR3T-NEW"))}, {Number: 2, Secret: secretref.Of([]byte("S3CR3T-OLD")), Retired: true}}}}
+		},
 		Assigned: func(string) string { return "prod_key" }}
 	go srv.Serve(ctx, ln)
 

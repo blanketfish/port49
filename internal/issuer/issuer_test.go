@@ -440,3 +440,27 @@ func TestEachMethodIsHeldToItsRules(t *testing.T) {
 		}
 	}
 }
+
+// CA.Previous is the previous CA, set only when issuing-ca-previous.pem is
+// present and valid: the record of the issuing CA follows a promotion by it.
+func TestLoadSetsThePreviousCA(t *testing.T) {
+	now := time.Now()
+	m := files(t, now)
+	if c, _ := Load(Mem(m), now); c.Previous != nil {
+		t.Fatal("a previous CA with no file")
+	}
+	prev := files(t, now)
+	m[PreviousCertFile] = prev[CertFile]
+	c, _ := Load(Mem(m), now)
+	if c.Previous == nil || Fingerprint(c.Previous) == Fingerprint(c.Cert) {
+		t.Fatalf("previous %v", c.Previous)
+	}
+	m[PreviousCertFile] = []byte("not a certificate")
+	if c, _ = Load(Mem(m), now); c.Previous != nil {
+		t.Fatal("an unusable previous CA was kept")
+	}
+	m[PreviousCertFile] = prev[CertFile]
+	if c, _ = Load(Mem(m), now.Add(caLife+time.Hour)); c.Previous != nil {
+		t.Fatal("an expired previous CA was kept")
+	}
+}

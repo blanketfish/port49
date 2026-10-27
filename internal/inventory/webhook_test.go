@@ -130,7 +130,7 @@ func TestAnUnsignedOrMisSignedDeliveryTriggersNothing(t *testing.T) {
 	log := rig.out.String()
 	if strings.Count(log, "(bad_signature)") != 1 || strings.Count(log, "(unsigned)") != 1 ||
 		!strings.Contains(log, "port49-inventory: webhook: refused a delivery for source netbox_prod from 10.0.0.9 "+
-			"(bad_signature): the webhook's secret in the source must be the value webhook_secret_env names") {
+			"(bad_signature): the webhook's secret in the source must be the value webhook_secret_ref names") {
 		t.Fatalf("%s", log)
 	}
 	for _, leak := range []string{hookSecret, bad, "leaf-01", "updated"} {

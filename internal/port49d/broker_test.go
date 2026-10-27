@@ -30,6 +30,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
@@ -56,7 +57,7 @@ func brokerConfigWith(t *testing.T, policyBody string, others []string) config.C
 	}
 	cfg := config.Config{
 		Session:   config.SessionConfig{MaxSessionAgeDefault: time.Hour},
-		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretEnv: "UNUSED"}}},
+		Keys:      map[string]keyset.Set{"lab_key": {Current: keyset.Version{Version: 1, SecretRef: "env:UNUSED"}}},
 		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),
@@ -110,7 +111,7 @@ scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 // sharedUsernamePolicy is minimalPolicy with bob as a second identity of
 // alice's subject: the two log in under one username, so one context key
@@ -120,7 +121,7 @@ scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com", "user:bob@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
-`
+` + runKeys
 
 func buildWith(cfg config.Config) error {
 	_, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
@@ -269,7 +270,7 @@ subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, toke
 grants:
   - {subject: s, scope: all_devices, roles: [op]}
   - {subject: s, scope: all_devices, roles: [adm], expires: `+lapse.Format(time.RFC3339)+`}
-`), "inventory_file", memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+`+runKeys), "inventory_file", memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,6 +454,7 @@ key_groups:
 func writeRunConfigWith(t *testing.T, b *config.BrokerConfig, inventory, extra string) string {
 	t.Helper()
 	t.Setenv("T_RUN_SECRET", "run-test-secret")
+	t.Setenv("PORT49_KEY_RUN", "run-test-secret")
 	t.Setenv("T_RUN_ENC", "33333333333333333333333333333333")
 	// safeDir: the inventory is read behind the policy file's fence.
 	dir := safeDir(t)
@@ -465,11 +467,8 @@ func writeRunConfigWith(t *testing.T, b *config.BrokerConfig, inventory, extra s
 listen: "127.0.0.1:0"
 metrics_listen: "127.0.0.1:0"
 inventory_file: %s
-keys:
-  k:
-    current: {version: 1, secret_env: T_RUN_SECRET}
 encryption:
-  current: {id: v1, secret_env: T_RUN_ENC}
+  current: {id: v1, secret_ref: env:T_RUN_ENC}
 accounting: {spool_path: %s}
 broker:
   listen: %q
@@ -543,6 +542,40 @@ func TestThePolicyOnlyDaemonAdmitsALogin(t *testing.T) {
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	if st := dev.login("alice", seed.Login); st != wire.AuthenStatusPass {
 		t.Fatalf("the split daemon's login: status %d", st)
+	}
+}
+
+// A policy with no keys: block is refused at start by port49d (port49-broker
+// shares startPolicy, which the same refusal passes through): it is the one place port49 learns key names (decision 53
+// ruling 3). One with a block says its notices at start (pre-flight I8).
+func TestAPolicyWithNoKeysBlockRefusesTheStart(t *testing.T) {
+	b := brokerConfig(t, minimalPolicy).Broker
+	writePolicyFile(t, b.PolicyFile, strings.Replace(minimalPolicy, runKeys, "", 1))
+	if _, err := runExpectingRefusal(t, writeRunConfig(t, b)); err == nil || !strings.Contains(err.Error(), "declares no keys: block") {
+		t.Fatalf("a policy with no keys: block started: %v", err)
+	}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	writePolicyFile(t, b.PolicyFile, strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 2, secret_ref: env:PORT49_KEY_RUN}\n"+
+		"    accept: [{version: 1, secret_ref: env:PORT49_KEY_RUN}]\n"+labKeyRun, 1))
+	startSplitDaemon(t, func() string {
+		cfgPath := writeRunConfig(t, b)
+		raw, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(raw)
+		body = body[:strings.Index(body, "broker:\n")] + "policy: {file: " + b.PolicyFile + ", watch_interval: 1s}\n" +
+			"inventory: {max_removed_percent: 100}\n"
+		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return cfgPath
+	}(), &out, 1)
+	if !strings.Contains(out.String(), "key k version 1 has no retire_after") {
+		t.Fatalf("the start does not say its key notices:\n%s", out.String())
 	}
 }
 
@@ -654,9 +687,9 @@ func TestAStartAdmittingNoneAdvisesInTheProcessesOwnTerms(t *testing.T) {
 		role        config.Role
 		has, hasNot []string
 	}{
-		{config.RoleDaemon, []string{"the key_refs port49d.yaml defines", "to take the whole fleet off deliberately, stop port49d"},
+		{config.RoleDaemon, []string{bundle.KeyRefsFile, "to take the whole fleet off deliberately, stop port49d"},
 			[]string{"port49-broker", "stop every port49d"}},
-		{config.RoleBroker, []string{"the key_refs port49-broker.yaml defines",
+		{config.RoleBroker, []string{bundle.KeyRefsFile,
 			"to take the whole fleet off deliberately, stop every port49d (port49-broker serves no device)"},
 			[]string{"port49d.yaml", "stop port49d"}},
 	} {

@@ -31,7 +31,7 @@ func withDirectoryBlock(t *testing.T, cfg string) string {
     servers:
       - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
     ca_file: `+ca+`
-    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_secret_ref: env:PORT49_LDAP_PASSWORD}
     base_dn: "DC=corp,DC=example,DC=com"
     certificate_mapping: {kind: issuer_serial}
     nested_groups: in_chain

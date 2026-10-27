@@ -21,7 +21,11 @@ const brokerBlock = `broker:
 func loadWith(t *testing.T, extra string) (Config, error) {
 	t.Helper()
 	setKeyEnv(t)
-	return Load(write(t, "port49d.yaml", fmt.Sprintf(sample, write(t, "inv.yaml", inv))+extra))
+	body := fmt.Sprintf(sample, write(t, "inv.yaml", inv)) + extra
+	if strings.Contains(extra, "broker:") || strings.Contains(extra, "policy:") {
+		body = withPolicy(body)
+	}
+	return Load(write(t, "port49d.yaml", body))
 }
 
 func TestNoBrokerBlockIsNoBroker(t *testing.T) {

@@ -569,20 +569,20 @@ func (l *labDir) aliceSID(t *testing.T) string {
 // Configuration, the broker's way: directory.Config, NewDialer, Pool, Resolver
 // ---------------------------------------------------------------------------
 
-// getenvOf is the lookup LoadCredentials reads a simple bind's password
-// through: the run's generated password under the name the config gives.
-func getenvOf(password string) func(string) string {
-	return func(name string) string {
-		if name == "LAB_DIRECTORY_BIND_PASSWORD" {
-			return password
+// getenvOf is the resolver LoadCredentials reads a simple bind's password
+// through: the run's generated password under the reference the config gives.
+func getenvOf(password string) func(string) ([]byte, error) {
+	return func(ref string) ([]byte, error) {
+		if ref == "env:LAB_DIRECTORY_BIND_PASSWORD" {
+			return []byte(password), nil
 		}
-		return ""
+		return nil, fmt.Errorf("%s: the variable is not set", ref)
 	}
 }
 
 // bindSimple is the broker's simple bind over LDAPS.
 func (l *labDir) bindSimple() directory.Bind {
-	return directory.Bind{Mechanism: "simple", BindDN: l.bindDN, PasswordEnv: "LAB_DIRECTORY_BIND_PASSWORD"}
+	return directory.Bind{Mechanism: "simple", BindDN: l.bindDN, PasswordRef: "env:LAB_DIRECTORY_BIND_PASSWORD"}
 }
 
 // viaStartTLS is l as port49 reaches it over StartTLS on the plain LDAP port.

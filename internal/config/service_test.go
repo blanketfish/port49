@@ -27,6 +27,9 @@ func loadService(t *testing.T, withFile, withBroker bool, block string) (Config,
 	if withBroker {
 		body += brokerBlock
 	}
+	if withBroker || strings.Contains(block, "policy:") || strings.Contains(block, "broker:") {
+		body = withPolicy(body)
+	}
 	return Load(write(t, "port49d.yaml", body+block))
 }
 

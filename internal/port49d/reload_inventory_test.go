@@ -15,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -405,7 +406,7 @@ func TestAPolicyThatAdmitsNoDeviceAdvisesPort49BrokerInItsOwnTerms(t *testing.T)
 	rig.sighupWithBound(t, 100)
 	out := rig.out.String()
 	if !strings.Contains(out, "the new policy admits none of the 2 device(s)") ||
-		!strings.Contains(out, "the key_refs port49-broker.yaml defines") ||
+		!strings.Contains(out, bundle.KeyRefsFile) ||
 		!strings.Contains(out, "to take the whole fleet off deliberately, stop every port49d (port49-broker serves no device)") ||
 		strings.Contains(out, "port49d.yaml") || strings.Contains(out, "stop port49d") {
 		t.Fatalf("the refusal: %s", out)

@@ -427,11 +427,8 @@ func k8sBrokerFiles(dir, pki string, vs []k8sVerifier) (cfg, policy, inventory s
 metrics_listen: "127.0.0.1:0"
 inventory_file: %s
 admin_socket: %s
-keys:
-  lab_key:
-    current: {version: 1, secret_env: PORT49_LAB_KEY}
 encryption:
-  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}
+  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %s}
 token: {candidate_cap: %d}
 broker:
@@ -461,6 +458,9 @@ grants:
   - {subject: svc_backup, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: lab_key}
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: env:PORT49_KEY_LAB}
 `, l69SA)
 	inventory = fmt.Sprintf("devices:\n  - {name: %s, platform: arista_eos, addresses: [127.0.0.1]}\n", l48Device)
 	return cfg, policy, inventory

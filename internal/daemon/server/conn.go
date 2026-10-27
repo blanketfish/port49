@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,14 +33,12 @@ const maxLiveSessions = 64
 // unadmittedHeaderDeadline bounds how long a source that is not in the
 // inventory may hold a connection before sending its first header. An
 // admitted device gets the configured idle timeout; an unadmitted one has no
-// claim on it, and today the only global connection cap is EMFILE — the worst
-// one there is, since it refuses admitted devices too and fails the
-// accounting spool's own file open. Thirty seconds times the per-source cap,
-// per address, is a cheap way to sit on descriptors. Admission is already
-// known at Accept, so this costs nothing to apply.
+// claim on it. Thirty seconds times the per-source cap, per address, is a
+// cheap way to sit on descriptors. Admission is already known at Accept, so
+// this costs nothing to apply.
 //
-// This is not the global cap, which is plan 12 along with its sizing and its
-// alarm. It is the part of it that is cheap to pull forward.
+// This is not the global cap, which is limits.max_connections (Slots). It
+// frees an unadmitted source's slots, global and per-source, sooner.
 const unadmittedHeaderDeadline = 5 * time.Second
 
 type conn struct {
@@ -53,7 +52,12 @@ type conn struct {
 	// tlsc is the TLS connection while a shutdown may close it with
 	// close_notify; it is cleared when a reset or a protocol error drops the
 	// connection without one. Serve's shutdown goroutine reads it.
-	tlsc     atomic.Pointer[tls.Conn]
+	tlsc atomic.Pointer[tls.Conn]
+	// wmu is held around each reply write, and by a shutdown's close, so the
+	// close never lands inside a Write: crypto/tls skips close_notify then and
+	// sends a bare FIN. The shutdown bounds a stuck write by a write deadline
+	// first (closeTLSAtShutdown).
+	wmu      sync.Mutex
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
@@ -284,12 +288,12 @@ func (s *conn) decline() {
 // may include a credential, and BodySHA256 is documented as the hash of what
 // arrived on the wire.
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
-	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	// A TLS connection is dropped without close_notify, as a reset's is,
 	// and that holds for a shutdown during the backoff too: the handle is
-	// cleared before the hold, not after it.
+	// cleared before the record and the hold, not after them.
 	s.tlsc.Store(nil)
 	s.c = s.raw
+	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	s.backoff(ctx, "malformed_backoff")
 }
 
@@ -298,9 +302,9 @@ func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 // protocolError, the TLS handle is dropped before the hold, so a shutdown
 // during it sends no close_notify either.
 func (s *conn) badTLSHeader(ctx context.Context, h wire.Header) {
-	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
 	s.tlsc.Store(nil)
 	s.c = s.raw
+	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
 	s.backoff(ctx, "malformed_backoff")
 }
 
@@ -484,11 +488,31 @@ func (s *conn) serve(ctx context.Context) {
 // one, so a device cannot walk the keyring packet by packet. Each packet is
 // judged at its own time: a connection opened before its version's
 // retire_after is refused at the first packet past it, so holding a
-// connection open never extends a key's life.
+// connection open never extends a key's life; and the key set in force is read
+// again at every later packet, so a reload that retires or removes the
+// connection's version ends it without a strike.
 func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]byte, bool) {
 	if s.version == 0 {
+		// The first packet is judged against the key set in force now, never the
+		// one this connection was accepted with: a reload may have withdrawn a
+		// version since, often because its key leaked. The Accept-time set only
+		// classifies a miss below (re-review 6, Task 7 ruling).
+		accepted := s.keys
+		s.keys = s.d.keysFor(s.dev.KeyRef)
 		r := s.keys.Resolve(h, obf, s.d.Now())
-		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
+		if r.Diagnosis != keyring.DiagValidated {
+			if w := accepted.Resolve(h, obf, s.d.Now()); w.Diagnosis == keyring.DiagValidated {
+				// It would have validated under a version the reload took out
+				// of service: port49d's change, not the device's. As a withdrawal
+				// mid-connection: the record, the count, a reset, no strike.
+				s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(w.Version),
+					string(keyring.DiagMatchesRetired)).Inc()
+				s.unvalidated(h, obf, keyring.DiagMatchesRetired, w.Version)
+				s.reset()
+				return nil, false
+			}
+		}
+		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
 			// more: no admission, no reply. The strike is counted, and the next
@@ -509,12 +533,29 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		}
 		return r.Body, true
 	}
+	// The key set in force for this device, read again at every packet: a
+	// reload that retired or removed the version this connection speaks ends
+	// it here, wherever the packet comes in the connection's life (decision 53
+	// ruling 4). An absent key_ref is a removed version.
+	s.keys = s.d.keysFor(s.dev.KeyRef)
+	if s.withdrawnByReload(s.d.Now()) {
+		// port49d's change, not the device's: one record and a reset, with no
+		// strike, as every reload's withdrawal is (spec §10, "How a daemon
+		// refreshes its snapshot"). The device is still admitted, so there is
+		// no decline window either: its next connection is served, on the new
+		// version or struck then for the old one.
+		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(s.version),
+			string(keyring.DiagMatchesRetired)).Inc()
+		s.unvalidated(h, obf, keyring.DiagMatchesRetired, s.version)
+		s.reset()
+		return nil, false
+	}
 	if s.pastDate(s.d.Now()) {
 		// matches_retired here means the connection's version is past its
 		// retire_after; this packet is not trial-decrypted, since nothing it
 		// could say would change the answer (spec §10). It is closed as a
 		// first-packet miss is: struck, and reset at once.
-		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(s.version),
+		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(s.version),
 			string(keyring.DiagMatchesRetired)).Inc()
 		s.keyMiss(h, obf, keyring.DiagMatchesRetired, s.version)
 		return nil, false
@@ -526,6 +567,19 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		return nil, false
 	}
 	return body, true
+}
+
+// withdrawnByReload reports whether a reload took the version this
+// connection validated under out of service: removed it, or listed it as
+// retired before its retire_after passed. A version past its date is
+// pastDate's, and struck.
+func (s *conn) withdrawnByReload(now time.Time) bool {
+	for _, v := range s.keys.Versions {
+		if v.Number == s.version {
+			return v.Retired && (v.RetireAt.IsZero() || now.Before(v.RetireAt))
+		}
+	}
+	return true
 }
 
 // pastDate reports whether the version this connection validated under has
@@ -555,11 +609,13 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 	}
 	rh := wire.Header{MajorVersion: h.MajorVersion, MinorVersion: h.MinorVersion, Type: h.Type, SeqNo: h.SeqNo + 1,
 		Flags: flags, SessionID: h.SessionID, Length: uint32(len(body))}
-	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
-		return false
-	}
 	if s.tls == nil {
 		out = wire.Obfuscate(rh, s.keys.Secret(s.version), body)
+	}
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
+		return false
 	}
 	_, err := s.c.Write(append(rh.Encode(), out...))
 	return err == nil
@@ -683,5 +739,36 @@ func authorOutcome(status uint8) string {
 		return "error"
 	default:
 		return "fail"
+	}
+}
+
+// shutdownWriteBound is how long a shutdown waits for a reply write already
+// under way before it closes a TLS connection over it: a device that stopped
+// reading must not hold the shutdown.
+var shutdownWriteBound = 2 * time.Second
+
+// closeTLSAtShutdown closes the TLS connection with close_notify after any
+// reply write in flight has finished. A write that does not finish within
+// shutdownWriteBound (a peer that stopped reading, its send buffer full) is
+// broken by a write deadline on the TCP connection beneath, re-applied while
+// the lock is awaited so a write that starts meanwhile cannot lengthen it.
+func (s *conn) closeTLSAtShutdown(tc *tls.Conn) {
+	until := time.Now().Add(shutdownWriteBound)
+	for !s.wmu.TryLock() {
+		_ = s.raw.SetWriteDeadline(until)
+		time.Sleep(2 * time.Millisecond)
+	}
+	defer s.wmu.Unlock()
+	_ = s.raw.SetWriteDeadline(until)
+	// crypto/tls sets its own 5s deadline for the alert's write, which a full
+	// send buffer would wait out; so the close runs apart, and the TCP
+	// connection is closed under it if it outlasts the bound.
+	closed := make(chan struct{})
+	go func() { tc.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(max(time.Until(until), 100*time.Millisecond)):
+		_ = s.raw.Close()
+		<-closed
 	}
 }

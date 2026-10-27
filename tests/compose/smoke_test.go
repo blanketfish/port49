@@ -121,7 +121,7 @@ func TestComposeSmoke(t *testing.T) {
 	ready(t, s, "127.0.0.1:9050")
 	ready(t, s, "127.0.0.1:9049")
 
-	dev := device{t: t, addr: "127.0.0.1:49", key: []byte(envValue(t, filepath.Join(local, "port49d.env"), "PORT49_TACACS_KEY"))}
+	dev := device{t: t, addr: "127.0.0.1:49", key: []byte(envValue(t, filepath.Join(local, "port49d.env"), "PORT49_KEY_TACACS"))}
 	if st := dev.login("alice", mint(t, local, "127.0.0.1:8443", "smoke1")); st != wire.AuthenStatusPass {
 		t.Fatalf("a device login through the stack: status %d", st)
 	}

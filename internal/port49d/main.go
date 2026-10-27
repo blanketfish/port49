@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +57,7 @@ import (
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -288,6 +291,13 @@ func distinctAnchors(human, workload namedAnchor) error {
 // the human one from client_ca_file, then the workload one.
 func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter,
 	log decision.Emitter, m *metrics.Metrics) (*http.Server, *broker.Broker, []namedAnchor, error) {
+	return buildBrokerAnchorWith(cfg, inventoryFrom, st, minter, log, m, nil)
+}
+
+// buildBrokerAnchorWith is buildBrokerAnchor issuing from the CA already read
+// and checked (loaded); nil reads it here.
+func buildBrokerAnchorWith(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter,
+	log decision.Emitter, m *metrics.Metrics, loaded *loadedIssuer) (*http.Server, *broker.Broker, []namedAnchor, error) {
 	if cfg.Broker == nil {
 		return nil, nil, nil, nil
 	}
@@ -371,8 +381,11 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	announceDirectory(stderr, proc, cfg, pol)
 	announceWorkloadIdentities(stderr, proc, cfg, pol)
 	announceServiceAccountIdentities(stderr, proc, cfg, pol)
+	// The key sets fetch on goroutines that outlive this build: they say
+	// through the writer held now, not the package's variable.
+	idOut := stderr
 	if b.Identity, err = openOIDC(cfg, brokerStateDir(cfg), m, func(format string, args ...any) {
-		fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
+		fmt.Fprintf(idOut, proc+": "+format+"\n", args...)
 	}); err != nil {
 		return nil, nil, nil, err
 	}
@@ -382,9 +395,12 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	// The issuing CA (plan 9b; decision 43 ruling 14), before the server's
 	// pool is built from it. It never refuses the start.
 	if id := cfg.Broker.Identity; id != nil && id.Issuance != nil {
-		b.Issuer = openIssuer(cfg, m, func(format string, args ...any) {
+		if loaded == nil {
+			loaded = loadIssuer(cfg, time.Now())
+		}
+		b.Issuer = openIssuerFrom(cfg, m, func(format string, args ...any) {
 			fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
-		})
+		}, loaded)
 		b.CertificateLifetime = id.Issuance.CertificateLifetime
 	}
 	// The directory_password verifier is set before Server, which accepts a
@@ -506,14 +522,41 @@ func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
 	return inv, engine.HashOf(raw), nil
 }
 
-// parseBundle builds the bundle from the policy file's bytes and an
-// inventory (bundle.Parse): a reload of either loads the one it read against
-// the other in force, so the version it remembers refusing is the version it
-// refused.
-func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
+// keysOf is the key set lookups port49d serves from: the policy's in force
+// (dk), or with no policy port49d.yaml's, read once at load.
+func keysOf(cfg config.Config, dk *liveKeys) (func(string) keyring.Set, func() map[string]keyring.Set) {
+	if dk != nil {
+		return dk.Set, dk.All
+	}
+	ring := cfg.Keyring()
+	return func(ref string) keyring.Set { return ring[ref] }, func() map[string]keyring.Set { return ring }
+}
+
+// compileBundle compiles raw against inv, with no keys: requirement: the
+// start guard's reading of a policy recorded before the policy carried its
+// keys (pre-flight M14). Every file port49d reads goes through parseBundle.
+func compileBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
 	pol, err := bundle.Parse(raw, inv, policyEnv(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, quotesCut{err})
+	}
+	return pol, nil
+}
+
+// parseBundle builds the bundle from the policy file's bytes and an
+// inventory (bundle.Parse): a reload of either loads the one it read against
+// the other in force, so the version it remembers refusing is the version it
+// refused. The policy must declare its keys: block, the one place port49
+// learns key names (decision 53 ruling 3).
+func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
+	pol, err := compileBundle(cfg, raw, inv)
+	if err != nil {
+		return nil, err
+	}
+	if !pol.KeysDeclared() {
+		return nil, fmt.Errorf("%s %s: the policy declares no keys: block, so %s knows no key name (decision 53 "+
+			"ruling 3); add the key sets beside key_groups, or `keys: {}` for a fleet all on TLS",
+			policyKey(cfg), cfg.Policy.File, procOf(cfg))
 	}
 	return pol, nil
 }
@@ -911,10 +954,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// derivation avoids on restart, triggered by a rotation instead. With the
 	// window, a tag retires when its key leaves the window, and not before —
 	// one rule for the record and for the tag on it.
-	tagKey := token.TagKey(keys.Current.Bytes[:])
+	cur := keys.Current.Bytes()
+	tagKey := token.TagKey(cur[:])
 	tags := token.NewTagWindow(tagKey)
 	if keys.Previous != nil {
-		tags = token.NewTagWindow(tagKey, token.TagKey(keys.Previous.Bytes[:]))
+		prev := keys.Previous.Bytes()
+		tags = token.NewTagWindow(tagKey, token.TagKey(prev[:]))
 	}
 	// port49_revocations_in_force is the marks this process enforces, and
 	// nothing else sets it (review M3). Metrics are the run's, and the last
@@ -1036,6 +1081,24 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		sayPolicy(procOf(cfg), pol, now)
 		sayFailClosed(procOf(cfg), pol, now, m)
 		live = policy.NewLive(pol)
+	}
+	// The device keys in force: the policy's, each secret read now and at
+	// every reload (decision 53). port49-broker serves no device: no keys.
+	var dk *liveKeys
+	if live != nil && cfg.Role == config.RoleDaemon {
+		dk = newLiveKeys(cfg.Secrets, cfg.KeySecretRefs)
+		kb, err := dk.build(live.Load())
+		if err != nil {
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, err)
+		}
+		dk.put(kb)
+		// spec §10: a version whose retire_after has passed, an accept version
+		// with none, said at start as config's notices were.
+		for _, n := range keyset.Notices(live.Load().KeySets(), time.Now()) {
+			fmt.Fprintf(stderr, "%s: %s\n", procOf(cfg), n)
+		}
 	}
 	if startDoc != nil {
 		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
@@ -1178,12 +1241,13 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		admit = liveAdmission{live}
 		m.CountAdmissionRefused(func() int { return len(live.Load().AdmissionRefusals()) })
 	}
-	keySets := cfg.Keyring()
+	keysFor, allKeys := keysOf(cfg, dk)
 	seen := &keyring.Seen{}
 	m.WatchKeys(func() []metrics.KeySample {
 		var out []metrics.KeySample
-		for _, ref := range cfg.KeyRefs() {
-			for _, v := range keySets[ref].Versions {
+		sets := allKeys()
+		for _, ref := range slices.Sorted(maps.Keys(sets)) {
+			for _, v := range sets[ref].Versions {
 				out = append(out, metrics.KeySample{KeyRef: ref, Version: v.Number, Devices: seen.Count(ref, v.Number),
 					RetireAt: v.RetireAt})
 			}
@@ -1200,7 +1264,22 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
 			"context the broker stopped refreshing keeps its last answer until its own session ends")
 	}
-	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
+	// The global connection cap (decision 53 ruling 8): sized from the
+	// open-file limit unless limits.max_connections sets it, said, and
+	// published, so an operator sees what binds before it does.
+	limit := openFileLimit()
+	capN, err := connectionCap(cfg.Limits.MaxConnections, limit)
+	if err != nil {
+		mln.Close()
+		stopSpool()
+		<-spoolDone
+		return fmt.Errorf("config: %w", err)
+	}
+	m.ConnectionsMax.Set(float64(capN))
+	from := capSource(cfg.Limits.MaxConnections, limit)
+	fmt.Fprintf(stderr, "%s: at most %d TACACS+ connections at once (%s); past it each new connection is reset "+
+		"at Accept\n", procOf(cfg), capN, from)
+	deps := server.Deps{Slots: server.NewSlots(capN, time.Now), Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keysFor, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
@@ -1341,7 +1420,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 		}
-		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
+		srv := &admin.Server{Held: held, Keys: allKeys, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
 			StoreStatus: newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh).answer}
 		if brk != nil {
 			// The socket's deadline covers the wait and the run; one bound
@@ -1480,6 +1559,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
+		r.keys = dk
 		r.generic = newGenericRecorder(log, procOf(cfg))
 		r.generic.record(live.Load(), time.Now())
 		hookTLSReload(r, tl, cfg, live)

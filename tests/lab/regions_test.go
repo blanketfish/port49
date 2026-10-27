@@ -281,7 +281,7 @@ func pidWrap(pidfile, envFile string, argv []string) []string {
 // single-quoted, so the shell that sources the file takes it as data.
 func writeRegionEnv(dir, encKey, tacacsKey string) (string, error) {
 	path := filepath.Join(dir, "run.env")
-	return path, writeEnvFile(path, [2]string{"L74_ENC_KEY", encKey}, [2]string{"L74_TACACS_KEY", tacacsKey})
+	return path, writeEnvFile(path, [2]string{"L74_ENC_KEY", encKey}, [2]string{"PORT49_KEY_L74", tacacsKey})
 }
 
 // writeEnvFile writes NAME='value' lines to a 0600 file, each value single-quoted.

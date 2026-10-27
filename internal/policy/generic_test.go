@@ -10,7 +10,6 @@ import (
 
 func TestGenericDevicesAreAdmittedDevicesWithNoAdapter(t *testing.T) {
 	e := env()
-	e.KeyRefs = []string{"campus_key", "prod_key"}
 	e.Devices = append(e.Devices,
 		admission.Device{Name: "srl2", Platform: "nokia_srlinux",
 			Addresses: []netip.Addr{netip.MustParseAddr("10.9.0.2")}},
@@ -22,7 +21,7 @@ func TestGenericDevicesAreAdmittedDevicesWithNoAdapter(t *testing.T) {
 		// No adapter, but no key group admits it: refused, not served.
 		admission.Device{Name: "stray", Platform: "nokia_srlinux",
 			Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.9")}})
-	p, err := Parse([]byte(keyGrouped), e)
+	p, err := Parse([]byte(keyGrouped+keysFor("campus_key", "prod_key")), e)
 	if err != nil {
 		t.Fatal(err)
 	}

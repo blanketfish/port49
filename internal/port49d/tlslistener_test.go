@@ -1084,7 +1084,7 @@ func TestRunWithNoBrokerReloadsTheTLSFilesAtSIGHUP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(cfgPath, append(raw[:strings.Index(string(raw), "\nbroker:")+1], p.block("127.0.0.1:0")...), 0o600)
+	os.WriteFile(cfgPath, append(append(raw[:strings.Index(string(raw), "\nbroker:")+1], runDaemonKeys...), p.block("127.0.0.1:0")...), 0o600)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfgPath) }()

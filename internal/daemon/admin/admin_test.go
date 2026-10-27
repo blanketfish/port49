@@ -16,7 +16,7 @@ import (
 )
 
 func TestAnswerRefusesAnUnknownOpAndAnUnheldDevice(t *testing.T) {
-	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
+	s := &Server{Held: &keyring.Held{}, Keys: func() map[string]keyring.Set { return map[string]keyring.Set{} }, Now: time.Now}
 	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke, revocations, directory_forget, store_status, "+
 		"second_factor_reset, sign_in_unlock, enrollments_init, enrollments_export and enrollments_import" {
 		t.Fatalf("%+v", r)
@@ -76,7 +76,7 @@ func TestUIDAllowedIsOwnAndRootOnly(t *testing.T) {
 
 // A request that is not one JSON object is refused without echoing it.
 func TestAnswerNeverEchoesAMalformedRequest(t *testing.T) {
-	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
+	s := &Server{Held: &keyring.Held{}, Keys: func() map[string]keyring.Set { return map[string]keyring.Set{} }, Now: time.Now}
 	r := s.answer(context.Background(), Request{Op: "keys_diagnose\x00secret", Device: "x"}, 0)
 	if !strings.Contains(r.Error, "unknown op") || strings.Contains(r.Error, "secret") {
 		t.Fatalf("%+v", r)

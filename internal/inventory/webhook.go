@@ -57,7 +57,7 @@ const (
 var hookHint = map[string]string{
 	HookStale: "its timestamp is more than 5m from this host's clock: check NTP on both hosts; the scheduled sync " +
 		"covers the change",
-	HookBadSignature:   "the webhook's secret in the source must be the value webhook_secret_env names",
+	HookBadSignature:   "the webhook's secret in the source must be the value webhook_secret_ref names",
 	HookUnsigned:       "set the webhook's secret in the source; port49-inventory takes only signed deliveries",
 	HookTooLarge:       "a delivery is at most 1 MiB",
 	HookBadBody:        "its body has no timestamp port49-inventory reads",

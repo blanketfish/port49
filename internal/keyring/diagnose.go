@@ -43,7 +43,7 @@ func Diagnose(held *Held, sets map[string]Set, device, assigned string, now time
 	for _, ref := range refs {
 		s := sets[ref]
 		for i, v := range s.Versions {
-			if Validates(p.Header, wire.Obfuscate(p.Header, v.Secret, p.Body)) {
+			if Validates(p.Header, wire.Obfuscate(p.Header, v.Secret.Bytes(), p.Body)) {
 				f.Matches = append(f.Matches, Match{KeyRef: ref, Version: v.Number, State: s.State(i, now)})
 			}
 		}

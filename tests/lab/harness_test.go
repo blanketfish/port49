@@ -1105,7 +1105,7 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	if encKey == "" {
 		encKey = labEncKeyDefault
 	}
-	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
+	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_KEY_LAB="+key, "PORT49_KEY_RUN="+key, "PORT49_LAB_ENC_KEY="+encKey)
 	if err := l.daemon.Start(); err != nil {
 		return fmt.Errorf("start port49d: %w", err)
 	}
@@ -2400,6 +2400,10 @@ func splitDaemonYAML(base string, n splitNode, policy, inventory, store string) 
 	}
 	out := strings.TrimRight(base[:cut], "\n") + "\n"
 	var err error
+	// The key sets are the policy's (decision 53 ruling 3).
+	if out, err = swapLine(out, "keys:\n"+l28Anchor, ""); err != nil {
+		return "", err
+	}
 	for _, s := range [][2]string{
 		{`listen: "` + tacacsAddr + `"`, `listen: "` + n.Listen + `"`},
 		{`metrics_listen: "` + metricsAddr + `"`, `metrics_listen: "` + n.Metrics + `"`},
@@ -2438,8 +2442,8 @@ func splitBrokerYAML(base, sliceBroker string, o splitBrokerOpts) (string, error
 			block = append(block, ln)
 		}
 	}
-	return "metrics_listen: \"" + o.Metrics + "\"\ninventory_file: " + o.Inventory + "\nkey_refs: [lab_key]\n" +
-		"encryption:\n  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}\nadmin_socket: " + o.Admin + "\n" +
+	return "metrics_listen: \"" + o.Metrics + "\"\ninventory_file: " + o.Inventory + "\n" +
+		"encryption:\n  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}\nadmin_socket: " + o.Admin + "\n" +
 		strings.Join(block, "\n") + "\n  state_dir: " + o.State + "\n  policy_watch_interval: 1s\n" +
 		o.Store + "lab:\n" + base[cut:], nil
 }
@@ -2593,7 +2597,7 @@ func (p *proc) start() error {
 	p.cmd.Dir = root
 	p.cmd.Stdout = p.out
 	p.cmd.Stderr = io.MultiWriter(p.errf, os.Stderr)
-	p.cmd.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
+	p.cmd.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_KEY_LAB="+key, "PORT49_KEY_RUN="+key, "PORT49_LAB_ENC_KEY="+encKey)
 	if err := p.cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", p.bin, err)
 	}

@@ -340,9 +340,9 @@ func TestTLSOfferedConnectionClosesAtIdleTimeout(t *testing.T) {
 	f, cert := newOfferFixture(t, log, admission.Resolved{Device: nxos01TLS}, func(d *Deps, _ *tlsFixture) {
 		d.IdleTimeout = idle
 	})
+	start := time.Now() // before quiet's idle deadline is set server-side
 	busy := offered(t, f, cert, 0x100)
 	quiet := offered(t, f, cert, 0x200)
-	start := time.Now()
 	time.Sleep(idle / 2)
 	if _, err := busy.session(t, 0x101, wire.TypeAcct, acctStop, 0); err != nil {
 		t.Fatalf("a packet inside idle_timeout was not served: %v", err)

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/secretref"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -17,9 +18,9 @@ func start(t *testing.T) (wire.Header, []byte) {
 
 func set() Set {
 	return Set{Ref: "prod_key", Versions: []Version{
-		{Number: 3, Secret: []byte("v3-secret")},
-		{Number: 2, Secret: []byte("v2-secret")},
-		{Number: 1, Secret: []byte("v1-secret"), Retired: true},
+		{Number: 3, Secret: secretref.Of([]byte("v3-secret"))},
+		{Number: 2, Secret: secretref.Of([]byte("v2-secret"))},
+		{Number: 1, Secret: secretref.Of([]byte("v1-secret")), Retired: true},
 	}}
 }
 

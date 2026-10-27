@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,4 +75,36 @@ type judgedFails struct{}
 
 func (judgedFails) Judged(context.Context) (etcdstore.JudgedRecord, bool, error) {
 	return etcdstore.JudgedRecord{}, false, fmt.Errorf("%w: test", store.ErrUnavailable)
+}
+
+// The bundle last judged before the upgrade was recorded with no keys:
+// block. The first start after the upgrade is still judged against it: the
+// guard compiles the recorded policy and never refuses it for a block it
+// predates, so a new file that takes a device out of service is refused.
+func TestTheFirstStartAfterTheUpgradeIsJudgedAgainstAPolicyWithNoKeysBlock(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.MaxRemovedPercent = 20
+	inv := cfg.Inventory
+	before := strings.Replace(minimalPolicy, runKeys, "", 1) // as recorded before the upgrade
+	if strings.Contains(before, "keys:") {
+		t.Fatal("the recorded policy must have no keys: block")
+	}
+	good, err := parseBundle(cfg, []byte(minimalPolicy), inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	none, err := parseBundle(cfg, []byte(quarantiningLeaf1), inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, now := context.Background(), time.Now()
+	recorded := judgedAt{rec: etcdstore.JudgedRecord{Bundle: "b-before-upgrade", Policy: []byte(before)}, ok: true}
+	if refused, said := guardAtStart(ctx, cfg, recorded, good, now); refused != nil || said != "" {
+		t.Fatalf("the same policy with its keys: block added is judged and passes: %v %q", refused, said)
+	}
+	refused, said := guardAtStart(ctx, cfg, recorded, none, now)
+	var sr *startRefusal
+	if !errors.As(refused, &sr) || sr.bundle != "b-before-upgrade" || said != "" {
+		t.Fatalf("a file quarantining leaf1 is refused against the pre-upgrade record: %v %q", refused, said)
+	}
 }

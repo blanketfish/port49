@@ -441,6 +441,8 @@ func (s *conn) obfuscatedOverTLS(h wire.Header) {
 		return // no reply: seq_no + 1 would wrap, and the seq 255 rule closes (conn.go)
 	}
 	rh, body := wire.ErrorReply(h)
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
 	if err := s.c.SetWriteDeadline(time.Now().Add(s.d.IdleTimeout)); err == nil {
 		_, _ = s.c.Write(append(rh.Encode(), body...))
 	}

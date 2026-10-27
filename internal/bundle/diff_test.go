@@ -533,6 +533,7 @@ roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+keys: {lab_key: {current: {version: 1, secret_ref: "env:PORT49_KEY_TEST"}}}
 `)
 	inv := func(addressed bool) admission.Inventory {
 		var out admission.Inventory
@@ -546,7 +547,7 @@ key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
 		}
 		return out
 	}
-	env := policy.Env{KeyRefs: []string{"lab_key"}}
+	env := policy.Env{}
 	old, err := Parse(pol, inv(true), env)
 	if err != nil {
 		t.Fatal(err)

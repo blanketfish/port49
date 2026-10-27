@@ -23,7 +23,11 @@ roles: [{name: r, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: s, scope: campus, roles: [r]}]
 key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]
-`
+` + diffKeys
+
+// diffKeys defines the key_refs the diff fixtures name.
+const diffKeys = "keys:\n  prod_key:\n    current: {version: 1, secret_ref: env:PORT49_KEY_NEVER_READ}\n" +
+	"  lab_key:\n    current: {version: 1, secret_ref: env:PORT49_KEY_NEVER_READ_LAB}\n"
 
 // Spec §10, §12: the review artifact for an inventory change, the security
 // lines marked, and an exit that says whether port49d would take it.
@@ -95,21 +99,21 @@ func TestInventoryDiffMarksEverySecurityChange(t *testing.T) {
 	}
 }
 
-// With --config the key_refs and the bound are port49d.yaml's, as port49d
-// reads them: a pin to a key the file does not define refuses the device, and
-// that counts against inventory.max_removed_percent.
+// The policy's keys: block defines the keys and --config's bound is
+// port49d.yaml's, as port49d reads them: a pin to a key the block does not
+// define refuses the device, and that counts against
+// inventory.max_removed_percent.
 func TestInventoryDiffReadsTheConfigAsPort49dDoes(t *testing.T) {
 	_, pol, old, write := diffFiles(t)
 	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
-		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
-	cfg := write("port49d.yaml", "keys:\n  prod_key: {current: {version: 1, secret_env: NEVER_READ}}\n"+
-		"inventory: {max_removed_percent: 50}\n")
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: ghost_key}\n")
+	cfg := write("port49d.yaml", "inventory: {max_removed_percent: 50}\n")
 	var out, errOut bytes.Buffer
 	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg, old, new}, &out, &errOut); code != 0 ||
 		!strings.Contains(out.String(), "admission_changed leaf-02: admitted → refused") {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
 	}
-	cfg10 := write("port49d-10.yaml", "keys:\n  prod_key: {current: {version: 1, secret_env: NEVER_READ}}\n")
+	cfg10 := write("port49d-10.yaml", "listen: \":49\"\n")
 	out.Reset()
 	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg10, old, new}, &out, &errOut); code != 1 ||
 		!strings.Contains(out.String(), "refused: the new inventory removes 0 of 2 devices and refuses 1 more") {
@@ -244,31 +248,20 @@ func TestInventoryDiffFailsAChangePort49dWouldHalfTake(t *testing.T) {
 	}
 }
 
-// Without --config every verdict says the key_refs went unchecked (I2): a pin
-// to a key port49d.yaml does not define reads as admitted here and is refused
-// there. With --config it is not said.
-func TestInventoryDiffSaysTheKeyRefsWentUnchecked(t *testing.T) {
+// The policy's keys: block is what the key_refs are checked against (pre-flight
+// M17): a pin to a key it does not define is refused with no --config given,
+// and no verdict says the key_refs went unchecked.
+func TestInventoryDiffChecksThePolicysKeyRefs(t *testing.T) {
 	_, pol, old, write := diffFiles(t)
 	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
-		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
-	const note = "key_refs not checked against port49d.yaml: pass --config to check them"
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: ghost_key}\n")
 	var out, errOut bytes.Buffer
-	if code := run([]string{"inventory", "diff", "--policy", pol, old, new}, &out, &errOut); code != 0 ||
-		!strings.Contains(out.String(), "ok: port49d would take the new inventory (inventory.max_removed_percent 10%); "+note) {
-		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	code := run([]string{"inventory", "diff", "--policy", pol, "--max-removed-percent", "100", old, new}, &out, &errOut)
+	if !strings.Contains(out.String(), "admission_changed leaf-02: admitted → refused") {
+		t.Fatalf("exit %d: a pin to a key the policy does not define is not refused:\n%s%s", code, out.String(), errOut.String())
 	}
-	half := write("half.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n")
-	out.Reset()
-	if code := run([]string{"inventory", "diff", "--policy", pol, old, half}, &out, &errOut); code != 1 ||
-		!strings.Contains(out.String(), note) {
-		t.Fatalf("a refused verdict must say it too: exit %d: %s", code, out.String())
-	}
-	cfg := write("port49d.yaml", "keys:\n  prod_key: {current: {version: 1, secret_env: NEVER_READ}}\n"+
-		"  lab_key: {current: {version: 1, secret_env: NEVER_READ}}\n")
-	out.Reset()
-	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg, old, new}, &out, &errOut); code != 0 ||
-		strings.Contains(out.String(), note) {
-		t.Fatalf("with --config: exit %d: %s", code, out.String())
+	if strings.Contains(out.String(), "unchecked") || strings.Contains(out.String(), "not checked against port49d.yaml") {
+		t.Fatalf("a verdict says the key_refs went unchecked:\n%s", out.String())
 	}
 }
 
@@ -458,5 +451,17 @@ func TestTheDiffRedactsTheGuardsRefusal(t *testing.T) {
 	}
 	if redacted(nil, pol) != nil {
 		t.Fatal("a nil error")
+	}
+}
+
+// A policy with no keys: block is one port49d refuses to load, so inventory
+// diff says so and fails, as policy test and keys status do (re-review 8, M2).
+func TestInventoryDiffFailsAPolicyWithNoKeysBlock(t *testing.T) {
+	_, _, old, write := diffFiles(t)
+	pol := write("nokeys.yaml", strings.Replace(diffPolicy, diffKeys, "", 1))
+	var out, errOut bytes.Buffer
+	code := run([]string{"inventory", "diff", "--policy", pol, old, old}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String()+errOut.String(), "the policy declares no keys: block") {
+		t.Fatalf("exit %d, want 1 with the keys: line:\n%s%s", code, out.String(), errOut.String())
 	}
 }

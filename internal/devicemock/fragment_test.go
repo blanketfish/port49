@@ -22,3 +22,16 @@ func TestMergeFragmentRefusesANonMapping(t *testing.T) {
 		t.Fatal("a list fragment has no top-level keys")
 	}
 }
+
+// Base and fragment are each one document: a second is refused, not dropped.
+func TestMergeFragmentRefusesASecondDocument(t *testing.T) {
+	for name, c := range map[string][2]string{
+		"base":     {"a: 1\n---\nb: 2\n", "c: 3\n"},
+		"fragment": {"a: 1\n", "c: 3\n---\nd: 4\n"},
+	} {
+		_, err := MergeFragment([]byte(c[0]), []byte(c[1]))
+		if err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

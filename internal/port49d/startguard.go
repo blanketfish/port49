@@ -40,6 +40,14 @@ func (s *startRefusal) Unwrap() error { return s.err }
 // and a broker stranded by an inventory edit would cost every login. A
 // record that could not be read is not one that is absent: refused is
 // that error, and the start waits for an answer, failing closed.
+//
+// The recorded policy is compiled with compileBundle, which does not require
+// a keys: block: the bundle last judged may predate the upgrade that put the
+// keys in the policy, and the first start after it must still be judged
+// (pre-flight M14). With no block declared, admit refuses no device for its
+// key_ref, so the recorded policy admits what it admitted when it was judged,
+// and a new file whose block omits a key a key group names counts those
+// devices as removed.
 func guardAtStart(ctx context.Context, cfg config.Config, judged judgedReader, pol *policy.Policy,
 	now time.Time) (refused error, said string) {
 	rec, ok, err := judged.Judged(ctx)
@@ -54,7 +62,7 @@ func guardAtStart(ctx context.Context, cfg config.Config, judged judgedReader, p
 		return nil, fmt.Sprintf("the bundle last judged (%s) was recorded without its policy (over 1 MiB); "+
 			"this start is not judged against it", rec.Bundle)
 	}
-	old, err := parseBundle(cfg, rec.Policy, pol.Inventory())
+	old, err := compileBundle(cfg, rec.Policy, pol.Inventory())
 	if err != nil {
 		return nil, fmt.Sprintf("the policy last judged (%s) does not compile against the inventory in force (%v); "+
 			"this start is not judged against it", rec.Bundle, oneLine(err))

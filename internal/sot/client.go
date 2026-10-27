@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/egress"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -58,6 +59,9 @@ const (
 	maxDevices = 100_000
 )
 
+// proxy is the transport's proxy (egress.Proxy); a variable for the tests.
+var proxy = egress.Proxy
+
 // dialTimeout bounds a dial and a TLS handshake; the sync's deadline bounds
 // the rest. A variable for the tests.
 var dialTimeout = 10 * time.Second
@@ -93,7 +97,7 @@ func parseBase(raw string) (*url.URL, error) {
 		return nil, errors.New("url must be https://host[:port][/path]")
 	}
 	if u.User != nil {
-		return nil, errors.New("url carries user information; the source is asked with the token token_secret_env " +
+		return nil, errors.New("url carries user information; the source is asked with the token token_secret_ref " +
 			"names, so remove it")
 	}
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
@@ -118,29 +122,45 @@ func newClient(base, caFile string, token Secret, product string) (*client, erro
 		scheme = "Bearer "
 	}
 	host := u.Hostname()
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{Timeout: dialTimeout}
 	tr := &http.Transport{
-		// Each connection's TLS config is built at its dial from the CA file
-		// as it is then; RootCAs is never nil, so never the host's roots
-		// unless the CA file is the host's bundle.
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			pool, err := readCA(caFile)
-			if err != nil {
-				return nil, err
+		Proxy:       proxy,
+		DialContext: dialer.DialContext,
+		// The CA file is read at each handshake, direct or through the
+		// proxy's tunnel, so a rotated CA needs no restart. A proxied HTTPS
+		// request never calls DialTLSContext: the transport dials the proxy,
+		// sends CONNECT, then handshakes with this config. InsecureSkipVerify
+		// only hands verification to VerifyConnection, which verifies the
+		// chain against that pool and the name against the source's host:
+		// RootCAs is never nil, so never the host's roots unless the CA file
+		// is the host's bundle.
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host, InsecureSkipVerify: true,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				pool, err := readCA(caFile)
+				if err != nil {
+					return err
+				}
+				if len(cs.PeerCertificates) == 0 {
+					return errors.New("the source sent no certificate")
+				}
+				inter := x509.NewCertPool()
+				for _, c := range cs.PeerCertificates[1:] {
+					inter.AddCert(c)
+				}
+				_, err = cs.PeerCertificates[0].Verify(x509.VerifyOptions{Roots: pool, Intermediates: inter,
+					DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+				return err
+			}},
+		// A 407 answers the CONNECT, so it is the egress proxy's, said apart
+		// from the source's own 401, which names the token. Keyed on the
+		// status code, never the proxy's reason phrase, which is its to word.
+		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, res *http.Response) error {
+			if res.StatusCode == http.StatusProxyAuthRequired {
+				return errProxyCredentials
 			}
-			ctx, cancel := context.WithTimeout(ctx, dialTimeout)
-			defer cancel()
-			raw, err := dialer.DialContext(ctx, network, addr)
-			if err != nil {
-				return nil, err
-			}
-			conn := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: host})
-			if err := conn.HandshakeContext(ctx); err != nil {
-				raw.Close()
-				return nil, err
-			}
-			return conn, nil
+			return nil
 		},
+		TLSHandshakeTimeout:   dialTimeout,
 		ResponseHeaderTimeout: 2 * time.Minute, MaxIdleConnsPerHost: 2,
 		// DefaultTransport's: port49 closes an idle connection before the
 		// source, or a proxy in front of it, does, and a rotated CA reaches
@@ -149,6 +169,10 @@ func newClient(base, caFile string, token Secret, product string) (*client, erro
 	return &client{base: u, auth: NewSecret(scheme + token.Reveal()), http: &http.Client{Transport: tr,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
+
+// errProxyCredentials is fixed text, so neither the proxy's credentials nor
+// its URL print.
+var errProxyCredentials = errors.New("the egress proxy refused HTTPS_PROXY's credentials; the token was not sent")
 
 // readCA is the CA file's certificates, read bounded. A file with none is an
 // error: an empty pool is never a reason to fall back.
@@ -212,6 +236,9 @@ func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte,
 			// M3). A dial or handshake timeout reads otherwise.
 			return answer{}, fmt.Errorf("%s: no answer began within 2m: lower page_size", what(method, u))
 		}
+		if errors.Is(err, errProxyCredentials) {
+			return answer{}, fmt.Errorf("%s: %w", what(method, u), errProxyCredentials)
+		}
 		return answer{}, clean(what(method, u), err)
 	}
 	defer resp.Body.Close()
@@ -254,7 +281,7 @@ func (c *client) getJSON(ctx context.Context, u *url.URL, v any) error {
 func statusError(what string, status int) error {
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		return fmt.Errorf("%s answered HTTP %d: the token token_secret_env names was refused, or may not read "+
+		return fmt.Errorf("%s answered HTTP %d: the token token_secret_ref names was refused, or may not read "+
 			"devices; it is not printed", what, status)
 	case status >= 300 && status < 400:
 		return fmt.Errorf("%s answered HTTP %d, a redirect, which is not followed: set url to where it points", what,

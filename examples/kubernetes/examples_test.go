@@ -177,11 +177,10 @@ func TestTheIdentitySnippetLoads(t *testing.T) {
 	writeFile(t, inv, "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [127.0.0.1]}\n"+
 		"key_groups:\n  - {match: {cidr: 127.0.0.0/8}, key_ref: prod_key}\n")
 	// Obviously fake secrets: nothing here opens a real record.
-	t.Setenv("EXAMPLE_PROD_V1", "fake-shared-secret")
 	t.Setenv("EXAMPLE_ENC_V1", "22222222222222222222222222222222")
 	cfgPath := filepath.Join(dir, "port49d.yaml")
-	writeFile(t, cfgPath, fmt.Sprintf("listen: \":4949\"\ninventory_file: %s\nkeys:\n  prod_key:\n"+
-		"    current: {version: 1, secret_env: EXAMPLE_PROD_V1}\nencryption:\n  current: {id: v1, secret_env: EXAMPLE_ENC_V1}\n%s",
+	writeFile(t, cfgPath, fmt.Sprintf("listen: \":4949\"\ninventory_file: %s\n"+
+		"encryption:\n  current: {id: v1, secret_ref: env:EXAMPLE_ENC_V1}\n%s",
 		inv, broker))
 	c, err := config.Load(cfgPath)
 	if err != nil {

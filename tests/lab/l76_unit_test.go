@@ -753,7 +753,7 @@ func TestL76WrongKeyConfigSwapsTheOneBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(got, "PORT49_LAB_KEY") || !strings.Contains(got, "secret_env: "+l76WrongKeyEnv) ||
+	if strings.Contains(got, "PORT49_LAB_KEY") || !strings.Contains(got, "secret_ref: env:"+l76WrongKeyEnv) ||
 		!strings.Contains(got, "other: 1") {
 		t.Errorf("got:\n%s", got)
 	}
