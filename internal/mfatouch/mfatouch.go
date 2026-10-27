@@ -115,6 +115,25 @@ func Sign(touch crypto.Signer, challenge, ekm []byte) ([]byte, error) {
 	return api.SignRefresh(touch, api.MFAMessage(challenge, ekm))
 }
 
+// SignAdmin is the touch key's signature over api.AdminMessage for one admin
+// request, as the broker verifies it: the challenge, the request's own hash
+// (api.AdminRequestSHA256) and the connection's admin exporter value. The
+// touch happens inside; the caller holds no connection across it.
+func SignAdmin(touch crypto.Signer, challenge []byte, request [32]byte, ekm []byte) ([]byte, error) {
+	return api.SignRefresh(touch, api.AdminMessage(challenge, request, ekm))
+}
+
+// AdminHeader is the Port49-Admin-Proof header's value for a signed
+// challenge: base64url of the proof's JSON.
+func AdminHeader(challenge string, sig []byte, chain []string) (string, error) {
+	raw, err := json.Marshal(api.AdminProof{Challenge: challenge, Signature: base64.RawURLEncoding.EncodeToString(sig),
+		Attestation: chain})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
 // Request is POST /v1/mfa's body for a touch proof.
 func Request(challenge string, sig []byte, chain []string) ([]byte, error) {
 	return json.Marshal(api.MFAProofRequest{Challenge: challenge, Method: "hardware_key_touch",

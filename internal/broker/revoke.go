@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/k8sid"
+	"github.com/rhwendt/port49/internal/normal"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
@@ -63,7 +62,7 @@ type RevokeReport struct {
 	// limited to one key, named.
 	Key store.TokenKey
 	// LiftNote says where a standing mark made over HTTP is lifted: the
-	// endpoint sets it from Broker.AdminSocket (decision 34), and Text prints
+	// endpoint sets it (liftNote; decision 34), and Text prints
 	// it after the mark's own text. Empty from the admin socket, whose
 	// caller is already there.
 	LiftNote string
@@ -99,12 +98,6 @@ type RevokeReport struct {
 	workload bool
 }
 
-// principalPrefixes are the forms a verifier gives a principal (spec §2):
-// user: for people, app: for an OIDC machine (plan 7h), spiffe:// for a
-// workload certificate (plan 8), system:serviceaccount: for a cluster's
-// service account (plan 10).
-var principalPrefixes = []string{"user:", "app:", spiffe.Scheme, k8sid.Prefix}
-
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
 // email (the mapping is case-insensitive by construction), or app: and the
@@ -130,23 +123,14 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 	case req.Issuer == "" || req.Serial == "":
 		return req, "", "", fmt.Errorf("%w: a certificate is named by its issuer and its serial, both", ErrBadRevocation)
 	}
-	if len(req.Issuer) > 2048 || !utf8.ValidString(req.Issuer) ||
-		strings.IndexFunc(req.Issuer, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
-		return req, "", "", fmt.Errorf("%w: the issuer has a control or format character or is not UTF-8", ErrBadRevocation)
+	if err := normal.Issuer(req.Issuer); err != nil {
+		return req, "", "", fmt.Errorf("%w: %v", ErrBadRevocation, err)
 	}
-	s := strings.ReplaceAll(strings.ToLower(req.Serial), ":", "")
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(strings.TrimPrefix(s, "-"), "0x")
-	if s == "" || len(s) > 64 || strings.Trim(s, "0123456789abcdef") != "" {
-		return req, "", "", fmt.Errorf("%w: a serial is hexadecimal", ErrBadRevocation)
+	serial, err := normal.Serial(req.Serial)
+	if err != nil {
+		return req, "", "", fmt.Errorf("%w: %v", ErrBadRevocation, err)
 	}
-	if s = strings.TrimLeft(s, "0"); s == "" {
-		s, neg = "0", false
-	}
-	if neg {
-		s = "-" + s
-	}
-	req.Serial = s
+	req.Serial = serial
 	return req, store.RevocationCert, store.CertKey(req.Issuer, req.Serial), nil
 }
 
@@ -158,42 +142,11 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // a request names only after this, so no spelling makes another principal
 // read as the caller, or the caller as another (decision 34).
 func normalPrincipal(p string) (string, error) {
-	if strings.HasPrefix(strings.ToLower(p), spiffe.Scheme) {
-		// Before the 1024-byte guard below: an ID may be spiffe.MaxLen bytes,
-		// and the verifier authenticates one that long, so the operator must be
-		// able to revoke it. Verbatim: the path is case-sensitive, and the
-		// verifier gives the ID only in the form ParseWorkload accepts, which
-		// bounds its length and characters (decision 40 ruling 4).
-		if _, err := spiffe.ParseWorkload(p); err != nil {
-			return "", fmt.Errorf("%w: %s is not a workload's SPIFFE ID as the broker spells one (%v)",
-				ErrBadRevocation, printsafe.Line(p, 200), err)
-		}
-		return p, nil
+	n, err := normal.Principal(p)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrBadRevocation, err)
 	}
-	if strings.HasPrefix(strings.ToLower(p), k8sid.Prefix) {
-		// Verbatim: a cluster names accounts in lower case alone, and the
-		// verifier gives one only in the form k8sid.Parse accepts (decision 49
-		// ruling 8). Before the 1024-byte guard, as a spiffe ID is.
-		id, err := k8sid.Parse(p)
-		if err != nil {
-			return "", fmt.Errorf("%w: %s is not a service account as its cluster names one (%v)", ErrBadRevocation,
-				printsafe.Line(p, 200), err)
-		}
-		return id.String(), nil
-	}
-	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
-		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
-	}
-	for _, pre := range principalPrefixes {
-		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
-			if pre == "app:" {
-				return pre + p[len(pre):], nil // a client id is case-sensitive
-			}
-			return pre + strings.ToLower(p[len(pre):]), nil
-		}
-	}
-	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci, spiffe://corp.example.com/host/oxidized-01, system:serviceaccount:netops:oxidized)",
-		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
+	return n, nil
 }
 
 // Revoke puts a mark in force and reaches everything it names (spec

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/normal"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
@@ -39,16 +39,11 @@ func (b *Broker) signInOps() error {
 // email, lower-cased as Forget lowers it. Only a person signs in with a
 // password.
 func userPrincipal(principal string) (string, error) {
-	if !strings.HasPrefix(strings.ToLower(principal), "user:") {
-		return "", fmt.Errorf("broker: %q is not a user: principal; only a person signs in with a directory password",
-			printsafe.Line(principal, 200))
-	}
-	normal, err := normalPrincipal(principal)
+	n, err := normal.User(principal)
 	if err != nil {
-		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: user: and an email",
-			printsafe.Line(principal, 300))
+		return "", fmt.Errorf("broker: %w", err)
 	}
-	return normal, nil
+	return n, nil
 }
 
 // lostRemedy is what an operator does about an enrollment store that is lost,
