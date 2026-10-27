@@ -12,6 +12,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 // The operator's side of the directory-password sign-in (plan 9e, decision
@@ -447,6 +448,11 @@ func (b *Broker) ImportEnrollments(ctx context.Context, sealed []byte, replace b
 	case errors.Is(err, store.ErrConflict):
 		return "", errors.New("broker: the store holds a second factor enrolled or reset after this export was " +
 			"taken, and importing it would undo that: run it with --replace to replace the store anyway")
+	case errors.Is(err, crypt.ErrUnknownKey):
+		// The store's text quotes the key id the export names, which is the
+		// export's own and not yet checked: never echoed.
+		return "", errors.New("broker: the export is sealed under a key this broker does not hold: set " +
+			"encryption.previous to the key it was exported under, then import it again")
 	case err != nil:
 		// The text is the store's own about the export, never its content.
 		return "", fmt.Errorf("broker: the import failed, so nothing changed: %s", printsafe.Line(err.Error(), 300))

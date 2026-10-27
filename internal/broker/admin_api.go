@@ -103,6 +103,15 @@ func (b *Broker) adminFailed(w http.ResponseWriter, op string, err error) {
 		printsafe.Line(strings.TrimPrefix(err.Error(), "broker: "), 600))
 }
 
+// adminUnavailable answers a call whose operation cannot run on this broker
+// (no directory, no directory_password verifier): 409 admin_operation_failed,
+// after the right and before any challenge, so a rightless caller learns
+// nothing and no key press is spent on it. The text is the broker's own
+// about itself, or names a principal the caller has validated.
+func (b *Broker) adminUnavailable(w http.ResponseWriter, op string, err error) {
+	b.adminFailed(w, op, err)
+}
+
 // certTargetOf is the target a challenge shows for a certificate: its issuer
 // and serial, as the broker compares them.
 func certTargetOf(req RevokeRequest) string { return req.Issuer + " serial " + req.Serial }
@@ -299,8 +308,14 @@ func (b *Broker) directoryForget(w http.ResponseWriter, r *http.Request) {
 	}
 	rec := decision.Record{TS: b.Now(), Event: decision.EventDirectoryForget, Principal: principal,
 		Forget: &decision.Forget{Origin: d.origin}}
-	if !b.adminRight(w, r, d.c, rec, []string{policy.RightForgetPrincipals}, "forgetting a directory pin") ||
-		!b.adminGate(w, r, d.c, d.body, "forget_principal", principal) {
+	if !b.adminRight(w, r, d.c, rec, []string{policy.RightForgetPrincipals}, "forgetting a directory pin") {
+		return
+	}
+	if err := b.forgetUnavailable(principal); err != nil {
+		b.adminUnavailable(w, "forget_principal", err)
+		return
+	}
+	if !b.adminGate(w, r, d.c, d.body, "forget_principal", principal) {
 		return
 	}
 	text, err := b.Forget(r.Context(), principal, d.origin)
@@ -342,8 +357,14 @@ func (b *Broker) directoryResetSecondFactor(w http.ResponseWriter, r *http.Reque
 	if !req.All {
 		rec.Principal = target
 	}
-	if !b.adminRight(w, r, d.c, rec, []string{policy.RightResetSecondFactor}, "resetting a second factor") ||
-		!b.adminGate(w, r, d.c, d.body, op, target) {
+	if !b.adminRight(w, r, d.c, rec, []string{policy.RightResetSecondFactor}, "resetting a second factor") {
+		return
+	}
+	if err := b.signInOps(); err != nil {
+		b.adminUnavailable(w, op, err)
+		return
+	}
+	if !b.adminGate(w, r, d.c, d.body, op, target) {
 		return
 	}
 	principal := target
@@ -372,8 +393,14 @@ func (b *Broker) directoryUnlock(w http.ResponseWriter, r *http.Request) {
 	}
 	rec := decision.Record{TS: b.Now(), Event: decision.EventSignInUnlock, Principal: principal,
 		SignInUnlock: &decision.SignInUnlock{Origin: d.origin}}
-	if !b.adminRight(w, r, d.c, rec, []string{policy.RightUnlockSignIn}, "clearing a sign-in lockout") ||
-		!b.adminGate(w, r, d.c, d.body, "unlock_sign_in", principal) {
+	if !b.adminRight(w, r, d.c, rec, []string{policy.RightUnlockSignIn}, "clearing a sign-in lockout") {
+		return
+	}
+	if err := b.signInOps(); err != nil {
+		b.adminUnavailable(w, "unlock_sign_in", err)
+		return
+	}
+	if !b.adminGate(w, r, d.c, d.body, "unlock_sign_in", principal) {
 		return
 	}
 	text, err := b.UnlockSignIn(r.Context(), principal, d.origin)
@@ -397,6 +424,10 @@ func (b *Broker) directoryImport(w http.ResponseWriter, r *http.Request) {
 	rec := decision.Record{TS: b.Now(), Event: decision.EventEnrollmentsImport,
 		EnrollmentsImport: &decision.EnrollmentsImport{Origin: origin}}
 	if !b.adminRight(w, r, c, rec, []string{policy.RightImportEnrollments}, "importing the enrollment store") {
+		return
+	}
+	if err := b.signInOps(); err != nil {
+		b.adminUnavailable(w, "import_enrollments", err)
 		return
 	}
 	replace, err := importReplace(r)

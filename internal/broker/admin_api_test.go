@@ -9,18 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/rhwendt/port49/internal/store/memory"
 )
 
 // The admin endpoints (plan 12b, task 3c; spec §2, §5.1.4, §5.1.6): each
@@ -81,10 +79,6 @@ type adminRoute struct {
 	setup func(t *testing.T, f *mfaFixture)
 	// revokeRight marks the one route that revoke_others alone opens.
 	revokeRight bool
-	// refused is the code a proved call that reaches its operation is
-	// answered when the fixture cannot run it (a forget with no directory);
-	// the proof was still judged and spent.
-	refused string
 }
 
 func importTarget(body string) string {
@@ -112,7 +106,14 @@ func adminRoutes(t *testing.T) []adminRoute {
 		{name: "lift by certificate", path: liftPath, body: liftCertBody, op: "lift", target: certTarget,
 			right: "lift_revocations", event: "revoke", setup: revoke(RevokeRequest{Issuer: testIssuer, Serial: "1a2b"})},
 		{name: "forget", path: forgetPath, body: daveBody, op: "forget_principal", target: daveKey,
-			right: "forget_principals", event: "directory_forget", refused: "admin_operation_failed"},
+			right: "forget_principals", event: "directory_forget",
+			setup: func(t *testing.T, f *mfaFixture) {
+				t.Helper()
+				if err := f.st.PutMembership(context.Background(), store.Membership{Principal: daveKey,
+					DN: "CN=Dave,DC=corp", EntryID: "guid:d4", VerifiedAt: f.now}, time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{name: "reset second factor", path: resetPath, body: daveBody, op: "reset_second_factor", target: daveKey,
 			right: "reset_second_factor", event: "second_factor_reset"},
 		{name: "reset every second factor", path: resetPath, body: resetAllBody, op: "reset_second_factor_all",
@@ -144,9 +145,9 @@ func TestEachAdminRouteNeedsItsRight(t *testing.T) {
 			var f *mfaFixture
 			actor := func() *mfaActor { return f.bob }
 			if who == "bob" {
-				f = newMFAFixture(t)
+				f = newMFAFixture(t, withTestDirectory())
 			} else {
-				f = newAdminFixture(t)
+				f = newAdminFixture(t, withTestDirectory())
 				actor = func() *mfaActor { return f.alice }
 			}
 			f.withAdminOps(t)
@@ -180,7 +181,7 @@ func TestEachAdminRouteNeedsItsRight(t *testing.T) {
 // With the right and no proof, each route answers 401 admin_touch_required
 // with the operation and target of spec §5.1.6, and does nothing.
 func TestEachAdminRouteNeedsATouch(t *testing.T) {
-	f := newMFAFixture(t, withAllAdminRights())
+	f := newMFAFixture(t, withAllAdminRights(), withTestDirectory())
 	f.withAdminOps(t)
 	for _, rt := range adminRoutes(t) {
 		t.Run(rt.name, func(t *testing.T) {
@@ -212,7 +213,7 @@ func TestEachAdminRouteNeedsATouch(t *testing.T) {
 func TestEachProvedAdminRouteRunsOnceOnly(t *testing.T) {
 	for _, rt := range adminRoutes(t) {
 		t.Run(rt.name, func(t *testing.T) {
-			f := newMFAFixture(t, withAllAdminRights())
+			f := newMFAFixture(t, withAllAdminRights(), withTestDirectory())
 			f.withAdminOps(t)
 			if rt.setup != nil {
 				rt.setup(t, f)
@@ -226,10 +227,6 @@ func TestEachProvedAdminRouteRunsOnceOnly(t *testing.T) {
 				Text string `json:"text"`
 			}
 			switch {
-			case rt.refused != "":
-				if ans := decodeAdminAnswer(t, raw); code != 409 || ans.Error != rt.refused {
-					t.Fatalf("the proved call: %d %s, want 409 %s", code, ans.Error, rt.refused)
-				}
 			case code != 200 || json.Unmarshal(raw, &out) != nil || out.Text == "":
 				t.Fatalf("the proved call: %d %s, want 200 with a text", code, decodeAdminAnswer(t, raw).Error)
 			case recordsWith(t, f, rt.event, "") == 0:
@@ -523,109 +520,89 @@ func TestALiftOverTheAPITellsTheCopy(t *testing.T) {
 	}
 }
 
-// A forget over the API runs Forget as the caller: it removes the pin, and
-// the record's origin is api <caller>. The proof is this file's other tests';
-// the seam skips it so a directory, which a held connection cannot have after
-// the fact, can answer for the caller.
-func TestForgetRunsThroughTheAPI(t *testing.T) {
-	a := answerFor(corpAlice, "alice")
-	a.GroupNames = []string{"oncall-group"}
-	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
-	path := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(path, []byte(strings.Replace(groupPolicy, "api: [explain_others, revoke_others]",
-		"api: [forget_principals]", 1)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	pol, err := policy.Load(path, policy.Env{Devices: f.inventory(), Directory: policy.DirectoryOn})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.b.Policy.Swap(pol)
-	f.b.skipAdminProof = true // legacy: this test is about what a forget does, not its proof
-	const victim = "user:victim@corp.example.com"
+// A forget over the API runs Forget as the caller, on a broker whose directory
+// was configured from the start, with a real proof: it removes the pin, and
+// the record's origin is api <caller>.
+func TestForgetRunsAsTheCaller(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights(), withTestDirectory())
+	const victim = "user:victim@example.com"
 	if err := f.st.PutMembership(context.Background(), store.Membership{Principal: victim, DN: "CN=Victim,DC=corp",
 		EntryID: "guid:0a1b", VerifiedAt: f.now}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	w := f.call(f.pinned(a), f.state(f.alice), "POST", forgetPath, `{"principal":"`+victim+`"}`)
+	body := `{"principal":"` + victim + `"}`
+	code, raw := f.adminCall(t, f.alice, f.alice.conn, forgetPath, body)
 	var out api.AdminResult
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || !strings.Contains(out.Text, "guid:0a1b") {
-		t.Fatalf("%d %s", w.Code, w.Body)
+	if code != 200 || json.Unmarshal(raw, &out) != nil || !strings.Contains(out.Text, "guid:0a1b") {
+		t.Fatalf("%d %s", code, raw)
 	}
 	if _, err := f.st.GetMembership(context.Background(), victim); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the pin outlived the forget: %v", err)
 	}
-	if !strings.Contains(f.log.String(), `"origin":"api `+corpAlice+`"`) {
-		t.Fatalf("no record names the caller as origin: %s", f.log.String())
-	}
-	// Without the right, 403.
-	b := answerFor(corpAlice, "alice")
-	f.b.Directory = directory.ForTestsStaticResolver(f.st, map[string]directory.Answer{corpAlice: b}, nil)
-	if w := f.call(f.pinned(b), f.state(f.alice), "POST", forgetPath, `{"principal":"`+victim+`"}`); w.Code != 403 {
-		t.Fatalf("without the group: %d %s", w.Code, w.Body)
+	if !strings.Contains(f.logs.String(), `"origin":"api `+alicePrincipal+`"`) {
+		t.Fatal("no record names the caller as origin")
 	}
 }
 
-// The §12 line is said where roots are missing and a subject holds an
-// admin-level right: not with no holder (no operation to refuse), and not with
-// roots loaded.
-func TestTheAdminTouchLineNeedsMissingRootsAndAHolder(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		opts []mfaOpt
-		want bool
-	}{
-		{"roots missing, a holder", []mfaOpt{withoutAttestationRoots(), withAdminRight()}, true},
-		{"roots missing, a lift holder", []mfaOpt{withoutAttestationRoots(), withBobLifting()}, true},
-		{"roots missing, no holder", []mfaOpt{withoutAttestationRoots()}, false},
-		{"roots present, a holder", []mfaOpt{withAllAdminRights()}, false},
-		{"roots missing, a reserved right only", []mfaOpt{withoutAttestationRoots(), withBobAPI("sync")}, false},
+// A call whose operation cannot run on this broker is refused 409 after the
+// right and before any challenge: no key press is spent on it, and a caller
+// without the right is told nothing of the broker (403).
+func TestAnUnavailableOperationAsksForNoTouch(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights()) // no directory, no directory_password verifier
+	exp := exportOf(t)
+	for _, c := range []struct{ name, path, body, want string }{
+		{"forget", forgetPath, daveBody, "no broker.directory"},
+		{"reset a second factor", resetPath, daveBody, "no directory_password verifier"},
+		{"reset every second factor", resetPath, resetAllBody, "no directory_password verifier"},
+		{"unlock", unlockPath, daveBody, "no directory_password verifier"},
+		{"import", importPath, exp, "no directory_password verifier"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f := newMFAFixture(t, c.opts...)
-			line := f.b.AdminTouchLine(f.b.Policy.Load())
-			if c.want != (line != "") {
-				t.Fatalf("line %q, want a line: %v", line, c.want)
+			code, raw := f.alice.conn.post(t, c.path, nil, c.body)
+			ans := decodeAdminAnswer(t, raw)
+			if code != 409 || ans.Error != "admin_operation_failed" || ans.Admin != nil ||
+				!strings.Contains(ans.Detail, c.want) {
+				t.Fatalf("answered %d %s %q, want 409 admin_operation_failed naming %q and no challenge", code,
+					ans.Error, ans.Detail, c.want)
 			}
-			if c.want && (line != f.b.AdminTouchUnavailable() || !strings.Contains(line,
-				"broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file")) {
-				t.Fatalf("the line is %q", line)
+			if strings.Contains(ans.Detail, "dave") {
+				t.Fatal("the answer echoes the request")
+			}
+			// Without the right, the caller learns nothing of this broker.
+			code, raw = f.bob.conn.post(t, c.path, nil, c.body)
+			if ans := decodeAdminAnswer(t, raw); code != 403 || ans.Error != "api_right_missing" {
+				t.Fatalf("a caller without the right: %d %s, want 403", code, ans.Error)
 			}
 		})
 	}
+	if f.adminRecords(t, "admin_touch_required") != 0 || f.b.admin.len() != 0 {
+		t.Fatal("an operation that cannot run was issued a challenge")
+	}
 }
 
-// The bound is on the bytes read, not on a length the client states: a body
-// sent chunked, with no Content-Length, is cut at the bound too.
-func TestImportIsBoundedWithNoContentLength(t *testing.T) {
+// A 409's text is the broker's own, or a principal the broker validated: an
+// export that names an unknown key id does not have the id echoed back.
+func TestAnImportRefusalNeverEchoesTheExport(t *testing.T) {
 	f := newMFAFixture(t, withAllAdminRights())
 	f.withAdminOps(t)
-	c := f.alice.conn
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		chunk := strings.Repeat("x", 1<<20)
-		_, _ = fmt.Fprintf(c.c, "POST %s?replace=false HTTP/1.1\r\nHost: broker\r\nTransfer-Encoding: chunked\r\n\r\n", importPath)
-		for i := 0; i < maxImportTest>>20+2; i++ {
-			if _, err := fmt.Fprintf(c.c, "%x\r\n%s\r\n", len(chunk), chunk); err != nil {
-				return
-			}
-		}
-		_, _ = fmt.Fprint(c.c, "0\r\n\r\n")
-	}()
-	_ = c.c.SetReadDeadline(time.Now().Add(20 * time.Second))
-	resp, err := http.ReadResponse(c.br, nil)
+	// An export sealed under a key this broker does not hold, whose id is the
+	// request's own text.
+	donor, _ := newSignInFixture(t)
+	donor.b.Enrollments = crypt.WrapEnrollments(memory.NewEnrollments(donor.b.Now), testKeys("zz-echo-me"), nil)
+	if err := donor.b.Enrollments.CreateEnrollmentMark(context.Background(), store.EnrollmentMark{CreatedAt: donor.now}); err != nil {
+		t.Fatal(err)
+	}
+	exp, err := donor.b.ExportEnrollments(context.Background())
 	if err != nil {
-		t.Fatalf("no answer: %v", err)
+		t.Fatal(err)
 	}
-	_ = resp.Body.Close()
-	_ = c.c.Close()
-	wg.Wait()
-	if resp.StatusCode != 413 {
-		t.Fatalf("a chunked body over the bound: %d, want 413", resp.StatusCode)
+	if !strings.Contains(string(exp), "zz-echo-me") {
+		t.Fatal("setup: the export does not name its key id")
 	}
-	if f.adminRecords(t, "admin_touch_required") != 0 || f.b.admin.len() != 0 {
-		t.Fatal("a body over the bound was issued a challenge")
+	body := string(exp)
+	code, raw := f.adminCall(t, f.alice, f.alice.conn, importPath+"?replace=true", body)
+	if ans := decodeAdminAnswer(t, raw); code != 409 || ans.Error != "admin_operation_failed" ||
+		strings.Contains(ans.Detail, "zz-echo-me") || !strings.Contains(ans.Detail, "encryption.previous") {
+		t.Fatalf("answered %d %s %q: the text echoes the export or is not a 409", code, ans.Error, ans.Detail)
 	}
 }

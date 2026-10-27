@@ -28,9 +28,28 @@ import (
 // The store leaves a tombstone holding the forget's time (DeleteMembership),
 // so a verification begun before the forget can never write the old pin
 // back: one forget ends it.
-func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, error) {
+// forgetUnavailable is why a forget of normal (a principal as the broker
+// spells it; "" before one is named) cannot hold anything to forget: no
+// directory, or a workload with no mapping (pre-flight M-6). The API asks it
+// before it asks for a touch, so no key press is spent on a call that cannot
+// run. It echoes only normal, which the caller has validated.
+func (b *Broker) forgetUnavailable(normal string) error {
 	if b.Directory == nil {
-		return "", errors.New("broker: no broker.directory is configured, so no membership is held to forget")
+		return errors.New("broker: no broker.directory is configured, so no membership is held to forget")
+	}
+	if normal != "" && directory.IsWorkload(normal) && b.Directory.Cfg.Workload == nil {
+		// Nothing is held for a workload without the mapping, and nothing
+		// would read it. A record left from when one was configured expires
+		// with its lease.
+		return fmt.Errorf("broker: no workload mapping is configured (broker.identity.machines[].directory), so "+
+			"no membership is held for %s to forget", printsafe.Line(normal, 300))
+	}
+	return nil
+}
+
+func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, error) {
+	if err := b.forgetUnavailable(""); err != nil {
+		return "", err
 	}
 	// The principal as the log spells it (the mark's own rule), so a
 	// mixed-case name finds the record it names.
@@ -46,12 +65,8 @@ func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, 
 		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: user: and an email, or a "+
 			"workload's SPIFFE ID verbatim", printsafe.Line(principal, 300))
 	}
-	if directory.IsWorkload(normal) && b.Directory.Cfg.Workload == nil {
-		// Nothing is held for a workload without the mapping, and nothing
-		// would read it (pre-flight M-6). A record left from when one was
-		// configured expires with its lease.
-		return "", fmt.Errorf("broker: no workload mapping is configured (broker.identity.machines[].directory), so "+
-			"no membership is held for %s to forget", printsafe.Line(normal, 300))
+	if err := b.forgetUnavailable(normal); err != nil {
+		return "", err
 	}
 	principal = normal
 	ctx, cancel := context.WithTimeout(ctx, holdTimeout)

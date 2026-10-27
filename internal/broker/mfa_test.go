@@ -31,6 +31,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/pivattest"
@@ -60,6 +61,7 @@ type mfaOpts struct {
 	adminRight    bool   // alice's subject declares api: [revoke_others]
 	allAdminRight bool   // and every other admin-level right (plan 12b, task 3c)
 	bobAPI        string // the one right bob's subject declares, if any
+	directory     bool   // the broker has a directory from the start, so each held connection is pinned to one
 }
 
 type mfaOpt func(*mfaOpts)
@@ -73,6 +75,7 @@ func withAppliesToMachines() mfaOpt   { return func(o *mfaOpts) { o.machines = t
 func withShortCeiling() mfaOpt        { return func(o *mfaOpts) { o.shortCeiling = true } }
 func withJunosCore() mfaOpt           { return func(o *mfaOpts) { o.junosCore = true } }
 func withAdminRight() mfaOpt          { return func(o *mfaOpts) { o.adminRight = true } }
+func withTestDirectory() mfaOpt       { return func(o *mfaOpts) { o.directory = true } }
 func withBobAPI(right string) mfaOpt  { return func(o *mfaOpts) { o.bobAPI = right } }
 func withBobLifting() mfaOpt          { return withBobAPI("lift_revocations") }
 func withAllAdminRights() mfaOpt {
@@ -364,6 +367,14 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 		f.b.PerLoginMFA = &MFAVerifiers{Anchors: &anchors}
 	}
 
+	if o.directory {
+		// Before the listener is wired, so Wire gives it a Map and every held
+		// connection is pinned to the principal the directory names (plan 12b).
+		f.b.Directory = directory.ForTestsFuncResolver(f.st, func(p string) (directory.Answer, error) {
+			return directory.Answer{Membership: store.Membership{Principal: p,
+				Username: strings.TrimPrefix(strings.SplitN(p, "@", 2)[0], "user:")}, Source: directory.Fresh}, nil
+		})
+	}
 	f.addr, _ = serveThroughWith(t, base, ListenerLimits{MaxPendingPerSource: 16, MaxPerPrincipal: 8,
 		HandshakeTimeout: 10 * time.Second}, nil, f.b.Wire)
 	f.alice = f.actor(t, f.fixture.alice, true)
