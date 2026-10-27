@@ -808,8 +808,10 @@ func TestAnAncestorOthersCanWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(mid, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "the directory "+mid) ||
-		!strings.Contains(err.Error(), "chmod go-w") {
+	// The refusal names the ancestor, the file read, the directory's mode as
+	// a directory's, and a way out that does not need chmod on a shared one.
+	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "the directory "+mid+", above "+p+", is mode drwxrwxrwx") ||
+		!strings.Contains(err.Error(), "chmod go-w") || !strings.Contains(err.Error(), "move the file under directories only root or uid") {
 		t.Fatalf("an others-writable ancestor: %v", err)
 	}
 	// The same walk guards the other entry points.
@@ -945,5 +947,50 @@ func TestAnACLGrantingWriteIsRefused(t *testing.T) {
 	}
 	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "writable by others") {
 		t.Fatalf("an ACL granting write: %v", err)
+	}
+}
+
+// A plain ancestor another user owns is refused even at 0755, and a read-only
+// mount never excuses its owner: its owner can rename the directory below it
+// and put another tree in its place (/home/bob above the file).
+func TestAnAncestorOfAnotherOwnerIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root owns the swapped uid's directory anyway")
+	}
+	top := safeDir(t)
+	mid := filepath.Join(top, "bob")
+	dir := filepath.Join(mid, "port49")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mid, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(p, []byte(minimalPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mi, err := os.Stat(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	midIno := mi.Sys().(*syscall.Stat_t).Ino
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
+	real := FileOwner
+	FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Ino == midIno {
+			return uint32(os.Geteuid() + 1), true
+		}
+		return real(fi)
+	}
+	for _, ro := range []bool{false, true} {
+		func() {
+			defer func(f func(*os.File) (bool, error)) { ReadOnlyFS = f }(ReadOnlyFS)
+			ReadOnlyFS = func(*os.File) (bool, error) { return ro, nil }
+			_, err := Read(p, maxPolicySize, "policy file")
+			if err == nil || !strings.Contains(err.Error(), "the directory "+mid) || !strings.Contains(err.Error(), "chown it") {
+				t.Fatalf("an ancestor of another owner (read-only mount %v): %v", ro, err)
+			}
+		}()
 	}
 }

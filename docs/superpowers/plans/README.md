@@ -7910,8 +7910,12 @@ These are the notes the pull request body carries. Each is true of the code as b
 - **The fence.** Every directory above a policy, inventory or key file must be neither group- nor
   world-writable and owned by root or port49d's user, unless it is sticky (as `/tmp` is) and owned by root or
   port49d's user. A directory on a read-only mount is excused for its mode alone: its ownership is still
-  checked. A `/home/<someone>` path, or a umask of 002 that left a
-  group-writable parent, is refused naming the directory. POSIX ACLs show in the mode's group bits; NFSv4
+  checked. That excuse trusts whoever writes the mount's source, so the host side must itself be protected:
+  `-v /srv/shared:/cfg:ro` with a 0777 host `/srv/shared` lets any host user swap the tree below it. Bind a
+  directory only root or port49d's user can write. A `/home/<someone>` path, or a umask of 002 that left a
+  group-writable parent, is refused naming the directory and the file being read. For a shared ancestor
+  such as `/srv` or `/home/team`, do not `chmod go-w` it: move the file under a root- or port49d-owned 0755
+  directory. POSIX ACLs show in the mode's group bits; NFSv4
   ACLs are not read, so keep the policy off NFS.
 - **Upgrade.**
   - Brokers that each ran their own `init-issuer` refuse after the first records its CA. Before upgrading, compare

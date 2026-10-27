@@ -78,7 +78,11 @@ var ReadOnlyFS = func(f *os.File) (bool, error) {
 // changes nothing that was checked or read. Every directory above them is
 // held to the same rule, a sticky one (/tmp) and one on a read-only mount
 // excused (decision 53 ruling 11); POSIX ACLs show in the mode's group bits,
-// NFSv4 ACLs are not read.
+// NFSv4 ACLs are not read. Those ancestors are checked by path, not by
+// descriptor: that is sound because swapping a component needs write on its
+// parent, which the rule has just limited to root and this process's user
+// (and, on a read-only mount, to whoever writes the mount's source, whom the
+// excuse trusts); only they could win a race against the walk.
 //
 // It is opened non-blocking, so a named pipe is refused rather than hanging a
 // start or a reload until something writes to it, and read to at most max
@@ -346,7 +350,7 @@ func resolvePolicyPath(path string) (string, error) {
 			// (that one is held below, to the stricter rule that names the
 			// link).
 			if !ancestors[resolved] {
-				if err := ancestorWritableByUsAlone(resolved); err != nil {
+				if err := ancestorWritableByUsAlone(resolved, abs); err != nil {
 					return "", err
 				}
 				ancestors[resolved] = true
@@ -386,19 +390,24 @@ func resolvePolicyPath(path string) (string, error) {
 // and writable by nobody else, unless its sticky bit is set - others can then
 // rename nothing below it that they do not own, and the next directory down
 // is checked in turn - or it is on a read-only mount, as a link's directory
-// is excused. The refusal names the directory and the rule, never a file's
+// is excused; that excuse trusts whoever writes the mount's source, so bind
+// only a directory that root or port49d's user alone can write. The refusal
+// names the directory, the path being read and the rule, never a file's
 // bytes.
-func ancestorWritableByUsAlone(dir string) error {
+func ancestorWritableByUsAlone(dir, path string) error {
 	d, di, err := openDir(dir)
 	if err != nil {
 		return err
 	}
 	defer d.Close()
-	what := "the directory " + dir + ", above the file"
+	what := "the directory " + dir + ", above " + path + ","
 	if di.Mode()&fs.ModeSticky != 0 {
 		return ownedByUsOrRoot(what, di)
 	}
-	return dirWritableByUsAlone(what, d, di)
+	// A shared ancestor (/srv, /home/team) is not ours to chmod: the way out
+	// is a directory only root or this user can write.
+	return dirWritableByUsAloneAdvising(what, d, di, fmt.Sprintf("chmod go-w it, or, if others share it, move the file "+
+		"under directories only root or uid %d can write", Geteuid()))
 }
 
 // openDir opens dir for fstat and openat alone, without following a link in
@@ -436,10 +445,16 @@ func writableByUsAlone(what string, fi fs.FileInfo) error {
 // rename a stale policy over it. Read-only is asked of the descriptor opened,
 // not a path, and the owner is still checked.
 func dirWritableByUsAlone(what string, d *os.File, fi fs.FileInfo) error {
+	return dirWritableByUsAloneAdvising(what, d, fi, "chmod go-w it")
+}
+
+// dirWritableByUsAloneAdvising is dirWritableByUsAlone with the remedy a
+// mode refusal ends on.
+func dirWritableByUsAloneAdvising(what string, d *os.File, fi fs.FileInfo, advice string) error {
 	if err := ownedByUsOrRoot(what, fi); err != nil {
 		return err
 	}
-	if err := notWritableByOthers(what, fi); err == nil {
+	if err := notWritableByOthersAdvising(what, fi, advice); err == nil {
 		return nil
 	} else if ro, rerr := ReadOnlyFS(d); rerr != nil || !ro {
 		return err
@@ -460,9 +475,22 @@ func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
 }
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {
-	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
+	return notWritableByOthersAdvising(what, fi, "chmod go-w it")
+}
+
+// notWritableByOthersAdvising refuses a group- or world-writable mode, a
+// directory's shown as one (drwxrwxrwx) and advice its last words.
+func notWritableByOthersAdvising(what string, fi fs.FileInfo, advice string) error {
+	if fi.Mode().Perm()&0o022 != 0 {
+		mode := fi.Mode().Perm().String()
+		if fi.IsDir() {
+			mode = fi.Mode().Type().String()[:1] + mode[1:]
+			if fi.Mode()&fs.ModeSticky != 0 {
+				mode += " (sticky)"
+			}
+		}
 		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write it "+
-			"decides who gets access - chmod go-w it", what, perm)
+			"decides who gets access - %s", what, mode, advice)
 	}
 	return nil
 }
