@@ -288,12 +288,12 @@ func (s *conn) decline() {
 // may include a credential, and BodySHA256 is documented as the hash of what
 // arrived on the wire.
 func (s *conn) protocolError(ctx context.Context, h wire.Header) {
-	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	// A TLS connection is dropped without close_notify, as a reset's is,
 	// and that holds for a shutdown during the backoff too: the handle is
-	// cleared before the hold, not after it.
+	// cleared before the record and the hold, not after them.
 	s.tlsc.Store(nil)
 	s.c = s.raw
+	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
 	s.backoff(ctx, "malformed_backoff")
 }
 
@@ -302,9 +302,9 @@ func (s *conn) protocolError(ctx context.Context, h wire.Header) {
 // protocolError, the TLS handle is dropped before the hold, so a shutdown
 // during it sends no close_notify either.
 func (s *conn) badTLSHeader(ctx context.Context, h wire.Header) {
-	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
 	s.tlsc.Store(nil)
 	s.c = s.raw
+	s.unvalidated(h, nil, keyring.DiagNotTACACS, 0)
 	s.backoff(ctx, "malformed_backoff")
 }
 
