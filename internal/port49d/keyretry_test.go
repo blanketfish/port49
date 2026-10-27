@@ -273,10 +273,7 @@ func TestARewriteNeverRefusesAReload(t *testing.T) {
 	if err := os.WriteFile(v2, []byte("not-a-real-key-v2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The new current is version 2; version 1 moves to accept.
-	rig.write(t, strings.Replace(minimalPolicy, runKeys, "keys:\n  k:\n    current: {version: 2, secret_ref: file:"+v2+"}\n"+
-		"    accept: [{version: 1, secret_ref: file:"+v1+", retire_after: 2099-01-01}]\n"+labKeyRun, 1))
-	_ = filePolicy
+	rig.write(t, filePolicy("    accept: [{version: 2, secret_ref: file:"+v2+", retire_after: 2099-01-01}]\n"))
 	before := testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("applied"))
 	rig.now = rig.now.Add(keyRetryInterval)
 	rig.pollTwice()
@@ -286,6 +283,50 @@ func TestARewriteNeverRefusesAReload(t *testing.T) {
 	if testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("applied")) != before+1 ||
 		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
 		t.Fatalf("the reload was not applied cleanly:\n%s", rig.out.String())
+	}
+}
+
+// A swap reads the held files itself, whatever the poll's clock says.
+func TestASwapRereadsTheKeyFiles(t *testing.T) {
+	rig, dir, v1, filePolicy := rewriteRig(t)
+	if err := os.WriteFile(v1, []byte(rewriteNew), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v2 := filepath.Join(dir, "k_v2")
+	if err := os.WriteFile(v2, []byte("not-a-real-key-v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.r.keyFilesNext = rig.now.Add(24 * time.Hour) // the poll reads nothing
+	rig.write(t, filePolicy("    accept: [{version: 2, secret_ref: file:"+v2+", retire_after: 2099-01-01}]\n"))
+	rig.pollTwice()
+	if !strings.Contains(rig.out.String(), "has changed since port49d read it") {
+		t.Fatalf("the swap did not read the held files:\n%s", rig.out.String())
+	}
+}
+
+// A version that goes from changed to unreadable is a different line and is
+// said at once, and so is the way back (spec §12: "when first seen").
+func TestAChangeOfStateIsSaidAtOnce(t *testing.T) {
+	rig, _, v1, _ := rewriteRig(t)
+	poll := func() {
+		rig.now = rig.now.Add(keyRetryInterval)
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if err := os.WriteFile(v1, []byte(rewriteNew), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	poll()
+	os.Remove(v1)
+	poll()
+	if !strings.Contains(rig.out.String(), "can no longer be read") {
+		t.Fatalf("changed then removed inside keyRetrySayEvery was not said:\n%s", rig.out.String())
+	}
+	if err := os.WriteFile(v1, []byte(rewriteNew), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	poll()
+	if n := strings.Count(rig.out.String(), "has changed since port49d read it"); n != 2 {
+		t.Fatalf("unreadable then changed again was not said (%d lines):\n%s", n, rig.out.String())
 	}
 }
 

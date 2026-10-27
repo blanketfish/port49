@@ -345,6 +345,12 @@ func TestAKeyFileRewrittenInPlaceIsFoundAndNotRead(t *testing.T) {
 	if string(held) != orig {
 		t.Fatalf("the secret in force is not the one read: held %d bytes, rewritten file %d", len(held), len(rewritten))
 	}
+	k.mu.Lock()
+	heldText := k.held["file:"+path].Bytes()
+	k.mu.Unlock()
+	if string(heldText) != orig {
+		t.Fatalf("k.held no longer holds the bytes read: %d bytes, rewritten file %d", len(heldText), len(rewritten))
+	}
 }
 
 func TestAKeyFileRemovedIsFoundUnreadable(t *testing.T) {
@@ -392,5 +398,52 @@ func TestAnUnchangedKeyFileIsNotAFinding(t *testing.T) {
 	var nilKeys *liveKeys
 	if got := nilKeys.rewritten(); got != nil {
 		t.Fatal("a nil liveKeys has findings")
+	}
+}
+
+// The re-read keeps the bound the first read had: a link in the key directory
+// that now leads outside key_secret_refs.file_dir is not followed.
+func TestAKeyFileLinkedOutsideTheKeyDirIsUnreadable(t *testing.T) {
+	dir := safeDir(t)
+	path := filepath.Join(dir, "k_v1")
+	if err := os.WriteFile(path, []byte("not-a-real-key-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	outside := filepath.Join(safeDir(t), "elsewhere")
+	if err := os.WriteFile(outside, []byte("not-a-real-key-other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(path)
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	got := k.rewritten()
+	if len(got) != 1 || got[0].State != keyFileUnreadable || got[0].Err == nil ||
+		!strings.Contains(got[0].Err.Error(), "outside") {
+		t.Fatalf("findings = %+v, want one keyFileUnreadable naming the bound", got)
+	}
+}
+
+// ...and keeps the bound's width as well: a link that leads out of the
+// reference's own directory but stays inside key_secret_refs.file_dir, as a
+// Secret volume's `..data` links do, is followed.
+func TestAKeyFileLinkedWithinTheKeyDirIsRead(t *testing.T) {
+	dir := safeDir(t)
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, []byte("not-a-real-key-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sub, "k_v1")
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	if got := k.rewritten(); len(got) != 0 {
+		t.Fatalf("findings = %+v, want none: the link stays inside file_dir", got)
 	}
 }

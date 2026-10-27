@@ -83,7 +83,7 @@ type reloader struct {
 	// read, tried again until it loads (keyretry.go).
 	keyWait keyWait
 	// keyFilesNext is when the poll reads the held key files again, and
-	// keyFilesSaid when each finding (by "ref/version") was last said
+	// keyFilesSaid when each finding (by "ref/version/state") was last said
 	// (rereadKeyFiles).
 	keyFilesNext time.Time
 	keyFilesSaid map[string]time.Time
@@ -1636,7 +1636,7 @@ func (r *reloader) rereadKeyFiles(trigger string) {
 	now := r.now()
 	still := map[string]time.Time{}
 	for _, f := range findings {
-		id := fmt.Sprintf("%s/%d", f.Ref, f.Version)
+		id := fmt.Sprintf("%s/%d/%d", f.Ref, f.Version, f.State) // a change of state is a new line
 		last, seen := r.keyFilesSaid[id]
 		if !seen || trigger == "SIGHUP" || now.Sub(last) >= keyRetrySayEvery {
 			if f.State == keyFileUnreadable {
