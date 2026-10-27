@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -604,5 +605,164 @@ func TestAnImportRefusalNeverEchoesTheExport(t *testing.T) {
 	if ans := decodeAdminAnswer(t, raw); code != 409 || ans.Error != "admin_operation_failed" ||
 		strings.Contains(ans.Detail, "zz-echo-me") || !strings.Contains(ans.Detail, "encryption.previous") {
 		t.Fatalf("answered %d %s %q: the text echoes the export or is not a 409", code, ans.Error, ans.Detail)
+	}
+}
+
+// On the four routes whose right the route itself fixes, the right comes
+// before the body is judged: a caller without it gets 403 and a record
+// whatever it sent, so a stolen token cannot probe the route unseen. The
+// revoke endpoint is the exception: its body's form picks the right.
+func TestARightlessCallerWithAMalformedBodyIsRefusedForTheRight(t *testing.T) {
+	f := newMFAFixture(t, withTestDirectory())
+	f.withAdminOps(t)
+	for _, c := range []struct{ name, path, event, body string }{
+		{"lift", liftPath, "revoke", `{"force":true}`},
+		{"lift naming nothing", liftPath, "revoke", `{}`},
+		{"lift not JSON", liftPath, "revoke", `not json`},
+		{"forget", forgetPath, "directory_forget", `{"force":true}`},
+		{"forget of a non-principal", forgetPath, "directory_forget", `{"principal":"bob"}`},
+		{"reset naming both", resetPath, "second_factor_reset", `{"principal":"user:bob@example.com","all":true}`},
+		{"reset naming neither", resetPath, "second_factor_reset", `{}`},
+		{"unlock of a workload", unlockPath, "sign_in_unlock", `{"principal":"app:ci"}`},
+		{"unlock not JSON", unlockPath, "sign_in_unlock", `[`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := recordsWith(t, f, c.event, "api_right_missing")
+			code, raw := f.bob.conn.post(t, c.path, nil, c.body)
+			if ans := decodeAdminAnswer(t, raw); code != 403 || ans.Error != "api_right_missing" || ans.Admin != nil {
+				t.Fatalf("answered %d %s, want 403 api_right_missing", code, ans.Error)
+			}
+			if recordsWith(t, f, c.event, "api_right_missing") != before+1 {
+				t.Fatalf("no %s record with api_right_missing", c.event)
+			}
+		})
+	}
+	// The exception, said as a test: the form decides the right there.
+	code, raw := f.bob.conn.post(t, revokePath, nil, `{"cert_issuer":"CN=Test CA"}`)
+	if ans := decodeAdminAnswer(t, raw); code != 400 || ans.Error != "bad_request" {
+		t.Fatalf("a malformed revoke body answered %d %s, want 400 bad_request", code, ans.Error)
+	}
+}
+
+// provedImportHead is the head of a proved import of body, its challenge taken
+// on c: what a client sends before it sends the body.
+func (f *mfaFixture) provedImportHead(t *testing.T, c *mfaConn, body string) string {
+	t.Helper()
+	path := importPath + "?replace=false"
+	ch := f.adminAsk(t, c, path, body)
+	sig := f.adminSign(t, f.alice.touchKey, ch.Challenge, "POST", path, body, c.adminExporter(t))
+	return fmt.Sprintf("POST %s HTTP/1.1\r\nHost: broker\r\nContent-Length: %d\r\n%s: %s\r\n\r\n", path, len(body),
+		api.AdminProofHeader, adminHeader(t, ch.Challenge, sig, f.alice.atts))
+}
+
+// A proved import whose body is cut short, or stalls past the deadline, is 400
+// and spends no challenge: the proof is checked only on a whole body.
+func TestAProvedImportWithATruncatedBodyIsRefusedAndKeepsItsChallenge(t *testing.T) {
+	for _, how := range []string{"cut", "stalled"} {
+		t.Run(how, func(t *testing.T) {
+			defer func(d time.Duration) { importReadTimeout = d }(importReadTimeout)
+			importReadTimeout = 1 * time.Second
+			f := newMFAFixture(t, withAllAdminRights())
+			f.withAdminOps(t)
+			c := f.alice.conn
+			body := exportOf(t)
+			head := f.provedImportHead(t, c, body)
+			if f.b.admin.len() != 1 {
+				t.Fatalf("setup: %d challenges held, want 1", f.b.admin.len())
+			}
+			if _, err := fmt.Fprint(c.c, head+body[:len(body)/2]); err != nil {
+				t.Fatal(err)
+			}
+			if how == "cut" {
+				if err := c.c.CloseWrite(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = c.c.SetReadDeadline(time.Now().Add(10 * time.Second))
+			resp, err := http.ReadResponse(c.br, nil)
+			if err != nil {
+				t.Fatalf("no answer: %v", err)
+			}
+			defer resp.Body.Close()
+			raw := new(strings.Builder)
+			_, _ = bufio.NewReader(resp.Body).WriteTo(raw)
+			if ans := decodeAdminAnswer(t, []byte(raw.String())); resp.StatusCode != 400 || ans.Error != "bad_request" {
+				t.Fatalf("a truncated body answered %d %s, want 400 bad_request", resp.StatusCode, ans.Error)
+			}
+			// A stalled body ends the connection, and its challenge with it.
+			if n := f.b.admin.len(); how == "cut" && n != 1 {
+				t.Fatalf("%d challenges held after the cut body, want the 1 still unspent", n)
+			}
+			if f.adminRecords(t, "admin_touch_refused") != 0 || recordsWith(t, f, "enrollments_import", "") != 0 {
+				t.Fatal("a truncated body reached the proof or the import")
+			}
+		})
+	}
+}
+
+// slowImport is an enrollment store whose import takes a while, and gives up
+// when its context ends, as a store's write does.
+type slowImport struct {
+	store.Enrollments
+	wait time.Duration
+}
+
+func (s slowImport) Import(ctx context.Context, sealed []byte, replace bool) (int, time.Time, error) {
+	select {
+	case <-time.After(s.wait):
+	case <-ctx.Done():
+		return 0, time.Time{}, ctx.Err()
+	}
+	return s.Enrollments.Import(ctx, sealed, replace)
+}
+
+// A body that arrives near the import deadline leaves the write its whole
+// time. A deadline that fired after the body was whole would cancel the
+// request's context and cut the write short; net/http clears the deadline at
+// the body's EOF, and this pins that the route needs nothing else.
+func TestAnImportWhoseBodyArrivesNearTheDeadlineStillWrites(t *testing.T) {
+	defer func(d time.Duration) { importReadTimeout = d }(importReadTimeout)
+	importReadTimeout = 1 * time.Second
+	f := newMFAFixture(t, withAllAdminRights())
+	f.withAdminOps(t)
+	f.b.Enrollments = slowImport{Enrollments: f.b.Enrollments, wait: 1500 * time.Millisecond}
+	c := f.alice.conn
+	body := exportOf(t)
+	head := f.provedImportHead(t, c, body)
+	if _, err := fmt.Fprint(c.c, head+body[:len(body)/2]); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(800 * time.Millisecond) // the body is whole just inside the deadline
+	if _, err := fmt.Fprint(c.c, body[len(body)/2:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(c.br, nil)
+	if err != nil {
+		t.Fatalf("no answer: %v", err)
+	}
+	defer resp.Body.Close()
+	raw := new(strings.Builder)
+	_, _ = bufio.NewReader(resp.Body).WriteTo(raw)
+	if resp.StatusCode != 200 {
+		ans := decodeAdminAnswer(t, []byte(raw.String()))
+		t.Fatalf("the import answered %d %s %q, want 200", resp.StatusCode, ans.Error, ans.Detail)
+	}
+}
+
+// An operation's error is one printable line, bounded, whatever it holds.
+func TestAnAdminFailureIsOnePrintableBoundedLine(t *testing.T) {
+	f := newMFAFixture(t)
+	rec := httptest.NewRecorder()
+	f.b.adminFailed(rec, "forget_principal", errors.New("broker: first\nsecond\x1b[31m "+strings.Repeat("y", 900)))
+	var ans struct{ Error, Detail string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != 409 || ans.Error != "admin_operation_failed" {
+		t.Fatalf("answered %d %s, want 409 admin_operation_failed", rec.Code, ans.Error)
+	}
+	if strings.ContainsAny(ans.Detail, "\n\x1b") || len(ans.Detail) > 700 {
+		t.Fatalf("the detail is not one bounded printable line: %d bytes", len(ans.Detail))
 	}
 }

@@ -27,6 +27,9 @@ import (
 // right never presses the key, and a refused proof changes nothing. The
 // answers carry the text the admin socket printed (api.AdminResult).
 
+// importReadTimeout is api.ImportReadTimeout, a variable so a test can shorten it.
+var importReadTimeout = api.ImportReadTimeout
+
 // maxAdminBody bounds a small admin request's JSON body.
 const maxAdminBody = 4 << 10
 
@@ -157,29 +160,41 @@ func (b *Broker) revocationsLift(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req api.LiftRequest
-	if err := decodeAdminBody(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a lift: name a principal, or a "+
-			"certificate's cert_issuer and cert_serial")
-		return
-	}
-	rr, kind, _, err := RevokeRequest{Principal: req.Principal, Issuer: req.CertIssuer, Serial: req.CertSerial}.normal()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
-		return
-	}
+	// The right is fixed by the route, so it is checked before the body is
+	// judged: a caller without it learns nothing and leaves a record, whatever
+	// it sent. The record names the target only when the body gives one.
 	origin := "api " + c.principal
 	now := b.Now()
 	rec := decision.Record{TS: now, Event: decision.EventRevoke,
 		Revocation: &decision.Revocation{By: ByPrincipal, At: decision.FormatTime(now), Origin: origin}}
-	target := rr.Principal
-	if kind == store.RevocationCert {
-		rec.Revocation.By, rec.Revocation.Issuer, rec.Revocation.Serial = ByCert, rr.Issuer, rr.Serial
-		target = certTargetOf(rr)
-	} else {
-		rec.Principal = rr.Principal
+	var (
+		req    api.LiftRequest
+		rr     RevokeRequest
+		kind   string
+		target string
+	)
+	bad := "the body is not a lift: name a principal, or a certificate's cert_issuer and cert_serial"
+	if decodeAdminBody(body, &req) == nil {
+		var err error
+		rr, kind, _, err = RevokeRequest{Principal: req.Principal, Issuer: req.CertIssuer, Serial: req.CertSerial}.normal()
+		if err != nil {
+			bad = strings.TrimPrefix(err.Error(), "broker: ")
+		} else {
+			bad = ""
+			target = rr.Principal
+			if kind == store.RevocationCert {
+				rec.Revocation.By, rec.Revocation.Issuer, rec.Revocation.Serial = ByCert, rr.Issuer, rr.Serial
+				target = certTargetOf(rr)
+			} else {
+				rec.Principal = rr.Principal
+			}
+		}
 	}
 	if !b.adminRight(w, r, c, rec, []string{policy.RightLiftRevocations}, "lifting a revocation") {
+		return
+	}
+	if bad != "" {
+		writeError(w, http.StatusBadRequest, "bad_request", bad)
 		return
 	}
 	if !b.adminGate(w, r, c, body, "lift", target) {
@@ -273,12 +288,15 @@ type adminDirectory struct {
 	c      caller
 	body   []byte
 	origin string
+	// decodeFailed: the body is not the call's JSON object.
+	decodeFailed bool
 }
 
-// directoryHead authenticates the caller under the call's event and reads and
-// decodes a small JSON body into v; it has answered when it returns false.
-// The caller then validates the fields, checks the right and asks for the touch.
-func (b *Broker) directoryHead(w http.ResponseWriter, r *http.Request, event string, v any, usage string) (adminDirectory, bool) {
+// directoryHead authenticates the caller under the call's event and reads a
+// small JSON body, decoding it into v; it has answered when it returns false.
+// A body that does not decode is not answered here: the right is checked
+// first, so decodeFailed is left to the caller to answer after it.
+func (b *Broker) directoryHead(w http.ResponseWriter, r *http.Request, event string, v any) (adminDirectory, bool) {
 	c, ok := b.authenticate(w, r, event, "did nothing")
 	if !ok {
 		return adminDirectory{}, false
@@ -287,28 +305,33 @@ func (b *Broker) directoryHead(w http.ResponseWriter, r *http.Request, event str
 	if !ok {
 		return adminDirectory{}, false
 	}
-	if err := decodeAdminBody(body, v); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", usage)
-		return adminDirectory{}, false
-	}
-	return adminDirectory{c: c, body: body, origin: "api " + c.principal}, true
+	return adminDirectory{c: c, body: body, origin: "api " + c.principal, decodeFailed: decodeAdminBody(body, v) != nil}, true
 }
 
 // directoryForget is POST /v1/directory/forget (forget_principals, a touch).
 func (b *Broker) directoryForget(w http.ResponseWriter, r *http.Request) {
 	var req api.PrincipalRequest
-	d, ok := b.directoryHead(w, r, decision.EventDirectoryForget, &req, "the body names a principal")
+	d, ok := b.directoryHead(w, r, decision.EventDirectoryForget, &req)
 	if !ok {
 		return
 	}
-	principal, err := normalPrincipal(req.Principal)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
-		return
+	var principal string
+	bad := "the body names a principal"
+	if !d.decodeFailed {
+		var err error
+		if principal, err = normalPrincipal(req.Principal); err != nil {
+			bad = strings.TrimPrefix(err.Error(), "broker: ")
+		} else {
+			bad = ""
+		}
 	}
 	rec := decision.Record{TS: b.Now(), Event: decision.EventDirectoryForget, Principal: principal,
 		Forget: &decision.Forget{Origin: d.origin}}
 	if !b.adminRight(w, r, d.c, rec, []string{policy.RightForgetPrincipals}, "forgetting a directory pin") {
+		return
+	}
+	if bad != "" {
+		writeError(w, http.StatusBadRequest, "bad_request", bad)
 		return
 	}
 	if err := b.forgetUnavailable(principal); err != nil {
@@ -330,34 +353,38 @@ func (b *Broker) directoryForget(w http.ResponseWriter, r *http.Request) {
 // (reset_second_factor, a touch): one principal, or all.
 func (b *Broker) directoryResetSecondFactor(w http.ResponseWriter, r *http.Request) {
 	var req api.ResetSecondFactorRequest
-	d, ok := b.directoryHead(w, r, decision.EventSecondFactorReset, &req, "the body names a principal, or all")
+	d, ok := b.directoryHead(w, r, decision.EventSecondFactorReset, &req)
 	if !ok {
 		return
 	}
 	op, target := "reset_second_factor", ""
-	switch {
-	case req.All && req.Principal != "":
-		writeError(w, http.StatusBadRequest, "bad_request", "name a principal or all, not both")
-		return
-	case !req.All && req.Principal == "":
-		writeError(w, http.StatusBadRequest, "bad_request", "name a principal, or all")
-		return
-	case req.All:
-		op, target = "reset_second_factor_all", "all"
-	default:
-		p, err := userPrincipal(req.Principal)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
-			return
+	bad := "the body names a principal, or all"
+	if !d.decodeFailed {
+		switch {
+		case req.All && req.Principal != "":
+			bad = "name a principal or all, not both"
+		case !req.All && req.Principal == "":
+			bad = "name a principal, or all"
+		case req.All:
+			op, target, bad = "reset_second_factor_all", "all", ""
+		default:
+			if p, err := userPrincipal(req.Principal); err != nil {
+				bad = strings.TrimPrefix(err.Error(), "broker: ")
+			} else {
+				target, bad = p, ""
+			}
 		}
-		target = p
 	}
 	rec := decision.Record{TS: b.Now(), Event: decision.EventSecondFactorReset,
-		SecondFactorReset: &decision.SecondFactorReset{All: req.All, Origin: d.origin}}
-	if !req.All {
+		SecondFactorReset: &decision.SecondFactorReset{All: bad == "" && req.All, Origin: d.origin}}
+	if bad == "" && !req.All {
 		rec.Principal = target
 	}
 	if !b.adminRight(w, r, d.c, rec, []string{policy.RightResetSecondFactor}, "resetting a second factor") {
+		return
+	}
+	if bad != "" {
+		writeError(w, http.StatusBadRequest, "bad_request", bad)
 		return
 	}
 	if err := b.signInOps(); err != nil {
@@ -382,18 +409,27 @@ func (b *Broker) directoryResetSecondFactor(w http.ResponseWriter, r *http.Reque
 // directoryUnlock is POST /v1/directory/unlock (unlock_sign_in, a touch).
 func (b *Broker) directoryUnlock(w http.ResponseWriter, r *http.Request) {
 	var req api.PrincipalRequest
-	d, ok := b.directoryHead(w, r, decision.EventSignInUnlock, &req, "the body names a principal")
+	d, ok := b.directoryHead(w, r, decision.EventSignInUnlock, &req)
 	if !ok {
 		return
 	}
-	principal, err := userPrincipal(req.Principal)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
-		return
+	var principal string
+	bad := "the body names a principal"
+	if !d.decodeFailed {
+		var err error
+		if principal, err = userPrincipal(req.Principal); err != nil {
+			bad = strings.TrimPrefix(err.Error(), "broker: ")
+		} else {
+			bad = ""
+		}
 	}
 	rec := decision.Record{TS: b.Now(), Event: decision.EventSignInUnlock, Principal: principal,
 		SignInUnlock: &decision.SignInUnlock{Origin: d.origin}}
 	if !b.adminRight(w, r, d.c, rec, []string{policy.RightUnlockSignIn}, "clearing a sign-in lockout") {
+		return
+	}
+	if bad != "" {
+		writeError(w, http.StatusBadRequest, "bad_request", bad)
 		return
 	}
 	if err := b.signInOps(); err != nil {
@@ -426,21 +462,25 @@ func (b *Broker) directoryImport(w http.ResponseWriter, r *http.Request) {
 	if !b.adminRight(w, r, c, rec, []string{policy.RightImportEnrollments}, "importing the enrollment store") {
 		return
 	}
-	if err := b.signInOps(); err != nil {
-		b.adminUnavailable(w, "import_enrollments", err)
-		return
-	}
 	replace, err := importReplace(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := b.signInOps(); err != nil {
+		b.adminUnavailable(w, "import_enrollments", err)
+		return
+	}
 	// ErrNotSupported (a recorder in a test) is no reason to refuse.
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(api.ImportReadTimeout))
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(importReadTimeout))
 	body, ok := readAdminBody(w, r, api.MaxImportBytes)
 	if !ok {
 		return
 	}
+	// No deadline needs clearing here: net/http clears the connection's when
+	// the body hits EOF (startBackgroundRead), so it never cancels r.Context
+	// under the write below. TestAnImportWhoseBodyArrivesNearTheDeadlineStillWrites
+	// pins that, should a later net/http change it.
 	if len(bytes.TrimSpace(body)) == 0 {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is the sealed export `port49-broker "+
 			"export-enrollments` wrote: none arrived")
