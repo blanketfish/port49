@@ -432,26 +432,28 @@ func followWitness(t *testing.T) func(t *testing.T, rec *witnessRecord, atLeast 
 }
 
 // followGuard is followWitness for port49d's restore guard, which a test
-// cannot name (run makes it): the wait is until a guard has followed atLeast.
-// Only the daemon started since the revision was written can have followed
-// it, so any guard that has is the one.
-func followGuard(t *testing.T) func(t *testing.T, atLeast uint64) {
+// cannot name (run makes it): the wait is until guards distinct guards have
+// each followed atLeast, guards being the number of daemons the test runs, so
+// a test with two daemons cannot pass on the first one alone.
+func followGuard(t *testing.T) func(t *testing.T, guards int, atLeast uint64) {
 	t.Helper()
 	var h hookSeen[*restoreGuard]
 	old := guardFollowed
 	guardFollowed = func(g *restoreGuard, rev uint64) { h.add(g, rev, false) }
 	t.Cleanup(func() { guardFollowed = old })
-	return func(t *testing.T, atLeast uint64) {
+	return func(t *testing.T, guards int, atLeast uint64) {
 		t.Helper()
-		top := func() (hi uint64) {
+		reached := func() (n int) {
 			for _, v := range h.snapshot() {
-				hi = max(hi, v)
+				if v >= atLeast {
+					n++
+				}
 			}
-			return hi
+			return n
 		}
-		waitHook(t, fmt.Sprintf("port49d to follow revision %d", atLeast),
-			func() bool { return top() >= atLeast },
-			func() string { return fmt.Sprintf("the highest followed is %d", top()) })
+		waitHook(t, fmt.Sprintf("%d guards to follow revision %d", guards, atLeast),
+			func() bool { return reached() >= guards },
+			func() string { return fmt.Sprintf("%d reached it", reached()) })
 	}
 }
 
@@ -569,4 +571,42 @@ func TestRestorePassedCountsPasses(t *testing.T) {
 	}
 	pass(b)
 	<-advanced
+}
+
+// The hooks are what make the waits sound, so their place is pinned: the
+// follow hook fires after Saw has raised the witness followed, and the pass
+// hook after judge has judged the read. A hook moved before either would take
+// the waits back to timing, and these go red.
+func TestTheGuardHooksFireAfterTheirWork(t *testing.T) {
+	var atFollow, atPass []string
+	oldF, oldP := guardFollowed, restorePassed
+	guardFollowed = func(g *restoreGuard, rev uint64) {
+		if high, _ := g.recorded(); high < rev {
+			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, high))
+		}
+	}
+	restorePassed = func(g *restoreGuard) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if !g.checked {
+			atPass = append(atPass, "the read was not judged")
+		}
+	}
+	t.Cleanup(func() { guardFollowed, restorePassed = oldF, oldP })
+	_, s := openFollowStore(t)
+	g := newRestoreGuard(io.Discard)
+	g.followed(7)
+	// A guard waiting for a read that answers: judge lifts it.
+	g.mu.Lock()
+	g.checked = false
+	g.mu.Unlock()
+	if !g.pass(context.Background(), time.Second, s.RestoreRead) {
+		t.Fatal("a pass was cut short")
+	}
+	if len(atFollow) > 0 {
+		t.Errorf("guardFollowed fired before Saw: %v", atFollow)
+	}
+	if len(atPass) > 0 {
+		t.Errorf("restorePassed fired before judge: %v", atPass)
+	}
 }

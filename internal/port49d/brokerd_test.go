@@ -2205,7 +2205,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 		t.Fatalf("control: the token's first login: %d", st)
 	}
 	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
-	followed(t, witnessAt(t, root)) // port49d follows it
+	followed(t, 1, witnessAt(t, root)) // port49d follows it
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -2293,7 +2293,7 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 		t.Fatalf("control: the token's first login: %d", st)
 	}
 	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
-	followed(t, witnessAt(t, root)) // port49d follows it
+	followed(t, 1, witnessAt(t, root)) // port49d follows it
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}

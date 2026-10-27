@@ -65,7 +65,6 @@ func (g *restoreGuard) Allows() bool {
 	return g.checked && !g.guarded
 }
 
-// Saw raises the witness followed. It never lifts the guard.
 // guardFollowed is told each revision of meta/witness port49d's follower gave
 // g, after g took it, and restorePassed each completed pass of g. Only tests
 // swap them, to wait on port49d's guard instead of sleeping; both are keyed
@@ -82,6 +81,7 @@ func (g *restoreGuard) followed(rev uint64) {
 	guardFollowed(g, rev)
 }
 
+// Saw raises the witness followed. It never lifts the guard.
 func (g *restoreGuard) Saw(rev uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

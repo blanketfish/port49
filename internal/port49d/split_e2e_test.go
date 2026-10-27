@@ -36,7 +36,7 @@ func closedWithin(c net.Conn, d time.Duration) bool {
 
 // stopEveryBroker stops the one broker after it has run the keyspace and
 // kept its witness, then waits until its hold is gone from etcd and each
-// of daemons guards has completed two passes since (passes, from countPasses):
+// of the daemons' guards has completed two passes since (passes, from countPasses):
 // the daemons then run on with a runner that held the keyspace and is dead,
 // which is the 3am case (design §6), not one that never started.
 func stopEveryBroker(t *testing.T, root *clientv3.Client, out *syncBuffer, stop func() error,
@@ -53,7 +53,7 @@ func stopEveryBroker(t *testing.T, root *clientv3.Client, out *syncBuffer, stop 
 		resp, err := root.Get(ctx, "/port49/v1/meta/hold", clientv3.WithPrefix(), clientv3.WithCountOnly())
 		return err == nil && resp.Count == 0
 	})
-	passes(t, daemons, 2) // each daemon's guard has read the empty hold
+	passes(t, daemons, 2) // two witness periods of each daemon's guard, with the runner dead
 }
 
 // lastOf is the last of recs, nil when there is none.
