@@ -1324,10 +1324,14 @@ body's SHA-256, so the prompt shows that a replace wipes the store. The record i
 `SHA-256(challenge ‖ 0 ‖ exporter ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ request_sha256)`, so any
 other caller, connection or request misses it.
 
-**The routes.** Every admin write runs in one order: its right (403 `api_right_missing`, recorded,
-no challenge), the request's own validity (400, no challenge), the body's bound, the touch, then the
-operation. So a caller without the right never blinks, and a call that cannot run is never asked
-for a key press. The routes and their rights are §2's table. The certificate's target is its
+**The routes.** Every admin write runs in one order: the request's own validity (400, no challenge),
+its right (403 `api_right_missing`, recorded, no challenge), whether this broker can run it at all
+(409 `admin_operation_failed`, no challenge: a forget with no `broker.directory`, a second-factor
+reset, unlock or import with no `directory_password` verifier), the body's bound, the touch, then
+the operation. So a caller without the right never blinks, learns nothing of how the broker is
+configured, and no key press is ever spent on a call that cannot run. The text of a 409 is the
+broker's own, or names a principal the broker has validated; it never quotes the body (an import
+sealed under an unknown key is told to set `encryption.previous`, without the key id the file names). The routes and their rights are §2's table. The certificate's target is its
 issuer, then `serial`, then the serial as the broker compares it (`CN=Example CA serial 1a2b`); an
 import's is `merge` or `replace`, a space, and the 12 hex digits. A proved call answers
 `{"text": …, "partial": …}`: `text` is what the CLI prints, unchanged, and `partial` is set where a
