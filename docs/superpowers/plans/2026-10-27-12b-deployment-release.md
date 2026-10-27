@@ -96,7 +96,7 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
    - **Compose:** `docker compose exec`, as today.
    - **Kubernetes:** `kubectl exec statefulset/<release>-broker -- port49 revoke --socket /run/port49/port49-broker.sock …`.
 
-   An admin revocation over the network API is not built here (see "Open for Ryan").
+   An admin revocation over the network API is not built here: for beta, revocation is the local socket only (team lead, 2026-10-27; Ryan may override, see "Open for Ryan").
 6. **Packages.**
    - **The two packages:**
      - `port49-server` ships the static build: `port49d`, `port49-broker`, `port49-inventory` and `port49`, with the units, `sysusers.d` and `tmpfiles.d`.
@@ -107,7 +107,7 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
    - **The Python library and the collection** (roadmap, plan 9d carry): the client package installs both beside the client build.
      - The collection goes at `/usr/share/ansible/collections/ansible_collections/port49/client/`, which is on ansible-core's default collections path, in both formats.
      - The `.deb` installs the library (pure Python, `dependencies = []`) at `/usr/lib/python3/dist-packages/port49/`, Debian's version-independent path.
-     - **The `.rpm` does not install the library yet.** RPM distributions have no version-independent `site-packages`: the path is `/usr/lib/python3.<minor>/site-packages`, and one nfpm package cannot name the target's minor version. Installing it on a path Python does not search would ship a library that does not import. This is in "Open for Ryan".
+     - **The `.rpm` does not install the library yet.** RPM distributions have no version-independent `site-packages`: the path is `/usr/lib/python3.<minor>/site-packages`, and one nfpm package cannot name the target's minor version. Installing it on a path Python does not search would ship a library that does not import. So the `.rpm` leaves the library to `pip install port49`, and the client README says so (team lead, 2026-10-27; Ryan may override, see "Open for Ryan").
      - `TestClientPackageContents` asserts each path. A Debian-container test imports `port49` with the system `python3`, and `ansible-doc port49.client.token` finds the collection.
    - **Not done by the client package:**
      - adding a user to `tss`, since a package cannot know which user (the README says `usermod -aG tss <user>`);
@@ -147,6 +147,7 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
      - `terminationGracePeriodSeconds: 60`.
      - Neither StatefulSet sets `persistentVolumeClaimRetentionPolicy`. Kubernetes' default retains the PVCs, so a scale-down (the HPA's included) leaves a spool PVC with unsent accounting until a scale-up takes it back. The README says so.
    - **Probes** (A16): readiness `/readyz` and liveness `/healthz`, as plain HTTP `httpGet` on each process's metrics port. No probe needs a client certificate, and none touches TACACS+ or the broker API.
+     - Liveness sets `periodSeconds: 10` and `failureThreshold: 6` (60 s), with the template comment `# /healthz is unbound for seconds between runs after a store loss (internal/port49d/main.go:727-731)`. Kubernetes' default 10 s × 3 would let the kubelet kill port49d mid etcd outage (pre-flight re-review R1).
    - **Issuer discovery** (plan 10 carry): `issuerDiscovery.enabled` renders the `system:service-account-issuer-discovery` ClusterRoleBinding of `examples/kubernetes/issuer-discovery.yaml`, in each cluster whose workloads mint, off by default.
    - **Pod Security:** the initContainers and `copy-issuer.sh`'s pods run as root, so the namespace needs the `baseline` level, not `restricted`. The README says so.
    - **Binding 49 as non-root:** the pod sysctl `net.ipv4.ip_unprivileged_port_start=0`, a safe sysctl.
@@ -192,13 +193,14 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
         - Kubernetes: `kubectl logs --previous`, `kubectl describe pod` for a missing Secret (a `ContainerCreating` event, never a port49 line), and `CrashLoopBackOff`.
 14. **The etcd floor in every smoke.** Each smoke configures every member's URL, never a Service or VIP, and asserts port49d's start line `etcd …, at or above the floor` names all three.
 
-## Open for Ryan (not decided here)
+## Open for Ryan
 
-- **An admin revocation over the authenticated API.** Today it is the local socket in every shape (ruling 5). A remote admin revoke is server code with its own authorization rule, so it is not built here.
-- **The Python library in the `.rpm`** (ruling 6). RPM `site-packages` is per Python minor version, so one package cannot install an importable library. Three choices:
+The first two are ruled by the team lead (2026-10-27) and written into rulings 5 and 6. Ryan may override either.
+
+- **An admin revocation over the authenticated API.** Ruled: local socket only for beta, in every shape (ruling 5). A remote admin revoke is server code with its own authorization rule, so it is not built here.
+- **The Python library in the `.rpm`** (ruling 6). RPM `site-packages` is per Python minor version, so one package cannot install an importable library. Ruled: the `.rpm` leaves the library to `pip install port49`, and the README says so. The alternatives, if Ryan overrides:
   - per-distribution RPMs, each naming its `python3.<minor>`;
-  - a `%post` running `pip`;
-  - the `.rpm` leaves the library to `pip install port49`, and the README says so.
+  - a `%post` running `pip`.
 
   The `.deb` and the collection follow the roadmap as written.
 - **One-time actions before the first tag:**
@@ -828,7 +830,7 @@ These are the conditions most likely to bite an operator that no single task's h
     - `Conflicts: port49-server`.
   - `TestTheClientPackageImportsAndFindsTheCollection`: in a `debian:trixie-slim` container with `python3` and `ansible-core` (pinned), `apt-get install ./port49_*.deb`. Then `python3 -c 'import port49'` exits 0, and `ansible-doc -t lookup port49.client.token` exits 0.
   - `TestTheClientConffileSetsNothing`, in `internal/userconfig/conffile_test.go`: `parse("../../packaging/client/config.yaml", "system config", false)` returns the zero `File`. The test reads the raw text and finds each A13 key (`broker`, `broker_ca`, `broker_crl`, `touch_key`, `key`, `issued_key_store`) as a commented line.
-  - `TestTheRPMsMatch`: `rpm -qlpv` shows the same paths and modes, except the Python library, which the `.rpm` omits ("Open for Ryan").
+  - `TestTheRPMsMatch`: `rpm -qlpv` shows the same paths and modes, except the Python library, which the `.rpm` omits (ruling 6).
   - `TestTheDarwinClientArchivesExist`: `dist/port49_*_darwin_{arm64,amd64}.tar.gz` exist.
 
 - [ ] **Step 2: Run the tests and see them fail.**
@@ -861,7 +863,7 @@ These are the conditions most likely to bite an operator that no single task's h
     - 0755 with no setgid and no capabilities, and why `port49 ssh`'s askpass needs that (9a P15);
     - `usermod -aG tss <user>` for a TPM;
     - the pcscd polkit rule as a host install;
-    - where the client package puts the Python library and the collection, and that on an `.rpm` host the library comes from `pip install port49` until "Open for Ryan" is ruled;
+    - where the client package puts the Python library and the collection, and that on an `.rpm` host the library comes from `pip install port49` (ruling 6);
     - macOS unsigned (L63).
 
 - [ ] **Step 4: Verify.**
@@ -984,7 +986,7 @@ These are the conditions most likely to bite an operator that no single task's h
     - port49d's pod mounts `etcd.port49d.existingSecret` and not the broker's, and the broker's pod the reverse;
     - both mount `etcd.caSecret`;
     - the device-keys Secret is mounted only in port49d's pod.
-  - `TestProbesNeverNeedAClientCertificate`: every container's readiness probe is `httpGet` `/readyz` and its liveness probe `httpGet` `/healthz`, scheme `HTTP`, on the metrics port. No probe names port 49, 300 or the broker API port, and none is `exec` or `tcpSocket`.
+  - `TestProbesNeverNeedAClientCertificate`: every container's readiness probe is `httpGet` `/readyz` and its liveness probe `httpGet` `/healthz`, scheme `HTTP`, on the metrics port. No probe names port 49, 300 or the broker API port, and none is `exec` or `tcpSocket`. Every liveness probe has `periodSeconds × failureThreshold ≥ 60` (re-review R1).
   - `TestAMissingChartIsAFinding`, in `tests/ci/versions`: `Read` of a tree without `Chart.yaml` is an error (pre-flight M3).
   - `TestIssuerDiscoveryIsOptIn`: off, no ClusterRoleBinding renders. On, one binds `system:service-account-issuer-discovery` to `system:unauthenticated`, matching `examples/kubernetes/issuer-discovery.yaml`.
   - `TestTheHPAScalesOnConnections`: with `autoscaling.enabled: true`, an `autoscaling/v2` HPA whose single metric is type `Pods`, named `port49_connections`. There is no `Resource` metric.
@@ -1105,7 +1107,7 @@ The workflow `.github/workflows/kind.yml` lands in Task 13, after L82 closes. Th
   8. **The CronJob, inside and outside** (plan 10 carry):
      - The broker gets a `k8s` verifier for the kind cluster, with `issuerDiscovery.enabled: true`, and the policy gets the subject of `examples/kubernetes/policy.yaml`.
      - **Inside:** a Job made from `examples/kubernetes/backup-cronjob.yaml`'s template (`kubectl create job --from=cronjob/…`) mints with `port49 workload token --token-file` against the in-cluster broker Service. PASS iff the Job completes, and the broker logs the service account's principal.
-     - **Outside:** a `port49-broker` started on the host from `make build`, with the cluster's `jwks` URL and CA (as L69 ran), and the same Job pointed at it through the kind network gateway. PASS iff the Job completes.
+     - **Outside:** a `port49-broker` started on the host from `make build`, with the cluster's `jwks` URL and CA (as L69 ran), and the same Job pointed at it through the kind network gateway. Kind's etcd is not reachable from the host, so this broker uses the memory store. Its server certificate comes from `testpki` with the kind gateway IP (from `docker network inspect kind`) as an IP SAN, and it listens on that gateway address. PASS iff the Job completes.
 
   On failure the test calls `Cluster.Dump`. It always deletes the cluster.
 
@@ -1125,7 +1127,7 @@ The workflow `.github/workflows/kind.yml` lands in Task 13, after L82 closes. Th
 ### Task 12: The release workflow and publishing
 
 **Files:**
-- Create: `.github/workflows/release.yml`, `tests/ci/workflows_test.go` (untagged; parses YAML), `packaging/requirements-release.txt` (`build`, `setuptools` and `ansible-core`, each pinned with `--hash`)
+- Create: `.github/workflows/release.yml`, `tests/ci/workflows_test.go` (untagged; parses YAML), `packaging/requirements-release.txt` (`build`, `setuptools` and `ansible-core` with every transitive dependency, generated by `pip-compile --generate-hashes`; the file's header records the exact command, and a regeneration is that command re-run, never a hand edit)
 - Modify: `clients/python/pyproject.toml` (classifiers and URLs only, if missing; `requires` pinned to the setuptools version in `requirements-release.txt`), `clients/ansible/ansible_collections/port49/client/galaxy.yml` (`build_ignore` for tests), `.github/workflows/lab-free.yml` (no change to `on:`; its tag trigger stays)
 
 **Interfaces:**

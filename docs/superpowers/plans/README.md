@@ -7583,7 +7583,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
   - **Spec:** decision 54 (its Task 1); §10, and §12's "A key secret rewritten in place"; design §13.
   - **Lab:** opens L82 (Secret volumes and External Secrets on kind), L83 (Vault Agent and the CSI driver), L84
     (`LoadCredential=` and Compose `secrets:`) and L85 (MetalLB anycast), and runs each. L39 (b) and (c) stay 12c's.
-  - Status: **written 2026-10-27**, revised the same day after its pre-flight (C1, I1–I14 and M1–M15 applied; the `.rpm` Python library and the release environments' tag restrictions are open for Ryan); seventeen tasks.
+  - Status: **written 2026-10-27**, revised the same day after its pre-flight (C1, I1–I14 and M1–M15 applied; the `.rpm` Python library (pip-only) and revocation (local socket for beta) ruled by the lead, Ryan may override; the release environments' tag restrictions are open for Ryan); seventeen tasks.
 - **12c — Reference configurations, alarms and lab rows.**
   - **Builds:**
     - the per-platform reference AAA configurations (L73's TLS ones included);
