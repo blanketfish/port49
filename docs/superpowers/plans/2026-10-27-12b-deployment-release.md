@@ -16,7 +16,8 @@ Also:
 - Most of this plan is files outside Go: units, Dockerfile, compose, Helm templates, workflows and GoReleaser.
 - Each artifact is pinned two ways. A Go test under a build tag (`systemd`, `helm`, `kind`, `image`, `compose`) parses it or runs it. A `make` target runs that test, and a workflow runs the target.
 - The smoke tests share one helper package, `tests/shapes/shapetest`, factored out of `tests/compose`. It holds the TACACS+ device, the token mint, readiness and the key-rotation cell.
-- There are three Go changes:
+- There are three Go changes from 12a's carries, and one from Ryan's ruling of 2026-10-27 (Tasks 3a–3g): admin-level operations move from the admin sockets to the broker API, each needing a security key press bound to its request, and the sockets are removed.
+- The 12a carries are:
   - `liveKeys.rewritten` and the reloader's re-read of held `file:` keys (spec §12);
   - a witness-follower test hook;
   - two CI helpers, `tests/ci/cmd/testshard` and `tests/ci/cmd/mustpass`, plus `tests/ci/cmd/versioncheck`.
@@ -37,7 +38,8 @@ Every tool and action is pinned to an exact version: the Makefile pins tools by 
   - §10, "Version sets, and no cutover" (a version's secret never changes);
   - §12, which Task 1 extends with "A key secret rewritten in place";
   - §13 decision 53 (its rulings 1, 2, 8 and 12, and the 12a hand-offs), and decision 54, which Task 1 writes from the rulings below;
-  - §15, rows L39, L69 and L82–L85.
+  - §15, rows L39, L60, L62, L69 and L82–L86;
+  - §2's rights table, §5.1.4, §5.1.5 (`hardware_key_touch`, decision 45 rulings 12 and 14), §5.7 and §12, which Task 3a amends for admin calls (ruling 5).
 - `docs/design/2026-08-21-port49-design.md` §13:
   - the source address;
   - "The policy file is a privilege";
@@ -91,12 +93,36 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
    - **Credential mechanisms:** `LoadCredential=`, Compose `secrets:`, the Vault Agent injector and the Secrets Store CSI driver are named in a README only after L83 or L84 closes with them passing. Rotation is a reload, never a restart (Ryan, 2026-10-26). A mechanism that fails the cell "a version added reaches the running process with no restart" may be named for the encryption key only, never for device keys.
 3. **No read-only hardening of a path the fence reads.** The fence excuses a directory's mode on a read-only mount (12a operator notes). `ProtectSystem=strict` or `full`, or `ReadOnlyPaths=/etc`, would mount `/etc` read-only inside the unit, so a group-writable `/etc/port49` on the host would pass. The units set `ProtectSystem=true` (only `/usr`, `/boot` and `/efi` are read-only). They never set `ReadOnlyPaths=`, `BindReadOnlyPaths=`, `ProtectHome=read-only`, an `:ro` `TemporaryFileSystem=` or `InaccessiblePaths=` over a path port49 reads. They do set the hardening that leaves `/etc` writable: `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes`, and `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` for port49d (empty for the broker). The unit test asserts each. The systemd smoke makes an *ancestor*, `/etc`, group-writable under the shipped unit and asserts the start is refused. A read-only mount excuses an ancestor's mode, never the holding directory's (`fence_linux.go:105–112`), so only an ancestor can show the excuse. The Helm chart's ConfigMap and Secret volumes are read-only, but the kubelet writes them, which is the trusted writer `tests/lab/results/configmap-mounts.md` measured.
 4. **Two users on a systemd host:** `port49d` and `port49-broker`, each in its own group. This applies plan 7e ruling 1 (no process holds both etcd identities) to one host. The packages create them with `sysusers.d`.
-5. **Admin sockets and `port49 revoke` per shape** (decides A8's location half):
-   - **systemd:** `admin_socket: /run/port49d/port49d.sock` (`RuntimeDirectory=port49d`, 0700), and `sudo port49 revoke --socket /run/port49d/port49d.sock …`.
-   - **Compose:** `docker compose exec`, as today.
-   - **Kubernetes:** `kubectl exec statefulset/<release>-broker -- port49 revoke --socket /run/port49/port49-broker.sock …`.
+5. **Admin operations go over the broker API, each with a security key press** (Ryan, 2026-10-27; this replaces the socket ruling the plan first carried, and Task 3a writes it into the spec as decision 54 ruling 15).
+   - **The factor** is §5.1.5's `hardware_key_touch` (decision 45 ruling 12): an always-touch slot's signature over the connection's TLS exporter, with attestations chaining to the configured roots, from the token that holds the session key. Each admin-level call needs its right and a fresh proof bound to that one request: the challenge carries the operation and the target, and the signature covers `SHA-256` of the exact method, path and body (Task 3a's §5.1.6). There is no reuse window, so it is one touch per operation. An exposed admin certificate, bearer token or agent session alone authorizes nothing admin-level.
+   - **What is admin-level:** a call that writes, lifts or removes state belonging to another principal or to the server's trust. Reads (`explain_others`, the revocation list) and the caller's own (`mine`) are not, and neither is an install-time init that refuses when anything is there. So `revoke_others` needs the touch, and `explain_others` does not.
+   - **The inventory** (every operation the two sockets answered, and the rest of the admin surface):
 
-   An admin revocation over the network API is not built here: for beta, revocation is the local socket only (team lead, 2026-10-27; Ryan may override, see "Open for Ryan").
+     | Operation today | Verdict |
+     |---|---|
+     | `port49 revoke --principal` (socket) and `--via-agent --principal` | API `POST /v1/tokens/revoke`, `revoke_others`, touch |
+     | `port49 revoke --cert` / `--cert-issuer --cert-serial` (socket) | API, same endpoint, new body, `revoke_others`, touch |
+     | `--via-agent --device --username`; `{sid, issuer}` | API as today, `revoke_others`, now with a touch |
+     | `port49 revoke --lift` (socket) | API `POST /v1/revocations/lift`, new right `lift_revocations`, touch |
+     | `port49 revoke --list` (socket) | API `GET /v1/revocations`, `revoke_others` or `lift_revocations`, no touch (read) |
+     | `port49 directory forget` (socket) | API `POST /v1/directory/forget`, new right `forget_principals`, touch |
+     | `port49 directory reset-second-factor <p>` and `--all` (socket) | API `POST /v1/directory/reset-second-factor`, new right `reset_second_factor`, touch |
+     | `port49 directory unlock` (socket) | API `POST /v1/directory/unlock`, new right `unlock_sign_in`, touch |
+     | `port49 directory import [--replace]` (socket) | API `POST /v1/directory/import`, new right `import_enrollments`, touch |
+     | `port49 directory init-enrollments` (socket) | local subcommand `port49-broker init-enrollments` / `port49d init-enrollments`, install-time like `init-revocations` |
+     | `port49 directory export` (socket) | local subcommand `port49-broker export-enrollments` / `port49d export-enrollments`: reads sealed bytes with the process's own store identity, so backups need no admin credential |
+     | `port49 store status` (both sockets) | `GET /store/status` on each process's metrics listener, read-only counts, no right; `port49 store status --metrics ADDR` |
+     | `port49 keys diagnose` (port49d's socket) | local subcommand `port49d keys-diagnose --device D --capture FILE`, offline from a pcap; port49d stops holding an unvalidated packet in memory |
+     | `port49 revoke --mine`; `explain_others` | unchanged, no touch |
+     | `forget-issuer`, `init-issuer`, `rotate-issuer`, `init-revocations`, `store-roles` | unchanged local subcommands: they run with the brokers stopped or before any admin exists, and were never socket operations |
+     | `port49-broker revoke --offline [--lift]` | the break-glass, unchanged, plus `--list`; and a new `port49d revoke --offline` for a port49d with its broker in process |
+
+   - **The admin socket is removed outright** (pre-beta, no deprecation). `admin_socket` in either config file is refused by name.
+   - **Per shape,** an operator runs `port49 revoke …` and `port49 directory …` on their own workstation, through their agent. No shape needs `sudo`, `docker exec` or `kubectl exec` for an admin call. The break-glass, with every broker stopped, as root or the broker's user:
+     - **systemd:** `systemctl stop port49-broker` on every broker host, then `port49-broker revoke --offline …`, then start.
+     - **Compose:** `docker compose stop port49-broker`, then `docker compose run --rm --no-deps port49-broker revoke --offline …`, then start.
+     - **Kubernetes:** `deploy/helm/port49/scripts/revoke-offline.sh <namespace> <release> -- <revoke flags>`. It scales the broker StatefulSet to 0, runs the command in a one-shot pod on broker-0's PVC and config (as `copy-issuer.sh` runs `init-issuer`), then scales back.
+   - **The 3am view** is Task 3a's table: an unattested key, a touch timeout, the identity provider down (the admin's certificate still revokes), and the roots missing. Each shape README carries it.
 6. **Packages.**
    - **The two packages:**
      - `port49-server` ships the static build: `port49d`, `port49-broker`, `port49-inventory` and `port49`, with the units, `sysusers.d` and `tmpfiles.d`.
@@ -177,7 +203,7 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
     - The chart's `examples/values-multi-region.yaml` is the Kubernetes form, rendered by the helm tests.
     - The examples also carry backups:
       - an etcd snapshot timer under `UMask=0077`;
-      - a `port49 directory export` timer under `UMask=0077`;
+      - a `port49-broker export-enrollments` timer under `UMask=0077`;
       - the Kubernetes CronJob form.
 
       Velero for the chart's PVCs is carried to 12c: naming it needs a measurement (pre-flight M10).
@@ -195,14 +221,14 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
 
 ## Open for Ryan
 
-The first two are ruled by the team lead (2026-10-27) and written into rulings 5 and 6. Ryan may override either.
+The `.rpm` item is ruled by the team lead (2026-10-27) and written into ruling 6. Ryan may override it. The admin revoke over the API is decided (ruling 5, Ryan 2026-10-27).
 
-- **An admin revocation over the authenticated API.** Ruled: local socket only for beta, in every shape (ruling 5). A remote admin revoke is server code with its own authorization rule, so it is not built here.
 - **The Python library in the `.rpm`** (ruling 6). RPM `site-packages` is per Python minor version, so one package cannot install an importable library. Ruled: the `.rpm` leaves the library to `pip install port49`, and the README says so. The alternatives, if Ryan overrides:
   - per-distribution RPMs, each naming its `python3.<minor>`;
   - a `%post` running `pip`.
 
   The `.deb` and the collection follow the roadmap as written.
+- **No automated admin call** (ruling 5's consequence). A machine principal cannot press a key, so a SOAR playbook or an HR offboarding hook can no longer revoke another principal through `revoke_others`. Recommended: keep it so. Offboarding goes through the identity provider, whose back-channel logout (`/v1/logout`) needs no right, and the disabled account cannot sign in again. The alternative is a revoke-only machine right with no touch, which would make an exposed workload token able to lock people out.
 - **One-time actions before the first tag:**
   - register the PyPI trusted publisher: project `port49`, repository `rhwendt/port49`, workflow `release.yml`, environment `pypi`;
   - create the `galaxy` environment holding the secret `GALAXY_API_KEY`;
@@ -219,11 +245,14 @@ The first two are ruled by the team lead (2026-10-27) and written into rulings 5
   - Linux-only test code goes in `_linux.go` files or behind a build tag, so `make check-darwin` stays clean.
 - **snake_case** for every data key:
   - port49's own: `key_secret_refs.file_dir`, `limits.max_connections`, `tls_listener.listen`.
-  - The new metric: `port49_key_secret_files_changed`.
+  - The new metrics: `port49_key_secret_files_changed` and `port49_admin_touch_total{outcome}`.
+  - The new rights: `lift_revocations`, `forget_principals`, `reset_second_factor`, `unlock_sign_in`, `import_enrollments`.
   - Helm values follow Helm's camelCase convention, because they are the chart's interface rather than port49's data. Every port49 config key they render stays snake_case.
-- **Reason codes** come only from spec §5.7. This plan adds none.
+- **Reason codes** come only from spec §5.7. Task 3a adds `admin_touch_required`, `admin_touch_proved`, `admin_touch_refused` and `admin_touch_unavailable` there before Task 3b emits them.
 - **Warnings** come only from spec §12. The two rewrite lines are written into §12 by Task 1, before Task 2 emits them.
-- **Metrics:** no device identity in any label. The one new metric, `port49_key_secret_files_changed`, has no label.
+- **Metrics:** no device identity in any label. `port49_key_secret_files_changed` has no label, and `port49_admin_touch_total` has only `outcome`.
+- **Proof material is never logged:** no record, log line or test failure carries an admin challenge, signature or attestation (Task 3b's `TestTheRecordHoldsNoProofMaterial`).
+- **Hardware.** Agents never run `ykman`, `tpm2_*` or `pkcs11-tool`; a real YubiKey and TPM are present. Unit tests use `testpki.NewPIV` and software signers. Only Task 3g touches a real key, with Ryan present.
 - **Secrets never printed or committed.**
   - No secret appears in an example, a values file, a workflow, a log line or a test failure message.
   - An example uses visibly fake material: `example.com`, `not-a-real-key-v1`, PEMs generated at test time by `internal/testpki`. Never a committed private key.
@@ -240,7 +269,7 @@ The first two are ruled by the team lead (2026-10-27) and written into rulings 5
   - Every image is pinned by tag, and by digest where a workflow publishes from it.
 - **Workflow permissions.** The default is `permissions: {contents: read}`. A job widens only what it uses: `packages: write` for the image and chart, `attestations: write` with `id-token: write` for attestations, and `id-token: write` for the PyPI publish. No job prints a secret, and none runs `set -x`.
 - **Files never read:** `*.env`, `*.keytab`, `*-key.pem`, `realm.json`, `router.db`, `/tmp/port49-lab-tokens.jsonl`, `tests/lab/logs/**`. A smoke reads only the key files it generated itself, under `t.TempDir()`.
-- **Lab tasks** (13, 14, 15, 16) run on the lab host under the lab lock, with the stall watchdog. Each closes or updates its row by CLAUDE.md's rule: a results note under `tests/lab/results/`, the §15 Status edited, and a `docs: close lab register entries ...` commit.
+- **Lab tasks** (3g, 13, 14, 15, 16) run on the lab host under the lab lock, with the stall watchdog. Each closes or updates its row by CLAUDE.md's rule: a results note under `tests/lab/results/`, the §15 Status edited, and a `docs: close lab register entries ...` commit.
 - **Commits.**
   - Conventional Commits, one per task step that says "Commit".
   - Each ends with `Co-Authored-By: Claude <model name> <noreply@anthropic.com>`, naming the implementing model.
@@ -264,6 +293,7 @@ These are the conditions most likely to bite an operator that no single task's h
 5. **A release publishes from the wrong ref or the wrong version**, or a pull request job gains `id-token`. *Pinned:*
    - Task 12's `TestReleaseRunsOnTagsOnly`, `TestOnlyThreeJobsHoldIDToken`, `TestPublishJobsBuildNothing` and `versioncheck` at the tag;
    - Task 4's `versions` job on every pull request.
+6. **A captured admin proof is replayed against another call**: the same proof for another target, another operation, another connection, or a second time. *Pinned:* Task 3b's `TestAProofIsBoundToItsRequest`, `TestAProofIsBoundToItsConnection`, `TestAProofIsSpentOnce` and `TestAPerLoginProofIsNotAnAdminProof`.
 
 ---
 
@@ -274,6 +304,13 @@ These are the conditions most likely to bite an operator that no single task's h
 | `docs/design/2026-08-23-policy-engine-spec.md` | §10 sentence, §12 paragraph, decision 54, rows L82–L85 | 1 |
 | `internal/port49d/livekeys.go`, `reload.go`, `internal/daemon/metrics/metrics.go` | re-read held `file:` keys, warn | 2 |
 | `internal/port49d/witness.go`, `restoreguard.go`, `brokerd.go` and four tests | witness-follower hook | 3 |
+| `docs/design/2026-08-23-policy-engine-spec.md` | §2 rights, §5.1.6 admin calls, §5.7, §10, §12, decision 54 ruling 15, row L86 | 3a |
+| `internal/broker/adminproof.go`, `internal/broker/api/admin.go`, `internal/mfatouch/` | the request-bound admin proof | 3b |
+| `internal/broker/admin_api.go`, `internal/policy/load.go` | admin endpoints, the five rights | 3c |
+| `internal/agent/`, `cmd/port49/revoke.go`, `directory.go` | admin calls through the agent | 3d |
+| `internal/daemon/admin/` (deleted), `internal/config/`, `internal/port49d/` | sockets removed; offline and local subcommands; store status on the metrics port | 3e |
+| `internal/port49d/keysdiagnose.go`, `pcap.go` | keys-diagnose from a capture | 3f |
+| `tests/lab/l86_admin_touch.go`, `tests/lab/results/L86-ser8.md` | lab row L86 | 3g |
 | `tests/ci/testshard/`, `tests/ci/cmd/{testshard,mustpass,versioncheck}/`, `Makefile`, `.github/workflows/test.yml` | CI split, root tests, versions | 4 |
 | `Dockerfile`, `tests/image/` | multi-arch build, image layout check | 5 |
 | `tests/shapes/shapetest/`, `tests/compose/`, `deploy/compose/`, `internal/testpki/compose.go` | shared smoke helpers; compose secrets as files | 6 |
@@ -311,7 +348,7 @@ These are the conditions most likely to bite an operator that no single task's h
 - [ ] **Step 3: Write decision 54, "Deployment shapes, release and publishing (plan 12b)".**
 
   - Rulings 1–14 as this plan states them, one paragraph each.
-  - Its "Open" line names the admin revoke over the API.
+  - Its "Open" line names the admin revoke over the API. (Merged so; Task 3a removes it, since Ryan decided it on 2026-10-27.)
 
 - [ ] **Step 4: Add rows L82–L85 to §15, each with Status `open`.**
 
@@ -466,6 +503,317 @@ These are the conditions most likely to bite an operator that no single task's h
   ```bash
   git commit -am "test: wait on the witness follower's hook instead of sleeping two witness periods"
   ```
+
+---
+
+### Task 3a: Spec: admin calls over the API, each with a security key press
+
+Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. This task writes it into the spec before any code (rights first in §2, reasons first in §5.7, warnings first in §12). Task 1 is merged on the branch, so this task amends decision 54 in place.
+
+**Files:**
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md`:
+  - §2, the rights table;
+  - §5.1.4, every sentence that sends a lift, a certificate or a list to "the admin socket";
+  - a new §5.1.6, "Admin calls";
+  - §5.7, the events table, the reason codes table and the `origin` vocabulary;
+  - §10, "Cross-group probing is manual";
+  - §12, the `port49 revoke`, `port49 directory`, `port49 keys diagnose` and `port49 store status` entries, and the line "`port49-broker --config port49-broker.yaml` is the broker on etcd";
+  - §13, decision 34's "Others" bullet (a note pointing at decision 54 ruling 15), decision 54 (ruling 5 struck through to ruling 15, ruling 15 added, its "Open" line), and decision 36's "The sockets." bullet (the same note);
+  - §15, row L86 after L85.
+
+- [ ] **Step 1: §2, the rights table.** Add these rows after `explain_others`, and the "admin-level" paragraph under the table:
+
+  | Right | Unlocks | Admin-level |
+  |---|---|---|
+  | `revoke_others` | (as today), plus a revocation by certificate (`{"cert_issuer", "cert_serial"}`), and `GET /v1/revocations` | yes, except the list |
+  | `lift_revocations` | `POST /v1/revocations/lift`, by principal or certificate; and `GET /v1/revocations` | yes, except the list |
+  | `forget_principals` | `POST /v1/directory/forget` | yes |
+  | `reset_second_factor` | `POST /v1/directory/reset-second-factor`, one principal or `all` | yes |
+  | `unlock_sign_in` | `POST /v1/directory/unlock` | yes |
+  | `import_enrollments` | `POST /v1/directory/import` | yes |
+
+  Add an "Admin-level" column to the existing rows: `explain_others` no; `sync`, `keys_show` and `replay` reserved.
+
+  The paragraph, verbatim:
+
+  > **Admin-level calls.** A call is admin-level when it writes, lifts or removes state that belongs to another principal or to the server's trust: a revocation of another principal, a certificate, a `(device, username)` key or an OIDC session; a lift; a directory pin; a second factor or a sign-in lockout; the enrollment store. A call that only reads (`explain_others`, the revocation list) or acts on the caller alone (`mine`) is not, and neither is an install-time initialization that refuses when anything is there (`init-revocations`, `init-enrollments`, `init-issuer`). An admin-level call needs its right and a fresh `hardware_key_touch` proof bound to that one request (§5.1.6). So an admin's certificate, bearer token or agent session, exposed alone, authorizes nothing admin-level.
+
+  A certificate revocation stays under `revoke_others` rather than a right of its own: it reaches a subset of what a revocation of the certificate's principal reaches, so a separate right would grant nothing `revoke_others` does not. A lift is its own right because it is the one call that weakens.
+
+- [ ] **Step 2: §5.1.6, "Admin calls".** Write it with these rules, one paragraph each:
+
+  - **The challenge.** An admin-level request carrying no `Port49-Admin-Proof` header is answered `401 admin_touch_required` with `{"admin": {"operation", "target", "challenge", "expires_at"}}`: 32 random bytes, kept 2 minutes in the answering broker's memory, never the store, one per connection (a new one replaces the last). The operations are `revoke_principal`, `revoke_certificate`, `revoke_key`, `revoke_sid`, `lift`, `forget_principal`, `reset_second_factor`, `reset_second_factor_all`, `unlock_sign_in` and `import_enrollments`. The target is the principal, the certificate's issuer and serial, the `device/username` key, the `sid` and issuer, or `all`. The record is keyed by `SHA-256(challenge ‖ 0 ‖ exporter ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ request_sha256)`, so any other caller, connection or request misses it.
+  - **The request binding.** `request_sha256 = SHA-256("port49 admin request v1\0" ‖ method ‖ 0 ‖ path ‖ 0 ‖ body)`, over the exact body bytes. The proved retry sends the same method, path and body bytes, so a proof made for "revoke bob" verifies against nothing but "revoke bob" on that connection.
+  - **The proof.** The touch key signs `"port49 admin v1\0" ‖ challenge ‖ request_sha256 ‖ exporter`, where `exporter` is the connection's TLS exporter value under the label `EXPORTER-port49-admin` (32 bytes). Its own label and prefix mean a per-login proof (§5.1.5) is never an admin proof, or the reverse. The header is base64url JSON `{"challenge", "signature", "attestation": [touch slot, f9, session slot]}`. The broker verifies the attestations exactly as decision 45 ruling 12 does, against `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file`: the chain to the roots, the touch policy `always`, one device serial for both slots, and the session slot's key equal to this connection's client key. Then it takes the challenge record (single use) and runs the operation.
+  - **No reuse.** A proof covers the one request it was made for, once. There is no `reuse_for` for admin calls, so each operation is one touch.
+  - **Order.** The proof is judged before the request takes the revocation slot or touches the store, so a touch never holds the slot, and a refused proof changes nothing.
+  - **Who cannot prove.** A caller with no client certificate on the connection (a bearer, a workload's fresh connection), or whose session key is not on the attested token, cannot prove. Such a request gets no challenge: it is refused `401 admin_touch_refused`, naming why. A broker with no attestation roots answers every admin-level call `503 admin_touch_unavailable` and says so at start and at every reload.
+  - **The agent.** `port49 revoke` and `port49 directory` send admin calls through the operator's agent (`POST /admin` on the agent's socket). The agent sends the request, takes the challenge, prints `touch your key to <operation> <target>`, signs over the exporter value read with the wire (released for the touch, as decision 45 ruling 14 does), and sends the retry only over the connection it signed over (`mfatouch.Post`'s rule, through Task 3b's `PostRequest`). Otherwise it says "the connection changed during the touch; run it again", posting nothing. An agent whose `touch_key_unusable` is set refuses an admin call before sending anything, naming why, so no `admin_touch_refused` fires for an operator whose key cannot touch.
+  - **The 3am view**, as a table in this section (the exact lines are the CLI's):
+
+    | Condition | What the operator sees | What to do |
+    |---|---|---|
+    | Session key not on a security key (TPM, Secure Enclave, file) | `port49: admin operations need a security key press, and your session key is in the TPM: a touch proves only from the token that holds it` (the agent's `touch_key_unusable` text); exit 1, nothing sent | log in with a session key on the security key (`key: pkcs11:…`, or `issued_key_store: pkcs11`) |
+    | Attestation does not chain (a newer firmware's intermediate missing) | `401 admin_touch_refused: the touch slot's attestation does not verify: …`; exit 1; the alert fires | add the root or intermediate to `attestation_roots_file`, then reload |
+    | No touch in time | `hwkey: no touch within 15s; touch the key when it blinks and try again` (decision 45 ruling 14; the timing is provisional on L60, measured 14.4 s on one token); exit 1, nothing done, no alert; the challenge expires unspent | run it again |
+    | The connection changed during the touch | `the connection changed during the touch; run it again`; exit 1, nothing posted, no alert | run it again |
+    | The identity provider is down | Nothing: the admin's port49 certificate is still valid, `port49 login` reuses it without the provider (decision 43 rulings 12 and 17), and neither the touch nor the call needs the provider | revoke as usual |
+    | The admin's certificate has expired and the provider is down | `port49 login --oidc` cannot sign in | break-glass: `port49-broker revoke --offline` (or `port49d revoke --offline`) with every broker stopped |
+    | A right held through a `group:` subject, with the directory down | the right resolves as the directory cache allows (decisions 38 and 51); past that, `403 api_right_missing` | name at least two on-call admins by `identity:` as well (the shape READMEs say so) |
+    | No attestation roots configured | `503 admin_touch_unavailable: no attestation roots are configured (broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file); admin operations need them` | set the file |
+    | The store is down | the proof needs no store; the operation answers `503 store_unavailable`, as today | `revoke --offline` when the store is back but the brokers are not; etcd's own `rv/` path otherwise (decision 36) |
+
+- [ ] **Step 3: §5.7.** Add:
+  - the event `admin_touch` (broker): an admin-level call's proof outcome, carrying `admin: {operation, target, challenge_sha256}`, never the challenge, the signature or the attestations;
+  - the reason codes:
+    - `admin_touch_required` (`admin_touch`): an admin-level call carried no proof; a challenge was issued, nothing done;
+    - `admin_touch_proved` (`admin_touch`): the proof verified, and the operation's own record follows;
+    - `admin_touch_refused` (`admin_touch`): the proof did not verify (an unknown, spent, expired, or another caller's, connection's or request's challenge; a signature not over this exporter and request; an attestation that does not chain, is not always-touch, or is not the session key's token's), or the caller cannot prove (no client certificate). API 401 with the cause. **Alertable on its own**, as `per_login_mfa_refused` is;
+    - `admin_touch_unavailable` (`admin_touch`): no attestation roots loaded. A configuration fault, alertable;
+  - in the `origin` vocabulary: remove `admin_socket uid <n>`. Admin calls carry `api <principal>`; `offline uid <n>` stays.
+  - the metric `port49_admin_touch_total{outcome}`, `outcome` one of `required`, `proved`, `refused`, `unavailable`. No device or principal label.
+
+- [ ] **Step 4: §10, "Cross-group probing is manual".** Replace the socket sentences with: `port49d keys-diagnose --device <name> --capture <file.pcap>`, run as port49d's user on a port49d host (or by `kubectl exec` in a port49d pod), with port49d's config and environment. It reads the first TACACS+ packet from that device's address in a classic pcap file the operator captured, and tries every key the policy names, retired versions included. It prints only the group and version that validated, or `no key port49d holds validates this packet`. It never prints a packet byte or a key. The running port49d no longer keeps an unvalidated packet in memory. The rest of the paragraph (manual, never automatic, a CPU amplifier on an unauthenticated listener) stands.
+
+- [ ] **Step 5: §12.** Rewrite these entries:
+  - `port49 revoke (--principal | --cert | --cert-issuer --cert-serial) [--lift]` and `port49 revoke --list`: through the agent, under the rights of §2 and the touch of §5.1.6. Exit codes as today, plus 1 for a touch not made. `--socket` and `--via-agent` are refused by name: `port49 revoke: --socket was removed; admin operations go through your agent with a security key press (spec §5.1.6)`. `--mine` and `--device/--username` keep their meaning: `--mine` needs no right and no touch, while a key needs `revoke_others` and a touch.
+  - `port49 directory forget | reset-second-factor | unlock | import`: through the agent, each under its right and a touch. `--socket` is refused by name, as above.
+  - `port49-broker init-enrollments` and `port49d init-enrollments` (install-time, as the broker's or port49d's user, refused when a store or mark is there).
+  - `port49-broker export-enrollments` and `port49d export-enrollments` (reads the sealed store through the process's own store identity, writes it to stdout, refuses a terminal). Neither is admin-level: one creates nothing that exists, and the other reads sealed bytes.
+  - `port49 store status --metrics <addr>`: reads `GET /store/status` on the process's metrics listener (plain HTTP, beside `/readyz`), with the same output and exit codes. One status runs at a time per process, and a second request is answered 429. The answer carries counts and ages only, never a member URL or a certificate.
+  - `port49-broker revoke --offline` gains `--list`. `port49d revoke --offline [--config FILE] (--principal P | --cert-issuer I --cert-serial S) [--lift] | --list` is added, for a port49d with its broker in process, run with port49d stopped. It writes the store or `broker.revocations_file`, as port49d's user or root.
+  - `admin_socket`, in port49d.yaml or port49-broker.yaml, is refused at load: `admin_socket was removed: admin operations go over the broker API with a security key press (spec §5.1.6); delete the key`. The rule "etcd requires admin_socket" is deleted.
+  - Add the warning `port49-broker: no attestation roots are configured (broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file): every admin operation will be refused until they are`, said at start and at every reload while a policy subject holds an admin-level right. The same warning is said by port49d when its broker is in process.
+
+- [ ] **Step 6: Decision 54.** Strike ruling 5's socket text and say "replaced by ruling 15". Add **ruling 15**, written from this plan's ruling 5, with its inventory table. Remove the admin revoke from its "Open" line. Add a one-line note to decision 34's "Others" bullet and to decision 36's "The sockets." bullet: "superseded by decision 54 ruling 15".
+
+- [ ] **Step 7: §15, row L86, Status `open`.**
+
+  | ID | Claim to measure (each cell: what is recorded; PASS iff) | What rests on it | Platforms |
+  |---|---|---|---|
+  | **L86** | An admin call's touch on a real YubiKey, on the SER8 (needs Ryan present). (a) Two admin calls 5 s apart under touch policy `always`: whether the second blinks again. PASS iff each call needs its own touch, and the second fails without one. (b) No touch: the time to failure and the words. PASS iff the CLI prints the timeout line, exits 1, and `port49 revoke --list` shows no mark. (c) An OIDC-issued session key in the token's slot (`issued_key_store: pkcs11`, L60's open issued-key cell): an admin call. PASS iff it succeeds with one touch. (d) The key unplugged with the agent running: an admin call. PASS iff the CLI says to insert the key, nothing is sent, and the broker's log has no `admin_touch_refused`. Cites L60 (partial: the touch policy byte, the attestation chain and serial, a 14.4 s timeout on one token) and L62 (TPM session keys, which this path refuses before sending). | §5.1.6's "one touch per operation" and its 3am table; decision 54 ruling 15 | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 |
+
+- [ ] **Step 8: Check and commit.**
+
+  Run `make test && make vet` (the spec is not compiled, but the reason-code test reads §5.7: `internal/decision` must still pass). Commit:
+
+  ```bash
+  git add docs/design/2026-08-23-policy-engine-spec.md
+  git commit -m "docs: admin calls over the broker API with a security key press; the admin socket removed; row L86"
+  ```
+
+
+---
+
+### Task 3b: The admin proof in the broker
+
+**Files:**
+- Create: `internal/broker/adminproof.go`, `internal/broker/adminproof_test.go`, `internal/broker/api/admin.go`
+- Modify: `internal/broker/mfa.go` (split `verifyTouch` so it verifies a message under a label), `internal/broker/revoke_api.go` (the `revoke_others` forms go through the gate), `internal/decision/reasons.go` (the four reasons), `internal/daemon/metrics/metrics.go` (`port49_admin_touch_total`), `internal/mfatouch/mfatouch.go` (`PostRequest`)
+
+**Interfaces:**
+- Produces:
+  - in `api`: `const AdminExporterLabel = "EXPORTER-port49-admin"`; `const AdminProofHeader = "Port49-Admin-Proof"`; `func AdminRequestSHA256(method, path string, body []byte) [32]byte`; `func AdminMessage(challenge []byte, request [32]byte, ekm []byte) []byte`; `type AdminChallenge struct{ Operation, Target, Challenge string; ExpiresAt time.Time }` (JSON `operation`, `target`, `challenge`, `expires_at`); `type AdminProof struct{ Challenge, Signature string; Attestation []string }`.
+  - in `broker`: `func (b *Broker) adminGate(w http.ResponseWriter, r *http.Request, body []byte, op, target string) bool`. It returns true only when a proof for this exact request verified and was taken. Otherwise it has written the 401 or 503 and the `admin_touch` record.
+  - `func (b *Broker) verifyTouchMessage(r *http.Request, p *touchProof, label string, msg func(ekm []byte) []byte, now time.Time) string`. `verifyTouch` becomes a call to it with the per-login label and `api.MFAMessage`.
+  - in `mfatouch`: `func PostRequest(ctx context.Context, do func(*http.Request) (*http.Response, error), req *http.Request, body, ekm []byte, state func(net.Conn) (tls.ConnectionState, bool)) (*http.Response, error)`, which carries the caller's method, URL and headers under `Post`'s connection rule. `Post` becomes a call to it, so its callers (`internal/agent/agent.go:1321`, `internal/workload/client.go:481`) are unchanged.
+
+- [ ] **Step 1: Write the failing tests** in `adminproof_test.go`. Use `testpki.NewPIV` for the attestations and a software signer for the touch slot with policy `always`:
+  - `TestAnAdminCallWithNoProofGetsAChallenge`: `POST /v1/tokens/revoke {"principal":"user:bob@example.com"}` under `revoke_others` is answered 401 `admin_touch_required`, with `operation: revoke_principal` and `target: user:bob@example.com`. No mark is written.
+  - `TestAProvedAdminCallRuns`: the retry with the proof revokes. The records are `admin_touch` `admin_touch_proved`, then `revoke`.
+  - `TestAProofIsBoundToItsRequest`: a proof made for bob, sent with a body naming carol, is refused `admin_touch_refused`, and carol is not revoked. The same holds for a lift path given a revoke's proof.
+  - `TestAProofIsSpentOnce`: the same proved request sent twice. The second is `admin_touch_refused`.
+  - `TestAProofIsBoundToItsConnection`: a challenge taken on one connection, proved and sent on another. Refused.
+  - `TestAPerLoginProofIsNotAnAdminProof`: a signature over `api.MFAMessage` for the same challenge is refused.
+  - `TestABearerCannotProve`: a request with no client certificate gets no challenge. It is refused 401 `admin_touch_refused`, and the record says why.
+  - `TestNoRootsMeansUnavailable`: with no roots, 503 `admin_touch_unavailable`. The start warning of §12 is said once.
+  - `TestARefusedProofTakesNoSlot`: while a refused proof is judged, a concurrent principal revocation takes the slot at once.
+  - `TestMineNeedsNoTouch`: `{"mine": true}` is answered as today, with no challenge.
+  - `TestTheRecordHoldsNoProofMaterial`: no `admin_touch` record contains the challenge, the signature or an attestation's base64. Assert this before printing any record.
+
+- [ ] **Step 2: Run them and see them fail.** Run `go test ./internal/broker/ -run 'Admin|Proof|Bearer|NoRoots|Mine|RefusedProof|TheRecordHolds' -count=1`. Expected: FAIL (undefined).
+
+- [ ] **Step 3: Implement.**
+  - The challenge store is a map under one mutex, keyed as §5.1.6 says. It holds at most one entry per connection: the connection's exporter value is in the key, and the map drops an entry by its connection's `ConnState` close and by expiry.
+  - `tokensRevoke` reads the body once, then calls `adminGate` for every form but `mine` before `acquireRevoke`.
+  - The 401 and 503 bodies use `api.Error` with the §5.7 reason as `error`.
+
+- [ ] **Step 4: Run them and see them pass.** Also run the existing `mfa_test.go` and `revoke_api_test.go` (PASS: `verifyTouch` is unchanged for per-login), then `make test && make vet`.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add internal/broker internal/decision internal/daemon/metrics internal/mfatouch
+  git commit -m "feat: an admin-level call proves a touch bound to its own request"
+  ```
+
+---
+
+### Task 3c: The admin endpoints and their rights
+
+**Files:**
+- Modify: `internal/policy/load.go` (the five rights; `apiRights`), `internal/policy/lint.go` (admin-level rights named in the `api_rights` finding), `internal/broker/broker.go` (routes), `internal/broker/revoke_api.go` (a certificate body), `internal/broker/api/` (request and response types)
+- Create: `internal/broker/admin_api.go`, `internal/broker/admin_api_test.go`
+
+**Interfaces:**
+- Consumes: Task 3b's `adminGate`; the existing `Revoke`, `Lift`, `Forget`, `ResetSecondFactor`, `UnlockSignIn` and `ImportEnrollments`, with origin `api <caller>`.
+- Produces:
+  - `policy.RightLiftRevocations = "lift_revocations"`, `RightForgetPrincipals = "forget_principals"`, `RightResetSecondFactor = "reset_second_factor"`, `RightUnlockSignIn = "unlock_sign_in"`, `RightImportEnrollments = "import_enrollments"`;
+  - the routes:
+    - `POST /v1/tokens/revoke` gains `{"cert_issuer", "cert_serial"}`;
+    - `POST /v1/revocations/lift` takes `{"principal"}` or `{"cert_issuer", "cert_serial"}`;
+    - `GET /v1/revocations` returns `api.RevocationList`, whose marks are those `--list` prints, with the same fields;
+    - `POST /v1/directory/forget` takes `{"principal"}`;
+    - `POST /v1/directory/reset-second-factor` takes `{"principal"}` or `{"all": true}`;
+    - `POST /v1/directory/unlock` takes `{"principal"}`;
+    - `POST /v1/directory/import?replace=true|false` takes the sealed export as its body, at most 16 MiB.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `TestEachAdminRouteNeedsItsRight`: table-driven over the six write routes. Without the right, 403 `api_right_missing`, recorded, and no challenge is issued: the right is checked before the gate, so a caller without it never blinks.
+  - `TestEachAdminRouteNeedsATouch`: with the right and no proof, 401 `admin_touch_required`, with the operation and target of §5.1.6.
+  - `TestTheListNeedsARightAndNoTouch`: `GET /v1/revocations` under `revoke_others` or `lift_revocations` answers 200. With neither, 403.
+  - `TestALiftIsNotARevokeRight`: `revoke_others` alone cannot lift (403).
+  - `TestAnUnknownRightStillFailsLoad`: `api: [lift_revocation]` (misspelt) is a load error naming the list.
+  - `TestImportIsBounded`: a 17 MiB body is answered 413, with no challenge issued.
+
+- [ ] **Step 2: Run them and see them fail.** Run `go test ./internal/broker/ ./internal/policy/ -run 'AdminRoute|TheList|ALift|UnknownRight|ImportIsBounded' -count=1`. Expected: FAIL.
+
+- [ ] **Step 3: Implement.** The order on each handler is: right, body bound, `adminGate`, then the operation (and the revocation slot for revoke and lift). The responses carry the same text the socket printed (`text` in the JSON), so the CLI prints them unchanged.
+
+- [ ] **Step 4: Run them and see them pass.** Then `make test && make vet`.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add internal/policy internal/broker
+  git commit -m "feat: admin endpoints for lift, list, certificates, forget, second-factor reset, unlock and import"
+  ```
+
+---
+
+### Task 3d: The agent and the CLI make admin calls
+
+**Files:**
+- Modify: `internal/agent/agent.go` (`POST /admin` on the agent's socket; `func (a *Agent) Admin(ctx context.Context, req AdminRequest) (AdminResponse, error)`), `cmd/port49/revoke.go`, `cmd/port49/directory.go`, `cmd/port49/main.go` (usage)
+- Create: `internal/agent/admin_test.go`, `cmd/port49/admin_test.go`
+
+**Interfaces:**
+- Consumes: `api.AdminChallenge`, `api.AdminProof`, `api.AdminMessage`, `api.AdminRequestSHA256` and `mfatouch.PostRequest` (Task 3b); the routes of Task 3c.
+- Produces:
+  - `agent.AdminRequest{Method, Path string; Body []byte}`. The agent refuses any path not in its allowlist: the seven routes of Task 3c, and `/v1/tokens/revoke` other than `mine`.
+  - `agent.AdminResponse{Status int; Body []byte}`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - In `internal/agent/admin_test.go`, against a test broker with `testpki.NewPIV` and a software touch signer:
+    - `TestTheAgentTouchesOncePerCall`: two calls make two signatures, each over its own request.
+    - `TestAnUnusableTouchKeySendsNothing`: with `touchUnusable` set, `Admin` returns the reason, and the broker saw no request.
+    - `TestAChangedConnectionPostsNothing`: the connection is replaced between the challenge and the retry. The result is `ErrConnectionChanged`, and the broker recorded no `admin_touch_refused`.
+    - `TestThePathIsAllowlisted`: `/v1/tokens` through `POST /admin` is refused by the agent.
+  - In `cmd/port49/admin_test.go`:
+    - `TestRevokeSocketIsRefusedByName` and `TestDirectorySocketIsRefusedByName`: exit 2, with the line of Task 3a step 5;
+    - `TestRevokePrintsTheTouchPrompt`: the prompt names the operation and the target before the touch.
+
+- [ ] **Step 2: Run them and see them fail.** Run `go test ./internal/agent/ ./cmd/port49/ -run 'Admin|Touch|Socket|Allowlisted|ChangedConnection' -count=1`. Expected: FAIL.
+
+- [ ] **Step 3: Implement.**
+  - `port49 revoke` sends every form through the agent: the principal, the certificate (read from `--cert` as today), the key, the lift and the list. `--via-agent` and `--socket` are refused by name.
+  - The agent sends admin calls on a client of their own, `a.adminClient`, with one connection (`MaxConnsPerHost: 1`), as `a.mfaClient` does, so the challenge, the exporter value and the retry are one connection's.
+  - The y/N prompt for a principal stays, and is asked before the touch.
+  - `port49 directory forget|reset-second-factor|unlock|import` go through the agent as well. `export` and `init-enrollments` are refused here, naming `port49-broker export-enrollments` and `port49-broker init-enrollments`.
+
+- [ ] **Step 4: Run them and see them pass.** Then `make test && make vet`.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add internal/agent cmd/port49
+  git commit -m "feat: port49 revoke and port49 directory make admin calls through the agent with a touch"
+  ```
+
+---
+
+### Task 3e: Remove the admin sockets; the offline and local subcommands
+
+**Files:**
+- Delete: `internal/daemon/admin/` (the package and its tests), `cmd/port49/store.go`'s socket path
+- Modify:
+  - `internal/config/config.go`: `admin_socket` refused by name in both files, and the "etcd requires admin_socket" rule deleted;
+  - `internal/port49d/main.go`, `brokerd.go`, `revocations.go`, `offline.go`: remove the socket; add `port49d revoke --offline`, `--list` on both offline commands, and `init-enrollments` and `export-enrollments` on both binaries;
+  - `internal/port49d/storestatus.go` and the metrics listener's mux: `GET /store/status`;
+  - `cmd/port49/store.go`: `--metrics ADDR`;
+  - `deploy/compose/config/port49d.yaml` and `port49-broker.yaml`: the `admin_socket` lines deleted;
+  - every test fixture and lab config that sets `admin_socket`: grep the whole tree, `tests/lab/` included, and change each.
+- Create: `internal/port49d/offline_port49d_test.go`, `internal/port49d/enrollcmd_test.go`, `internal/config/adminsocket_test.go`
+
+**Interfaces:**
+- Produces:
+  - `port49d revoke --offline [--config FILE] (--principal P | --cert-issuer I --cert-serial S) [--lift] | --list`;
+  - `port49-broker revoke --offline … --list`;
+  - `port49-broker|port49d init-enrollments [--config FILE]`;
+  - `port49-broker|port49d export-enrollments [--config FILE]`;
+  - `GET /store/status` (text/plain, the lines §12 shows; 503 when a store does not answer, 429 while one runs).
+
+- [ ] **Step 1: Write the failing tests.**
+  - `TestAdminSocketIsRefusedByName`: in each file, the load error is the §12 text.
+  - `TestOfflineRevokeOnPort49d`: a combined port49d config on the memory store with a `revocations_file`. `port49d revoke --offline --principal user:bob@example.com` writes the mark. A start then refuses bob's mint with `credential_revoked`. `--lift` removes the mark, and `--list` names it while it stands.
+  - `TestOfflineListOnTheBroker`: over the etcd test cluster (`storetest`'s), `--list` prints each mark with its origin.
+  - `TestInitAndExportEnrollments`: init once (exit 0), and a second time (exit 1, "already"). Export to a pipe gives sealed bytes that `ImportEnrollments` accepts. Export to a terminal is refused.
+  - `TestStoreStatusOnTheMetricsListener`: the body matches the socket's former text; a second concurrent request gets 429; the body holds no `https://` and no `-----BEGIN`.
+  - `TestNoAdminSocketRemains`: no file under `internal/` or `cmd/` imports `internal/daemon/admin`, and no config under `deploy/` or `tests/` holds `admin_socket:`. This is a tree walk.
+
+- [ ] **Step 2: Run them and see them fail.** Run `go test ./internal/config/ ./internal/port49d/ -run 'AdminSocket|Offline|Enrollments|StoreStatus|NoAdminSocket' -count=1`. Expected: FAIL.
+
+- [ ] **Step 3: Implement.** Delete the socket and its wiring. The offline port49d command reuses `offline.go`'s flow with port49d's config and its broker block. It refuses when port49d answers on its metrics listener (`/readyz`), the same "with every broker down" rule, and refuses a port49d with no broker block, naming `port49-broker revoke --offline`.
+
+- [ ] **Step 4: Run them and see them pass.** Then `make test && make vet`, and `make check-darwin` (the deleted `peer_other.go` was the darwin build's).
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add -A internal cmd deploy/compose/config tests
+  git commit -m "feat: remove the admin sockets; offline revoke on port49d, offline list, local enrollment init and export, store status on the metrics port"
+  ```
+
+---
+
+### Task 3f: `port49d keys-diagnose` from a capture
+
+**Files:**
+- Create: `internal/port49d/keysdiagnose.go`, `internal/port49d/keysdiagnose_test.go`, `internal/port49d/pcap.go` (the classic pcap reader: the global header, the record headers, Ethernet, IPv4 or IPv6, and TCP to port 49; no new module)
+- Modify: `internal/port49d/main.go` (the subcommand), `internal/port49d/` (the in-memory last-unvalidated packet removed), `cmd/port49/keys.go` (`keys diagnose` refused, naming `port49d keys-diagnose`)
+
+**Interfaces:**
+- Produces: `port49d keys-diagnose --device <name> --capture <file> [--config FILE]`. It exits 0 when a key validates, 1 when none does or the capture holds no packet from the device, and 2 on usage.
+
+- [ ] **Step 1: Write the failing tests.** Generate captures at test time with a `devicemock` login written as pcap records:
+  - `TestDiagnoseNamesTheMatchingGroup`: a packet under a retired version of another group. The output is `group <g> version <n> validates this packet` and nothing else.
+  - `TestDiagnoseNamesNone`: a packet under an unknown key gives `no key port49d holds validates this packet`.
+  - `TestDiagnosePrintsNoPacketByte`: the output holds no byte of the packet in hex or base64, and no key. Assert this before printing it.
+  - `TestDiagnoseRefusesAPcapng`: a pcapng file is refused, naming `tcpdump -w`'s classic format.
+  - `TestNoUnvalidatedPacketIsHeld`: port49d's runtime type no longer has the field (a compile-time check, by reflection over the struct).
+
+- [ ] **Step 2–4:** Run them and see them fail; implement; run them and see them pass. Then `make test && make vet`.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add internal/port49d cmd/port49/keys.go
+  git commit -m "feat: keys-diagnose reads a capture offline; port49d holds no unvalidated packet"
+  ```
+
+---
+
+### Task 3g: Lab L86: an admin touch on a real YubiKey
+
+Needs Ryan present with a YubiKey 5 on the SER8. It runs on the lab host under the lab lock, with the stall watchdog. Agents never run `ykman`, `tpm2_*` or `pkcs11-tool`: Ryan provisions the slots, and the harness uses only `port49`.
+
+**Files:**
+- Create: `tests/lab/l86_admin_touch.go` (`//go:build lab`), `tests/lab/results/L86-ser8.md`
+- Modify: spec §15 row L86's Status, and §5.1.6's "provisional on L60" timing where L86 measures it
+
+- [ ] **Step 1: Run the four cells of row L86** against a broker on the SER8 with Yubico's PIV roots in `attestation_roots_file`. Record each cell's PASS or FAIL, with the firmware and libykcs11 version.
+- [ ] **Step 2: Write `L86-ser8.md`**, close or update the row by CLAUDE.md's rule, and fix any doc a FAIL contradicts, citing the note.
+- [ ] **Step 3: Commit** `docs: close lab register entries L86 ...`, or `docs: lab register L86 partial ...` if a cell waits on a second token.
 
 ---
 
@@ -628,6 +976,8 @@ These are the conditions most likely to bite an operator that no single task's h
   - `WaitFor(t *testing.T, what string, within time.Duration, ok func() bool)`;
   - `FloorLine(t *testing.T, log string, members []string)`, which fails unless one line matches `etcd .*, at or above the floor` and names every member URL;
   - `Gauge(t *testing.T, metricsAddr, name string) float64`, which reads one unlabelled metric;
+  - `AdminNeedsTouch(t *testing.T, brokerDir, brokerAddr, principal string)`: with the operator's certificate under `revoke_others`, `POST /v1/tokens/revoke` naming `principal` is answered 401 `admin_touch_required` with a challenge, and a mint by `principal` still succeeds afterwards (ruling 5; Task 3b);
+  - `OfflineRevoked(t *testing.T, brokerDir, brokerAddr, principal string)`: a mint by `principal` is refused `credential_revoked`;
   - `RotateCell(t *testing.T, d Device, user string, mint func() string, metricsAddr string, within time.Duration, r Rotator)`, with:
 
     ```go
@@ -655,6 +1005,7 @@ These are the conditions most likely to bite an operator that no single task's h
   - In `TestComposeSmoke`:
     - after the first login, call `shapetest.FloorLine` on `docker compose logs port49d` with the three member URLs;
     - after the recreate, call `RotateCell`, with a `composeRotator` that writes through `docker run --rm -v port49_port49d-keys:/k -v port49_port49d-etc:/e -v port49_broker-etc:/b port49-setup:dev`, and reads `StartedAt` from `docker inspect -f '{{.State.StartedAt}}'` of port49d. `WritePolicy` writes the policy into both `-etc` volumes, since the broker reads the key names from it, each by a temporary file and `mv`.
+  - After `RotateCell`, the admin cells (ruling 5): `AdminNeedsTouch` for `user:bob@example.com`; then `docker compose stop port49-broker`, `docker compose run --rm --no-deps port49-broker revoke --offline --principal user:bob@example.com` (exit 0), `docker compose start port49-broker`, and `OfflineRevoked`; then the same with `--lift`, and bob mints again.
   - Add `TestTheStackHasNoEnvSecret`: `docker inspect` of each running container shows no `PORT49_KEY_` or `PORT49_ENC` variable. On a failure it prints the variable *names* only, never a value.
 
 - [ ] **Step 2: Run the test and see it fail.**
@@ -679,6 +1030,7 @@ These are the conditions most likely to bite an operator that no single task's h
     - The `docker inspect` paragraph becomes: no secret is in any container's environment, and a key version is added by writing a new file into `port49d-keys` and the policy, with no restart (Task 6's cell).
     - Add a section on the issuing CA for a second broker service: `docker run --rm -v port49_broker-state:/a -v port49_broker2-state:/b alpine:3.22 sh -c 'install -o 65532 -g 65532 -m 0600 /a/issuing-ca.key /b/ && install -o 65532 -g 65532 -m 0644 /a/issuing-ca.pem /b/'`, after `docker compose exec port49-broker port49-broker init-issuer`.
     - Add a pointer to `deploy/examples/stores/` (Task 7).
+    - Replace every `docker compose exec … port49 revoke` and `port49 directory` instruction with ruling 5's: admin calls from the workstation through the agent with a key press, the compose break-glass, and Task 3a's 3am table. `init-enrollments` and `export-enrollments` are `docker compose run --rm port49-broker <subcommand>`.
     - Note that the compose example lists all three member URLs, never a VIP.
     - Add the `encryption:` rotation runbook (ruling 13) and the "When it will not start" table (ruling 13).
 
@@ -702,7 +1054,7 @@ These are the conditions most likely to bite an operator that no single task's h
   - `deploy/systemd/port49d.service`, `port49-broker.service`;
   - `deploy/systemd/sysusers.d/port49.conf`, `tmpfiles.d/port49.conf`;
   - `deploy/systemd/config/{port49d.yaml,port49-broker.yaml,policy.yaml,inventory.yaml}`;
-  - `deploy/systemd/examples/{etcd@.service,sysusers-etcd.conf,etcd-1.yaml,etcd-2.yaml,etcd-3.yaml,port49-etcd-snapshot.service,port49-etcd-snapshot.timer,port49-directory-export.service,port49-directory-export.timer}`;
+  - `deploy/systemd/examples/{etcd@.service,sysusers-etcd.conf,etcd-1.yaml,etcd-2.yaml,etcd-3.yaml,port49-etcd-snapshot.service,port49-etcd-snapshot.timer,port49-enrollments-export.service,port49-enrollments-export.timer}`;
   - `deploy/systemd/README.md`;
   - `deploy/examples/stores/single-site/{port49d.yaml,port49-broker.yaml}`, `multi-region/{port49d.yaml,port49-broker.yaml}` and `README.md`;
   - `tests/shapes/units_test.go` and `tests/shapes/examples_test.go`, untagged (they parse files only).
@@ -725,7 +1077,7 @@ These are the conditions most likely to bite an operator that no single task's h
     | `ExecReload` | `/bin/kill -HUP $MAINPID` | same |
     | `UMask` | `0077` | `0077` |
     | `AmbientCapabilities` | `CAP_NET_BIND_SERVICE` | absent |
-    | `RuntimeDirectory` / `Mode` | `port49d` / `0700` | `port49-broker` / `0700` |
+    | `RuntimeDirectory` | absent | absent |
     | `StateDirectory` / `Mode` | absent | `port49-broker` / `0700` |
     | `ProtectSystem` | `true` | `true` |
     | `NoNewPrivileges` | `yes` | `yes` |
@@ -739,9 +1091,9 @@ These are the conditions most likely to bite an operator that no single task's h
     - `ProtectHome=read-only`;
     - a `TemporaryFileSystem=` entry ending `:ro`;
     - an `ExecStartPre=` naming `init-revocations` or `init-enrollments` (A14, A16).
-  - `TestTheSystemdConfigsLoad`. It follows the lab unit tests' pattern (`tests/lab/directory_e2e_unit_test.go:56`): `strings.ReplaceAll` each absolute root (`/etc/port49`, `/var/spool/port49d`, `/run/port49d`, `/var/lib/port49-broker`) into `t.TempDir()`, and writes `testpki` PEMs and fixture secrets there at the fence's modes. Then it calls `config.Load` and `config.LoadBroker` and asserts:
+  - `TestTheSystemdConfigsLoad`. It follows the lab unit tests' pattern (`tests/lab/directory_e2e_unit_test.go:56`): `strings.ReplaceAll` each absolute root (`/etc/port49`, `/var/spool/port49d`, `/var/lib/port49-broker`) into `t.TempDir()`, and writes `testpki` PEMs and fixture secrets there at the fence's modes. Then it calls `config.Load` and `config.LoadBroker` and asserts:
     - `KeySecretRefs.FileDir` is the rewritten `/etc/port49/keys`;
-    - `admin_socket` is the rewritten `/run/port49d/port49d.sock`;
+    - neither file holds `admin_socket` (Task 3e refuses it);
     - the etcd endpoints are three member URLs;
     - `limits.max_connections` is unset (the default, sized from `LimitNOFILE`).
   - `TestTheTLSListenerIsCommentedOut`: the raw text holds a commented `# tls_listener:` block with `listen: ":300"`. Uncommented, it loads again.
@@ -767,16 +1119,17 @@ These are the conditions most likely to bite an operator that no single task's h
     - `etcd-1.yaml`, `etcd-2.yaml` and `etcd-3.yaml` each set `auto-compaction-mode: periodic`, `auto-compaction-retention: "1h"` and `quota-backend-bytes: 8589934592`, with TLS and client-cert auth.
   - **Backup units:**
     - The snapshot unit is an etcd-host example, since it needs etcd root's certificate. Its `ExecStart=/bin/sh -c 'etcdctl snapshot save /var/backups/port49/etcd-$$(date +%%F).db'` runs under `UMask=0077`. systemd does no `$(…)` or redirection itself.
-    - The export unit runs on a broker host, `ExecStart=/usr/bin/port49 directory export --socket /run/port49-broker/port49-broker.sock` with `StandardOutput=file:/var/backups/port49/directory-export.json`, under `UMask=0077`.
+    - The export unit runs on a broker host as `User=port49-broker`, `ExecStart=/usr/bin/port49-broker export-enrollments` with `StandardOutput=file:/var/backups/port49/directory-export.json`, under `UMask=0077`.
     - The timers are `OnCalendar=hourly` and `daily`.
   - **README sections:**
     - install and `systemctl enable --now`;
     - where secrets live, and adding a key version;
     - `init-issuer` on one broker, then `install -o port49-broker -g port49-broker -m 0600` to the others;
     - `forget-issuer`;
-    - `port49 revoke --socket /run/port49d/port49d.sock`;
+    - admin calls from the operator's workstation through the agent, the security key press, the break-glass `port49-broker revoke --offline` with every broker stopped, and Task 3a's 3am table (ruling 5);
+    - `attestation_roots_file` with Yubico's PIV roots, and at least two on-call admins named by `identity:`;
     - `init-revocations` once at install, never `ExecStartPre=`;
-    - `init-enrollments` once;
+    - `port49-broker init-enrollments` once;
     - the directory keytab and `PORT49_SITE` through `systemctl edit port49-broker`;
     - the CRL file or `SSL_CERT_FILE` (A25);
     - the four requirements of the roadmap's "Deployment shapes";
@@ -917,7 +1270,7 @@ These are the conditions most likely to bite an operator that no single task's h
        - Then, with a drop-in of `ProtectSystem=strict` and `ReadWritePaths=/var/spool/port49d`, and `/etc` still g+w, the same restart *passes*. This proves the cell can tell the two settings apart.
        - Remove the drop-in, restore `/etc`'s mode in a `t.Cleanup` that runs even on failure, and restart.
      - **Review Focus 2:** write a policy with no `keys:` and restart. Within 360 s, `systemctl show -p NRestarts,ActiveState port49d` reads `NRestarts` ≤ 5 and `ActiveState=failed`. Restore the policy, then `systemctl reset-failed`.
-     - `docker exec <container> port49 revoke --socket /run/port49d/port49d.sock --principal user:bob@example.com`, run as root, exits 0.
+     - **Admin calls:** `AdminNeedsTouch` for `user:bob@example.com`. Then the break-glass: `systemctl stop port49-broker`, `port49-broker revoke --offline --principal user:bob@example.com` as root (exit 0), `systemctl start port49-broker`, and `OfflineRevoked`. Then `--lift` the same way, and bob mints again.
   7. On failure, log the journal of every port49 unit through `tests/qual/secret-filter.sh`. Always remove the container.
 
 - [ ] **Step 3: Verify.**
@@ -944,7 +1297,7 @@ These are the conditions most likely to bite an operator that no single task's h
   - `deploy/helm/port49/Chart.yaml` (`version` and `appVersion` equal to pyproject's, today `0.1.0`), `values.yaml`, `values.schema.json`;
   - `templates/{_helpers.tpl,port49d-statefulset.yaml,broker-statefulset.yaml,services.yaml,configmaps.yaml,pdb.yaml,hpa.yaml,serviceaccount.yaml,issuer-discovery.yaml,NOTES.txt}`;
   - `deploy/helm/port49/examples/{external-secret.yaml,values-multi-region.yaml,backup-cronjob.yaml}`, `examples/etcd/{statefulset.yaml,service.yaml,etcd-init-job.yaml}`;
-  - `deploy/helm/port49/scripts/copy-issuer.sh`;
+  - `deploy/helm/port49/scripts/copy-issuer.sh` and `revoke-offline.sh` (ruling 5's break-glass: scale the brokers to 0, a one-shot pod on broker-0's PVC and config running `port49-broker revoke --offline`, scale back, every pod deleted by a trap);
   - `deploy/helm/port49/README.md`;
   - `tests/helm/render_test.go` (`//go:build helm`).
 - Modify: `Makefile` (pinned `bin/helm-$(HELM_VERSION)`, `helm-test`); `tests/ci/versions/versions.go` and its test (`Chart` required now, the optional path removed)
@@ -986,7 +1339,7 @@ These are the conditions most likely to bite an operator that no single task's h
     - port49d's pod mounts `etcd.port49d.existingSecret` and not the broker's, and the broker's pod the reverse;
     - both mount `etcd.caSecret`;
     - the device-keys Secret is mounted only in port49d's pod.
-  - `TestProbesNeverNeedAClientCertificate`: every container's readiness probe is `httpGet` `/readyz` and its liveness probe `httpGet` `/healthz`, scheme `HTTP`, on the metrics port. No probe names port 49, 300 or the broker API port, and none is `exec` or `tcpSocket`. Every liveness probe has `periodSeconds × failureThreshold ≥ 60` (re-review R1).
+  - `TestProbesNeverNeedAClientCertificate`: every container's readiness probe is `httpGet` `/readyz` and its liveness probe `httpGet` `/healthz`, scheme `HTTP`, on the metrics port. No probe names port 49, 300 or the broker API port, and none is `exec` or `tcpSocket`. No rendered config holds `admin_socket`. Every liveness probe has `periodSeconds × failureThreshold ≥ 60` (re-review R1).
   - `TestAMissingChartIsAFinding`, in `tests/ci/versions`: `Read` of a tree without `Chart.yaml` is an error (pre-flight M3).
   - `TestIssuerDiscoveryIsOptIn`: off, no ClusterRoleBinding renders. On, one binds `system:service-account-issuer-discovery` to `system:unauthenticated`, matching `examples/kubernetes/issuer-discovery.yaml`.
   - `TestTheHPAScalesOnConnections`: with `autoscaling.enabled: true`, an `autoscaling/v2` HPA whose single metric is type `Pods`, named `port49_connections`. There is no `Resource` metric.
@@ -1023,9 +1376,9 @@ These are the conditions most likely to bite an operator that no single task's h
     - "Vault Agent and the CSI driver: unmeasured (L83)";
     - `subPath` never used;
     - the issuing CA (`copy-issuer.sh`) and `forget-issuer`;
-    - `kubectl exec` for revoke;
-    - `init-revocations` and `init-enrollments` as one-off Jobs, never initContainers;
-    - backups (the CronJob, `port49 directory export` under `umask 077`);
+    - admin calls through the agent with a key press, `revoke-offline.sh` as the break-glass, and Task 3a's 3am table (ruling 5);
+    - `init-revocations` and `port49-broker init-enrollments` as one-off Jobs, never initContainers;
+    - backups (the CronJob running `port49-broker export-enrollments` under `umask 077`, with the broker's own etcd Secret);
     - `externalTrafficPolicy: Local` with "source preservation unmeasured on Kubernetes (L39 b, c)";
     - port 300;
     - the image is not `g=u`, and a `g=u` rebuild (as some OpenShift guides advise) is refused by the fence at start. No claim about any platform's admission policy;
@@ -1103,7 +1456,7 @@ The workflow `.github/workflows/kind.yml` lands in Task 13, after L82 closes. Th
      - Wait 180 s. Read both files' sha256 inside the pod, never the bytes.
      - Record whether the whole mount changed and the `subPath` file did not, and log the observation for L82.
   6. **Copy the CA.** `copy-issuer.sh port49 t`. The sha256 of `issuing-ca.pem` matches on both brokers' PVCs, and `issuing-ca.key` is `65532 600` on each.
-  7. **Revoke.** `kubectl exec t-broker-0 -- port49 revoke --socket /run/port49/port49-broker.sock --principal user:bob@example.com` exits 0.
+  7. **Revoke.** `AdminNeedsTouch` for `user:bob@example.com` through a port-forward to the broker Service. Then `revoke-offline.sh port49 t -- --principal user:bob@example.com` exits 0, the brokers come back ready, and `OfflineRevoked` holds.
   8. **The CronJob, inside and outside** (plan 10 carry):
      - The broker gets a `k8s` verifier for the kind cluster, with `issuerDiscovery.enabled: true`, and the policy gets the subject of `examples/kubernetes/policy.yaml`.
      - **Inside:** a Job made from `examples/kubernetes/backup-cronjob.yaml`'s template (`kubectl create job --from=cronjob/…`) mints with `port49 workload token --token-file` against the in-cluster broker Service. PASS iff the Job completes, and the broker logs the service account's principal.
@@ -1119,7 +1472,7 @@ The workflow `.github/workflows/kind.yml` lands in Task 13, after L82 closes. Th
 
   ```bash
   git add tests/kind internal/testpki/kind.go internal/testpki/kind_test.go Makefile
-  git commit -m "test: the Kubernetes shape end to end on kind, with rotation, restart, the CA copy, revoke and a CronJob"
+  git commit -m "test: the Kubernetes shape end to end on kind, with rotation, restart, the CA copy, the offline revoke and a CronJob"
   ```
 
 ---
@@ -1351,14 +1704,14 @@ This task runs straight after Task 11, before any later task, because Task 11's 
   It holds:
   - each task's commits;
   - what changed in review;
-  - "Carried forward": anything not done, and L82–L85's states;
+  - "Carried forward": anything not done, and L82–L86's states;
   - "Operator notes", true of the code as built, each a line:
     - the three shapes and their make targets;
     - where secrets live per shape;
     - the rewrite warning and its gauge;
     - `ProtectSystem=true` and why;
     - two users;
-    - admin sockets per shape;
+    - admin calls over the API with a key press, the rights, the break-glass per shape, and the 3am table;
     - the packages and their conflict;
     - 0755 with no setgid or capabilities;
     - the client conffile;
