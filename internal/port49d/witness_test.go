@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -368,4 +370,203 @@ func TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass(t *testing.T) {
 	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged == 0 {
 		t.Fatalf("the second purge wrote no meta/purged: %+v %v", got, err)
 	}
+}
+
+// hookTimeout is how long a wait on a hook gives before it fails.
+const hookTimeout = 10 * time.Second
+
+// hookSeen is what a recording hook has seen, by the pointer it was told of:
+// one test process may run several daemons, so no wait is keyed by name.
+type hookSeen[P comparable] struct {
+	mu   sync.Mutex
+	high map[P]uint64 // the highest revision followed, or the passes completed
+}
+
+func (h *hookSeen[P]) add(p P, rev uint64, count bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.high == nil {
+		h.high = map[P]uint64{}
+	}
+	switch {
+	case count:
+		h.high[p]++
+	case rev > h.high[p]:
+		h.high[p] = rev
+	}
+}
+
+func (h *hookSeen[P]) snapshot() map[P]uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return maps.Clone(h.high)
+}
+
+// waitHook polls ok until it holds or hookTimeout, failing with what the hook
+// had seen. Hooks are package variables, so a test installs its recorder
+// before it starts a daemon: the restore, a cleanup registered first, runs
+// after the daemons have stopped.
+func waitHook(t *testing.T, what string, ok func() bool, seen func() string) {
+	t.Helper()
+	for deadline := time.Now().Add(hookTimeout); !ok(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting for %s: %s", what, seen())
+		}
+	}
+}
+
+// followWitness installs a recording witnessFollowed, restored in t.Cleanup,
+// and returns a wait until rec has followed a revision of atLeast or more.
+func followWitness(t *testing.T) func(t *testing.T, rec *witnessRecord, atLeast uint64) {
+	t.Helper()
+	var h hookSeen[*witnessRecord]
+	old := witnessFollowed
+	witnessFollowed = func(rec *witnessRecord, rev uint64) { h.add(rec, rev, false) }
+	t.Cleanup(func() { witnessFollowed = old })
+	return func(t *testing.T, rec *witnessRecord, atLeast uint64) {
+		t.Helper()
+		waitHook(t, fmt.Sprintf("the record to follow revision %d", atLeast),
+			func() bool { return h.snapshot()[rec] >= atLeast },
+			func() string { return fmt.Sprintf("the highest it followed is %d", h.snapshot()[rec]) })
+	}
+}
+
+// followGuard is followWitness for port49d's restore guard, which a test
+// cannot name (run makes it): the wait is until a guard has followed atLeast.
+// Only the daemon started since the revision was written can have followed
+// it, so any guard that has is the one.
+func followGuard(t *testing.T) func(t *testing.T, atLeast uint64) {
+	t.Helper()
+	var h hookSeen[*restoreGuard]
+	old := guardFollowed
+	guardFollowed = func(g *restoreGuard, rev uint64) { h.add(g, rev, false) }
+	t.Cleanup(func() { guardFollowed = old })
+	return func(t *testing.T, atLeast uint64) {
+		t.Helper()
+		top := func() (hi uint64) {
+			for _, v := range h.snapshot() {
+				hi = max(hi, v)
+			}
+			return hi
+		}
+		waitHook(t, fmt.Sprintf("port49d to follow revision %d", atLeast),
+			func() bool { return top() >= atLeast },
+			func() string { return fmt.Sprintf("the highest followed is %d", top()) })
+	}
+}
+
+// passesFrom takes the counts now and returns the wait for n more completed
+// passes by at least daemons distinct owners.
+func passesFrom[P comparable](h *hookSeen[P], what string) func(t *testing.T, daemons, n int) {
+	base := h.snapshot()
+	return func(t *testing.T, daemons, n int) {
+		t.Helper()
+		advanced := func() (k int) {
+			for p, c := range h.snapshot() {
+				if c >= base[p]+uint64(n) {
+					k++
+				}
+			}
+			return k
+		}
+		waitHook(t, fmt.Sprintf("%d %s to complete %d passes", daemons, what, n),
+			func() bool { return advanced() >= daemons },
+			func() string { return fmt.Sprintf("%d advanced", advanced()) })
+	}
+}
+
+// passesAfter is a wait counted from its own call.
+func passesAfter[P comparable](h *hookSeen[P], what string) func(t *testing.T, daemons, n int) {
+	return func(t *testing.T, daemons, n int) {
+		t.Helper()
+		passesFrom(h, what)(t, daemons, n)
+	}
+}
+
+// countPasses installs a recording restorePassed, restored in t.Cleanup, and
+// returns a wait for n more completed passes of each of daemons guards.
+func countPasses(t *testing.T) func(t *testing.T, daemons, n int) {
+	t.Helper()
+	var h hookSeen[*restoreGuard]
+	old := restorePassed
+	restorePassed = func(g *restoreGuard) { h.add(g, 0, true) }
+	t.Cleanup(func() { restorePassed = old })
+	return passesAfter(&h, "restore guards")
+}
+
+// countRunnerPasses is countPasses for the broker runner's witness passes.
+func countRunnerPasses(t *testing.T) func(t *testing.T, daemons, n int) {
+	t.Helper()
+	var h hookSeen[*runner]
+	old := witnessPassed
+	witnessPassed = func(r *runner) { h.add(r, 0, true) }
+	t.Cleanup(func() { witnessPassed = old })
+	return passesAfter(&h, "runners")
+}
+
+func openFollowStore(t *testing.T) (*etcdtest.Server, *etcdstore.Store) {
+	t.Helper()
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}, Prefix: "/port49/", Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return srv, s
+}
+
+// The hook tells what the follower gave the record: a write of meta/witness
+// is waited for by its revision.
+func TestTheWitnessHookSeesWhatTheFollowerSaw(t *testing.T) {
+	waitFollowed := followWitness(t)
+	_, s := openFollowStore(t)
+	rec := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); s.FollowWitness(ctx, rec.followed) }()
+	t.Cleanup(func() { cancel(); <-done })
+	rev, err := s.PutWitness(ctx, "port49-broker on test", 0)
+	if err != nil || rev == 0 {
+		t.Fatalf("writing meta/witness: %d %v", rev, err)
+	}
+	waitFollowed(t, rec, rev)
+	if got, _ := rec.Recorded(); got < rev {
+		t.Fatalf("the hook fired before the record took %d: it has %d", rev, got)
+	}
+}
+
+// Passes are counted per guard: a second guard's are not the first's.
+func TestRestorePassedCountsPasses(t *testing.T) {
+	var h hookSeen[*restoreGuard]
+	old := restorePassed
+	restorePassed = func(g *restoreGuard) { h.add(g, 0, true) }
+	t.Cleanup(func() { restorePassed = old })
+	_, s := openFollowStore(t)
+	a, b := newRestoreGuard(io.Discard), newRestoreGuard(io.Discard)
+	ctx := context.Background()
+	pass := func(g *restoreGuard) {
+		t.Helper()
+		if !g.pass(ctx, time.Second, s.RestoreRead) {
+			t.Fatal("a pass was cut short")
+		}
+	}
+	waitA := passesFrom(&h, "restore guards")
+	pass(a)
+	pass(a)
+	waitA(t, 1, 2) // returns: a completed two since the counts were taken
+	waitAB := passesFrom(&h, "restore guards")
+	pass(a)
+	pass(a)
+	if base := h.snapshot(); base[a] != 4 || base[b] != 0 {
+		t.Fatalf("counts a=%d b=%d, want 4 and 0", base[a], base[b])
+	}
+	advanced := make(chan struct{})
+	go func() { defer close(advanced); waitAB(t, 2, 1) }()
+	select {
+	case <-advanced:
+		t.Fatal("a's passes were counted as b's")
+	case <-time.After(100 * time.Millisecond):
+	}
+	pass(b)
+	<-advanced
 }

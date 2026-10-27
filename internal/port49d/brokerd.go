@@ -561,7 +561,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	wit := openWitness(filepath.Join(cfg.Broker.StateDir, stateWitnessFile), cfg.Stores.Session.Etcd.Prefix, stderr)
 	wg.Add(2)
 	go func() { defer wg.Done(); wit.keep(ctx) }()
-	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.Saw) }()
+	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.followed) }()
 
 	minter := token.NewMinter(bs.st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	brokerSrv, brk, anchors, err := buildBrokerAnchorWith(cfg, inventoryFrom, bs.st, minter, log, m, bs.issuer)

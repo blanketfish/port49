@@ -2057,6 +2057,7 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	runnerPasses := countRunnerPasses(t)
 	root := f.srv.Client(t, "root")
 	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
@@ -2111,7 +2112,7 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	}
 	// One restore, one purge: the record follows the purge, so the passes
 	// after it find nothing (Task 15c review I-1).
-	time.Sleep(2 * witnessEvery)
+	runnerPasses(t, 1, 2)
 	if n := strings.Count(out.String()[before:], "every unspent token is purged"); n != 1 {
 		t.Fatalf("%d purges for one restore:\n%s", n, out.String()[before:])
 	}
@@ -2174,6 +2175,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	followed := followGuard(t)
 	// The restore keeps etcd away for over five seconds; the checks would
 	// close the listeners first, and this test measures the restore guard.
 	addUnderEtcd(t, f.daemon, "    health: {close_after: 60}\n")
@@ -2203,7 +2205,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 		t.Fatalf("control: the token's first login: %d", st)
 	}
 	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
-	time.Sleep(2 * witnessEvery) // port49d follows it
+	followed(t, witnessAt(t, root)) // port49d follows it
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -2257,6 +2259,7 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	followed := followGuard(t)
 	root := f.srv.Client(t, "root")
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	metricsD := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())[1]
@@ -2290,7 +2293,7 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 		t.Fatalf("control: the token's first login: %d", st)
 	}
 	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
-	time.Sleep(2 * witnessEvery) // port49d follows it
+	followed(t, witnessAt(t, root)) // port49d follows it
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}

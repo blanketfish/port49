@@ -88,6 +88,18 @@ func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 	return w
 }
 
+// witnessFollowed is told each revision of meta/witness the broker's follower
+// gave rec, after rec took it. Only tests swap it, to wait on the follower
+// instead of sleeping; it is keyed by the record, not by process, because a
+// test process may run several daemons.
+var witnessFollowed = func(rec *witnessRecord, rev uint64) {}
+
+// followed is what the broker's FollowWitness calls: Saw, then the hook.
+func (w *witnessRecord) followed(rev uint64) {
+	w.Saw(rev)
+	witnessFollowed(w, rev)
+}
+
 // Saw raises the record to rev and never lowers it: a lower witness is a
 // restore's, which the runner judges.
 func (w *witnessRecord) Saw(rev uint64) {
