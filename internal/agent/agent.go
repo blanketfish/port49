@@ -211,6 +211,7 @@ type Agent struct {
 	client       *http.Client
 	revokeClient *http.Client                                                      // client's transport, no Timeout: Revoke's ctx carries revokeTimeout
 	mfaClient    *http.Client                                                      // client's transport and Timeout, refusing redirects: a proof is posted where it was meant
+	adminClient  *http.Client                                                      // client's transport (one connection), no Timeout: an admin call's ctx bounds it; refusing redirects
 	dialTLS      func(ctx context.Context, network, addr string) (net.Conn, error) // the transport's dialer
 	now          func() time.Time
 	log          io.Writer
@@ -247,6 +248,9 @@ type Agent struct {
 	// in Unix nanoseconds; 0 when none holds it.
 	wire     chan struct{}
 	revoking atomic.Int64
+	// touching is set while an admin call waits on the touch key: one at a
+	// time (AdminPrompt).
+	touching atomic.Bool
 
 	mu       sync.Mutex
 	deadline time.Time
@@ -365,6 +369,7 @@ func New(c Config) *Agent {
 	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: mfatouch.NoRedirect}
 	a.revokeClient = &http.Client{Transport: tr, CheckRedirect: mfatouch.NoRedirect}
 	a.mfaClient = &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: mfatouch.NoRedirect}
+	a.adminClient = &http.Client{Transport: tr, CheckRedirect: mfatouch.NoRedirect}
 	return a
 }
 
@@ -1833,6 +1838,7 @@ func (a *Agent) Handler() http.Handler {
 		}
 		answer(w, struct{}{}, err)
 	})
+	mux.HandleFunc("POST /admin", a.adminHandler)
 	mux.HandleFunc("POST /unlock", a.unlock)
 	mux.HandleFunc("GET /identity", func(w http.ResponseWriter, r *http.Request) {
 		out, err := a.Identity(r.Context())
@@ -2060,6 +2066,20 @@ func answer(w http.ResponseWriter, out any, err error) {
 			w.Header().Set("Retry-After", strconv.Itoa(int(refused.RetryAfter/time.Second)))
 		}
 		writeJSON(w, status, api.Error{Error: refused.Code, Detail: refused.Detail})
+	case errors.As(err, new(*AdminRefusedError)):
+		writeJSON(w, http.StatusBadRequest, api.Error{Error: codeAdminRefused,
+			Detail: err.(*AdminRefusedError).Detail})
+	case errors.As(err, new(*TouchUnusableError)):
+		writeJSON(w, http.StatusConflict, api.Error{Error: codeTouchUnusable, Detail: err.(*TouchUnusableError).Detail})
+	case errors.Is(err, ErrTouchBusy):
+		writeJSON(w, http.StatusConflict, api.Error{Error: codeTouchBusy, Detail: err.Error()})
+	case errors.Is(err, ErrChallengeMismatch):
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: codeChallengeMismatch, Detail: err.Error()})
+	case errors.Is(err, ErrConnectionChanged):
+		writeJSON(w, http.StatusConflict, api.Error{Error: "connection_changed", Detail: err.Error()})
+	case errors.As(err, new(*UnansweredAdminError)):
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: codeAdminUnanswered,
+			Detail: err.(*UnansweredAdminError).Err.Error()})
 	case KeyCode(err) != "":
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: KeyCode(err), Detail: err.Error()})
 	case writeRefusal(w, err):

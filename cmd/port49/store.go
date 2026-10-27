@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/admin"
 )
@@ -57,4 +59,34 @@ func storeStatusCmd(args []string, stdout, stderr io.Writer) int {
 		return 3
 	}
 	return 0
+}
+
+// unansweredError is askAdmin's failure after the request was written: the
+// op may have run.
+type unansweredError struct{ err error }
+
+func (e *unansweredError) Error() string { return e.err.Error() }
+func (e *unansweredError) Unwrap() error { return e.err }
+
+// askAdmin sends req to port49d's admin socket and returns its one answer,
+// waiting at most wait. The socket answers port49d's user and root alone.
+// The write side stays open until the answer is read: port49d takes a
+// half-close for a hang-up and abandons the op. A failure once the request
+// is written is an *unansweredError.
+func askAdmin(socket string, req admin.Request, wait time.Duration) (admin.Response, error) {
+	c, err := net.DialTimeout("unix", socket, 5*time.Second)
+	if err != nil {
+		return admin.Response{}, fmt.Errorf("%v (is admin_socket set in port49d.yaml, and are you port49d's user "+
+			"or root?)", err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(wait))
+	if err := json.NewEncoder(c).Encode(req); err != nil {
+		return admin.Response{}, err
+	}
+	var resp admin.Response
+	if err := json.NewDecoder(c).Decode(&resp); err != nil {
+		return admin.Response{}, &unansweredError{err}
+	}
+	return resp, nil
 }

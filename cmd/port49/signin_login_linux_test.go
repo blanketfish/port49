@@ -99,12 +99,32 @@ func (d *dirLab) served(method, path string) int {
 	return n
 }
 
-// operator is `port49 directory <args[0]> --socket <the lab's> <args[1:]>`.
+// operator is what the broker's operator does on the broker host or through
+// an agent with a touch key (spec §5.1.6): the broker's own operation, called
+// directly. The CLI's half is admin_test.go's and directory_linux_test.go's.
 func (d *dirLab) operator(t *testing.T, args ...string) (code int, out, errb string) {
 	t.Helper()
-	var so, se bytes.Buffer
-	code = run(append([]string{"directory", args[0], "--socket", d.adminSock}, args[1:]...), &so, &se)
-	return code, so.String(), se.String()
+	ctx := context.Background()
+	var text string
+	var err error
+	switch args[0] {
+	case "init-enrollments":
+		text, err = d.b.InitEnrollments(ctx, "test")
+	case "unlock":
+		text, err = d.b.UnlockSignIn(ctx, args[1], "test")
+	case "reset-second-factor":
+		if args[1] == "--all" {
+			text, err = d.b.ResetSecondFactor(ctx, "", true, "test")
+		} else {
+			text, err = d.b.ResetSecondFactor(ctx, args[1], false, "test")
+		}
+	default:
+		t.Fatalf("operator: %v", args)
+	}
+	if err != nil {
+		return 1, "", err.Error()
+	}
+	return 0, text + "\n", ""
 }
 
 // initEnrollments is `port49 directory init-enrollments`, which must succeed.

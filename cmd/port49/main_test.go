@@ -29,7 +29,6 @@ import (
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
@@ -386,7 +385,6 @@ type labBroker struct {
 	signIn     *fakeSignInDirectory
 	enrollPath string
 	enrollKeys crypt.Keys
-	adminSock  string
 	// onAccept, when set, runs for each connection the broker accepts, before
 	// it is served.
 	onAccept atomic.Pointer[func()]
@@ -457,6 +455,10 @@ type labOpts struct {
 	// enrollment store that does not exist until `port49 directory
 	// init-enrollments` creates it.
 	signIn *fakeSignInDirectory
+	// admin gives alice's subject api: revoke_others, lift_revocations; front
+	// wraps the broker's handler (admin_test.go).
+	admin bool
+	front func(http.Handler) http.Handler
 }
 
 // fakeSignInDirectory is a directory of people by name: their entry and
@@ -541,11 +543,15 @@ func newLabBrokerOpts(t *testing.T, o labOpts) *labBroker {
 	if o.mfa {
 		requirement = ", per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 15m}"
 	}
+	rights := ""
+	if o.admin {
+		rights = ", api: [revoke_others, lift_revocations, forget_principals, reset_second_factor, unlock_sign_in, import_enrollments]"
+	}
 	policyFile := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(policyFile, []byte(`
 scopes: [{name: all_devices, match: {}`+requirement+`}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
-subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s`+rights+`}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `), 0o600); err != nil {
 		t.Fatal(err)
@@ -644,6 +650,9 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 			inner.ServeHTTP(w, r)
 		})
 	}
+	if o.front != nil {
+		srv.Handler = o.front(srv.Handler)
+	}
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -668,10 +677,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 // issuing CA, certificates trusted only if the broker issued them, the
 // enrollment store as a sealed file in a private directory under test keys
 // (never created: `port49 directory init-enrollments` is the one creator),
-// and an admin socket answering the directory sign-in's operator commands.
-// The admin server's three handlers are hand-built here, not port49d's own
-// (serveSignInOps): this suite tests the broker and the CLI, and L67(g) covers
-// port49d's wiring of them.
+// and nothing else: the operator's commands call the broker directly (operator).
 func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 	t.Helper()
 	if l.b.Issuer == nil {
@@ -694,26 +700,6 @@ func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 	l.enrollPath = filepath.Join(privateDir(t), "enrollments.json")
 	l.b.EnrollmentFile = l.enrollPath
 	l.reopenEnrollments(t)
-
-	l.adminSock = privateSocket(t)
-	ln, err := admin.Listen(l.adminSock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	origin := func(uid uint32) string { return fmt.Sprintf("admin_socket uid %d", uid) }
-	srv := &admin.Server{Now: time.Now, Proc: "port49-broker",
-		SecondFactorReset: func(ctx context.Context, p string, all bool, uid uint32) (string, error) {
-			return l.b.ResetSecondFactor(ctx, p, all, origin(uid))
-		},
-		SignInUnlock: func(ctx context.Context, p string, uid uint32) (string, error) {
-			return l.b.UnlockSignIn(ctx, p, origin(uid))
-		},
-		EnrollmentsInit: func(ctx context.Context, uid uint32) (string, error) {
-			return l.b.InitEnrollments(ctx, origin(uid))
-		}}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go srv.Serve(ctx, ln)
 }
 
 // reopenEnrollments opens the enrollment file afresh, as a broker's start
@@ -1063,7 +1049,8 @@ func TestRevokeMineBehindAnEarlierRevocationSaysItWasNotSent(t *testing.T) {
 			Detail: "agent: an earlier revocation still held the connection; this one was not sent"})
 	}))
 	var out, errb bytes.Buffer
-	if code := run([]string{"revoke", "--mine", "--agent-socket", sock}, &out, &errb); code != 1 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"revoke", "--mine"}, &out, &errb); code != 1 ||
 		errb.String() != "port49 revoke: an earlier revocation still held the connection; this one was not sent\n" {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}

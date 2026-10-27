@@ -17,10 +17,10 @@ import (
 // caller's own sessions with no mark, so a token mints at once after it;
 // revoking another principal, or a key without --mine, without the right is
 // refused, exit 1, saying which right and, for a key, the --mine form; a
-// key with neither --mine nor --via-agent is usage.
+// key is refused the same.
 func TestTheCLIReachesTheAPIThroughTheAgent(t *testing.T) {
 	// The test's stdin may be a terminal; the question is
-	// TestRevokeViaAgentAsksOnATerminal's.
+	// TestRevokePrincipalAsksOnATerminal's.
 	defer func(tty func() bool) { confirmTTY = tty }(confirmTTY)
 	confirmTTY = func() bool { return false }
 	l := newLabBroker(t, time.Hour)
@@ -51,50 +51,46 @@ func TestTheCLIReachesTheAPIThroughTheAgent(t *testing.T) {
 		!strings.Contains(se, "--subject") {
 		t.Fatalf("explain --subject over the agent: %d %q", code, se)
 	}
-	if code, so, se := cli("revoke", "--mine", "--agent-socket", sock); code != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code, so, se := cli("revoke", "--mine"); code != 0 ||
 		!strings.Contains(so, "ended user:alice@example.com's sessions everywhere") {
 		t.Fatalf("revoke --mine: %d %q %q", code, so, se)
 	}
 	if code, so, se := cli("token", "--socket", sock, "leaf1"); code != 0 || so == "" {
 		t.Fatalf("a token after revoke --mine: %d %q %q", code, so, se)
 	}
-	if code, _, se := cli("revoke", "--via-agent", "--principal", "user:carol@example.com", "--agent-socket", sock); code != 1 ||
-		!strings.Contains(se, "needs the api: revoke_others right") {
-		t.Fatalf("revoking another without the right: %d %q", code, se)
+	// This agent has no touch key, so an admin call is refused before it is
+	// sent, saying what to do; the right is another test's (admin_test.go).
+	if code, _, se := cli("revoke", "--principal", "user:carol@example.com", "--yes"); code != 1 ||
+		!strings.Contains(se, "no touch_key is configured") || !strings.Contains(se, "nothing was sent") ||
+		strings.Contains(se, "touch your key") {
+		t.Fatalf("an admin call with no touch key: %d %q", code, se)
 	}
-	if code, _, se := cli("revoke", "--via-agent", "--device", "leaf1", "--username", "alice", "--agent-socket", sock); code != 1 ||
-		!strings.Contains(se, "needs the api: revoke_others right") || !strings.Contains(se, "--mine --device leaf1 --username alice") {
-		t.Fatalf("a key without the right: %d %q", code, se)
-	}
-	if code, _, se := cli("revoke", "--device", "leaf1", "--username", "alice", "--agent-socket", sock); code != 2 ||
-		!strings.Contains(se, "--mine") {
-		t.Fatalf("a key with neither --mine nor --via-agent: %d %q", code, se)
-	}
-	if code, _, se := cli("revoke", "--via-agent", "--lift", "--principal", "user:carol@example.com"); code != 2 ||
-		!strings.Contains(se, "admin socket") {
-		t.Fatalf("--lift over the agent: %d %q", code, se)
+	if code, _, se := cli("revoke", "--lift", "--device", "leaf1", "--username", "alice"); code != 2 ||
+		!strings.Contains(se, "--lift") {
+		t.Fatalf("--lift of a key: %d %q", code, se)
 	}
 }
 
-// --via-agent --principal asks before it marks someone, on a terminal only;
-// a no sends nothing, and --yes skips the question (pre-flight M11). The
-// socket, in a private directory, has no agent, so a request that is sent
-// says so.
-func TestRevokeViaAgentAsksOnATerminal(t *testing.T) {
+// --principal asks before it marks someone, on a terminal only, and before
+// the key is touched; a no sends nothing, and --yes skips the question
+// (pre-flight M11). The socket, in a private directory, has no agent, so a
+// request that is sent says so.
+func TestRevokePrincipalAsksOnATerminal(t *testing.T) {
 	defer func(in io.Reader, tty func() bool) { confirmIn, confirmTTY = in, tty }(confirmIn, confirmTTY)
 	confirmTTY = func() bool { return true }
-	sock := privateSocket(t)
-	args := []string{"revoke", "--via-agent", "--principal", "user:bob@example.com", "--agent-socket", sock}
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", privateSocket(t))
+	args := []string{"revoke", "--principal", "user:bob@example.com"}
 	var out, errb bytes.Buffer
 	confirmIn = strings.NewReader("n\n")
 	if code := run(args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "[y/N]") ||
-		!strings.Contains(errb.String(), "nothing was revoked") || strings.Contains(errb.String(), "no agent at") {
+		!strings.Contains(errb.String(), "nothing was revoked") || strings.Contains(errb.String(), "no agent is running") {
 		t.Fatalf("declined: %d %q", code, errb.String())
 	}
 	errb.Reset()
 	confirmIn = strings.NewReader("")
 	if code := run(append(args, "--yes"), &out, &errb); code != 1 || strings.Contains(errb.String(), "[y/N]") ||
-		!strings.Contains(errb.String(), "no agent at") {
+		!strings.Contains(errb.String(), "no agent is running") {
 		t.Fatalf("--yes: %d %q", code, errb.String())
 	}
 	errb.Reset()
@@ -106,30 +102,30 @@ func TestRevokeViaAgentAsksOnATerminal(t *testing.T) {
 	errb.Reset()
 	confirmIn = strings.NewReader("y\n")
 	if code := run(args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "[y/N]") ||
-		!strings.Contains(errb.String(), "no agent at") || strings.Contains(errb.String(), "nothing was revoked") {
+		!strings.Contains(errb.String(), "no agent is running") || strings.Contains(errb.String(), "nothing was revoked") {
 		t.Fatalf("a yes: %d %q", code, errb.String())
 	}
 	errb.Reset()
 	confirmIn = strings.NewReader("")
 	if code := run(args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "[y/N]") ||
-		!strings.Contains(errb.String(), "nothing was revoked") || strings.Contains(errb.String(), "no agent at") {
+		!strings.Contains(errb.String(), "nothing was revoked") || strings.Contains(errb.String(), "no agent is running") {
 		t.Fatalf("EOF on a terminal: %d %q", code, errb.String())
 	}
 }
 
-// --yes belongs to --via-agent --principal alone, and the admin socket's
-// --socket is not the agent's: either elsewhere is usage, so an operator
+// --yes belongs to --principal alone: elsewhere it is usage, so an operator
 // is not left wondering why the flag did nothing.
-func TestRevokeAgentFlagsOutOfPlace(t *testing.T) {
+func TestRevokeFlagsOutOfPlace(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"revoke", "--principal", "user:bob@example.com", "--yes"}, "--yes"},
 		{[]string{"revoke", "--mine", "--yes"}, "--yes"},
-		{[]string{"revoke", "--via-agent", "--device", "leaf1", "--username", "bob", "--yes"}, "--yes"},
-		{[]string{"revoke", "--mine", "--socket", "/tmp/x.sock"}, "--agent-socket"},
-		{[]string{"revoke", "--via-agent", "--principal", "user:bob@example.com", "--socket", "/tmp/x.sock"}, "--agent-socket"},
+		{[]string{"revoke", "--device", "leaf1", "--username", "bob", "--yes"}, "--yes"},
+		{[]string{"revoke", "--list", "--yes"}, "--yes"},
+		{[]string{"revoke", "--list", "--principal", "user:bob@example.com"}, "--list"},
+		{[]string{"revoke", "--mine", "--principal", "user:bob@example.com"}, "--mine"},
+		{[]string{"revoke"}, "name a principal"},
 	} {
 		var out, errb bytes.Buffer
 		if code := run(tc.args, &out, &errb); code != 2 || !strings.Contains(errb.String(), tc.want) {

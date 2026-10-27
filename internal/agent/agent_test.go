@@ -1462,6 +1462,11 @@ type realOpts struct {
 	// follows for a POST whose body it cannot replay, as a GET with the
 	// request's custom headers (the agent session among them).
 	redirectMFA string
+	// admin gives alice's subject api: revoke_others and lift_revocations, so
+	// the admin calls of spec §5.1.6 are hers (admin_test.go).
+	admin bool
+	// front, when set, wraps the broker's handler.
+	front func(http.Handler) http.Handler
 }
 
 // realMFAPolicy asks for a second factor at each login, on every device.
@@ -1496,6 +1501,9 @@ func newRealRigWith(t *testing.T, o realOpts) *realRig {
 	polText := realPolicy
 	if o.mfa {
 		polText = realMFAPolicy
+	}
+	if o.admin {
+		polText = strings.Replace(polText, "token_ttl: 60s}", "token_ttl: 60s, api: [revoke_others, lift_revocations]}", 1)
 	}
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(path, []byte(polText), 0o600); err != nil {
@@ -1586,6 +1594,9 @@ func newRealRigWith(t *testing.T, o realOpts) *realRig {
 	srv, err := r.b.Server("127.0.0.1:0", srvCert, ca.Pool())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if o.front != nil {
+		srv.Handler = o.front(srv.Handler)
 	}
 	if o.redirectMFA != "" {
 		inner := srv.Handler

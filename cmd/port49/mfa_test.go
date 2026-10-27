@@ -158,12 +158,19 @@ func (m *mfaLab) seen(r *http.Request) {
 // asks sign-ins to send.
 func newMFALab(t *testing.T, withTouch bool, iss *oidctest.Issuer, acr string) *mfaLab {
 	t.Helper()
+	return newMFALabWith(t, withTouch, iss, acr, labOpts{})
+}
+
+// newMFALabWith is newMFALab with the extra lab options extra names (admin,
+// front).
+func newMFALabWith(t *testing.T, withTouch bool, iss *oidctest.Issuer, acr string, extra labOpts) *mfaLab {
+	t.Helper()
 	piv, err := testpki.NewPIV(time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := &mfaLab{piv: piv, sink: &secretSink{}, logs: &lockedBuffer{}}
-	o := labOpts{maxAge: 12 * time.Hour, iss: iss, keepX509: true, mfa: true, acr: acr, logs: m.logs, spy: m.seen}
+	o := labOpts{maxAge: 12 * time.Hour, iss: iss, keepX509: true, mfa: true, acr: acr, logs: m.logs, spy: m.seen, admin: extra.admin, front: extra.front}
 	if withTouch {
 		o.piv = piv
 	}
@@ -450,8 +457,9 @@ func TestRevokeIsNotHeldBehindATouch(t *testing.T) {
 	}
 	revoked := make(chan int, 1)
 	var out, errb bytes.Buffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", m.socket)
 	go func() {
-		revoked <- run([]string{"revoke", "--mine", "--device", "leaf1", "--username", "alice", "--agent-socket", m.socket}, &out, &errb)
+		revoked <- run([]string{"revoke", "--mine", "--device", "leaf1", "--username", "alice"}, &out, &errb)
 	}()
 	select {
 	case code := <-revoked:

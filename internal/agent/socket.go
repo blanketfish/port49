@@ -35,6 +35,12 @@ var getuid = os.Getuid
 // $XDG_RUNTIME_DIR/port49/agent.sock, or /tmp/port49-<uid>/agent.sock on a
 // host without one.
 func SocketPath() string {
+	// PORT49_TEST_AGENT_SOCKET is the tests' only way to point a command at
+	// an agent of its own: no flag names a socket, and nothing but a test sets
+	// this.
+	if p := os.Getenv("PORT49_TEST_AGENT_SOCKET"); p != "" {
+		return p
+	}
 	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
 		return filepath.Join(d, "port49", "agent.sock")
 	}
@@ -312,6 +318,12 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		}
 		return nil
 	}
+	return c.answerError(resp)
+}
+
+// answerError is the error a non-200 answer from the agent means: the
+// switch of roundTrip's comment.
+func (c *Client) answerError(resp *http.Response) error {
 	var e refusalBody
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
 	switch {
@@ -337,6 +349,16 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 		return &BrokerUnavailableError{errors.New(e.Detail)}
 	case resp.StatusCode == http.StatusServiceUnavailable && e.Error == codeStoreUnavailable:
 		return &StoreUnavailableError{Err: &BrokerUnavailableError{errors.New(e.Detail)}, RetryAfter: retryAfterHeader(resp.Header)}
+	case resp.StatusCode == http.StatusBadRequest && e.Error == codeAdminRefused:
+		return &AdminRefusedError{Detail: e.Detail}
+	case resp.StatusCode == http.StatusConflict && e.Error == codeTouchUnusable:
+		return &TouchUnusableError{Detail: e.Detail}
+	case resp.StatusCode == http.StatusConflict && e.Error == codeTouchBusy:
+		return ErrTouchBusy
+	case e.Error == codeChallengeMismatch:
+		return ErrChallengeMismatch
+	case e.Error == codeAdminUnanswered:
+		return &UnansweredAdminError{Err: errors.New(e.Detail)}
 	case e.Error != "":
 		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 	}
@@ -470,4 +492,75 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	return s, nil
+}
+
+// Admin asks the agent to make one admin call (spec §5.1.6) and returns the
+// broker's answer. prompt is called with what the touch is for, as the agent
+// built it from the request, once the broker has asked and before the key is
+// waited on; it is never called for a call that needs no touch or that the
+// agent refuses. One the agent took and never answered, after the proof was
+// on its way, is an *UnansweredAdminError, not ErrNoAgent: it may have run.
+func (c *Client) Admin(ctx context.Context, req AdminRequest, prompt func(string)) (AdminResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return AdminResponse{}, err
+	}
+	var sent atomic.Bool
+	// The agent gives up first, past adminTimeout, and says why; the client's
+	// own Timeout is sized for a mint.
+	ctx, cancel := context.WithTimeout(ctx, adminTimeout+10*time.Second)
+	defer cancel()
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { sent.Store(true) }})
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/admin", bytes.NewReader(body))
+	if err != nil {
+		return AdminResponse{}, err
+	}
+	if err := c.checkDir(); err != nil {
+		return AdminResponse{}, err
+	}
+	resp, err := (&http.Client{Transport: c.http.Transport}).Do(hreq)
+	if err != nil {
+		if sent.Load() {
+			var cause error = err
+			if ue := (*url.Error)(nil); errors.As(err, &ue) {
+				cause = ue.Err
+			}
+			return AdminResponse{}, &UnansweredAdminError{Err: fmt.Errorf("your agent at %s: %w", c.socket, cause)}
+		}
+		return AdminResponse{}, fmt.Errorf("%w at %s: %w", ErrNoAgent, c.socket, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return AdminResponse{}, c.answerError(resp)
+	}
+	if resp.Header.Get("Content-Type") != adminStreamType {
+		var out AdminResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return AdminResponse{}, &UnansweredAdminError{Err: fmt.Errorf("your agent's answer did not decode: %w", err)}
+		}
+		return out, nil
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev adminEvent
+		if err := dec.Decode(&ev); err != nil {
+			return AdminResponse{}, &UnansweredAdminError{Err: fmt.Errorf("your agent at %s stopped answering: %w",
+				c.socket, err)}
+		}
+		switch {
+		case ev.Prompt != "":
+			if prompt != nil {
+				prompt(ev.Prompt)
+			}
+		case ev.Response != nil:
+			return *ev.Response, nil
+		case ev.Error != nil:
+			h := http.Header{}
+			if ev.Error.RetryAfter != "" {
+				h.Set("Retry-After", ev.Error.RetryAfter)
+			}
+			return AdminResponse{}, c.answerError(&http.Response{StatusCode: ev.Error.Status, Header: h,
+				Body: io.NopCloser(bytes.NewReader(ev.Error.Body))})
+		}
+	}
 }

@@ -29,6 +29,15 @@ const codeStoreUnavailable = "store_unavailable"
 // the key blinked, so the command may prove another way.
 const codeNoAttestation = "no_attestation"
 
+// The socket codes of an admin call the agent itself refused or lost (admin.go).
+const (
+	codeAdminRefused      = "admin_refused"
+	codeTouchUnusable     = "touch_unusable"
+	codeTouchBusy         = "touch_busy"
+	codeChallengeMismatch = "challenge_mismatch"
+	codeAdminUnanswered   = "admin_unanswered"
+)
+
 // decodeRefresh reads POST /refresh's body. It is optional (an older client
 // sends none) but strict: a field it does not know is refused by name, so a
 // misspelled challenge is never dropped in silence and its proof left unspent.

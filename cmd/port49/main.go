@@ -2,7 +2,7 @@
 // step 3). `port49 login` starts the agent that holds the session — one
 // mutual-TLS connection to the broker — and `port49 token DEVICE` mints
 // through it, fresh every time. `port49 identity`, `explain` given no files,
-// and `revoke --mine` or `--via-agent` ask the broker through the agent, under
+// and `revoke` ask the broker through the agent, under
 // the caller's api: rights. The policy tools of spec §12 (`explain`,
 // `policy test`, `policy replay`, `access review`, `grants remove`) read a
 // policy file and an inventory file offline and need no broker. Plan 9 builds
@@ -104,27 +104,28 @@ const usage = `usage:
   port49 store status [--socket PATH]
                 (each store as port49d or port49-broker sees it: backend, members, reachable, the
                 directory cache's age; exits 3 when a store does not answer)
-  port49 revoke [--socket PATH] (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX) [--lift]
-  port49 revoke [--socket PATH] --list
-                (exits 3 when the revocation is in force but incomplete or not saved)
-  port49 revoke --mine [--device NAME --username NAME] [--agent-socket PATH]
-  port49 revoke --via-agent [--yes] (--principal PRINCIPAL | --device NAME --username NAME) [--agent-socket PATH]
-                (through your agent, under your api: rights; --mine leaves no mark; --via-agent needs
-                api: revoke_others, and asks first on a terminal unless --yes)
-  port49 directory forget [--socket PATH] PRINCIPAL
+  port49 revoke (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX | --device NAME --username NAME) [--yes]
+  port49 revoke --lift (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX)
+  port49 revoke --list
+  port49 revoke --mine [--device NAME --username NAME]
+                (through your agent, under your api: rights: revoke_others, or lift_revocations for
+                --lift and --list. Every write but --mine asks for a press of your security key,
+                bound to that one request; --principal asks first on a terminal unless --yes;
+                --mine leaves no mark and asks for no press; exits 3 when the revocation is in
+                force but incomplete or not saved)
+  port49 directory forget PRINCIPAL
                 (forget a principal's directory membership and the entry it is pinned to: for an
                 entry deleted and re-created, once you have confirmed it is the same person)
-  port49 directory reset-second-factor [--socket PATH] (PRINCIPAL | --all)
+  port49 directory reset-second-factor (PRINCIPAL | --all)
                 (a person who lost their authenticator may enroll again for the broker's reopen_for;
                 --all reopens it for every entry with no active second factor, and replaces a lost
                 enrollment store, keeping the unreadable file beside it)
-  port49 directory unlock [--socket PATH] PRINCIPAL
+  port49 directory unlock PRINCIPAL
                 (clear a person's failed password sign-ins)
-  port49 directory init-enrollments [--socket PATH]
-                (create the enrollment store of a new install, once)
-  port49 directory export [--socket PATH] > FILE
-  port49 directory import [--socket PATH] [--replace] < FILE
-                (the enrollment store, sealed under the broker's key: keep it, restore from it)
+  port49 directory import [--replace] < FILE
+                (restore the enrollment store from an export; each directory command asks for a press
+                of your security key, through your agent. Making the export and creating the store
+                are on the broker host: port49-broker export-enrollments, init-enrollments)
 `
 
 func main() {
