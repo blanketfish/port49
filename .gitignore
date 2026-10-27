@@ -38,3 +38,4 @@ __pycache__/
 /tests/lab/topologies/clab-*/
 # deploy/compose's trial PKI and env files (go run ./tests/compose/cmd/compose-pki)
 /deploy/compose/local/
+/cmd/port49/port49
