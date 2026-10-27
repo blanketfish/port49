@@ -345,8 +345,11 @@ the next is written (team lead, 2026-10-24). It covers:
 - the issuing-CA record (the key stays on each broker's disk: Ryan);
 - the fence's ancestor walk.
 
-It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-server-hardening` (Plan 12a — As built, below); its
-whole-branch review and merge follow.
+It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-server-hardening` (Plan 12a — As built, below);
+**merged 2026-10-27** (PR #35). **12b written 2026-10-27** (`2026-10-27-12b-deployment-release.md`, seventeen tasks: one
+spec, two code, two CI, seven artifact-and-smoke, four lab, one docs; decision 54, rulings 1–14, written by its Task 1). It builds
+the systemd, container and Kubernetes shapes as peers, each with a CI smoke test, plus the tag-only release (packages, image,
+chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite warning, and lab rows L82–L85.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7576,6 +7579,11 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
     - each artifact's README (plan 13 writes the docs-site pages);
     - anycast through MetalLB, offered only after a lab row measures `externalTrafficPolicy: Local`.
   - Inventory themes A and E. Written after 12a merges.
+  - **Plan:** `2026-10-27-12b-deployment-release.md`.
+  - **Spec:** decision 54 (its Task 1); §10, and §12's "A key secret rewritten in place"; design §13.
+  - **Lab:** opens L82 (Secret volumes and External Secrets on kind), L83 (Vault Agent and the CSI driver), L84
+    (`LoadCredential=` and Compose `secrets:`) and L85 (MetalLB anycast), and runs each. L39 (b) and (c) stay 12c's.
+  - Status: **written 2026-10-27**; seventeen tasks.
 - **12c — Reference configurations, alarms and lab rows.**
   - **Builds:**
     - the per-platform reference AAA configurations (L73's TLS ones included);
