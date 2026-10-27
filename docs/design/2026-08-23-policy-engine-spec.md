@@ -5139,6 +5139,8 @@ keys:
 A secret store such as Vault reaches port49 as a file its agent renders (Vault Agent, External
 Secrets, the Secrets Store CSI driver); port49 reads no store directly (decision 53 ruling 5).
 
+A version's file rewritten in place is not re-read. port49d keeps the bytes it read and warns (§12), so a restart is the only thing that would take the new bytes, and only on the replica restarted.
+
 `current` decides only two things: what `port49 keys show <device>` renders for provisioning,
 and the order candidates are tried in. **Validation accepts any listed version**, so nothing
 needs promoting and there is no moment at which a device must already have been updated:
@@ -6150,6 +6152,8 @@ It says, when shedding begins (the first shed after a minute with none): `port49
 TACACS+ connection slots (limits.max_connections) are in use; each new connection is reset at
 Accept and the device tries its next server`, and while it lasts, at most once a minute:
 `port49d: still shedding: M connections reset at Accept in the last minute; K of N slots in use`, K being the slots held when it is said.
+
+**A key secret rewritten in place.** At every SIGHUP, after every swap, and every 30 s, port49d reads each held `file:` key reference again (decision 54 ruling 11). For a file whose bytes differ from those it holds it says, per version that names it: `port49d: keys.<ref> version <n>: <path> has changed since port49d read it; port49d keeps the secret it read, and a restart would take the new one on that replica alone; a version's secret never changes (§10): put the new secret in a new file under a new version`. For one it can no longer read: `port49d: keys.<ref> version <n>: <path> can no longer be read (<error>); port49d keeps the secret it read, but a restart will refuse to start until the file is back or the policy no longer names the version`. Each line is said when first seen, then at most every 10 minutes per reference, and at every SIGHUP. `port49_key_secret_files_changed`, a gauge with no label, is the number of key versions whose held file is in either state. Neither refuses a reload. An `env:` reference is never re-read: a variable cannot change in a running process.
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
@@ -10942,6 +10946,159 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   state directory overlapping `file_dir`, is refused at load, compared with links resolved.
   `port49 policy test` checks the same allowance.
 
+**54. Deployment shapes, release and publishing (plan 12b; Ryan, the team lead and plan 12b's
+pre-flight reviews, 2026-10-26 and 2026-10-27).** systemd, container and Kubernetes are peer
+shapes; Kubernetes is native and never required.
+
+- **1. One artifact, one smoke, one README per shape.** systemd: `deploy/systemd/`, in the
+  `port49-server` package, smoke `make systemd-smoke` (real systemd as PID 1 in a container).
+  Container: `Dockerfile` and `deploy/compose/`, smokes `make compose-smoke` and `make
+  image-check`. Kubernetes: `deploy/helm/port49/`, smoke `make kind-smoke`. A shape whose smoke
+  does not pass in CI is not shipped.
+- **2. Where each shape keeps its secrets** (provisional on L82, L83 and L84 where it says so).
+  systemd: `key_secret_refs.file_dir: /etc/port49/keys` (`/run` is cleared at reboot and
+  `RuntimeDirectory=` at every stop), the directory `root:port49d 0750` and each key file
+  `root:port49d 0440`; the encryption key is `/etc/port49/secrets/encryption.key`,
+  `port49d:port49d 0400`, and the broker's `/etc/port49/secrets/broker-encryption.key`, owned by
+  port49-broker, both outside `file_dir` (decision 53, re-review N1). Compose: the env files are
+  removed; `setup.sh` writes the device keys into a `port49d-keys` volume mounted read-only at
+  `/run/port49/keys` (directory `root:65532 0750`, files `root:65532 0440`) and each encryption
+  key into the component's configuration volume at `/etc/port49/secrets/encryption.key`, `65532
+  0400`; nothing secret is left in `docker inspect`. Kubernetes (the key volume is provisional on
+  L82): a Secret volume mounted whole at `/run/port49/keys`, never by `subPath`, `defaultMode:
+  0440`, in port49d's pod alone, which sets `fsGroup: 65532` with `fsGroupChangePolicy:
+  OnRootMismatch`; the broker's pod loads no device key and sets no `fsGroup`; the encryption key
+  comes from a second Secret at `/etc/port49/secrets`; each etcd client identity is its own Secret
+  (`etcd.port49d.existingSecret` in port49d alone, `etcd.broker.existingSecret` in the broker
+  alone, `etcd.caSecret`, the CA certificate alone, in both), so no pod holds the other's etcd
+  key. `LoadCredential=`, Compose `secrets:`, the Vault Agent injector and the Secrets Store CSI
+  driver are named in a README only after L83 or L84 closes with them passing; rotation is a
+  reload, never a restart, and a mechanism that fails the cell "a version added reaches the
+  running process with no restart" may be named for the encryption key only, never for device
+  keys.
+- **3. No read-only hardening of a path the fence reads.** The fence excuses a directory's mode on
+  a read-only mount, so `ProtectSystem=strict` or `full`, or `ReadOnlyPaths=/etc`, would let a
+  group-writable `/etc/port49` on the host pass. The units set `ProtectSystem=true` and never
+  `ReadOnlyPaths=`, `BindReadOnlyPaths=`, `ProtectHome=read-only`, an `:ro`
+  `TemporaryFileSystem=` or `InaccessiblePaths=` over a path port49 reads; they set
+  `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes` and `CapabilityBoundingSet=`
+  `CAP_NET_BIND_SERVICE` for port49d (empty for the broker). A unit test asserts each, and the
+  systemd smoke makes an ancestor, `/etc`, group-writable under the shipped unit and asserts the
+  start is refused: a read-only mount excuses an ancestor's mode, never the holding directory's.
+  The chart's ConfigMap and Secret volumes are read-only but the kubelet writes them, the trusted
+  writer `tests/lab/results/configmap-mounts.md` measured.
+- **4. Two users on a systemd host.** `port49d` and `port49-broker`, each in its own group,
+  created by `sysusers.d`: plan 7e ruling 1 (no process holds both etcd identities)
+  applied to one host.
+- **5. Admin sockets and `port49 revoke` per shape** (Ryan may override). systemd:
+  `admin_socket: /run/port49d/port49d.sock` (`RuntimeDirectory=port49d`, 0700) and `sudo port49
+  revoke --socket /run/port49d/port49d.sock …`. Compose: `docker compose exec`. Kubernetes:
+  `kubectl exec statefulset/<release>-broker -- port49 revoke --socket
+  /run/port49/port49-broker.sock …`. An admin revocation over the network API is not built: for
+  beta, revocation is the local socket only (team lead, 2026-10-27).
+- **6. Packages** (the `.rpm` library is ruled pip-only; Ryan may override). `port49-server` ships
+  the static build (`port49d`, `port49-broker`, `port49-inventory`, `port49`) with the units,
+  `sysusers.d` and `tmpfiles.d`; `port49` ships the client build (`-tags hwkey_dlopen`) as
+  `/usr/bin/port49`; the two conflict on that path (decision 45 ruling 22). Every binary is 0755,
+  root-owned, with no setuid or setgid bit and no file capability; port49d binds 49 through the
+  unit's `AmbientCapabilities=CAP_NET_BIND_SERVICE`. The client package ships
+  `/etc/port49/config.yaml` as a root 0644 conffile, a commented template that sets nothing and
+  lists `broker`, `broker_ca`, `broker_crl`, `touch_key`, `key` and `issued_key_store`. The client
+  package installs the Ansible collection at
+  `/usr/share/ansible/collections/ansible_collections/port49/client/` in both formats, and the
+  `.deb` installs the pure-Python library at `/usr/lib/python3/dist-packages/port49/`. The `.rpm`
+  does not install the library: RPM `site-packages` is per Python minor version, which one nfpm
+  package cannot name, so the `.rpm` leaves it to `pip install port49` and the README says so. The
+  client package does not add a user to `tss` (the README says `usermod -aG tss <user>`) and
+  installs no polkit rule for pcscd. macOS ships as an unsigned tarball for darwin/arm64 and
+  darwin/amd64; L63, signing, stays open.
+- **7. Release.** GoReleaser runs on `v*` tags only and makes the archives, packages and
+  `SHA256SUMS`, with build provenance from `actions/attest-build-provenance`. The image is
+  `ghcr.io/rhwendt/port49:<version>` for linux/amd64 and linux/arm64, cross-compiled in the build
+  stage (`--platform=$BUILDPLATFORM`); the chart is `oci://ghcr.io/rhwendt/charts/port49` at the
+  release version. Build is apart from publish: `build-python` and `build-galaxy` build with
+  tools pinned by hash (`packaging/requirements-release.txt`, `--require-hashes`), hold no token
+  and hand the result on through `actions/upload-artifact`; `pypi` and `galaxy` only download and
+  publish. Every checkout in `release.yml` sets `persist-credentials: false` except
+  `goreleaser`'s, and GoReleaser runs from the sha256-pinned `bin/goreleaser-$(GORELEASER_VERSION)`.
+  PyPI uses trusted publishing from the `pypi` environment with `skip-existing: true`; only
+  `pypi`, `goreleaser` and `image` hold `id-token: write`, and no workflow sets it or `write-all`
+  at workflow level. Galaxy uses `ansible-galaxy collection publish` with `secrets.GALAXY_API_KEY`
+  in the `galaxy` environment, and "already exists" for this version on a re-run is success. No
+  workflow uses `pull_request_target`. The tag `vX.Y.Z` equals `clients/python/pyproject.toml`'s
+  `version`, `galaxy.yml`'s `version`, and `Chart.yaml`'s `version` and `appVersion`; `versioncheck`
+  checks that all agree on every pull request and that all equal the tag at the tag.
+- **8. CI.** `make test` stays the whole suite, its timeout raised to 30m. CI splits it into
+  `test-rest` (every package but `internal/port49d`), `test-shard` (`internal/port49d` in three
+  shards cut by `testshard` from `go test -list`) and `test-root` (as root, the tests that skip
+  as a user). A shard that runs nothing fails: `testshard` exits non-zero when `go test -list`
+  fails or lists nothing and on an empty shard, and `testshard -check` asserts the shards' union
+  equals the list. No `t.Parallel`: the tests swap package variables. The `acl` package is
+  installed and `mustpass` requires `TestAnACLGrantingWriteIsRefused` to pass, never skip.
+- **9. Kubernetes shape.** port49d and port49-broker are each a StatefulSet with a PVC per replica
+  for the spool and for `state_dir`; each data directory is a 0700 subdirectory an initContainer
+  makes. The update strategy is `RollingUpdate`; the PodDisruptionBudget is `maxUnavailable: 1`;
+  anti-affinity is preferred and the zone topology spread is `whenUnsatisfiable: ScheduleAnyway`,
+  so a cluster with no zone labels still schedules; `terminationGracePeriodSeconds: 60`. Neither
+  StatefulSet sets `persistentVolumeClaimRetentionPolicy`, so a scale-down leaves a spool PVC with
+  unsent accounting until a scale-up takes it back, and the README says so. Probes are plain HTTP
+  `httpGet` on each process's metrics port, readiness `/readyz` and liveness `/healthz`, needing no
+  client certificate and touching neither TACACS+ nor the broker API; liveness sets
+  `periodSeconds: 10` and `failureThreshold: 6` (60 s), since `/healthz` is unbound for seconds
+  between runs after a store loss and Kubernetes' default 30 s (10 s x 3) would let the kubelet kill port49d mid etcd
+  outage. `issuerDiscovery.enabled` renders the `system:service-account-issuer-discovery`
+  ClusterRoleBinding of `examples/kubernetes/issuer-discovery.yaml`, off by default. The
+  initContainers and `copy-issuer.sh`'s pods run as root, so the namespace needs the `baseline`
+  Pod Security level. Binding 49 as non-root uses the safe pod sysctl
+  `net.ipv4.ip_unprivileged_port_start=0`. The Services (TACACS+ 49, and the TLS listener's port,
+  default 300, when `tlsListener.enabled`) set `externalTrafficPolicy: Local`; whether that keeps
+  the source is L39 (b), still open and 12c's, and the README says so. An optional HPA on
+  `port49_connections` is off by default, rendered and tested and never exercised (design §13: scale
+  on connections, never CPU). Two server groups are two releases. etcd is not in the chart:
+  `deploy/helm/port49/examples/etcd/` is a reference StatefulSet with an `etcd-init` Job, which
+  the smoke uses. `broker.site` sets `PORT49_SITE`, and `broker.directory.keytabSecret` mounts a
+  keytab.
+- **10. Issuing CA copies.** Kubernetes: `deploy/helm/port49/scripts/copy-issuer.sh` runs
+  `init-issuer` once, in a one-shot pod from the port49 image that mounts broker-0's PVC and
+  config (never `kubectl exec` into broker-0, which may be the one crash-looping), then copies
+  `state/issuing-ca.pem` and `state/issuing-ca.key` to every other broker's PVC, creating `state/`
+  `65532:65532 0700` if missing. Each side is a root debug pod on that PVC's node, since `kubectl
+  cp` cannot work against a distroless broker; the key travels inside one kubectl exec stream
+  (`set -o pipefail`) and is written 0600, owned by 65532. systemd and compose: the READMEs give
+  the `install -m 0600` copy.
+- **11. The in-place rewrite warns and never refuses.** At every SIGHUP, after every swap and
+  every `keyRetryInterval` (30 s), port49d reads each held `file:` key reference again. Changed
+  bytes or an unreadable file is said in §12's words ("A key secret rewritten in place"), at
+  most every 10 minutes per reference and at every SIGHUP; the held bytes stay in force;
+  `port49_key_secret_files_changed`, a gauge with no label, counts the key versions whose held
+  file is in either state.
+- **12. MetalLB anycast is gated on L85.** If L85 measures the source kept under `Local`, the
+  route withdrawn when a pod goes, and a rolling restart under the PDB with no failed login past
+  one retry, the chart gains `anycast.enabled`. Otherwise nothing ships, L85 records why and the
+  roadmap carries it. Design §13's note stands: under anycast prefer per-transaction; NX-OS's
+  single-connect offer is a device choice the README names.
+- **13. Store examples are shared.** `deploy/examples/stores/single-site/` and `multi-region/` hold
+  port49d.yaml and port49-broker.yaml fragments at the systemd paths, loaded by a test through
+  `config.Load`/`LoadBroker`; the compose and systemd READMEs point at them. The chart's
+  `examples/values-multi-region.yaml` is the Kubernetes form, rendered by the helm tests. The
+  examples carry backups: an etcd snapshot timer and a `port49 directory export` timer, each under
+  `UMask=0077`, and the Kubernetes CronJob form; Velero for the chart's PVCs is carried to 12c,
+  since naming it needs a measurement. Each shape README carries the `encryption:` key rotation
+  runbook (one key everywhere from one secret), written for that shape's secret files, and a
+  "When it will not start" table whose columns are the refusal, the exact line, where to read it
+  and the fix, with rows for a secret file missing or unreadable, the CA differing, etcd below the
+  floor, the fence refusing, and a per-shape tail (systemd: `journalctl -u port49d -b` and
+  `systemctl reset-failed port49d && systemctl start port49d` after `StartLimitBurst`; compose:
+  `docker compose logs port49d`, and `restart: unless-stopped` loops without limit; Kubernetes:
+  `kubectl logs --previous`, `kubectl describe pod` for a missing Secret, which is a
+  `ContainerCreating` event and never a port49 line, and `CrashLoopBackOff`).
+- **14. The etcd floor in every smoke.** Each smoke configures every member's URL, never a Service
+  or VIP, and asserts port49d's start line `etcd …, at or above the floor` names all three.
+- **Open.** An admin revocation over the authenticated API (ruling 5) is not built and may be
+  overridden by Ryan; the `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
+  overridden (per-distribution RPMs, or a `%post` running `pip`). Rulings 2, 9 and 12 wait on
+  L82–L85.
+
 ---
 
 ## 14. Required test assertions
@@ -11731,6 +11888,12 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L79** | Whether a directory write sent from a region whose link is cut (iptables DROP, so the kernel keeps retransmitting) is delivered after the link heals within the retransmission window: (j) a lift reported "could not be lifted, and stands" that lands later; (k) a revoke reported failed that lands after an operator's lift elsewhere (expected fail-closed: the mark re-created). What `port49 store status` and the decision log say in each case. | §13 decision 51 (11a's final review, dial-fix M4); the operator text of `port49 revoke --lift` | three simulated regions (L74's harness, etcd 3.6.15) | closed — measured 2026-10-21; tests/lab/results/L79-regions.md (etcd 3.6.15, three simulated regions). Re-measured 2026-10-21 on commit 9111f962 (the landed-after-lift flag): in (k) both broker 3 and broker 1 now log "a revocation of the principal made ... before the lift at ... landed after it: a copy sent while its writer was cut off ... it stands everywhere", and `port49 revoke --list` in region 1 shows the entry marked "landed after the lift ... (revision 20)"; in (j) no such line appeared, the mark stayed at revision 17, and "are put back" lines were 0. (j) The lift from region 3 during the cut exited 1 in 513 ms with "the revocation could not be lifted, and stands"; after the heal at 20 s the mark stayed in the directory for the 60 s polled, at the same revision (5), so no lift landed late and the message is true. (k) The revoke from region 3 exited 1 with "the revocation may not have been recorded: a copy already sent can still land when the directory answers again, and then stands everywhere, even over a lift made meanwhile ... this port49-broker denies what it names, until a lift on this port49-broker or its restart"; the lift in region 1 then removed the mark (revision 8), and 250 ms after the heal the mark was back at revision 9 with no "are put back" line in broker 3's log, so the failed revoke was delivered late and fails closed; which process wrote it is not identified. `port49 store status` in region 3 during the cut printed `etcd 1/3 members unreachable` (exit 3) and after the heal `3/3 members reachable`; port49d logged "not answering ... revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers" and then "answering again". Not measured: a heal later than 20 s, or after the kernel gives up (about 15 minutes). |
 | **L80** | NX-OS 10.6(2)F over per-request TLS (RFC 9887 with no `single-connection`, the device default) with `aaa authorization commands default group port49 local`: whether a command port49's policy denies runs (local fallback) or is refused, graded from the command's first output line and port49's records, and whether any authorization request for it reaches port49. L73 cell a showed the device sent port49 no `authorize_command` for `show version` over per-request TLS, yet the command ran (`tests/lab/results/L73-cisco_nxos.md`, "per-request TLS carries no command authorization", read before port49 offered single-connect, decision 50 ruling 20); nobody had typed a denied command that way. | whether port49's command policy holds on NX-OS 10.6 over TLS in the device's default mode; the NX-OS 10.6(2)F row of `docs/qualified-platforms.md` (command authorization over TLS) and its profile's `tls_server_single_connect_honored` device fact; plan 12's NX-OS TLS reference configuration | NX-OS: Nexus 9300v 10.6(2)F | closed — measured 2026-10-21, re-measured with the fix 2026-10-22; tests/lab/results/L80-cisco_nxos.md (Nexus 9300v 10.6(2)F). **Before the fix** (2026-10-21): over per-request TLS the device asked port49 about some commands only, and `show users`, the command port49 denies, **ran**: its first output line was "NAME LINE TIME IDLE PID COMMENT", and port49 received 0 `authorize_command` records for it (1 for other commands). The 2026-10-22 baseline arm (`tests/lab/evidence/L80-cisco_nxos/baseline/`, the build before the fix) again showed the device asking about some commands only (`terminal length 0` and `show version` unasked in one cell; `terminal length 0`, `configure terminal` and `end` in the other), one connection per request; in its two cells `show users` was asked and denied, so that run did not reproduce a denied command running. Its device debug observed the read failure on a socket the server had closed (`nxos_ssl_read() failed`), then `mark server dead`, then `Fall back method none succeeded` (2 and 3 times in the two cells), on requests the debug labels aaa type 2 (accounting); no such fallback on an authorization request was captured, so how an unasked command ran is unmeasured. **After the fix** (port49 offering single-connect; `tests/lab/evidence/L80-cisco_nxos/fixed/`, and `tls_token_login` in tests/lab/results/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md): the device keeps one connection and asks about every command; `show users` is denied by port49; every fixed-arm cell read `ssl_read_failed=0`, `mark_server_dead=0` and `fall_back_none=0`; three concurrent sessions shared one connection (3 denials, none lost); with 35 s between commands (`idle35`) the session reconnected cleanly after port49 closed the idle connection (3 connections, `idle_closed=3`, every `show users` still asked and denied). One counter is unexplained: `tacacs_group_failed` read 3 in seven of the eight fixed-arm cells and 2 in the eighth, with no fallback line beside it (`tests/lab/evidence/L80-cisco_nxos/fixed/*-summary.txt`, the `debug counts:` lines); its cause is unmeasured. **A port49d restart in mid-session** (2026-10-23, the fixed build, the `restart` cells: 20 permitted commands half a second apart, `show users` after every fourth, port49d stopped by SIGINT after the 8th and started 0.26 to 0.51 s later). *On the memory store* (`restart-summary.txt`, verdict `context_lost_on_memory_store`): the device found the close and reconnected by itself (the connection open at the stop ended with port49's FIN at the stop, a new one opened 0.27 s after port49d was listening), with no lost or unasked command, `ssl_read_failed=0`, `mark_server_dead=0` and no fallback line, but every permitted command it typed after the restart (12 of 12) was asked about and denied `context_missing`, because the login context lived in the stopped process; the CLI session stays up and every later command is denied until the operator logs in again. That is harsher than the Junos re-authorization case in the memory-store paragraph below, which a denial does not end. *On etcd* (`restart_etcd-summary.txt`, a single real etcd 3.6.15 member beside `port49-broker`, three runs, each verdict `clean_reconnect`): the contexts were kept, all 21 permitted commands ran and the 5 `show users` were denied by the policy, 0 lost, 0 unasked, 0 denied for `context_missing`, again `ssl_read_failed=0`, `mark_server_dead=0`, no fallback line, and a new connection 0.02 s after port49d was listening; the one command typed at the stop (a `show users`) took 5.26 s to answer, and that wait was not the restart: on the new connection the device's first `nxos_ssl_open` returned -1 and `nxos_ssl_retry_open` succeeded 5.0 s later (`tests/lab/evidence/L80-cisco_nxos/fixed/restart_etcd-debug.txt`), while port49d was already listening, and the cell's first connection shows the same 5 s retry with no restart. So about 5 s is NX-OS 10.6's open retry on a new TLS connection, restart or not; why the first open fails is unmeasured. The restart summaries now print `ssl_open_retry=N`, and the dead, fallback, retry and failed-open counts are over the cell's window with the setup phase's apart (`setup_*`). Whether the close at the restart carried a close_notify is unmeasured under TLS 1.3 (the alert is encrypted in a header-only capture): the device handled the close, however it was signalled, without loss. A restart therefore costs an operator nothing on etcd and a fresh login on the memory store; plan 12's NX-OS TLS reference configuration need not name a second server to survive a restart. |
 | **L81** | An IP address as the TLS server name (decision 50 ruling 10): (a) `openssl s_client -servername <IPv6 literal>` against a listener whose `server_names` lists it in another spelling: accepted. An unlisted one is refused with the alert (best-effort, recorded) and `sni_mismatch`, and the next connection inside the window is reset at Accept, with no strike and no second record. (b) vJunos-router 26.2 with port49's IPv6 address over TLS: whether it sends SNI, and in what form. | `server_names` taking an IP address and matching an address SNI by address (§13 decision 50 ruling 10); whether an IPv6 Junos can be listed in `server_names` at all | (a) reference clients on the lab host; (b) Junos: vJunos-router 26.2 | open — (a) measured 2026-10-22; tests/lab/results/L81-reference.md: a server name `2001:0DB8:0:0::1` matched a `server_names` entry `2001:db8::1` and the handshake completed, and `2001:0DB8:0:0::2` got the `internal error` alert and `sni_mismatch` naming the spelling sent, with the next connection reset at Accept (declined_refused +1, held_refused +0). (a) uses IPv4 loopback transport, so it measures SNI handling only. (b), vJunos-router 26.2 over IPv6, is unmeasured, so the row stays open. The docs make no IPv6-Junos claim until (b) is measured. |
+| **L82** | Kubernetes Secret volumes as port49d's key directory, on kind. (a) The owner, group and mode of the mount's directory, its `..data` link and each key file under `defaultMode: 0440`, `fsGroup: 65532`, `fsGroupChangePolicy: OnRootMismatch`. PASS iff port49d starts with the key (`fence.ReadSecret` accepts). (b) A key added to the Secret reaching a whole-volume mount: the delay. PASS iff the file appears within 180 s. (c) A `subPath` mount of the same Secret after an update. PASS iff the `subPath` file is unchanged after 180 s while the whole mount changed: that confirms "never `subPath`". (d) An External Secrets Operator `ExternalSecret` (`fake` provider), one remote key per version. PASS iff a version added to the ExternalSecret reaches the mounted Secret, and a policy naming it is in force with no container restart (`restartCount` and start time unchanged) within 240 s. | Decision 54 ruling 2's Kubernetes key volume (provisional on this row); the ESO example; 12a's whole-volume hand-off | kind (node image recorded), ESO version recorded | open |
+| **L83** | Secret-store agents rendering port49d's keys, on kind. (a) The Vault Agent injector's rendered file with `perms = "0440"`: owner, group, mode and the agent's uid (documented as 100), with and without `agent-run-as-same-user`. PASS iff port49d starts with the key. (b) The Secrets Store CSI driver with the Vault provider: the files' owner and mode with and without the provider's file-permission setting. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added at the store reaches the running process with no restart. PASS iff a policy naming the new version is in force with no container restart within 300 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether a README may name Vault Agent or the CSI driver (decision 54 ruling 2) | kind; Vault, injector, CSI driver and provider versions recorded | open |
+| **L84** | Host credential mechanisms against `fence.ReadSecret`. (a) systemd `LoadCredential=`: `$CREDENTIALS_DIRECTORY`'s path, owner and mode, and the files'. PASS iff port49d starts with `key_secret_refs.file_dir` naming it, and again on a second start. (b) Compose file-backed `secrets:`, long syntax `uid: "0"`, `gid: "65532"`, `mode: 0440`, and the short syntax (documented 0444): the mounted file's owner and mode. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added reaches the running process with no restart. PASS iff a policy naming it is in force with `ExecMainStartTimestamp` or `StartedAt` unchanged within 120 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether the systemd and compose READMEs may offer these (decision 54 ruling 2) | systemd 257 (Debian 13); Docker and Compose versions recorded | open |
+| **L85** | MetalLB in BGP mode as an anycast VIP for port49d, on kind with an FRR peer. (a) The source address port49d sees under `externalTrafficPolicy: Local`. PASS iff it is the device's own address and the device-binding check passes. (b) Which nodes advertise the VIP. PASS iff exactly the nodes running a ready port49d pod. (c) A port49d pod deleted: the withdrawal time, and what an open single-connection session and a per-transaction client see. PASS iff the route is withdrawn within 10 s, and the per-transaction client's next login passes. (d) A rolling restart under the chart's PDB, with one login a second. PASS iff no login fails past one retry. | Whether the chart offers anycast (decision 54 ruling 12; Plan 12 rulings, B2); design §13's anycast note | kind; MetalLB and FRR versions recorded | open |
+
+Every cell of L82–L85 carries its own PASS condition, so a row closes when every cell has a PASS or a FAIL. A FAIL is a measured answer, not an open row. A README names a mechanism only where every one of its cells is PASS.
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
