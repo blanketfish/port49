@@ -49,6 +49,9 @@ func BrokerMain(args []string) int {
 	if len(args) > 0 && args[0] == "revoke" {
 		return offlineRevoke(args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && args[0] == "forget-issuer" {
+		return forgetIssuer(args[1:], os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && (args[0] == "init-issuer" || args[0] == "rotate-issuer") {
 		return issuerCmd("port49-broker", args[0], "/etc/port49/port49-broker.yaml", config.LoadBroker, args[1:],
 			os.Stdout, os.Stderr)
@@ -63,7 +66,7 @@ func BrokerMain(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-issuer|rotate-issuer …")
+		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-issuer|rotate-issuer|forget-issuer …")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -209,6 +212,18 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		bs.fresh.Need("pins", "logouts")
 	}
 	tellFresh(bs.fresh, m)
+	// issuerCheck holds this broker's issuing CA to the one the store records
+	// (decision 53 ruling 10); nothing to check where it issues nothing.
+	held, issues := heldIssuer(cfg, time.Now())
+	host, _ := os.Hostname()
+	issuerCheck := func(s *etcdstore.Store, timeout time.Duration) error {
+		if !issues {
+			return nil
+		}
+		c, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return checkIssuerRecord(c, s, held, "port49-broker@"+host, out)
+	}
 	// startChecks is what a directory store of its own passes before it is
 	// used (R27, R28), and the broker writes its key window there.
 	startChecks := func(dirRaw *etcdstore.Store) error {
@@ -216,14 +231,20 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		if err := retry(func() error { return checkTwoStores(ctx, cfg, b, dirRaw, 4*de.CallTimeout) }); err != nil {
 			return err
 		}
-		return retry(func() error {
+		if err := retry(func() error {
 			return checkDirectoryKeys(ctx, "port49-broker", dirRaw, directoryRef(cfg), keys, out, 4*de.CallTimeout, true)
-		})
+		}); err != nil {
+			return err
+		}
+		return retry(func() error { return issuerCheck(dirRaw, 4*de.CallTimeout) })
 	}
 	// snap is the region's snapshot this start serves from when the
 	// directory does not answer (R19); nil when it opened.
 	var snap *snapshotView
 	if cfg.Stores.Shared {
+		if err := retry(func() error { return issuerCheck(b, 4*e.CallTimeout) }); err != nil {
+			return fail(err)
+		}
 		bs.dir.set(b)
 	} else {
 		dirRaw, derr := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
@@ -754,7 +775,16 @@ func runBroker(parent context.Context, cfgPath string) error {
 					if err := checkTwoStores(ctx, cfg, bs.raw, s, 4*de.CallTimeout); err != nil {
 						return err
 					}
-					return checkDirectoryKeys(ctx, "port49-broker", s, directoryRef(cfg), keys, stderr, 4*de.CallTimeout, true)
+					if err := checkDirectoryKeys(ctx, "port49-broker", s, directoryRef(cfg), keys, stderr, 4*de.CallTimeout, true); err != nil {
+						return err
+					}
+					if held, issues := heldIssuer(cfg, time.Now()); issues {
+						host, _ := os.Hostname()
+						c, cancel := context.WithTimeout(ctx, 4*de.CallTimeout)
+						defer cancel()
+						return checkIssuerRecord(c, s, held, "port49-broker@"+host, stderr)
+					}
+					return nil
 				}); err != nil {
 					if ctx.Err() == nil {
 						dirErr <- err // ends the run: the process exits 1 saying it

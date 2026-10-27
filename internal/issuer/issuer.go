@@ -106,6 +106,9 @@ type CA struct {
 	// Trusted is every CA a chain may end at: Cert, the staged next and the
 	// previous, those present (decision 43 ruling 14).
 	Trusted []*x509.Certificate
+	// Previous is the previous CA, from PreviousCertFile, when present and
+	// valid: the store's record of the issuing CA follows a promotion by it.
+	Previous *x509.Certificate
 	// Unavailable is why Issue refuses: nil when it issues.
 	Unavailable error
 
@@ -176,6 +179,9 @@ func Load(f Files, now time.Time) (*CA, []string) {
 				o.name, rfc(cert.NotAfter), o.what))
 		case cert != nil:
 			c.Trusted = append(c.Trusted, cert)
+			if o.name == PreviousCertFile {
+				c.Previous = cert
+			}
 			line := fmt.Sprintf("trusting %s too, %s (%s), valid until %s", o.what, cert.Subject, Fingerprint(cert),
 				rfc(cert.NotAfter))
 			if o.name == PreviousCertFile {
