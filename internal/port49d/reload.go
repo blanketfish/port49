@@ -212,6 +212,11 @@ type reloader struct {
 	// force (broker.Broker.MFAUnavailable), said after each swap when it is
 	// not empty. Nil with no broker in the process.
 	mfaUnavailable func(pol *policy.Policy, now time.Time) string
+	// adminTouch is the line (broker.Broker.AdminTouchLine) that every admin
+	// operation is refused for want of attestation roots, said after each swap
+	// where a subject holds an admin-level right, when it is not empty. Nil
+	// with no broker in the process.
+	adminTouch func(pol *policy.Policy) string
 	// failClosed says the fail-closed compositions after each swap's
 	// refresh pass and at each grant expiry (sayAtExpiry), off this
 	// goroutine (failClosedReporter). run closes it.
@@ -1305,6 +1310,11 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 	if r.mfaUnavailable != nil {
 		if line := r.mfaUnavailable(pol, now); line != "" {
 			r.sayf("broker: %s\n", line)
+		}
+	}
+	if r.adminTouch != nil {
+		if line := r.adminTouch(pol); line != "" {
+			r.sayf("%s\n", line)
 		}
 	}
 }

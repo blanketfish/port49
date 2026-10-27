@@ -22,6 +22,10 @@ type RevokeRequest struct {
 	Username  string `json:"username,omitempty"`
 	Sid       string `json:"sid,omitempty"`
 	Issuer    string `json:"issuer,omitempty"`
+	// CertIssuer and CertSerial, together, revoke one certificate (a
+	// standing mark) under revoke_others and a touch (plan 12b).
+	CertIssuer string `json:"cert_issuer,omitempty"`
+	CertSerial string `json:"cert_serial,omitempty"`
 }
 
 // SessionRef names a live session by device and device-facing username.

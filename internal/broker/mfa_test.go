@@ -52,12 +52,14 @@ type mfaOpts struct {
 	noRoots       bool
 	touchOnlyCore bool
 	machines      bool
-	intermediate  bool // the device certificate is signed by an intermediate under the root
-	listInter     bool // and the operator's roots file lists that intermediate
-	shortCeiling  bool // alice's grant on core carries a one-hour session ceiling
-	noRequirement bool // core carries no per_login_mfa (a policy before the reload that adds one)
-	junosCore     bool // core-sw01 is on juniper_junos, which never asks about a command
-	adminRight    bool // alice's subject declares api: [revoke_others]
+	intermediate  bool   // the device certificate is signed by an intermediate under the root
+	listInter     bool   // and the operator's roots file lists that intermediate
+	shortCeiling  bool   // alice's grant on core carries a one-hour session ceiling
+	noRequirement bool   // core carries no per_login_mfa (a policy before the reload that adds one)
+	junosCore     bool   // core-sw01 is on juniper_junos, which never asks about a command
+	adminRight    bool   // alice's subject declares api: [revoke_others]
+	allAdminRight bool   // and every other admin-level right (plan 12b, task 3c)
+	bobAPI        string // the one right bob's subject declares, if any
 }
 
 type mfaOpt func(*mfaOpts)
@@ -71,6 +73,11 @@ func withAppliesToMachines() mfaOpt   { return func(o *mfaOpts) { o.machines = t
 func withShortCeiling() mfaOpt        { return func(o *mfaOpts) { o.shortCeiling = true } }
 func withJunosCore() mfaOpt           { return func(o *mfaOpts) { o.junosCore = true } }
 func withAdminRight() mfaOpt          { return func(o *mfaOpts) { o.adminRight = true } }
+func withBobAPI(right string) mfaOpt  { return func(o *mfaOpts) { o.bobAPI = right } }
+func withBobLifting() mfaOpt          { return withBobAPI("lift_revocations") }
+func withAllAdminRights() mfaOpt {
+	return func(o *mfaOpts) { o.adminRight, o.allAdminRight = true, true }
+}
 func withDeviceUnderIntermediate(listed bool) mfaOpt {
 	return func(o *mfaOpts) { o.intermediate, o.listInter = true, listed }
 }
@@ -99,6 +106,14 @@ func mfaPolicy(o mfaOpts) string {
 	if o.adminRight {
 		netopsAPI = ", api: [revoke_others]"
 	}
+	bobsAPI := ""
+	if o.bobAPI != "" {
+		bobsAPI = ", api: [" + o.bobAPI + "]"
+	}
+	if o.allAdminRight {
+		netopsAPI = ", api: [revoke_others, lift_revocations, forget_principals, reset_second_factor, " +
+			"unlock_sign_in, import_enrollments]"
+	}
 	if o.shortCeiling {
 		ceilingRole = "\n  - {name: short_session, max_session_age: 1h}"
 		ceilingGrant = "\n  - {subject: netops, scope: core, roles: [short_session]}"
@@ -111,7 +126,7 @@ roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}%s
 subjects:
   - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s%s}
-  - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s}
+  - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s%s}
   - {name: svc_oxidized, identity: ["spiffe://corp.example.com/host/oxidized-01"], username: svc-oxidized, token_ttl: 60s}
   - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}
 grants:
@@ -123,7 +138,7 @@ grants:
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: edge, roles: [network_admin], max_privilege: admin}
-`, coreMFA, ceilingRole, netopsAPI, ceilingGrant)
+`, coreMFA, ceilingRole, netopsAPI, bobsAPI, ceilingGrant)
 }
 
 // failStore fails the named store methods, for the store-down cases.
@@ -229,18 +244,24 @@ func (c *mfaConn) exporter(t *testing.T) []byte {
 // post writes one POST on the held connection and reads its answer.
 func (c *mfaConn) post(t *testing.T, path string, hdr map[string]string, body string) (int, []byte) {
 	t.Helper()
+	return c.do(t, "POST", path, hdr, body)
+}
+
+// do writes one request with method on the held connection and reads its answer.
+func (c *mfaConn) do(t *testing.T, method, path string, hdr map[string]string, body string) (int, []byte) {
+	t.Helper()
 	var h strings.Builder
 	for k, v := range hdr {
 		fmt.Fprintf(&h, "%s: %s\r\n", k, v)
 	}
-	if _, err := fmt.Fprintf(c.c, "POST %s HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n%sContent-Length: %d\r\n\r\n%s",
-		path, h.String(), len(body), body); err != nil {
+	if _, err := fmt.Fprintf(c.c, "%s %s HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n%sContent-Length: %d\r\n\r\n%s",
+		method, path, h.String(), len(body), body); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	resp, err := http.ReadResponse(c.br, nil)
 	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)

@@ -586,6 +586,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.RevokeTimeout = admin.OpTimeout
 	brk.AdminSocket = cfg.AdminSocket
 	brk.Proc = "port49-broker"
+	brk.OnLift = marksCopy.Lifted // a lift over the API leaves the copy as the admin socket's did
 	// MarkChanged's lines, a held connection closed and a lift a reload
 	// found, go to port49-broker's stderr (Ruling T9-c).
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) }
@@ -946,7 +947,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	rel.inventory, rel.cfgPath = inventoryAtStart, cfgPath
 	rel.startDocument(startDoc, startFrom)
 	rel.onSettled = rn.settled
-	rel.mfaUnavailable = brk.MFAUnavailable
+	rel.mfaUnavailable, rel.adminTouch = brk.MFAUnavailable, brk.AdminTouchLine
 	rel.fullPass, rel.whole = make(chan fullPassOwed), rn.whole
 	rel.onSwap = func(pol *policy.Policy) {
 		select {

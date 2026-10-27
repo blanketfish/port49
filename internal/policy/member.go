@@ -126,6 +126,21 @@ func (p *Policy) HasRightOf(m Member, right string) bool {
 	return slices.ContainsFunc(p.subjectsOf(m), func(s *Subject) bool { return slices.Contains(s.API, right) })
 }
 
+// AdminRightHolders is the names of the subjects that declare an admin-level
+// right (AdminRights), sorted: a group subject counts, since a member of its
+// group holds the right. The broker says its start line, that every admin
+// operation is refused for want of attestation roots, only where there is one.
+func (p *Policy) AdminRightHolders() []string {
+	var names []string
+	for name, s := range p.subs {
+		if slices.ContainsFunc(s.API, func(r string) bool { return slices.Contains(AdminRights, r) }) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // ResolveMember is spec §5.1 for m on d at now: every matching subject's
 // grants compose (Ruling 5). One identity subject and no directory is
 // Resolve exactly as before plan 7g.

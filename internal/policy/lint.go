@@ -138,8 +138,16 @@ func (p *Policy) Lint(now time.Time) []Finding {
 				"broker.identity.machines[].directory, where its entry's username_attribute names it", name)
 		}
 		if len(sub.API) > 0 {
-			add(FindingAPIRights, "subject %q holds api: [%s], authority over other people's sessions (spec §2)",
+			msg := fmt.Sprintf("subject %q holds api: [%s], authority over other people's sessions (spec §2)",
 				name, strings.Join(sub.API, " "))
+			// The admin-level rights each need a security key press on top
+			// (spec §2, §5.1.6): name them, so a reviewer sees which.
+			if admin := slices.DeleteFunc(slices.Clone(sub.API), func(r string) bool {
+				return !slices.Contains(AdminRights, r)
+			}); len(admin) > 0 {
+				msg += "; admin-level, each call needs a security key press: " + strings.Join(admin, " ")
+			}
+			add(FindingAPIRights, "%s", msg)
 		}
 		if sub.Group != "" {
 			// Lint reads the policy alone, so it says the condition, not

@@ -418,6 +418,12 @@ func buildBrokerAnchorWith(cfg config.Config, inventoryFrom string, st store.Sto
 	if line := b.MFAUnavailable(pol, now); line != "" {
 		fmt.Fprintf(stderr, "%s: broker: %s\n", proc, line)
 	}
+	// Where a subject holds an admin-level right and no attestation roots are
+	// loaded, every admin call is refused: said once here, and at each swap
+	// (spec §12; decision 54 ruling 15).
+	if line := b.AdminTouchLine(pol); line != "" {
+		fmt.Fprintf(stderr, "%s: %s\n", proc, line)
+	}
 	var anchor *x509.CertPool
 	if anchorCert != nil {
 		anchor = x509.NewCertPool()
@@ -1555,15 +1561,16 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// contexts: port49d reads the policy in force at each packet (plan 7e).
 		var pass func(context.Context, []broker.Prior) (broker.RefreshReport, error)
 		var mfaUnavailable func(*policy.Policy, time.Time) string
+		var adminTouch func(*policy.Policy) string
 		if brk != nil {
-			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
+			pass, mfaUnavailable, adminTouch = brk.Refresh, brk.MFAUnavailable, brk.AdminTouchLine
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
 		r.keys = dk
 		r.generic = newGenericRecorder(log, procOf(cfg))
 		r.generic.record(live.Load(), time.Now())
 		hookTLSReload(r, tl, cfg, live)
-		r.mfaUnavailable = mfaUnavailable
+		r.mfaUnavailable, r.adminTouch = mfaUnavailable, adminTouch
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)
 		r.seen, r.held = seen, deps.Held

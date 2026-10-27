@@ -718,15 +718,43 @@ func TestNoRootsRecordsItsFixedWhy(t *testing.T) {
 // route that lost its gate answers the first call 200, and this goes red.
 // Each new admin route joins this table.
 func TestEveryGatedFormNeedsATouch(t *testing.T) {
-	for _, form := range []struct{ name, body, op, target string }{
-		{"principal", bobBody, "revoke_principal", bobKey},
-		{"key", `{"device":"core-sw01","username":"bob"}`, "revoke_key", "core-sw01/bob"},
-		{"sid", `{"sid":"s-1"}`, "revoke_sid", "s-1 at "},
+	revoke := func(req RevokeRequest) func(*testing.T, *mfaFixture) {
+		return func(t *testing.T, f *mfaFixture) {
+			t.Helper()
+			req.Origin = "test"
+			if _, err := f.b.Revoke(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, form := range []struct {
+		name, path, body, op, target string
+		setup                        func(*testing.T, *mfaFixture)
+	}{
+		{"principal", revokePath, bobBody, "revoke_principal", bobKey, nil},
+		{"key", revokePath, `{"device":"core-sw01","username":"bob"}`, "revoke_key", "core-sw01/bob", nil},
+		{"sid", revokePath, `{"sid":"s-1"}`, "revoke_sid", "s-1 at ", nil},
+		{"certificate", revokePath, certBody, "revoke_certificate", certTarget, nil},
+		{"lift of a principal", liftPath, bobBody, "lift", bobKey, revoke(RevokeRequest{Principal: bobKey})},
+		{"lift of a certificate", liftPath, liftCertBody, "lift", certTarget,
+			revoke(RevokeRequest{Issuer: testIssuer, Serial: "1a2b"})},
 	} {
 		t.Run(form.name, func(t *testing.T) {
-			f := newAdminFixture(t)
+			f := newMFAFixture(t, withAllAdminRights())
+			if form.setup != nil {
+				form.setup(t, f)
+			}
 			c := f.alice.conn
-			code, raw := c.post(t, revokePath, nil, form.body)
+			revokeRecords := func() (n int) {
+				for _, r := range f.recs(t) {
+					if r["event"] == "revoke" {
+						n++
+					}
+				}
+				return n
+			}
+			before := revokeRecords()
+			code, raw := c.post(t, form.path, nil, form.body)
 			ans := decodeAdminAnswer(t, raw)
 			if code != 401 || ans.Error != "admin_touch_required" || ans.Admin == nil {
 				t.Fatalf("with no proof: %d %s, want 401 admin_touch_required", code, ans.Error)
@@ -734,12 +762,10 @@ func TestEveryGatedFormNeedsATouch(t *testing.T) {
 			if ans.Admin.Operation != form.op || !strings.HasPrefix(ans.Admin.Target, form.target) {
 				t.Fatalf("operation %q target %q", ans.Admin.Operation, ans.Admin.Target)
 			}
-			for _, r := range f.recs(t) {
-				if r["event"] == "revoke" {
-					t.Fatal("a call with no proof wrote a revoke record")
-				}
+			if revokeRecords() != before {
+				t.Fatal("a call with no proof wrote a revoke record")
 			}
-			if code, _ := f.adminCall(t, f.alice, c, revokePath, form.body); code != 200 {
+			if code, _ := f.adminCall(t, f.alice, c, form.path, form.body); code != 200 {
 				t.Fatalf("with a proof: %d, want 200", code)
 			}
 			if f.adminRecords(t, "admin_touch_proved") != 1 {

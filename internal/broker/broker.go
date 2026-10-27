@@ -171,6 +171,12 @@ type Broker struct {
 	// when empty, "port49-broker" on the broker (Task 15a review M-6).
 	Proc string
 
+	// OnLift, when set, is told of each mark a lift over the API removed,
+	// after the store committed it and before the lift is answered: the
+	// runner's copy of the marks drops it (port49-broker's Lifted), as it did
+	// for a lift on the admin socket.
+	OnLift func(store.Revocation)
+
 	// MintGate, when set, is asked of the policy a mint would run under,
 	// with the policy held: an error refuses the whole batch
 	// store_unavailable, minting nothing. port49-broker refuses until a
@@ -264,6 +270,12 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sign-in/confirm", b.signInConfirm)
 	mux.HandleFunc("GET /v1/identity", b.identity)
 	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
+	mux.HandleFunc("POST /v1/revocations/lift", b.revocationsLift)
+	mux.HandleFunc("GET /v1/revocations", b.revocationsList)
+	mux.HandleFunc("POST /v1/directory/forget", b.directoryForget)
+	mux.HandleFunc("POST /v1/directory/reset-second-factor", b.directoryResetSecondFactor)
+	mux.HandleFunc("POST /v1/directory/unlock", b.directoryUnlock)
+	mux.HandleFunc("POST /v1/directory/import", b.directoryImport)
 	mux.HandleFunc("POST /v1/explain", b.explain)
 	mux.HandleFunc("GET /healthz", b.healthz)
 	mux.HandleFunc("GET /readyz", b.readyz)

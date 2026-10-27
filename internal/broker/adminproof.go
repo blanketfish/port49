@@ -17,6 +17,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -143,7 +144,7 @@ func (b *Broker) connClosed(c net.Conn, s http.ConnState) {
 
 // AdminTouchUnavailable is the line port49-broker and port49d say, at start
 // and at every reload, where a subject holds an admin-level right (spec §12):
-// "" when roots are loaded.
+// "" when roots are loaded. AdminTouchLine is the one to say.
 func (b *Broker) AdminTouchUnavailable() string {
 	if b.mfaTouch() {
 		return ""
@@ -151,6 +152,18 @@ func (b *Broker) AdminTouchUnavailable() string {
 	return "no attestation roots are configured " +
 		"(broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file): every admin operation " +
 		"will be refused until they are"
+}
+
+// AdminTouchLine is AdminTouchUnavailable's line for pol, or "" when roots are
+// loaded or no subject in pol holds an admin-level right: with none there is
+// no operation to refuse, and a broker that runs no admin calls says nothing.
+// The process says it at its start and at each swap, once per policy; it
+// never refuses either.
+func (b *Broker) AdminTouchLine(pol *policy.Policy) string {
+	if len(pol.AdminRightHolders()) == 0 {
+		return ""
+	}
+	return b.AdminTouchUnavailable()
 }
 
 // adminGate is the proof an admin-level call needs, after its right. It

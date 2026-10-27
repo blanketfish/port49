@@ -56,8 +56,9 @@ var errNotSaved = errors.New("port49d's log says why")
 // is read once, from the policy in force, before Revoke waits for its slot,
 // and not again after the wait, as a mint reads the policy once (pre-flight
 // M18). A self or key revocation takes no slot; one caller may have one in
-// flight (revokeOwnOrKey). A lift and a revocation by certificate are the
-// admin socket's alone.
+// flight (revokeOwnOrKey). A certificate (cert_issuer and cert_serial) is a
+// standing mark under revoke_others too (revokeCertificate); a lift is
+// POST /v1/revocations/lift's, under its own right.
 func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	c, ok := b.authenticate(w, r, decision.EventRevoke, "revoked nothing")
 	if !ok {
@@ -86,12 +87,18 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a revocation request: "+
-			"name mine, a principal, or a device and a username (a lift is "+b.proc()+"'s admin socket's)")
+			"name mine, a principal, a device and a username, a sid, or a certificate's cert_issuer and "+
+			"cert_serial (a lift is POST /v1/revocations/lift)")
 		return
 	}
 	origin := "api " + asker
 	byKey := req.Device != "" || req.Username != ""
+	byCert := req.CertIssuer != "" || req.CertSerial != ""
 	switch {
+	case byCert && (req.Mine || req.Principal != "" || byKey || req.Sid != "" || req.Issuer != ""):
+		writeError(w, http.StatusBadRequest, "bad_request", "name a certificate's cert_issuer and cert_serial "+
+			"alone, not with another form")
+		return
 	case req.Sid != "" && (req.Mine || req.Principal != "" || byKey):
 		writeError(w, http.StatusBadRequest, "bad_request", "name a sid alone, with its issuer when more than one "+
 			"provider is configured")
@@ -102,7 +109,8 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	case req.Mine && req.Principal != "", byKey && req.Principal != "":
 		writeError(w, http.StatusBadRequest, "bad_request", "name mine, a principal, or a device and a username, not both")
 		return
-	case req.Sid == "" && !req.Mine && !byKey && req.Principal == "", byKey && (req.Device == "" || req.Username == ""):
+	case req.Sid == "" && !req.Mine && !byKey && !byCert && req.Principal == "",
+		byKey && (req.Device == "" || req.Username == ""):
 		writeError(w, http.StatusBadRequest, "bad_request", "name mine, a principal, or a device and a username "+
 			"(both, for one key)")
 		return
@@ -134,6 +142,10 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	gate := func(op, target string) bool { return b.adminGate(w, r, c, body, op, target) }
 	if req.Sid != "" {
 		b.revokeSid(w, r, pol, asker, origin, req, mayOthers, refused, gate)
+		return
+	}
+	if byCert {
+		b.revokeCertificate(w, r, pol, asker, origin, req, mayOthers, refused, gate)
 		return
 	}
 	if byKey {
@@ -201,11 +213,17 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	if !gate("revoke_principal", target) {
 		return
 	}
-	// The wait for the revocation slot is bounded; once Revoke holds it, it
-	// runs to the end detached from this request (Revoke's comment).
+	b.runRevoke(w, r, pol, RevokeRequest{Principal: target, Origin: origin}, asker, origin)
+}
+
+// runRevoke makes a standing mark and answers it. The wait for the
+// revocation slot is bounded; once Revoke holds it, it runs to the end
+// detached from this request (Revoke's comment).
+func (b *Broker) runRevoke(w http.ResponseWriter, r *http.Request, pol *policy.Policy, req RevokeRequest, asker,
+	origin string) {
 	wait, cancel := context.WithTimeout(r.Context(), revokeSlotWait)
 	defer cancel()
-	rep, err := b.Revoke(wait, RevokeRequest{Principal: target, Origin: origin})
+	rep, err := b.Revoke(wait, req)
 	switch {
 	case errors.Is(err, ErrBadRevocation):
 		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
@@ -215,7 +233,11 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		// The mark was not written, so nothing was revoked beyond this
 		// port49d's own copy (Revoke): Revoke's own error names the store's
 		// fault and the fallback, for port49d's log.
-		b.logf("broker: a revocation of %s asked by %s was not made: %v", target, asker, err)
+		what := req.Principal
+		if what == "" {
+			what = certTargetOf(req)
+		}
+		b.logf("broker: a revocation of %s asked by %s was not made: %v", what, asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not "+
 			"be recorded, so nothing was revoked; "+b.unrecordedNote())

@@ -1289,3 +1289,52 @@ func TestASwapPutsTheKeysBeforeThePolicyAndDropsTheOldAfter(t *testing.T) {
 		t.Fatalf("a key no policy in force names is still in force (%d versions)", n)
 	}
 }
+
+// Where a subject holds an admin-level right and no attestation roots are
+// loaded, every admin call is refused: said once at the start and once at
+// each swap that puts such a policy in force, and never where no subject
+// holds one (spec §12; decision 54 ruling 15). Neither refuses.
+func TestTheAdminTouchLineIsSaidWhereASubjectHoldsAnAdminRight(t *testing.T) {
+	const line = "no attestation roots are configured " +
+		"(broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file): every admin operation will be " +
+		"refused until they are"
+	rig := newReloadRig(t, policyWithGroups)
+	rig.r.adminTouch = rig.b.AdminTouchLine
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	if strings.Contains(rig.out.String(), "attestation_roots_file") {
+		t.Fatalf("said with no subject holding an admin-level right:\n%s", rig.out.String())
+	}
+	// explain_others is not admin-level, nor is a reserved right.
+	notAdmin := strings.Replace(policyWithGroups, "username: alice, token_ttl: 60s}",
+		"username: alice, token_ttl: 60s, api: [explain_others, sync]}", 1)
+	swapTo(t, rig, notAdmin)
+	if strings.Contains(rig.out.String(), "attestation_roots_file") {
+		t.Fatalf("said for a right that is not admin-level:\n%s", rig.out.String())
+	}
+	holder := strings.Replace(policyWithGroups, "username: alice, token_ttl: 60s}",
+		"username: alice, token_ttl: 60s, api: [lift_revocations]}", 1)
+	swapTo(t, rig, holder)
+	if !strings.Contains(string(rig.b.Policy.Load().Raw()), "lift_revocations") {
+		t.Fatalf("the policy with the right was not applied:\n%s", rig.out.String())
+	}
+	if n := strings.Count(rig.out.String(), "port49d: "+line+"\n"); n != 1 {
+		t.Fatalf("the swap said it %d times, want once, prefixed by the process:\n%s", n, rig.out.String())
+	}
+	rig.pollTwice() // nothing changed: nothing swapped, nothing said again
+	if n := strings.Count(rig.out.String(), "attestation_roots_file"); n != 1 {
+		t.Fatalf("said %d times for one policy:\n%s", n, rig.out.String())
+	}
+
+	// A start reads the policy file the rig's config names: the holder's.
+	var start syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &start
+	if _, _, err := buildBroker(rig.cfg, "inventory_file "+rig.cfg.InventoryFile, memory.New(time.Now), seedMinter(),
+		decision.NewJSONLines(io.Discard), rig.m); err != nil {
+		t.Fatalf("the start refused: %v", err)
+	}
+	if n := strings.Count(start.String(), "port49d: "+line+"\n"); n != 1 {
+		t.Fatalf("the start said it %d times, want once:\n%s", n, start.String())
+	}
+}
