@@ -7572,7 +7572,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
     - the release pipeline and client packages;
     - PyPI and Galaxy;
     - `make test`/`make vet` and `TestAnotherUIDIsRefused` in CI (Ryan lifted the workflow hold on 2026-10-24);
-    - `file:` secrets per shape: whole-volume mounts, `defaultMode`/`fsGroup`, Vault Agent's `perms`;
+    - `file:` secrets per shape (Plan 12a — As built, Hand-offs, below);
     - each artifact's README (plan 13 writes the docs-site pages);
     - anycast through MetalLB, offered only after a lab row measures `externalTrafficPolicy: Local`.
   - Inventory themes A and E. Written after 12a merges.
@@ -7877,8 +7877,10 @@ These are the notes the pull request body carries. Each is true of the code as b
     connections with no strike.
   - **Never rewrite a version in place.** An edit of a held secret (same version, new bytes) is not re-read until
     restart. Always add a new version.
-  - A start with an unreadable secret exits. A reload whose secret file is not rendered yet keeps the old keys and
-    retries every 30 s and on SIGHUP.
+  - A start with an unreadable config secret exits. So does a port49d start whose policy names a device-key file
+    that cannot be read: `dk.build` runs once at start and its error ends the run (`internal/port49d/main.go`); no
+    test pins that start, only the reload's retry (`keyretry_test.go`). A port49-broker loads no device keys. A
+    reload whose secret file is not rendered yet keeps the old keys and retries every 30 s and on SIGHUP.
 - **Startup under systemd.** A refused start exits and systemd restarts it. Set `RestartSec=` and
   `StartLimitIntervalSec=`/`StartLimitBurst=` so a start the server refuses (a CA mismatch, an etcd below the
   floor, a policy with no `keys:`) does not flap. This belongs in 12b's units; it is not written here.
@@ -7891,7 +7893,7 @@ These are the notes the pull request body carries. Each is true of the code as b
 - **Global cap.** `limits.max_connections` sheds: it accepts, then resets the connection with no strike. It says
   so in one log line a minute, and the counter is `port49_connections_shed_total{reason="global_cap"}`;
   `port49_connections_max` is the cap. Unset, the cap is sized from the open-file limit (less 1024, or half the
-  limit where that is less); an unreadable limit is taken as 4096, and the start line says so. Keep `LimitNOFILE=` generous.
+  limit where that is less); an unreadable limit is taken as 4096, and the start line says so. The 12b hand-off covers `LimitNOFILE=`.
 - **Egress proxy.** The inventory service's sources honour `HTTPS_PROXY` and `NO_PROXY`. Proxy credentials are
   never printed. A 407 means the proxy refused `HTTPS_PROXY`'s credentials; the token was not sent.
 - **Issuing CA.**
@@ -7907,7 +7909,8 @@ These are the notes the pull request body carries. Each is true of the code as b
 - **One YAML document.** A second document is refused in every file.
 - **The fence.** Every directory above a policy, inventory or key file must be neither group- nor
   world-writable and owned by root or port49d's user, unless it is sticky (as `/tmp` is) and owned by root or
-  port49d's user, or sits on a read-only mount. A `/home/<someone>` path, or a umask of 002 that left a
+  port49d's user. A directory on a read-only mount is excused for its mode alone: its ownership is still
+  checked. A `/home/<someone>` path, or a umask of 002 that left a
   group-writable parent, is refused naming the directory. POSIX ACLs show in the mode's group bits; NFSv4
   ACLs are not read, so keep the policy off NFS.
 - **Upgrade.**
@@ -7928,13 +7931,16 @@ These are the notes the pull request body carries. Each is true of the code as b
     or in `PORT49_KEY_*` variables.
   - `file:` secrets per shape (`fence.ReadSecret`: links followed inside the directory, owner root or port49d's
     user, no world bit, group-read allowed):
-    - Kubernetes Secret volume: mount the whole volume at `file_dir`, never by `subPath` (kubelet updates `..data`
-      in a whole-volume mount, so a new key version reaches the next retry with no restart; a `subPath` mount never
-      sees it). `defaultMode: 0440` (or `0400`) and `fsGroup` set to port49d's group.
-    - Secrets Store CSI driver: the same whole-volume mount; its default file mode is 0644, which is refused, so set the
-      provider's file permission and `fsGroup`; measure the mode each provider writes.
-    - Vault Agent: the template's `perms = "0440"` (or `"0400"`), and the agent running as root or as port49d's user
-      (the injector's default uid 100 is refused); render into `file_dir`.
+    - Kubernetes Secret volume: mount the whole volume at `file_dir`. Kubernetes' documentation says a `subPath` mount does
+      not receive updates, which would keep a new key version from the next retry (unmeasured: assert it in the
+      kubernetes smoke, which also asserts a whole-volume mount does receive it). `defaultMode: 0440` (or `0400`)
+      and `fsGroup` set to port49d's group.
+    - Secrets Store CSI driver: the same whole-volume mount. The driver's default file mode is documented as 0644
+      (unmeasured); a mode with a world bit is refused, so set the provider's file permission and `fsGroup`, and
+      measure what each provider writes before the shape documents it (a 12b or 12c lab row).
+    - Vault Agent: the template's `perms = "0440"` (or `"0400"`), and the agent running as root or as port49d's user.
+      The injector's default uid is documented as 100, which `fence.ReadSecret` would refuse (owner root or
+      port49d's user): measure in the shape's smoke before the shape documents it. Render into `file_dir`.
     - Docker and systemd credentials: Docker's `secrets:` long syntax with `mode: 0440` and the gid (the default is
       documented as 0444: measure it in the shape's smoke); systemd's `LoadCredential=` files under
       `$CREDENTIALS_DIRECTORY`, which `key_secret_refs.file_dir` names (owner, mode and ACL unmeasured: measure first).
