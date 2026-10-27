@@ -117,7 +117,7 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
      | `forget-issuer`, `init-issuer`, `rotate-issuer`, `init-revocations`, `store-roles` | unchanged local subcommands: they run with the brokers stopped or before any admin exists, and were never socket operations |
      | `port49-broker revoke --offline [--lift]` | the break-glass, unchanged, plus `--list`; and a new `port49d revoke --offline` for a port49d with its broker in process |
 
-   - **The admin socket is removed outright** (pre-beta, no deprecation). `admin_socket` in either config file is refused by name.
+   - **The admin socket is removed outright** (pre-beta, no deprecation). `admin_socket` in either config file is refused by name. No operation keeps a socket (Ryan's addendum, 2026-10-27: only a compelling reason the API and a touch cannot serve would keep one). Each row above was checked for one, and none has it. The two that cannot reach a running broker have homes that need no socket: the break-glass revoke runs offline with the brokers stopped, and `keys diagnose` runs offline from a capture. `store status` is a read with no authority, so it goes on the metrics port.
    - **Per shape,** an operator runs `port49 revoke …` and `port49 directory …` on their own workstation, through their agent. No shape needs `sudo`, `docker exec` or `kubectl exec` for an admin call. The break-glass, with every broker stopped, as root or the broker's user:
      - **systemd:** `systemctl stop port49-broker` on every broker host, then `port49-broker revoke --offline …`, then start.
      - **Compose:** `docker compose stop port49-broker`, then `docker compose run --rm --no-deps port49-broker revoke --offline …`, then start.
