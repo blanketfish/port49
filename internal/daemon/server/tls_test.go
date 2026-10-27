@@ -264,8 +264,14 @@ func refusedAtHandshake(t *testing.T, f *tlsFixture, log *syncBuffer, cert *tls.
 	if _, _, err := f.login(t, cert, adjust); err == nil {
 		t.Fatalf("%s: the login was answered", outcome)
 	}
-	if !waitFor(t, func() bool { return log.contains(`"tls_outcome":"` + string(outcome) + `"`) }) {
-		t.Fatalf("%s: no record: %s", outcome, log.String())
+	// The device has its alert before tlsRefused runs, and tlsRefused
+	// records, counts, then strikes or declines: wait for the last.
+	if !waitFor(t, func() bool {
+		return log.contains(`"tls_outcome":"`+string(outcome)+`"`) &&
+			f.ts.limits.Holding(loopback) == struck && (struck || f.ts.limits.Declined(loopback))
+	}) {
+		t.Fatalf("%s: no record, or struck %v declined %v: %s", outcome,
+			f.ts.limits.Holding(loopback), f.ts.limits.Declined(loopback), log.String())
 	}
 	if !log.contains(`"diagnosis":"tls_refused"`) || !log.contains(`"transport":"tls"`) {
 		t.Fatalf("%s: record: %s", outcome, log.String())
@@ -1031,7 +1037,10 @@ func TestTLSAlternatingMismatchesKeepTheStrikeCap(t *testing.T) {
 		} else {
 			_, _, err = f.login(t, &stranger, nil)
 		}
-		if err == nil || !waitFor(t, func() bool { return records() == before+1 }) {
+		// The window opens after the record (tlsRefused): wait for both.
+		if err == nil || !waitFor(t, func() bool {
+			return records() == before+1 && (f.ts.limits.Holding(loopback) || f.ts.limits.Declined(loopback))
+		}) {
 			t.Fatalf("refusal %d: %v, %d records, want %d: a window outlasted malformed_backoff_max", i, err,
 				records(), before+1)
 		}

@@ -104,7 +104,20 @@ func resumed(t *testing.T, f *tlsFixture, cert tls.Certificate, cache tls.Client
 	if _, _, err := c.recv(); err != nil { // the reply; the ticket arrived with it
 		t.Fatal(err)
 	}
-	return c.conn.ConnectionState().DidResume
+	did := c.conn.ConnectionState().DidResume
+	// The server frees its per-source slot after the reply reaches us; two
+	// still held refuse the next dial (PerNASConnections 2).
+	c.conn.Close()
+	if !waitFor(t, func() bool {
+		release, ok := f.ts.limits.Acquire(loopback)
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("the server still holds both of the source's connection slots")
+	}
+	return did
 }
 
 func TestNoTicketsWhenTheLifetimeIsZero(t *testing.T) {
