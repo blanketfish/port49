@@ -1575,11 +1575,11 @@ func TestAConfigSecretInsideTheAllowanceIsRefused(t *testing.T) {
 // paths, and a name that merely shares a prefix is not inside.
 func TestAKeyFileNeedsNoTextMatchToOverlapTheAllowance(t *testing.T) {
 	setKeyEnv(t)
-	real := filepath.Join(t.TempDir(), "real")
+	real := filepath.Join(safeTemp(t), "real")
 	if err := os.Mkdir(real, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(t.TempDir(), "keys")
+	link := filepath.Join(safeTemp(t), "keys")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
 	}
@@ -1664,4 +1664,15 @@ func TestMaxConnectionsIsBounded(t *testing.T) {
 			t.Fatalf("max_connections %s: unhelpful error %v", c.value, err)
 		}
 	}
+}
+
+// safeTemp is a fresh directory only its owner can write, whatever the umask:
+// the fence refuses a file under any directory others can write.
+func safeTemp(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }

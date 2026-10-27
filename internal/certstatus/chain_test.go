@@ -30,7 +30,7 @@ func TestAnUncoveredIssuerOpensWithTheAPIsWords(t *testing.T) {
 // crlFile writes der to a new file and returns its path.
 func crlFile(t *testing.T, der []byte) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "list.crl")
+	path := filepath.Join(safeTemp(t), "list.crl")
 	if err := os.WriteFile(path, der, 0o644); err != nil {
 		t.Fatal(err)
 	}

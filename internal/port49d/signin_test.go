@@ -45,7 +45,7 @@ var signInTestKeys = crypt.Keys{Current: crypt.NewKey("k", [32]byte{9})}
 func signInConfig(t *testing.T, listen string) (config.Config, string) {
 	t.Helper()
 	cfg := brokerConfig(t, directoryPolicy)
-	state := filepath.Join(t.TempDir(), "state")
+	state := filepath.Join(safeDir(t), "state")
 	if err := os.Mkdir(state, 0o700); err != nil {
 		t.Fatal(err)
 	}

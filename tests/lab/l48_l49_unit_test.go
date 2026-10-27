@@ -576,6 +576,9 @@ func TestLocalBrokerStartsOnTheRealPort49d(t *testing.T) {
 	}
 	for _, crl := range []bool{false, true} {
 		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o755); err != nil { // the fence refuses an ancestor others can write; t.TempDir follows the umask
+			t.Fatal(err)
+		}
 		wl := filepath.Join(dir, "wl")
 		if err := testpki.WriteWorkloadLab(wl, l48ID, time.Now()); err != nil {
 			t.Fatal(err)

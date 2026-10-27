@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -45,7 +46,7 @@ func safeDir(t *testing.T) string {
 // dirPerm, and returns its path.
 func policyAt(t *testing.T, perm, dirPerm os.FileMode) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "etc")
+	dir := filepath.Join(safeDir(t), "etc")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +93,14 @@ func TestAPolicyFileAnotherUserOwnsIsRefused(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("as root every file is owned by an accepted uid")
 	}
-	defer func(f func() int) { Geteuid = f }(Geteuid)
-	Geteuid = func() int { return os.Geteuid() + 1 }
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
+	real := FileOwner
+	FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if !fi.IsDir() {
+			return uint32(os.Geteuid() + 1), true // the file alone; every directory is ours
+		}
+		return real(fi)
+	}
 	path := policyAt(t, 0o600, 0o700)
 	if _, err := Read(path, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "the file "+path) ||
 		!strings.Contains(err.Error(), "chown it") {
@@ -107,7 +114,7 @@ func TestAPolicyFileAnotherUserOwnsIsRefused(t *testing.T) {
 // returns dir.
 func configMap(t *testing.T) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "policy")
+	dir := filepath.Join(safeDir(t), "policy")
 	stamped := filepath.Join(dir, "..2026_09_24_07_00_00.123456789")
 	if err := os.MkdirAll(stamped, 0o755); err != nil {
 		t.Fatal(err)
@@ -145,7 +152,7 @@ func TestAConfigMapPolicyIsRead(t *testing.T) {
 // link standing for a directory each sit in a directory others can write.
 func TestALinkInADirectoryOthersCanWriteIsRefused(t *testing.T) {
 	open := func() string {
-		d := filepath.Join(t.TempDir(), "open")
+		d := filepath.Join(safeDir(t), "open")
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +276,7 @@ func TestAWritableFileOnAReadOnlyMountIsRefused(t *testing.T) {
 
 // A chain of links that never ends is refused, not followed forever.
 func TestALinkLoopIsRefused(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "etc")
+	dir := filepath.Join(safeDir(t), "etc")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -362,13 +369,18 @@ func TestAPolicyDirectoryAnotherUserOwnsIsRefused(t *testing.T) {
 	}
 	defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
 	real := FileOwner
+	path := policyAt(t, 0o600, 0o700)
+	hi, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdingIno := hi.Sys().(*syscall.Stat_t).Ino
 	FileOwner = func(fi fs.FileInfo) (uint32, bool) {
-		if fi.IsDir() {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Ino == holdingIno {
 			return uint32(os.Geteuid() + 1), true
 		}
 		return real(fi)
 	}
-	path := policyAt(t, 0o600, 0o700)
 	if _, err := Read(path, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "the directory "+filepath.Dir(path)) ||
 		!strings.Contains(err.Error(), "chown it") {
 		t.Fatalf("%v", err)
@@ -407,7 +419,7 @@ func TestTheInventoryFileIsFenced(t *testing.T) {
 // of mode dirPerm, and returns its path.
 func inventoryAt(t *testing.T, perm, dirPerm os.FileMode) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "etc")
+	dir := filepath.Join(safeDir(t), "etc")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +508,7 @@ func TestAnInventorySymlinkIsFenced(t *testing.T) {
 
 	// A safe target behind a link in a directory others can write: the link
 	// can be swapped.
-	swappable := t.TempDir()
+	swappable := safeDir(t)
 	if err := os.Chmod(swappable, 0o777); err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +652,7 @@ func TestASecretLinkInsideTheDirectoryIsFollowed(t *testing.T) {
 // (Review Focus 2; decision 53 ruling 12).
 func TestALinkOutOfTheDirectoryIsRefused(t *testing.T) {
 	dir := secretVolume(t)
-	other := filepath.Join(t.TempDir(), "tls-key.pem")
+	other := filepath.Join(safeDir(t), "tls-key.pem")
 	if err := os.WriteFile(other, []byte("hunter2-key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +696,7 @@ func TestASecretFileOfAnotherOwnerIsRefused(t *testing.T) {
 // that is 01777.
 func plainSecretDir(t *testing.T, mode fs.FileMode) (dir, file string) {
 	t.Helper()
-	dir = filepath.Join(t.TempDir(), "keys")
+	dir = filepath.Join(safeDir(t), "keys")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -776,5 +788,162 @@ func TestAHardLinkedSecretInAStickyDirectoryIsRefused(t *testing.T) {
 	}
 	if raw, err := ReadSecret(tfile, tight, 1<<20); err != nil || len(raw) != 7 {
 		t.Fatalf("a second name in a private directory: %d bytes, %v", len(raw), err)
+	}
+}
+
+// A directory above the file that others can write could rename the file's
+// directory and put another in its place: refused, unless its sticky bit
+// keeps others from renaming what is below it (decision 53 ruling 11).
+func TestAnAncestorOthersCanWriteIsRefused(t *testing.T) {
+	top := safeDir(t)
+	mid := filepath.Join(top, "shared")
+	dir := filepath.Join(mid, "port49")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(p, []byte(minimalPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mid, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "the directory "+mid) ||
+		!strings.Contains(err.Error(), "chmod go-w") {
+		t.Fatalf("an others-writable ancestor: %v", err)
+	}
+	// The same walk guards the other entry points.
+	if _, err := ReadNoLink(p, maxPolicySize, "state file"); err == nil || !strings.Contains(err.Error(), mid) {
+		t.Fatalf("ReadNoLink under an others-writable ancestor: %v", err)
+	}
+	if err := CheckDir(p, "policy file"); err == nil || !strings.Contains(err.Error(), mid) {
+		t.Fatalf("CheckDir under an others-writable ancestor: %v", err)
+	}
+	if err := os.Chmod(mid, 0o777|fs.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := Read(p, maxPolicySize, "policy file"); err != nil || string(raw) != minimalPolicy {
+		t.Fatalf("a sticky ancestor, as /tmp is: %v", err)
+	}
+	// A group-writable ancestor is refused too, and the refusal names the
+	// ancestor, never the file's bytes.
+	if err := os.Chmod(mid, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), mid) ||
+		strings.Contains(err.Error(), "scopes:") {
+		t.Fatalf("a group-writable ancestor: %v", err)
+	}
+}
+
+// A sticky ancestor is excused only when we or root own it: another user's
+// sticky directory is theirs to rename within.
+func TestAStickyAncestorOfAnotherOwnerIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root owns the swapped uid's directory anyway")
+	}
+	top := safeDir(t)
+	mid := filepath.Join(top, "shared")
+	dir := filepath.Join(mid, "port49")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(p, []byte(minimalPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mid, 0o777|fs.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	mi, err := os.Stat(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	midIno := mi.Sys().(*syscall.Stat_t).Ino
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileOwner = f }(FileOwner)
+	real := FileOwner
+	FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Ino == midIno {
+			return uint32(os.Geteuid() + 1), true
+		}
+		return real(fi)
+	}
+	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), mid) ||
+		!strings.Contains(err.Error(), "chown it") {
+		t.Fatalf("a sticky ancestor of another owner: %v", err)
+	}
+}
+
+// An ancestor on a read-only mount is excused, as a link's directory is.
+func TestAWritableAncestorOnAReadOnlyMountIsAccepted(t *testing.T) {
+	top := safeDir(t)
+	mid := filepath.Join(top, "shared")
+	dir := filepath.Join(mid, "port49")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(p, []byte(minimalPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mid, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func(*os.File) (bool, error)) { ReadOnlyFS = f }(ReadOnlyFS)
+	ReadOnlyFS = func(*os.File) (bool, error) { return false, nil }
+	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), mid) {
+		t.Fatalf("a 0777 ancestor on a writable mount is refused: %v", err)
+	}
+	ReadOnlyFS = func(*os.File) (bool, error) { return true, nil }
+	if raw, err := Read(p, maxPolicySize, "policy file"); err != nil || string(raw) != minimalPolicy {
+		t.Fatalf("a 0777 ancestor on a read-only mount is accepted: %v", err)
+	}
+}
+
+// A secret file's key directory is walked too: an others-writable parent
+// could rename the whole key directory, so ReadSecret refuses it.
+func TestASecretUnderAnAncestorOthersCanWriteIsRefused(t *testing.T) {
+	top := safeDir(t)
+	mid := filepath.Join(top, "shared")
+	keys := filepath.Join(mid, "keys")
+	if err := os.MkdirAll(keys, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(keys, "k1")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mid, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadSecret(p, keys, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "the directory "+mid) || strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("a secret under an others-writable ancestor: %v", err)
+	}
+	if err := os.Chmod(mid, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := ReadSecret(p, keys, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the same secret under a private ancestor: %v", err)
+	}
+}
+
+// A POSIX ACL granting another user write shows in the mode's group bits
+// (the ACL mask), so the mode check already refuses it.
+func TestAnACLGrantingWriteIsRefused(t *testing.T) {
+	setfacl, err := exec.LookPath("setfacl")
+	if err != nil {
+		t.Skip("setfacl is not installed")
+	}
+	dir := safeDir(t)
+	p := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(p, []byte(minimalPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(setfacl, "-m", "u:nobody:rw", p).CombinedOutput(); err != nil {
+		t.Skipf("this filesystem takes no ACL: %v %s", err, out)
+	}
+	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || !strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("an ACL granting write: %v", err)
 	}
 }

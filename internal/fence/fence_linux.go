@@ -75,8 +75,10 @@ var ReadOnlyFS = func(f *os.File) (bool, error) {
 // in its place, and the file is opened relative to that descriptor, without
 // following one either; both checks are fstats of the descriptors, and the
 // bytes come from the file descriptor checked. A rename after the checks
-// changes nothing that was checked or read. Directories above those are not
-// walked; keep the file where only root can rename its directory.
+// changes nothing that was checked or read. Every directory above them is
+// held to the same rule, a sticky one (/tmp) and one on a read-only mount
+// excused (decision 53 ruling 11); POSIX ACLs show in the mode's group bits,
+// NFSv4 ACLs are not read.
 //
 // It is opened non-blocking, so a named pipe is refused rather than hanging a
 // start or a reload until something writes to it, and read to at most max
@@ -98,10 +100,8 @@ func Read(path string, max int64, what string) ([]byte, error) {
 // tested against within; a chain that leaves the directory and comes back is
 // read, which is safe because the directory holding every link on the way is
 // held to the fence's rule by resolvePolicyPath (a writer who could plant the
-// middle link is refused there). The ancestors of those directories are
-// walked from Task 15 of plan 12a (decision 53 ruling 11), not by this
-// function alone; until then keep the key directory where only root can
-// rename its parents. The directory holding the file is held to Read's rule,
+// middle link is refused there). Every ancestor of those directories is
+// walked too (decision 53 ruling 11). The directory holding the file is held to Read's rule,
 // never excused by a read-only mount, except for a sticky directory we or
 // root own (secretDirWritableByUsAlone). within must be absolute, clean and
 // not "/". The file must be owned by this process's user or root, writable by
@@ -325,6 +325,7 @@ func resolvePolicyPath(path string) (string, error) {
 	resolved := "/"
 	links := 0
 	checked := map[string]bool{}
+	ancestors := map[string]bool{}
 	for len(pending) > 0 {
 		comp := pending[0]
 		pending = pending[1:]
@@ -341,6 +342,15 @@ func resolvePolicyPath(path string) (string, error) {
 			return "", err
 		}
 		if fi.Mode()&fs.ModeSymlink == 0 {
+			// A directory the path passes through, not one holding a link
+			// (that one is held below, to the stricter rule that names the
+			// link).
+			if !ancestors[resolved] {
+				if err := ancestorWritableByUsAlone(resolved); err != nil {
+					return "", err
+				}
+				ancestors[resolved] = true
+			}
 			resolved = next
 			continue
 		}
@@ -369,6 +379,26 @@ func resolvePolicyPath(path string) (string, error) {
 		pending = append(strings.Split(target, "/"), pending...)
 	}
 	return resolved, nil
+}
+
+// ancestorWritableByUsAlone holds a directory the path passes through to the
+// fence's rule (decision 53 ruling 11): owned by this process's user or root,
+// and writable by nobody else, unless its sticky bit is set - others can then
+// rename nothing below it that they do not own, and the next directory down
+// is checked in turn - or it is on a read-only mount, as a link's directory
+// is excused. The refusal names the directory and the rule, never a file's
+// bytes.
+func ancestorWritableByUsAlone(dir string) error {
+	d, di, err := openDir(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	what := "the directory " + dir + ", above the file"
+	if di.Mode()&fs.ModeSticky != 0 {
+		return ownedByUsOrRoot(what, di)
+	}
+	return dirWritableByUsAlone(what, d, di)
 }
 
 // openDir opens dir for fstat and openat alone, without following a link in

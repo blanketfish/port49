@@ -187,7 +187,7 @@ func (l *logs) all() []string {
 
 func stateDir(t *testing.T) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "state")
+	dir := filepath.Join(safeTemp(t), "state")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +809,7 @@ func TestCRL(t *testing.T) {
 		}
 
 		t.Run("a file", func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "issuing.crl")
+			path := filepath.Join(safeTemp(t), "issuing.crl")
 			der := signCRL(t, ca, crlSpec{number: 1, revoked: []x509.RevocationListEntry{revoked(5, t0)}})
 			if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}), 0o644); err != nil {
 				t.Fatal(err)
@@ -1109,4 +1109,15 @@ func equal(a, b []string) bool {
 
 func equalDurations(a, b []time.Duration) bool {
 	return fmt.Sprint(a) == fmt.Sprint(b)
+}
+
+// safeTemp is a fresh directory only its owner can write, whatever the umask:
+// the fence refuses a file under any directory others can write.
+func safeTemp(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
