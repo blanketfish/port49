@@ -1363,7 +1363,7 @@ key is refused, `another touch is waiting on your key`.
 agent (`POST /admin` on the agent's socket). The agent sends the request, takes the challenge,
 prints `touch your key to <operation> <target>`, signs over the exporter value read with the wire
 (released for the touch, as decision 45 ruling 14 does), and sends the retry only over the
-connection it signed over (`mfatouch.Post`'s rule, through Task 3b's `PostRequest`). Otherwise it
+connection it signed over (`mfatouch.Post`'s rule, through `PostRequest`). Otherwise it
 says "the connection changed during the touch; run it again", posting nothing. An agent whose
 `touch_key_unusable` is set refuses an admin call before sending anything, naming why, so no
 `admin_touch_refused` fires for an operator whose key cannot touch.
@@ -2570,7 +2570,8 @@ record's `principal` is then the first); `device` and `username` name a `key` re
 or a `self` one limited to a key; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
 asked (`api <principal>` over HTTP, `backchannel_logout <issuer>`, or `offline uid <n>` for a
-revoke written by `port49-broker revoke --offline` with every broker down); `contexts` how many
+revoke or lift written by `port49-broker revoke --offline` or `port49d revoke --offline` with every
+broker down); `contexts` how many
 live contexts were marked; `token_keys` how many
 `(device, username)` keys had their unspent tokens deleted; `connections` how many held broker
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
@@ -7446,12 +7447,14 @@ the file is there and does not load, or when the marker is there without the fil
 restored from backup, never re-created). A start still writes the marker beside a file that
 loads with none: that creates no revocations file, and it makes a config-managed file's later
 loss read as a loss rather than as a first install. Writing `{"revocations": []}` by hand stays
-the way to start empty on purpose. Revocation is an admin-socket operation open to port49d's user
-and root, and over HTTP `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34).
+the way to start empty on purpose. Revocation was an admin-socket operation open to port49d's user
+and root, and over HTTP `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34;
+superseded by decision 54 ruling 15: it is the API alone, with a security key press).
 The store's marks are read at mint, not at the handshake, so `port49 login` still touches no
 store; a revoked operator's login is refused at the agent's first request, from the listener's copy. *Amended by decision 36 (plan 7e):*
 on etcd the store keeps the marks, each broker process a copy, and the file is retired; a lift
-is port49-broker's admin socket's, or its offline command's. (§5.1.4, §5.7, §12; design document §11, §12, §17)
+was port49-broker's admin socket's, or its offline command's; now the API's, or the offline
+command's (decision 54 ruling 15). (§5.1.4, §5.7, §12; design document §11, §12, §17)
 
 **33. A session ends where its roles say, warns before, refreshes by a signed nonce, and every
 certificate's revocation status is checked at every use.** *Plan 7b, 2026-10-01, rulings where the
@@ -7948,9 +7951,9 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   record, and a stolen broker host holds no device key.
 - **The configuration.** `port49-broker.yaml` is port49d.yaml's schema under the broker's role:
   it requires `broker:` (with `broker.state_dir`, where the persisted CRLs are kept),
-  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, an inventory and
-  `admin_socket`, and takes the key names a policy may assign from the policy's own `keys:` block
-  (decision 53 ruling 3); it refuses `listen`, `keys:`,
+  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, and an inventory
+  (`admin_socket` is refused, decision 54 ruling 15), and takes the key names a policy may assign
+  from the policy's own `keys:` block (decision 53 ruling 3); it refuses `listen`, `keys:`,
   `store.etcd.daemon`, `accounting`, `limits`, the receipt windows, `platforms`, `policy:`,
   `broker.revocations_file`, and any `lab:` key but the seed tokens. port49d.yaml on etcd
   requires `policy: {file, watch_interval}` and refuses `broker:`, `store.etcd.broker` and
@@ -7961,7 +7964,7 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   contexts, purges the unspent tokens only as below, and carries the policy in force into every
   kept context; then it runs the sweep, the re-index, the ledger record's keeper, the context
   half of every refresh pass, and a full context pass whenever another replica asks for one.
-  Every replica serves the API and the admin socket, runs the token half of its own reload's
+  Every replica serves the API, runs the token half of its own reload's
   passes and certificate status, and follows the contexts and the marks. A runner that loses
   the hold stops those duties at once, keeps serving the API, and tries to take the hold again
   every 5s; a broker's readiness is never the store's. Its mints are another matter: each
@@ -8200,8 +8203,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   declares is `username_collision`; the declared one stands. A principal is pinned to its entry by
   `objectGUID` or `entryUUID` (else DN), for the life of its membership record, `max(grace, 24h)`
   after its last verification or refusal; another entry claiming it is `identity_unmapped`, and a
-  refusal keeps the pin. The escape is `port49 directory forget <principal>` on the broker's admin
-  socket, which deletes the record and writes a `directory_forget` report (§5.7); it asks the
+  refusal keeps the pin. The escape is `port49 directory forget <principal>`, over the broker API
+  under `forget_principals` and a security key press (decision 54 ruling 15), which deletes the
+  record and writes a `directory_forget` report (§5.7); it asks the
   directory nothing and grants nothing, so it is run only after confirming the new entry is the
   same person. The two attributes must be writable only by directory administrators; the
   uniqueness searches hold when they are not. This is a ruling, not a device claim, and is not
@@ -10083,9 +10087,10 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   Losing the enrollments must never reopen D2's window for everyone, so a lost store fails closed.
   The store keeps a creation mark (the file's body; the etcd key `meta/enrollments`). **port49d and
   the broker never create the store at start**, as decision 32 and `init-revocations` rule for
-  revocations: `port49 directory init-enrollments`, on the broker's admin socket, is its one
-  creator. It writes the mark, refuses when a store or a mark is already there, and writes one
-  `second_factor_reset` report with `"created": true`. A store with no mark (a missing file or key,
+  revocations: `port49-broker init-enrollments` (or `port49d init-enrollments`), a local subcommand
+  (decision 54 ruling 15), is its one creator. It writes the mark, refuses when a store or a mark is
+  already there, and writes one `second_factor_reset` report with `"created": true`. A store with no
+  mark (a missing file or key,
   a new install not yet initialised included) or a file that will not unseal (a lost or rotated seal
   key, tampering) refuses password sign-in with `enrollment_store_lost`, before anything is counted
   or read. The log carries one error naming what to run, the metric
@@ -10233,8 +10238,9 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   `source_limit`. An unknown name is recorded `deny sign_in_refused` with no principal; two entries
   for one name `deny identity_ambiguous` (alertable, as everywhere). `enroll`: `permit
   second_factor_enrolled` or a deny with the same reasons. The 202 that starts an enrollment records
-  nothing. `second_factor_reset` and `sign_in_unlock` name the principal and `origin: admin_socket
-  uid N`; `second_factor_reset` with `"all": true` (`--all`) or `"created": true`
+  nothing. `second_factor_reset` and `sign_in_unlock` name the principal and `origin: api
+  <principal>` (`init-enrollments`: `offline uid <n>`); `second_factor_reset` with `"all": true`
+  (`--all`) or `"created": true`
   (`init-enrollments`) names none. `enrollments_import` names the records imported and the export's
   time. A lost enrollment store is recorded `issue deny enrollment_store_lost`.
 - **10. The certificate.** A directory sign-in's certificate is 9b's (decision 43 ruling 9) but for
@@ -10255,7 +10261,8 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   `port49 directory forget`) is refused `failed: second_factor` with the one sentence of ruling 7
   (the caller is told nothing more), and the broker's log says once an hour which entries differ and
   names `port49 directory reset-second-factor <principal>`.
-- **13. Operator commands,** on the broker's admin socket, as `port49 directory forget` is: `port49
+- **13. Operator commands,** over the broker API with a security key press, as `port49 directory
+  forget` is (superseded by decision 54 ruling 15; they were on the admin socket): `port49
   directory reset-second-factor <principal>` makes the record `reopened` for `reopen_for` (the
   secret dropped; an enrollment begun inside the window may later hold a pending secret in the
   reopened record, ruling 4) and prints what it removed (`enrolled_at`, `enrolled_from`); with `--all` it drops
@@ -10930,8 +10937,9 @@ reason and cost.
   and nothing of `ds/b/`. `port49d
   store-roles` prints a section per store; the directory's section is run once, against the
   directory cluster, not once per region.
-- **`port49 store status` (R6, R21).** Asks the process's admin socket (`store_status`): per role,
-  the backend, `<answering>/<listed> members`, reachability, and the directory's cache age;
+- **`port49 store status` (R6, R21).** Reads `GET /store/status` on the metrics listener
+  (decision 54 ruling 15): per role, the backend, `<answering>/<listed> members`, reachability, and
+  the directory's cache age;
   "shares the directory store" for a shared session store. Exit 3 when a store does not answer.
 - **Kubernetes verifiers (R24).** Each region's broker lists its own region's clusters.
 - **Removed (R5, R25).** The top-level `store:` key and `broker.directory.enrollment_store`, with no
