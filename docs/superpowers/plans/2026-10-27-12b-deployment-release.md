@@ -253,6 +253,7 @@ The `.rpm` item is ruled by the team lead (2026-10-27) and written into ruling 6
 - **Warnings** come only from spec §12. The two rewrite lines are written into §12 by Task 1, before Task 2 emits them.
 - **Metrics:** no device identity in any label. `port49_key_secret_files_changed` has no label, and `port49_admin_touch_total` has only `outcome`.
 - **Proof material is never logged:** no record, log line or test failure carries an admin challenge, signature or attestation (Task 3b's `TestTheRecordHoldsNoProofMaterial`).
+- **No socket is user-facing** (Ryan, 2026-10-27). No command has a socket flag, and no README, help text or example names a socket path or `PORT49_TEST_AGENT_SOCKET`, the tests' only override (Task 3h).
 - **Hardware.** Agents never run `ykman`, `tpm2_*` or `pkcs11-tool`; a real YubiKey and TPM are present. Unit tests use `testpki.NewPIV` and software signers. Only Task 3g touches a real key, with Ryan present.
 - **Secrets never printed or committed.**
   - No secret appears in an example, a values file, a workflow, a log line or a test failure message.
@@ -312,6 +313,7 @@ These are the conditions most likely to bite an operator that no single task's h
 | `internal/daemon/admin/` (deleted), `internal/config/`, `internal/port49d/` | sockets removed; offline and local subcommands; store status on the metrics port | 3e |
 | `internal/port49d/keysdiagnose.go`, `pcap.go` | keys-diagnose from a capture | 3f |
 | `tests/lab/l86_admin_touch.go`, `tests/lab/results/L86-ser8.md` | lab row L86 | 3g |
+| `internal/agent/socket.go`, `cmd/port49/*`, `clients/python`, `clients/ansible`, the tests that pass `--socket` | no socket flag on any command | 3h (runs before 3g) |
 | `tests/ci/testshard/`, `tests/ci/cmd/{testshard,mustpass,versioncheck}/`, `Makefile`, `.github/workflows/test.yml` | CI split, root tests, versions | 4 |
 | `Dockerfile`, `tests/image/` | multi-arch build, image layout check | 5 |
 | `tests/shapes/shapetest/`, `tests/compose/`, `deploy/compose/`, `internal/testpki/compose.go` | shared smoke helpers; compose secrets as files | 6 |
@@ -581,8 +583,9 @@ Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. **First merge
 - [ ] **Step 4: §10, "Cross-group probing is manual".** Replace the socket sentences with: `port49d keys-diagnose --device <name> --capture <file.pcap>`, run as port49d's user on a port49d host (or by `kubectl exec` in a port49d pod), with port49d's config and environment. It reads the first TACACS+ packet from that device's address in a classic pcap file the operator captured (`--capture -` reads standard input, so on Kubernetes, whose image is distroless and has no `tar` for `kubectl cp`: `kubectl exec -i <pod> -- port49d keys-diagnose --device D --capture - < f.pcap`), and tries every key the policy names, retired versions included. It prints only the group and version that validated, or `no key port49d holds validates this packet`. It never prints a packet byte or a key. The running port49d no longer keeps an unvalidated packet in memory. The rest of the paragraph (manual, never automatic, a CPU amplifier on an unauthenticated listener) stands.
 
 - [ ] **Step 5: §12.** Rewrite these entries:
-  - `port49 revoke (--principal | --cert | --cert-issuer --cert-serial) [--lift]` and `port49 revoke --list`: through the agent, under the rights of §2 and the touch of §5.1.6. Exit codes as today, plus 1 for a touch not made. `--socket` names the agent's socket, as it does on `identity`, `refresh`, `policy` and `login`; `--agent-socket` and `--via-agent` are removed (pre-beta, no alias), and an unknown flag exits 2 (amendment pre-flight A-M4). `--mine` and `--device/--username` keep their meaning: `--mine` needs no right and no touch, while a key needs `revoke_others` and a touch.
-  - `port49 directory forget | reset-second-factor | unlock | import`: through the agent, each under its right and a touch. `--socket` names the agent's socket, as above.
+  - `port49 revoke (--principal | --cert | --cert-issuer --cert-serial) [--lift]` and `port49 revoke --list`: through the agent, under the rights of §2 and the touch of §5.1.6. Exit codes as today, plus 1 for a touch not made. `--via-agent` is removed (pre-beta, no alias), and an unknown flag exits 2. `--mine` and `--device/--username` keep their meaning: `--mine` needs no right and no touch, while a key needs `revoke_others` and a touch.
+  - `port49 directory forget | reset-second-factor | unlock | import`: through the agent, each under its right and a touch.
+  - **No socket is user-facing** (Ryan, 2026-10-27, superseding the pre-flight's A-M4). No command has a `--socket` or `--agent-socket` flag: `login`, `token`, `refresh`, `identity`, `ssh`, `explain`, `revoke`, `directory`, `store status` and `keys` lose theirs, and the agent's §12 synopses drop `[--socket PATH]`. The agent and every client find the agent's socket at its per-user default (`$XDG_RUNTIME_DIR/port49/agent.sock`, else `/tmp/port49-<uid>/agent.sock`). The Python library's `socket=` argument and the collection's `socket` option go too. Tests override the path with one environment variable, `PORT49_TEST_AGENT_SOCKET`, which the spec records here for implementers alone: no README, help text, example or operator page names it.
   - `port49-broker init-enrollments` and `port49d init-enrollments` (install-time, as the broker's or port49d's user, refused when a store or mark is there).
   - `port49-broker export-enrollments` and `port49d export-enrollments` (reads the sealed store through the process's own store identity, writes it to stdout, refuses a terminal). Neither is admin-level: one creates nothing that exists, and the other reads sealed bytes.
   - `port49 store status --metrics <addr>`: reads `GET /store/status` on the process's metrics listener (plain HTTP, beside `/readyz`), with the same output and exit codes. One status runs at a time per process, and a second request is answered 429. The metrics listener has no authentication, so the answer is store health alone, from a fixed allowlist: per role, the backend, `<answering>/<listed> members`, reachability, the directory cache's age, the names of the feeds down, the count of logouts pending, and a reason from `outageCause`'s fixed words. Never a member URL, an etcd error's text, a certificate, a principal, a mark or a key. Everything else stays behind the API: the revocation list is `GET /v1/revocations` under its right. The same counts are already on `/metrics` as gauges.
@@ -716,7 +719,7 @@ Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. **First merge
     - `TestAChangedConnectionPostsNothing`: the connection is replaced between the challenge and the retry. The result is `ErrConnectionChanged`, and the broker recorded no `admin_touch_refused`.
     - `TestThePathIsAllowlisted`: `/v1/tokens` through `POST /admin` is refused by the agent.
   - In `cmd/port49/admin_test.go`:
-    - `TestRevokeSocketIsTheAgents` and `TestDirectorySocketIsTheAgents`: `--socket PATH` reaches a test agent listening at PATH; `--agent-socket` and `--via-agent` exit 2;
+    - `TestRevokeHasNoSocketFlag`: `port49 revoke --socket X`, `--agent-socket X` and `--via-agent` each exit 2 as unknown flags; the same for `port49 directory --socket X`;
     - `TestAChallengeForAnotherTargetIsRefused`: a test broker answers a challenge naming carol for a request naming bob. The agent refuses it, prints nothing to touch, and signs nothing;
     - `TestOneTouchAtATime`: a second `POST /admin` while one waits on the touch is refused `another touch is waiting on your key`;
     - `TestTheImportPromptShowsReplace`: `port49 directory import --replace` prints `touch your key to import_enrollments replace <12 hex>`;
@@ -725,7 +728,7 @@ Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. **First merge
 - [ ] **Step 2: Run them and see them fail.** Run `go test ./internal/agent/ ./cmd/port49/ -run 'Admin|Touch|Socket|Allowlisted|ChangedConnection' -count=1`. Expected: FAIL.
 
 - [ ] **Step 3: Implement.**
-  - `port49 revoke` sends every form through the agent: the principal, the certificate (read from `--cert` as today), the key, the lift and the list. `--socket` is the agent's socket; `--agent-socket` and `--via-agent` are removed.
+  - `port49 revoke` sends every form through the agent: the principal, the certificate (read from `--cert` as today), the key, the lift and the list. There is no socket flag (Task 3h); `--agent-socket` and `--via-agent` are removed.
   - The agent computes the operation, target and `request_sha256` from its own request, refuses a differing challenge, and holds one touch at a time under a mutex (§5.1.6, "Presence, not intent").
   - The agent sends admin calls on a client of their own, `a.adminClient`, with one connection (`MaxConnsPerHost: 1`), as `a.mfaClient` does, so the challenge, the exporter value and the retry are one connection's.
   - The y/N prompt for a principal stays, and is asked before the touch.
@@ -750,7 +753,7 @@ Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. **First merge
   - `internal/config/config.go`: `admin_socket` refused by name in both files, and the "etcd requires admin_socket" rule deleted;
   - `internal/port49d/main.go`, `brokerd.go`, `revocations.go`, `offline.go`: remove the socket; add `port49d revoke --offline`, `--list` on both offline commands, and `init-enrollments` and `export-enrollments` on both binaries;
   - `internal/port49d/storestatus.go` and the metrics listener's mux: `GET /store/status`;
-  - `cmd/port49/store.go`: `--metrics ADDR`;
+  - `cmd/port49/store.go`: `--metrics ADDR` (an address, not a socket);
   - `deploy/compose/config/port49d.yaml` and `port49-broker.yaml`: the `admin_socket` lines deleted;
   - every test fixture and lab config that sets `admin_socket`: grep the whole tree, `tests/lab/` included, and change each;
   - every caller that drives the socket from the CLI (A-I3, A-M8): `tests/lab/revoke_test.go:97` (`revokeCLI`) and its callers in `api_revoke_test.go`, `l69_test.go:498`, `l74_test.go`, `l75_test.go`, `split_test.go` and `compose_test.go`, and `tests/compose/smoke_test.go`. Each becomes an API admin call through a lab helper with a software touch signer and `testpki.NewPIV` roots, or `revoke --offline` where a closed row measured the mark itself. `tests/compose/smoke_test.go`'s revoke step becomes the offline form here, so the compose workflow is green between this task and Task 6;
@@ -771,7 +774,7 @@ Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. **First merge
   - `TestOfflineListOnTheBroker`: over the etcd test cluster (`storetest`'s), `--list` prints each mark with its origin.
   - `TestInitAndExportEnrollments`: init once (exit 0), and a second time (exit 1, "already"). Export to a pipe gives sealed bytes that `ImportEnrollments` accepts. Export to a terminal is refused.
   - `TestStoreStatusOnTheMetricsListener`: the body matches the socket's former text; a second concurrent request gets 429; the body holds no `https://`, no `http://`, no `:2379`, no `-----BEGIN`, no `user:`, `app:` or `spiffe://`, and no `rv/`. Every reason line is one of `outageCause`'s fixed words (`not opened yet`, `permission denied`, `timed out`, `unreachable`), never an error's text.
-  - `TestNoAdminSocketRemains`: no file under `internal/` or `cmd/` imports `internal/daemon/admin`, and no config under `deploy/` or `tests/` holds `admin_socket:`. No file under `tests/` passes `"--socket"` to a `port49 revoke`, `port49 directory` or `port49 store` invocation. This is a tree walk.
+  - `TestNoAdminSocketRemains`: no file under `internal/` or `cmd/` imports `internal/daemon/admin`, and no config under `deploy/` or `tests/` holds `admin_socket:`. This is a tree walk. (Task 3h's `TestNoSocketFlagAnywhere` covers `--socket`.)
 
 - [ ] **Step 2: Run them and see them fail.** Run `go test ./internal/config/ ./internal/port49d/ -run 'AdminSocket|Offline|Enrollments|StoreStatus|NoAdminSocket' -count=1`. Expected: FAIL.
 
@@ -812,6 +815,45 @@ Ryan's ruling of 2026-10-27 (ruling 5) replaces the admin sockets. **First merge
   ```bash
   git add internal/port49d cmd/port49/keys.go
   git commit -m "feat: keys-diagnose reads a capture offline; port49d holds no unvalidated packet"
+  ```
+
+---
+
+### Task 3h: No socket flag on any command
+
+Ryan's rule (2026-10-27): no user ever types or knows a socket path. Run this after 3f and before 3g. 3g needs Ryan present and may wait, so 3h does not wait for it.
+
+**Files:**
+- Modify:
+  - `internal/agent/socket.go`: `SocketPath()` returns `$PORT49_TEST_AGENT_SOCKET` when it is set, and otherwise the per-user default as today;
+  - every `fs.String("socket", …)` in `cmd/port49/` (`refresh.go`, `identity.go`, `ssh.go`, `policy.go`, `main.go`'s login and token, `revoke.go`, `directory.go`, `keys.go`, `store.go`), each deleted;
+  - the usage text in `cmd/port49/main.go`;
+  - `clients/python/src/port49/client.py` (the `socket=` argument removed) and `clients/python/tests/test_agent.py`;
+  - `clients/ansible/ansible_collections/port49/client/plugins/lookup/token.py` (the `socket` option removed) and its tests;
+  - every test that passes `--socket` to `port49`: `internal/agent/agent_test.go`, `internal/port49d/daemon_test.go`, `offline_test.go`, `tests/compose/smoke_test.go`, and in `tests/lab/` `l56`, `l67`, `slice`, `l78`, `qualify`, `l75`, `directory_e2e`, `l29`, `l64_l65`, `projection`, `l74`, `session`, `revoke`, `compose` and `l60/*`. Each sets `PORT49_TEST_AGENT_SOCKET` in the child's environment instead. `tests/lab/runbooks/L62-ser8.md` drops the flag. Captures under `tests/lab/captures/` are records, so they are left unchanged.
+- Create: `cmd/port49/nosocket_test.go`
+
+**Interfaces:**
+- Produces: `PORT49_TEST_AGENT_SOCKET`, read only by `agent.SocketPath()`, documented only in its Go comment and spec §12's implementer note.
+
+- [ ] **Step 1: Write the failing tests** in `cmd/port49/nosocket_test.go`:
+  - `TestNoCommandTakesASocket`: for each subcommand, `--socket X` and `--agent-socket X` exit 2 as unknown flags.
+  - `TestNoHelpNamesASocket`: the usage text and each subcommand's `-h` output contain no `socket` and no `PORT49_TEST_AGENT_SOCKET`.
+  - `TestTheTestVariableMovesTheAgent`: with the variable set to a temp path, `port49 identity` reaches a test agent there.
+  - `TestNoSocketFlagAnywhere`: a tree walk. No file under `cmd/`, `internal/`, `tests/` (except `tests/lab/captures/`), `clients/`, `deploy/` or `examples/` holds `"--socket"`, `--socket ` or `--agent-socket`. No file under `deploy/`, `examples/` or `clients/` other than tests, and no `README.md` anywhere, names `PORT49_TEST_AGENT_SOCKET`.
+  - In Python: `test_agent.py` asserts the argv holds no `--socket`. `Agent(socket=…)` raises `TypeError`.
+
+- [ ] **Step 2: Run them and see them fail.** Run `go test ./cmd/port49/ -run 'Socket|TestVariable|NoHelp' -count=1` and `make python-test` (or the `python.yml` command). Expected: FAIL.
+
+- [ ] **Step 3: Implement.** Delete each flag. The lab and test callers set the variable. Run `go vet -tags lab ./tests/lab/...` (compile only) to catch every lab caller.
+
+- [ ] **Step 4: Run them and see them pass.** Then `make test && make vet`, the Python and collection tests, and `go vet -tags lab ./tests/lab/...`.
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  git add internal/agent cmd/port49 clients tests internal/port49d
+  git commit -m "feat: no socket flag on any command; the CLI finds its agent at the per-user default"
   ```
 
 ---
