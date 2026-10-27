@@ -211,7 +211,7 @@ func (b *Broker) logoutByHandWith(lt oidc.LogoutToken, rep RevokeReport, step fu
 	}
 	out := lead + strings.Join(each, "; and ")
 	if sidOnly {
-		out = fmt.Sprintf(`POST /v1/tokens/revoke {"sid": %q, "issuer": %q} (needs revoke_others), or %s`, lt.Sid, lt.Issuer, out)
+		out = fmt.Sprintf(`port49 revoke --sid %q --sid-issuer %q (needs revoke_others and a press of your security key), or %s`, lt.Sid, lt.Issuer, out)
 	}
 	return out
 }

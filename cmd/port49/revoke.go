@@ -39,6 +39,8 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 	mine := fs.Bool("mine", false, "end your own sessions and delete your own unspent tokens; leaves no mark, asks for no touch")
 	device := fs.String("device", "", "one device, by its inventory name, with --username (and --mine for your own session there)")
 	username := fs.String("username", "", "with --device: the device-facing username")
+	sid := fs.String("sid", "", "end one OIDC session by its sid, as a back-channel logout does; with --sid-issuer")
+	sidIssuer := fs.String("sid-issuer", "", "with --sid: the provider's issuer URL, as the broker's log names it")
 	yes := fs.Bool("yes", false, "with --principal: do not ask before revoking")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -49,9 +51,17 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	byCert := *certFile != "" || *issuer != "" || *serial != ""
 	byKey := *device != "" || *username != ""
+	bySid := *sid != "" || *sidIssuer != ""
 	switch {
 	case *yes && (*principal == "" || *lift || *list || *mine):
 		fmt.Fprintln(stderr, "port49 revoke: --yes goes with --principal, the one form that asks")
+		return 2
+	case bySid && (*sid == "" || *sidIssuer == ""):
+		fmt.Fprintln(stderr, "port49 revoke: a session is named by --sid and --sid-issuer, both")
+		return 2
+	case bySid && (*principal != "" || byCert || byKey || *lift || *mine || *list):
+		fmt.Fprintln(stderr, "port49 revoke: --sid names one session; it takes no principal, certificate, key, "+
+			"--lift, --list or --mine")
 		return 2
 	case *list && (*principal != "" || byCert || byKey || *lift || *mine):
 		fmt.Fprintln(stderr, "port49 revoke: --list takes no principal, certificate, key, --lift or --mine")
@@ -80,19 +90,21 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 		return revokeList(stdout, stderr)
 	}
 	forms := 0
-	for _, set := range []bool{*principal != "", byCert, byKey} {
+	for _, set := range []bool{*principal != "", byCert, byKey, bySid} {
 		if set {
 			forms++
 		}
 	}
 	if forms != 1 {
 		fmt.Fprintln(stderr, "port49 revoke: name a principal (--principal), a certificate (--cert, or "+
-			"--cert-issuer and --cert-serial), or a key (--device and --username); one of the three. Your own "+
+			"--cert-issuer and --cert-serial), a key (--device and --username), or a session (--sid and --sid-issuer); one of the four. Your own "+
 			"sessions are --mine")
 		return 2
 	}
 	var rev api.RevokeRequest
 	switch {
+	case bySid:
+		rev = api.RevokeRequest{Sid: *sid, Issuer: *sidIssuer}
 	case byKey:
 		rev = api.RevokeRequest{Device: *device, Username: *username}
 	case byCert:

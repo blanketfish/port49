@@ -105,13 +105,14 @@ const usage = `usage:
                 (each store as port49d or port49-broker sees it: backend, members, reachable, the
                 directory cache's age; exits 3 when a store does not answer)
   port49 revoke (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX | --device NAME --username NAME) [--yes]
+  port49 revoke --sid SID --sid-issuer ISSUER
   port49 revoke --lift (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX)
   port49 revoke --list
   port49 revoke --mine [--device NAME --username NAME]
                 (through your agent, under your api: rights: revoke_others, or lift_revocations for
                 --lift and --list. Every write but --mine asks for a press of your security key,
                 bound to that one request; --principal asks first on a terminal unless --yes;
-                --mine leaves no mark and asks for no press; exits 3 when the revocation is in
+                --sid ends one OIDC session; --mine leaves no mark and asks for no press; exits 3 when the revocation is in
                 force but incomplete or not saved)
   port49 directory forget PRINCIPAL
                 (forget a principal's directory membership and the entry it is pinned to: for an

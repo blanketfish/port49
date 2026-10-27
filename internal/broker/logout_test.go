@@ -336,7 +336,7 @@ func TestALogoutWhoseJTICannotBeGivenBackSaysSo(t *testing.T) {
 		t.Fatalf("%s", lshown(w))
 	}
 	if !strings.Contains(said.String(), "could not be given back") ||
-		!strings.Contains(said.String(), `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) {
+		!strings.Contains(said.String(), `port49 revoke --sid "s-sub-alice" --sid-issuer `) {
 		t.Fatalf("the lost logout was not said with its manual end:\n%s", said.String())
 	}
 }
@@ -492,7 +492,7 @@ func TestAStoreFailedLogoutSaysAnUnconditionalRecovery(t *testing.T) {
 	first, _, _ := strings.Cut(out, "\n")
 	if strings.Contains(out, "if the decision log has a revoke record") || !strings.Contains(out, ") only after "+lift) ||
 		!strings.Contains(out, "port49 revoke --list") || strings.Contains(out, "port49 revoke <principal>") ||
-		!strings.Contains(first, `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) || !strings.Contains(first, "(needs revoke_others)") {
+		!strings.Contains(first, `port49 revoke --sid "s-sub-alice" --sid-issuer `) || !strings.Contains(first, "(needs revoke_others and a press of your security key)") {
 		t.Fatalf("the recovery said:\n%s", out)
 	}
 }
@@ -810,7 +810,7 @@ func TestLogoutByHandAlternatives(t *testing.T) {
 	}
 	for _, c := range cases {
 		out := f.b.logoutByHand(c.lt, RevokeReport{}, false)
-		if strings.Contains(out, `POST /v1/tokens/revoke {"sid"`) != c.sidAPI || !strings.Contains(out, c.leadsWith) {
+		if strings.Contains(out, `port49 revoke --sid `) != c.sidAPI || !strings.Contains(out, c.leadsWith) {
 			t.Errorf("%s: %s", c.name, out)
 		}
 	}

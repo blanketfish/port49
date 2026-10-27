@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/store/crypt"
 )
@@ -249,5 +250,41 @@ func TestAdminWithNoAgentSaysToLogIn(t *testing.T) {
 	code, _, se := cli("revoke", "--principal", "user:bob@example.com", "--yes")
 	if code != 1 || !strings.Contains(se, "port49 login") {
 		t.Fatalf("exit %d %q", code, se)
+	}
+}
+
+// A session is ended by sid through the agent: the request names the sid and
+// its issuer, both, and nothing else. The prompt is the agent's
+// (internal/agent's TestTheSidFormIsShownAsSidAtIssuer).
+func TestRevokeSidSendsTheSidAndItsIssuer(t *testing.T) {
+	withNoQuestion(t)
+	stub := newAdminStub(t, func(agent.AdminRequest) (int, any) {
+		return 200, api.RevokeResponse{By: "logout_sid", Text: "ended the session"}
+	})
+	if code, so, se := cli("revoke", "--sid", "s-1", "--sid-issuer", "https://idp.example.com"); code != 0 ||
+		!strings.Contains(so, "ended the session") {
+		t.Fatalf("exit %d %q %q", code, so, se)
+	}
+	reqs := stub.requests()
+	if len(reqs) != 1 || reqs[0].Method != "POST" || reqs[0].Path != "/v1/tokens/revoke" {
+		t.Fatalf("%+v", reqs)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(reqs[0].Body, &body); err != nil || body["sid"] != "s-1" || body["issuer"] != "https://idp.example.com" || len(body) != 2 {
+		t.Fatalf("the body: %s", reqs[0].Body)
+	}
+	for _, args := range [][]string{
+		{"revoke", "--sid", "s-1"},
+		{"revoke", "--sid-issuer", "https://idp.example.com"},
+		{"revoke", "--sid", "s-1", "--sid-issuer", "x", "--principal", "user:a@b.example"},
+		{"revoke", "--sid", "s-1", "--sid-issuer", "x", "--lift"},
+		{"revoke", "--sid", "s-1", "--sid-issuer", "x", "--yes"},
+	} {
+		if code, _, _ := cli(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	if n := len(stub.requests()); n != 1 {
+		t.Fatalf("a usage error sent a request: %d", n)
 	}
 }

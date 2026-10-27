@@ -168,7 +168,7 @@ func TestALogoutWhosePutOnceFailedSaysSo(t *testing.T) {
 	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
 	if !strings.Contains(out, "the store did not answer") || !strings.Contains(out, "port49 revoke --principal") ||
 		!strings.Contains(out, "--lift --principal ") || !strings.Contains(out, ") only after "+lift) ||
-		!strings.Contains(out, `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) {
+		!strings.Contains(out, `port49 revoke --sid "s-sub-alice" --sid-issuer `) {
 		t.Fatalf("the PutOnce failure said:\n%s", out)
 	}
 	if strings.Contains(out, raw) || strings.Contains(out, "j-secret-jti") {

@@ -272,3 +272,16 @@ func TestTheAgentsAdminRefusalsTravelTheSocket(t *testing.T) {
 		t.Fatalf("an unusable key: %v", err)
 	}
 }
+
+// The sid form is shown as "sid at issuer", and needs its issuer: the agent
+// cannot know which provider the broker would pick.
+func TestTheSidFormIsShownAsSidAtIssuer(t *testing.T) {
+	c, err := classifyAdmin(revokeCall(`{"sid":"s-1","issuer":"https://idp.example.com"}`))
+	if err != nil || c.op != "revoke_sid" || c.target != "s-1 at https://idp.example.com" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	var refused *AdminRefusedError
+	if _, err := classifyAdmin(revokeCall(`{"sid":"s-1"}`)); !errors.As(err, &refused) {
+		t.Fatalf("a sid with no issuer: %v", err)
+	}
+}
