@@ -30,6 +30,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -101,8 +102,14 @@ func l86VerdictA(c1, c2, c3 result, blinkedAgain int) l86Verdict {
 	return l86Verdict{true, fmt.Sprintf("each call took its own touch; Ryan saw the second blink again: %d (1 yes, 0 no)", blinkedAgain)}
 }
 
+// noRevocationWords is what `revoke --list` prints for an empty store
+// (broker.RevocationsText). Each cell's broker starts empty, so cell (b) needs exactly
+// these words: any mark, or a list format that no longer says them, FAILs loudly
+// instead of passing because the target happens not to be spelled.
+const noRevocationWords = "no revocation is in force"
+
 // l86VerdictB: the CLI prints the timeout line, exits 1, and the revocation
-// list shows no mark for the target.
+// list says no revocation is in force.
 func l86VerdictB(c result, list result, target string) l86Verdict {
 	switch {
 	case c.code != 1:
@@ -113,6 +120,8 @@ func l86VerdictB(c result, list result, target string) l86Verdict {
 		return l86Verdict{false, fmt.Sprintf("revoke --list exited %d", list.code)}
 	case strings.Contains(list.stdout, target):
 		return l86Verdict{false, "revoke --list shows a mark for the untouched call's target"}
+	case !strings.Contains(list.stdout, noRevocationWords):
+		return l86Verdict{false, "revoke --list does not say \"" + noRevocationWords + "\": a mark, or a changed list format"}
 	}
 	return l86Verdict{true, fmt.Sprintf("exit 1 with the timeout line after %s; no mark", c.took.Round(100*time.Millisecond))}
 }
@@ -255,7 +264,7 @@ func l86Issued(text string) bool {
 
 // l86Lock takes the lab's single-occupant lock for the cell, as the
 // topology runs do, and lets it go with the process.
-func l86Lock(t *testing.T, cell string) {
+func (h *lab) l86Lock(t *testing.T, cell string) {
 	t.Helper()
 	f, err := os.OpenFile(labLockFile, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -269,6 +278,7 @@ func l86Lock(t *testing.T, cell string) {
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(fmt.Sprintf("TestL86%s pid %d\n", cell, os.Getpid())), 0)
 	t.Cleanup(func() { f.Close() })
+	h.onKill = append(h.onKill, func() { f.Close() }) // a killed process lets the lock go too; say so explicitly
 }
 
 // l86Versions records the firmware Ryan named and libykcs11's package
@@ -306,9 +316,82 @@ func l86Begin(t *testing.T, cell string) *lab {
 	}
 	h := newStudyLab(t, "L86", cell, true)
 	h.needPKCS11()
-	l86Lock(t, cell)
+	h.l86Lock(t, cell)
+	dl, _ := t.Deadline()
+	h.l86Guard(os.Exit, dl)
+	h.l86Need9c()
 	h.l86Versions()
 	return h
+}
+
+// l86KillGrace is how long before the test binary's own deadline the cell cleans
+// up and exits: the testing package's timeout panic runs no t.Cleanup.
+var l86KillGrace = 45 * time.Second
+
+// l86Guard makes a killed cell clean up what t.Cleanup would: a SIGINT or SIGTERM,
+// or the test's own deadline (-test.timeout) a grace period away, stops every agent
+// the cell started by its recorded pid (a PIN-unlocked session must not outlive
+// the cell), restores the terminal, and runs h.onKill (Keycloak's down -v, the lab
+// lock), then calls exit. Go's testing package runs no t.Cleanup on a signal or on
+// its timeout panic. The guard is dropped when the cell ends normally.
+func (h *lab) l86Guard(exit func(int), deadline time.Time) {
+	h.t.Helper()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan struct{})
+	var timeout <-chan time.Time
+	if !deadline.IsZero() {
+		tm := time.NewTimer(time.Until(deadline) - l86KillGrace)
+		timeout = tm.C
+		h.t.Cleanup(func() { tm.Stop() })
+	}
+	h.t.Cleanup(func() { signal.Stop(sig); close(done) })
+	go func() {
+		var why string
+		select {
+		case s := <-sig:
+			why = "got " + s.String()
+		case <-timeout:
+			why = "the test's own deadline is " + l86KillGrace.String() + " away"
+		case <-done:
+			return
+		}
+		h.say("\n  L86 cell %s: %s; cleaning up (agents by pid, the terminal, Keycloak, the lab lock) and stopping", h.cell, why)
+		h.stopAllAgents()
+		h.restoreTTY()
+		h.mu.Lock()
+		kill := append([]func(){}, h.onKill...)
+		h.mu.Unlock()
+		for i := len(kill) - 1; i >= 0; i-- {
+			kill[i]()
+		}
+		h.obs("killed", why+"; the cell did not finish and has no verdict")
+		exit(2)
+	}()
+}
+
+// l86Need9c refuses to go on when slot 9c's key is not on the token. The runbook never makes,
+// resets or overwrites a slot: the touch key is the 9c key provisioned for L60 (touch always).
+func (h *lab) l86Need9c() {
+	h.t.Helper()
+	if err := l86CheckSlot(func() error {
+		k, err := clientkey.Open(h.keyRef(slot9c, false), nil)
+		if err == nil {
+			_ = k.Close()
+		}
+		return err
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// l86CheckSlot is the INVALID a missing 9c key reads as. It names no key and no PIN.
+func l86CheckSlot(open func() error) error {
+	if err := open(); err != nil {
+		return fmt.Errorf("INVALID: slot 9c (CKA_ID %s) is not on the token (%s). The harness and the runbook never "+
+			"create, reset or overwrite a slot: stop and tell the lead", slot9c, redact(err.Error()))
+	}
+	return nil
 }
 
 // l86Start sets the cell up: the terminal, the lock, the versions, the lab CA,
@@ -399,7 +482,7 @@ func TestL86C(t *testing.T) {
 	addrs, _ := net.LookupHost(kcHost)
 	if !l86HostsOK(addrs) {
 		t.Fatalf("INVALID: %s does not resolve to 127.0.0.1 on this host: type "+
-			"`echo '127.0.0.1 %s' | sudo tee -a /etc/hosts` yourself (tests/lab/L86-runbook.md, cell (c) setup) and run the cell again",
+			"`echo '127.0.0.1 %s # port49-l86' | sudo tee -a /etc/hosts` yourself (tests/lab/L86-runbook.md, cell (c) setup) and run the cell again",
 			kcHost, kcHost)
 	}
 	roots := h.yubicoRoots()

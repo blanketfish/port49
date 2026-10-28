@@ -8,12 +8,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -65,7 +68,9 @@ func TestL86VerdictB(t *testing.T) {
 		list result
 		pass bool
 	}{
-		{"timeout, exit 1, no mark", words, result{stdout: "no revocations"}, true},
+		{"timeout, exit 1, no mark", words, result{stdout: "no revocation is in force\n"}, true},
+		{"another mark, not the target's", words, result{stdout: "principal user:other@example.com revoked\n"}, false},
+		{"a list format that says nothing", words, result{stdout: "no revocations"}, false},
 		{"exit 2", res(2, touchTimeoutWords), result{}, false},
 		{"other words", res(1, "the broker refused"), result{}, false},
 		{"a mark was made", words, result{stdout: "user:l86-b-1@example.com revoked"}, false},
@@ -403,4 +408,125 @@ func TestL86OIDCBrokerOffersTheRealmAndIssuance(t *testing.T) {
 	if c.Issuance == nil || c.Issuance.Available == nil || !*c.Issuance.Available {
 		t.Errorf("issuance %+v", c.Issuance)
 	}
+}
+
+// guardLab is a lab with no terminal and a fake agent: a `sleep` child recorded as the
+// cell's agent by its pid, which the guard must stop.
+func guardLab(t *testing.T) (*lab, *exec.Cmd, *bool) {
+	t.Helper()
+	h := setupLab(t, "guard", false, nil, io.Discard, privateDir(t, "l86guard"))
+	agent := exec.Command("sleep", "120")
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = agent.Process.Kill(); _ = agent.Wait() })
+	h.agents[filepath.Join(t.TempDir(), "no-such.sock")] = agent.Process.Pid
+	killed := new(bool)
+	h.onKill = append(h.onKill, func() { *killed = true })
+	return h, agent, killed
+}
+
+// A killed cell stops its agent by pid, runs what else it must undo, and exits non-zero.
+func TestL86GuardCleansUpOnASignal(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
+		h, agent, killed := guardLab(t)
+		exit := make(chan int, 1)
+		h.l86Guard(func(c int) { exit <- c }, time.Time{})
+		if err := syscall.Kill(os.Getpid(), sig); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case c := <-exit:
+			if c == 0 {
+				t.Errorf("%v: exit code 0 for a killed cell", sig)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%v: the guard did not clean up and exit", sig)
+		}
+		if h.agentsRunning() != 0 {
+			t.Errorf("%v: the agent is still recorded as running", sig)
+		}
+		if err := agent.Process.Signal(syscall.Signal(0)); err == nil {
+			// still signalable: give the reaper a moment, then it must be gone
+			done := make(chan struct{})
+			go func() { _ = agent.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Errorf("%v: the agent process was not stopped", sig)
+			}
+		}
+		if !*killed {
+			t.Errorf("%v: the extra clean-up (Keycloak, the lock) did not run", sig)
+		}
+	}
+}
+
+// The test binary's own deadline, which panics without running t.Cleanup, is a trigger too.
+func TestL86GuardCleansUpBeforeTheDeadline(t *testing.T) {
+	old := l86KillGrace
+	l86KillGrace = 100 * time.Millisecond
+	defer func() { l86KillGrace = old }()
+	h, _, killed := guardLab(t)
+	exit := make(chan int, 1)
+	h.l86Guard(func(c int) { exit <- c }, time.Now().Add(300*time.Millisecond))
+	select {
+	case <-exit:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the guard did not clean up before the deadline")
+	}
+	if !*killed || h.agentsRunning() != 0 {
+		t.Error("the deadline clean-up did not run")
+	}
+}
+
+// A cell that ends normally drops the guard: no exit, and a later signal is not its business.
+func TestL86GuardIsDroppedWhenTheCellEnds(t *testing.T) {
+	exit := make(chan int, 1)
+	t.Run("cell", func(t *testing.T) {
+		h := setupLab(t, "guard", false, nil, io.Discard, privateDir(t, "l86guard"))
+		h.l86Guard(func(c int) { exit <- c }, time.Time{})
+	})
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case c := <-exit:
+		t.Fatalf("the guard exited (%d) for a cell that ended normally", c)
+	default:
+	}
+}
+
+func TestL86MissingSlot9cStopsTheCell(t *testing.T) {
+	if err := l86CheckSlot(func() error { return nil }); err != nil {
+		t.Fatalf("a present slot was refused: %v", err)
+	}
+	err := l86CheckSlot(func() error { return fmt.Errorf("no object with CKA_ID 02") })
+	if err == nil || !strings.Contains(err.Error(), "INVALID") || !strings.Contains(err.Error(), "never create, reset or overwrite") ||
+		!strings.Contains(err.Error(), "tell the lead") {
+		t.Fatalf("a missing slot: %v", err)
+	}
+}
+
+// A killed cell lets the lab lock go before it exits, by name, not only by dying.
+func TestL86KilledCellReleasesTheLabLock(t *testing.T) {
+	probe, err := os.OpenFile(labLockFile, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Skipf("the lab lock file: %v", err)
+	}
+	defer probe.Close()
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Skip("the lab is occupied; this test never takes a lock someone holds")
+	}
+	_ = syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
+	h := setupLab(t, "lock", false, nil, io.Discard, privateDir(t, "l86lock"))
+	h.l86Lock(t, "x")
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		t.Fatal("the cell did not hold the lab lock")
+	}
+	for _, f := range h.onKill {
+		f()
+	}
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("the kill clean-up did not release the lab lock: %v", err)
+	}
+	_ = syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
 }

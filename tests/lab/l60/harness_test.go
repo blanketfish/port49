@@ -124,6 +124,9 @@ type lab struct {
 	agents  map[string]int // socket -> agent pid
 	obsFile *os.File
 	broker  *labBroker // the cell's broker, whose refresh pacing a refresh steps past
+	// onKill is what a killed cell also undoes (the lab lock, Keycloak): the
+	// signal guard (l86Guard) runs it after the agents and the terminal.
+	onKill []func()
 }
 
 // newLab opens Ryan's terminal and the lab directory, and with build builds

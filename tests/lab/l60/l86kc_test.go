@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -105,6 +106,23 @@ func l86Docker(args ...string) *exec.Cmd {
 	return exec.Command("sg", "docker", "-c", "docker "+strings.Join(q, " "))
 }
 
+// kcUpDeadline bounds `docker compose up`: a first pull on a slow link must not eat the
+// cell's whole -test.timeout. Keycloak's own discovery wait is separate.
+const kcUpDeadline = 8 * time.Minute
+
+// kcComposeCtx is kcCompose that is killed, with the `sg` shell's whole process group,
+// when ctx ends.
+func kcComposeCtx(ctx context.Context, root string, args ...string) *exec.Cmd {
+	q := make([]string, 0, len(args)+5)
+	for _, a := range append([]string{"compose", "-p", kcProject, "-f", filepath.Join(root, "tests", "lab", "oidc", "compose.yaml")}, args...) {
+		q = append(q, shQuote(a))
+	}
+	cmd := exec.CommandContext(ctx, "sg", "docker", "-c", "docker "+strings.Join(q, " "))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	return cmd
+}
+
 // kcCompose is `docker compose` on tests/lab/oidc/compose.yaml, project port49laboidc.
 func kcCompose(root string, args ...string) *exec.Cmd {
 	return l86Docker(append([]string{"compose", "-p", kcProject, "-f", filepath.Join(root, "tests", "lab", "oidc", "compose.yaml")}, args...)...)
@@ -182,19 +200,38 @@ func (h *lab) l86StartKeycloak() *l86Keycloak {
 		h.t.Fatalf("INVALID: the chown of Keycloak's key: %v\n%s", err, tailText(string(o), 500))
 	}
 	k := &l86Keycloak{h: h, ca: ca, caFile: filepath.Join(pki, "lab-ca.pem"), http: kcHTTP(ca)}
-	cmd := kcCompose(root, "up", "-d")
+	ctx, cancel := context.WithTimeout(context.Background(), kcUpDeadline)
+	defer cancel()
+	cmd := kcComposeCtx(ctx, root, "up", "-d")
 	cmd.Dir = root
 	h.say("  starting the lab's Keycloak (docker compose -p %s; the first run pulls the image and imports the realm: minutes)", kcProject)
+	down := func() error {
+		d := kcCompose(root, "down", "-v")
+		d.Dir = root
+		if o, err := d.CombinedOutput(); err != nil {
+			return fmt.Errorf("%v\n%s", err, tailText(string(o), 500))
+		}
+		return nil
+	}
 	h.t.Cleanup(func() {
-		down := kcCompose(root, "down", "-v")
-		down.Dir = root
-		if o, err := down.CombinedOutput(); err != nil {
-			h.t.Errorf("docker compose down -v (project %s) failed: %v\n%s\nrun it yourself: see tests/lab/L86-runbook.md, clean-up",
-				kcProject, err, tailText(string(o), 500))
+		if err := down(); err != nil {
+			h.t.Errorf("docker compose down -v (project %s) failed: %v\nrun it yourself: see tests/lab/L86-runbook.md, \"If a cell was killed\"",
+				kcProject, err)
 		}
 	})
+	h.mu.Lock()
+	h.onKill = append(h.onKill, func() {
+		if err := down(); err != nil {
+			h.say("  docker compose down -v (project %s) failed: %v\n  run it yourself: tests/lab/L86-runbook.md, \"If a cell was killed\"", kcProject, err)
+		}
+	})
+	h.mu.Unlock()
 	if o, err := cmd.CombinedOutput(); err != nil {
-		h.t.Fatalf("INVALID: docker compose up: %v\n%s", err, tailText(string(o), 1500))
+		why := ""
+		if ctx.Err() != nil {
+			why = fmt.Sprintf(" (the %s deadline: pre-pull the image yourself, runbook step 6)", kcUpDeadline)
+		}
+		h.t.Fatalf("INVALID: docker compose up: %v%s\n%s", err, why, tailText(string(o), 1500))
 	}
 	k.waitDiscovery(3 * time.Minute)
 	h.obs("keycloak", "up: "+kcIssuer()+" (the lab's compose project "+kcProject+", image pinned by digest)")
