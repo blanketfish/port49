@@ -446,6 +446,16 @@ var (
 // which hold the semaphore this is called under.
 func persister(st store.Store, path string, held []store.Revocation, enforced *store.Marks,
 	m *metrics.Metrics) func(context.Context) error {
+	persist, _ := persisterDrain(st, path, held, enforced, m)
+	return persist
+}
+
+// persisterDrain is persister and a drain: drain waits, up to wait, until no
+// pass is writing, and says whether none is. A pass outlives the call that
+// started it, so the holder of the file's lock drains before it unlocks: a
+// detached pass must not write once an offline revoke may hold the lock.
+func persisterDrain(st store.Store, path string, held []store.Revocation, enforced *store.Marks,
+	m *metrics.Metrics) (persist func(context.Context) error, drain func(wait time.Duration) bool) {
 	slot := make(chan struct{}, 1)
 	var mu sync.Mutex // dirty, the alarm, and a pass's last look and release
 	dirty := false
@@ -482,7 +492,7 @@ func persister(st store.Store, path string, held []store.Revocation, enforced *s
 			return
 		}
 	}
-	return func(ctx context.Context) error {
+	persist = func(ctx context.Context) error {
 		deadline, write, hook := persistDeadline, writeRevocations, persistHook // read before any goroutine: tests swap them
 		ctx, cancel := context.WithTimeout(ctx, deadline)
 		defer cancel()
@@ -529,6 +539,18 @@ func persister(st store.Store, path string, held []store.Revocation, enforced *s
 		}
 		return nil
 	}
+	drain = func(wait time.Duration) bool {
+		// A pass holds the slot until it has written and looked; taking it
+		// means none is running, and none starts while the caller is draining.
+		select {
+		case slot <- struct{}{}:
+			<-slot
+			return true
+		case <-time.After(wait):
+			return false
+		}
+	}
+	return persist, drain
 }
 
 // sayFlagged is a start's one line for the n marks standing flagged

@@ -1163,14 +1163,23 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, lerr)
 		}
-		defer unlock()
+		// A detached pass may still be writing when this run ends: the lock is
+		// given up only after it is done, so an offline revoke never races it.
+		drainPersist := func(time.Duration) bool { return true }
+		defer func() {
+			if !drainPersist(persistDeadline) {
+				fmt.Fprintln(stderr, "port49d: a write of broker.revocations_file has not returned; the lock is released anyway")
+			}
+			unlock()
+		}()
 		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
 		if err != nil {
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
-		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, marks, authMarks, m)
+		persist, d := persisterDrain(brk.Store, cfg.Broker.RevocationsFile, marks, authMarks, m)
+		brk.Persist, drainPersist = persist, d
 		brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)

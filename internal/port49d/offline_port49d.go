@@ -101,6 +101,9 @@ func offlineDaemon(ctx context.Context, cfgPath string, log io.Writer) (*broker.
 		return nil, "", nil, err
 	}
 	file := cfg.Broker.RevocationsFile
+	if err := offlineOwner(file, cfgPath); err != nil {
+		return nil, "", nil, err
+	}
 	// A port49d that answers nothing may still be starting, or be another
 	// config's on the same file: the lock is what keeps it out of the file
 	// between this load and this save.
