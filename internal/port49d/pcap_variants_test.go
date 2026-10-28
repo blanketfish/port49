@@ -175,6 +175,16 @@ func TestThePcapReaderReadsEveryVariant(t *testing.T) {
 			{flags: 0x18, seq: 1001, payload: pkt[:15]},
 			{flags: 0x18, seq: 1001 + 30, payload: pkt[30:]}, // bytes 15..30 never seen
 		}},
+		// Segments out of order: the stream is given up at the first gap, even
+		// though everything that follows would complete it. Skipping the gap
+		// instead of abandoning the flow would find a packet here.
+		{name: "a gap filled later is still a lost segment", cap: eth, segs: []vseg{
+			{flags: 0x02, seq: 1000},
+			{flags: 0x18, seq: 1001, payload: pkt[:15]},
+			{flags: 0x18, seq: 1001 + 30, payload: pkt[30:]},
+			{flags: 0x18, seq: 1001 + 15, payload: pkt[15:30]},
+			{flags: 0x18, seq: 1001 + 30, payload: pkt[30:]},
+		}},
 		{name: "a flow that sends more than a packet holds in one segment", cap: eth,
 			segs: func() []vseg {
 				p, _ := vPacket(10)
