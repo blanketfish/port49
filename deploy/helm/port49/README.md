@@ -48,6 +48,13 @@ update. Files are mode 0440; the pod sets `fsGroup: 65532` with `fsGroupChangePo
 so the unprivileged user can read them and the state directories are not made group-writable at every
 start.
 
+fsGroup also makes a PVC's root group-writable, and port49's file fence refuses a group-writable
+directory above a file it reads (the kept CRLs and the bundle live below the volume). So the
+`data-dir` init container, which runs as root after the kubelet has set the volume up, removes the
+group write bit from the volume root before the process starts, and no fenced file (policy,
+inventory, device keys, the sealing key) lives on a PVC. Unverified against a real kubelet until the
+kind smoke and L82.
+
 `examples/external-secret.yaml` syncs the device keys from Vault with External Secrets: one Secret key
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
 remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. Vault Agent

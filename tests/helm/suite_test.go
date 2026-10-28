@@ -316,6 +316,51 @@ func checkSeparation(t *testing.T, r renderer) {
 	}
 }
 
+// With fsGroup the kubelet makes a PVC's root setgid and group-writable (2775), and the fence
+// (fence.resolvePolicyPath) refuses any non-sticky group-writable ancestor of a file it reads, which
+// the kept CRL and bundle files below the volume are. So the root initContainer drops the group
+// write bit of the mount root after the kubelet has set it, before the process starts; and nothing
+// fenced (policy, inventory, keys, the encryption key) lives under a PVC at all. UNVERIFIED against
+// a real kubelet until Task 11's kind smoke and L82.
+func checkPVCRootIsNotGroupWritable(t *testing.T, r renderer) {
+	docs := render(t, r, "")
+	for name, mount := range map[string]string{"t-port49d": "/var/spool/port49d", "t-broker": "/var/lib/port49-broker"} {
+		p := pod(one(t, docs, "StatefulSet", name))
+		var cmd string
+		for _, c := range list(at(p, "initContainers")) {
+			cmd += str(at(c, "command", 2))
+		}
+		if !strings.Contains(cmd, "chmod g-w "+mount+" ") && !strings.HasSuffix(cmd, "chmod g-w "+mount) {
+			t.Errorf("%s: no initContainer drops the group write bit of %s: %q", name, mount, cmd)
+		}
+		if str(at(p, "securityContext", "fsGroup")) != "" && !strings.Contains(cmd, "chmod g-w") {
+			t.Errorf("%s sets fsGroup but never undoes the group-writable volume root", name)
+		}
+	}
+	for _, c := range []string{"port49d", "broker"} {
+		var walk func(path string, v any)
+		walk = func(path string, v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				for k, e := range x {
+					walk(path+"."+k, e)
+				}
+			case []any:
+				for i, e := range x {
+					walk(path+"[]"+fmt.Sprint(i), e)
+				}
+			case string:
+				if (strings.HasSuffix(path, "_file") || strings.HasSuffix(path, "_dir") || strings.Contains(path, "secret_ref")) &&
+					(strings.Contains(x, "/var/spool/port49d") || strings.Contains(x, "/var/lib/port49-broker")) &&
+					!strings.HasSuffix(path, "state_dir") && !strings.HasSuffix(path, "spool_path") {
+					t.Errorf("%s: %s is %q, a fenced file under a PVC", c, path, x)
+				}
+			}
+		}
+		walk(c, cfg(t, docs, c))
+	}
+}
+
 func checkEtcdIdentities(t *testing.T, r renderer) {
 	docs := render(t, r, "")
 	d := secretsOf(pod(one(t, docs, "StatefulSet", "t-port49d")))
@@ -582,6 +627,7 @@ var checks = []struct {
 	{"TestBothAreStatefulSetsWithAPVCPerReplica", checkStatefulSets},
 	{"TestServicesKeepTheSource", checkServices},
 	{"TestSeparationAndDisruption", checkSeparation},
+	{"TestPVCRootIsNotGroupWritable", checkPVCRootIsNotGroupWritable},
 	{"TestNoPodHoldsTheOthersEtcdIdentity", checkEtcdIdentities},
 	{"TestProbesNeverNeedAClientCertificate", checkProbes},
 	{"TestIssuerDiscoveryIsOptIn", checkIssuerDiscovery},

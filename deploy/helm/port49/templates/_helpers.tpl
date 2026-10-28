@@ -56,10 +56,17 @@ A data directory's initContainer: root, making a 0700 subdirectory owned by 6553
 refuses a group-writable one, and the volume's root may be group-writable). Called with
 (dict "root" . "dir" "/var/lib/port49-broker/state").
 */}}
+{{- /*
+The kubelet applies fsGroup to the PVC's root (setgid, group-writable), and the fence refuses a
+group-writable non-sticky directory above a file it reads (the kept CRL, the bundle). The kubelet
+sets it at mount, before this container runs, so this container takes the group write bit off the
+root again; with OnRootMismatch the kubelet puts it back at the next mount and this runs again
+before the process starts. Unverified against a real kubelet until the kind smoke and L82.
+*/ -}}
 {{- define "port49.dataInit" -}}
 name: data-dir
 image: {{ .root.Values.initImage }}
-command: [sh, -c, {{ printf "install -d -m 0700 -o 65532 -g 65532 %s" .dir | quote }}]
+command: [sh, -c, {{ printf "install -d -m 0700 -o 65532 -g 65532 %s && chmod g-w %s" .dir .mount | quote }}]
 securityContext:
   runAsNonRoot: false
   runAsUser: 0
