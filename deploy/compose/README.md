@@ -114,14 +114,17 @@ within `grace`, and past `session.staleness_ceiling` (default 4h) a command is d
 
 ## Revoking
 
-```sh
-docker compose exec port49-broker port49 revoke --socket /run/port49/port49-broker.sock --principal user:bob@example.com
-```
+With a broker running, an operator revokes from their own machine with `port49 revoke --principal
+user:bob@example.com`: it goes through their agent to the broker API, under their `revoke_others`
+right, and asks for a press of their security key (spec §5.1.6). There is no socket to exec into.
+`port49 revoke --list` shows the marks in force.
 
-With every broker down, as the broker's own user (which the image is; plan 7e, Ruling 13):
+With every broker down, as the broker's own user (which the image is; plan 7e, Ruling 13), the
+break-glass form writes the mark through etcd and `--list` reads it:
 
 ```sh
 docker compose run --rm --entrypoint port49-broker port49-broker revoke --offline --principal user:bob@example.com
+docker compose run --rm --entrypoint port49-broker port49-broker revoke --offline --list
 ```
 
 ## `broker.state_dir`
