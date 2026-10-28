@@ -1,0 +1,101 @@
+{{- $c := dict "root" . "component" "broker" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    {{- include "port49.labels" $c | nindent 4 }}
+spec:
+  serviceName: {{ .Release.Name }}-broker
+  replicas: {{ .Values.broker.replicas }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "port49.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "port49.labels" $c | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-broker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        # broker.state_dir must be writable by no group: the default fsGroupChangePolicy
+        # (Always) would make it group-writable at every mount and the next start would be
+        # refused. OnRootMismatch gives the Secret files group 65532 once and then leaves the
+        # volume alone; the 0700 subdirectory below is the state_dir. (plan 7e, Task 18.)
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      {{- include "port49.placement" $c | nindent 6 }}
+      initContainers:
+        - {{- include "port49.dataInit" (dict "root" . "dir" "/var/lib/port49-broker/state" "mount" "/var/lib/port49-broker") | nindent 10 }}
+      containers:
+        - name: port49-broker
+          image: {{ include "port49.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/usr/local/bin/port49-broker]
+          args: [--config, /etc/port49/config/port49-broker.yaml]
+          {{- with .Values.broker.site }}
+          env:
+            - {name: PORT49_SITE, value: {{ . | quote }}}
+          {{- end }}
+          ports:
+            - {name: api, containerPort: 8443}
+            - {name: metrics, containerPort: 9050}
+          {{- include "port49.probes" . | nindent 10 }}
+          securityContext:
+            {{- include "port49.containerSecurity" . | nindent 12 }}
+          {{- with .Values.broker.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/port49/config, readOnly: true}
+            - {name: encryption, mountPath: /etc/port49/secrets, readOnly: true}
+            - {name: etcd-ca, mountPath: /etc/port49/etcd-ca, readOnly: true}
+            - {name: etcd-client, mountPath: /etc/port49/etcd, readOnly: true}
+            - {name: broker-tls, mountPath: /etc/port49/broker, readOnly: true}
+            {{- if .Values.broker.attestationRootsConfigMap }}
+            - {name: attestation-roots, mountPath: /etc/port49/attestation, readOnly: true}
+            {{- end }}
+            {{- if .Values.broker.directory.keytabSecret }}
+            - {name: directory, mountPath: /etc/port49/directory, readOnly: true}
+            {{- end }}
+            - {name: data, mountPath: /var/lib/port49-broker}
+      volumes:
+        - name: config
+          configMap: {name: {{ .Release.Name }}-broker}
+        - name: encryption
+          secret: {secretName: {{ .Values.encryption.existingSecret }}, defaultMode: 0440}
+        - name: etcd-ca
+          secret: {secretName: {{ .Values.etcd.caSecret }}, defaultMode: 0440}
+        - name: etcd-client
+          secret: {secretName: {{ .Values.etcd.broker.existingSecret }}, defaultMode: 0440}
+        - name: broker-tls
+          secret: {secretName: {{ .Values.broker.tls.existingSecret }}, defaultMode: 0440}
+        {{- if .Values.broker.attestationRootsConfigMap }}
+        - name: attestation-roots
+          configMap: {name: {{ .Values.broker.attestationRootsConfigMap }}}
+        {{- end }}
+        {{- if .Values.broker.directory.keytabSecret }}
+        - name: directory
+          secret: {secretName: {{ .Values.broker.directory.keytabSecret }}, defaultMode: 0440}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.broker.state.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.broker.state.size }}

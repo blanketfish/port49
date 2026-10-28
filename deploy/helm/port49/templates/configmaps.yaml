@@ -1,0 +1,85 @@
+{{/*
+Each component's config, built from the values and merged with config.port49d / config.broker
+(maps merge; the values win). Paths are the pod's: every Secret and ConfigMap is a whole-volume
+mount, and every secret_ref is a file: reference.
+*/}}
+{{- define "port49.port49dConfig" -}}
+listen: ":49"
+metrics_listen: ":9049"
+inventory_file: /etc/port49/config/inventory.yaml
+policy: {file: /etc/port49/config/policy.yaml, watch_interval: 5s}
+encryption:
+  current: {id: {{ .Values.encryption.id | quote }}, secret_ref: file:/etc/port49/secrets/encryption.key}
+key_secret_refs: {file_dir: /run/port49/keys}
+accounting:
+  spool_path: /var/spool/port49d/data/acct.jsonl
+{{- if .Values.tlsListener.enabled }}
+tls_listener:
+  listen: {{ printf ":%d" (int .Values.tlsListener.port) | quote }}
+  cert_file: /etc/port49/tls/tls.crt
+  key_file: /etc/port49/tls/tls.key
+  client_ca_file: /etc/port49/tls/ca.crt
+  certificate_status: {ocsp: {use_aia: true}}
+{{- end }}
+stores:
+  directory:
+    backend: etcd
+    etcd:
+      endpoints: {{ .Values.etcd.endpoints | toJson }}
+      ca_file: /etc/port49/etcd-ca/ca.crt
+      daemon: {cert_file: /etc/port49/etcd/tls.crt, key_file: /etc/port49/etcd/tls.key}
+{{- end }}
+
+{{- define "port49.brokerConfig" -}}
+metrics_listen: ":9050"
+inventory_file: /etc/port49/config/inventory.yaml
+encryption:
+  current: {id: {{ .Values.encryption.id | quote }}, secret_ref: file:/etc/port49/secrets/encryption.key}
+broker:
+  listen: ":8443"
+  tls_cert_file: /etc/port49/broker/tls.crt
+  tls_key_file: /etc/port49/broker/tls.key
+  policy_file: /etc/port49/config/policy.yaml
+  # a 0700 subdirectory the initContainer makes (the volume's root is not private enough)
+  state_dir: /var/lib/port49-broker/state
+  {{- if .Values.broker.attestationRootsConfigMap }}
+  # the two forms are refused together: identity replaces client_ca_file
+  identity:
+    humans:
+      - {type: x509, trust_anchor_file: /etc/port49/broker/ca.crt}
+    per_login_mfa:
+      hardware_key_touch: {attestation_roots_file: /etc/port49/attestation/attestation-roots.pem}
+  {{- else }}
+  client_ca_file: /etc/port49/broker/ca.crt
+  {{- end }}
+stores:
+  directory:
+    backend: etcd
+    etcd:
+      endpoints: {{ .Values.etcd.endpoints | toJson }}
+      ca_file: /etc/port49/etcd-ca/ca.crt
+      broker: {cert_file: /etc/port49/etcd/tls.crt, key_file: /etc/port49/etcd/tls.key}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-port49d
+  labels:
+    {{- include "port49.labels" (dict "root" . "component" "port49d") | nindent 4 }}
+data:
+  port49d.yaml: |
+    {{- toYaml (mustMergeOverwrite (fromYaml (include "port49.port49dConfig" .)) .Values.config.port49d) | nindent 4 }}
+  policy.yaml: {{ .Values.policy | toJson }}
+  inventory.yaml: {{ .Values.inventory | toJson }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    {{- include "port49.labels" (dict "root" . "component" "broker") | nindent 4 }}
+data:
+  port49-broker.yaml: |
+    {{- toYaml (mustMergeOverwrite (fromYaml (include "port49.brokerConfig" .)) .Values.config.broker) | nindent 4 }}
+  policy.yaml: {{ .Values.policy | toJson }}
+  inventory.yaml: {{ .Values.inventory | toJson }}

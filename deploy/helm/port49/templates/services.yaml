@@ -1,0 +1,42 @@
+# TACACS+: the devices' address. Local keeps their source address where the platform supports it
+# (unmeasured on Kubernetes: spec §15 L39 b, c).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-port49d
+  labels:
+    {{- include "port49.labels" (dict "root" . "component" "port49d") | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort") }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  selector:
+    {{- include "port49.selector" (dict "root" . "component" "port49d") | nindent 4 }}
+  ports:
+    - {name: tacacs, port: 49, targetPort: tacacs, protocol: TCP}
+    {{- if .Values.tlsListener.enabled }}
+    - {name: tacacs-tls, port: {{ .Values.tlsListener.port }}, targetPort: tacacs-tls, protocol: TCP}
+    {{- end }}
+---
+# The broker's API, for the people's agents and the workloads that mint.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    {{- include "port49.labels" (dict "root" . "component" "broker") | nindent 4 }}
+  {{- with .Values.brokerService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.brokerService.type }}
+  selector:
+    {{- include "port49.selector" (dict "root" . "component" "broker") | nindent 4 }}
+  ports:
+    - {name: api, port: 8443, targetPort: api, protocol: TCP}

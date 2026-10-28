@@ -1,0 +1,14 @@
+{{- range $c := list "port49d" "broker" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-{{ $c }}
+  labels:
+    {{- include "port49.labels" (dict "root" $ "component" $c) | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "port49.selector" (dict "root" $ "component" $c) | nindent 6 }}
+---
+{{- end }}

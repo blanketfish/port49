@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "port49 chart values",
+  "type": "object",
+  "required": ["keys", "encryption", "etcd", "broker"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "port49d": {
+      "type": "object",
+      "properties": {"replicas": {"type": "integer", "minimum": 1}}
+    },
+    "broker": {
+      "type": "object",
+      "required": ["tls"],
+      "properties": {
+        "replicas": {"type": "integer", "minimum": 1},
+        "tls": {
+          "type": "object",
+          "required": ["existingSecret"],
+          "properties": {"existingSecret": {"type": "string", "minLength": 1}}
+        },
+        "site": {"type": "string"},
+        "attestationRootsConfigMap": {"type": "string"}
+      }
+    },
+    "keys": {
+      "type": "object",
+      "required": ["existingSecret"],
+      "properties": {"existingSecret": {"type": "string", "minLength": 1}}
+    },
+    "encryption": {
+      "type": "object",
+      "required": ["existingSecret"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "existingSecret": {"type": "string", "minLength": 1}
+      }
+    },
+    "etcd": {
+      "type": "object",
+      "required": ["endpoints", "caSecret", "port49d", "broker"],
+      "properties": {
+        "endpoints": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^https://"}
+        },
+        "caSecret": {"type": "string", "minLength": 1},
+        "port49d": {
+          "type": "object",
+          "required": ["existingSecret"],
+          "properties": {"existingSecret": {"type": "string", "minLength": 1}}
+        },
+        "broker": {
+          "type": "object",
+          "required": ["existingSecret"],
+          "properties": {"existingSecret": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "tlsListener": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "existingSecret": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      },
+      "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+      "then": {"properties": {"existingSecret": {"minLength": 1}}, "required": ["existingSecret"]}
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["LoadBalancer", "NodePort", "ClusterIP"]},
+        "externalTrafficPolicy": {"enum": ["Local", "Cluster"]}
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {"enabled": {"type": "boolean"}}
+    },
+    "issuerDiscovery": {
+      "type": "object",
+      "properties": {"enabled": {"type": "boolean"}}
+    },
+    "policy": {"type": "string"},
+    "inventory": {"type": "string"},
+    "config": {
+      "type": "object",
+      "properties": {"port49d": {"type": "object"}, "broker": {"type": "object"}}
+    }
+  }
+}

@@ -1,0 +1,101 @@
+{{- $c := dict "root" . "component" "port49d" -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-port49d
+  labels:
+    {{- include "port49.labels" $c | nindent 4 }}
+spec:
+  serviceName: {{ .Release.Name }}-port49d
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.port49d.replicas }}
+  {{- end }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "port49.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "port49.labels" $c | nindent 8 }}
+      annotations:
+        # a changed config or policy rolls the pods (the policy is also re-read at watch_interval)
+        checksum/config: {{ include (print $.Template.BasePath "/configmaps.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-port49d
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The device keys and the sealing key are root-owned Secret files: fsGroup makes them
+        # 0440 group 65532, readable by port49d and by nobody else. OnRootMismatch leaves the
+        # spool alone once its root matches (the default, Always, would walk it at every mount).
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        # Non-root binds 49: a safe sysctl.
+        sysctls:
+          - {name: net.ipv4.ip_unprivileged_port_start, value: "0"}
+      {{- include "port49.placement" $c | nindent 6 }}
+      initContainers:
+        - {{- include "port49.dataInit" (dict "root" . "dir" "/var/spool/port49d/data" "mount" "/var/spool/port49d") | nindent 10 }}
+      containers:
+        - name: port49d
+          image: {{ include "port49.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [--config, /etc/port49/config/port49d.yaml]
+          ports:
+            - {name: tacacs, containerPort: 49}
+            {{- if .Values.tlsListener.enabled }}
+            - {name: tacacs-tls, containerPort: {{ .Values.tlsListener.port }}}
+            {{- end }}
+            - {name: metrics, containerPort: 9049}
+          {{- include "port49.probes" . | nindent 10 }}
+          securityContext:
+            {{- include "port49.containerSecurity" . | nindent 12 }}
+          {{- with .Values.port49d.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            # Whole-volume mounts, never subPath: the kubelet updates a whole mount in place, so a
+            # key version added to a Secret reaches port49d with no restart.
+            - {name: config, mountPath: /etc/port49/config, readOnly: true}
+            - {name: keys, mountPath: /run/port49/keys, readOnly: true}
+            - {name: encryption, mountPath: /etc/port49/secrets, readOnly: true}
+            - {name: etcd-ca, mountPath: /etc/port49/etcd-ca, readOnly: true}
+            - {name: etcd-client, mountPath: /etc/port49/etcd, readOnly: true}
+            {{- if .Values.tlsListener.enabled }}
+            - {name: tls, mountPath: /etc/port49/tls, readOnly: true}
+            {{- end }}
+            - {name: data, mountPath: /var/spool/port49d}
+      volumes:
+        - name: config
+          configMap: {name: {{ .Release.Name }}-port49d}
+        - name: keys
+          secret: {secretName: {{ .Values.keys.existingSecret }}, defaultMode: 0440}
+        - name: encryption
+          secret: {secretName: {{ .Values.encryption.existingSecret }}, defaultMode: 0440}
+        - name: etcd-ca
+          secret: {secretName: {{ .Values.etcd.caSecret }}, defaultMode: 0440}
+        - name: etcd-client
+          secret: {secretName: {{ .Values.etcd.port49d.existingSecret }}, defaultMode: 0440}
+        {{- if .Values.tlsListener.enabled }}
+        - name: tls
+          secret: {secretName: {{ .Values.tlsListener.existingSecret }}, defaultMode: 0440}
+        {{- end }}
+  # One PVC per replica for the accounting spool. No persistentVolumeClaimRetentionPolicy: the
+  # default retains the PVCs, so a scale-down leaves unsent accounting until a scale-up takes it back.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.port49d.spool.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.port49d.spool.size }}

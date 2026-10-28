@@ -1,0 +1,8 @@
+apiVersion: v2
+name: port49
+description: port49d (TACACS+) and port49-broker on an etcd you run, as StatefulSets
+type: application
+# version and appVersion equal clients/python/pyproject.toml's; `versioncheck` fails a release
+# where they differ (plan 12b, Task 8).
+version: 0.1.0
+appVersion: "0.1.0"

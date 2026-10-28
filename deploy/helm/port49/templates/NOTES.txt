@@ -1,0 +1,16 @@
+port49 {{ .Chart.AppVersion }} is installed as {{ .Release.Name }}-port49d and {{ .Release.Name }}-broker.
+
+Check readiness from a pod's metrics port, never from `kubectl get pods` alone:
+  kubectl -n {{ .Release.Namespace }} port-forward {{ .Release.Name }}-port49d-0 9049 &
+  curl -s localhost:9049/readyz
+{{- if not .Values.broker.attestationRootsConfigMap }}
+
+No attestation roots are configured (broker.attestationRootsConfigMap): every admin call
+(port49 revoke, port49 directory ...) is refused 503 until they are. Set it, then roll the brokers.
+{{- end }}
+{{- if not .Values.policy }}
+
+No policy is set (--set-file policy=policy.yaml): port49d refuses to serve one it cannot load.
+{{- end }}
+
+The issuing CA: run deploy/helm/port49/scripts/copy-issuer.sh {{ .Release.Namespace }} {{ .Release.Name }} once, then every broker is the same CA.

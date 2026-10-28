@@ -1,0 +1,20 @@
+{{- if .Values.issuerDiscovery.enabled }}
+# Lets port49-broker read this cluster's service account keys without a credential (spec §13
+# decision 49 ruling 2). EXPOSURE: this binds system:unauthenticated, so anyone who can reach the
+# API server can read the issuer discovery document and the JWKS: public keys only. See
+# examples/kubernetes/issuer-discovery.yaml in the repository for the alternatives.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-service-account-issuer-discovery
+  labels:
+    {{- include "port49.labels" (dict "root" . "component" "broker") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:service-account-issuer-discovery
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:unauthenticated
+{{- end }}
