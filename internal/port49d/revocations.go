@@ -453,7 +453,10 @@ func persister(st store.Store, path string, held []store.Revocation, enforced *s
 // persisterDrain is persister and a drain: drain waits, up to wait, until no
 // pass is writing, and says whether none is. A pass outlives the call that
 // started it, so the holder of the file's lock drains before it unlocks: a
-// detached pass must not write once an offline revoke may hold the lock.
+// detached pass must not write once an offline revoke may hold the lock. A
+// drain that succeeds keeps the slot, so no pass starts after it either: a
+// revoke that outlives the shutdown cannot write once the lock is given up,
+// and its persist answers "an earlier write has not returned" at its deadline.
 func persisterDrain(st store.Store, path string, held []store.Revocation, enforced *store.Marks,
 	m *metrics.Metrics) (persist func(context.Context) error, drain func(wait time.Duration) bool) {
 	slot := make(chan struct{}, 1)
@@ -544,7 +547,6 @@ func persisterDrain(st store.Store, path string, held []store.Revocation, enforc
 		// means none is running, and none starts while the caller is draining.
 		select {
 		case slot <- struct{}{}:
-			<-slot
 			return true
 		case <-time.After(wait):
 			return false

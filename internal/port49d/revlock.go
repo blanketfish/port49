@@ -3,6 +3,7 @@ package port49d
 import (
 	"errors"
 	"fmt"
+	"github.com/rhwendt/port49/internal/broker"
 	"os"
 	"syscall"
 	"time"
@@ -16,6 +17,15 @@ var errRevocationsLocked = errors.New("locked")
 // seconds of work, and a start that exits at once would be restarted by its
 // supervisor into the same wait, so it waits first and then says why it left.
 var revocationsLockWait = 30 * time.Second
+
+// persistDrainWait is how long a stopping port49d waits for a write of the
+// revocations file that outlived its call before it gives up the lock anyway:
+// a mount that never answers must not keep shutdown from finishing.
+var persistDrainWait = 20 * time.Second
+
+// daemonBrokerHook, set by a test, is handed the in-process broker once it is
+// wired. Nil in production.
+var daemonBrokerHook func(*broker.Broker)
 
 // revocationsLockPath is the sidecar the file's lock lives on. The lock is on
 // a file beside broker.revocations_file, never on it: every save renames a

@@ -5,12 +5,14 @@ package port49d
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"errors"
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
@@ -98,5 +100,78 @@ func TestADetachedPassIsDrainedBeforeTheUnlock(t *testing.T) {
 	rs, err := loadRevocations(path)
 	if err != nil || len(rs) != 1 {
 		t.Fatalf("the pass finished before the drain answered: %v %v", rs, err)
+	}
+}
+
+// The daemon's own wiring: a write of the revocations file that outlives the
+// revoke that started it keeps the lock held through shutdown until it
+// returns; and once the lock is given up no pass can start, so a revoke that
+// outlives the shutdown writes nothing beside an offline revoke.
+func TestShutdownKeepsTheLockUntilAHungWriteReturns(t *testing.T) {
+	var out syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, io.Discard
+	b := brokerConfig(t, minimalPolicy).Broker
+	cfgPath := writeRunConfig(t, b)
+	brkCh := make(chan *broker.Broker, 1)
+	daemonBrokerHook = func(brk *broker.Broker) { brkCh <- brk }
+	w := persistDrainWait
+	persistDrainWait = 20 * time.Second
+	t.Cleanup(func() { daemonBrokerHook, persistDrainWait = nil, w })
+	release := hangWrites(t, 50*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	returned := false
+	t.Cleanup(func() {
+		release()
+		cancel()
+		if !returned {
+			select {
+			case <-done:
+			case <-time.After(30 * time.Second):
+			}
+		}
+	})
+	waitForCount(t, &out, "port49d: broker listening on ", 1)
+	brk := <-brkCh
+
+	req := broker.RevokeRequest{Principal: "user:alice@example.com", Origin: "test"}
+	_, _ = brk.Revoke(context.Background(), req) // answers at the persist deadline; the write goes on
+	cancel()
+	select {
+	case err := <-done:
+		returned = true
+		t.Fatalf("run returned (%v) with a write still hung", err)
+	case <-time.After(400 * time.Millisecond):
+	}
+	if _, err := lockRevocations(b.RevocationsFile); !errors.Is(err, errRevocationsLocked) {
+		t.Fatalf("the lock while a write hangs: %v", err)
+	}
+	release()
+	select {
+	case err := <-done:
+		returned = true
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return once the write did")
+	}
+	unlock, err := lockRevocations(b.RevocationsFile)
+	if err != nil {
+		t.Fatalf("the lock after the write returned: %v", err)
+	}
+	defer unlock()
+	// The pass that hung wrote its mark before the lock was given up.
+	if rs, err := loadRevocations(b.RevocationsFile); err != nil || len(rs) != 1 {
+		t.Fatalf("the file after the drain: %v %v", rs, err)
+	}
+	// A revoke that outlives the shutdown starts no pass: the slot is kept.
+	_, _ = brk.Revoke(context.Background(), broker.RevokeRequest{Principal: "user:bob@example.com", Origin: "test"})
+	if rs, _ := loadRevocations(b.RevocationsFile); len(rs) != 1 {
+		t.Fatalf("a write landed after the unlock: %v", rs)
 	}
 }

@@ -1164,10 +1164,11 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, lerr)
 		}
 		// A detached pass may still be writing when this run ends: the lock is
-		// given up only after it is done, so an offline revoke never races it.
+		// given up only after it is done, and no pass starts after, so an
+		// offline revoke never races one.
 		drainPersist := func(time.Duration) bool { return true }
 		defer func() {
-			if !drainPersist(persistDeadline) {
+			if !drainPersist(persistDrainWait) {
 				fmt.Fprintln(stderr, "port49d: a write of broker.revocations_file has not returned; the lock is released anyway")
 			}
 			unlock()
@@ -1449,6 +1450,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		brk.Conns = bl
 	}
 	if brk != nil {
+		if daemonBrokerHook != nil {
+			daemonBrokerHook(brk)
+		}
 		brk.RevokeTimeout = revokeRunTimeout
 	}
 
