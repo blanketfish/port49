@@ -13,16 +13,19 @@ import (
 // Task 1): etcd's CA, a certificate for each of its three members (no
 // extended key usage, so it serves a peer's and a client's side), a client
 // certificate per etcd user (root, port49d, port49-broker), the broker's
-// lab PKI under broker/ for email, and the two env files. Valid 24h, as
-// WriteLab's. Nothing it writes protects anything real: a trial and the
+// lab PKI under broker/ for email and for ComposeOperator and ComposeBob,
+// the device key as keys/tacacs_v1, and each component's sealing key as
+// secrets/port49d-encryption.key and secrets/broker-encryption.key (files,
+// never an env file: nothing secret may show in a container's environment).
+// Valid 24h, as WriteLab's. Nothing it writes protects anything real: a trial and the
 // tests use it, never a deployment.
 func WriteCompose(dir, email string, now time.Time) error {
-	for _, d := range []string{dir, filepath.Join(dir, "etcd")} {
+	for _, d := range []string{dir, filepath.Join(dir, "etcd"), filepath.Join(dir, "keys"), filepath.Join(dir, "secrets")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
 	}
-	if err := WriteLab(filepath.Join(dir, "broker"), email, now); err != nil {
+	if err := WriteLabWith(filepath.Join(dir, "broker"), email, []string{ComposeOperator, ComposeBob}, now); err != nil {
 		return err
 	}
 	from, until := now.Add(-time.Hour), now.Add(24*time.Hour)
@@ -55,7 +58,7 @@ func WriteCompose(dir, email string, now time.Time) error {
 			return err
 		}
 	}
-	tacacs, err := secret(24)
+	tacacs, err := secret(32)
 	if err != nil {
 		return err
 	}
@@ -63,8 +66,8 @@ func WriteCompose(dir, email string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	files["port49d.env"] = []byte(fmt.Sprintf("PORT49_KEY_TACACS=%s\nPORT49_ENC_KEY=%s\n", tacacs, enc))
-	files["port49-broker.env"] = []byte(fmt.Sprintf("PORT49_ENC_KEY=%s\n", enc))
+	files["keys/tacacs_v1"] = []byte(tacacs)
+	files["secrets/port49d-encryption.key"], files["secrets/broker-encryption.key"] = []byte(enc), []byte(enc)
 	for name, body := range files {
 		if err := writeFresh(filepath.Join(dir, name), body); err != nil {
 			return fmt.Errorf("testpki: %s: %w", name, err)
@@ -73,8 +76,19 @@ func WriteCompose(dir, email string, now time.Time) error {
 	return nil
 }
 
-// secret is n random characters from [A-Za-z0-9]: safe in an env file
-// unquoted, and n bytes long.
+// The two people besides the trial's own client whom WriteCompose cuts a
+// client certificate for: the admin operator (policy: api revoke_others) and
+// bob, whom the admin cells revoke and mint for (LabClientFiles names them).
+const (
+	ComposeOperator = "operator@example.com"
+	ComposeBob      = "bob@example.com"
+)
+
+// RandomSecret is n random characters from [A-Za-z0-9], n bytes long: a
+// fresh key for a test to write as a file.
+func RandomSecret(n int) (string, error) { return secret(n) }
+
+// secret is n random characters from [A-Za-z0-9], n bytes long.
 func secret(n int) (string, error) {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 	out := make([]byte, n)
