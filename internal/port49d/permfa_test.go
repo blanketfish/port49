@@ -96,8 +96,8 @@ func TestSIGHUPReReadsTheAttestationRoots(t *testing.T) {
 	if len(b.PerLoginMFA.AMR) != 1 || b.PerLoginMFA.ACRValues != "acr-x" {
 		t.Fatalf("the swap changed the other verifier settings: %+v", b.PerLoginMFA)
 	}
-	if len(said) != 1 || !strings.Contains(said[0], path) {
-		t.Fatalf("a good reload said %q, want one line naming the file", said)
+	if len(said) != 1 || !strings.Contains(said[0], path) || !strings.Contains(said[0], "re-read: 1 roots (was 1)") {
+		t.Fatalf("a good reload said %q, want one line naming the file and the root counts", said)
 	}
 
 	// Unusable files keep the roots in force, and say so once.

@@ -61,6 +61,14 @@ func (b *Broker) perLoginMFA() *MFAVerifiers {
 	return b.PerLoginMFA
 }
 
+// AttestationRoots is the roots in force now, nil for none.
+func (b *Broker) AttestationRoots() *pivattest.Anchors {
+	if m := b.perLoginMFA(); m != nil {
+		return m.Anchors
+	}
+	return nil
+}
+
 // SetAttestationRoots puts a (nil for none) in force as the roots a touch is verified
 // against, keeping AMR and ACRValues, while the broker serves: port49d and port49-broker
 // call it at SIGHUP with the file re-read (spec §5.1.6: "add the root or intermediate to

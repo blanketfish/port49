@@ -60,7 +60,12 @@ type Attestation struct {
 // Anchors is attestation_roots_file read: its self-signed certificates are
 // Roots and the rest Intermediates, so a hierarchy with an intermediate
 // under a newer Yubico root verifies (pre-flight I14).
-type Anchors struct{ Roots, Intermediates *x509.CertPool }
+type Anchors struct {
+	Roots, Intermediates *x509.CertPool
+	// NumRoots counts the self-signed certificates in Roots, so a reload can say how many
+	// roots are in force now and how many were.
+	NumRoots int
+}
 
 // ParseAnchors reads every PEM certificate in b. Text outside the PEM blocks
 // (comments before, between or after) is ignored, as openssl does, so a note
@@ -106,6 +111,7 @@ func ParseAnchors(b []byte) (Anchors, error) {
 	if roots == 0 {
 		return Anchors{}, errors.New("pivattest: anchors hold no self-signed root certificate")
 	}
+	a.NumRoots = roots
 	return a, nil
 }
 

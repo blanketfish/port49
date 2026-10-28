@@ -393,6 +393,9 @@ func TestParseAnchors(t *testing.T) {
 	if len(a.Roots.Subjects()) != 1 || len(a.Intermediates.Subjects()) != 1 { //nolint:staticcheck // counting only
 		t.Errorf("roots %d, intermediates %d; want 1 and 1", len(a.Roots.Subjects()), len(a.Intermediates.Subjects())) //nolint:staticcheck
 	}
+	if a.NumRoots != 1 {
+		t.Errorf("NumRoots is %d, want 1", a.NumRoots)
+	}
 	for name, in := range map[string][]byte{
 		"empty":       nil,
 		"no PEM":      []byte("not a certificate"),

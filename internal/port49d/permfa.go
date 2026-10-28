@@ -64,8 +64,13 @@ func reloadAttestationRoots(cfg *oidc.PerLoginMFA, b *broker.Broker, pol func() 
 			"attestation roots already in force", cfg.AttestationRootsFile, err)
 		return
 	}
+	was := 0
+	if old := b.AttestationRoots(); old != nil {
+		was = old.NumRoots
+	}
 	b.SetAttestationRoots(&a)
-	say("broker: SIGHUP: per_login_mfa hardware_key_touch verifies attestations against %s (re-read)", cfg.AttestationRootsFile)
+	say("broker: SIGHUP: per_login_mfa hardware_key_touch verifies attestations against %s; re-read: %d roots (was %d)",
+		cfg.AttestationRootsFile, a.NumRoots, was)
 	// What the roots now in force change about the policy in force, as at a start.
 	if p := pol(); p != nil {
 		if line := b.MFAUnavailable(p, time.Now()); line != "" {
