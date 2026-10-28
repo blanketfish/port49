@@ -48,12 +48,24 @@ update. Files are mode 0440; the pod sets `fsGroup: 65532` with `fsGroupChangePo
 so the unprivileged user can read them and the state directories are not made group-writable at every
 start.
 
-fsGroup also makes a PVC's root group-writable, and port49's file fence refuses a group-writable
-directory above a file it reads (the kept CRLs and the bundle live below the volume). So the
-`data-dir` init container, which runs as root after the kubelet has set the volume up, removes the
-group write bit from the volume root before the process starts, and no fenced file (policy,
-inventory, device keys, the sealing key) lives on a PVC. Unverified against a real kubelet until the
-kind smoke and L82.
+fsGroup also acts on a PVC's root, and two rules meet there. With `OnRootMismatch` the kubelet walks the
+whole volume at a pod's start unless the root is group 65532, includes 0770 and has setgid (kubelet
+`volume_linux.go`, `requiresPermissionChange`); its walk adds group write to everything it reaches.
+port49's file fence refuses a group-writable directory above a file it reads, unless the directory is
+sticky and root-owned. So the `data-dir` init container, as root before the process starts, sets the
+volume root to `root:65532` mode 3770 (the kubelet then never walks it again, and the fence excuses
+it), makes the data directory with an explicit `chmod 0700`, and repairs everything below it to
+owner-only, so a walk that happens anyway (a restore, a driver that walks regardless) changes nothing
+the process sees. No fenced file (policy, inventory, device keys, the sealing key) lives on a PVC. A
+cluster that forbids root init containers needs a volume root provisioned 3770 root:65532 instead.
+If `data-dir` fails the pod sits in `Init:` and `kubectl describe pod` says why; nothing starts
+half-fenced.
+
+Unverified against a real kubelet until Task 11's kind smoke. Its two-generation cell must use a
+volume type the kubelet applies fsGroup to (a `local` volume or csi-hostpath, never kind's default
+hostPath class, which never applies it): install, delete the pod, and check the broker starts again,
+the root is `3770 root:65532` and `state/issuing-ca.key` is still 0600. Run first with the old 2755
+root it must crash-loop on the `state_dir` refusal, which proves the cell detects it.
 
 `examples/external-secret.yaml` syncs the device keys from Vault with External Secrets: one Secret key
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a

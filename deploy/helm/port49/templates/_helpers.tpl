@@ -57,16 +57,21 @@ refuses a group-writable one, and the volume's root may be group-writable). Call
 (dict "root" . "dir" "/var/lib/port49-broker/state").
 */}}
 {{- /*
-The kubelet applies fsGroup to the PVC's root (setgid, group-writable), and the fence refuses a
-group-writable non-sticky directory above a file it reads (the kept CRL, the bundle). The kubelet
-sets it at mount, before this container runs, so this container takes the group write bit off the
-root again; with OnRootMismatch the kubelet puts it back at the next mount and this runs again
-before the process starts. Unverified against a real kubelet until the kind smoke and L82.
+Why the root is made 3770 and the directory repaired (fsgroup-analysis.md, kubelet v1.33.1
+pkg/volume/volume_linux.go:192-233). With fsGroup and OnRootMismatch the kubelet skips its recursive
+walk only while the volume root has gid = fsGroup, perms including 0770, and setgid. A root left
+2755 (group write removed) is a mismatch at every later mount: the walk then makes the data
+directory 2770 and its files 0660, and the fence refuses the directory. So this container, as root
+before the process starts: sets the root to root:65532 3770 (setgid for the kubelet's test, sticky
+so the fence excuses a group-writable ancestor, fence_linux.go:403-405), makes the directory with an
+explicit chmod (BusyBox install -d leaves an existing one alone), and repairs the tree below it to
+owner-only whatever a walk did. CAP_FSETID keeps the setgid bit when chmod runs as root outside the
+directory's group. UNVERIFIED against a real kubelet until the kind smoke's two-generation cell.
 */ -}}
 {{- define "port49.dataInit" -}}
 name: data-dir
 image: {{ .root.Values.initImage }}
-command: [sh, -c, {{ printf "install -d -m 0700 -o 65532 -g 65532 %s && chmod g-w %s" .dir .mount | quote }}]
+command: [sh, -c, {{ printf "chown 0:65532 %s && chmod 3770 %s && install -d -m 0700 -o 65532 -g 65532 %s && chown -R 65532:65532 %s && chmod -R go-rwx %s && chmod -R g-s %s && chmod 0700 %s" .mount .mount .dir .dir .dir .dir .dir | quote }}]
 securityContext:
   runAsNonRoot: false
   runAsUser: 0
@@ -74,7 +79,7 @@ securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: [ALL]
-    add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    add: [CHOWN, FOWNER, FSETID, DAC_OVERRIDE]
   seccompProfile:
     type: RuntimeDefault
 volumeMounts:

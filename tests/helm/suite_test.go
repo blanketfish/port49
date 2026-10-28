@@ -6,8 +6,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -316,25 +319,60 @@ func checkSeparation(t *testing.T, r renderer) {
 	}
 }
 
-// With fsGroup the kubelet makes a PVC's root setgid and group-writable (2775), and the fence
-// (fence.resolvePolicyPath) refuses any non-sticky group-writable ancestor of a file it reads, which
-// the kept CRL and bundle files below the volume are. So the root initContainer drops the group
-// write bit of the mount root after the kubelet has set it, before the process starts; and nothing
-// fenced (policy, inventory, keys, the encryption key) lives under a PVC at all. UNVERIFIED against
-// a real kubelet until Task 11's kind smoke and L82.
-func checkPVCRootIsNotGroupWritable(t *testing.T, r renderer) {
+// With fsGroup and OnRootMismatch the kubelet skips its walk of a PVC only while the root is
+// root:65532 with perms including 0770 and setgid (kubeletWalks); a root with the group write bit
+// removed (the first design, 2755) is a mismatch at every later mount, and the walk then makes the
+// data directory 2770, which the fence refuses. So the root init container sets 3770, which the
+// kubelet skips and the fence excuses (sticky, root-owned), makes the data directory with an
+// explicit chmod and repairs the tree below it. Nothing fenced lives under a PVC. UNVERIFIED against
+// a real kubelet until Task 11's two-generation kind cell.
+func checkPVCRootAndRepair(t *testing.T, r renderer) {
 	docs := render(t, r, "")
-	for name, mount := range map[string]string{"t-port49d": "/var/spool/port49d", "t-broker": "/var/lib/port49-broker"} {
+	for name, v := range map[string][2]string{
+		"t-port49d": {"/var/spool/port49d", "/var/spool/port49d/data"},
+		"t-broker":  {"/var/lib/port49-broker", "/var/lib/port49-broker/state"},
+	} {
+		mount, dir := v[0], v[1]
 		p := pod(one(t, docs, "StatefulSet", name))
-		var cmd string
-		for _, c := range list(at(p, "initContainers")) {
-			cmd += str(at(c, "command", 2))
+		if str(at(p, "securityContext", "fsGroup")) != "65532" || str(at(p, "securityContext", "fsGroupChangePolicy")) != "OnRootMismatch" {
+			t.Errorf("%s: pod security context %v, want fsGroup 65532 with OnRootMismatch, never Always", name, at(p, "securityContext"))
 		}
-		if !strings.Contains(cmd, "chmod g-w "+mount+" ") && !strings.HasSuffix(cmd, "chmod g-w "+mount) {
-			t.Errorf("%s: no initContainer drops the group write bit of %s: %q", name, mount, cmd)
+		init := at(p, "initContainers", 0)
+		cmd := str(at(init, "command", 2))
+		for _, want := range []string{
+			"chown 0:65532 " + mount + " && chmod 3770 " + mount,
+			"install -d -m 0700 -o 65532 -g 65532 " + dir,
+			"chown -R 65532:65532 " + dir,
+			"chmod -R go-rwx " + dir,
+			"chmod -R g-s " + dir,
+			"chmod 0700 " + dir,
+		} {
+			if !strings.Contains(cmd, want) {
+				t.Errorf("%s: the data-dir init command lacks %q:\n%s", name, want, cmd)
+			}
 		}
-		if str(at(p, "securityContext", "fsGroup")) != "" && !strings.Contains(cmd, "chmod g-w") {
-			t.Errorf("%s sets fsGroup but never undoes the group-writable volume root", name)
+		caps := fmt.Sprint(at(init, "securityContext", "capabilities", "add"))
+		if !strings.Contains(caps, "FSETID") || !strings.Contains(caps, "CHOWN") {
+			t.Errorf("%s: the data-dir init container's capabilities are %s, want CHOWN and FSETID among them", name, caps)
+		}
+		// What the root init sets must be a root the kubelet skips and the fence excuses.
+		m := regexp.MustCompile(`chown ([0-9]+):([0-9]+) \S+ && chmod ([0-7]{4}) `).FindStringSubmatch(cmd)
+		if m == nil {
+			t.Fatalf("%s: no chown and chmod of the volume root in %q", name, cmd)
+		}
+		mode, _ := strconv.ParseUint(m[3], 8, 32)
+		perm := fs.FileMode(mode & 0o777)
+		if mode&0o2000 != 0 {
+			perm |= fs.ModeSetgid
+		}
+		if mode&0o1000 != 0 {
+			perm |= fs.ModeSticky
+		}
+		if kubeletWalks(m[2], "65532", perm|fs.ModeDir, false) {
+			t.Errorf("%s: root %s:%s %04o makes the kubelet walk the volume at every mount", name, m[1], m[2], mode)
+		}
+		if perm&fs.ModeSticky == 0 || m[1] != "0" {
+			t.Errorf("%s: root %s:%s %04o: the fence excuses a group-writable ancestor only if it is sticky and root-owned", name, m[1], m[2], mode)
 		}
 	}
 	for _, c := range []string{"port49d", "broker"} {
@@ -627,7 +665,7 @@ var checks = []struct {
 	{"TestBothAreStatefulSetsWithAPVCPerReplica", checkStatefulSets},
 	{"TestServicesKeepTheSource", checkServices},
 	{"TestSeparationAndDisruption", checkSeparation},
-	{"TestPVCRootIsNotGroupWritable", checkPVCRootIsNotGroupWritable},
+	{"TestPVCRootIsMadeSkippableAndTheDataDirRepaired", checkPVCRootAndRepair},
 	{"TestNoPodHoldsTheOthersEtcdIdentity", checkEtcdIdentities},
 	{"TestProbesNeverNeedAClientCertificate", checkProbes},
 	{"TestIssuerDiscoveryIsOptIn", checkIssuerDiscovery},
