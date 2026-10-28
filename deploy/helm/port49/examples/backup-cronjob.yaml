@@ -1,17 +1,21 @@
 # The etcd snapshot (design §13's runbook), as a CronJob. Every name is fake: the PVC
 # `port49-backups` and the Secret `port49-etcd-root` (etcd's root certificate and key, ca.crt
-# tls.crt tls.key) are yours.
+# tls.crt tls.key) are yours. backup-enrollments-cronjob.yaml is the same pattern.
 #
-# The etcd image has no shell, so the command is etcdctl itself and each run replaces
-# /backups/etcd-snapshot.db: keep history with your PVC's snapshots. etcdctl creates the file
-# 0600 (unmeasured here: `umask 077` is not available without a shell). The root Secret is
-# mounted only in this Job's pod.
+# The pattern, for both backups, because neither the etcd nor the port49 image has a shell:
+#   1. stale-check (alpine): refuses to run when `<name>.new` or `<name>.new.part` is there, from a
+#      run that did not finish. The job fails; nothing is overwritten and the failed pod stays for
+#      `kubectl logs`. A person looks, removes the file, and the next schedule runs.
+#   2. snapshot (the etcd image): `etcdctl snapshot save` writes `<name>.new`. It creates the file 0600
+#      (etcd v3.6.15, client/v3/snapshot/v3_snapshot.go:73 opens the .part file with
+#      fileutil.PrivateFileMode, which client/pkg/fileutil/fileutil.go:31 defines as 0o600, then renames
+#      it). It opens with O_TRUNC, so it would silently overwrite a stale file: step 1 is the guard.
+#   3. finish (alpine): `umask 077`, renames to a dated name, prunes after 14 days, as the systemd
+#      export does.
+# The root Secret is mounted only in this Job's pod. Nothing here writes the snapshot to a log.
 #
-# The sealed enrollments (`port49-broker export-enrollments`) are not a CronJob: the port49 image
-# has no shell to redirect its binary stdout into a 0600 file. The README runs it from a
-# workstation with `umask 077`.
-#
-# Velero for port49's own PVCs is unmeasured and not named here (plan 12c).
+# UNVERIFIED until Task 11's kind smoke: nothing in this file has run. Velero for port49's own PVCs is
+# unmeasured and not named here (plan 12c).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -21,11 +25,25 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      backoffLimit: 0
       template:
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
           securityContext: {runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch}
-          containers:
+          initContainers:
+            - name: stale-check
+              image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  for f in /backup/etcd-snapshot.new /backup/etcd-snapshot.new.part; do
+                    [ ! -e "$f" ] || { echo "$f is left from a run that did not finish: check it, remove it, and the next run proceeds" >&2; exit 1; }
+                  done
+              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+              volumeMounts:
+                - {name: backups, mountPath: /backup, readOnly: true}
             - name: snapshot
               image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
               command:
@@ -36,14 +54,28 @@ spec:
                 - --key=/etcd-root/tls.key
                 - snapshot
                 - save
-                - /backups/etcd-snapshot.db
-              securityContext:
-                runAsNonRoot: true
-                allowPrivilegeEscalation: false
-                capabilities: {drop: [ALL]}
+                - /backup/etcd-snapshot.new
+              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
               volumeMounts:
                 - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
-                - {name: backups, mountPath: /backups}
+                - {name: backups, mountPath: /backup}
+          containers:
+            - name: finish
+              image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu; umask 077
+                  new=/backup/etcd-snapshot.new
+                  dated=/backup/etcd-snapshot-$(date -u +%Y%m%dT%H%M%SZ).db
+                  [ ! -e "$dated" ] || { echo "$dated exists: not replaced" >&2; exit 1; }
+                  chmod 0600 "$new"
+                  mv "$new" "$dated"
+                  find /backup -name 'etcd-snapshot-*.db' -mtime +14 -delete
+              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+              volumeMounts:
+                - {name: backups, mountPath: /backup}
           volumes:
             - name: etcd-root
               secret: {secretName: port49-etcd-root, defaultMode: 0440}

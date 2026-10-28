@@ -229,3 +229,80 @@ func TestTheScriptsAreSoundBash(t *testing.T) {
 		}
 	}
 }
+
+// Both backups follow one pattern (plan 12b, Task 10 ruling): a stale-check that fails loudly, a
+// writer that makes `<name>.new` 0600 (the port49 image with --out, the etcd image with etcdctl
+// snapshot save), and an alpine finish step that does umask 077, renames to a dated name and prunes
+// after 14 days. Neither image has a shell, and nothing sealed goes to a log.
+func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
+	const alpine = "alpine:3.22@sha256:"
+	for file, w := range map[string]struct{ image, name string }{
+		"backup-cronjob.yaml":             {"gcr.io/etcd-development/etcd:v3.6.15@sha256:", "etcd-snapshot"},
+		"backup-enrollments-cronjob.yaml": {"ghcr.io/rhwendt/port49:", "enrollments"},
+	} {
+		var cj doc
+		if err := yaml.Unmarshal([]byte(read(t, "deploy/helm/port49/examples/"+file)), &cj); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		job := at(cj, "spec", "jobTemplate", "spec")
+		p := at(job, "template", "spec")
+		if kindOf(cj) != "CronJob" || str(at(cj, "spec", "concurrencyPolicy")) != "Forbid" {
+			t.Errorf("%s: not a CronJob with concurrencyPolicy Forbid", file)
+		}
+		if str(at(job, "backoffLimit")) != "0" || str(at(p, "restartPolicy")) != "Never" {
+			t.Errorf("%s: a failed run must stay failed (backoffLimit 0, restartPolicy Never)", file)
+		}
+		inits := list(at(p, "initContainers"))
+		var stale, writer = -1, -1
+		for i, c := range inits {
+			switch str(at(c, "name")) {
+			case "stale-check":
+				stale = i
+				if !strings.HasPrefix(str(at(c, "image")), alpine) {
+					t.Errorf("%s: stale-check is %s, want the pinned alpine", file, str(at(c, "image")))
+				}
+				script := str(at(c, "command", 2))
+				if !strings.Contains(script, "/backup/"+w.name+".new") || !strings.Contains(script, "exit 1") {
+					t.Errorf("%s: stale-check does not refuse /backup/%s.new: %q", file, w.name, script)
+				}
+			case "snapshot", "export":
+				writer = i
+				if !strings.HasPrefix(str(at(c, "image")), w.image) {
+					t.Errorf("%s: the writer is %s, want %s...", file, str(at(c, "image")), w.image)
+				}
+				var parts []string
+				for _, a := range append(list(at(c, "command")), list(at(c, "args"))...) {
+					parts = append(parts, str(a))
+				}
+				joined := strings.Join(parts, " ")
+				if strings.Contains(joined, "sh -c") || strings.Contains(joined, ">") {
+					t.Errorf("%s: the writer uses a shell or a redirect: %s", file, joined)
+				}
+				if !strings.Contains(joined, "/backup/"+w.name+".new") {
+					t.Errorf("%s: the writer does not write /backup/%s.new: %s", file, w.name, joined)
+				}
+				if file == "backup-enrollments-cronjob.yaml" && !strings.Contains(joined, "--out /backup/enrollments.new") {
+					t.Errorf("%s: the export does not use --out: %s", file, joined)
+				}
+			}
+		}
+		if stale < 0 || writer < 0 || stale > writer {
+			t.Errorf("%s: the stale-check must exist and run before the writer (stale %d, writer %d)", file, stale, writer)
+		}
+		fin := at(p, "containers", 0)
+		script := str(at(fin, "command", 2))
+		for _, want := range []string{"umask 077", "mv \"$new\" \"$dated\"", "-mtime +14 -delete", "/backup/" + w.name + ".new", "chmod 0600"} {
+			if !strings.Contains(script, want) {
+				t.Errorf("%s: the finish step lacks %q:\n%s", file, want, script)
+			}
+		}
+		if !strings.HasPrefix(str(at(fin, "image")), alpine) || len(list(at(p, "containers"))) != 1 {
+			t.Errorf("%s: the one main container is %s, want the pinned alpine", file, str(at(fin, "image")))
+		}
+		for _, c := range append(inits, list(at(p, "containers"))...) {
+			if at(c, "env") != nil {
+				t.Errorf("%s: container %s sets env: secrets are files", file, str(at(c, "name")))
+			}
+		}
+	}
+}

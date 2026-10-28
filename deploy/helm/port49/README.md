@@ -123,10 +123,18 @@ for the cluster, which is a cluster-wide change: enable it in one release per cl
 
 ## Backups
 
-`examples/backup-cronjob.yaml` takes an etcd snapshot. The snapshot holds sealed data but is still
-sensitive; give its volume a restrictive mode. The enrollments export cannot be a CronJob: the port49
-image has no shell to redirect its output into a private file. Run `port49 export-enrollments` from a
-workstation under `umask 077`.
+Two CronJob examples, one pattern (UNVERIFIED until the kind smoke): `examples/backup-cronjob.yaml`
+(the etcd snapshot) and `examples/backup-enrollments-cronjob.yaml` (the sealed enrollment store,
+`port49-broker export-enrollments --out FILE`). Neither the etcd nor the port49 image has a shell, so:
+
+1. a `stale-check` init container fails the job when `<name>.new` is left from a run that did not
+   finish (the failed pod stays, and `kubectl logs` names the file); remove it and the next run goes;
+2. the writer init container (`etcdctl snapshot save`, or `export-enrollments --out`) creates
+   `<name>.new` 0600 and never replaces a file;
+3. an alpine `finish` container does `umask 077`, renames to a dated name and prunes after 14 days.
+
+Nothing sealed is written to a log. The snapshot holds sealed data but is still sensitive; give its
+PVC a restrictive access mode. Restore enrollments with `port49 directory import`.
 
 ## Multi-region
 
