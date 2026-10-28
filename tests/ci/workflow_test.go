@@ -126,6 +126,11 @@ func workflowProblems(name string, raw []byte) []string {
 
 func TestEveryWorkflowFollowsTheCIRules(t *testing.T) {
 	files, err := filepath.Glob("../../.github/workflows/*.yml")
+	if err == nil {
+		var more []string
+		more, err = filepath.Glob("../../.github/workflows/*.yaml")
+		files = append(files, more...)
+	}
 	if err != nil || len(files) < 7 {
 		t.Fatalf("found %d workflows (%v), want at least the seven shipped", len(files), err)
 	}

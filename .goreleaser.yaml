@@ -91,13 +91,24 @@ nfpms:
         dst: /usr/lib/sysusers.d/port49.conf
       - src: deploy/systemd/tmpfiles.d/port49.conf
         dst: /usr/lib/tmpfiles.d/port49.conf
+      # What the systemd README sends the operator to: its text, the example configs to copy
+      # into /etc/port49, the etcd, snapshot and export units, and the store blocks.
+      - src: deploy/systemd/README.md
+        dst: /usr/share/doc/port49-server/README.systemd.md
       - src: deploy/systemd/config/
-        dst: /usr/share/doc/port49-server/examples/
+        dst: /usr/share/doc/port49-server/examples/config/
+        type: tree
+      - src: deploy/systemd/examples/
+        dst: /usr/share/doc/port49-server/examples/systemd/
+        type: tree
+      - src: deploy/examples/stores/
+        dst: /usr/share/doc/port49-server/examples/stores/
         type: tree
     # Every binary is 0755, owned by root, with no setuid, setgid or file capability: port49d
     # binds 49 through the unit's AmbientCapabilities. packages_test.go checks it.
     scripts:
       postinstall: packaging/server/postinstall.sh
+      preremove: packaging/server/preremove.sh
   - id: port49
     package_name: port49
     ids: [port49-client]
@@ -110,6 +121,7 @@ nfpms:
     formats: [deb, rpm]
     bindir: /usr/bin
     conflicts: [port49-server]
+    recommends: [python3]
     contents:
       - src: packaging/client/config.yaml
         dst: /etc/port49/config.yaml

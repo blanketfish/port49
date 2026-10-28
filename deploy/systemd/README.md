@@ -42,7 +42,9 @@ systemctl enable --now port49d port49-broker
 Without the package: put the four binaries in `/usr/bin`, the two `.service` files in
 `/usr/lib/systemd/system/`, `sysusers.d/port49.conf` in `/usr/lib/sysusers.d/`,
 `tmpfiles.d/port49.conf` in `/usr/lib/tmpfiles.d/`, then `systemd-sysusers` and
-`systemd-tmpfiles --create`. Copy `config/` to `/etc/port49/` and edit it.
+`systemd-tmpfiles --create`. Copy `config/` to `/etc/port49/` and edit it. The package puts it, this file, the etcd, snapshot
+and export units and the store examples under `/usr/share/doc/port49-server/` (`examples/config/`,
+`examples/systemd/`, `examples/stores/`, `README.systemd.md`).
 
 Binding port 49 as `port49d` needs no file capability: the unit grants `CAP_NET_BIND_SERVICE`
 as an ambient capability, and bounds the process to it.

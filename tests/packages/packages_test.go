@@ -105,11 +105,32 @@ func TestServerPackageContents(t *testing.T) {
 	}
 	for _, p := range []string{"/usr/lib/systemd/system/port49d.service", "/usr/lib/systemd/system/port49-broker.service",
 		"/usr/lib/sysusers.d/port49.conf", "/usr/lib/tmpfiles.d/port49.conf"} {
+		want(t, files, p, "-rw-r--r--")
+	}
+	for _, p := range []string{"/usr/share/doc/port49-server/README.systemd.md", "/usr/share/doc/port49-server/examples/config/port49d.yaml",
+		"/usr/share/doc/port49-server/examples/systemd/port49-enrollments-export.service", "/usr/share/doc/port49-server/examples/stores/README.md"} {
 		if _, ok := files[p]; !ok {
 			t.Errorf("%s is not in the package", p)
 		}
 	}
 	noSpecialBits(t, files)
+	// the maintainer scripts are ours: the postinst makes users and directories and starts
+	// nothing, the prerm stops the units on removal only
+	ctl := t.TempDir()
+	run(t, "dpkg-deb", "-e", deb, ctl)
+	post, _ := os.ReadFile(filepath.Join(ctl, "postinst"))
+	for _, want := range []string{"systemd-sysusers port49.conf", "systemd-tmpfiles --create port49.conf", "systemctl daemon-reload"} {
+		if !strings.Contains(string(post), want) {
+			t.Errorf("postinst lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`systemctl (enable|start|restart)`).Match(post) {
+		t.Error("postinst enables or starts a unit")
+	}
+	pre, _ := os.ReadFile(filepath.Join(ctl, "prerm"))
+	if !strings.Contains(string(pre), "systemctl disable --now port49d.service port49-broker.service") || !strings.Contains(string(pre), "remove | 0") {
+		t.Error("prerm does not stop and disable the units on removal only")
+	}
 	if got := strings.TrimSpace(run(t, "dpkg-deb", "-f", deb, "Conflicts")); !strings.Contains(got, "port49") || strings.Contains(got, "port49-server") {
 		t.Errorf("Conflicts is %q, want port49", got)
 	}
@@ -145,6 +166,9 @@ func TestClientPackageContents(t *testing.T) {
 	conf, err := os.ReadFile(filepath.Join(dir, "conffiles"))
 	if err != nil || !regexp.MustCompile(`(?m)^/etc/port49/config\.yaml$`).Match(conf) {
 		t.Errorf("/etc/port49/config.yaml is not in conffiles (%v)", err)
+	}
+	if got := strings.TrimSpace(run(t, "dpkg-deb", "-f", deb, "Recommends")); !strings.Contains(got, "python3") {
+		t.Errorf("Recommends is %q, want python3", got)
 	}
 	if got := strings.TrimSpace(run(t, "dpkg-deb", "-f", deb, "Conflicts")); got != "port49-server" {
 		t.Errorf("Conflicts is %q, want port49-server", got)
@@ -198,6 +222,20 @@ func TestTheRPMsMatch(t *testing.T) {
 			t.Errorf("%s and %s differ:\ndeb: %v\nrpm: %v", c.deb, c.rpm, d, r)
 		}
 	}
+}
+
+// The rpm marks /etc/port49/config.yaml as a config file that an upgrade does not replace.
+func TestTheRPMKeepsTheConffile(t *testing.T) {
+	out := run(t, "rpm", "-qp", "--qf", `[%{FILEFLAGS:fflags} %{FILENAMES}\n]`, dist(t, "port49_*_amd64.rpm"))
+	for _, ln := range strings.Split(out, "\n") {
+		if f := strings.Fields(ln); len(f) == 2 && f[1] == "/etc/port49/config.yaml" {
+			if !strings.Contains(f[0], "c") || !strings.Contains(f[0], "n") {
+				t.Errorf("/etc/port49/config.yaml has file flags %q, want config and noreplace", f[0])
+			}
+			return
+		}
+	}
+	t.Error("/etc/port49/config.yaml is not in the rpm")
 }
 
 func TestTheDarwinClientArchivesExist(t *testing.T) {

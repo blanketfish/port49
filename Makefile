@@ -415,7 +415,8 @@ bin/gitleaks-$(GITLEAKS_VERSION):
 
 # Release packages (plan 12b, Task 8). GoReleaser is pinned by sha256 like gitleaks. UNVERIFIED:
 # this target and the pinned digest have not been run; the first `make packages` is the check.
-# `make packages` builds dist/ locally and publishes nothing (--snapshot --skip=publish).
+# `make packages` builds dist/ locally and publishes and signs nothing (--snapshot
+# --skip=publish,sign): signing belongs to the release workflow.
 # `make packages-check` then runs tests/packages, which fails, never skips, when dist/ is empty.
 GORELEASER_VERSION ?= 2.19.0
 GORELEASER_SHA256_LINUX_X64 = ebc3194ad1d1b1787614405285a0039665cd4c5bd3305215a1b201600f90630b
@@ -430,7 +431,7 @@ bin/goreleaser-$(GORELEASER_VERSION):
 	rm bin/goreleaser.tar.gz
 
 packages: bin/goreleaser-$(GORELEASER_VERSION)
-	bin/goreleaser-$(GORELEASER_VERSION) release --snapshot --clean --skip=publish
+	bin/goreleaser-$(GORELEASER_VERSION) release --snapshot --clean --skip=publish,sign
 
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v
