@@ -35,12 +35,11 @@ read it, and the observation line says so.
    never, 9c PIN once and touch **always**, 9e PIN once, were made for L60 with `ykman piv keys
    generate`.)
 
-2. **Only if slot 9c is not touch-always** (check: L60's note says it is; skip otherwise).
-   **Ryan types this; agents never run it.** ykman asks for the management key at its own prompt:
-
-   ```
-   ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy ALWAYS 9c ~/.cache/port49-l60/pub-9c.pem
-   ```
+2. **Slot 9c is the key L60 provisioned (touch always); this runbook never makes, resets or overwrites a
+   slot.** Each cell checks that 9c's key is on the token before it starts and stops with `INVALID: slot
+   9c ... is not on the token` if it is not. If you see that, stop and tell the lead: do not generate a
+   key to get past it. Nothing here runs `ykman piv keys generate` or `reset`; the one `ykman` write is
+   the certificate import the proxy below prints for you to type.
 
 3. **The firmware, operator-reported from ykman.** port49 does not report it. **Ryan types this**
    (read the version line; do not paste the serial anywhere):
@@ -61,6 +60,7 @@ read it, and the observation line says so.
 
    ```
    export PORT49_L86=1 PORT49_L86_BIN=$PWD/bin/l86/port49
+   export L86_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)     # step 12 collects only what this run wrote
    l86() { bin/l86/l60.test -test.v -test.timeout 20m -test.run "^$1\$"; }
    ```
 
@@ -74,7 +74,14 @@ read it, and the observation line says so.
    project `port49laboidc`, the realm `tests/lab/oidc/keycloak/realm.json` (`make lab-oidc` and `make
    lab-oidc-l55` bring up the same project; there is no separate command). It needs Docker as those do
    (the cell runs it under `sg docker`), port 18443 free (stop any other lab's Keycloak; the cell stops
-   with `INVALID` if one answers), and the image pulled the first time. It makes a fresh lab CA each run
+   with `INVALID` if one answers), and the image pulled the first time: **pull it yourself now**, so the cell's `up` is quick (the cell
+   gives `up` 8 minutes and stops with `INVALID` past that). **Ryan types this**:
+
+   ```
+   docker compose -p port49laboidc -f tests/lab/oidc/compose.yaml pull
+   ```
+
+   The cell makes a fresh lab CA each run
    and keeps the generated admin password in a 0600 file compose reads; it never prints it.
 
    Slot 9e must hold a key you made with `ykman piv keys generate` (L60's step 1 made it; the id is `04`
@@ -82,10 +89,11 @@ read it, and the observation line says so.
    fallback below, so 9e holds no certificate from it.
 
    **Ryan types this** (once per boot; Keycloak's name must resolve to this host, for port49 and for your
-   browser; this is the same line as the L62 runbook's A6):
+   browser). The line carries a marker comment so the clean-up removes only this line and never the L62
+   runbook's A6 line for the same name (if A6's line is there already, the name resolves: skip this):
 
    ```
-   echo '127.0.0.1 keycloak.port49.lab' | sudo tee -a /etc/hosts
+   echo '127.0.0.1 keycloak.port49.lab # port49-l86' | sudo tee -a /etc/hosts
    ```
 
    Your browser must reach `https://keycloak.port49.lab:18443` and the redirect to `http://127.0.0.1:18749`.
@@ -183,18 +191,30 @@ is run: 9e then holds that certificate.
 
 ## Clean-up and handing back
 
-11. Every agent a cell started is stopped by its pid when the cell ends, and cell (c) takes its
-    Keycloak down. If a cell was killed, take the project down yourself. **Ryan types this**:
+11. When a cell ends normally or fails on an assertion, it stops every agent it started by its pid,
+    restores the terminal and takes its Keycloak down. When it is **killed** (Ctrl-C, a `kill`, or the
+    `-test.timeout` 45 s before it fires), the harness catches SIGINT, SIGTERM and that deadline and
+    does the same, then releases the lab lock and exits 2 with `L86 cell ...: ... cleaning up`. A
+    `kill -9`, a power loss or a lost terminal skips it: do the next block.
+
+    **If a cell was killed** (**Ryan types this**; nothing here is guessed for you):
 
     ```
+    stty sane                                              # the terminal, if it is raw or echo is off
+    pgrep -u "$USER" -af 'port49 agent'                    # the PIN-unlocked agents; read the pids
+    kill <pid>                                             # each one, by pid, never by pattern
     docker compose -p port49laboidc -f tests/lab/oidc/compose.yaml down -v
     ```
 
-    Then remove the hosts line, confirm the key is back in, and:
+    The lab lock (`/tmp/port49-lab.lock`) lets go when the process dies; if the next cell says the lab
+    is occupied, `cat /tmp/port49-lab.lock` names the holder, and a holder that is not alive is stale.
+
+    Then remove this runbook's hosts line (the marker keeps it away from any other line), confirm the key
+    is back in, and:
 
     ```
-    sudo sed -i '/keycloak.port49.lab/d' /etc/hosts
-    unset PORT49_L86 PORT49_L86_BIN PORT49_L86_PREP PORT49_L86_FIRMWARE PORT49_L86_SLOT_9E_ID
+    sudo sed -i '/ # port49-l86$/d' /etc/hosts
+    unset PORT49_L86 PORT49_L86_BIN PORT49_L86_PREP PORT49_L86_FIRMWARE PORT49_L86_SLOT_9E_ID L86_START
     rm -rf bin/l86
     ```
 
@@ -202,9 +222,13 @@ is run: 9e then holds that certificate.
     hold no PIN, no token and no serial (a serial is masked). Collect them and tell the lead the path:
 
     ```
-    grep ' L86 ' ~/.cache/port49-l60/observations.log > ~/.cache/port49-l60/L86-observations.txt
-    grep -c verdict ~/.cache/port49-l60/L86-observations.txt     # 4 verdicts: a, b, c, d (5 with the proxy)
+    awk -v s="$L86_START" '$1 >= s && / L86 /' ~/.cache/port49-l60/observations.log > ~/.cache/port49-l60/L86-observations.txt
+    grep -c verdict ~/.cache/port49-l60/L86-observations.txt   # one per cell run since L86_START: a, b, c, d (5 with the proxy)
     ```
+
+    Only lines since `L86_START` (step 5) are taken, so an earlier attempt's or a killed cell's old lines
+    are left out. A cell you ran twice in this run has two verdicts: the later one is the cell's, and
+    the lead reads them in order. A killed cell writes `L86 <cell> killed: ...` and no verdict.
 
     The firmware line reads `firmware_operator_reported_from_ykman`: it is yours, not the harness's.
     The broker's decision log for each cell stays in `~/.cache/port49-l60/decisions-<cell>.jsonl`
