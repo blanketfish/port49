@@ -91,8 +91,9 @@ func parseOffline(proc, defCfg string, args []string, out io.Writer) (f offlineF
 // nothing mints for the principal after. It takes no hold, binds nothing
 // and keeps no copy; the report goes to out as port49 revoke prints it,
 // and the revoke record to log, port49-broker's decision log. With --list
-// it prints the marks in force, each with its origin. Exit 0 on a
-// whole report, 1 on an error or a partial one, 2 on a usage error.
+// it prints the marks in force, each with its origin. A user who does not own
+// broker.state_dir is refused before anything is written. Exit 0 on a
+// whole report, 1 on an error, a refusal or a partial one, 2 on a usage error.
 func offlineRevoke(args []string, log, out io.Writer) int {
 	f, code, done := parseOffline("port49-broker", "/etc/port49/port49-broker.yaml", args, out)
 	if done {
@@ -111,6 +112,21 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	brk := run.brk
 	if f.list {
 		return offlineList(ctx, brk.Store, offlineSay, out)
+	}
+	// A user who does not own broker.state_dir is refused before anything is written: the copy it
+	// would end by writing is refused anyway, and a revoke that stands in the store while the
+	// command says it could not finish is half a revoke at 3am. Only the owner is knowable here;
+	// an I/O failure of the copy is not, and keeps its write-anyway rule (final review 7e-2 I-2).
+	if err := ownStateDir(run.stateDir); err != nil {
+		var wo *wrongOwnerError
+		if errors.As(err, &wo) {
+			what := "revoked"
+			if *lift {
+				what = "lifted"
+			}
+			fmt.Fprintf(out, "%snothing was %s: %v\n", offlineSay, what, offlineOwnerHint(wo))
+			return 1
+		}
 	}
 	// Who ran it, as the API's origin names its caller (spec §5.7).
 	req := broker.RevokeRequest{Principal: *principal, Issuer: *issuer, Serial: *serial,
