@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,6 +58,16 @@ func layoutProblems(r io.Reader) ([]string, error) {
 			sticky := h.Mode&0o1000 != 0
 			if h.Mode&0o022 != 0 && !(sticky && h.Uid == 0) {
 				bad("a directory writable by group or other")
+			}
+		}
+		// A file no group or other user can write, and no setuid or setgid bit anywhere: a
+		// symlink's mode is always 0777 in a tar and means nothing, so it is skipped.
+		if h.Typeflag != tar.TypeDir && h.Typeflag != tar.TypeSymlink && h.Typeflag != tar.TypeLink {
+			if h.Mode&0o022 != 0 {
+				bad("a file writable by group or other")
+			}
+			if h.Mode&0o6000 != 0 {
+				bad("a setuid or setgid file")
 			}
 		}
 		for _, d := range stateDirs {
@@ -155,6 +167,9 @@ func good() []ent {
 	for _, b := range binaries {
 		e = append(e, ent{name: "usr/local/bin/" + b, typ: tar.TypeReg, mode: 0o755})
 	}
+	e = append(e,
+		ent{name: "etc/ssl/certs/ca.pem", typ: tar.TypeReg, mode: 0o644},
+		ent{name: "etc/ssl/cert.pem", typ: tar.TypeSymlink, mode: 0o777})
 	return e
 }
 
@@ -184,7 +199,11 @@ func TestTheLayoutCheckRefusesWhatItShould(t *testing.T) {
 			e[5].pax = map[string]string{capXattr: "x"}
 			return e
 		}, "/usr/local/bin/port49d: a binary carries a file capability"},
-		{"a missing binary", func(e []ent) []ent { return e[:8] }, "/usr/local/bin/port49-inventory: missing"},
+		{"a missing binary", func(e []ent) []ent { return append(e[:8], e[9:]...) }, "/usr/local/bin/port49-inventory: missing"},
+		{"a group-writable file", func(e []ent) []ent { e[9].mode = 0o664; return e }, "/etc/ssl/certs/ca.pem: a file writable"},
+		{"a world-writable file", func(e []ent) []ent { e[9].mode = 0o666; return e }, "/etc/ssl/certs/ca.pem: a file writable"},
+		{"a setuid file", func(e []ent) []ent { e[9].mode = 0o4755; return e }, "/etc/ssl/certs/ca.pem: a setuid or setgid file"},
+		{"a setgid file", func(e []ent) []ent { e[9].mode = 0o2755; return e }, "/etc/ssl/certs/ca.pem: a setuid or setgid file"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, err := layoutProblems(export(t, c.edit(good())))
@@ -195,5 +214,50 @@ func TestTheLayoutCheckRefusesWhatItShould(t *testing.T) {
 				t.Errorf("want a problem containing %q, got %v", c.want, p)
 			}
 		})
+	}
+}
+
+// The build context never carries a file that looks like a secret: the repository's own
+// .dockerignore is applied to a throwaway context holding one of each, and the files a
+// `COPY . .` would take are listed from the build's own output.
+func TestTheBuildContextLeavesSecretLookingFilesOut(t *testing.T) {
+	ignore, err := os.ReadFile("../../.dockerignore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ctx, ".dockerignore"), ignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ctx, "Dockerfile"), []byte("FROM scratch\nCOPY . /ctx/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Each file holds the word "fake" and nothing else.
+	planted := []string{"local.env", "deploy/compose/local/port49d.env", "etcd/root-key.pem", "broker.key", "a/b/server.key",
+		"svc-port49.keytab", "deploy/secrets/encryption.key", "x/secrets.json", "tests/lab/oidc/keycloak/realm.json",
+		"tests/lab/logs/windows/anything.txt"}
+	kept := []string{"main.go", "deploy/compose/setup.sh", "internal/secretref/ref.go", "tests/lab/oidc/compose.yaml"}
+	for _, f := range append(append([]string{}, planted...), kept...) {
+		p := filepath.Join(ctx, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("fake\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	if o, err := exec.Command("docker", "build", "--output", "type=local,dest="+out, ctx).CombinedOutput(); err != nil {
+		t.Fatalf("docker build of the throwaway context: %v\n%s", err, o)
+	}
+	for _, f := range planted {
+		if _, err := os.Stat(filepath.Join(out, "ctx", f)); err == nil {
+			t.Errorf("%s is in the build context: .dockerignore does not exclude it", f)
+		}
+	}
+	for _, f := range kept {
+		if _, err := os.Stat(filepath.Join(out, "ctx", f)); err != nil {
+			t.Errorf("%s is missing from the build context: .dockerignore excludes too much", f)
+		}
 	}
 }

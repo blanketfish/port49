@@ -14,8 +14,8 @@
 # static-debian12:nonroot
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS base
 
-# golang:1.26
-FROM --platform=$BUILDPLATFORM golang:1.26@sha256:3e81679b4c293b7eecc6f8a044b355a3062a09db22cca961731c81a2dbcd8f83 AS build
+# golang:1.26 (1.26.10, the current patch of the minor; a Go patch is often a security fix)
+FROM --platform=$BUILDPLATFORM golang:1.26@sha256:c141012f2b79382f9cb7438104ae0cd324cc548c1a605f393ef7402b87a1bd8b AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
