@@ -5459,9 +5459,10 @@ is distroless and has no `tar` for `kubectl cp`: `kubectl exec -i <pod> -- port4
 --device D --capture - < f.pcap`), and tries every key the policy names, retired versions
 included. It prints only the group and version that validated, or `no key port49d holds validates
 this packet`. When the packet's header marks it unencrypted (the header's unencrypted flag, which is
-in the 12-byte header and not the body), it also writes one line to stderr: `the device sent this
-packet unencrypted, so no key applies`, since a device with no key configured for this server would
-otherwise read as a wrong key. It never prints a packet byte or a key. The running port49d no longer keeps an
+in the 12-byte header and not the body), it also writes one line to stderr: `port49d keys-diagnose:
+the device sent this packet unencrypted, so no key applies`, since a device with no key configured
+for this server would otherwise read as a wrong key. It never prints a packet byte or a key. The
+running port49d no longer keeps an
 unvalidated packet in memory. It names a real misconfiguration exactly — a lab device presenting
 the production key, say, which
 is a finding in its own right regardless of the rotation. It MUST NOT run automatically on
