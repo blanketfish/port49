@@ -3,6 +3,7 @@ package l60
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"io"
 	"net"
 	"net/netip"
@@ -106,6 +107,17 @@ func startBroker(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.W
 func startBrokerWith(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.Writer,
 	policyFor func(touch bool) string) *labBroker {
 	t.Helper()
+	return startBrokerWire(t, clientCA, pivRoots, logTo, policyFor, nil)
+}
+
+// startBrokerWire is startBrokerWith with wire, which may change the broker
+// before it is served: it reports whether the broker is OIDC-only, taking no
+// client anchor of its own (its issuing CA is its anchor, as port49-broker
+// serves with broker.identity.issuance and no x509 human), and clientCA may
+// then be nil (l86kc_test.go, L86 cell c).
+func startBrokerWire(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.Writer,
+	policyFor func(touch bool) string, wire func(br *broker.Broker, now func() time.Time) bool) *labBroker {
+	t.Helper()
 	now := time.Now()
 	dir := t.TempDir()
 	srvCA, err := testpki.NewCA("port49 L60 throwaway broker CA", now.Add(-time.Hour), now.Add(24*time.Hour))
@@ -148,10 +160,15 @@ func startBrokerWith(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo 
 		br.PerLoginMFA = &broker.MFAVerifiers{Anchors: &anchors}
 	}
 
+	oidcOnly := wire != nil && wire(br, b.now)
 	// One live context for alice on leaf1, so a refresh has a session to
-	// extend.
+	// extend (the OIDC lab user's, for an OIDC-only broker).
+	principal := "user:" + labEmail
+	if oidcOnly {
+		principal = "user:" + l86OIDCEmail
+	}
 	ctx := context.Background()
-	res, err := pol.Resolve("user:"+labEmail, devices[0], now)
+	res, err := pol.Resolve(principal, devices[0], now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,16 +180,22 @@ func startBrokerWith(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo 
 		t.Fatal(err)
 	}
 	if err := st.PutContext(ctx, store.ContextKey{NAS: leafPlain, Username: "alice"}, store.Context{CtxID: "ctx_leaf1",
-		Principal: "user:" + labEmail, Username: "alice", PrivLvl: 1, BlobHash: hash, AuthTime: now,
+		Principal: principal, Username: "alice", PrivLvl: 1, BlobHash: hash, AuthTime: now,
 		SessionExpires: now.Add(time.Hour), RefreshedAt: now, LastTouchedAt: now}, 24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.IndexContext(ctx, "user:"+labEmail, "", "", store.ContextRef{NAS: leafPlain, Username: "alice"},
+	if err := st.IndexContext(ctx, principal, "", "", store.ContextRef{NAS: leafPlain, Username: "alice"},
 		24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 
-	srv, err := br.Server("127.0.0.1:0", srvCert, clientCA.Pool())
+	var anchor *x509.CertPool
+	if oidcOnly {
+		br.NoX509 = true
+	} else {
+		anchor = clientCA.Pool()
+	}
+	srv, err := br.Server("127.0.0.1:0", srvCert, anchor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +222,19 @@ func (h *lab) startLabBroker(ca *testpki.CA, pivRoots []byte) *labBroker {
 // startLabBrokerWith is startLabBroker under its own policy.
 func (h *lab) startLabBrokerWith(ca *testpki.CA, pivRoots []byte, policyFor func(touch bool) string) *labBroker {
 	h.t.Helper()
+	return h.startLabBrokerWire(ca, pivRoots, policyFor, nil)
+}
+
+// startLabBrokerWire is startLabBrokerWith with startBrokerWire's wire.
+func (h *lab) startLabBrokerWire(ca *testpki.CA, pivRoots []byte, policyFor func(touch bool) string,
+	wire func(br *broker.Broker, now func() time.Time) bool) *labBroker {
+	h.t.Helper()
 	f, err := os.OpenFile(filepath.Join(h.dir, "decisions-"+h.cell+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	h.t.Cleanup(func() { f.Close() })
-	b := startBrokerWith(h.t, ca, pivRoots, f, policyFor)
+	b := startBrokerWire(h.t, ca, pivRoots, f, policyFor, wire)
 	h.broker = b
 	h.obs("broker", b.url+" (in-process; touch devices: "+map[bool]string{true: "yes", false: "no"}[pivRoots != nil]+")")
 	return b

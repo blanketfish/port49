@@ -8,7 +8,9 @@
 //
 //	(a) TestL86A  two admin calls 5 s apart: each needs its own touch
 //	(b) TestL86B  no touch: the time to failure, the words, no mark
-//	(c) TestL86C  a session key in slot 9e (not 9a) beside the touch key: one touch
+//	(c) TestL86C  the real OIDC path: the lab's Keycloak, `port49 login --oidc` with
+//	              issued_key_store: pkcs11 (slot 9e), one admin call, one touch
+//	    TestL86C9eFallback  the proxy: a lab-CA certificate in 9e; does not close (c)
 //	(d) TestL86D  the key unplugged: the CLI says to insert it, nothing is sent
 //
 // Each cell records PASS or FAIL on a line `L86 <cell> verdict: ...`, with the
@@ -25,6 +27,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +39,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/rhwendt/port49/internal/decision"
 )
 
 const (
@@ -53,6 +57,10 @@ const (
 const (
 	touchTimeoutWords = "no touch within 15s"
 	insertWords       = "insert your key"
+	refusedReason     = "admin_touch_refused" // spec §5.7 (decision.AdminTouchRefused)
+	signedInWords     = "; your certificate from "
+	tokenKeyWords     = "the key is the one issued_key names, on your token"
+	oidcDeadline      = 5 * time.Minute // a sign-in in a browser, then the PIN
 	gapBetweenCalls   = 5 * time.Second
 	adminDeadline     = 60 * time.Second
 )
@@ -109,26 +117,51 @@ func l86VerdictB(c result, list result, target string) l86Verdict {
 	return l86Verdict{true, fmt.Sprintf("exit 1 with the timeout line after %s; no mark", c.took.Round(100*time.Millisecond))}
 }
 
-// l86VerdictC: the admin call with the 9e session key succeeds with one touch.
-func l86VerdictC(c result, touches int) l86Verdict {
+// l86VerdictC: the session key was issued by the OIDC sign-in (the login exited 0,
+// said the certificate is the sign-in's and the key is the token's issued_key, and the
+// broker's log holds a permitted issue record), and the admin call with that key
+// succeeds with one touch.
+func l86VerdictC(login, call result, issued bool, touches int) l86Verdict {
+	switch {
+	case login.code != 0:
+		return l86Verdict{false, fmt.Sprintf("the OIDC login exited %d", login.code)}
+	case !strings.Contains(login.stdout, signedInWords):
+		return l86Verdict{false, "the login did not say a certificate was issued for the sign-in"}
+	case !strings.Contains(login.stderr, tokenKeyWords):
+		return l86Verdict{false, "the login did not say the key is the one issued_key names, on the token"}
+	case !issued:
+		return l86Verdict{false, "the broker's log has no permitted issue record: the certificate was not issued by this sign-in"}
+	case call.code != 0:
+		return l86Verdict{false, fmt.Sprintf("the admin call exited %d", call.code)}
+	case touches != 1:
+		return l86Verdict{false, fmt.Sprintf("Ryan counted %d touches, want 1", touches)}
+	}
+	return l86Verdict{true, "the OIDC-issued session key in the token's slot made the admin call succeed with one touch"}
+}
+
+// l86VerdictC9e is the proxy's: a lab-CA certificate in slot 9e, no OIDC. It can fail
+// the admin path; it can never close row L86's (c), and its verdict says so.
+func l86VerdictC9e(c result, touches int) l86Verdict {
 	switch {
 	case c.code != 0:
 		return l86Verdict{false, fmt.Sprintf("the call exited %d", c.code)}
 	case touches != 1:
 		return l86Verdict{false, fmt.Sprintf("Ryan counted %d touches, want 1", touches)}
 	}
-	return l86Verdict{true, "the call succeeded with one touch"}
+	return l86Verdict{true, "the call succeeded with one touch (proxy: does not close (c))"}
 }
 
-// l86VerdictD: the CLI fails saying to insert the key, and the broker's decision
-// log grew by no admin record at all, so nothing was sent and no
-// admin_touch_refused was made.
-func l86VerdictD(c result, grown []string) l86Verdict {
+// l86VerdictD: the CLI fails saying to insert the key, the broker's log has no
+// admin_touch_refused (checked by that name: a refusal is the row's one named
+// failure), and it grew by no admin record at all, so nothing was sent.
+func l86VerdictD(c result, grown []string, refused int) l86Verdict {
 	switch {
 	case c.code == 0:
 		return l86Verdict{false, "the call succeeded with the key out"}
 	case !strings.Contains(strings.ToLower(c.stderr), insertWords):
 		return l86Verdict{false, "the CLI did not say to insert the key"}
+	case refused != 0:
+		return l86Verdict{false, "the broker's log has admin_touch_refused (" + strconv.Itoa(refused) + " times): the call was sent"}
 	case len(grown) != 0:
 		return l86Verdict{false, "the broker's log grew by " + strings.Join(grown, ", ")}
 	}
@@ -181,6 +214,45 @@ func l86AdminEventsFrom(text string, from int) ([]string, int, error) {
 	return out, n, sc.Err()
 }
 
+// l86Refused counts the decision-log lines past the first from lines whose reason is
+// admin_touch_refused, whatever their event: the one failure row L86 (d) names.
+// Only the reason is read.
+func l86Refused(text string, from int) int {
+	var n, line int
+	sc := bufio.NewScanner(strings.NewReader(text))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		line++
+		if line <= from {
+			continue
+		}
+		var rec struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(sc.Bytes(), &rec) == nil && rec.Reason == refusedReason {
+			n++
+		}
+	}
+	return n
+}
+
+// l86Issued is whether the decision log holds a permitted issue record: the broker
+// exchanged a person's ID token for a certificate. Only the event and verdict are read.
+func l86Issued(text string) bool {
+	sc := bufio.NewScanner(strings.NewReader(text))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var rec struct {
+			Event   string `json:"event"`
+			Verdict string `json:"verdict"`
+		}
+		if json.Unmarshal(sc.Bytes(), &rec) == nil && rec.Event == decision.EventIssue && rec.Verdict == decision.VerdictPermit {
+			return true
+		}
+	}
+	return false
+}
+
 // l86Lock takes the lab's single-occupant lock for the cell, as the
 // topology runs do, and lets it go with the process.
 func l86Lock(t *testing.T, cell string) {
@@ -207,7 +279,7 @@ func (h *lab) l86Versions() {
 	if err != nil {
 		h.t.Fatalf("INVALID: %v (the register needs the firmware recorded; RUNBOOK step 3)", err)
 	}
-	h.obs("firmware", fw)
+	h.obs("firmware_operator_reported_from_ykman", fw) // typed by Ryan: port49 does not read it
 	h.obs("libykcs11_module", h.module)
 	out, err := exec.Command("dpkg-query", "-W", "-f=${Version}", "ykcs11").Output()
 	if err != nil || len(out) == 0 {
@@ -224,11 +296,10 @@ type l86Cell struct {
 	logPath string
 }
 
-// l86Start sets the cell up: the terminal, the lock, the versions, the lab CA,
-// a broker under the admin policy with Yubico's roots, and one login on
-// sessionID with the touch key on slot 9c. Ryan types the PIN at port49's own
-// prompt.
-func l86Start(t *testing.T, cell, sessionID string) *l86Cell {
+// l86Begin is what every cell starts with: the gate, the terminal, the token's
+// module, the lab lock, and the versions (the firmware as Ryan reported it from
+// ykman, the libykcs11 package's).
+func l86Begin(t *testing.T, cell string) *lab {
 	t.Helper()
 	if os.Getenv(gateL86) != "1" {
 		t.Skipf("set %s=1 and run from a terminal (an admin touch on your key); see tests/lab/L86-runbook.md", gateL86)
@@ -237,6 +308,16 @@ func l86Start(t *testing.T, cell, sessionID string) *l86Cell {
 	h.needPKCS11()
 	l86Lock(t, cell)
 	h.l86Versions()
+	return h
+}
+
+// l86Start sets the cell up: the terminal, the lock, the versions, the lab CA,
+// a broker under the admin policy with Yubico's roots, and one login on
+// sessionID with the touch key on slot 9c. Ryan types the PIN at port49's own
+// prompt.
+func l86Start(t *testing.T, cell, sessionID string) *l86Cell {
+	t.Helper()
+	h := l86Begin(t, cell)
 	ca := h.needLabCA()
 	b := h.startLabBrokerWith(ca, h.yubicoRoots(), l86Policy)
 	c := &l86Cell{h: h, b: b, sock: socketIn(t), logPath: filepath.Join(h.dir, "decisions-"+cell+".jsonl")}
@@ -308,19 +389,68 @@ func TestL86B(t *testing.T) {
 	c.finish(l86VerdictB(r, list, target))
 }
 
-// Cell (c): a session key in slot 9e, not 9a, on the same token as the touch key.
-// The OIDC issuance that would put it there is L60 cell (g)'s (plan 9e); this
-// cell measures the admin path's half: that session key, the same token's touch
-// key, one touch. It needs TestL86Prep9e's certificate imported first.
+// Cell (c): the real OIDC path (row L86 (c); L60 cell (g)'s open issued-key cell). The
+// lab's Keycloak and an in-process broker that verifies its ID tokens and issues
+// certificates; `port49 login --oidc` with issued_key_store: pkcs11, so the session key
+// is the key Ryan made in slot 9e and the certificate is the broker's, issued for the
+// sign-in; then one admin call with the same token's touch key, one touch.
 func TestL86C(t *testing.T) {
-	c := l86Start(t, "c", cmpOr(os.Getenv(envSlot9eID), defaultSlot9e))
-	h := c.h
-	h.obs("scope", "session key in slot 9e with a lab-CA certificate; OIDC issuance not exercised (L60 cell g)")
+	h := l86Begin(t, "c")
+	addrs, _ := net.LookupHost(kcHost)
+	if !l86HostsOK(addrs) {
+		t.Fatalf("INVALID: %s does not resolve to 127.0.0.1 on this host: type "+
+			"`echo '127.0.0.1 %s' | sudo tee -a /etc/hosts` yourself (tests/lab/L86-runbook.md, cell (c) setup) and run the cell again",
+			kcHost, kcHost)
+	}
+	roots := h.yubicoRoots()
+	k := h.l86StartKeycloak()
+	b := k.startOIDCBroker(roots)
+	c := &l86Cell{h: h, b: b, sock: socketIn(t), logPath: filepath.Join(h.dir, "decisions-c.jsonl")}
+	id := cmpOr(os.Getenv(envSlot9eID), defaultSlot9e)
+	cfg := l86Config{broker: b.url, touchKey: h.keyRef(slot9c, false), issuedKey: h.keyRef(id, false),
+		redirectPort: kcRedirectPort}
+	if err := cfg.writeConfig(h.home); err != nil {
+		t.Fatalf("INVALID: the cell's config: %v", err)
+	}
+	h.obs("scope", "the real OIDC path: Keycloak realm "+kcRealm+", sign-in as "+l86OIDCUser+", issued_key_store: pkcs11 "+
+		"(slot 9e, CKA_ID "+id+"), touch key slot 9c")
+	h.step("1", "port49 login --oidc prints an address: open it in your browser, sign in as %s "+
+		"(password: see the runbook), then type your PIN at port49's own prompt (the key in slot 9e signs the "+
+		"certificate request). %s", l86OIDCUser, pinHelp)
+	login := h.port49(runOpts{deadline: oidcDeadline, terminal: true}, "login", "--oidc", "--no-browser",
+		"--broker-ca", b.serverCA, "--oidc-ca", k.caFile, "--redirect-port", strconv.Itoa(kcRedirectPort), onSock(c.sock))
+	login.stderr = l86LoginWords(login.stderr)
+	h.obsResult("login", login)
+	h.obs("login_pin_prompts", strconv.Itoa(h.askInt("How many times did port49 ask for the PIN?")))
+	h.mustOK(login, "the OIDC login")
+	text, _ := os.ReadFile(c.logPath)
+	issued := l86Issued(string(text))
+	h.obs("broker_issue_record_permitted", strconv.FormatBool(issued))
+	st := h.obsStatus("status", c.sock)
+	if !st.TouchKey {
+		t.Fatalf("INVALID: the agent has no usable touch key (%s): admin calls need one on the same token", st.TouchKeyUnusable)
+	}
 	h.step("2", "TOUCH the key once when it blinks (do not touch twice)")
-	r := c.revoke("call", l86Target("c", 1))
+	call := c.revoke("call", l86Target("c", 1))
 	touches := h.askInt("How many times did you touch the key?")
 	h.obs("touches", strconv.Itoa(touches))
-	c.finish(l86VerdictC(r, touches))
+	c.finish(l86VerdictC(login, call, issued, touches))
+}
+
+// TestL86C9eFallback is the proxy for cell (c): the same admin path with a lab-CA
+// certificate Ryan imported into slot 9e (TestL86Prep9e), no OIDC. It measures the
+// admin path's half only. Its result is recorded as "proxy, does not close (c)": a
+// row is not closed on a proxy. Run it only when the Keycloak stack cannot be had.
+func TestL86C9eFallback(t *testing.T) {
+	c := l86Start(t, "c9e", cmpOr(os.Getenv(envSlot9eID), defaultSlot9e))
+	h := c.h
+	h.obs("scope", "PROXY, does not close (c): a lab-CA certificate in slot 9e, no OIDC sign-in, no issuance")
+	h.step("2", "TOUCH the key once when it blinks (do not touch twice)")
+	r := c.revoke("call", l86Target("c9e", 1))
+	touches := h.askInt("How many times did you touch the key?")
+	h.obs("touches", strconv.Itoa(touches))
+	h.obs("row_status", "proxy, does not close (c)")
+	c.finish(l86VerdictC9e(r, touches))
 }
 
 // Cell (d): the key unplugged with the agent running.
@@ -339,9 +469,15 @@ func TestL86D(t *testing.T) {
 		t.Fatalf("INVALID: the decision log: %v", err)
 	}
 	h.obs("broker_admin_records_after_pull", strconv.Itoa(len(grown)))
+	text, err := os.ReadFile(c.logPath)
+	if err != nil {
+		t.Fatalf("INVALID: the decision log: %v", err)
+	}
+	refused := l86Refused(string(text), before)
+	h.obs("broker_"+refusedReason+"_after_pull", strconv.Itoa(refused))
 	h.step("3", "put the key back")
 	h.waitEnter("Re-insert the key, then press Enter", handDeadline)
-	c.finish(l86VerdictD(r, grown))
+	c.finish(l86VerdictD(r, grown, refused))
 }
 
 // TestL86Prep9e makes the certificate for slot 9e's public key (read from the
