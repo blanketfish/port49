@@ -32,6 +32,11 @@ Bring the whole stack up the first time, or run `docker compose build` first: on
 The trial PKI protects nothing real. TACACS+ is published on `127.0.0.1:49`, the broker on
 `127.0.0.1:8443`, and each component's metrics on `127.0.0.1:9049` and `127.0.0.1:9050`.
 
+**Ready is not "running".** The stack has no healthchecks (planned with plan 13), so
+`docker compose ps` showing `running` says only that the process started. Check readiness from
+the host with `curl 127.0.0.1:9049/readyz` (port49d) and `curl 127.0.0.1:9050/readyz` (the
+broker), on the metrics ports; a `200` is ready, anything else or no answer is not.
+
 Inputs, each an environment variable with a default: `PORT49_COMPOSE_LOCAL` (`./local`),
 `PORT49_COMPOSE_CONFIG` (`./config`), `PORT49_COMPOSE_SUBNET` (`172.30.49.0/24`),
 `PORT49_TACACS_PUBLISH` (`127.0.0.1:49`), `PORT49_BROKER_PUBLISH` (`127.0.0.1:8443`).
@@ -61,6 +66,15 @@ No secret is in any container's environment, so `docker inspect` shows none. Eac
   directory, the file `65532` 0400), the same 32 bytes in both. It is not under `/run/port49/keys`:
   a policy may name any file there.
 
+`setup` places a key once. At every `up`, per key file: absent in the volume, it is installed; the
+same bytes, it is left alone; different bytes, `setup` stops the stack with one line naming the file
+(`keys are never replaced in place`) and the volume is untouched; gone from `local/`, the installed
+file is kept and a line says so. To change a key, add a new version (below, and "Rotating the
+`encryption:` key"), never edit `local/keys/` or `local/secrets/` under a running stack. The policy
+is the opposite: `setup` copies `config/policy.yaml` over the volumes' at every `up`, so
+**edit `config/policy.yaml` on the host, then `docker compose up -d`**. port49d reads it at
+`policy.watch_interval` with no restart. A policy edited inside a volume is reverted at the next `up`.
+
 Docker API access is root-equivalent, so guard it as you would the host: `docker run` with a volume
 reads every file in it. Compose's own `secrets:` is not used here.
 
@@ -87,9 +101,9 @@ docker run --rm -i -v port49_port49d-keys:/k --entrypoint sh port49-setup:dev -c
 It is the recipe of `deploy/systemd/README.md` ("Adding a key version"), in the volume: a temporary
 file made in the destination, a no-clobber hard link, nothing left behind on a failure. Type the
 key into the device from the volume, and keep the new file's name for the policy. Then add
-`{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}` to the key set in `policy.yaml`, under `accept:` (moving the
-old version out of `current:` once each device carries the new key), and write the policy into both
-`-etc` volumes by a temporary file and `mv`. port49d reads the policy at `policy.watch_interval` (5 s
+`{version: 2, secret_ref: "file:/run/port49/keys/tacacs_v2"}` to the key set in `config/policy.yaml`, under `accept:` (moving the
+old version out of `current:` once each device carries the new key), and run `docker compose up -d`:
+`setup` copies the policy into both `-etc` volumes. port49d reads the policy at `policy.watch_interval` (5 s
 here) and the new version takes effect with no restart: `port49_key_secret_files_changed` stays 0.
 
 ## A deployment
@@ -172,7 +186,7 @@ key; the three are set out in `deploy/systemd/README.md` ("Admin operations"). I
 - put the PEM roots in `PORT49_COMPOSE_LOCAL/broker/attestation-roots.pem`; `setup` copies it to
   `/etc/port49/broker/attestation-roots.pem` when it is there, and the broker config's
   `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file` names that path. A
-  changed roots file is `docker compose up -d` (setup copies it) then `docker compose kill -s HUP port49-broker`;
+  changed roots file is `docker compose up -d` (setup copies it) then `docker compose kill -s HUP port49-broker` (the broker re-reads the roots file at SIGHUP; a file it cannot use keeps the roots in force and logs one line saying so);
 - grant `api: [revoke_others, lift_revocations]` to at least two on-call admins by `identity:` in
   `config/policy.yaml`, even if a `group:` subject also holds it: a group's rights resolve through
   the directory, which may be down when you need them.
@@ -257,17 +271,44 @@ One key, in both components, from one secret, in three steps. A new key is a new
 never a rewrite.
 
 1. Make the new sealing key once, as `secrets/encryption-e2.key` in both `-etc` volumes
-   (`65532` 0400), the same 32 bytes in each. The recipe of `deploy/systemd/README.md` ("Where the secrets
-   live", `KEY_ID=e2`) applies with the two destinations being the `secrets/` directories of `port49d-etc`
-   and `broker-etc`: draw until the last byte is not a newline, link no-clobber, leave no temporary file. Add it to
-   `port49d.yaml` and `port49-broker.yaml` under `encryption:` as `previous: {id: c2, secret_ref:
+   (`65532` 0400), the same 32 bytes in each, with this one command from any directory (project
+   `port49`; `docker compose -p` changes the volume prefix). It draws until the last byte is not a
+   newline, makes both temporary files in the destination directories, links them no-clobber, and
+   leaves nothing behind on a failure. It never overwrites: an existing `encryption-e2.key` is refused.
+
+   ```sh
+   docker run --rm -i -v port49_port49d-etc:/e -v port49_broker-etc:/b --entrypoint sh port49-setup:dev -c '
+     KEY_ID=$1   # a new id for every key: never an existing one
+     umask 077 && cd /e/secrets && cd /b/secrets || exit 1
+     n=encryption-$KEY_ID.key
+     for f in /e/secrets/$n /b/secrets/$n; do
+       [ ! -e "$f" ] && [ ! -L "$f" ] || { echo "port49: $f exists; pick a new key id" >&2; exit 1; }
+     done
+     t=; u=; trap "rm -f \"\$t\" \"\$u\"" EXIT; trap "exit 1" INT TERM HUP
+     t=$(mktemp /e/secrets/.key.XXXXXX) && u=$(mktemp /b/secrets/.key.XXXXXX) || exit 1
+     ok=
+     for i in 1 2 3 4 5 6 7 8 9 10; do
+       head -c 32 /dev/urandom > "$t" && [ "$(wc -c < "$t")" -eq 32 ] &&
+         [ "$(tail -c1 "$t" | od -An -tx1 | tr -d " ")" != 0a ] && ok=1 && break
+     done
+     [ -n "$ok" ] || { echo "port49: no usable 32-byte key in 10 draws" >&2; exit 1; }
+     cat "$t" > "$u" && chown 65532:65532 "$t" "$u" && chmod 0400 "$t" "$u" ||
+       { echo "port49: the sealing key was not made" >&2; exit 1; }
+     ln "$t" "/e/secrets/$n" || { echo "port49: /e/secrets/$n exists; pick a new key id" >&2; exit 1; }
+     ln "$u" "/b/secrets/$n" || { rm -f "/e/secrets/$n"; echo "port49: /b/secrets/$n exists; pick a new key id" >&2; exit 1; }
+   ' sh e2
+   ```
+
+   Add it to `config/port49d.yaml` and `config/port49-broker.yaml` under `encryption:` as `previous: {id: c2, secret_ref:
    file:/etc/port49/secrets/encryption-e2.key}`, run `docker compose up -d` (setup copies the config
    files) and `docker compose restart port49d port49-broker`. Both open what either key sealed.
 2. Swap: make `c2` `current:` and `c1` `previous:` in both files, and restart both.
 3. Remove `previous:` and the old file only after the scheduled directory pass (every `refresh_interval`)
    has re-sealed the second-factor records under `c2`. A record that opens under neither key is never
    "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
-   `port49 directory reset-second-factor`.
+   `port49 directory reset-second-factor`. Remove the old file from the volumes
+   (`docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/encryption.key`,
+   with the old file's name) and, if you kept a copy of it in `local/secrets/`, from `local/` only after the volumes.
 
 A process whose window lacks the directory's current key id refuses to start, naming the directory
 store and the id. Two store blocks reaching one etcd cluster at one prefix are refused too.
@@ -275,13 +316,13 @@ store and the id. Two store blocks reaching one etcd cluster at one prefix are r
 ## When it will not start
 
 `docker compose logs port49d` (or `port49-broker`) holds the line. `restart: unless-stopped` has no
-limit: a start that fails is tried again, every few seconds, until you fix the cause or `docker
+limit: a start that fails is tried again, with a restart delay that grows to a minute, until you fix the cause or `docker
 compose stop` it, so `docker compose ps` shows a restarting container and the log repeats the line.
 A port49d whose etcd is down at boot comes back on its own when etcd does.
 
 | Refusal | The line | Where | Fix |
 |---|---|---|---|
-| A secret file missing or unreadable | `config: encryption.current (id "c1"): ...` naming the file; a key file: `keys.k version 1: ...` | `docker compose logs port49d` | write the file as the table above says (`setup` rewrites the first key at every `up`) |
+| A secret file missing or unreadable | `config: encryption.current.secret_ref (id "c1") file:/etc/port49/secrets/encryption.key: open ...: permission denied` (or the file it names); a key file: `config: keys.k version 1 secret_ref file:/run/port49/keys/tacacs_v1: ...` | `docker compose logs port49d` | write the file as the table above says (`setup` installs a key that is absent, and refuses one that differs; it never rewrites one) |
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | fix the mode the line names in the volume (`docker run --rm -v <volume>:/v alpine:3.22 chmod go-w /v/<dir>`) |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `docker compose logs port49-broker` | copy `issuing-ca.pem` and `.key` from a broker that holds it (above) |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `docker compose logs port49d` | upgrade the member |

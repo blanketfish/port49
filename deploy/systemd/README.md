@@ -343,7 +343,7 @@ try starts.
 
 | Refusal | The line | Where | Fix |
 |---|---|---|---|
-| A secret file missing or unreadable | `config: encryption.current (id "e1"): ...` naming the file | `journalctl -u port49d -b` | create it, owned and moded as the table above |
+| A secret file missing or unreadable | `config: encryption.current.secret_ref (id "e1") file:/etc/port49/secrets/encryption.key: open ...` naming the file; a key file: `config: keys.k version 1 secret_ref file:...: ...` | `journalctl -u port49d -b` | create it, owned and moded as the table above |
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | `chmod go-w` the directory the line names, or an ancestor of it |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `journalctl -u port49-broker -b` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
