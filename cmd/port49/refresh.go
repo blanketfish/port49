@@ -43,7 +43,7 @@ func refreshCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 refresh: no agent at %s; run 'port49 login'\n", socket)
+		fmt.Fprint(stderr, noAgentLine("port49 refresh", socket))
 		return 1
 	case err != nil:
 		fmt.Fprintln(stderr, "port49 refresh:", unprefixed(err))

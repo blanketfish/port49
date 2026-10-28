@@ -836,7 +836,7 @@ func TestRefreshWithNoAgentOrARefusal(t *testing.T) {
 	var out, errb bytes.Buffer
 	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(empty, "nobody.sock"))
 	if code := run([]string{"refresh"}, &out, &errb); code != 1 ||
-		!strings.Contains(errb.String(), "run 'port49 login'") {
+		!strings.Contains(errb.String(), "start one with 'port49 login'") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 	p := refreshStub(t, agent.Status{}, http.StatusBadGateway, api.Error{Error: "refresh_failed",

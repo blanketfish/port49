@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -82,15 +83,54 @@ func repoRoot(t *testing.T) string {
 }
 
 func TestNoSocketFlagAnywhere(t *testing.T) {
-	root := repoRoot(t)
+	for _, problem := range socketProblems(repoRoot(t)) {
+		t.Error(problem)
+	}
+}
+
+// The walk finds what it is meant to: a flag in the design docs, and the test
+// variable in a markdown file under internal/, each planted in a tree of its own.
+func TestTheSocketWalkFindsAPlantedLine(t *testing.T) {
+	root := t.TempDir()
+	plant := func(rel, text string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plant("docs/design/x.md", "run port49 token --socket /tmp/a.sock\n")
+	plant("internal/agent/NOTES.md", "set PORT49_TEST_AGENT_SOCKET to move it\n")
+	plant("tests/lab/runbooks/ok.md", "PORT49_TEST_AGENT_SOCKET=/tmp/x o login\n")
+	plant("docs/superpowers/plans/ok.md", "PORT49_TEST_AGENT_SOCKET\n")
+	got := strings.Join(socketProblems(root), "\n")
+	for _, want := range []string{"docs/design/x.md", "internal/agent/NOTES.md"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the walk missed %s; it said:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "runbooks") || strings.Contains(got, "superpowers") {
+		t.Errorf("the walk flagged an exempt file:\n%s", got)
+	}
+}
+
+// socketProblems is every place under root that names a socket flag, or the
+// test variable where only tests may.
+func socketProblems(root string) (problems []string) {
 	exemptFile := map[string]bool{
 		"cmd/port49/nosocket_test.go": true,
 		"cmd/port49/admin_test.go":    true,
 	}
 	const exemptDir = "tests/lab/captures/"
 	const runbooks = "tests/lab/runbooks/"
+	const plans = "docs/superpowers/plans/"
+	const ruleDoc = "docs/design/2026-08-23-policy-engine-spec.md"
 	flagForms := []string{`"--socket"`, "--socket ", "--agent-socket"}
-	for _, top := range []string{"cmd", "internal", "tests", "clients", "deploy", "examples"} {
+	addf := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	for _, top := range []string{"cmd", "internal", "tests", "clients", "deploy", "examples", "docs"} {
 		_ = filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
@@ -103,7 +143,7 @@ func TestNoSocketFlagAnywhere(t *testing.T) {
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() || exemptFile[rel] {
+			if !d.Type().IsRegular() || exemptFile[rel] || strings.HasPrefix(rel, plans) {
 				return nil
 			}
 			b, err := os.ReadFile(path)
@@ -111,36 +151,34 @@ func TestNoSocketFlagAnywhere(t *testing.T) {
 				return nil // unreadable, or a binary
 			}
 			text := string(b)
+			// docs/ other than the plans is checked for the flag too, but
+			// only the design docs are held to the pattern list below.
 			for _, form := range flagForms {
-				if strings.Contains(text, form) {
-					t.Errorf("%s holds %s", rel, form)
+				if rel == ruleDoc {
+					break // the spec states this rule, so it names the flag it forbids
+				}
+				if top != "docs" && strings.Contains(text, form) || top == "docs" && strings.HasPrefix(rel, "docs/design/") &&
+					strings.Contains(text, "--socket") {
+					addf("%s holds %s", rel, form)
+					break
 				}
 			}
 			if strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, "_test.go") && strings.Contains(text, "--socket") &&
 				!strings.Contains(text, `"--socket"`) && !strings.Contains(text, "--socket ") && !strings.Contains(text, "--agent-socket") {
-				t.Errorf("%s names --socket in a message", rel) // a message must not tell anyone to pass it
+				addf("%s names --socket in a message", rel) // a message must not tell anyone to pass it
 			}
-			isTest := strings.HasSuffix(rel, "_test.go") || strings.Contains(rel, "/tests/") || strings.HasPrefix(rel, "tests/")
+			isTest := strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, "tests/") || strings.Contains(rel, "/tests/")
+			markdown := strings.HasSuffix(rel, ".md")
 			operatorFacing := (strings.HasPrefix(rel, "deploy/") || strings.HasPrefix(rel, "examples/") ||
 				strings.HasPrefix(rel, "clients/")) && !isTest
-			if (operatorFacing || filepath.Base(rel) == "README.md") && !strings.HasPrefix(rel, runbooks) &&
+			if (operatorFacing || markdown || top == "docs") && !strings.HasPrefix(rel, runbooks) &&
 				strings.Contains(text, "PORT49_TEST_AGENT_SOCKET") {
-				t.Errorf("%s names PORT49_TEST_AGENT_SOCKET, which only tests set", rel)
+				addf("%s names PORT49_TEST_AGENT_SOCKET, which only tests set", rel)
 			}
 			return nil
 		})
 	}
-	// docs/ is operator-facing as well; the plans record this rule, so they name the variable.
-	_ = filepath.WalkDir(filepath.Join(root, "docs"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !d.Type().IsRegular() || strings.Contains(filepath.ToSlash(path), "/docs/superpowers/plans/") {
-			return nil
-		}
-		if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte("PORT49_TEST_AGENT_SOCKET")) {
-			rel, _ := filepath.Rel(root, path)
-			t.Errorf("%s names PORT49_TEST_AGENT_SOCKET, which only tests set", filepath.ToSlash(rel))
-		}
-		return nil
-	})
+	return problems
 }
 
 // The two refusals that used to tell the person to pass --socket say what to
@@ -166,5 +204,25 @@ func TestNoErrorNamesASocketFlag(t *testing.T) {
 	_, _, err := listenAskpass(long)
 	if err == nil || !strings.Contains(err.Error(), "XDG_RUNTIME_DIR") || strings.Contains(err.Error(), "--socket") {
 		t.Errorf("the long askpass directory: %v", err)
+	}
+}
+
+// Each command that finds no agent says the same next step, and still prints
+// where it looked.
+func TestEveryNoAgentLineSaysWhatToDo(t *testing.T) {
+	sock := privateSocket(t)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	for _, args := range [][]string{{"identity"}, {"refresh"}, {"token", "leaf1"}, {"ssh", "leaf1"},
+		{"explain", "--device", "leaf1"}} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 1 {
+			t.Errorf("%v: code %d, stderr %q", args, code, errb.String())
+			continue
+		}
+		line := errb.String()
+		if !strings.Contains(line, "no agent at "+sock+"; start one with 'port49 login'") ||
+			!strings.HasSuffix(line, ", or check that XDG_RUNTIME_DIR is the one the agent started under\n") {
+			t.Errorf("%v: %q", args, line)
+		}
 	}
 }

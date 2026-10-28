@@ -857,8 +857,9 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	if err := os.Chmod(wide, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Listen(filepath.Join(wide, "agent.sock")); err == nil || !strings.Contains(err.Error(), "0700") {
-		t.Fatalf("a directory others can enter: %v", err)
+	if _, err := Listen(filepath.Join(wide, "agent.sock")); err == nil || !strings.Contains(err.Error(), "0700") ||
+		!strings.Contains(err.Error(), "chmod 700 "+wide) || !strings.Contains(err.Error(), "XDG_RUNTIME_DIR") {
+		t.Fatalf("a directory others can enter, with its remedy: %v", err)
 	}
 	// A symlink is refused even to a private directory: on the /tmp fallback,
 	// whoever planted it owns where the socket lands (pre-flight F4). The
@@ -871,8 +872,9 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("a symlinked directory: %v", err)
+	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") ||
+		!strings.Contains(err.Error(), "XDG_RUNTIME_DIR") {
+		t.Fatalf("a symlinked directory, with its remedy: %v", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
@@ -151,7 +152,7 @@ func mintFailed(cmd, socket, device string, item api.MintItem, err error, stderr
 		// carries is not printed.
 		fmt.Fprintf(stderr, "%s: %s: %s\n", cmd, device, unprefixed(ie))
 	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "%s: no agent at %s; run `port49 login`\n", cmd, socket)
+		fmt.Fprint(stderr, noAgentLine(cmd, socket))
 	case err != nil:
 		// An ended session says to log in and why: an expired certificate
 		// has to be renewed before a login will work. A revocation says
@@ -200,4 +201,14 @@ func warnNearCeiling(stderr io.Writer, device string, item api.MintItem, warn ti
 	fmt.Fprintf(stderr, "port49: your session on %s ends at %s (%s); run 'port49 refresh'\n", device,
 		item.SessionExpiresAt, timeLeft(left))
 	return true
+}
+
+// noAgentLine is the one line every command says when nothing listens at the
+// agent's socket: where it looked, and what to do next. The path is printed
+// because it tells an operator whether XDG_RUNTIME_DIR is the one the agent
+// started under. other names a way round the agent, for a command that has one.
+func noAgentLine(cmd, socket string, other ...string) string {
+	next := append([]string{"start one with 'port49 login'"}, other...)
+	next = append(next, "check that XDG_RUNTIME_DIR is the one the agent started under")
+	return fmt.Sprintf("%s: no agent at %s; %s, or %s\n", cmd, socket, strings.Join(next[:len(next)-1], ", "), next[len(next)-1])
 }

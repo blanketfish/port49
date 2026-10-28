@@ -30,7 +30,7 @@ func identityCmd(args []string, stdout, stderr io.Writer) int {
 	id, err := agent.NewClient(socket).Identity(context.Background())
 	switch {
 	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 identity: no agent at %s; run 'port49 login'\n", socket)
+		fmt.Fprint(stderr, noAgentLine("port49 identity", socket))
 		return 1
 	case err != nil:
 		fmt.Fprintln(stderr, "port49 identity:", unprefixed(err))

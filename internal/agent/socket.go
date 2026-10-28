@@ -72,11 +72,12 @@ func checkPrivateDir(dir string) error {
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("agent: %s is a symlink; the socket's directory must be a real directory you own, "+
-			"at mode 0700", dir)
+			"at mode 0700; remove the link and create the directory with mode 0700, or set XDG_RUNTIME_DIR to a "+
+			"directory you own", dir)
 	}
 	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
 		return fmt.Errorf("agent: %s must be a directory at mode 0700, and it is %v; its mode is the socket's "+
-			"access control", dir, fi.Mode().Perm())
+			"access control; run chmod 700 %s, or set XDG_RUNTIME_DIR to a directory you own", dir, fi.Mode().Perm(), dir)
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != getuid() {
 		return fmt.Errorf("agent: %s is not owned by you (uid %d); whoever owns it can replace the socket, "+

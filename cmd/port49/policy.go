@@ -95,7 +95,7 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 		var refused *agent.APIError
 		switch {
 		case errors.Is(err, agent.ErrNoAgent):
-			fmt.Fprintf(stderr, "port49 explain: no agent at %s; run 'port49 login', or give --policy and --inventory\n", socket)
+			fmt.Fprint(stderr, noAgentLine("port49 explain", socket, "give --policy and --inventory"))
 			return 1
 		case errors.As(err, &refused) && refused.Code == "api_right_missing" && *principal != "":
 			fmt.Fprintln(stderr, "port49 explain: refused: explaining another principal needs the api: explain_others "+
