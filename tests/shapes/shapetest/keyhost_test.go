@@ -71,6 +71,23 @@ func TestKeyHostGuard(t *testing.T) {
 			t.Errorf("%q", r)
 		}
 	})
+	t.Run("a CCID-only Yubico key has no hidraw node", func(t *testing.T) {
+		root := t.TempDir()
+		mk(t, root, "sys/bus/usb/devices/1-4/idVendor", "1050\n")
+		mk(t, root, "sys/bus/usb/devices/1-4:1.0/bInterfaceClass", "0b\n") // an interface has no idVendor
+		mk(t, root, "sys/bus/usb/devices/1-5/idVendor", "046d\n")
+		r := KeyHostRefusal(root)
+		if !strings.Contains(r, "/sys/bus/usb/devices/1-4") || strings.Contains(r, "1-5") || strings.Contains(r, root) {
+			t.Errorf("want the Yubico USB device's path (relative to the host root): %q", r)
+		}
+	})
+	t.Run("a USB bus with no Yubico device", func(t *testing.T) {
+		root := t.TempDir()
+		mk(t, root, "sys/bus/usb/devices/1-5/idVendor", "046d\n")
+		if r := KeyHostRefusal(root); r != "" {
+			t.Errorf("%s", r)
+		}
+	})
 	t.Run("the override", func(t *testing.T) {
 		root := t.TempDir()
 		mk(t, root, "dev/tpm0", "")
@@ -106,4 +123,51 @@ func TestKeyHostGuardOnlyStatsTheDevices(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the guard blocked on the device: it opened it")
 	}
+}
+
+// A directory that exists but cannot be read is not "none": the guard refuses, and the override
+// still covers it. A missing directory is none.
+func TestKeyHostGuardFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	t.Setenv(KeyHostOverride, "")
+	for _, dir := range []string{"sys/class/hidraw", "sys/bus/usb/devices"} {
+		t.Run(dir, func(t *testing.T) {
+			root := t.TempDir()
+			d := filepath.Join(root, dir)
+			if err := os.MkdirAll(filepath.Join(d, "x"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(d, 0); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(d, 0o755) })
+			r := KeyHostRefusal(root)
+			if !strings.HasPrefix(r, "refusing to start: cannot tell whether a TPM or security key is attached: ") ||
+				!strings.Contains(r, KeyHostOverride+"=1") || strings.Contains(r, "\n") {
+				t.Errorf("an unreadable %s: %q", dir, r)
+			}
+			t.Setenv(KeyHostOverride, "1")
+			if r := KeyHostRefusal(root); r != "" {
+				t.Errorf("the override does not cover an unreadable %s: %s", dir, r)
+			}
+		})
+	}
+	t.Run("an unreadable idVendor", func(t *testing.T) {
+		root := t.TempDir()
+		mk(t, root, "sys/bus/usb/devices/1-4/idVendor", "046d\n")
+		f := filepath.Join(root, "sys/bus/usb/devices/1-4/idVendor")
+		if err := os.Chmod(f, 0); err != nil {
+			t.Fatal(err)
+		}
+		if r := KeyHostRefusal(root); !strings.Contains(r, "cannot tell") {
+			t.Errorf("%q", r)
+		}
+	})
+	t.Run("no sys at all", func(t *testing.T) {
+		if r := KeyHostRefusal(t.TempDir()); r != "" {
+			t.Errorf("a missing directory must mean none: %s", r)
+		}
+	})
 }
