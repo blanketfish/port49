@@ -5,8 +5,10 @@ package port49d
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -90,5 +92,33 @@ func TestAnOfflineListAsAnotherUserStillWorks(t *testing.T) {
 	var rout, rerr bytes.Buffer
 	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--list"}, &rout, &rerr); code != 0 {
 		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+}
+
+// A directory another user owns is reported as a wrong owner even when its mode is also bad, so the
+// offline tools refuse before a write instead of treating it as an I/O failure (Task 9 re-review n-1).
+func TestAWrongOwnerIsReportedBeforeABadMode(t *testing.T) {
+	dir := safeDir(t)
+	sub := filepath.Join(dir, "state")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0o775); err != nil { // group-writable: a mode error on its own
+		t.Fatal(err)
+	}
+	if err := ownStateDir(sub); err == nil || errors.As(err, new(*wrongOwnerError)) {
+		t.Fatalf("control: a group-writable directory of ours should be a mode error: %v", err)
+	}
+	real := fence.FileOwner
+	t.Cleanup(func() { fence.FileOwner = real })
+	fence.FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if st, err := os.Lstat(sub); err == nil && os.SameFile(st, fi) {
+			return uint32(os.Geteuid()) + 1, true
+		}
+		return real(fi)
+	}
+	var wo *wrongOwnerError
+	if err := ownStateDir(sub); !errors.As(err, &wo) {
+		t.Fatalf("a directory another user owns, with a bad mode, was reported as %v, want a wrong owner", err)
 	}
 }

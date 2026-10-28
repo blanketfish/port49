@@ -59,19 +59,22 @@ func ownedHere(what, path string, dir bool) error {
 		return fmt.Errorf("%s is a symbolic link: point broker.state_dir at the directory itself (%s)", what, target)
 	case dir && !fi.IsDir():
 		return fmt.Errorf("%s is not a directory", what)
-	case dir && fi.Mode().Perm()&0o022 != 0:
-		return fmt.Errorf("%s is writable by its group or others (mode %04o): port49-broker's own state is kept "+
-			"there; chmod 0700 it", what, fi.Mode().Perm())
 	case !dir && !fi.Mode().IsRegular():
 		return fmt.Errorf("%s is not a regular file (%v): port49-broker writes it itself; remove it", what,
 			fi.Mode().Type())
 	}
+	// The owner before the mode: a path another user owns is a wrong owner whatever its mode, so the
+	// offline tools refuse it before a write rather than treating it as an I/O failure.
 	uid, ok := fence.FileOwner(fi)
 	if !ok {
 		return fmt.Errorf("%s: cannot read its owner", what)
 	}
 	if euid := fence.Geteuid(); uid != uint32(euid) && uid != 0 {
 		return &wrongOwnerError{what: what, uid: uid, euid: uint32(euid)}
+	}
+	if dir && fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s is writable by its group or others (mode %04o): port49-broker's own state is kept "+
+			"there; chmod 0700 it", what, fi.Mode().Perm())
 	}
 	return nil
 }
