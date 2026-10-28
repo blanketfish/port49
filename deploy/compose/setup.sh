@@ -24,13 +24,15 @@ dir() { install -d -o 0 -g 0 -m 0755 "$@"; }
 # given, and a sealing key re-written would strand what it sealed. At every `up`:
 # absent in the volume: installed; the same bytes: left alone; different bytes:
 # refused (the stack stops, the volume untouched); gone from local/: the
-# installed one is kept and the line says so. The copy is a temp file in the
+# installed one is kept and the line says so; absent from both: skipped, silently. The copy is a temp file in the
 # destination directory, linked in without clobbering, so no step overwrites.
 TMP=
 trap 'rm -f "$TMP"; rm -rf /etc/port49/*' EXIT
 once() { # source, destination, owner, group, mode
   if [ ! -e "$1" ]; then
-    [ -e "$2" ] || { echo "setup: $1 is missing and $2 is not installed" >&2; exit 1; }
+    # In neither place: nothing to install. A config that still names the file is refused by
+    # the daemon's own start check, which names the file; a rotation's last step leaves it so.
+    [ -e "$2" ] || return 0
     echo "setup: $1 is gone; keeping the installed $2"
     return 0
   fi
@@ -101,10 +103,10 @@ install -o 0 -g 0 -m 0600 "$L/etcd/root-key.pem" /vol/etcd-root/root-key.pem
 # The staged copy holds both components' etcd private keys and the exited
 # container keeps its filesystem layer, so /etc/port49 is a tmpfs (compose.yaml)
 # and is emptied on every exit (the trap at the top)
-# (Ruling 1 holds inside the project). Nothing after setup needs it: etcd-init
+# (Ruling 1 holds inside the project). The sealing key is not staged: store-roles reads no
+# secret. Nothing after setup needs it: etcd-init
 # reads roles.sh from the etcd-root volume.
-dir /etc/port49/etcd /etc/port49/secrets
-cp /vol/port49d-etc/secrets/encryption.key /etc/port49/secrets/encryption.key
+dir /etc/port49/etcd
 cp /vol/port49d-etc/port49d.yaml /vol/broker-etc/port49-broker.yaml /etc/port49/
 cp /vol/port49d-etc/etcd/* /vol/broker-etc/etcd/* /etc/port49/etcd/
 port49d store-roles --config /etc/port49/port49d.yaml --broker-config /etc/port49/port49-broker.yaml \

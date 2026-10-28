@@ -279,6 +279,7 @@ never a rewrite.
    ```sh
    docker run --rm -i -v port49_port49d-etc:/e -v port49_broker-etc:/b --entrypoint sh port49-setup:dev -c '
      KEY_ID=$1   # a new id for every key: never an existing one
+     : "${KEY_ID:?set KEY_ID to the new key id}"
      umask 077 && cd /e/secrets && cd /b/secrets || exit 1
      n=encryption-$KEY_ID.key
      for f in /e/secrets/$n /b/secrets/$n; do
@@ -306,9 +307,12 @@ never a rewrite.
 3. Remove `previous:` and the old file only after the scheduled directory pass (every `refresh_interval`)
    has re-sealed the second-factor records under `c2`. A record that opens under neither key is never
    "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
-   `port49 directory reset-second-factor`. Remove the old file from the volumes
+   `port49 directory reset-second-factor`. Remove the old key from `local/secrets/` **first**
+   (`port49d-encryption.key` and `broker-encryption.key` are the old key's), so an `up` in between cannot install it
+   again, and then from the volumes
    (`docker run --rm -v port49_port49d-etc:/e -v port49_broker-etc:/b alpine:3.22 rm /e/secrets/encryption.key /b/secrets/encryption.key`,
-   with the old file's name) and, if you kept a copy of it in `local/secrets/`, from `local/` only after the volumes.
+   with the old file's name). Setup skips a sealing key that is in neither place; once the config no longer names the
+   old file, every later `up` starts clean and the old key stays gone.
 
 A process whose window lacks the directory's current key id refuses to start, naming the directory
 store and the id. Two store blocks reaching one etcd cluster at one prefix are refused too.

@@ -344,7 +344,98 @@ func TestComposeSmoke(t *testing.T) {
 			shapetest.OfflineRevoked(t, brokerDir, "127.0.0.1:8443", bob)
 		}
 	}
-	fmt.Fprintln(os.Stderr, "compose smoke: login, floor line, recreate, session kept, token redeemed, state_dir kept, key version added, admin cells")
+	rotateEncryptionKey(t, s, dev, mint)
+	fmt.Fprintln(os.Stderr, "compose smoke: login, floor line, recreate, session kept, token redeemed, state_dir kept, key version added, admin cells, encryption key rotated")
+}
+
+// volumeFileExists reports whether path is in volume (a throwaway container; the bytes never leave it).
+func volumeFileExists(t *testing.T, volume, path string) bool {
+	t.Helper()
+	return exec.Command("docker", "run", "--rm", "-v", project+"_"+volume+":/v:ro", "--entrypoint", "test",
+		"port49-setup:dev", "-e", "/v/"+path).Run() == nil
+}
+
+// rotateEncryptionKey is the README's rotation through its third step (Task 6 re-review, I-4): the
+// new sealing key placed beside the old, made current with the old as previous, then the old one
+// removed from local/ first and from the volumes, and every later `up` starts clean with the old
+// key still gone (setup skips a sealing key that is in neither place). The new key's bytes are an
+// obviously fake 32-byte value.
+func rotateEncryptionKey(t *testing.T, s stack, dev shapetest.Device, mint func() string) {
+	t.Helper()
+	const fake = "not-a-real-key-for-the-smoke-e2!"
+	if len(fake) != 32 {
+		t.Fatalf("the fake sealing key is %d bytes, want 32", len(fake))
+	}
+	c := composeRotator{s: s}
+	// stdin is read once: write the first copy, copy it to the second.
+	if err := c.sh([]byte(fake), `set -eu; umask 077
+cat > /e/secrets/encryption-e2.key; cp /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key
+chown 65532:65532 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key
+chmod 0400 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key`); err != nil {
+		t.Fatal(err)
+	}
+	const cur = "  current: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}\n"
+	edit := func(block string) {
+		t.Helper()
+		for _, f := range []string{"port49d.yaml", "port49-broker.yaml"} {
+			p := filepath.Join(s.config, f)
+			b, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Always from the shipped text, so step 3 does not depend on step 2's edit.
+			if !strings.Contains(string(b), cur) && !strings.Contains(string(b), "id: c2") {
+				t.Fatalf("%s has no encryption block the smoke recognises", f)
+			}
+			out := string(b)
+			if i := strings.Index(out, "encryption:\n"); i >= 0 {
+				j := i + len("encryption:\n")
+				for strings.HasPrefix(out[j:], "  ") {
+					j += strings.Index(out[j:], "\n") + 1
+				}
+				out = out[:i] + block + out[j:]
+			}
+			if err := os.WriteFile(p, []byte(out), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	restart := func() {
+		t.Helper()
+		s.run("up", "-d")
+		s.run("restart", "port49d", "port49-broker")
+		s.ready("127.0.0.1:9050")
+		s.ready("127.0.0.1:9049")
+		if st := dev.Login("alice", mint()); st != wire.AuthenStatusPass {
+			t.Fatalf("a login after the encryption key change: status %d", st)
+		}
+	}
+	// Step 2: c2 current, c1 previous.
+	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}\n" +
+		"  previous: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}\n")
+	restart()
+	// Step 3: previous removed; local/ first, then the volumes.
+	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}\n")
+	for _, f := range []string{"port49d-encryption.key", "broker-encryption.key"} {
+		if err := os.Remove(filepath.Join(s.local, "secrets", f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command("docker", "run", "--rm", "-v", project+"_port49d-etc:/e", "-v", project+"_broker-etc:/b",
+		"--entrypoint", "rm", "port49-setup:dev", "/e/secrets/encryption.key", "/b/secrets/encryption.key").CombinedOutput(); err != nil {
+		t.Fatalf("removing the old key from the volumes: %v\n%s", err, out)
+	}
+	restart()
+	// Another up: setup starts clean and the old key stays gone.
+	s.run("up", "-d")
+	for _, v := range []string{"port49d-etc", "broker-etc"} {
+		if volumeFileExists(t, v, "secrets/encryption.key") {
+			t.Fatalf("the old encryption key is back in %s after another up", v)
+		}
+		if !volumeFileExists(t, v, "secrets/encryption-e2.key") {
+			t.Fatalf("the new encryption key is missing from %s", v)
+		}
+	}
 }
 
 // TestTheStackHasNoEnvSecret: no running container's environment holds a

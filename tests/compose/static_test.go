@@ -8,6 +8,7 @@ package compose
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -166,5 +167,75 @@ stores:
 	ok := "services:\n  a:\n    environment:\n      ETCD_INITIAL_CLUSTER_TOKEN: port49-compose\n      ETCD_DATA_DIR: /var/lib/etcd\n      U: https://etcd-1:2380\n"
 	if got := envEntries("compose.yaml", parse(t, "ok", []byte(ok))); len(got) != 0 {
 		t.Fatalf("ordinary settings were flagged: %q", got)
+	}
+}
+
+// onceFunc is setup.sh's once(), extracted, so its cases run with no Docker.
+func onceFunc(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../deploy/compose/setup.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "once() {")
+	j := strings.Index(s[i:], "\n}\n")
+	if i < 0 || j < 0 {
+		t.Fatal("setup.sh has no once() function")
+	}
+	return s[i : i+j+3]
+}
+
+func runOnce(t *testing.T, src, dst string) (string, error) {
+	t.Helper()
+	script := "set -eu\nTMP=\n" + onceFunc(t) + `once "$1" "$2" "$(id -u)" "$(id -g)" 0400` + "\n"
+	out, err := exec.Command("sh", "-c", script, "sh", src, dst).CombinedOutput()
+	return string(out), err
+}
+
+// A sealing key that is in neither local/ nor the volume is skipped without a word: a rotation's
+// last step leaves it so, and the daemon's own start check names a file the config still wants.
+func TestOnceSkipsAKeyInNeitherPlace(t *testing.T) {
+	d := t.TempDir()
+	out, err := runOnce(t, filepath.Join(d, "gone"), filepath.Join(d, "installed"))
+	if err != nil || out != "" {
+		t.Fatalf("a key in neither place: err %v, output %q, want success and silence", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(d, "installed")); err == nil {
+		t.Fatal("once installed something from nothing")
+	}
+}
+
+func TestOnceStillKeepsAnInstalledKeyWhoseSourceIsGone(t *testing.T) {
+	d := t.TempDir()
+	dst := filepath.Join(d, "installed")
+	if err := os.WriteFile(dst, []byte("fake"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runOnce(t, filepath.Join(d, "gone"), dst)
+	if err != nil || !strings.Contains(out, "is gone; keeping the installed") {
+		t.Fatalf("err %v, output %q, want the keep line", err, out)
+	}
+}
+
+// The rotation recipe refuses an empty key id before it touches anything.
+func TestTheRotationRecipeRefusesAnEmptyKeyID(t *testing.T) {
+	b, err := os.ReadFile("../../deploy/compose/README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	k := strings.Index(s, "KEY_ID=$1")
+	if k < 0 {
+		t.Fatal("the README has no rotation recipe")
+	}
+	i := strings.LastIndex(s[:k], "-c '") + len("-c '")
+	j := strings.Index(s[i:], "\n   ' sh e2")
+	if j < 0 {
+		t.Fatal("the rotation recipe's end is not where the test expects")
+	}
+	out, err := exec.Command("sh", "-c", s[i:i+j], "sh", "").CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "set KEY_ID to the new key id") {
+		t.Fatalf("an empty key id: err %v, output %q, want a refusal naming KEY_ID", err, out)
 	}
 }
