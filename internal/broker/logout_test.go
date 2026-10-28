@@ -336,7 +336,7 @@ func TestALogoutWhoseJTICannotBeGivenBackSaysSo(t *testing.T) {
 		t.Fatalf("%s", lshown(w))
 	}
 	if !strings.Contains(said.String(), "could not be given back") ||
-		!strings.Contains(said.String(), `port49 revoke --sid "s-sub-alice" --sid-issuer `) {
+		!strings.Contains(said.String(), `port49 revoke --sid 's-sub-alice' --sid-issuer `) {
 		t.Fatalf("the lost logout was not said with its manual end:\n%s", said.String())
 	}
 }
@@ -492,7 +492,7 @@ func TestAStoreFailedLogoutSaysAnUnconditionalRecovery(t *testing.T) {
 	first, _, _ := strings.Cut(out, "\n")
 	if strings.Contains(out, "if the decision log has a revoke record") || !strings.Contains(out, ") only after "+lift) ||
 		!strings.Contains(out, "port49 revoke --list") || strings.Contains(out, "port49 revoke <principal>") ||
-		!strings.Contains(first, `port49 revoke --sid "s-sub-alice" --sid-issuer `) || !strings.Contains(first, "(needs revoke_others and a press of your security key)") {
+		!strings.Contains(first, `port49 revoke --sid 's-sub-alice' --sid-issuer `) || !strings.Contains(first, "(needs revoke_others and a press of your security key)") {
 		t.Fatalf("the recovery said:\n%s", out)
 	}
 }
@@ -812,6 +812,23 @@ func TestLogoutByHandAlternatives(t *testing.T) {
 		out := f.b.logoutByHand(c.lt, RevokeReport{}, false)
 		if strings.Contains(out, `port49 revoke --sid `) != c.sidAPI || !strings.Contains(out, c.leadsWith) {
 			t.Errorf("%s: %s", c.name, out)
+		}
+	}
+}
+
+// The sid in the paste-ready line is one shell word whatever it holds: $ and
+// backtick stay literal inside single quotes, and a ' is closed, escaped and
+// reopened.
+func TestShellQuoteKeepsASidLiteral(t *testing.T) {
+	for in, want := range map[string]string{
+		"s-sub-alice": `'s-sub-alice'`,
+		"a$HOME`id`b": "'a$HOME`id`b'",
+		"it's":        `'it'\''s'`,
+		"$'`":         `'$'\''` + "`'",
+		"":            `''`,
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
 }

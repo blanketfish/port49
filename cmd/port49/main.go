@@ -867,7 +867,7 @@ func agentMain(args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer os.Remove(sf.socket)
-	srv := &http.Server{Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, ConnContext: agent.ConnContext}
 	go func() { _ = srv.Serve(ln) }()
 	fmt.Fprintf(stderr, "port49 agent: connected to %s; the session ends at %s (max_session_age %ds)\n",
 		sf.broker, a.SessionEndsAt().UTC().Format(time.RFC3339), conf.MaxSessionAgeSeconds)

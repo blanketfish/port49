@@ -133,7 +133,7 @@ func startLabAdmin(t *testing.T, piv *testpki.PIV, brokerURL, caFile, certFile, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: a.Handler()}
+	srv := &http.Server{Handler: a.Handler(), ConnContext: agent.ConnContext}
 	go srv.Serve(ln)
 	t.Cleanup(func() {
 		srv.Close()

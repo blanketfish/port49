@@ -313,17 +313,27 @@ func TestAnAbsentOrLockedKeySendsNothing(t *testing.T) {
 }
 
 // Each prompt the agent shows is also in its own log, with the operation, the
-// target and the uid, and never the challenge or the signature.
+// target and the connecting peer's pid and uid when the OS gave them (the field
+// is dropped otherwise, never the agent's own uid), and never the challenge or
+// the signature.
 func TestThePromptIsInTheAgentsLog(t *testing.T) {
 	r := newRealRigWith(t, realOpts{mfa: true, admin: true})
 	var log bytes.Buffer
 	r.a.log = &log
+	ctx := context.WithValue(context.Background(), peerKey{}, peerCred{pid: 4242, uid: 1234})
+	if _, err := r.a.AdminPrompt(ctx, revokeCall(bobBody), func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("admin_prompt operation=revoke_principal target=%q peer_pid=4242 peer_uid=1234\n", "user:bob@example.com")
+	if !strings.Contains(log.String(), want) {
+		t.Fatalf("the log lacks %q: %q", want, log.String())
+	}
+	log.Reset()
 	if _, err := r.a.AdminPrompt(context.Background(), revokeCall(bobBody), func(string) {}); err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("admin_prompt operation=revoke_principal target=%q uid=%d", "user:bob@example.com", getuid())
-	if !strings.Contains(log.String(), want) {
-		t.Fatalf("the log lacks %q: %q", want, log.String())
+	if strings.Contains(log.String(), "uid") || strings.Contains(log.String(), "peer_") {
+		t.Fatalf("with no peer known the log still names a uid: %q", log.String())
 	}
 	if strings.Contains(strings.ToLower(log.String()), "challenge") || strings.Contains(log.String(), "signature") {
 		t.Fatalf("the log carries proof material: %q", log.String())

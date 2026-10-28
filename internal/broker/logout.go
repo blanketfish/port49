@@ -211,7 +211,7 @@ func (b *Broker) logoutByHandWith(lt oidc.LogoutToken, rep RevokeReport, step fu
 	}
 	out := lead + strings.Join(each, "; and ")
 	if sidOnly {
-		out = fmt.Sprintf(`port49 revoke --sid %q --sid-issuer %q (needs revoke_others and a press of your security key), or %s`, lt.Sid, lt.Issuer, out)
+		out = fmt.Sprintf(`port49 revoke --sid %s --sid-issuer %s (needs revoke_others and a press of your security key), or %s`, shellQuote(lt.Sid), shellQuote(lt.Issuer), out)
 	}
 	return out
 }
@@ -465,4 +465,10 @@ func (r RevokeReport) logoutText(cutoff time.Time, ownerTTL time.Duration, revok
 	return fmt.Sprintf("logout: %s ended every session of sub %s: no principal is on record for it (no mint in the "+
 		"last %s); tokens it issued before %s are refused from now on; to end a person's sessions at once, %s",
 		r.OIDCIssuer, printsafe.Line(r.Sub, 80), ownerTTL, cutoff.UTC().Format(time.RFC3339), revokeHow)
+}
+
+// shellQuote is s as one POSIX shell word: single quotes, which keep $ and
+// backtick literal, with each ' written '\” (Go's %q would leave them live).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

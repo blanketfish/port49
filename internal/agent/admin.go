@@ -380,8 +380,8 @@ func (a *Agent) AdminPrompt(ctx context.Context, req AdminRequest, prompt func(s
 	// A touch asked for is traceable whoever asked: the prompt goes to the
 	// agent's own log as well as to the caller. Never the challenge or the
 	// signature.
-	fmt.Fprintf(a.log, "port49 agent: admin_prompt operation=%s target=%q uid=%d\n", call.op,
-		printsafe.Line(call.target, 300), getuid())
+	fmt.Fprintf(a.log, "port49 agent: admin_prompt operation=%s target=%q%s\n", call.op,
+		printsafe.Line(call.target, 300), peerText(ctx))
 	if prompt != nil {
 		prompt(fmt.Sprintf("touch your key to %s %s", call.op, printsafe.Line(call.target, 300)))
 	}
