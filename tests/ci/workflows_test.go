@@ -2,8 +2,10 @@ package ci
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,10 +25,11 @@ type step struct {
 }
 
 type job struct {
-	Needs       any            `yaml:"needs"`
-	Environment any            `yaml:"environment"`
-	Permissions map[string]any `yaml:"permissions"`
-	Steps       []step         `yaml:"steps"`
+	Env         map[string]string `yaml:"env"`
+	Needs       any               `yaml:"needs"`
+	Environment any               `yaml:"environment"`
+	Permissions map[string]any    `yaml:"permissions"`
+	Steps       []step            `yaml:"steps"`
 }
 
 type flow struct {
@@ -172,37 +175,38 @@ func TestPublishJobsBuildNothing(t *testing.T) {
 		t.Errorf("pypi's publish options are %v, want packages-dir dist and skip-existing", py.Steps[1].With)
 	}
 	gx := f.Jobs["galaxy"]
-	var runs []step
-	for _, s := range gx.Steps {
-		if s.Run != "" {
-			runs = append(runs, s)
-		}
+	if len(gx.Steps) != 4 || !strings.HasPrefix(gx.Steps[0].Uses, "actions/download-artifact@") ||
+		!strings.HasPrefix(gx.Steps[1].Uses, "actions/setup-python@") || gx.Steps[2].Run == "" || gx.Steps[3].Run == "" {
+		t.Fatalf("galaxy is not a download-artifact, a setup-python, a pip step and the publish step: %+v", gx.Steps)
 	}
-	if len(gx.Steps) != 3 || !strings.HasPrefix(gx.Steps[0].Uses, "actions/download-artifact@") ||
-		!strings.HasPrefix(gx.Steps[1].Uses, "actions/setup-python@") || len(runs) != 1 {
-		t.Fatalf("galaxy is not a download-artifact, a setup-python and one run step: %+v", gx.Steps)
+	if len(gx.Env) != 0 {
+		t.Errorf("galaxy has job-level env %v (names only): the token env belongs on the publish step", envNames(gx.Env))
 	}
-	lines := strings.Split(strings.TrimSpace(runs[0].Run), "\n")
-	if len(lines) != 4 || lines[0] != "pip install --require-hashes -r requirements-release.txt" ||
-		lines[1] != "set +e" ||
-		lines[2] != "ansible-galaxy collection publish port49-client-*.tar.gz > publish.log 2>&1" ||
-		!strings.HasPrefix(lines[3], "rc=$?") {
-		t.Errorf("galaxy's commands are %q", lines)
+	if gx.Steps[2].Run != "pip install --require-hashes -r requirements-release.txt" || len(gx.Steps[2].Env) != 0 {
+		t.Errorf("galaxy's pip step is %q with env %v", gx.Steps[2].Run, envNames(gx.Steps[2].Env))
 	}
+	pub := gx.Steps[3]
 	// the token reaches ansible-galaxy through its server config in the environment, never argv
-	for _, bad := range []string{"--token", "--api-key", "GALAXY_API_KEY"} {
-		if strings.Contains(runs[0].Run, bad) {
-			t.Errorf("galaxy's run text names %s: the token must go through env, not argv", bad)
+	for _, bad := range []string{"--token", "--api-key", "GALAXY_API_KEY", "pip"} {
+		if strings.Contains(pub.Run, bad) {
+			t.Errorf("galaxy's publish text names %s", bad)
 		}
 	}
-	if runs[0].Env["ANSIBLE_GALAXY_SERVER_LIST"] != "public" ||
-		runs[0].Env["ANSIBLE_GALAXY_SERVER_PUBLIC_URL"] != "https://galaxy.ansible.com/" ||
-		runs[0].Env["ANSIBLE_GALAXY_SERVER_PUBLIC_TOKEN"] != "${{ secrets.GALAXY_API_KEY }}" || len(runs[0].Env) != 3 {
-		t.Errorf("galaxy's publish env is %v (names only)", envNames(runs[0].Env))
+	if !strings.HasPrefix(pub.Run, "set +e\nansible-galaxy collection publish port49-client-*.tar.gz > publish.log 2>&1\n") {
+		t.Errorf("galaxy's publish text is %q", pub.Run)
 	}
-	// only Galaxy's exact, anchored refusal for an existing version is success
-	if !strings.Contains(runs[0].Run, "grep -qE '^ERROR! Error when publishing collection to .* \\(HTTP Code: 400, Message: Artifact already exists' publish.log") {
-		t.Error("galaxy's already-exists match is not the anchored message")
+	if pub.Env["ANSIBLE_GALAXY_SERVER_LIST"] != "public" ||
+		pub.Env["ANSIBLE_GALAXY_SERVER_PUBLIC_URL"] != "https://galaxy.ansible.com/" ||
+		pub.Env["ANSIBLE_GALAXY_SERVER_PUBLIC_TOKEN"] != "${{ secrets.GALAXY_API_KEY }}" || len(pub.Env) != 3 {
+		t.Errorf("galaxy's publish env is %v (names only)", envNames(pub.Env))
+	}
+	// no step but the publish holds the token, and no step that holds it runs pip
+	for id, j := range f.Jobs {
+		for i, s := range j.Steps {
+			if _, held := s.Env["ANSIBLE_GALAXY_SERVER_PUBLIC_TOKEN"]; held && !(id == "galaxy" && i == 3) {
+				t.Errorf("job %s step %d holds the Galaxy token", id, i)
+			}
+		}
 	}
 	for _, id := range []string{"build-python", "build-galaxy"} {
 		j := f.Jobs[id]
@@ -346,6 +350,18 @@ func TestTheImageJobTagsAndAttests(t *testing.T) {
 	if attest.With["subject-digest"] != "${{ steps.build.outputs.digest }}" || attest.With["push-to-registry"] != true {
 		t.Errorf("the attestation's options are %v", attest.With)
 	}
+	// image and chart push after goreleaser's draft and attestation succeeded
+	for _, id := range []string{"image", "chart"} {
+		got := false
+		if need, ok := f.Jobs[id].Needs.([]any); ok {
+			for _, n := range need {
+				got = got || n == "goreleaser"
+			}
+		}
+		if !got {
+			t.Errorf("%s does not need goreleaser", id)
+		}
+	}
 	// the jobs that publish wait for every check and build, and PyPI and Galaxy publish last
 	for _, id := range []string{"pypi", "galaxy"} {
 		need, _ := f.Jobs[id].Needs.([]any)
@@ -405,6 +421,45 @@ func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("check does not run %q", want)
+		}
+	}
+}
+
+// The publish step's exit status, run for real with a stub ansible-galaxy: success, a refusal
+// that is not "already exists", the anchored refusal, and the phrase on a line that is not
+// Galaxy's error. Only the first and the third pass.
+func TestTheGalaxyPublishStepPassesOnlyOnSuccessOrAnExistingVersion(t *testing.T) {
+	f, _ := release(t)
+	run := f.Jobs["galaxy"].Steps[3].Run
+	const existing = "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 400, Message: Collection version already exists Code: conflict)\n"
+	for _, c := range []struct {
+		name, out string
+		rc        int
+		pass      bool
+	}{
+		{"success", "published\n", 0, true},
+		{"unrelated failure", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 401, Message: Invalid token Code: unauthorized)\n", 1, false},
+		{"existing version", existing, 1, true},
+		{"phrase off the error line", "note: the thing already exists\n", 1, false},
+		{"phrase after an unanchored prefix", "x " + existing, 1, false},
+		{"a 400 that says exists but not already", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 400, Message: Namespace exists but you do not own it Code: forbidden)\n", 1, false},
+		{"another server's refusal", "[ERROR]: GalaxyError: Error when publishing collection to other (https://example.invalid/) (HTTP Code: 400, Message: Collection version already exists Code: conflict)\n", 1, false},
+		{"no output at all", "", 1, false},
+	} {
+		dir := t.TempDir()
+		stub := "#!/bin/sh\nprintf '%s' \"$STUB_OUT\"\nexit $STUB_RC\n"
+		if err := os.WriteFile(filepath.Join(dir, "ansible-galaxy"), []byte(stub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "port49-client-1.0.0.tar.gz"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", "-eo", "pipefail", "-c", run)
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "STUB_OUT=" + c.out, "STUB_RC=" + strconv.Itoa(c.rc)}
+		err := cmd.Run()
+		if (err == nil) != c.pass {
+			t.Errorf("%s: step passed=%v, want %v", c.name, err == nil, c.pass)
 		}
 	}
 }

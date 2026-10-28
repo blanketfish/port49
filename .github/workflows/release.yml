@@ -60,7 +60,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
 
   image:
-    needs: check
+    # After goreleaser: a failed draft or attestation stops the pushes.
+    needs: [check, goreleaser]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: release
@@ -99,7 +100,7 @@ jobs:
           push-to-registry: true
 
   chart:
-    needs: check
+    needs: [check, goreleaser]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: release
@@ -170,14 +171,17 @@ jobs:
         with: {name: galaxy-dist, path: .}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with: {python-version: '3.12'}
-      # The token reaches ansible-galaxy as its "public" server's token in the environment, never
-      # on argv. A failed publish fails the step unless Galaxy's own refusal says this version
-      # exists. UNVERIFIED: that message's exact text is only seen on a real re-run (12b report).
+      # No token in this step's environment: pip never sees it.
+      - run: pip install --require-hashes -r requirements-release.txt
+      # The token reaches ansible-galaxy as its "public" server's token, in this step's env
+      # only, never on argv. A failed publish fails the step unless Galaxy's refusal says this
+      # version exists. The line shape is read from ansible-core 2.21.4's source (display.py
+      # prefixes "[ERROR]: "; api.py:675 and :210 make the rest); the Message text after
+      # "HTTP Code: 400" is UNVERIFIED until a real re-run (12b report).
       - run: |
-          pip install --require-hashes -r requirements-release.txt
           set +e
           ansible-galaxy collection publish port49-client-*.tar.gz > publish.log 2>&1
-          rc=$?; cat publish.log; [ "$rc" -eq 0 ] || grep -qE '^ERROR! Error when publishing collection to .* \(HTTP Code: 400, Message: Artifact already exists' publish.log
+          rc=$?; cat publish.log; [ "$rc" -eq 0 ] || grep -qE '^\[ERROR\]: .*Error when publishing collection to public \(https://galaxy\.ansible\.com/\) \(HTTP Code: 400, Message: [^)]*already exists' publish.log
         env:
           ANSIBLE_GALAXY_SERVER_LIST: public
           ANSIBLE_GALAXY_SERVER_PUBLIC_URL: https://galaxy.ansible.com/
