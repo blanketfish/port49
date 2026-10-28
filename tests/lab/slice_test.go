@@ -108,9 +108,9 @@ func TestSliceEndToEnd(t *testing.T) {
 		}
 		defer os.RemoveAll(sockDir)
 		sock := filepath.Join(sockDir, "a", "agent.sock")
-		out, err := exec.Command(port49, "login", "--broker", sliceBrokerURL,
+		out, err := withAgent(exec.Command(port49, "login", "--broker", sliceBrokerURL,
 			"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
-			"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock).CombinedOutput()
+			"--broker-ca", filepath.Join(pki, testpki.LabCA)), sock).CombinedOutput()
 		if err != nil {
 			t.Fatalf("port49 login: %v\n%s", err, out)
 		}
@@ -154,9 +154,20 @@ func TestSliceEndToEnd(t *testing.T) {
 	})
 }
 
+// withAgent points cmd at the agent at sock, the only way a command is told
+// where its agent is.
+func withAgent(cmd *exec.Cmd, sock string) *exec.Cmd {
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = append(append([]string(nil), env...), "PORT49_TEST_AGENT_SOCKET="+sock)
+	return cmd
+}
+
 func sliceToken(t *testing.T, port49, sock, device string) string {
 	t.Helper()
-	cmd := exec.Command(port49, "token", "--socket", sock, device)
+	cmd := withAgent(exec.Command(port49, "token", device), sock)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

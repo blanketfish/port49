@@ -86,7 +86,8 @@ func TestLoginTakesWhatItLacksFromTheConfigFile(t *testing.T) {
 		t.Setenv(userconfig.EnvConfig, c.env)
 		sock, refreshes := runningAgent(t, c.dir)
 		var out, errb bytes.Buffer
-		code := run(append(append([]string{"login"}, c.args...), "--socket", sock), &out, &errb)
+		t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+		code := run(append([]string{"login"}, c.args...), &out, &errb)
 		if code != 0 || refreshes() != 1 ||
 			!strings.HasPrefix(out.String(), "port49: already logged in to "+configBroker+"; refreshing\n") {
 			t.Errorf("%s: code %d stdout %q stderr %q", c.name, code, out.String(), errb.String())
@@ -119,7 +120,8 @@ func TestTheSystemFileIsUnderYoursKeyByKey(t *testing.T) {
 	}
 	sock, refreshes := runningAgent(t, sys)
 	var out, errb bytes.Buffer
-	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 0 || refreshes() != 1 {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"login"}, &out, &errb); code != 0 || refreshes() != 1 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 }
@@ -133,7 +135,8 @@ func TestAConfigFileAtPlan9asPlaceIsRefused(t *testing.T) {
 	labConfig(t, filepath.Join(home, ".config", "port49"), configBroker)
 	sock, refreshes := runningAgent(t, filepath.Join(home, ".config", "port49"))
 	var out, errb bytes.Buffer
-	code := run([]string{"login", "--socket", sock}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"login"}, &out, &errb)
 	old, now := filepath.Join(home, ".config", "port49", "config.yaml"), filepath.Join(home, ".port49", "config.yaml")
 	if code != 2 || refreshes() != 0 || strings.Count(errb.String(), "\n") != 1 ||
 		!strings.Contains(errb.String(), "mkdir -m 700 -p "+filepath.Join(home, ".port49")+" && mv "+old+" "+now) {
@@ -147,7 +150,8 @@ func TestAFlagOverridesTheConfigFile(t *testing.T) {
 	cfg := labConfig(t, dir, "https://elsewhere.example:8443")
 	sock, refreshes := runningAgent(t, dir)
 	var out, errb bytes.Buffer
-	code := run([]string{"login", "--config", cfg, "--broker", configBroker, "--socket", sock}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"login", "--config", cfg, "--broker", configBroker}, &out, &errb)
 	if code != 0 || refreshes() != 1 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -163,7 +167,8 @@ func TestAConfigFileOthersCanWriteIsRefused(t *testing.T) {
 	}
 	sock, refreshes := runningAgent(t, dir)
 	var out, errb bytes.Buffer
-	code := run([]string{"login", "--config", cfg, "--socket", sock}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"login", "--config", cfg}, &out, &errb)
 	if code != 2 || refreshes() != 0 || !strings.HasPrefix(errb.String(), "port49 login: "+cfg+" is writable by others") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
@@ -173,21 +178,22 @@ func TestAConfigFileOthersCanWriteIsRefused(t *testing.T) {
 // file, and the flags are asked for.
 func TestAMissingConfigFile(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := run([]string{"login", "--config", filepath.Join(t.TempDir(), "none.yaml"), "--socket",
-		filepath.Join(t.TempDir(), "a.sock")}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(t.TempDir(), "a.sock"))
+	code := run([]string{"login", "--config", filepath.Join(t.TempDir(), "none.yaml")}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "none.yaml: no such file") {
 		t.Fatalf("a named file: code %d stderr %q", code, errb.String())
 	}
 	// Named, it is checked even when every flag is given.
 	errb.Reset()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(t.TempDir(), "a.sock"))
 	code = run([]string{"login", "--config", filepath.Join(t.TempDir(), "none.yaml"), "--broker", configBroker,
-		"--broker-ca", "ca.pem", "--cert", "c.pem", "--key", "k.pem", "--socket",
-		filepath.Join(t.TempDir(), "a.sock")}, &out, &errb)
+		"--broker-ca", "ca.pem", "--cert", "c.pem", "--key", "k.pem"}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "none.yaml: no such file") {
 		t.Fatalf("a named file beside every flag: code %d stderr %q", code, errb.String())
 	}
 	errb.Reset()
-	code = run([]string{"login", "--socket", filepath.Join(t.TempDir(), "a.sock")}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(t.TempDir(), "a.sock"))
+	code = run([]string{"login"}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "are all required") || !strings.Contains(errb.String(), "config.yaml") {
 		t.Fatalf("the default path: code %d stderr %q", code, errb.String())
 	}
@@ -203,7 +209,8 @@ func TestAConfigFileWithNoBrokerCAIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	code := run([]string{"login", "--config", cfg, "--socket", filepath.Join(t.TempDir(), "a.sock")}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(t.TempDir(), "a.sock"))
+	code := run([]string{"login", "--config", cfg}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "--broker-ca") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
@@ -222,7 +229,8 @@ func TestTheConfigFileCanChooseOIDC(t *testing.T) {
 	f.Close()
 	sock, refreshes := runningAgent(t, dir)
 	var out, errb bytes.Buffer
-	code := run([]string{"login", "--config", cfg, "--socket", sock}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"login", "--config", cfg}, &out, &errb)
 	if code != 1 || refreshes() != 0 || !strings.Contains(errb.String(), "with another certificate") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}

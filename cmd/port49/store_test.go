@@ -57,14 +57,6 @@ func TestStoreStatusExitsByWhatItFound(t *testing.T) {
 	}
 }
 
-// The socket flag is gone with the socket: it is a usage error.
-func TestStoreStatusTakesNoSocket(t *testing.T) {
-	var out, errb bytes.Buffer
-	if code := run([]string{"store", "status", "--socket", "/run/port49/port49d.sock"}, &out, &errb); code != 2 {
-		t.Fatalf("exit %d, want 2: %q", code, errb.String())
-	}
-}
-
 // The answer is printed through printsafe: a control sequence in a body from
 // an endpoint that is not port49 never reaches the terminal.
 func TestStoreStatusPrintsOnlySafeText(t *testing.T) {

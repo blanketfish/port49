@@ -738,7 +738,7 @@ func listenAskpass(agentSocket string) (net.Listener, string, error) {
 	}
 	path := filepath.Join(dir, "askpass-"+hex.EncodeToString(b[:])+".sock")
 	if len(path) > 107 {
-		return nil, "", fmt.Errorf("the askpass socket %s is too long for a Unix socket; pass a shorter --socket", path)
+		return nil, "", fmt.Errorf("the askpass socket directory %s is too long for a Unix socket; set XDG_RUNTIME_DIR to a shorter directory", dir)
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -878,7 +878,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	const cmd = "port49 ssh"
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	socket := fs.String("socket", agent.SocketPath(), "the agent's socket")
+	socket := agent.SocketPath()
 	ttl := fs.Duration("ttl", 0, "ask for this token lifetime; the broker clamps it to your policy's token_ttl")
 	port := fs.Int("port", 0, "the device's SSH port (default: ssh's, 22 unless your ssh_config says otherwise)")
 	bin := fs.String("ssh", "ssh", "the OpenSSH client to run, 8.5 or later")
@@ -928,11 +928,11 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	// sign-in, at this terminal); a re-mint while ssh runs is the agent's
 	// alone: it holds the terminal, and the proof is reused for reuse_for.
 	mint := func(ctx context.Context) (api.MintItem, error) {
-		return agent.NewClient(*socket).Token(ctx, req)
+		return agent.NewClient(socket).Token(ctx, req)
 	}
-	item, err := mintProved(context.Background(), proveFlags(*socket), req, stderr)
+	item, err := mintProved(context.Background(), proveFlags(socket), req, stderr)
 	mintedAt := time.Now()
-	if mintFailed(cmd, *socket, device, item, err, stderr) {
+	if mintFailed(cmd, socket, device, item, err, stderr) {
 		return 1
 	}
 	if item.Address == "" || item.Username == "" || strings.ContainsAny(item.Address, "\"\n") {
@@ -942,7 +942,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	// Asked before the signal trap, so a ^C while the agent is slow to answer
 	// ends the run before anything is sent (Task 3 re-review 3, N1).
-	warn := ceilingWarning(*socket)
+	warn := ceilingWarning(socket)
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", cmd, err)
@@ -954,7 +954,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
-	ln, sockPath, err := listenAskpass(*socket)
+	ln, sockPath, err := listenAskpass(socket)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s\n", cmd, unprefixed(err))
 		return 1
@@ -1017,7 +1017,7 @@ func sshCmd(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}()
-	stopWarn := warnInSession(stderr, *socket, device, item, warn)
+	stopWarn := warnInSession(stderr, socket, device, item, warn)
 	err = c.Wait()
 	stopWarn()
 	code := exitCode(err)

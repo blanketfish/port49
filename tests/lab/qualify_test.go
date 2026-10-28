@@ -298,9 +298,9 @@ func (q *qualEnv) login() {
 	}
 	q.t.Cleanup(func() { os.RemoveAll(sockDir) })
 	q.sock = filepath.Join(sockDir, "a", "agent.sock")
-	out, err := exec.Command(port49, "login", "--broker", sliceBrokerURL,
+	out, err := withAgent(exec.Command(port49, "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", q.sock).CombinedOutput()
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), q.sock).CombinedOutput()
 	if err != nil {
 		q.t.Fatalf("INVALID: port49 login: %v", err)
 	}

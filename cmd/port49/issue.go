@@ -100,8 +100,8 @@ func loginIssued(sf *sessionFlags, stdout, stderr io.Writer) int {
 			other = fmt.Sprintf("an agent for %s with another certificate", st.Broker)
 		}
 		if other != "" {
-			fmt.Fprintf(stderr, "port49 login: %s already holds %s; run 'port49 refresh' to extend that session, "+
-				"stop that agent first, or use --socket\n", other, sf.socket)
+			fmt.Fprintf(stderr, "port49 login: %s already holds the agent; run 'port49 refresh' to extend that session, "+
+				"or stop that agent first\n", other)
 			return 1
 		}
 		if sf.signIn {

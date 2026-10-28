@@ -45,7 +45,7 @@ func TestLoginAsksATerminalWhenTheTokenReportsTriesLow(t *testing.T) {
 	prompts, _ := pinPty(t, hwtest.SoftHSMUserPIN)
 	logins := pkcs11.LoginCalls()
 	var out, errb bytes.Buffer
-	code := run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb)
+	code := run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, false)...), &out, &errb)
 	if code == 0 || !strings.Contains(errb.String(), "will not spend one unattended") {
 		t.Fatalf("no terminal: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -62,7 +62,7 @@ func TestLoginAsksATerminalWhenTheTokenReportsTriesLow(t *testing.T) {
 	logins = pkcs11.LoginCalls()
 	out.Reset()
 	errb.Reset()
-	code = run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb)
+	code = run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, false)...), &out, &errb)
 	if code != 0 || !strings.Contains(out.String(), "port49: logged in to "+l.url) {
 		t.Fatalf("a terminal: code %d stdout %q stderr %q log %q", code, out.String(), errb.String(), agentLog(sock))
 	}

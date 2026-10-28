@@ -35,14 +35,14 @@ func TestL60E(t *testing.T) {
 	h.obsStatus("status_after_pull", s)
 
 	h.step("3", "port49 token leaf1 with the key out: on the held connection")
-	h.obsResult("mint_held", h.port49(runOpts{token: true}, "token", "--socket", s, leafPlain))
+	h.obsResult("mint_held", h.port49(runOpts{token: true}, "token", onSock(s), leafPlain))
 
 	h.step("4", "port49 refresh with the key out")
-	h.obsResult("refresh_key_out", h.port49(runOpts{}, "refresh", "--socket", s))
+	h.obsResult("refresh_key_out", h.port49(runOpts{}, "refresh", onSock(s)))
 
 	h.step("5", "the session survives: GET /status and a second mint")
 	h.obsStatus("status_key_out", s)
-	h.obsResult("mint_held_again", h.port49(runOpts{token: true}, "token", "--socket", s, leafPlain))
+	h.obsResult("mint_held_again", h.port49(runOpts{token: true}, "token", onSock(s), leafPlain))
 
 	h.step("6", "RE-INSERT the key; nothing is minted until the status is read")
 	h.waitEnter("Put the YubiKey back and wait for its light.", handDeadline)
@@ -52,7 +52,7 @@ func TestL60E(t *testing.T) {
 	h.obsStatus("status_after_relogin", s)
 
 	h.step("8", "port49 refresh after the re-login")
-	h.obsResult("refresh_after_relogin", h.port49(runOpts{}, "refresh", "--socket", s))
+	h.obsResult("refresh_after_relogin", h.port49(runOpts{}, "refresh", onSock(s)))
 	h.stopAgent(s)
 
 	h.pullCode()
@@ -128,24 +128,24 @@ func TestL60E2(t *testing.T) {
 	h.obs("second_login_pin_prompts", itoa(h.askInt("How many times did that login ask for the PIN?")))
 
 	h.step("3", "a second `port49 token leaf1` (another process)")
-	h.obsResult("second_token", h.port49(runOpts{token: true}, "token", "--socket", a, leafPlain))
+	h.obsResult("second_token", h.port49(runOpts{token: true}, "token", onSock(a), leafPlain))
 
 	h.step("4", "agent A still logged in: GET /status and a refresh, which signs")
 	h.obsStatus("status_a_after", a)
-	h.obsResult("refresh_a_after", h.port49(runOpts{}, "refresh", "--socket", a))
+	h.obsResult("refresh_a_after", h.port49(runOpts{}, "refresh", onSock(a)))
 
 	bs := socketIn(t)
 	r = h.typedLogin("5", "login_b", loginArgs(b, bs, h.keyRef(slot9a, false), "", ""))
 	h.obsStatus("status_a_after_b_login", a)
-	h.obsResult("refresh_a_after_b_login", h.port49(runOpts{}, "refresh", "--socket", a))
+	h.obsResult("refresh_a_after_b_login", h.port49(runOpts{}, "refresh", onSock(a)))
 	if r.code == 0 {
-		h.obsResult("refresh_b", h.port49(runOpts{}, "refresh", "--socket", bs))
+		h.obsResult("refresh_b", h.port49(runOpts{}, "refresh", onSock(bs)))
 	}
 
 	h.step("6", "agent B stops; agent A's refresh again")
 	h.stopAgent(bs)
 	h.obsStatus("status_a_after_b_stop", a)
-	h.obsResult("refresh_a_after_b_stop", h.port49(runOpts{}, "refresh", "--socket", a))
+	h.obsResult("refresh_a_after_b_stop", h.port49(runOpts{}, "refresh", onSock(a)))
 	h.stopAgent(a)
 	h.pinTries("pin_tries_after")
 }

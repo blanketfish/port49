@@ -25,7 +25,7 @@ func loginOnce(t *testing.T, l *labBroker, sock, ref, pin string) (code int, std
 	t.Helper()
 	asked, _ := pinPty(t, pin)
 	var out, errb bytes.Buffer
-	code = run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb)
+	code = run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, false)...), &out, &errb)
 	return code, errb.String(), int(asked.Load())
 }
 

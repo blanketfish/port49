@@ -800,8 +800,8 @@ func (r l64SSHRun) counts() string {
 func (e *l64Env) portSSH(ctx context.Context) l64SSHRun {
 	off, from := e.l.mark(), time.Now()
 	var r l64SSHRun
-	r.stdout, r.stderr, r.exit, r.err = l64Run(ctx, e.env(), root, filepath.Join(root, "bin", "port49"), "ssh", "-v",
-		"--socket", e.sock, "--ssh-config", e.cfgPath, e.node, "--", "show version")
+	r.stdout, r.stderr, r.exit, r.err = l64Run(ctx, append(e.env(), "PORT49_TEST_AGENT_SOCKET="+e.sock), root, filepath.Join(root, "bin", "port49"), "ssh", "-v",
+		"--ssh-config", e.cfgPath, e.node, "--", "show version")
 	r.recs = e.l.drainRecords(off, 6*time.Second)
 	r.packets = e.tacacsIn(from, time.Now())
 	r.read = l64ReadSSH(r.stderr)
@@ -938,9 +938,9 @@ func (e *l64Env) newAgent() (string, func(), error) {
 	sock := filepath.Join(dir, "a", "agent.sock")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	out, errOut, exit, err := l64Run(ctx, os.Environ(), root, filepath.Join(root, "bin", "port49"), "login",
+	out, errOut, exit, err := l64Run(ctx, append(os.Environ(), "PORT49_TEST_AGENT_SOCKET="+sock), root, filepath.Join(root, "bin", "port49"), "login",
 		"--broker", sliceBrokerURL, "--cert", filepath.Join(pki, testpki.LabClientCert), "--key",
-		filepath.Join(pki, testpki.LabClientKey), "--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock)
+		filepath.Join(pki, testpki.LabClientKey), "--broker-ca", filepath.Join(pki, testpki.LabCA))
 	if err != nil || exit != 0 {
 		os.RemoveAll(dir)
 		return "", nil, fmt.Errorf("port49 login: exit %d %v\n%s", exit, err, errOut)

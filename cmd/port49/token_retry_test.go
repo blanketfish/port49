@@ -145,7 +145,8 @@ func TestTokenCommandWaitsOutTheStartGate(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(permit)
 	}))
 	var out, errb lockedBuffer
-	code := run([]string{"token", "--socket", sock, "leaf1"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "leaf1"}, &out, &errb)
 	if code != 0 || out.String() != "LOGINTOKEN\n" || n.Load() != 3 {
 		t.Fatalf("code %d out %q err %q after %d calls", code, out.String(), errb.String(), n.Load())
 	}
@@ -166,7 +167,8 @@ func TestTokenCommandGivesUpWithTheSameWords(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(api.Error{Error: "store_unavailable", Detail: "gate closed; retry in 5s"})
 	}))
 	var out, errb lockedBuffer
-	code := run([]string{"token", "--json", "--socket", sock, "leaf1"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "--json", "leaf1"}, &out, &errb)
 	var f tokenFailure
 	if code != 1 || json.Unmarshal([]byte(out.String()), &f) != nil || f.Error != "broker_unavailable" ||
 		!strings.Contains(errb.String(), "gate closed; retry in 5s") || fc.at.Sub(time.Unix(1000, 0)) != 30*time.Second {

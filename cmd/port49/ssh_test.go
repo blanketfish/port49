@@ -97,7 +97,7 @@ func newSSHRig(t *testing.T, dev *deviceSSH, item api.MintItem, warn int, known 
 	if err := os.WriteFile(r.config, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r.flags = []string{"--socket", r.sock, "--ssh", sshTestBin(t), "--ssh-config", r.config,
+	r.flags = []string{"--ssh", sshTestBin(t), "--ssh-config", r.config,
 		"--port", strconv.Itoa(dev.port)}
 	return r
 }
@@ -141,6 +141,7 @@ func testHostKey(t *testing.T) ssh.PublicKey {
 func (r *sshRig) run(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb lockedBuffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", r.sock)
 	code := run(append(append([]string{"ssh"}, r.flags...), args...), &out, &errb)
 	return code, out.String(), errb.String()
 }
@@ -193,7 +194,7 @@ func TestTheTokenIsNeverInArgvOrTheEnvironment(t *testing.T) {
 	if err := os.WriteFile(at("ssh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = at("ssh")
+	r.flags[1] = at("ssh")
 	code, out, errb := r.run(t, "leaf1")
 	read := func(name string) string {
 		b, err := os.ReadFile(at(name))
@@ -245,7 +246,7 @@ func TestNoTokenNoSSH(t *testing.T) {
 	} {
 		dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 		r := newSSHRig(t, dev, sshPermit, 0, dev.key)
-		r.flags[1] = agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		r.sock = agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(c.status)
 			_ = json.NewEncoder(w).Encode(c.body)
 		}))
@@ -256,7 +257,7 @@ func TestNoTokenNoSSH(t *testing.T) {
 	}
 	dev := startDeviceSSH(t, []string{"password"}, "LOGINTOKEN", 0)
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
-	r.flags[1] = filepath.Join(t.TempDir(), "gone", "agent.sock")
+	r.sock = filepath.Join(t.TempDir(), "gone", "agent.sock")
 	code, _, errb := r.run(t, "leaf1")
 	if code != 1 || dev.connections() != 0 || !strings.Contains(errb, "port49 ssh: no agent at ") {
 		t.Fatalf("no agent: code %d conns %d stderr %q", code, dev.connections(), errb)
@@ -322,7 +323,7 @@ func TestAnOldOpenSSHIsRefusedBeforeAMint(t *testing.T) {
 	if err := os.WriteFile(old, []byte("#!/bin/sh\necho 'OpenSSH_8.4p1 Debian-5+deb11u3, OpenSSL 1.1.1w' >&2\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = old
+	r.flags[1] = old
 	code, _, errb := r.run(t, "leaf1")
 	if code != 1 || r.mints.Load() != 0 || !strings.Contains(errb, "is OpenSSH 8.4; port49 ssh needs 8.5 or later") {
 		t.Fatalf("code %d mints %d stderr %q", code, r.mints.Load(), errb)

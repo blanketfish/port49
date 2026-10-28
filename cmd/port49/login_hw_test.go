@@ -49,8 +49,8 @@ func tokenWithTheLabKey(t *testing.T, l *labBroker) (ref string) {
 
 // flagsWithKey is l's flags with --key replaced by ref; noCert drops --cert,
 // so the certificate would come from the token.
-func flagsWithKey(l *labBroker, sock, ref string, noCert bool) []string {
-	in := l.flags(sock)
+func flagsWithKey(t *testing.T, l *labBroker, sock, ref string, noCert bool) []string {
+	in := l.flags(t, sock)
 	var out []string
 	for i := 0; i < len(in); i++ {
 		switch {
@@ -114,7 +114,7 @@ func TestLoginAsksThePINOnceAndSaysTriesLeft(t *testing.T) {
 	prompts, shown := pinPty(t, "000000")
 	logins := pkcs11.LoginCalls()
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, false)...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "the token refused the PIN") {
 		t.Fatalf("a wrong PIN: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -134,7 +134,7 @@ func TestLoginAsksThePINOnceAndSaysTriesLeft(t *testing.T) {
 	prompts, shown = pinPty(t, hwtest.SoftHSMUserPIN)
 	out.Reset()
 	errb.Reset()
-	if code := run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, false)...), &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "port49: logged in to "+l.url) || !strings.Contains(out.String(), "\nrefreshed at ") {
 		t.Fatalf("code %d stdout %q stderr %q log %q", code, out.String(), errb.String(), agentLog(sock))
 	}
@@ -209,7 +209,7 @@ func TestLoginWithTheKeyOutReachesTheAgent(t *testing.T) {
 	h := serveHeldAgent(t, l, sock, ref, fp, "absent")
 	opens, logins := pkcs11.OpenCalls(), pkcs11.LoginCalls()
 	var out, errb bytes.Buffer
-	code := run(append([]string{"login"}, flagsWithKey(l, sock, ref, false)...), &out, &errb)
+	code := run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, false)...), &out, &errb)
 	if code != 1 || !strings.Contains(errb.String(), "insert your key and run `port49 login` again; your session goes on until 2099-01-01T00:00:00Z") {
 		t.Fatalf("absent: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -225,7 +225,7 @@ func TestLoginWithTheKeyOutReachesTheAgent(t *testing.T) {
 	prompts, _ := pinPty(t, hwtest.SoftHSMUserPIN)
 	out.Reset()
 	errb.Reset()
-	code = run(append([]string{"login"}, flagsWithKey(l, sock, ref, true)...), &out, &errb)
+	code = run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, true)...), &out, &errb)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if code != 0 || prompts.Load() != 1 || h.pins != 1 || h.refresh != 1 {

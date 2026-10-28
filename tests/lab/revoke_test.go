@@ -128,9 +128,9 @@ func personAgent(t *testing.T, cert, key string) (sock string, pid int, stop fun
 	sock = filepath.Join(dir, "a", "agent.sock")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
+	out, err := withAgent(exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, cert), "--key", filepath.Join(pki, key),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock).CombinedOutput()
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), sock).CombinedOutput()
 	m := agentPID.FindSubmatch(out)
 	if err != nil || m == nil {
 		os.RemoveAll(dir)
@@ -238,9 +238,9 @@ func revokedLogin(t *testing.T, fail func(string, ...any)) string {
 	defer os.RemoveAll(dir)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
+	out, err := withAgent(exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", filepath.Join(dir, "a", "agent.sock")).CombinedOutput()
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), filepath.Join(dir, "a", "agent.sock")).CombinedOutput()
 	if m := agentPID.FindSubmatch(out); m != nil {
 		pid, _ := strconv.Atoi(string(m[1]))
 		_ = syscall.Kill(pid, syscall.SIGTERM)

@@ -34,8 +34,9 @@ func TestTheAgentTrustsTheCABytesItIsHanded(t *testing.T) {
 		t.Fatal(err)
 	}
 	flags := func(sock string) []string {
+		t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
 		return []string{"--broker", l.url, "--cert", filepath.Join(l.dir, testpki.LabClientCert),
-			"--key", filepath.Join(l.dir, testpki.LabClientKey), "--broker-ca", swapped, "--socket", sock}
+			"--key", filepath.Join(l.dir, testpki.LabClientKey), "--broker-ca", swapped}
 	}
 
 	// Without the fd the swapped file is what the agent trusts, and it refuses.
@@ -102,9 +103,9 @@ func TestACAFromTheLoginThatHoldsNoCertificateNamesItsSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	var log lockedBuffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", privateSocket(t))
 	code := run([]string{"agent", "--broker", l.url, "--cert", filepath.Join(l.dir, testpki.LabClientCert),
-		"--key", filepath.Join(l.dir, testpki.LabClientKey), "--broker-ca", "/etc/port49/ca.pem",
-		"--socket", privateSocket(t), "--broker-ca-fd", strconv.Itoa(handed)}, io.Discard, &log)
+		"--key", filepath.Join(l.dir, testpki.LabClientKey), "--broker-ca", "/etc/port49/ca.pem", "--broker-ca-fd", strconv.Itoa(handed)}, io.Discard, &log)
 	if code == 0 || !strings.Contains(log.String(), "the broker CA the login passed (from /etc/port49/ca.pem) holds no PEM certificate") {
 		t.Fatalf("code %d: %s", code, log.String())
 	}

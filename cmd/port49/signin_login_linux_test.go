@@ -313,9 +313,10 @@ func scrubEnrollment(s string) string {
 }
 
 // dirFlags is `port49 login --directory` for the lab.
-func (d *dirLab) dirFlags(sock string, extra ...string) []string {
-	return append([]string{"login", "--directory", "--broker", d.url, "--broker-ca", filepath.Join(d.dir, testpki.LabCA),
-		"--socket", sock}, extra...)
+func (d *dirLab) dirFlags(t *testing.T, sock string, extra ...string) []string {
+	t.Helper()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	return append([]string{"login", "--directory", "--broker", d.url, "--broker-ca", filepath.Join(d.dir, testpki.LabCA)}, extra...)
 }
 
 // login runs `port49 login --directory` on sock, the person typing what
@@ -326,7 +327,7 @@ func (d *dirLab) login(t *testing.T, sock string, answer prompter, extra ...stri
 	t.Setenv(runCLIEnv, "1")
 	var so, se bytes.Buffer
 	asked := driveLogin(t, labDirName, so.String, answer)
-	code := run(d.dirFlags(sock, extra...), &so, &se)
+	code := run(d.dirFlags(t, sock, extra...), &so, &se)
 	return loginResult{code: code, out: scrubEnrollment(so.String()), err: se.String(), screen: so.String(), asked: *asked}
 }
 
@@ -334,7 +335,8 @@ func (d *dirLab) login(t *testing.T, sock string, answer prompter, extra ...stri
 func mints(t *testing.T, sock string) {
 	t.Helper()
 	var tok, terr bytes.Buffer
-	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"token", "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
 	}
 }
@@ -482,7 +484,8 @@ func TestLoginDirectoryEnrollsIssuesAndMints(t *testing.T) {
 		}
 	}
 	var tok, terr bytes.Buffer
-	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"token", "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
 	}
 	uri := "otpauth://"

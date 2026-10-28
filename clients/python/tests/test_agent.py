@@ -63,9 +63,13 @@ class AgentTest(unittest.TestCase):
         self.assertEqual((tok.address, tok.username, tok.login, tok.enable), ("10.0.0.11", "alice", "LOGINTOKEN", "ENABLETOKEN"))
         self.assertEqual(fake.argvs(self.dir), [["token", "--json", "--enable", "--ttl", "300s", "--", "leaf1"]])
 
-    def test_a_socket_goes_after_the_subcommand(self):
-        self.agent({"stdout": PERMIT}, socket="/run/p49.sock").token("leaf1")
-        self.assertEqual(fake.argvs(self.dir), [["token", "--socket", "/run/p49.sock", "--json", "--", "leaf1"]])
+    def test_no_socket_is_named_to_the_cli(self):
+        self.agent({"stdout": PERMIT}).token("leaf1")
+        self.assertFalse([a for argv in fake.argvs(self.dir) for a in argv if "socket" in a])
+
+    def test_the_agent_takes_no_socket(self):
+        with self.assertRaises(TypeError):
+            Agent(socket="/run/p49.sock")
 
     def test_a_deny_is_denied_with_its_reason(self):
         a = self.agent({"stdout": fake.item(device="leaf1", verdict="deny", reason="no_grants_matched", detail="d"), "code": 1})

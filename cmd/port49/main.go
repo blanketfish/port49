@@ -42,7 +42,7 @@ import (
 )
 
 const usage = `usage:
-  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--socket PATH] [--touch-key REF] [--cert FILE --key FILE |
+  port49 login [--config FILE] [--broker URL] [--broker-ca FILE] [--touch-key REF] [--cert FILE --key FILE |
                --oidc [--issuer URL] [--oidc-ca FILE] [--redirect-port N] [--no-browser] [--sign-in] |
                --directory [--name NAME] [--sign-in]]
                (each flag overrides its key in ~/.port49/config.yaml, or the file $PORT49_CONFIG names,
@@ -54,11 +54,11 @@ const usage = `usage:
   port49 login [--config FILE] [--broker URL] --delete-key
                (issued_key_store: secure_enclave: deletes this Mac's Secure Enclave keys for the broker and
                the certificate held for them, after asking; the next login makes one key)
-  port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
-  port49 refresh [--socket PATH]
-  port49 identity [--json] [--socket PATH]
+  port49 token [--enable] [--ttl DURATION] [--json] DEVICE
+  port49 refresh
+  port49 identity [--json]
   port49 ssh [--ttl DURATION] [--port N] [--ssh PATH] [--ssh-config FILE] [-v]
-             [--socket PATH] DEVICE [-- COMMAND...]
+             DEVICE [-- COMMAND...]
              (mints through your agent and runs your OpenSSH, 8.5 or later; host keys are your OpenSSH
              known_hosts', accepted at first contact and refused if changed; exits with ssh's status)
   port49 workload token --broker URL --broker-ca FILE (--cert FILE --key FILE | --token-file FILE)
@@ -73,7 +73,7 @@ const usage = `usage:
   port49 workload identity --broker URL --broker-ca FILE (--cert FILE --key FILE | --token-file FILE) [--json]
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
-  port49 explain --device NAME [--command "LINE"] [--principal ID] [--socket PATH]
+  port49 explain --device NAME [--command "LINE"] [--principal ID]
                  (asks the broker through your agent; --principal another needs api: explain_others)
   port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]
                      (--config reads key_secret_refs alone; the key sets are the policy's)
@@ -341,7 +341,7 @@ func (s *sessionFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&s.touchKey, "touch-key", "", "a key reference on the same token as --key, whose touch the agent may use "+
 		"(touch_key in the config file)")
 	fs.IntVar(&s.pinFD, "pin-fd", 0, "internal: the descriptor the login passes the key's PIN on")
-	fs.StringVar(&s.socket, "socket", agent.SocketPath(), "the agent's socket")
+	s.socket = agent.SocketPath() // no flag names it: the CLI finds its agent at the per-user default
 	fs.StringVar(&s.configFile, "config", userconfig.Path(), "your port49 config file, over /etc/port49/config.yaml "+
 		"key by key; each flag overrides its key")
 }
@@ -409,7 +409,7 @@ func (s *sessionFlags) complete() bool {
 
 func (s *sessionFlags) args() []string {
 	a := []string{"--broker", s.broker, "--cert", s.cert, "--key", s.key, "--broker-ca", s.brokerCA,
-		"--broker-crl", cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck)), "--socket", s.socket}
+		"--broker-crl", cmp.Or(s.brokerCRL, string(brokercrl.ModeCheck))}
 	if s.touchKey != "" {
 		a = append(a, "--touch-key", s.touchKey)
 	}
@@ -637,8 +637,8 @@ func login(args []string, stdout, stderr io.Writer) int {
 			other = fmt.Sprintf("an agent for %s with another certificate", st.Broker)
 		}
 		if other != "" {
-			fmt.Fprintf(stderr, "port49 login: %s already holds %s; run 'port49 refresh' to extend that session, "+
-				"stop that agent first, or use --socket\n", other, sf.socket)
+			fmt.Fprintf(stderr, "port49 login: %s already holds the agent; run 'port49 refresh' to extend that session, "+
+				"or stop that agent first\n", other)
 			return 1
 		}
 		return refreshRunning(ctx, &sf, st, stdout, stderr)
@@ -965,7 +965,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	enable := fs.Bool("enable", false, "mint an enable token beside the login one (printed with --json)")
 	ttl := fs.Duration("ttl", 0, "ask for this lifetime; the broker clamps it to your policy's token_ttl")
 	asJSON := fs.Bool("json", false, "print the broker's whole answer as JSON, enable token included")
-	socket := fs.String("socket", agent.SocketPath(), "the agent's socket")
+	socket := agent.SocketPath()
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -975,10 +975,10 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	device := fs.Arg(0)
 	item, err := mintRetrying(func() (api.MintItem, error) {
-		return mintProved(context.Background(), proveFlags(*socket),
+		return mintProved(context.Background(), proveFlags(socket),
 			agent.TokenRequest{Device: device, Enable: *enable, TTLSeconds: int(*ttl / time.Second)}, stderr)
 	}, tokenRetryClock, "port49 token", stderr)
-	if mintFailed("port49 token", *socket, device, item, err, stderr) {
+	if mintFailed("port49 token", socket, device, item, err, stderr) {
 		if *asJSON {
 			_ = json.NewEncoder(stdout).Encode(tokenFailureOf(device, item, err))
 		}
@@ -987,7 +987,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	// The device's own ceiling, said where the operator is looking, for a
 	// platform that does not show the server_msg warning (decision 33).
 	// Before the --json and plain prints, so both get it.
-	warnNearCeiling(stderr, device, item, ceilingWarning(*socket))
+	warnNearCeiling(stderr, device, item, ceilingWarning(socket))
 	if *asJSON {
 		_ = json.NewEncoder(stdout).Encode(item)
 		return 0

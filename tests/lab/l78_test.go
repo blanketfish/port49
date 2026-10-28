@@ -249,7 +249,7 @@ func (q *qualEnv) scrub(s string) string {
 // l78Mint runs `port49 token`; unlike q.mint a refusal is a result, not a
 // harness fault. The token is never printed. mintErr is stderr's first line.
 func (q *qualEnv) l78Mint() (tok, mintErr string) {
-	cmd := exec.Command(filepath.Join(root, "bin", "port49"), "token", "--socket", q.sock, q.l.p.node)
+	cmd := withAgent(exec.Command(filepath.Join(root, "bin", "port49"), "token", q.l.p.node), q.sock)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

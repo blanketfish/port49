@@ -247,7 +247,7 @@ func TestAProxyJumpHopsPromptNeverGetsTheToken(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = filepath.Join(dir, "ssh")
+	r.flags[1] = filepath.Join(dir, "ssh")
 	_, out, errb := r.run(t, "leaf1")
 	b, err := os.ReadFile(answer)
 	if err != nil {

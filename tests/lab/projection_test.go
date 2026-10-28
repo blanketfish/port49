@@ -414,9 +414,9 @@ func (l *lab) projectionShape(t *testing.T, set, port49, pki string, devices []a
 	}
 	defer os.RemoveAll(sockDir)
 	sock := filepath.Join(sockDir, "a", "agent.sock")
-	out, err := exec.Command(port49, "login", "--broker", sliceBrokerURL,
+	out, err := withAgent(exec.Command(port49, "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock).CombinedOutput()
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), sock).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s: port49 login: %v\n%s", name, err, out)
 	}

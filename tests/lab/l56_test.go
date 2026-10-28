@@ -179,9 +179,10 @@ func newL56CLI(t *testing.T, proxy, idpCA string) *l56CLI {
 	}
 	c := &l56CLI{bin: bin, home: home, sock: filepath.Join(home, "run", "agent.sock"),
 		env: append(env, "HOME="+home, "HTTPS_PROXY=http://"+proxy, "NO_PROXY=127.0.0.1",
+			"PORT49_TEST_AGENT_SOCKET="+filepath.Join(home, "run", "agent.sock"),
 			"BROWSER=", "DISPLAY=", "WAYLAND_DISPLAY=")}
 	c.flags = []string{"--oidc", "--no-browser", "--redirect-port", "18749", "--broker", sliceBrokerURL,
-		"--broker-ca", filepath.Join(root, slicePKIDir, testpki.LabCA), "--oidc-ca", idpCA, "--socket", c.sock}
+		"--broker-ca", filepath.Join(root, slicePKIDir, testpki.LabCA), "--oidc-ca", idpCA}
 	t.Cleanup(c.stopAgent)
 	return c
 }
@@ -471,7 +472,7 @@ func (c *l56CLI) tokenLeak(kc *keycloak, tok, stdout, stderr string) error {
 // token mints device and returns the token, registered as secret. Nothing
 // exempts it from the check of any other output.
 func (c *l56CLI) token(kc *keycloak, device string) (string, l56Run) {
-	cmd := exec.Command(c.bin, "token", "--socket", c.sock, device)
+	cmd := exec.Command(c.bin, "token", device)
 	cmd.Env = c.env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -719,7 +720,7 @@ func l56(t *testing.T, l *lab) {
 	// 3. A refresh by the key: no browser, no address printed. Control: 1,
 	// whose sign-in printed the address.
 	time.Sleep(11 * time.Second) // past the connection's refresh pacing
-	r = cli.run(t, kc, "refresh", "--socket", cli.sock)
+	r = cli.run(t, kc, "refresh")
 	ran("3. port49 refresh, no browser", r, "")
 	if r.code != 0 || !strings.Contains(r.stdout, "extended to") || strings.Contains(r.stderr, "https://") {
 		fail("the refresh: %s", r.cell())
@@ -769,7 +770,7 @@ func l56(t *testing.T, l *lab) {
 	}
 	var gone l56Run
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
-		if gone = cli.run(t, kc, "identity", "--socket", cli.sock); strings.Contains(gone.stderr, "no agent") {
+		if gone = cli.run(t, kc, "identity"); strings.Contains(gone.stderr, "no agent") {
 			break
 		}
 	}
@@ -819,7 +820,7 @@ func l56(t *testing.T, l *lab) {
 		}
 	}
 	time.Sleep(11 * time.Second)
-	r = cli.run(t, kc, "refresh", "--socket", cli.sock)
+	r = cli.run(t, kc, "refresh")
 	ran("6b. port49 refresh, Keycloak stopped", r, "")
 	if r.code != 0 || !strings.Contains(r.stdout, "extended to") {
 		fail("a refresh with Keycloak stopped: %s", r.cell())

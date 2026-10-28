@@ -136,7 +136,7 @@ func TestL60FLock(t *testing.T) {
 			t.Fatal("a login succeeded: that was the right PIN; the cell stops (tries are reset by it)")
 		}
 		h.step("3."+n+"r", "agent A's refresh and GET /status after wrong PIN %d", i)
-		h.obsResult("refresh_a_after_wrong_"+n, h.port49(runOpts{}, "refresh", "--socket", a))
+		h.obsResult("refresh_a_after_wrong_"+n, h.port49(runOpts{}, "refresh", onSock(a)))
 		h.obsStatus("status_a_after_wrong_"+n, a)
 	}
 
@@ -153,7 +153,7 @@ func TestL60FLock(t *testing.T) {
 	h.obsResult("blocked_login_a", r)
 	h.obs("blocked_login_a_flags_from_words", pinWords(r.stderr))
 	h.obs("blocked_login_a_pin_prompts", itoa(h.askInt("How many times did port49 ask for the PIN?")))
-	h.obsResult("blocked_refresh_a", h.port49(runOpts{}, "refresh", "--socket", a))
+	h.obsResult("blocked_refresh_a", h.port49(runOpts{}, "refresh", onSock(a)))
 	h.obsStatus("blocked_status_a", a)
 	h.stopAgent(a)
 	h.pinTries("pin_tries_blocked")
@@ -170,7 +170,7 @@ func TestL60FLock(t *testing.T) {
 	r = h.typedLogin("7", "login_after_unblock", loginArgs(b, c, h.keyRef(slot9a, false), "", ""))
 	h.mustOK(r, "the login after the unblock")
 	h.obsStatus("status_after_unblock", c)
-	h.obsResult("refresh_after_unblock", h.port49(runOpts{}, "refresh", "--socket", c))
+	h.obsResult("refresh_after_unblock", h.port49(runOpts{}, "refresh", onSock(c)))
 	h.stopAgent(c)
 	h.pinTries("pin_tries_end")
 }

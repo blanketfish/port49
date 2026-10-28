@@ -17,7 +17,7 @@ import (
 func refreshCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 refresh", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	socket := fs.String("socket", agent.SocketPath(), "the agent's socket")
+	socket := agent.SocketPath()
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -25,7 +25,7 @@ func refreshCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	ctx, c := context.Background(), agent.NewClient(*socket)
+	ctx, c := context.Background(), agent.NewClient(socket)
 	out, err := c.Refresh(ctx, "")
 	if err == nil && out.PerLoginMFA != nil {
 		// A context was left for want of a proof: say what the first refresh
@@ -33,7 +33,7 @@ func refreshCmd(args []string, stdout, stderr io.Writer) int {
 		// broker takes the proof and paces nothing between the two). A second
 		// requirement is printed, never proved in a loop.
 		printRefresh(stdout, out)
-		if err = prove(ctx, *socket, proveFlags(*socket), *out.PerLoginMFA, stderr); err == nil {
+		if err = prove(ctx, socket, proveFlags(socket), *out.PerLoginMFA, stderr); err == nil {
 			if out, err = c.Refresh(ctx, out.PerLoginMFA.Challenge); err == nil && out.PerLoginMFA != nil {
 				printRefresh(stdout, out)
 				fmt.Fprintf(stderr, "port49 refresh: %s\n", describeMFA(*out.PerLoginMFA))
@@ -43,7 +43,7 @@ func refreshCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 refresh: no agent at %s; run 'port49 login'\n", *socket)
+		fmt.Fprintf(stderr, "port49 refresh: no agent at %s; run 'port49 login'\n", socket)
 		return 1
 	case err != nil:
 		fmt.Fprintln(stderr, "port49 refresh:", unprefixed(err))

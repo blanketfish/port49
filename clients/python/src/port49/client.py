@@ -124,15 +124,12 @@ def refusal_of(err, device):
 class Agent:
     """A person's tokens, through the agent `port49 login` started."""
 
-    def __init__(self, port49="port49", socket=None, attempts=3, timeout=None, stderr=None):
-        self.port49, self.socket, self.attempts, self.timeout, self.stderr = port49, socket, attempts, timeout, stderr
+    def __init__(self, port49="port49", attempts=3, timeout=None, stderr=None):
+        self.port49, self.attempts, self.timeout, self.stderr = port49, attempts, timeout, stderr
         self._sleep = time.sleep
 
     def _argv(self, *args):
-        argv = [self.port49, *args]
-        if self.socket:
-            argv[2:2] = ["--socket", self.socket]
-        return argv
+        return [self.port49, *args]
 
     def identity(self):
         ran = _run.run(self._argv("identity", "--json"), timeout=self.timeout, stderr=self.stderr)

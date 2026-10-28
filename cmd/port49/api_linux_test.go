@@ -28,7 +28,7 @@ func TestTheCLIReachesTheAPIThroughTheAgent(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 {
+	if code := run(append([]string{"login"}, l.flags(t, sock)...), &out, &errb); code != 0 {
 		t.Fatalf("login: %d %s %s", code, out.String(), errb.String())
 	}
 	cli := func(args ...string) (int, string, string) {
@@ -37,17 +37,20 @@ func TestTheCLIReachesTheAPIThroughTheAgent(t *testing.T) {
 		code := run(args, &out, &errb)
 		return code, out.String(), errb.String()
 	}
-	if code, so, se := cli("identity", "--socket", sock); code != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code, so, se := cli("identity"); code != 0 ||
 		!strings.Contains(so, "principal  user:alice@example.com") || !strings.Contains(so, "subject    s") ||
 		!strings.Contains(so, "all_devices [r]") || !strings.Contains(so, "api        (none") ||
 		!strings.Contains(so, "this connection lasts until") {
 		t.Fatalf("identity: %d %q %q", code, so, se)
 	}
-	if code, so, se := cli("explain", "--socket", sock, "--device", "leaf1", "--command", "show version"); code != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code, so, se := cli("explain", "--device", "leaf1", "--command", "show version"); code != 0 ||
 		!strings.HasPrefix(so, "permit permit_dominates") {
 		t.Fatalf("explain: %d %q %q", code, so, se)
 	}
-	if code, _, se := cli("explain", "--socket", sock, "--device", "leaf1", "--subject", "s"); code != 2 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code, _, se := cli("explain", "--device", "leaf1", "--subject", "s"); code != 2 ||
 		!strings.Contains(se, "--subject") {
 		t.Fatalf("explain --subject over the agent: %d %q", code, se)
 	}
@@ -56,7 +59,8 @@ func TestTheCLIReachesTheAPIThroughTheAgent(t *testing.T) {
 		!strings.Contains(so, "ended user:alice@example.com's sessions everywhere") {
 		t.Fatalf("revoke --mine: %d %q %q", code, so, se)
 	}
-	if code, so, se := cli("token", "--socket", sock, "leaf1"); code != 0 || so == "" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code, so, se := cli("token", "leaf1"); code != 0 || so == "" {
 		t.Fatalf("a token after revoke --mine: %d %q %q", code, so, se)
 	}
 	// This agent has no touch key, so an admin call is refused before it is

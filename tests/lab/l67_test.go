@@ -2132,9 +2132,10 @@ func l67Said(screen string, secrets ...string) string {
 func (c *l67CLI) login(t *testing.T, in l67LoginIn) l67LoginOut {
 	t.Helper()
 	term, slave := newL67Term(t)
-	args := append([]string{"login", "--directory", "--name", in.name, "--broker", c.broker, "--broker-ca", c.ca, "--socket", c.sock}, in.extra...)
+	args := append([]string{"login", "--directory", "--name", in.name, "--broker", c.broker, "--broker-ca", c.ca}, in.extra...)
 	cmd := exec.Command(c.bin, args...)
 	cmd.Env = c.env
+	withAgent(cmd, c.sock)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start port49 login: %v", err)
@@ -2251,8 +2252,9 @@ type l67TokenOut struct {
 // whole of stdout and is never kept: only that one line came.
 func (c *l67CLI) token(t *testing.T, device string) l67TokenOut {
 	t.Helper()
-	cmd := exec.Command(c.bin, "token", "--socket", c.sock, device)
+	cmd := exec.Command(c.bin, "token", device)
 	cmd.Env = c.env
+	withAgent(cmd, c.sock)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

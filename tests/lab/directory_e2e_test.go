@@ -232,9 +232,9 @@ func tryAgent(cert, key string) (sock string, pid int, out string, stop func(), 
 		return "", 0, "", nil, err
 	}
 	sock = filepath.Join(dir, "a", "agent.sock")
-	cmd := exec.Command(filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
+	cmd := withAgent(exec.Command(filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, cert), "--key", filepath.Join(pki, key),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock)
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), sock)
 	cmd.Dir = root
 	var b strings.Builder
 	cmd.Stdout, cmd.Stderr = &b, &b

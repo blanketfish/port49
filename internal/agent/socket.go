@@ -80,7 +80,7 @@ func checkPrivateDir(dir string) error {
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != getuid() {
 		return fmt.Errorf("agent: %s is not owned by you (uid %d); whoever owns it can replace the socket, "+
-			"so it is refused - remove it or pass --socket", dir, getuid())
+			"so it is refused - remove it, or set XDG_RUNTIME_DIR to a directory you own", dir, getuid())
 	}
 	return nil
 }
@@ -94,7 +94,7 @@ const maxSocketPath = 107
 func Listen(path string) (net.Listener, error) {
 	if len(path) > maxSocketPath {
 		return nil, fmt.Errorf("agent: the socket path %s is %d bytes, too long for a Unix socket (at most %d); "+
-			"pass a shorter --socket", path, len(path), maxSocketPath)
+			"set XDG_RUNTIME_DIR to a shorter directory", path, len(path), maxSocketPath)
 	}
 	if err := PrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err

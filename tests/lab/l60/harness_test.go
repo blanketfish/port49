@@ -388,8 +388,12 @@ func (h *lab) port49(o runOpts, args ...string) result {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), o.deadline)
 	defer cancel()
+	args, sock := splitSock(args)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.Env = h.childEnv()
+	if sock != "" {
+		cmd.Env = append(cmd.Env, "PORT49_TEST_AGENT_SOCKET="+sock)
+	}
 	// SIGTERM first: port49's PIN prompt restores the terminal on it.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
@@ -426,7 +430,7 @@ func (h *lab) port49(o runOpts, args ...string) result {
 		clear(outb.Bytes())
 	} else {
 		r.stdout = outb.String()
-		h.noteAgent(args, r.stdout)
+		h.noteAgent(sock, r.stdout)
 	}
 	return r
 }
@@ -458,17 +462,31 @@ func parseAgentLine(stdout string) (pid int, log string, ok bool) {
 	return pid, m[2], err == nil
 }
 
-// noteAgent remembers an agent a login started, by its --socket.
-func (h *lab) noteAgent(args []string, stdout string) {
+// sockMark begins an argument that is not for port49: it names the agent the
+// command talks to, which no flag does. port49 strips it and puts the path in
+// PORT49_TEST_AGENT_SOCKET in the child's environment (splitSock).
+const sockMark = "\x00agent="
+
+// onSock is the argument that points a command at the agent at sock.
+func onSock(sock string) string { return sockMark + sock }
+
+// splitSock separates the agent's socket from the arguments for port49.
+func splitSock(args []string) (rest []string, sock string) {
+	for _, a := range args {
+		if p, ok := strings.CutPrefix(a, sockMark); ok {
+			sock = p
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return rest, sock
+}
+
+// noteAgent remembers an agent a login started, by its socket.
+func (h *lab) noteAgent(sock string, stdout string) {
 	pid, _, ok := parseAgentLine(stdout)
 	if !ok {
 		return
-	}
-	sock := ""
-	for i, a := range args {
-		if a == "--socket" && i+1 < len(args) {
-			sock = args[i+1]
-		}
 	}
 	h.mu.Lock()
 	h.agents[sock] = pid
@@ -764,7 +782,7 @@ func (h *lab) yubicoRoots() []byte {
 // loginArgs are a `port49 login`'s flags: the broker, its CA, the socket, the
 // key, and the certificate file when one is given (else the token's).
 func loginArgs(b *labBroker, sock, key, cert, touch string) []string {
-	a := []string{"login", "--broker", b.url, "--broker-ca", b.serverCA, "--socket", sock, "--key", key}
+	a := []string{"login", "--broker", b.url, "--broker-ca", b.serverCA, onSock(sock), "--key", key}
 	if cert != "" {
 		a = append(a, "--cert", cert)
 	}

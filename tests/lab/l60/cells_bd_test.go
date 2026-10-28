@@ -151,7 +151,7 @@ func TestL60B(t *testing.T) {
 	h.obsResult("control_login", r)
 	h.mustOK(r, "the control login")
 	h.obsStatus("control_status", s0)
-	h.obsResult("control_refresh", h.port49(runOpts{}, "refresh", "--socket", s0))
+	h.obsResult("control_refresh", h.port49(runOpts{}, "refresh", onSock(s0)))
 	h.stopAgent(s0)
 
 	h.step("2", "PIN tries before (ykman piv info, read only)")
@@ -165,10 +165,10 @@ func TestL60B(t *testing.T) {
 	h.obs("status_key_ref", st.KeyRef)
 
 	h.step("4", "port49 refresh: signs with slot 9a, no PIN (about 2s)")
-	rr := h.port49(runOpts{}, "refresh", "--socket", s1)
+	rr := h.port49(runOpts{}, "refresh", onSock(s1))
 	h.obsResult("refresh", rr)
 	h.step("5", "port49 token leaf1 on the held connection (the token is not shown)")
-	h.obsResult("token", h.port49(runOpts{token: true}, "token", "--socket", s1, leafPlain))
+	h.obsResult("token", h.port49(runOpts{token: true}, "token", onSock(s1), leafPlain))
 	h.obsStatus("status_after", s1)
 	h.stopAgent(s1)
 
@@ -193,20 +193,20 @@ func TestL60D(t *testing.T) {
 	h.obsStatus("status", s)
 
 	h.step("2", "control: port49 token %s, no second factor asked. Hands off (about 2s).", leafPlain)
-	h.obsResult("control_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", "--socket", s, leafPlain))
+	h.obsResult("control_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", onSock(s), leafPlain))
 
 	h.step("3", "port49 token %s WITH a touch", leafTouch)
 	h.waitEnter("After you press Enter, TOUCH the key when it blinks.", handDeadline)
-	h.obsResult("touched_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", "--socket", s, leafTouch))
+	h.obsResult("touched_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", onSock(s), leafTouch))
 
 	h.step("4", "port49 token %s with NO touch", leafTouch)
 	h.waitEnter("After you press Enter, do NOT touch the key; hands off until port49 reports (about 15s).", handDeadline)
-	h.obsResult("untouched_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", "--socket", s, leafTouch))
+	h.obsResult("untouched_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", onSock(s), leafTouch))
 	h.obsStatus("status_after_untouched", s)
 
 	h.step("5", "port49 token %s with a touch, right after the timeout", leafTouch)
 	h.waitEnter("After you press Enter, TOUCH the key when it blinks.", handDeadline)
-	h.obsResult("touched_after_timeout_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", "--socket", s, leafTouch))
+	h.obsResult("touched_after_timeout_token", h.port49(runOpts{deadline: touchDeadline, token: true}, "token", onSock(s), leafTouch))
 	h.obsStatus("status_end", s)
 	h.stopAgent(s)
 	h.pinTries("pin_tries_after")
