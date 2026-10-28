@@ -6737,7 +6737,9 @@ The output is run once, by etcd's root user.
 
 `port49-broker --config port49-broker.yaml` is the broker on etcd (plan 7e; decision 36).
 `port49-broker revoke --offline` revokes, lifts and (with `--list`) lists with every broker down,
-as the broker's user or root (host-local, §2). `port49d revoke --offline [--config FILE]
+as the broker's user (host-local, §2); it writes `broker.state_dir/marks.json`, which the broker's user owns, so
+run as root against such a directory it changes nothing and refuses with one line naming `sudo -u <owner>
+port49-broker revoke --offline ...`. `port49d revoke --offline [--config FILE]
 (--principal P | --cert-issuer I --cert-serial S) [--lift] | --list` is the same for a port49d
 with its broker in process, run with port49d stopped; it writes the store or
 `broker.revocations_file`, as the user that owns that file (port49d's user). Run as another uid,
