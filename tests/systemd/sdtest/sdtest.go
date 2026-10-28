@@ -167,15 +167,23 @@ func Forbidden(text string) []string {
 		{"--device", `--device(\s|=)`},
 		{"--device-cgroup-rule", `--device-cgroup-rule`},
 		{"a bind mount of /dev", `(-v|--volume)(\s+|=)/dev(/|:|\s|$)|(source|src)=/dev(/|,|\s|$)`},
-		{"a bind mount of /sys", `(-v|--volume)(\s+|=)/sys(:|\s|$)|(source|src)=/sys(,|\s|$)`},
 		{"a bind mount of /", `(-v|--volume)(\s+|=)/:|(source|src)=/(,|\s|$)`},
 		{"seccomp=unconfined", `seccomp(=|:)unconfined`},
 		{"the host's pid namespace", `--pid(\s+|=)host`},
 		{"the host's user namespace", `--userns(\s+|=)host`},
+		{"the host's ipc namespace", `--ipc(\s+|=)host`},
+		{"the host's uts namespace", `--uts(\s+|=)host`},
 		{"the host's network namespace", `--(net|network)(\s+|=)host`},
 	} {
 		if regexp.MustCompile(f.pattern).MatchString(text) {
 			found = append(found, f.name)
+		}
+	}
+	// /sys is bound only at the cgroup path the ruling allows.
+	for _, m := range regexp.MustCompile(`(?:-v|--volume)(?:\s+|=)(/sys[^\s:"]*)|(?:source|src)=(/sys[^\s,"]*)`).FindAllStringSubmatch(text, -1) {
+		if p := m[1] + m[2]; p != "/sys/fs/cgroup" && !strings.HasPrefix(p, "/sys/fs/cgroup/") {
+			found = append(found, "a bind mount of /sys")
+			break
 		}
 	}
 	for _, m := range regexp.MustCompile(`--cap-add(?:\s+|=)(\S+)`).FindAllStringSubmatch(text, -1) {
