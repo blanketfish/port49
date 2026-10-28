@@ -6736,7 +6736,11 @@ The output is run once, by etcd's root user.
 as the broker's user or root (host-local, §2). `port49d revoke --offline [--config FILE]
 (--principal P | --cert-issuer I --cert-serial S) [--lift] | --list` is the same for a port49d
 with its broker in process, run with port49d stopped; it writes the store or
-`broker.revocations_file`, as port49d's user or root. Live revocation goes through the API (§5.1.6).
+`broker.revocations_file`, as the user that owns that file (port49d's user). Run as another uid,
+root included, it changes nothing and refuses with one line naming `sudo -u <owner> port49d revoke
+--offline ...`: a file or `.lock` that root created would leave the non-root port49d unable to start.
+(`port49-broker revoke --offline` writes through etcd and has no such file.) Live revocation goes
+through the API (§5.1.6).
 
 **`admin_socket`**, in port49d.yaml or port49-broker.yaml, is refused at load: `admin_socket was
 removed: admin operations go over the broker API with a security key press (spec §5.1.6); delete
