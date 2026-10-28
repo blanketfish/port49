@@ -157,6 +157,7 @@ func readHost(t *testing.T, path string) string {
 // removed, on failure too, after the journals of every port49 unit are logged.
 func newBox(t *testing.T) box {
 	t.Helper()
+	shapetest.RefuseOnKeyHost(t) // before anything starts: this container is not an isolation boundary
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)

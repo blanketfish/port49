@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -258,7 +258,7 @@ lab-l80:
 lab-l84:
 	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
 
-lab-l84-systemd: packages
+lab-l84-systemd: smoke-keyhost packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
 	rc=0; PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
@@ -476,6 +476,12 @@ bin/helm-$(HELM_VERSION):
 helm-test: bin/helm-$(HELM_VERSION)
 	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
 
+# The container and cluster smokes run with enough privilege to escape to the host if their contents are
+# hostile, so they refuse to start on a host with a TPM (/dev/tpm0, /dev/tpmrm0) or a Yubico hidraw device,
+# which they only stat and read from sysfs. PORT49_SMOKE_ON_KEY_HOST=1 overrides it: its owner's decision.
+smoke-keyhost:
+	@go run ./tests/shapes/cmd/keyhost
+
 # The Kubernetes shape end to end (plan 12b, Task 11): the chart on a kind cluster. kind and kubectl are
 # pinned by sha256 like helm. UNVERIFIED: none of these targets has run; the first `make kind-smoke` is
 # the check. Behind the `kind` tag so `go test ./...` never needs Docker or a cluster, and it fails,
@@ -505,7 +511,7 @@ bin/kubectl-$(KUBECTL_VERSION):
 # Whatever the result, the cluster is deleted afterwards (the test's own guard covers a signal and the
 # deadline; this covers a make killed between them). To clean up by hand after any aborted run:
 # `bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke`, then `kind get clusters` is empty.
-kind-smoke: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+kind-smoke: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
 	docker build --target setup -t port49-setup:dev .
 	go build -o bin/oldroot ./tests/kind/cmd/oldroot
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
@@ -530,7 +536,7 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 # the exact state_dir refusal (a green broker, or a crash for another reason, fails it), so a passing
 # target is the red result observed. It builds the setup image the test loads, and deletes the
 # cluster afterwards like kind-smoke.
-kind-smoke-red: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+kind-smoke-red: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
 	docker build --target setup -t port49-setup:dev .
 	go build -o bin/oldroot ./tests/kind/cmd/oldroot
 	rc=0; KIND_OLD_ROOT=1 KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
@@ -540,11 +546,12 @@ kind-smoke-red: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERS
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
-# host. The container is never run with full privilege, a device or a bind mount of /dev (the host's TPM
-# and security key stay out of it): sdtest.RunArgs gives it CAP_SYS_ADMIN, an unconfined AppArmor profile
-# and tmpfs mounts, each justified there. It builds tests/systemd/Dockerfile (apt and the etcd image are
+# host. The container is never run with full privilege, a device or a bind mount of /dev, but it is NOT an
+# isolation boundary: CAP_SYS_ADMIN with an unconfined AppArmor profile and no user namespace is a known
+# container-escape set (kind's nodes are privileged, which is worse). So it refuses to start on a host with
+# a TPM or a Yubico key (smoke-keyhost); CI runners have neither. sdtest.RunArgs justifies each flag. It builds tests/systemd/Dockerfile (apt and the etcd image are
 # pulled by that build) and fails, never skips, when dist/ holds no package. Whatever the result, the
 # container and the network are removed afterwards, by their fixed names.
-systemd-smoke: packages
+systemd-smoke: smoke-keyhost packages
 	rc=0; go test -tags systemd ./tests/systemd/ -count=1 -v -timeout 30m || rc=$$?; \
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc

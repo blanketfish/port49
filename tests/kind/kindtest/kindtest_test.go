@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/tests/shapes/shapetest"
 )
 
 const podJSON = `{"spec":{"nodeName":"kind-worker"},"status":{"phase":"Running","hostIP":"172.18.0.3",
@@ -173,6 +175,8 @@ func TestUpDeletesAStaleClusterFirstAndAgainAtTheEnd(t *testing.T) {
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$*\" >> "+logf+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	defer func(r string) { shapetest.KeyHostRoot = r }(shapetest.KeyHostRoot)
+	shapetest.KeyHostRoot = t.TempDir() // the fake tree has no TPM; this host may
 	t.Setenv("KIND_BIN", fake)
 	t.Setenv("KUBECTL_BIN", fake)
 	t.Run("run", func(t *testing.T) { Up(t, "stalecheck") })

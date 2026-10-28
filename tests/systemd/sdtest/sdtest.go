@@ -142,6 +142,10 @@ var Ports = []string{"49:49", "8443:8443", "9049:9049", "9050:9050"}
 //
 // No --device and no bind mount of /dev or of anything else. If the first real run shows a unit
 // cannot start with these, the answer is to report the unit's error, never --privileged.
+//
+// This is not an isolation boundary. SYS_ADMIN, an unconfined AppArmor profile and no user namespace
+// are a known container-escape set, so a hostile payload in the container could reach host root. The
+// smoke therefore refuses to start on a host with a TPM or a Yubico key (shapetest.RefuseOnKeyHost).
 func RunArgs(name, network, image string) []string {
 	args := []string{"run", "-d", "--name", name, "--network", network,
 		"--cgroupns=private", "--cap-add", "SYS_ADMIN", "--security-opt", "apparmor=unconfined",
@@ -152,19 +156,32 @@ func RunArgs(name, network, image string) []string {
 	return append(args, image)
 }
 
-// Forbidden lists what text must never contain to hand a smoke container the host's devices: the
-// full-privilege flag, a device, a bind mount of /dev, or every capability. text is a harness file or a
-// Makefile recipe.
+// Forbidden lists what text must never contain to hand a smoke container the host: the full-privilege
+// flag, a device, a bind mount of /dev, /sys or /, any capability but SYS_ADMIN, an unconfined seccomp
+// profile, a device-cgroup rule, or the host's pid, user or network namespace. text is a harness file
+// or a Makefile recipe.
 func Forbidden(text string) []string {
 	var found []string
 	for _, f := range []struct{ name, pattern string }{
 		{"--privileged", `--privileged`},
 		{"--device", `--device(\s|=)`},
+		{"--device-cgroup-rule", `--device-cgroup-rule`},
 		{"a bind mount of /dev", `(-v|--volume)(\s+|=)/dev(/|:|\s|$)|(source|src)=/dev(/|,|\s|$)`},
-		{"--cap-add ALL", `--cap-add(\s+|=)(?i:all)\b`},
+		{"a bind mount of /sys", `(-v|--volume)(\s+|=)/sys(:|\s|$)|(source|src)=/sys(,|\s|$)`},
+		{"a bind mount of /", `(-v|--volume)(\s+|=)/:|(source|src)=/(,|\s|$)`},
+		{"seccomp=unconfined", `seccomp(=|:)unconfined`},
+		{"the host's pid namespace", `--pid(\s+|=)host`},
+		{"the host's user namespace", `--userns(\s+|=)host`},
+		{"the host's network namespace", `--(net|network)(\s+|=)host`},
 	} {
 		if regexp.MustCompile(f.pattern).MatchString(text) {
 			found = append(found, f.name)
+		}
+	}
+	for _, m := range regexp.MustCompile(`--cap-add(?:\s+|=)(\S+)`).FindAllStringSubmatch(text, -1) {
+		if c := strings.Trim(m[1], `"',`); c != "SYS_ADMIN" {
+			found = append(found, "--cap-add "+c)
+			break
 		}
 	}
 	return found

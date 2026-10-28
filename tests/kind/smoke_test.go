@@ -165,6 +165,7 @@ func sha(path string) string {
 }
 
 func TestKindSmoke(t *testing.T) {
+	shapetest.RefuseOnKeyHost(t) // kind's nodes are privileged containers
 	root := kindtest.Root()
 	s := &smoke{t: t, root: root, chart: filepath.Join(root, "deploy", "helm", "port49"), helm: "helm"}
 	s.subnet, s.gateway = dockerKindNetwork(t)

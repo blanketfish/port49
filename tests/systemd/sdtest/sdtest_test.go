@@ -245,9 +245,20 @@ func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
 		"docker run --mount type=bind,source=/dev,target=/dev x":         "a bind mount of /dev",
 		"docker run --mount type=bind,src=/dev/hidraw0,target=/x x":      "a bind mount of /dev",
 		"docker run --cap-add ALL x":                                     "--cap-add ALL",
-		"docker run --cap-add=all x":                                     "--cap-add ALL",
+		"docker run --cap-add=all x":                                     "--cap-add all",
 		`"run", "-d", "--privileged", "--cgroupns=private"`:              "--privileged",
 		"docker run --cap-add SYS_ADMIN --privileged --tmpfs /run image": "--privileged",
+		"docker run --cap-add SYS_PTRACE x":                              "--cap-add SYS_PTRACE",
+		"docker run --device-cgroup-rule='c 10:* rmw' x":                 "--device-cgroup-rule",
+		"docker run --security-opt seccomp=unconfined x":                 "seccomp=unconfined",
+		"docker run --pid=host x":                                        "the host's pid namespace",
+		"docker run --pid host x":                                        "the host's pid namespace",
+		"docker run --userns=host x":                                     "the host's user namespace",
+		"docker run --network=host x":                                    "the host's network namespace",
+		"docker run --net host x":                                        "the host's network namespace",
+		"docker run -v /sys:/sys x":                                      "a bind mount of /sys",
+		"docker run -v /:/host x":                                        "a bind mount of /",
+		"docker run --mount type=bind,source=/,target=/h x":              "a bind mount of /",
 	} {
 		got := Forbidden(text)
 		if len(got) == 0 || got[0] != want {
@@ -259,7 +270,8 @@ func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
 		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro image",
 		"docker run -v /var/devices:/x image",
 		"docker run --tmpfs /dev/shm image", // a tmpfs is not a host device
-		"docker run --cap-add ALLOW_NOTHING image",
+		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro --cap-add=SYS_ADMIN image",
+		`"--cap-add", "SYS_ADMIN"`,
 	} {
 		if got := Forbidden(ok); len(got) != 0 {
 			t.Errorf("%q was refused for %v", ok, got)
@@ -280,11 +292,20 @@ func TestTheHarnessNeverGrantsTheHostsDevices(t *testing.T) {
 		return string(b)
 	}
 	files := map[string]string{
-		"tests/systemd/smoke_test.go":   read("tests", "systemd", "smoke_test.go"),
-		"tests/systemd/cells_test.go":   read("tests", "systemd", "cells_test.go"),
-		"tests/systemd/l84_test.go":     read("tests", "systemd", "l84_test.go"),
 		"tests/systemd/Dockerfile":      read("tests", "systemd", "Dockerfile"),
 		".github/workflows/systemd.yml": read(".github", "workflows", "systemd.yml"),
+	}
+	// Every Go file in the smoke's package, whatever it is named: a new file that runs docker is scanned.
+	goFiles, err := filepath.Glob(filepath.Join(root, "tests", "systemd", "*.go"))
+	if err != nil || len(goFiles) < 3 {
+		t.Fatalf("found %d Go files in tests/systemd (%v), want smoke_test.go, cells_test.go and l84_test.go at least", len(goFiles), err)
+	}
+	for _, f := range goFiles {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files["tests/systemd/"+filepath.Base(f)] = string(b)
 	}
 	mk := read("Makefile")
 	for _, target := range []string{"systemd-smoke", "lab-l84-systemd"} {
@@ -454,5 +475,43 @@ func TestTmpfilesMakesTheConfigDirectories(t *testing.T) {
 	}
 	if strings.Contains(string(smoke), "install -d") {
 		t.Error("the smoke makes a directory itself (install -d): the shipped tmpfiles.d should")
+	}
+}
+
+// The smokes whose containers or nodes could reach host root refuse to start on a host with a TPM or a
+// Yubico key: the Makefile runs the check first, and each harness runs it before it starts anything.
+func TestSmokesRefuseOnAKeyHost(t *testing.T) {
+	root := kindtest.Root()
+	read := func(rel ...string) string {
+		b, err := os.ReadFile(filepath.Join(append([]string{root}, rel...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	mk := read("Makefile")
+	for _, target := range []string{"systemd-smoke", "kind-smoke", "kind-smoke-red", "lab-l84-systemd"} {
+		first := strings.Fields(strings.SplitN(strings.TrimPrefix(strings.SplitN(mk[strings.Index(mk, "\n"+target+":")+1:], "\n", 2)[0], target+":"), "##", 2)[0])
+		if len(first) == 0 || first[0] != "smoke-keyhost" {
+			t.Errorf("%s does not run smoke-keyhost before anything else (prerequisites %v)", target, first)
+		}
+	}
+	if r := recipe(t, mk, "smoke-keyhost"); !strings.Contains(r, "go run ./tests/shapes/cmd/keyhost") {
+		t.Errorf("smoke-keyhost does not run the guard:\n%s", r)
+	}
+	for _, c := range []struct{ file, after string }{
+		{"tests/systemd/smoke_test.go", "func newBox(t *testing.T) box {\n\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)"},
+		{"tests/kind/smoke_test.go", "func TestKindSmoke(t *testing.T) {\n\tshapetest.RefuseOnKeyHost(t)"},
+		{"tests/kind/kindtest/kindtest.go", "\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)\n\tkind := Bin("},
+	} {
+		if !strings.Contains(read(strings.Split(c.file, "/")...), c.after) {
+			t.Errorf("%s does not refuse on a key host before it starts anything", c.file)
+		}
+	}
+	if !strings.Contains(read("Makefile"), "NOT an\n# isolation boundary") && !strings.Contains(mk, "isolation boundary") {
+		t.Error("the Makefile comment does not say the container is not an isolation boundary")
+	}
+	if strings.Contains(mk, "the host's TPM\n# and security key stay out of it") {
+		t.Error("the Makefile still claims the flags keep the host's TPM and key out")
 	}
 }

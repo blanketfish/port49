@@ -63,6 +63,7 @@ type Cluster struct {
 // functions (shapetest.Guard), because the testing package runs no t.Cleanup on any of them.
 func Up(t *testing.T, name string) *Cluster {
 	t.Helper()
+	shapetest.RefuseOnKeyHost(t)
 	kind := Bin(t, "KIND_BIN")
 	c := &Cluster{T: t, Name: name, Kubeconfig: filepath.Join(t.TempDir(), "kubeconfig"), kubectl: Bin(t, "KUBECTL_BIN"), kind: kind}
 	deadline, _ := t.Deadline()

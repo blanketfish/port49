@@ -57,7 +57,7 @@ func TestMakefilePinsKindAndKubectlBySHA256(t *testing.T) {
 			t.Errorf("%s is not a 64 hex digit pin", v)
 		}
 	}
-	for _, want := range []string{"sha256sum -c -", "bin/kind-v$(KIND_VERSION)", "bin/kubectl-$(KUBECTL_VERSION)", "kind-smoke: image"} {
+	for _, want := range []string{"sha256sum -c -", "bin/kind-v$(KIND_VERSION)", "bin/kubectl-$(KUBECTL_VERSION)", "kind-smoke: smoke-keyhost image"} {
 		if !strings.Contains(mk, want) {
 			t.Errorf("the Makefile lacks %q", want)
 		}
