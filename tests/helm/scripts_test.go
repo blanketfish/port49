@@ -33,9 +33,13 @@ case "$cmd" in
       statefulset:'{.spec.template.spec.initContainers[0].image}') echo -n "alpine:3.22" ;;
       pod:'{.spec.nodeName}') case "$2" in t-broker-0) echo -n node-a ;; t-broker-1) echo -n node-b ;; esac ;;
       pod:'{.status.phase}') echo -n "${FAKE_PHASE:-Succeeded}" ;;
-      pods:*) i=0; while [ "$i" -lt "${FAKE_BROKER_PODS:-2}" ]; do echo "pod/t-broker-$i"; i=$((i + 1)); done ;;
+      pods:*) i=0; [ ! -f "$FAKE_DIR/gone" ] || FAKE_BROKER_PODS=0; while [ "$i" -lt "${FAKE_BROKER_PODS:-2}" ]; do echo "pod/t-broker-$i"; i=$((i + 1)); done ;;
     esac ;;
-  wait) [ "$FAKE_HANG" != wait ] || sleep 30 ;;
+  wait) [ "$FAKE_HANG" != wait ] || sleep 30
+        # the pods vanish between the count and the wait, and wait errors
+        if [ -n "$FAKE_WAITRACE" ]; then touch "$FAKE_DIR/gone"; exit 1; fi
+        # the pods are still there and the wait timed out
+        if [ -n "$FAKE_WAITFAIL" ]; then exit 1; fi ;;
   apply)
     n=$(ls "$FAKE_DIR" | grep -c '^apply-')
     cat > "$FAKE_DIR/apply-$n.json"
@@ -46,15 +50,32 @@ case "$cmd" in
     fi ;;
   exec)
     case "$*" in
-      *sha256sum*)
+      *"tar c -C /s/state"*)
+        # the source side of a copy: a real tar of placeholder files named by the arguments
+        all="$*"; names=${all##*"tar c -C /s/state "}
+        mkdir -p "$FAKE_DIR/src"
+        for n in $names; do echo "placeholder-$n" > "$FAKE_DIR/src/$n"; done
+        tar c -C "$FAKE_DIR/src" $names ;;
+      *.copy-issuer*)
+        # the destination side: its script, run here against a local /d with chown stubbed and
+        # install without -o and -g; FAKE_DST_HAS names files already in the target's state/
+        d=$FAKE_DIR/d; mkdir -p "$d/state" "$FAKE_DIR/stub"
+        for f in $FAKE_DST_HAS; do echo existing > "$d/state/$f"; done
+        printf '#!/bin/sh\nexit 0\n' > "$FAKE_DIR/stub/chown"
+        printf '#!/bin/sh\na=; while [ $# -gt 0 ]; do case $1 in -o|-g) shift 2 ;; *) a="$a $1"; shift ;; esac; done\nexec /usr/bin/install $a\n' > "$FAKE_DIR/stub/install"
+        chmod +x "$FAKE_DIR/stub/chown" "$FAKE_DIR/stub/install"
+        script=$(printf '%s' "${@: -1}" | sed "s#/d/state#$d/state#g")
+        PATH="$FAKE_DIR/stub:$PATH" sh -c "$script"
+        exit $? ;;
+      *inspect-*)
         # the inspection of broker N's volume: the sha256 lines the fixtures name
         o=$(echo "$*" | grep -o 'inspect-[0-9]*' | head -1 | sed 's/.*-//')
+        [ "$FAKE_READFAIL" != "$o" ] || exit 1
         var=FAKE_CA_$o; pv=FAKE_PREV_$o
         sum=${!var}; [ ! -f "$FAKE_DIR/CA_$o" ] || sum=$(cat "$FAKE_DIR/CA_$o")
         [ -z "$sum" ] || echo "$sum  /s/state/issuing-ca.pem"
         [ -z "${!pv}" ] || echo "${!pv}  /s/state/issuing-ca-previous.pem" ;;
-      *) case "$1" in -i) cat >/dev/null ;; esac
-         echo -n TARBYTES ;;
+      *) case "$1" in -i) cat >/dev/null ;; esac ;;
     esac ;;
   logs) echo "fake log: issuing CA sha256:0000" ;;
 esac
@@ -324,6 +345,59 @@ func TestCopyIssuerRefusesToOverwriteADifferentCA(t *testing.T) {
 	r.assertAllPodsDeleted(t)
 }
 
+// The destination's own guard, run for real against a local directory: a name that exists is not
+// replaced, nothing is moved, and the script says so (review n-1).
+func TestCopyIssuerDestinationRefusesToReplaceAFile(t *testing.T) {
+	r := runScript(t, "copy-issuer.sh", []string{"FAKE_CA_0=" + sumA, "FAKE_DST_HAS=issuing-ca.key"}, "ns", "t", "--from", "0")
+	if r.exitCode == 0 {
+		t.Fatalf("a copy over an existing key succeeded:\n%s", r.out)
+	}
+	if !strings.Contains(r.out, "exists: not replaced") {
+		t.Errorf("the refusal is not said:\n%s", r.out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.dir, "d", "state", "issuing-ca.key")); string(b) != "existing\n" {
+		t.Errorf("the existing key was changed: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "d", "state", "issuing-ca.pem")); err == nil {
+		t.Error("the certificate was moved in beside a key that was refused")
+	}
+	if len(r.calls("rollout")) != 0 {
+		t.Error("the brokers were restarted after a refused copy")
+	}
+}
+
+// And the same script when nothing is in the way: the files land, the key 0600, the staging gone.
+func TestCopyIssuerDestinationPlacesTheStagedFiles(t *testing.T) {
+	r := runScript(t, "copy-issuer.sh", []string{"FAKE_CA_0=" + sumA}, "ns", "t", "--from", "0")
+	if r.exitCode != 0 {
+		t.Fatalf("exit %d:\n%s", r.exitCode, r.out)
+	}
+	st := filepath.Join(r.dir, "d", "state")
+	for _, n := range []string{"issuing-ca.pem", "issuing-ca.key"} {
+		if b, err := os.ReadFile(filepath.Join(st, n)); err != nil || string(b) != "placeholder-"+n+"\n" {
+			t.Errorf("%s: %q %v", n, b, err)
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(st, "issuing-ca.key")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the key's mode is %v (%v), want 0600", fi.Mode().Perm(), err)
+	}
+	if _, err := os.Stat(filepath.Join(st, ".copy-issuer")); err == nil {
+		t.Error("the staging directory is left behind")
+	}
+}
+
+// A volume that cannot be read is an error naming the broker, never "no CA here" (review n-2).
+func TestCopyIssuerStopsWhenAVolumeCannotBeRead(t *testing.T) {
+	r := runScript(t, "copy-issuer.sh", []string{"FAKE_READFAIL=1", "FAKE_CA_0=" + sumA}, "ns", "t", "--from", "0")
+	if r.exitCode == 0 || !strings.Contains(r.out, "broker-1") {
+		t.Fatalf("exit %d, want a failure naming broker-1:\n%s", r.exitCode, r.out)
+	}
+	if len(r.tarStreams()) != 0 || len(r.initPods()) != 0 {
+		t.Error("something was copied or initialised after a failed read")
+	}
+	r.assertAllPodsDeleted(t)
+}
+
 func TestCopyIssuerChecksEveryTargetBeforeCopyingAny(t *testing.T) {
 	// three brokers: broker-1 is empty, broker-2 holds a different CA: nothing may be copied to broker-1.
 	r := runScript(t, "copy-issuer.sh", []string{"FAKE_REPLICAS=3", "FAKE_CA_0=" + sumA, "FAKE_CA_2=" + sumB}, "ns", "t", "--from", "0")
@@ -483,6 +557,29 @@ func TestRevokeOfflineWithNoBrokerPodsDoesNotWaitForTheirDeletion(t *testing.T) 
 		t.Errorf("with two broker pods, want one wait for their deletion, got %v", w)
 	}
 	r.assertPodHygiene(t)
+}
+
+// The pods can vanish between wait_none's count and its wait; kubectl then errors, and the script
+// must go on when none are left (review n-4).
+func TestRevokeOfflineSurvivesPodsVanishingBeforeTheWait(t *testing.T) {
+	r := runScript(t, "revoke-offline.sh", []string{"FAKE_WAITRACE=1"}, "ns", "t", "--", "--list")
+	if r.exitCode != 0 {
+		t.Fatalf("exit %d:\n%s\n%s", r.exitCode, r.out, r.joined())
+	}
+	if len(r.applied) != 1 {
+		t.Errorf("%d pods applied, want the one-shot revoke", len(r.applied))
+	}
+}
+
+// ...but when the wait fails with the pods still there, the script stops before it runs anything.
+func TestRevokeOfflineStopsWhenBrokerPodsStayUp(t *testing.T) {
+	r := runScript(t, "revoke-offline.sh", []string{"FAKE_WAITFAIL=1"}, "ns", "t", "--", "--list")
+	if r.exitCode == 0 || len(r.applied) != 0 {
+		t.Fatalf("exit %d with %d pods applied, want a failure before the one-shot pod", r.exitCode, len(r.applied))
+	}
+	if len(r.calls("scale")) < 2 {
+		t.Errorf("the brokers were not scaled back:\n%s", r.joined())
+	}
 }
 
 func TestRevokeOfflineQuotesItsArguments(t *testing.T) {

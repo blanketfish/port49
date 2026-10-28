@@ -96,7 +96,12 @@ JSON
 wait_none() { # selector
   local n
   n=$(K get pods -l "$1" -o name 2>/dev/null | grep -c . || true)
-  [ "${n:-0}" -eq 0 ] || K wait --for=delete pod -l "$1" --timeout=120s >/dev/null
+  [ "${n:-0}" -eq 0 ] && return 0
+  # The pods can vanish between the count and the wait, and wait then errors: look again, and fail only
+  # when some still exist.
+  K wait --for=delete pod -l "$1" --timeout=120s >/dev/null && return 0
+  n=$(K get pods -l "$1" -o name 2>/dev/null | grep -c . || true)
+  [ "${n:-0}" -eq 0 ]
 }
 
 # Waits for a one-shot pod to finish, prints its log, and succeeds only if it did.

@@ -15,7 +15,9 @@
 #     init-issuer would make a different CA and every broker would then refuse to start;
 #   - a target holds the same CA (and previous CA): skipped;
 #   - a target holds a different CA: it REFUSES, naming both ordinals and both certificate sha256s.
-#     Nothing is changed until every target has passed these checks.
+#     Every target's CA is compared before the first copy. What is left to a target's own copy step is
+#     a stray file of that target's (a key with no certificate): the copy refuses any name that exists,
+#     so an earlier target may already hold its copy by then. A copy never replaces a file.
 # issuing-ca.pem and issuing-ca.key, and issuing-ca-previous.pem when the source has it, are streamed
 # in one kubectl exec into a staging directory on the target, then renamed into place only where the
 # name is free; the key is written 0600, owned by 65532. Every pod it starts is deleted (waited for) on
@@ -67,7 +69,11 @@ inspect() { # ordinal
   local ord=$1 name out sum file
   name=$sts-inspect-$ord-$$
   shell_pod "$ord" "$name" /s true
-  out=$(K exec "$name" -- sh -c 'cd /s/state 2>/dev/null || exit 0; for f in issuing-ca.pem issuing-ca-previous.pem; do [ ! -f "$f" ] || sha256sum "$f"; done; exit 0')
+  # No state/ is an empty volume; a read that fails is an error, never "absent" (a misread CA would
+  # let init-issuer or a copy act on a volume that holds one).
+  out=$(K exec "$name" -- sh -c '[ -d /s/state ] || exit 0; cd /s/state || exit 1
+for f in issuing-ca.pem issuing-ca-previous.pem; do [ ! -f "$f" ] || sha256sum "$f" || exit 1; done') ||
+    die "could not read broker-$ord's volume (the sha256 of its issuing CA failed). Nothing was changed."
   K delete pod "$name" --ignore-not-found --wait=true >/dev/null
   pem[ord]=
   prev[ord]=
@@ -130,7 +136,12 @@ tar x -C "$s"
 for f in "$s"/*; do [ ! -e "$d/${f##*/}" ] || { echo "$d/${f##*/} exists: not replaced" >&2; exit 1; }; done
 chown 65532:65532 "$s"/*
 [ ! -e "$s/issuing-ca.key" ] || chmod 0600 "$s/issuing-ca.key"
-for n in issuing-ca-previous.pem issuing-ca.key issuing-ca.pem; do [ ! -e "$s/$n" ] || mv "$s/$n" "$d/$n"; done
+for n in issuing-ca-previous.pem issuing-ca.key issuing-ca.pem; do
+  [ -e "$s/$n" ] || continue
+  want=$(sha256sum < "$s/$n")
+  mv -n "$s/$n" "$d/$n"
+  [ ! -e "$s/$n" ] && [ "$(sha256sum < "$d/$n")" = "$want" ] || { echo "$d/$n was not placed: not replaced" >&2; exit 1; }
+done
 rmdir "$s"'
   K delete pod "$src" "$dst" --ignore-not-found --wait=true >/dev/null
   changed=1
