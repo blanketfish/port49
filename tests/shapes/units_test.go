@@ -112,11 +112,11 @@ func TestTheUnitsCarryTheirLimits(t *testing.T) {
 	}
 }
 
-// exportCommand is the export unit's ExecStart: a dated file, written to a temporary name in a
-// directory only the broker's user can use, synced, and renamed into place, so an export that
-// is shorter than the last, or that fails, never leaves another's bytes in a file.
+// exportCommand is the export unit's ExecStart: a dated file, written by --out (a new 0600 file, synced)
+// to a temporary name in a directory only the broker's user can use, and renamed into place, so an
+// export that is shorter than the last, or that fails, never leaves another's bytes in a file.
 const exportCommand = `/bin/sh -c 'set -eu; umask 077; d=/var/backups/port49-broker; f=$$d/enrollments-$$(date +%%F).json; ` +
-	`if /usr/bin/port49-broker export-enrollments > "$$f.tmp"; then sync "$$f.tmp"; mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; ` +
+	`rm -f "$$f.tmp"; if /usr/bin/port49-broker export-enrollments --out "$$f.tmp"; then mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; ` +
 	`/usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete; ` +
 	`/usr/bin/find "$$d" -name "enrollments-*.json.tmp" -mtime +1 -delete'`
 

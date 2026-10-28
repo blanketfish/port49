@@ -424,7 +424,9 @@ func TestTheExportNeverLeavesStaleBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	fake := filepath.Join(dir, "port49-broker")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec cat \"$FAKE_EXPORT\"\n"), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\n# export-enrollments --out FILE: a new file (noclobber is O_EXCL), removed if the export fails\n"+
+		"[ \"$1\" = export-enrollments ] && [ \"$2\" = --out ] || exit 2\nset -C; umask 077\n"+
+		"cat \"$FAKE_EXPORT\" > \"$3\" || { rm -f \"$3\"; exit 1; }\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	script = strings.NewReplacer("/var/backups/port49-broker", out, "/usr/bin/port49-broker", fake).Replace(script)
@@ -459,6 +461,20 @@ func TestTheExportNeverLeavesStaleBytes(t *testing.T) {
 	}
 	if fi, _ := os.Stat(f[0]); fi.Mode().Perm() != 0o600 {
 		t.Errorf("the export is mode %v, want 0600", fi.Mode().Perm())
+	}
+	// A temporary file a killed run left must not block today's export: --out never replaces a file.
+	day := strings.TrimSpace(func() string { b, _ := exec.Command("date", "+%F").Output(); return string(b) }())
+	if err := os.WriteFile(filepath.Join(out, "enrollments-"+day+".json.tmp"), []byte("left by a killed run"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(long); err != nil {
+		t.Fatalf("a stale temporary file blocked the export: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "enrollments-"+day+".json")); len(b) != 4096 {
+		t.Errorf("the export after a stale temporary file left %d bytes, want 4096", len(b))
+	}
+	if err := run(short); err != nil {
+		t.Fatal(err)
 	}
 	if err := run(filepath.Join(dir, "missing")); err == nil {
 		t.Error("a failed export exits 0")
