@@ -117,7 +117,8 @@ func TestTheUnitsCarryTheirLimits(t *testing.T) {
 // is shorter than the last, or that fails, never leaves another's bytes in a file.
 const exportCommand = `/bin/sh -c 'set -eu; umask 077; d=/var/backups/port49-broker; f=$$d/enrollments-$$(date +%%F).json; ` +
 	`if /usr/bin/port49-broker export-enrollments > "$$f.tmp"; then sync "$$f.tmp"; mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; ` +
-	`/usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete'`
+	`/usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete; ` +
+	`/usr/bin/find "$$d" -name "enrollments-*.json.tmp" -mtime +1 -delete'`
 
 // Ruling 3: nothing makes /etc read-only inside the unit, since the fence
 // excuses a directory's mode on a read-only mount, and a group-writable

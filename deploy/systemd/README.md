@@ -68,16 +68,27 @@ The two encryption files hold one value and are owned apart, so neither process 
 other's copy. They sit outside the key directory because a policy may name any file under
 `key_secret_refs.file_dir`. Never put them there.
 
-Make a sealing key (32 raw bytes) once, and install it for both. The loop regenerates until the
-last byte is not a newline: a key file loses one trailing newline when it is read, so such a key
-would load a byte short, one time in 256.
+Make a sealing key (32 raw bytes) once, and install it for both. The recipe runs in the
+destination directory, never in `/tmp` or under a fixed name another user could have planted: each
+temporary file is new and private, and is renamed over the final name only after every step
+passed. It draws again until the last byte is not a newline (a key file loses one trailing newline
+when it is read, so such a key would load a byte short, one time in 256), gives up after ten
+draws, and exits non-zero, installing nothing, if anything fails.
 
 ```sh
-umask 077
-until head -c 32 /dev/urandom > /tmp/encryption.key; [ "$(tail -c1 /tmp/encryption.key | od -An -tx1 | tr -d ' ')" != 0a ]; do :; done
-install -o port49d -g port49d -m 0400 /tmp/encryption.key /etc/port49/secrets/encryption.key
-install -o port49-broker -g port49-broker -m 0400 /tmp/encryption.key /etc/port49/secrets/broker-encryption.key
-shred -u /tmp/encryption.key
+(
+  umask 077 && cd /etc/port49/secrets || exit 1
+  t=$(mktemp ./.key.XXXXXX) && u=$(mktemp ./.key.XXXXXX) || exit 1
+  ok=
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    head -c 32 /dev/urandom > "$t" && [ "$(wc -c < "$t")" -eq 32 ] &&
+      [ "$(tail -c1 "$t" | od -An -tx1 | tr -d ' ')" != 0a ] && ok=1 && break
+  done
+  [ -n "$ok" ] || { rm -f "$t" "$u"; echo "port49: no usable 32-byte key in 10 draws" >&2; exit 1; }
+  cat "$t" > "$u" && chown port49d:port49d "$t" && chown port49-broker:port49-broker "$u" &&
+    chmod 0400 "$t" "$u" && mv -f "$t" encryption.key && mv -f "$u" broker-encryption.key ||
+    { rm -f "$t" "$u"; echo "port49: the sealing key was not installed" >&2; exit 1; }
+)
 ```
 
 Use the same value on every host of one deployment, from one secret.
@@ -89,8 +100,13 @@ line; never rewrite a file in place. Hex gives 32 characters you can type into t
 (`tacacs-server key`, `key`, `secret`), and the newline the file ends in is dropped when it is read.
 
 ```sh
-umask 077
-openssl rand -hex 16 > /tmp/k && install -o root -g port49d -m 0440 /tmp/k /etc/port49/keys/core-v2 && shred -u /tmp/k
+(
+  umask 077 && cd /etc/port49/keys || exit 1
+  t=$(mktemp ./.key.XXXXXX) || exit 1
+  openssl rand -hex 16 > "$t" && [ "$(wc -c < "$t")" -eq 33 ] && chown root:port49d "$t" &&
+    chmod 0440 "$t" && mv -f "$t" core-v2 ||
+    { rm -f "$t"; echo "port49: the device key was not made" >&2; exit 1; }
+)
 ```
 
 Then add `{version: 2, secret_ref: "file:/etc/port49/keys/core-v2"}` to the key set in the
@@ -160,8 +176,10 @@ systemctl start port49-broker
 
 `port49-broker revoke --offline --list` shows the marks. This stops issuance fleet-wide while the
 brokers are down, so use it only when no admin can reach a running broker. A port49d that runs its broker
-in process has `port49d revoke --offline`. Both offline commands need a uid that owns the revocations
-file; as root they refuse and name the `sudo -u` to use.
+in process has `port49d revoke --offline`. Each needs the uid that owns the files it
+writes, and as root refuses and names the `sudo -u` line: `port49-broker revoke --offline` writes
+`broker.state_dir` (the broker's user owns it), and `port49d revoke --offline` writes
+`broker.revocations_file`.
 
 ### The 3am table
 

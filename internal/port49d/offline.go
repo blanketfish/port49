@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -212,11 +214,23 @@ func offlineCopy(stateDir string, mark store.Revocation, lifted bool, out io.Wri
 	return c.writeErr()
 }
 
+// offlineOwnerName is the name of the user with uid on this host, or its number written
+// the way sudo takes one ('#996') when no name is there; a variable so a test can say.
+var offlineOwnerName = func(uid uint32) string {
+	n := strconv.FormatUint(uint64(uid), 10)
+	if u, err := user.LookupId(n); err == nil {
+		return u.Username
+	}
+	return "'#" + n + "'"
+}
+
 // offlineOwnerHint is the refusal of a state path another user owns, in the
-// tool's words: run it as the owner, never chown the directory.
+// tool's words: run it as the owner, never chown the directory, and the
+// sudo -u line to run, as port49d's own refusal gives one.
 func offlineOwnerHint(wo *wrongOwnerError) error {
 	return fmt.Errorf("%s is owned by uid %d and this runs as uid %d: run it as the user that owns "+
-		"broker.state_dir (uid %d), and do not chown the directory", wo.what, wo.uid, wo.euid, wo.uid)
+		"broker.state_dir (uid %d), e.g. sudo -u %s port49-broker revoke --offline ..., and do not chown the directory",
+		wo.what, wo.uid, wo.euid, wo.uid, offlineOwnerName(wo.uid))
 }
 
 // offlineFailed is the line for a revocation (or a lift) that did not

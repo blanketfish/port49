@@ -4,7 +4,7 @@
 # and `port49 directory import` would refuse the file. The command writes a temporary file in
 # /var/backups/port49-broker (0700, the broker's, from tmpfiles.d), syncs it and renames it
 # to enrollments-<date>.json, so each day has its own copy and a failed run changes nothing.
-# It keeps fourteen days. $$ and %% are systemd's escapes for $ and %.
+# It keeps fourteen days, and removes a temporary file a killed run left behind after a day. $$ and %% are systemd's escapes for $ and %.
 # Unmeasured on a real host: run it once by hand (README) before relying on the timer.
 # Restore with `port49 directory import`, which needs an admin and a key press.
 [Unit]
@@ -15,4 +15,4 @@ Type=oneshot
 User=port49-broker
 Group=port49-broker
 UMask=0077
-ExecStart=/bin/sh -c 'set -eu; umask 077; d=/var/backups/port49-broker; f=$$d/enrollments-$$(date +%%F).json; if /usr/bin/port49-broker export-enrollments > "$$f.tmp"; then sync "$$f.tmp"; mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; /usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete'
+ExecStart=/bin/sh -c 'set -eu; umask 077; d=/var/backups/port49-broker; f=$$d/enrollments-$$(date +%%F).json; if /usr/bin/port49-broker export-enrollments > "$$f.tmp"; then sync "$$f.tmp"; mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; /usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete; /usr/bin/find "$$d" -name "enrollments-*.json.tmp" -mtime +1 -delete'
