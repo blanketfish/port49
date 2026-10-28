@@ -519,3 +519,104 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 		t.Error("the Makefile still claims the flags keep the host's TPM and key out")
 	}
 }
+
+// The key-host override is for GitHub-hosted runners only: a job sets it only when its runs-on is a
+// GitHub-hosted ubuntu label, the systemd smoke job does set it, and neither the Makefile nor any
+// non-test Go file but the guard itself names it. Agents and developers set it by hand, never in the tree.
+func TestTheKeyHostOverrideIsOnlyOnHostedRunners(t *testing.T) {
+	root := kindtest.Root()
+	wf, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	if err != nil || len(wf) == 0 {
+		t.Fatalf("no workflows found: %v", err)
+	}
+	hosted := regexp.MustCompile(`^ubuntu-(latest|[0-9]+\.[0-9]+)$`)
+	set := 0
+	for _, f := range wf {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var w struct {
+			Env  map[string]any `yaml:"env"`
+			Jobs map[string]struct {
+				RunsOn any            `yaml:"runs-on"`
+				Env    map[string]any `yaml:"env"`
+				Steps  []struct {
+					Env map[string]any `yaml:"env"`
+				} `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal(b, &w); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if _, ok := w.Env[kindKeyHost]; ok {
+			t.Errorf("%s sets the override for the whole workflow: set it only in the job env of a hosted job", f)
+		}
+		for name, j := range w.Jobs {
+			for _, st := range j.Steps {
+				if _, ok := st.Env[kindKeyHost]; ok {
+					t.Errorf("%s job %s sets the override on a step: set it in the job env", f, name)
+				}
+			}
+			v, ok := j.Env[kindKeyHost]
+			if !ok {
+				continue
+			}
+			set++
+			if ro, _ := j.RunsOn.(string); !hosted.MatchString(ro) || v != "1" {
+				t.Errorf("%s job %s sets the override (%v) with runs-on %v: only GitHub-hosted ubuntu-* runners may, and only to \"1\"", f, name, v, j.RunsOn)
+			}
+		}
+	}
+	var sm struct {
+		Jobs map[string]struct {
+			Env map[string]any `yaml:"env"`
+		} `yaml:"jobs"`
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "systemd.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(b, &sm); err != nil {
+		t.Fatal(err)
+	}
+	if sm.Jobs["smoke"].Env[kindKeyHost] != "1" {
+		t.Error("the systemd smoke job does not set the override, so it would refuse on a hosted runner with a vTPM")
+	}
+	if set == 0 {
+		t.Error("no workflow job sets the override")
+	}
+	mk, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, l := range strings.Split(string(mk), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "#") && strings.Contains(l, kindKeyHost) {
+			t.Errorf("Makefile:%d names the override outside a comment: %s", i+1, l)
+		}
+	}
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == ".worktrees" || d.Name() == "node_modules" || d.Name() == "logs") {
+			return filepath.SkipDir
+		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, "shapetest/keyhost.go") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), kindKeyHost) || strings.Contains(string(b), "KeyHostOverride") {
+			t.Errorf("%s names the key-host override: only the guard may", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+const kindKeyHost = "PORT49_SMOKE_ON_KEY_HOST"

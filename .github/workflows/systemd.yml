@@ -9,6 +9,10 @@ jobs:
   smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    # A GitHub-hosted runner is ephemeral and its vTPM, if it has one, is nobody's key: the key-host guard
+    # (tests/shapes/shapetest/keyhost.go) would refuse on it. Only ubuntu-* jobs may set this.
+    env:
+      PORT49_SMOKE_ON_KEY_HOST: "1"
     permissions: {contents: read}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
