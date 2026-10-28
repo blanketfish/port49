@@ -197,7 +197,8 @@ type reloader struct {
 	// must not wait. Nil tells no one.
 	onSwap func(pol *policy.Policy)
 	// onHUP is told each SIGHUP before the reload: the TLS listener's files
-	// are re-read then too (decision 50 ruling 15). Nil is nothing.
+	// are re-read then too (decision 50 ruling 15), and so is the broker's
+	// attestation_roots_file. Nil is nothing; addHUP chains.
 	onHUP func()
 	// beforeSwap is told each policy about to be put in force, before it is:
 	// the TLS listener flags the devices the new inventory makes
@@ -358,6 +359,17 @@ func policyVersion(path string) ([]byte, string, error) {
 		return nil, "unreadable: " + err.Error(), err
 	}
 	return raw, engine.HashOf(raw), nil
+}
+
+// addHUP adds f to what each SIGHUP does before the reload, after what is already there.
+func (r *reloader) addHUP(f func()) {
+	prev := r.onHUP
+	r.onHUP = func() {
+		if prev != nil {
+			prev()
+		}
+		f()
+	}
 }
 
 // run serves until ctx ends: a poll every interval, a reload at every SIGHUP,

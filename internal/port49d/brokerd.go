@@ -936,6 +936,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 	rel.startDocument(startDoc, startFrom)
 	rel.onSettled = rn.settled
 	rel.mfaUnavailable, rel.adminTouch = brk.MFAUnavailable, brk.AdminTouchLine
+	if id := cfg.Broker.Identity; id != nil {
+		rel.addHUP(func() { reloadAttestationRoots(id.PerLoginMFA, brk, brk.Policy.Load, brokerSay) })
+	}
 	rel.fullPass, rel.whole = make(chan fullPassOwed), rn.whole
 	rel.onSwap = func(pol *policy.Policy) {
 		select {

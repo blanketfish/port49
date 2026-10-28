@@ -53,9 +53,33 @@ type MFAVerifiers struct {
 	ACRValues string
 }
 
+// perLoginMFA is the verifiers in force now. The roots are swapped whole at a SIGHUP, so
+// a reader takes the pointer once and uses it; nothing it points to is ever written.
+func (b *Broker) perLoginMFA() *MFAVerifiers {
+	b.mfaMu.RLock()
+	defer b.mfaMu.RUnlock()
+	return b.PerLoginMFA
+}
+
+// SetAttestationRoots puts a (nil for none) in force as the roots a touch is verified
+// against, keeping AMR and ACRValues, while the broker serves: port49d and port49-broker
+// call it at SIGHUP with the file re-read (spec §5.1.6: "add the root or intermediate to
+// attestation_roots_file, then reload").
+func (b *Broker) SetAttestationRoots(a *pivattest.Anchors) {
+	b.mfaMu.Lock()
+	defer b.mfaMu.Unlock()
+	next := MFAVerifiers{}
+	if b.PerLoginMFA != nil {
+		next = *b.PerLoginMFA
+	}
+	next.Anchors = a
+	b.PerLoginMFA = &next
+}
+
 // mfaTouch reports whether this broker verifies a hardware_key_touch.
 func (b *Broker) mfaTouch() bool {
-	return b.PerLoginMFA != nil && b.PerLoginMFA.Anchors != nil && b.PerLoginMFA.Anchors.Roots != nil
+	v := b.perLoginMFA()
+	return v != nil && v.Anchors != nil && v.Anchors.Roots != nil
 }
 
 // mfaIdP reports whether this broker verifies an idp_mfa.
@@ -65,8 +89,8 @@ func (b *Broker) mfaIdP() bool {
 
 // mfaAMR is the amr values an idp_mfa proof may carry (RFC 8176).
 func (b *Broker) mfaAMR() []string {
-	if b.PerLoginMFA != nil && len(b.PerLoginMFA.AMR) > 0 {
-		return b.PerLoginMFA.AMR
+	if v := b.perLoginMFA(); v != nil && len(v.AMR) > 0 {
+		return v.AMR
 	}
 	return []string{"mfa"}
 }
@@ -148,8 +172,8 @@ func (b *Broker) mfaConfig() *api.MFAConfig {
 		return nil
 	}
 	c := &api.MFAConfig{Methods: methodNames(methods)}
-	if b.PerLoginMFA != nil {
-		c.ACRValues = b.PerLoginMFA.ACRValues
+	if v := b.perLoginMFA(); v != nil {
+		c.ACRValues = v.ACRValues
 	}
 	return c
 }
@@ -730,7 +754,12 @@ func (b *Broker) verifyTouchMessage(r *http.Request, p *touchProof, label string
 	if err != nil {
 		return "this connection cannot export keying material", "no_exporter"
 	}
-	anchors := *b.PerLoginMFA.Anchors
+	v := b.perLoginMFA()
+	if v == nil || v.Anchors == nil {
+		// swapped away between the gate and here
+		return "no attestation roots are configured", "touch_slot_chain"
+	}
+	anchors := *v.Anchors
 	ta, err := pivattest.Verify(anchors, p.device, p.touch, now)
 	if err != nil {
 		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "touch_slot_chain"

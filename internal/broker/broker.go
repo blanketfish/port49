@@ -121,6 +121,7 @@ type Broker struct {
 	// decision 45): nil verifies hardware_key_touch never, and idp_mfa while
 	// a human OIDC verifier is configured.
 	PerLoginMFA   *MFAVerifiers
+	mfaMu         sync.RWMutex // PerLoginMFA's roots are swapped at SIGHUP (SetAttestationRoots)
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter

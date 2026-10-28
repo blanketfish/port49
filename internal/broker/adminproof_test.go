@@ -850,3 +850,46 @@ func TestNothingButTestsSkipsTheAdminProof(t *testing.T) {
 		}
 	}
 }
+
+// A broker with no attestation roots refuses every admin call 503; the roots a SIGHUP reads
+// are then taken as they are put in (SetAttestationRoots), and another set takes them away,
+// with no restart and no other part of the verifiers changed.
+func TestReloadedAttestationRootsTakeEffect(t *testing.T) {
+	f := newAdminFixture(t, withoutAttestationRoots())
+	f.b.PerLoginMFA.AMR, f.b.PerLoginMFA.ACRValues = []string{"hwk"}, "acr-x"
+	code, raw := f.alice.conn.post(t, revokePath, nil, bobBody)
+	if ans := decodeAdminAnswer(t, raw); code != 503 || ans.Error != "admin_touch_unavailable" {
+		t.Fatalf("with no roots: %d %s, want 503 admin_touch_unavailable", code, ans.Error)
+	}
+	roots, err := pivattest.ParseAnchors(f.root.PEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.SetAttestationRoots(&roots)
+	if code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody); code != 200 {
+		t.Fatalf("a touch chained to the roots put in was answered %d %s", code, decodeAdminAnswer(t, raw).Error)
+	}
+	if !f.marked(t, bobKey) {
+		t.Fatal("the proved call left no mark")
+	}
+	if got := f.b.mfaAMR(); len(got) != 1 || got[0] != "hwk" || f.b.mfaConfig().ACRValues != "acr-x" {
+		t.Fatalf("a roots swap changed the other verifier settings: amr %v", got)
+	}
+	// Another root, which the operator's attestations do not chain to.
+	other, err := testpki.NewCA("Another Root", f.now.Add(-time.Hour), f.now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oa, err := pivattest.ParseAnchors(other.PEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.SetAttestationRoots(&oa)
+	code, raw = f.adminCall(t, f.alice, f.alice.conn, revokePath, carolBody)
+	if ans := decodeAdminAnswer(t, raw); code != 401 || ans.Error != "admin_touch_refused" {
+		t.Fatalf("a touch not chained to the roots in force: %d %s, want 401 admin_touch_refused", code, ans.Error)
+	}
+	if f.marked(t, carolKey) {
+		t.Fatal("a refused proof revoked someone")
+	}
+}

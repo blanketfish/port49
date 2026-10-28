@@ -3,10 +3,12 @@ package port49d
 import (
 	"io"
 	"os"
+	"time"
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/pivattest"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 // maxAttestationRootsBytes bounds attestation_roots_file: a few PEM
@@ -40,6 +42,39 @@ func loadPerLoginMFA(cfg *oidc.PerLoginMFA, say func(string, ...any)) *broker.MF
 	say("broker: per_login_mfa.hardware_key_touch.attestation_roots_file %s: %v; hardware_key_touch is "+
 		"unavailable until it is fixed and the broker restarts", cfg.AttestationRootsFile, err)
 	return v
+}
+
+// reloadAttestationRoots re-reads attestation_roots_file at a SIGHUP and puts the roots in
+// force, as spec §5.1.6's "add the root or intermediate to attestation_roots_file, then
+// reload" says. A file that cannot be read, holds no PEM or no self-signed root changes
+// nothing: the roots in force stay, and one line says so, as a key file that cannot be
+// read at a reload keeps the secret already held. With no roots file configured it does
+// nothing. b is the broker serving; its other verifier settings are untouched.
+func reloadAttestationRoots(cfg *oidc.PerLoginMFA, b *broker.Broker, pol func() *policy.Policy, say func(string, ...any)) {
+	if cfg == nil || cfg.AttestationRootsFile == "" || b == nil {
+		return
+	}
+	raw, err := readLimited(cfg.AttestationRootsFile, maxAttestationRootsBytes)
+	var a pivattest.Anchors
+	if err == nil {
+		a, err = pivattest.ParseAnchors(raw)
+	}
+	if err != nil {
+		say("broker: SIGHUP: per_login_mfa.hardware_key_touch.attestation_roots_file %s: %v; keeping the "+
+			"attestation roots already in force", cfg.AttestationRootsFile, err)
+		return
+	}
+	b.SetAttestationRoots(&a)
+	say("broker: SIGHUP: per_login_mfa hardware_key_touch verifies attestations against %s (re-read)", cfg.AttestationRootsFile)
+	// What the roots now in force change about the policy in force, as at a start.
+	if p := pol(); p != nil {
+		if line := b.MFAUnavailable(p, time.Now()); line != "" {
+			say("broker: %s", line)
+		}
+		if line := b.AdminTouchLine(p); line != "" {
+			say("%s", line)
+		}
+	}
 }
 
 func readLimited(path string, limit int64) ([]byte, error) {

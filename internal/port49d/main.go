@@ -1573,6 +1573,14 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		r.generic = newGenericRecorder(log, procOf(cfg))
 		r.generic.record(live.Load(), time.Now())
 		hookTLSReload(r, tl, cfg, live)
+		if brk != nil && cfg.Broker != nil && cfg.Broker.Identity != nil {
+			id := cfg.Broker.Identity
+			r.addHUP(func() {
+				reloadAttestationRoots(id.PerLoginMFA, brk, live.Load, func(format string, args ...any) {
+					fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
+				})
+			})
+		}
 		r.mfaUnavailable, r.adminTouch = mfaUnavailable, adminTouch
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)

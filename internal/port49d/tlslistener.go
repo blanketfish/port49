@@ -891,7 +891,7 @@ func newTLSDeps(tc config.TLSListenerConfig, tl *tlsListener, expiry *devicecert
 // nil with no tls_listener.
 func hookTLSReload(r *reloader, tl *tlsListener, cfg config.Config, live *policy.Live) {
 	if tl != nil {
-		r.onHUP = func() { tl.reload("SIGHUP") }
+		r.addHUP(func() { tl.reload("SIGHUP") })
 		// Before the swap, so no connection is admitted under a clash the
 		// new inventory creates; after it, the exact flags of the new set.
 		r.beforeSwap = func(pol *policy.Policy) { tl.swapping(pol.Devices()) }
