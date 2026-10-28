@@ -171,6 +171,13 @@ func newBox(t *testing.T) box {
 	if out, err := b.docker("", "network", "create", "--subnet", subnet, "--gateway", gateway, network); err != nil {
 		t.Fatalf("docker network create %s: %v\n%s", network, err, out)
 	}
+	// A SIGINT, a SIGTERM or the test's own deadline runs no t.Cleanup, so the guard removes the
+	// container and the network itself: by name at once, and by the recorded ID once it is known.
+	deadline, _ := t.Deadline()
+	guard := shapetest.NewGuard(t, os.Exit, deadline, shapetest.KillGrace)
+	guard.OnKill(func() { b.docker("", "network", "rm", network) })
+	guard.OnKill(func() { b.docker("", "rm", "-f", container) })
+	id := ""
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, u := range []string{"port49d", "port49-broker", "etcd@etcd-1", "etcd@etcd-2", "etcd@etcd-3"} {
@@ -178,14 +185,17 @@ func newBox(t *testing.T) box {
 			}
 		}
 		b.docker("", "rm", "-f", container)
+		if id != "" {
+			b.docker("", "rm", "-f", id)
+		}
 		b.docker("", "network", "rm", network)
 	})
-	if out, err := b.docker("", "run", "-d", "--name", container, "--network", network,
-		"--privileged", "--cgroupns=private", "--tmpfs", "/run", "--tmpfs", "/run/lock",
-		"-p", "127.0.0.1:49:49", "-p", "127.0.0.1:8443:8443", "-p", "127.0.0.1:9049:9049", "-p", "127.0.0.1:9050:9050",
-		image); err != nil {
+	out, err := b.docker("", sdtest.RunArgs(container, network, image)...)
+	if err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
+	id = strings.TrimSpace(out)
+	guard.OnKill(func() { b.docker("", "rm", "-f", id) })
 	shapetest.WaitFor(t, "systemd to finish booting", 2*time.Minute, func() bool {
 		out, _ := b.exec("", "systemctl", "is-system-running")
 		s := strings.TrimSpace(out)
@@ -267,7 +277,7 @@ func bringUp(t *testing.T) stack {
 	ex := filepath.Join(root, "deploy", "systemd", "examples")
 	b.put("/etc/sysusers.d/etcd.conf", "root:root", "0644", readHost(t, filepath.Join(ex, "sysusers-etcd.conf")))
 	b.put("/etc/tmpfiles.d/port49-etcd.conf", "root:root", "0644", readHost(t, filepath.Join(ex, "tmpfiles-etcd.conf")))
-	b.sh("systemd-sysusers etcd.conf && systemd-tmpfiles --create port49-etcd.conf && install -d -m 0755 /etc/etcd /etc/etcd/pki")
+	b.sh("systemd-sysusers etcd.conf && systemd-tmpfiles --create port49-etcd.conf")
 	b.put("/etc/systemd/system/etcd@.service", "root:root", "0644", readHost(t, filepath.Join(ex, "etcd@.service")))
 	b.putFile("/etc/etcd/pki/ca.pem", "root:root", "0644", filepath.Join(pki, "etcd", "ca.pem"))
 	b.putFile("/etc/etcd/pki/root.pem", "root:root", "0644", filepath.Join(pki, "etcd", "root.pem"))
@@ -284,10 +294,19 @@ func bringUp(t *testing.T) stack {
 	}
 	b.sh("systemctl daemon-reload && systemctl enable --now etcd@etcd-1 etcd@etcd-2 etcd@etcd-3")
 
-	// port49's files, with the modes the README's table gives.
-	for _, d := range []string{"/etc/port49/etcd", "/etc/port49/broker"} {
-		b.sh("install -d -m 0755 " + d)
+	// The directories port49's and etcd's files go in are tmpfiles.d's (the package's postinstall and
+	// tmpfiles-etcd.conf): the smoke makes none of them, and fails if one is not there as shipped.
+	for _, d := range []string{"/etc/port49/etcd", "/etc/port49/broker", "/etc/etcd", "/etc/etcd/pki"} {
+		st, err := sdtest.ParseStat(b.sh("stat -c '%U:%G %a %n' " + d))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st[0].Want("root:root", "755"); err != nil {
+			t.Fatalf("tmpfiles.d should have made it: %v", err)
+		}
 	}
+
+	// port49's files, with the modes the README's table gives.
 	for _, f := range []struct{ dst, owner, mode, src string }{
 		{"/etc/port49/etcd/ca.pem", "root:root", "0644", "etcd/ca.pem"},
 		{"/etc/port49/etcd/port49d.pem", "root:root", "0644", "etcd/port49d.pem"},
@@ -417,7 +436,7 @@ func TestSystemdSmoke(t *testing.T) {
 	b.sh("chmod g+w /etc && systemctl restart port49d")
 	shapetest.WaitFor(t, "the journal's refusal of a group-writable /etc", time.Minute, func() bool {
 		for _, l := range strings.Split(b.journal("port49d", since), "\n") {
-			if sdtest.Refusal(l, "/etc") || strings.Contains(l, "/etc") && strings.Contains(l, "writable by others") {
+			if sdtest.Refusal(l, "/etc") {
 				return true
 			}
 		}
@@ -452,20 +471,32 @@ func TestSystemdSmoke(t *testing.T) {
 	b.put("/etc/port49/policy.yaml", "root:root", "0644", cur)
 	shapetest.Ready(t, "127.0.0.1:9049") // back with no reset-failed: nothing was ever failed
 
+	// 5b. The shipped units' ExecReload: the attestation roots are re-read with no restart.
+	reloadCell(t, u)
+
+	// 5c. The hardening the units say systemd-analyze security scores.
+	hardeningCell(t, b)
+
+	// 5d. The shipped export and snapshot units, and the directories tmpfiles.d makes for them.
+	backupsCell(t, u)
+
 	// 6. The admin calls: an unproved revoke is 401 with a challenge; then the break-glass with the
-	// broker stopped, as the broker's user (as root it refuses and names the sudo line), revokes bob,
-	// and --lift lifts it.
+	// broker stopped, as the README writes it (sudo -u port49-broker ...), revokes bob, and --lift lifts it.
+	// As root the same command refuses and revokes nothing: the owner check comes before the write.
 	shapetest.AdminNeedsTouch(t, brokerDir, "127.0.0.1:8443", bob)
+	breakGlass := must(sdtest.BreakGlass(readHost(t, filepath.Join(u.root, "deploy", "systemd", "README.md"))))
 	for _, lift := range []bool{false, true} {
-		args := []string{"port49-broker", "revoke", "--offline", "--config", "/etc/port49/port49-broker.yaml", "--principal", bob}
+		line := breakGlass
 		if lift {
-			args = append(args, "--lift")
+			line += " --lift"
 		}
 		b.sh("systemctl stop port49-broker")
 		if !lift {
-			// The refusal's words are internal/port49d/offline.go:offlineOwnerHint (line 230 on).
-			out, err := b.exec("", args...)
+			// The refusal's words are internal/port49d/offline.go:offlineOwnerHint.
+			asRoot := strings.TrimPrefix(line, "sudo -u port49-broker ")
+			out, err := b.exec("", strings.Fields(asRoot)...)
 			for _, want := range []string{
+				"nothing was revoked",
 				"run it as the user that owns broker.state_dir",
 				"e.g. sudo -u port49-broker port49-broker revoke --offline ...",
 				"do not chown the directory",
@@ -474,8 +505,11 @@ func TestSystemdSmoke(t *testing.T) {
 					t.Fatalf("`port49-broker revoke --offline` as root must refuse with %q (err %v)", want, err)
 				}
 			}
+			if listed := b.sh("sudo -u port49-broker port49-broker revoke --offline --list"); strings.Contains(listed, bob) {
+				t.Fatalf("root's refused revoke left a mark for %s in the store", bob)
+			}
 		}
-		b.sh("runuser -u port49-broker -- " + strings.Join(args, " "))
+		b.sh(line)
 		b.sh("systemctl start port49-broker")
 		shapetest.Ready(t, "127.0.0.1:9050")
 		if lift {
@@ -484,7 +518,7 @@ func TestSystemdSmoke(t *testing.T) {
 			shapetest.OfflineRevoked(t, brokerDir, "127.0.0.1:8443", bob)
 		}
 	}
-	fmt.Fprintln(os.Stderr, "systemd smoke: login, floor line, restart, state_dir, key version added, /etc fence, retry loop, admin cells")
+	fmt.Fprintln(os.Stderr, "systemd smoke: login, floor line, restart, state_dir, key version added, /etc fence, retry loop, reload, hardening, backups, admin cells")
 }
 
 func atLeast(s string, n int) bool {

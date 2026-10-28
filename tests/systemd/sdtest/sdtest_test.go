@@ -198,3 +198,261 @@ func TestTmpfilesMakesEtcdsDataDirectory(t *testing.T) {
 		t.Error("the README does not say tmpfiles-etcd.conf makes /var/lib/etcd")
 	}
 }
+
+func TestRunArgsGrantsOnlySysAdminAndNoDevice(t *testing.T) {
+	args := RunArgs("c", "n", "img:dev")
+	line := strings.Join(args, " ")
+	if f := Forbidden(line); len(f) != 0 {
+		t.Fatalf("the docker run line grants %v: %s", f, line)
+	}
+	var caps []string
+	for i, a := range args {
+		if a == "--cap-add" {
+			caps = append(caps, args[i+1])
+		}
+		for _, bad := range []string{"-v", "--volume", "--mount", "--device", "--privileged", "--pid=host", "--net=host", "--network=host"} {
+			if a == bad {
+				t.Errorf("the docker run line has %s", bad)
+			}
+		}
+	}
+	if strings.Join(caps, ",") != "SYS_ADMIN" {
+		t.Errorf("capabilities added: %v, want exactly SYS_ADMIN", caps)
+	}
+	for _, want := range []string{"--cgroupns=private", "--tmpfs /run", "--tmpfs /run/lock", "--tmpfs /tmp", "--security-opt apparmor=unconfined"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the docker run line lacks %q: %s", want, line)
+		}
+	}
+	for i, a := range args {
+		if a == "-p" && !strings.HasPrefix(args[i+1], "127.0.0.1:") {
+			t.Errorf("port %s is published beyond 127.0.0.1", args[i+1])
+		}
+	}
+	if args[len(args)-1] != "img:dev" || args[0] != "run" {
+		t.Errorf("the line does not run the image: %v", args)
+	}
+}
+
+func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
+	for text, want := range map[string]string{
+		"docker run --privileged x":                                      "--privileged",
+		"docker run --device /dev/tpm0 x":                                "--device",
+		"docker run --device=/dev/bus/usb x":                             "--device",
+		"docker run -v /dev:/dev x":                                      "a bind mount of /dev",
+		"docker run --volume /dev/bus/usb:/dev/bus/usb x":                "a bind mount of /dev",
+		"docker run --volume=/dev:/dev x":                                "a bind mount of /dev",
+		"docker run --mount type=bind,source=/dev,target=/dev x":         "a bind mount of /dev",
+		"docker run --mount type=bind,src=/dev/hidraw0,target=/x x":      "a bind mount of /dev",
+		"docker run --cap-add ALL x":                                     "--cap-add ALL",
+		"docker run --cap-add=all x":                                     "--cap-add ALL",
+		`"run", "-d", "--privileged", "--cgroupns=private"`:              "--privileged",
+		"docker run --cap-add SYS_ADMIN --privileged --tmpfs /run image": "--privileged",
+	} {
+		got := Forbidden(text)
+		if len(got) == 0 || got[0] != want {
+			t.Errorf("%q: found %v, want %s", text, got, want)
+		}
+	}
+	for _, ok := range []string{
+		"docker run --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run image",
+		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro image",
+		"docker run -v /var/devices:/x image",
+		"docker run --tmpfs /dev/shm image", // a tmpfs is not a host device
+		"docker run --cap-add ALLOW_NOTHING image",
+	} {
+		if got := Forbidden(ok); len(got) != 0 {
+			t.Errorf("%q was refused for %v", ok, got)
+		}
+	}
+}
+
+// Nothing the smoke runs hands the container a host device, whichever file starts it: the Go harness,
+// the image, the two Makefile recipes and the workflow. The Go harness runs the container only through
+// RunArgs.
+func TestTheHarnessNeverGrantsTheHostsDevices(t *testing.T) {
+	root := kindtest.Root()
+	read := func(rel ...string) string {
+		b, err := os.ReadFile(filepath.Join(append([]string{root}, rel...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	files := map[string]string{
+		"tests/systemd/smoke_test.go":   read("tests", "systemd", "smoke_test.go"),
+		"tests/systemd/cells_test.go":   read("tests", "systemd", "cells_test.go"),
+		"tests/systemd/l84_test.go":     read("tests", "systemd", "l84_test.go"),
+		"tests/systemd/Dockerfile":      read("tests", "systemd", "Dockerfile"),
+		".github/workflows/systemd.yml": read(".github", "workflows", "systemd.yml"),
+	}
+	mk := read("Makefile")
+	for _, target := range []string{"systemd-smoke", "lab-l84-systemd"} {
+		files["Makefile "+target] = recipe(t, mk, target)
+	}
+	for name, text := range files {
+		if f := Forbidden(text); len(f) != 0 {
+			t.Errorf("%s grants %v", name, f)
+		}
+	}
+	smoke := files["tests/systemd/smoke_test.go"]
+	if !strings.Contains(smoke, "sdtest.RunArgs(container, network, image)") || strings.Contains(smoke, `"run", "-d"`) {
+		t.Error("the smoke does not start its container through sdtest.RunArgs alone")
+	}
+	if !strings.Contains(smoke, `breakGlass := must(sdtest.BreakGlass(readHost(t, filepath.Join(u.root, "deploy", "systemd", "README.md"))))`) ||
+		!strings.Contains(smoke, "line := breakGlass\n") || !strings.Contains(smoke, "\t\tb.sh(line)\n") || strings.Contains(smoke, "runuser") {
+		t.Error("the smoke does not run the README's break-glass line as written")
+	}
+	if !strings.Contains(read("tests", "systemd", "Dockerfile"), "dbus ca-certificates sudo") {
+		t.Error("the image has no sudo, which the README's break-glass line needs")
+	}
+	if !strings.Contains(read("tests", "systemd", "Dockerfile"), "mount -o remount,rw /sys/fs/cgroup") {
+		t.Error("the image's init does not make its own cgroup mount writable: a container without full privilege has it read-only")
+	}
+}
+
+// recipe is a Makefile target's text, from its name to the next blank line.
+func recipe(t *testing.T, mk, target string) string {
+	t.Helper()
+	i := strings.Index(mk, "\n"+target+":")
+	if i < 0 {
+		t.Fatalf("the Makefile has no %s target", target)
+	}
+	rest := mk[i+1:]
+	if j := strings.Index(rest, "\n\n"); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
+// A killed run (the workflow cancelled, make interrupted) must not leave the container or its network:
+// both targets remove them after go test whatever its result and keep its exit status, and the workflow
+// does the same in a step that always runs.
+func TestAKilledRunLeavesNoContainerOrNetwork(t *testing.T) {
+	mk := func() string {
+		b, err := os.ReadFile(filepath.Join(kindtest.Root(), "Makefile"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}()
+	for _, target := range []string{"systemd-smoke", "lab-l84-systemd"} {
+		r := recipe(t, mk, target)
+		goTest := strings.Index(r, "go test -tags systemd")
+		rm := strings.Index(r, "docker rm -f port49systemd")
+		net := strings.Index(r, "docker network rm port49systemd")
+		if goTest < 0 || rm < goTest || net < goTest {
+			t.Errorf("%s does not remove the container and network after go test:\n%s", target, r)
+		}
+		if !strings.Contains(r, "|| rc=$$?") || !strings.Contains(r, "exit $$rc") {
+			t.Errorf("%s loses go test's exit status:\n%s", target, r)
+		}
+	}
+	wf, err := os.ReadFile(filepath.Join(kindtest.Root(), ".github", "workflows", "systemd.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				If  string `yaml:"if"`
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(wf, &doc); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range doc.Jobs["smoke"].Steps {
+		if s.If == "always()" && strings.Contains(s.Run, "docker rm -f port49systemd") && strings.Contains(s.Run, "docker network rm port49systemd") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the workflow has no always() step that removes the container and the network")
+	}
+}
+
+func TestParseStatAndWant(t *testing.T) {
+	st, err := ParseStat("port49-broker:port49-broker 700 /var/backups/port49-broker\nroot:root 600 /var/backups/port49/etcd-2026-10-28.db\n")
+	if err != nil || len(st) != 2 {
+		t.Fatalf("%v %v", st, err)
+	}
+	if err := st[0].Want("port49-broker:port49-broker", "700"); err != nil {
+		t.Error(err)
+	}
+	if st[1].Want("root:root", "644") == nil || st[1].Want("etcd:etcd", "600") == nil {
+		t.Error("a wrong mode or owner passed")
+	}
+	for _, bad := range []string{"root 600 /x", "root:root rw /x", "root:root 600", ""} {
+		if _, err := ParseStat(bad); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+}
+
+func TestParseSecurityReadsTheUnitRows(t *testing.T) {
+	out := "UNIT                  EXPOSURE PREDICATE HAPPY\nport49d.service            2.0 OK        \U0001F642\nport49-broker.service      1.8 OK        \U0001F642\n"
+	m, err := ParseSecurity(out)
+	if err != nil || m["port49d.service"] != 2.0 || m["port49-broker.service"] != 1.8 {
+		t.Fatalf("%v %v", m, err)
+	}
+	for _, bad := range []string{"", "no table here\n", "port49d.service  UNSAFE OK\n"} {
+		if _, err := ParseSecurity(bad); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+}
+
+// The smoke runs the README's break-glass line as written, so the README must hold exactly one.
+func TestTheREADMEHoldsOneBreakGlassLine(t *testing.T) {
+	line, err := BreakGlass(shipped(t, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "sudo -u port49-broker port49-broker revoke --offline --principal user:bob@example.com" {
+		t.Errorf("the README's break-glass line is %q: the smoke revokes bob", line)
+	}
+	if _, err := BreakGlass("nothing here"); err == nil {
+		t.Error("a README with no break-glass line was accepted")
+	}
+	if _, err := BreakGlass(line + "\n" + line + "\n"); err == nil {
+		t.Error("two break-glass lines were accepted")
+	}
+}
+
+func TestReReadFindsEveryReloadLine(t *testing.T) {
+	j := "broker: SIGHUP: per_login_mfa hardware_key_touch verifies attestations against /etc/port49/broker/attestation-roots.pem; re-read: 1 roots (was 1)\n" +
+		"other\nbroker: SIGHUP: x; re-read: 2 roots (was 1)\n"
+	got := ReRead(j)
+	if len(got) != 2 || got[0] != [2]int{1, 1} || got[1] != [2]int{2, 1} {
+		t.Errorf("%v", got)
+	}
+	if len(ReRead("broker: SIGHUP: keeping the attestation roots already in force")) != 0 {
+		t.Error("a refused reload was read as a re-read")
+	}
+}
+
+// The smoke does not make the directories it puts files in: tmpfiles.d does, and the README says so.
+func TestTmpfilesMakesTheConfigDirectories(t *testing.T) {
+	port49 := withoutComments(shipped(t, "tmpfiles.d", "port49.conf"))
+	for _, want := range []string{`^d /etc/port49/etcd 0755 root root -$`, `^d /etc/port49/broker 0755 root root -$`} {
+		if !regexp.MustCompile(`(?m)` + want).MatchString(port49) {
+			t.Errorf("tmpfiles.d/port49.conf lacks %s", want)
+		}
+	}
+	etcd := withoutComments(shipped(t, "examples", "tmpfiles-etcd.conf"))
+	for _, want := range []string{`^d /etc/etcd 0755 root root -$`, `^d /etc/etcd/pki 0755 root root -$`} {
+		if !regexp.MustCompile(`(?m)` + want).MatchString(etcd) {
+			t.Errorf("tmpfiles-etcd.conf lacks %s", want)
+		}
+	}
+	smoke, err := os.ReadFile(filepath.Join(kindtest.Root(), "tests", "systemd", "smoke_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(smoke), "install -d") {
+		t.Error("the smoke makes a directory itself (install -d): the shipped tmpfiles.d should")
+	}
+}

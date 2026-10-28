@@ -6,6 +6,7 @@ package sdtest
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -119,4 +120,125 @@ func ParseShow(out string) map[string]string {
 // it is writable by others.
 func Refusal(line, dir string) bool {
 	return strings.Contains(line, " "+dir+" is mode ") && strings.Contains(line, "writable by others")
+}
+
+// Ports are the host ports the container publishes, all on 127.0.0.1: TACACS+, the broker's API,
+// and the two metrics listeners.
+var Ports = []string{"49:49", "8443:8443", "9049:9049", "9050:9050"}
+
+// RunArgs is the `docker run` line of the smoke's container. It is not --privileged: that gives
+// the container every host device, which on a workstation includes the TPM and a security key. What
+// it grants instead, each for a stated reason:
+//   - --cgroupns=private: the container sees its own cgroup subtree as the root, so systemd as PID 1
+//     manages only that subtree.
+//   - --cap-add SYS_ADMIN: the units' sandboxing (PrivateDevices, PrivateTmp, ProtectSystem,
+//     ProtectKernel*, ProtectHostname, ProtectControlGroups) builds mount and UTS namespaces, and the
+//     image's init remounts the container's own cgroup mount read-write (Docker mounts it read-only
+//     without --privileged). No other capability is added.
+//   - --security-opt apparmor=unconfined: Docker's default AppArmor profile denies mount(2), which
+//     those namespaces and the remount need. The default seccomp profile is kept: with SYS_ADMIN it
+//     allows mount, unshare and setns.
+//   - tmpfs /run, /run/lock, /tmp: systemd's runtime state, not the host's.
+//
+// No --device and no bind mount of /dev or of anything else. If the first real run shows a unit
+// cannot start with these, the answer is to report the unit's error, never --privileged.
+func RunArgs(name, network, image string) []string {
+	args := []string{"run", "-d", "--name", name, "--network", network,
+		"--cgroupns=private", "--cap-add", "SYS_ADMIN", "--security-opt", "apparmor=unconfined",
+		"--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp"}
+	for _, p := range Ports {
+		args = append(args, "-p", "127.0.0.1:"+p)
+	}
+	return append(args, image)
+}
+
+// Forbidden lists what text must never contain to hand a smoke container the host's devices: the
+// full-privilege flag, a device, a bind mount of /dev, or every capability. text is a harness file or a
+// Makefile recipe.
+func Forbidden(text string) []string {
+	var found []string
+	for _, f := range []struct{ name, pattern string }{
+		{"--privileged", `--privileged`},
+		{"--device", `--device(\s|=)`},
+		{"a bind mount of /dev", `(-v|--volume)(\s+|=)/dev(/|:|\s|$)|(source|src)=/dev(/|,|\s|$)`},
+		{"--cap-add ALL", `--cap-add(\s+|=)(?i:all)\b`},
+	} {
+		if regexp.MustCompile(f.pattern).MatchString(text) {
+			found = append(found, f.name)
+		}
+	}
+	return found
+}
+
+// Stat is one line of `stat -c '%U:%G %a %n'`.
+type Stat struct {
+	Owner, Mode, Path string
+}
+
+// ParseStat reads `stat -c '%U:%G %a %n'` output, one path per line.
+func ParseStat(out string) ([]Stat, error) {
+	var res []Stat
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		f := strings.Fields(l)
+		if len(f) != 3 || !strings.Contains(f[0], ":") || !regexp.MustCompile(`^[0-7]{3,4}$`).MatchString(f[1]) {
+			return nil, fmt.Errorf("sdtest: stat line %q is not 'owner:group mode path'", l)
+		}
+		res = append(res, Stat{f[0], f[1], f[2]})
+	}
+	return res, nil
+}
+
+// Want checks one Stat against owner ("user:group") and mode.
+func (s Stat) Want(owner, mode string) error {
+	if s.Owner != owner || s.Mode != mode {
+		return fmt.Errorf("%s is %s %s, want %s %s", s.Path, s.Owner, s.Mode, owner, mode)
+	}
+	return nil
+}
+
+// ParseSecurity reads `systemd-analyze security --no-pager <units>`: the exposure each unit row
+// carries, by unit name.
+func ParseSecurity(out string) (map[string]float64, error) {
+	m := map[string]float64{}
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) < 2 || !strings.HasSuffix(f[0], ".service") {
+			continue
+		}
+		v, err := strconv.ParseFloat(f[1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("sdtest: the exposure of %s is %q, not a number", f[0], f[1])
+		}
+		m[f[0]] = v
+	}
+	if len(m) == 0 {
+		return nil, errors.New("sdtest: no unit rows in the systemd-analyze security output")
+	}
+	return m, nil
+}
+
+// breakGlassRE is the README's break-glass command line.
+var breakGlassRE = regexp.MustCompile(`(?m)^sudo -u port49-broker port49-broker revoke --offline --principal \S+$`)
+
+// BreakGlass is the README's break-glass command as written, for the smoke to run literally.
+func BreakGlass(readme string) (string, error) {
+	m := breakGlassRE.FindAllString(readme, -1)
+	if len(m) != 1 {
+		return "", fmt.Errorf("sdtest: want exactly one `sudo -u port49-broker port49-broker revoke --offline --principal P` line in the README, found %d", len(m))
+	}
+	return m[0], nil
+}
+
+var reRead = regexp.MustCompile(`re-read: (\d+) roots \(was (\d+)\)`)
+
+// ReRead is each "re-read: N roots (was M)" the journal holds (internal/port49d/permfa.go), as {N, M},
+// in order.
+func ReRead(journal string) [][2]int {
+	var res [][2]int
+	for _, m := range reRead.FindAllStringSubmatch(journal, -1) {
+		n, _ := strconv.Atoi(m[1])
+		was, _ := strconv.Atoi(m[2])
+		res = append(res, [2]int{n, was})
+	}
+	return res
 }

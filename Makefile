@@ -260,7 +260,8 @@ lab-l84:
 
 lab-l84-systemd: packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
-	PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m
+	rc=0; PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
+	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+
@@ -538,8 +539,12 @@ kind-smoke-red: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERS
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
-# installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker with
-# --privileged and a cgroup v2 host. It builds tests/systemd/Dockerfile (apt and the etcd image
-# are pulled by that build) and fails, never skips, when dist/ holds no package.
+# installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
+# host. The container is never run with full privilege, a device or a bind mount of /dev (the host's TPM
+# and security key stay out of it): sdtest.RunArgs gives it CAP_SYS_ADMIN, an unconfined AppArmor profile
+# and tmpfs mounts, each justified there. It builds tests/systemd/Dockerfile (apt and the etcd image are
+# pulled by that build) and fails, never skips, when dist/ holds no package. Whatever the result, the
+# container and the network are removed afterwards, by their fixed names.
 systemd-smoke: packages
-	go test -tags systemd ./tests/systemd/ -count=1 -v -timeout 30m
+	rc=0; go test -tags systemd ./tests/systemd/ -count=1 -v -timeout 30m || rc=$$?; \
+	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
