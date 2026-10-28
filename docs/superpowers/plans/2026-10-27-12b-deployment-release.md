@@ -1318,7 +1318,7 @@ Needs Ryan present with a YubiKey 5 on the SER8. It runs on the lab host under t
 
 - [ ] **Step 2: Write `TestSystemdSmoke`.**
 
-  1. Build the image, then run it: `docker run -d --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock -p 127.0.0.1:49:49 -p 127.0.0.1:8443:8443`.
+  1. Build the image, then run it: `docker run -d --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run --tmpfs /run/lock --tmpfs /tmp -p 127.0.0.1:49:49 -p 127.0.0.1:8443:8443` (lead ruling 2026-10-28: never `--privileged`, a device or a `/dev` bind mount; `sdtest.RunArgs` is the one definition).
   2. `docker cp` the `.deb` and the generated PKI. `apt-get install ./port49-server_*.deb`.
   3. Create the `etcd` user from `examples/sysusers-etcd.conf`. Install three `etcd@{1,2,3}` instances from `deploy/systemd/examples` with the three member configs, each with its own client and peer port (2379/2380, 2479/2480, 2579/2580). Apply `port49d store-roles` output with `etcdctl`.
   4. Copy `deploy/systemd/config/*` with the smoke's endpoints, and the keys and secrets, with the modes ruling 2 states.
