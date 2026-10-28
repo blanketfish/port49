@@ -1,0 +1,15 @@
+# port49's own etcd (never the control plane's), as the reference example the kind smoke uses:
+# three members, each reached by its own stable name through this headless Service, so the
+# endpoints in the chart's values name every member and never a Service or a VIP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: port49-etcd
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/name: etcd}
+  ports:
+    - {name: client, port: 2379}
+    - {name: peer, port: 2380}

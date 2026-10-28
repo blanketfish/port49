@@ -1,0 +1,40 @@
+# The us region of a multi-region deployment (spec §13 decision 51), as chart values: install
+# with `-f ci/values.yaml -f examples/values-multi-region.yaml`, replacing the example.com names.
+# stores.directory is one etcd stretched a member per region; stores.session is an etcd of this
+# region's own. Each region names its own session endpoints and nothing else differs. Run
+# `port49d store-roles` once against the stretched cluster and its session section against each
+# region's session etcd (README).
+etcd:
+  endpoints:
+    - https://etcd-us.example.com:2379
+    - https://etcd-eu.example.com:2379
+    - https://etcd-ap.example.com:2379
+config:
+  port49d:
+    stores:
+      directory:
+        etcd: {call_timeout: 500ms, start_timeout: 0}
+      session:
+        backend: etcd
+        etcd:
+          endpoints:
+            - https://etcd-session-us-1.example.com:2379
+            - https://etcd-session-us-2.example.com:2379
+            - https://etcd-session-us-3.example.com:2379
+          ca_file: /etc/port49/etcd-ca/ca.crt
+          daemon: {cert_file: /etc/port49/etcd/tls.crt, key_file: /etc/port49/etcd/tls.key}
+          hold_ttl: 15s
+  broker:
+    stores:
+      directory:
+        etcd: {call_timeout: 500ms}
+      session:
+        backend: etcd
+        etcd:
+          endpoints:
+            - https://etcd-session-us-1.example.com:2379
+            - https://etcd-session-us-2.example.com:2379
+            - https://etcd-session-us-3.example.com:2379
+          ca_file: /etc/port49/etcd-ca/ca.crt
+          broker: {cert_file: /etc/port49/etcd/tls.crt, key_file: /etc/port49/etcd/tls.key}
+          hold_ttl: 15s
