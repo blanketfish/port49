@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -20,12 +22,48 @@ import (
 // Valid 24h, as WriteLab's. Nothing it writes protects anything real: a trial and the
 // tests use it, never a deployment.
 func WriteCompose(dir, email string, now time.Time) error {
+	var ms []member
+	for _, m := range []string{"etcd-1", "etcd-2", "etcd-3"} {
+		ms = append(ms, member{m, []string{m, "localhost"}, Loopback()})
+	}
+	return writeStack(dir, email, now, ms, nil)
+}
+
+// member is one etcd member's certificate: its file name and the names it answers to.
+type member struct {
+	name string
+	dns  []string
+	ips  []net.IP
+}
+
+// WriteKind is WriteCompose's layout for a cluster (plan 12b, Task 11): the same files, but the
+// member certificates are etcd-0 .. etcd-<members-1>, each answering to the DNS names its pod has
+// behind the headless Service etcd in namespace: etcd-<i>.etcd.<namespace>.svc and
+// etcd-<i>.etcd.<namespace>.svc.cluster.local.
+func WriteKind(dir, namespace string, members int, email string, now time.Time) error {
+	if members < 1 {
+		return fmt.Errorf("testpki: %d etcd members", members)
+	}
+	if namespace == "" || strings.Contains(namespace, ".") {
+		return fmt.Errorf("testpki: %q is not a namespace name", namespace)
+	}
+	var ms []member
+	for i := 0; i < members; i++ {
+		n := fmt.Sprintf("etcd-%d", i)
+		host := n + ".etcd." + namespace + ".svc"
+		ms = append(ms, member{n, []string{host, host + ".cluster.local"}, nil})
+	}
+	// The broker's Service is <release>-broker in this namespace: any release name answers.
+	return writeStack(dir, email, now, ms, []string{"*." + namespace + ".svc", "*." + namespace + ".svc.cluster.local"})
+}
+
+func writeStack(dir, email string, now time.Time, members []member, brokerDNS []string) error {
 	for _, d := range []string{dir, filepath.Join(dir, "etcd"), filepath.Join(dir, "keys"), filepath.Join(dir, "secrets")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
 	}
-	if err := WriteLabWith(filepath.Join(dir, "broker"), email, []string{ComposeOperator, ComposeBob}, now); err != nil {
+	if err := writeLab(filepath.Join(dir, "broker"), email, []string{ComposeOperator, ComposeBob}, brokerDNS, nil, now); err != nil {
 		return err
 	}
 	from, until := now.Add(-time.Hour), now.Add(24*time.Hour)
@@ -47,8 +85,8 @@ func WriteCompose(dir, email string, now time.Time) error {
 		files["etcd/"+name+".pem"], files["etcd/"+name+"-key.pem"] = cert, key
 		return nil
 	}
-	for _, m := range []string{"etcd-1", "etcd-2", "etcd-3"} {
-		if err := issue(m, Leaf{CommonName: m, DNSNames: []string{m, "localhost"}, IPs: Loopback(),
+	for _, m := range members {
+		if err := issue(m.name, Leaf{CommonName: m.name, DNSNames: m.dns, IPs: m.ips,
 			NoExtKeyUsage: true}); err != nil {
 			return err
 		}

@@ -190,6 +190,11 @@ func WriteLabWith(dir, email string, others []string, now time.Time) error {
 // for serverIPs, for a lab whose brokers listen on addresses of their own
 // (the regions' namespaces); 127.0.0.1 stays.
 func WriteLabAt(dir, email string, others []string, serverIPs []net.IP, now time.Time) error {
+	return writeLab(dir, email, others, nil, serverIPs, now)
+}
+
+// writeLab is WriteLabAt with the server certificate also valid for the DNS names in dns.
+func writeLab(dir, email string, others, dns []string, serverIPs []net.IP, now time.Time) error {
 	// MkdirAll keeps an existing mode; a directory left loose by an earlier
 	// run is tightened, not inherited. The files are written fresh
 	// (writeFresh).
@@ -203,7 +208,7 @@ func WriteLabAt(dir, email string, others []string, serverIPs []net.IP, now time
 	if err != nil {
 		return err
 	}
-	srv, err := ca.Issue(Leaf{CommonName: "port49 lab broker", DNSNames: []string{"port49-broker"}, IPs: append([]net.IP{net.ParseIP("127.0.0.1")}, serverIPs...),
+	srv, err := ca.Issue(Leaf{CommonName: "port49 lab broker", DNSNames: append([]string{"port49-broker"}, dns...), IPs: append([]net.IP{net.ParseIP("127.0.0.1")}, serverIPs...),
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
 	if err != nil {
 		return err
