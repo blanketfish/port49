@@ -110,9 +110,13 @@ host install them with their owners, refusing to replace one:
 (
   KEY_ID=   # the same as where it was made
   cd /etc/port49/secrets || exit 1
-  for pair in encryption${KEY_ID:+-$KEY_ID}.key:port49d broker-encryption${KEY_ID:+-$KEY_ID}.key:port49-broker; do
-    f=${pair%%:*}; o=${pair##*:}
+  pairs="encryption${KEY_ID:+-$KEY_ID}.key:port49d broker-encryption${KEY_ID:+-$KEY_ID}.key:port49-broker"
+  for pair in $pairs; do   # refuse before installing either, so a host never holds half a pair
+    f=${pair%%:*}
     if [ -e "$f" ] || [ -L "$f" ]; then echo "port49: $f exists" >&2; exit 1; fi
+  done
+  for pair in $pairs; do
+    f=${pair%%:*}; o=${pair##*:}
     install -o "$o" -g "$o" -m 0400 "$HOME/$f" "$f" || { echo "port49: install of $f failed" >&2; exit 1; }
   done
 )

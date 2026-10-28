@@ -470,7 +470,7 @@ func TestTheExportNeverLeavesStaleBytes(t *testing.T) {
 	}
 }
 
-const copyMarker = "for pair in"
+const copyMarker = "for pair in $pairs"
 
 // copyEnv has the two files in a scratch $HOME and an install stub that records its calls and
 // copies without the owner (which needs root); INSTALL=fail makes it fail.
@@ -526,6 +526,9 @@ func TestTheCopySnippetRefusesAndSaysWhy(t *testing.T) {
 		}
 		if strings.Contains(out, "install of") {
 			t.Errorf("%s planted: said install failed for an existing name: %q", how, out)
+		}
+		if _, err := os.Lstat(filepath.Join(e.root, "secrets", "encryption.key")); err == nil {
+			t.Errorf("%s planted: the first file was installed though the second exists", how)
 		}
 		if b, _ := os.ReadFile(at); how == "file" && string(b) != "EXISTING-NOT-A-REAL-KEY" {
 			t.Errorf("an existing key was replaced")
