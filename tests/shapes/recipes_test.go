@@ -3,10 +3,13 @@ package shapes
 import (
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/secretref"
 )
@@ -464,5 +467,135 @@ func TestTheExportNeverLeavesStaleBytes(t *testing.T) {
 		t.Errorf("a failed export left %v: no temporary file may stay", f)
 	} else if b, _ := os.ReadFile(f[0]); string(b) != "short" {
 		t.Error("a failed export changed the last good file")
+	}
+}
+
+const copyMarker = "for pair in"
+
+// copyEnv has the two files in a scratch $HOME and an install stub that records its calls and
+// copies without the owner (which needs root); INSTALL=fail makes it fail.
+func copyEnv(t *testing.T) *recipeEnv {
+	t.Helper()
+	e := newRecipeEnv(t)
+	home := filepath.Join(e.stubs, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"encryption.key", "broker-encryption.key"} {
+		if err := os.WriteFile(filepath.Join(home, f), []byte("FAKE-KEY-FOR-TEST-ONLY"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.stub("install", "echo \"install $*\" >> "+e.log()+"\n"+
+		`[ "$INSTALL" = fail ] && exit 1`+"\n"+`for a; do last2=$last; last=$a; done; exec /usr/bin/cp "$last2" "$last"`+"\n")
+	return e
+}
+
+// The copy-to-other-hosts snippet refuses an existing name, says which failure it is, and
+// exits non-zero on any of them.
+func TestTheCopySnippetRefusesAndSaysWhy(t *testing.T) {
+	block := readmeBlock(t, copyMarker)
+	e := copyEnv(t)
+	out, err := e.run(block, "HOME="+filepath.Join(e.stubs, "home"))
+	if err != nil {
+		t.Fatalf("the plain copy failed: %v\n%s", err, out)
+	}
+	for _, f := range []string{"encryption.key", "broker-encryption.key"} {
+		if _, err := os.Stat(filepath.Join(e.root, "secrets", f)); err != nil {
+			t.Errorf("%s was not installed", f)
+		}
+	}
+	for _, how := range []string{"file", "link", "dangling"} {
+		e := copyEnv(t)
+		at := filepath.Join(e.root, "secrets", "broker-encryption.key")
+		var err error
+		switch how {
+		case "file":
+			err = os.WriteFile(at, []byte("EXISTING-NOT-A-REAL-KEY"), 0o400)
+		case "link":
+			err = os.Symlink(filepath.Join(e.stubs, "home", "encryption.key"), at)
+		default:
+			err = os.Symlink(filepath.Join(e.stubs, "nowhere"), at)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := e.run(block, "HOME="+filepath.Join(e.stubs, "home"))
+		if err == nil || !strings.Contains(out, "broker-encryption.key exists") {
+			t.Errorf("%s planted: err %v, output %q, want a refusal saying exists", how, err, out)
+		}
+		if strings.Contains(out, "install of") {
+			t.Errorf("%s planted: said install failed for an existing name: %q", how, out)
+		}
+		if b, _ := os.ReadFile(at); how == "file" && string(b) != "EXISTING-NOT-A-REAL-KEY" {
+			t.Errorf("an existing key was replaced")
+		}
+	}
+	e = copyEnv(t)
+	out, err = e.run(block, "HOME="+filepath.Join(e.stubs, "home"), "INSTALL=fail")
+	if err == nil || !strings.Contains(out, "install of encryption.key failed") || strings.Contains(out, "exists") {
+		t.Errorf("a failing install: err %v, output %q, want install failed and never exists", err, out)
+	}
+}
+
+// An interrupt, a terminate or a hangup leaves no temporary file and fails the recipe, under
+// dash as well as on a normal exit.
+func TestTheRecipesCleanUpOnASignal(t *testing.T) {
+	// Under nohup the test process ignores SIGHUP and every child would inherit that, and a shell
+	// cannot trap a signal that was ignored on entry. Catching it here gives the children the
+	// default again.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	for _, c := range []struct{ marker, dir, stub string }{
+		{sealMarker, "secrets", "head"},
+		{deviceMarker, "keys", "openssl"},
+	} {
+		for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+			e := newRecipeEnv(t)
+			ready := filepath.Join(e.stubs, "ready")
+			e.stub(c.stub, ": > '"+ready+"'\nexec sleep 30\n")
+			block := strings.NewReplacer("/etc/port49/secrets", filepath.Join(e.root, "secrets"),
+				"/etc/port49/keys", filepath.Join(e.root, "keys")).Replace(readmeBlock(t, c.marker))
+			cmd := exec.Command("sh", "-c", block)
+			cmd.Env = []string{"PATH=" + e.stubs + ":/usr/bin:/bin", "TMPDIR=" + e.stubs + "/tmp"}
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 200; i++ {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			if _, err := os.Stat(ready); err != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				t.Fatalf("%s %v: the recipe never reached %s", c.marker, sig, c.stub)
+			}
+			_ = syscall.Kill(-cmd.Process.Pid, sig)
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Errorf("%s %v: the recipe exited 0 after the signal", c.marker, sig)
+				}
+			case <-time.After(10 * time.Second):
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				t.Fatalf("%s %v: the recipe did not stop", c.marker, sig)
+			}
+			// the outer shell dies at once; the recipe's own subshell cleans up a moment later
+			var l []string
+			for i := 0; i < 80; i++ {
+				if l = leftovers(t, filepath.Join(e.root, c.dir)); len(l) == 0 {
+					break
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			if len(l) != 0 {
+				t.Errorf("%s %v left %v", c.marker, sig, l)
+			}
+		}
 	}
 }

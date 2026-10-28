@@ -86,7 +86,7 @@ replaced. `KEY_ID` names the key: empty makes `encryption.key` and `broker-encry
   for f in "$n" "$b"; do
     [ ! -e "$f" ] && [ ! -L "$f" ] || { echo "port49: $f exists; pick a new key id" >&2; exit 1; }
   done
-  t=; u=; trap 'rm -f "$t" "$u"' EXIT
+  t=; u=; trap 'rm -f "$t" "$u"' EXIT; trap 'exit 1' INT TERM HUP
   t=$(mktemp ./.key.XXXXXX) && u=$(mktemp ./.key.XXXXXX) || exit 1
   ok=
   for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -107,12 +107,15 @@ other host over a private channel (`scp encryption.key broker-encryption.key hos
 host install them with their owners, refusing to replace one:
 
 ```sh
-KEY_ID=   # the same as where it was made
-cd /etc/port49/secrets &&
-for pair in encryption${KEY_ID:+-$KEY_ID}.key:port49d broker-encryption${KEY_ID:+-$KEY_ID}.key:port49-broker; do
-  f=${pair%%:*}; o=${pair##*:}
-  [ ! -e "$f" ] && install -o "$o" -g "$o" -m 0400 "$HOME/$f" "$f" || { echo "port49: $f exists" >&2; break; }
-done
+(
+  KEY_ID=   # the same as where it was made
+  cd /etc/port49/secrets || exit 1
+  for pair in encryption${KEY_ID:+-$KEY_ID}.key:port49d broker-encryption${KEY_ID:+-$KEY_ID}.key:port49-broker; do
+    f=${pair%%:*}; o=${pair##*:}
+    if [ -e "$f" ] || [ -L "$f" ]; then echo "port49: $f exists" >&2; exit 1; fi
+    install -o "$o" -g "$o" -m 0400 "$HOME/$f" "$f" || { echo "port49: install of $f failed" >&2; exit 1; }
+  done
+)
 ```
 
 Then `shred -u` the two copies in `$HOME`.
@@ -128,7 +131,7 @@ line; never rewrite a file in place. Hex gives 32 characters you can type into t
   DEVICE_KEY=core-v2   # a new name for every version: never an existing one
   umask 077 && cd /etc/port49/keys || exit 1
   [ ! -e "$DEVICE_KEY" ] && [ ! -L "$DEVICE_KEY" ] || { echo "port49: $DEVICE_KEY exists; pick a new key id" >&2; exit 1; }
-  t=; trap 'rm -f "$t"' EXIT
+  t=; trap 'rm -f "$t"' EXIT; trap 'exit 1' INT TERM HUP
   t=$(mktemp ./.key.XXXXXX) || exit 1
   openssl rand -hex 16 > "$t" && [ "$(wc -c < "$t")" -eq 33 ] && chown root:port49d "$t" && chmod 0440 "$t" ||
     { echo "port49: the device key was not made" >&2; exit 1; }
