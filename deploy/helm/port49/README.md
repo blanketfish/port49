@@ -71,21 +71,44 @@ root it must crash-loop on the `state_dir` refusal, which proves the cell detect
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
 remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. Vault Agent
 and the Secrets Store CSI driver are unmeasured here (L83) and not documented as supported.
+The example's store is a namespaced `SecretStore`, usable only from the release's namespace. A
+cluster-wide `ClusterSecretStore` without `conditions` can be used from every namespace: anyone who
+can create an ExternalSecret anywhere could read the device keys through your Vault role.
+`examples/external-secret-clusterstore.yaml` shows the option, with the namespace named.
 
 To rotate the encryption key, add the new key to the Secret, set `encryption.id` to a new id, and
 upgrade; port49 reads old ids until nothing is sealed under them (see the operator guide).
 
 ## The issuing CA
 
-Every broker must hold the same issuing CA. After the first install run, once:
+Every broker must hold the same issuing CA, or it refuses to start against the store's record of it.
+After the first install run, once:
 
 ```sh
-deploy/helm/port49/scripts/copy-issuer.sh port49 port49
+deploy/helm/port49/scripts/copy-issuer.sh port49 port49 --from 0
 ```
 
-It runs `init-issuer` in a one-shot pod on broker-0's volume, copies the CA to each other broker's
-volume with ownership and mode set, restarts the brokers, and prints each pod's "issuing ca" log
-line so you can compare them. It never `exec`s into a broker. `forget-issuer` retires a CA.
+`--from` is required: it names the broker whose CA is the one to keep (`--to` names targets; the
+default is every other broker). The script looks at every broker's volume first. If none holds a CA it
+runs `init-issuer` in a one-shot pod on the source's volume; if the source holds none but another
+broker does it refuses and names that broker (a second `init-issuer` would make a different CA). It
+copies `issuing-ca.pem` and `issuing-ca.key` (and `issuing-ca-previous.pem` during a rotation) to each
+target through a staging directory, with ownership and mode set, skips a target that already holds
+the same CA, and **refuses, naming both certificate sha256s and both ordinals, a target that holds a
+different one: it never overwrites a CA.** Then it restarts the brokers and prints each pod's "issuing
+ca" log line so you can compare them. It never `exec`s into a broker, and its helper pods have
+deadlines of minutes.
+
+**broker-0's volume was lost** (or any broker's): copy from one that holds the CA, never run
+`init-issuer`:
+
+```sh
+deploy/helm/port49/scripts/copy-issuer.sh port49 port49 --from 1 --to 0
+```
+
+Do not reach for `forget-issuer`. It removes the store's record of the CA so that a new one can be
+made, and every certificate issued under the old CA stops working. It is for the case where every
+broker lost the CA and no copy exists.
 
 ## Admin calls
 
@@ -107,7 +130,11 @@ one-off Jobs, run once per new deployment.
 | Pod `Pending` | `kubectl describe pod <pod>` | A named Secret or PVC is missing. |
 | Not Ready, running | `curl :9049/readyz` through a port-forward | A store is unreachable; the body says which. |
 | Admin call 503 | broker log | No attestation roots configured. |
-| Brokers disagree on the CA | `copy-issuer.sh` output | Run it again; it is idempotent on the source. |
+| Brokers disagree on the CA, or one refuses to start on it | the broker's "issuing ca" log line; `copy-issuer.sh` output | Copy from a broker that holds the CA the store records, onto the one that differs: `copy-issuer.sh <ns> <release> --from <ordinal> --to <ordinal>`. It refuses to overwrite a different CA and names both; never `init-issuer` again, and not `forget-issuer`. |
+| Pod `Init:Error` or `Init:CrashLoopBackOff` | `kubectl logs <pod> -c data-dir` (`describe` shows only the exit code) | The root init that sets up the volume failed; its log names the command. Usually a PVC that cannot be chowned (a read-only or network volume that refuses chown), or a namespace policy that drops its capabilities. |
+| No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `restricted`. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700), so the namespace must be `baseline` (README, Install). |
+| A backup Job failed | `kubectl logs job/<name> -c stale-check` | A `.new` file is left from a run that did not finish; the log names it. Neither backup image has a shell: remove it from a throwaway alpine pod that mounts the backups PVC (`kubectl run`, `rm /backup/<name>.new`), and the next run proceeds. |
+| `kubectl get externalsecret` shows `SecretSyncedError` | `kubectl describe externalsecret <name>` | ESO cannot reach the store or a remote key. The Secret keeps its last data, so a new key version never appears and port49d names the missing `secret_ref`. |
 
 ## Storage and scaling
 
@@ -135,9 +162,11 @@ for the cluster, which is a cluster-wide change: enable it in one release per cl
 
 ## Backups
 
-Two CronJob examples, one pattern (UNVERIFIED until the kind smoke): `examples/backup-cronjob.yaml`
-(the etcd snapshot) and `examples/backup-enrollments-cronjob.yaml` (the sealed enrollment store,
-`port49-broker export-enrollments --out FILE`). Neither the etcd nor the port49 image has a shell, so:
+Two CronJobs, one pattern (UNVERIFIED until the kind smoke): `examples/backup-cronjob.yaml` (the etcd
+snapshot, which needs etcd's root certificate and is yours to adapt) and the chart's own, off by default:
+`--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<your PVC>` (the sealed
+enrollment store, `port49-broker export-enrollments --out FILE`; it mounts what the broker does, from
+the same template). Neither the etcd nor the port49 image has a shell, so:
 
 1. a `stale-check` init container fails the job when `<name>.new` is left from a run that did not
    finish (the failed pod stays, and `kubectl logs` names the file); remove it and the next run goes;
