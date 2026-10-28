@@ -176,12 +176,13 @@ jobs:
       # The token reaches ansible-galaxy as its "public" server's token, in this step's env
       # only, never on argv. A failed publish fails the step unless Galaxy's refusal says this
       # version exists. The line shape is read from ansible-core 2.21.4's source (display.py
-      # prefixes "[ERROR]: "; api.py:675 and :210 make the rest); the Message text after
+      # prefixes "[ERROR]: "; api.py:88 and :114 rewrite the server URL to .../api/ before :675 builds
+      # the message, and :210 adds the rest); the Message text after
       # "HTTP Code: 400" is UNVERIFIED until a real re-run (12b report).
       - run: |
           set +e
           ansible-galaxy collection publish port49-client-*.tar.gz > publish.log 2>&1
-          rc=$?; cat publish.log; [ "$rc" -eq 0 ] || grep -qE '^\[ERROR\]: .*Error when publishing collection to public \(https://galaxy\.ansible\.com/\) \(HTTP Code: 400, Message: [^)]*already exists' publish.log
+          rc=$?; cat publish.log; [ "$rc" -eq 0 ] || grep -qE '^\[ERROR\]: .*Error when publishing collection to public \(https://galaxy\.ansible\.com/api/\) \(HTTP Code: 400, Message: [^)]*already exists' publish.log
         env:
           ANSIBLE_GALAXY_SERVER_LIST: public
           ANSIBLE_GALAXY_SERVER_PUBLIC_URL: https://galaxy.ansible.com/

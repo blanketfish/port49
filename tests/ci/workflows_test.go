@@ -431,19 +431,20 @@ func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
 func TestTheGalaxyPublishStepPassesOnlyOnSuccessOrAnExistingVersion(t *testing.T) {
 	f, _ := release(t)
 	run := f.Jobs["galaxy"].Steps[3].Run
-	const existing = "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 400, Message: Collection version already exists Code: conflict)\n"
+	const existing = "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/api/) (HTTP Code: 400, Message: Collection version already exists Code: conflict)\n"
 	for _, c := range []struct {
 		name, out string
 		rc        int
 		pass      bool
 	}{
 		{"success", "published\n", 0, true},
-		{"unrelated failure", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 401, Message: Invalid token Code: unauthorized)\n", 1, false},
+		{"unrelated failure", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/api/) (HTTP Code: 401, Message: Invalid token Code: unauthorized)\n", 1, false},
 		{"existing version", existing, 1, true},
 		{"phrase off the error line", "note: the thing already exists\n", 1, false},
 		{"phrase after an unanchored prefix", "x " + existing, 1, false},
-		{"a 400 that says exists but not already", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 400, Message: Namespace exists but you do not own it Code: forbidden)\n", 1, false},
+		{"a 400 that says exists but not already", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/api/) (HTTP Code: 400, Message: Namespace exists but you do not own it Code: forbidden)\n", 1, false},
 		{"another server's refusal", "[ERROR]: GalaxyError: Error when publishing collection to other (https://example.invalid/) (HTTP Code: 400, Message: Collection version already exists Code: conflict)\n", 1, false},
+		{"the configured URL without /api/", "[ERROR]: GalaxyError: Error when publishing collection to public (https://galaxy.ansible.com/) (HTTP Code: 400, Message: Collection version already exists Code: conflict)\n", 1, false},
 		{"no output at all", "", 1, false},
 	} {
 		dir := t.TempDir()
