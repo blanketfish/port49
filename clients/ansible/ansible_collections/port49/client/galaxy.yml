@@ -12,3 +12,7 @@ tags:
   - networking
   - security
   - tacacs
+build_ignore:
+  - tests
+  - "*.pyc"
+  - __pycache__

@@ -47,6 +47,38 @@ type workflow struct {
 	} `yaml:"jobs"`
 }
 
+// releaseJobPerms is what each job of release.yml may hold, and nothing else: a job that
+// publishes holds its one write, and the two that build with no token hold only a read. These
+// are the only exceptions to the contents: read rule, and no other workflow has any.
+var releaseJobPerms = map[string]map[string]string{
+	"check":        {"contents": "read"},
+	"goreleaser":   {"contents": "write", "attestations": "write", "id-token": "write"},
+	"image":        {"contents": "read", "packages": "write", "attestations": "write", "id-token": "write"},
+	"chart":        {"contents": "read", "packages": "write"},
+	"build-python": {"contents": "read"},
+	"pypi":         {"id-token": "write"},
+	"build-galaxy": {"contents": "read"},
+	"galaxy":       {},
+}
+
+// jobPermsOK is whether p is what job id of workflow name may hold.
+func jobPermsOK(name, id string, p any) bool {
+	if name != "release.yml" {
+		return readOnly(p)
+	}
+	want, ok := releaseJobPerms[id]
+	m, isMap := p.(map[string]any)
+	if !ok || !isMap || len(m) != len(want) {
+		return false
+	}
+	for k, v := range want {
+		if m[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 // readOnly is a permissions value of exactly contents: read; write-all, read-all and a missing
 // block are none of that.
 func readOnly(p any) bool {
@@ -92,8 +124,8 @@ func workflowProblems(name string, raw []byte) []string {
 		add("no jobs")
 	}
 	for id, j := range w.Jobs {
-		if !readOnly(j.Permissions) {
-			add("job %s: permissions are %v, want exactly contents: read set on the job", id, j.Permissions)
+		if !jobPermsOK(name, id, j.Permissions) {
+			add("job %s: permissions are %v, want exactly contents: read set on the job (release.yml: its table)", id, j.Permissions)
 		}
 		if j.TimeoutMinutes == 0 {
 			add("job %s: no timeout-minutes", id)
@@ -102,7 +134,9 @@ func workflowProblems(name string, raw []byte) []string {
 			if s.Uses != "" && !pinned.MatchString(s.Uses) {
 				add("job %s: %q is not pinned by a full commit SHA", id, s.Uses)
 			}
-			if strings.HasPrefix(s.Uses, "actions/checkout@") && fmt.Sprint(s.With["persist-credentials"]) != "false" {
+			// the one checkout that keeps its credentials: GoReleaser creates the release with them
+			keeps := name == "release.yml" && id == "goreleaser"
+			if strings.HasPrefix(s.Uses, "actions/checkout@") && !keeps && fmt.Sprint(s.With["persist-credentials"]) != "false" {
 				add("job %s: a checkout without persist-credentials: false", id)
 			}
 			for _, bad := range []string{"github.event", "github.head_ref", "github.ref_name", "secrets."} {

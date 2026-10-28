@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -432,6 +432,11 @@ bin/goreleaser-$(GORELEASER_VERSION):
 
 packages: bin/goreleaser-$(GORELEASER_VERSION)
 	bin/goreleaser-$(GORELEASER_VERSION) release --snapshot --clean --skip=publish,sign
+
+# The release workflow's step: the same pinned binary, publishing (GITHUB_TOKEN in its environment).
+# Never run locally; make packages is the local build.
+release-packages: bin/goreleaser-$(GORELEASER_VERSION)
+	bin/goreleaser-$(GORELEASER_VERSION) release --clean
 
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v
