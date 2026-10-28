@@ -32,7 +32,7 @@ import (
 // init-enrollments prints what it did and exits 0, or 1 with the reason
 // ("already there" names import and reset-second-factor --all). export-
 // enrollments writes the sealed bytes to stdout and nothing else there, and is
-// refused when stdout is a terminal. Exit 2 is a usage error.
+// refused when stdout is a terminal, or writes to the new file --out names. Exit 2 is a usage error.
 func enrollmentsCmd(proc, op string, args []string, stdout, stderr io.Writer) int {
 	def, load := "/etc/port49/port49d.yaml", config.Load
 	if proc == "port49-broker" {
@@ -41,14 +41,19 @@ func enrollmentsCmd(proc, op string, args []string, stdout, stderr io.Writer) in
 	fs := flag.NewFlagSet(proc+" "+op, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", def, "path to "+proc+"'s yaml")
+	outPath := fs.String("out", "", "export-enrollments: write the sealed export to this new file (created 0600, never replacing one) instead of stdout")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "usage: %s %s [--config FILE]\n", proc, op)
+		fmt.Fprintf(stderr, "usage: %s %s [--config FILE]%s\n", proc, op, map[bool]string{true: " [--out FILE]"}[op == "export-enrollments"])
 		return 2
 	}
-	if op == "export-enrollments" && stdoutIsTerminal(stdout) {
+	if op != "export-enrollments" && *outPath != "" {
+		fmt.Fprintf(stderr, "%s %s: --out is export-enrollments's\n", proc, op)
+		return 2
+	}
+	if op == "export-enrollments" && *outPath == "" && stdoutIsTerminal(stdout) {
 		fmt.Fprintf(stderr, "%s %s: the sealed export is binary: redirect it to a file or a pipe, "+
 			"%s %s > enrollments.sealed\n", proc, op, proc, op)
 		return 2
@@ -71,7 +76,43 @@ func enrollmentsCmd(proc, op string, args []string, stdout, stderr io.Writer) in
 	if op == "export-enrollments" {
 		logTo = stderr
 	}
+	if *outPath != "" {
+		return withOutFile(*outPath, stderr, func(w io.Writer) int {
+			return runEnrollments(ctx, proc, op, cfg, keys, logTo, w, stderr)
+		})
+	}
 	return runEnrollments(ctx, proc, op, cfg, keys, logTo, stdout, stderr)
+}
+
+// withOutFile runs the export into a new file at path: created 0600 with O_EXCL, so one that
+// exists (a stale partial one included) is refused and never replaced, then synced and closed.
+// Whatever fails, the partial file is removed, so a later run never finds one that looks whole.
+// run's code is returned, or 1 for a failure of the file's own.
+func withOutFile(path string, stderr io.Writer, run func(io.Writer) int) int {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			fmt.Fprintf(stderr, "--out %s exists: it is never replaced; remove it or name a new file\n", path)
+		} else {
+			fmt.Fprintf(stderr, "--out %s: %v\n", path, err)
+		}
+		return 1
+	}
+	code := run(f)
+	if code == 0 {
+		if err := f.Sync(); err != nil {
+			fmt.Fprintf(stderr, "--out %s: syncing: %v\n", path, err)
+			code = 1
+		}
+	}
+	if err := f.Close(); err != nil && code == 0 {
+		fmt.Fprintf(stderr, "--out %s: closing: %v\n", path, err)
+		code = 1
+	}
+	if code != 0 {
+		_ = os.Remove(path)
+	}
+	return code
 }
 
 // stdoutIsTerminal is whether w is a terminal; a variable so a test can say.
