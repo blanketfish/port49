@@ -12,6 +12,7 @@ jobs:
   srlinux:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    permissions: {contents: read}
     # bash -eo pipefail: a step fails on its command, not on the secret filter it is piped through.
     # The job log is world-readable once the repository is public, so every lab step's output goes
     # through tests/qual/secret-filter.sh (the filter vet.sh reads lab logs through).
@@ -21,8 +22,9 @@ jobs:
       # From the v0.71.1 release's checksums.txt (containerlab_0.71.1_linux_amd64.deb).
       CLAB_DEB_SHA256: f6dcdd63a389b4bbaa1d94a2f67c8816b8afdf39ada8146ad0fc800e762719f8
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with: {go-version-file: go.mod}
       - name: Prove the lab harness can run here
         run: |

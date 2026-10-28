@@ -35,7 +35,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 	if *check {
-		if err := testshard.Check(names, *n); err != nil {
+		if err := testshard.CheckListed(names, *n, func(re string) ([]string, error) { return testshard.ListMatching(*pkg, re) }); err != nil {
 			fmt.Fprintln(stderr, "testshard:", err)
 			return 1
 		}

@@ -85,7 +85,7 @@ func TestAnEmptyShardIsAnError(t *testing.T) {
 
 func TestCheckFindsAMissingName(t *testing.T) {
 	all := names(10)
-	if err := Check(all, 3); err != nil {
+	if err := CheckListed(all, 3, matching(all)); err != nil {
 		t.Fatalf("a good partition: %v", err)
 	}
 	shards := [][]string{{"A", "C"}, {"B"}}
@@ -108,5 +108,53 @@ func TestTheListKeepsTestsFuzzAndExamples(t *testing.T) {
 	sort.Strings(got)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// matching is a stand-in for `go test -list RE`: the names the regex selects.
+func matching(names []string) func(string) ([]string, error) {
+	return func(re string) ([]string, error) {
+		r, err := regexp.Compile(re)
+		if err != nil {
+			return nil, err
+		}
+		var out []string
+		for _, n := range names {
+			if r.MatchString(n) {
+				out = append(out, n)
+			}
+		}
+		return out, nil
+	}
+}
+
+func TestCheckListedRunsTheRealRegexes(t *testing.T) {
+	all := names(17)
+	if err := CheckListed(all, 3, matching(all)); err != nil {
+		t.Fatalf("a good split: %v", err)
+	}
+	// a regex that selects less than its shard: the name is in no shard's run
+	short := func(re string) ([]string, error) {
+		got, err := matching(all)(re)
+		if err != nil || len(got) == 0 {
+			return got, err
+		}
+		return got[1:], nil
+	}
+	if err := CheckListed(all, 3, short); err == nil || !strings.Contains(err.Error(), "is in no shard") {
+		t.Errorf("a regex that drops a test: %v", err)
+	}
+	// a regex that selects another shard's test as well
+	wide := func(re string) ([]string, error) { return all[:2], nil }
+	if err := CheckListed(all, 3, wide); err == nil {
+		t.Error("shards that all select the same tests were accepted")
+	}
+	boom := func(string) ([]string, error) { return nil, fmt.Errorf("go test -list failed") }
+	if err := CheckListed(all, 3, boom); err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Errorf("a list that fails: %v", err)
+	}
+	empty := func(string) ([]string, error) { return nil, nil }
+	if err := CheckListed(all, 3, empty); err == nil || !strings.Contains(err.Error(), "selects no test") {
+		t.Errorf("shards that select nothing: %v", err)
 	}
 }

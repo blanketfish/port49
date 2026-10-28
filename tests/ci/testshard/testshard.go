@@ -79,18 +79,27 @@ func ShardRegex(names []string, i, n int) (string, error) {
 	return Regex(part)
 }
 
-// Check is nil when the shards 1..n together hold exactly names, each once.
-func Check(names []string, n int) error {
+// CheckListed is nil when the shards 1..n, as the regexes -shard prints them and as go test
+// selects by them (list is `go test -list RE`), together hold exactly names, each once. It tests
+// the printed regexes themselves, not the partition that made them.
+func CheckListed(names []string, n int, list func(re string) ([]string, error)) error {
 	if len(names) == 0 {
 		return fmt.Errorf("no tests listed")
 	}
 	shards := make([][]string, 0, n)
 	for i := 1; i <= n; i++ {
-		part, err := Partition(names, i, n)
+		re, err := ShardRegex(names, i, n)
 		if err != nil {
 			return err
 		}
-		shards = append(shards, part)
+		got, err := list(re)
+		if err != nil {
+			return fmt.Errorf("shard %d/%d: %w", i, n, err)
+		}
+		if len(got) == 0 {
+			return fmt.Errorf("shard %d/%d: go test selects no test with %s", i, n, re)
+		}
+		shards = append(shards, got)
 	}
 	return covers(names, shards)
 }
@@ -140,6 +149,17 @@ func ParseList(out string) []string {
 		}
 	}
 	return names
+}
+
+// ListMatching runs `go test -list re pkg` and returns the tests it selects.
+func ListMatching(pkg, re string) ([]string, error) {
+	cmd := exec.Command("go", "test", "-list", re, pkg)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("go test -list %s %s: %v: %s", re, pkg, err, strings.TrimSpace(errb.String()))
+	}
+	return ParseList(out.String()), nil
 }
 
 // List runs `go test -list . pkg` and returns its tests. It fails when go does,
