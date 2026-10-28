@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/tests/ci/versions"
+	"github.com/rhwendt/port49/tests/kind/kindtest"
 )
 
 func TestTheChartVersionsAgreeWithTheReleaseArtifacts(t *testing.T) {
@@ -308,5 +309,31 @@ func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 				t.Errorf("%s: container %s sets env: secrets are files", file, str(at(c, "name")))
 			}
 		}
+	}
+}
+
+// The kind smoke's post-renderer (tests/kind/kindtest.OldRoot) rewrites the chart's own rendered
+// init command. If the chart's text drifts from the pattern, the RED run of the fsGroup cell would
+// stop meaning anything: this fails first.
+func TestTheKindPostRendererMatchesTheChartsInitCommands(t *testing.T) {
+	var all strings.Builder
+	for _, d := range render(t, goRender, "") {
+		if kindOf(d) == "StatefulSet" {
+			b, err := yaml.Marshal(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all.Write(b)
+		}
+	}
+	out, err := kindtest.OldRoot([]byte(all.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(out), "&& chmod g-w "); n != 2 {
+		t.Errorf("the post-renderer rewrote %d init commands, want both pods'", n)
+	}
+	if strings.Contains(string(out), "chmod 3770") {
+		t.Error("a 3770 root survived the post-renderer")
 	}
 }

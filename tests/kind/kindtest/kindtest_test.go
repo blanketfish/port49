@@ -1,0 +1,124 @@
+package kindtest
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const podJSON = `{"spec":{"nodeName":"kind-worker"},"status":{"phase":"Running","hostIP":"172.18.0.3",
+"conditions":[{"type":"Initialized","status":"True"},{"type":"Ready","status":"True"}],
+"containerStatuses":[{"restartCount":2,"state":{"running":{"startedAt":"2026-10-28T10:00:00Z"}}}]}}`
+
+const crashJSON = `{"spec":{"nodeName":"kind-worker2"},"status":{"phase":"Running","hostIP":"172.18.0.4",
+"conditions":[{"type":"Ready","status":"False"}],
+"containerStatuses":[{"restartCount":4,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}],
+"initContainerStatuses":[{"state":{"terminated":{"exitCode":0}}}]}}`
+
+func TestParsePod(t *testing.T) {
+	p, err := ParsePod([]byte(podJSON))
+	if err != nil || !p.Ready || p.Restarts != 2 || p.StartedAt != "2026-10-28T10:00:00Z" || p.HostIP != "172.18.0.3" ||
+		p.Node != "kind-worker" || p.Waiting != "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	p, err = ParsePod([]byte(crashJSON))
+	if err != nil || p.Ready || p.Waiting != "CrashLoopBackOff" || p.Restarts != 4 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if _, err := ParsePod([]byte("not json")); err == nil {
+		t.Error("garbage parsed as a pod")
+	}
+}
+
+func TestParseStat(t *testing.T) {
+	ss, err := ParseStat("700 65532 65532 /v/state\n600 65532 65532 /v/state/issuing-ca.key\n")
+	if err != nil || len(ss) != 2 {
+		t.Fatalf("%v %v", ss, err)
+	}
+	if err := ss[1].Want("600", 65532, 65532); err != nil {
+		t.Error(err)
+	}
+	if err := ss[1].Want("660", 65532, 65532); err == nil || !strings.Contains(err.Error(), "issuing-ca.key") {
+		t.Errorf("a 600 key passed for 660: %v", err)
+	}
+	for _, bad := range []string{"", "700 x 1 /p", "9 1 1 /p", "700 1 1", "700 1 1 /a /b"} {
+		if _, err := ParseStat(bad); err == nil {
+			t.Errorf("%q parsed", bad)
+		}
+	}
+}
+
+const newInit = `command: [sh, -c, "chown 0:65532 /var/lib/port49-broker && chmod 3770 /var/lib/port49-broker && install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chown -R 65532:65532 /var/lib/port49-broker/state && chmod -R go-rwx /var/lib/port49-broker/state && chmod -R g-s /var/lib/port49-broker/state && chmod 0700 /var/lib/port49-broker/state"]`
+
+func TestOldRootRewritesToTheFirstDesign(t *testing.T) {
+	out, err := OldRoot([]byte("a: 1\n" + newInit + "\nb: 2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chmod g-w /var/lib/port49-broker"`
+	if !strings.Contains(string(out), want) || strings.Contains(string(out), "3770") || !strings.Contains(string(out), "a: 1") {
+		t.Fatalf("rewritten text:\n%s", out)
+	}
+	// Both pods' commands are rewritten.
+	two := newInit + "\n" + strings.ReplaceAll(newInit, "/var/lib/port49-broker", "/var/spool/port49d")
+	out, err = OldRoot([]byte(two))
+	if err != nil || strings.Count(string(out), "chmod g-w") != 2 {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	// Nothing to rewrite is an error: a changed chart must break the cell, not make it green.
+	if _, err := OldRoot([]byte("kind: StatefulSet\n")); err == nil {
+		t.Error("a manifest with no init command was accepted")
+	}
+}
+
+func TestStateDirRefusalMatchesTheBrokersLine(t *testing.T) {
+	line := "config: broker.state_dir /var/lib/port49-broker/state is writable by its group or others (mode 0770): port49-broker's own state"
+	if !StateDirRefusal.MatchString(line) {
+		t.Fatal("the refusal pattern does not match the broker's line")
+	}
+	for _, other := range []string{
+		"config: broker.state_dir /var/lib/port49-broker/state must be a directory that exists",
+		"config: broker.state_dir /tmp/x is writable by its group or others (mode 0770)",
+		"config: broker.state_dir /var/lib/port49-broker/state is writable by its group or others (mode 0750)",
+		"config: broker.state_dir /var/lib/port49-broker/state is writable by its group or others (mode 0700)",
+	} {
+		if StateDirRefusal.MatchString(other) {
+			t.Errorf("matched %q", other)
+		}
+	}
+	for _, mode := range []string{"0770", "0775", "0720", "0702"} {
+		if !StateDirRefusal.MatchString("config: broker.state_dir /var/lib/port49-broker/state is writable by its group or others (mode " + mode + "): x") {
+			t.Errorf("mode %s is not matched", mode)
+		}
+	}
+	// And the pattern is the source's format, not a guess.
+	src, err := os.ReadFile(filepath.Join(Root(), "internal", "config", "config.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), `"config: broker.state_dir %s is writable by its group or others (mode %04o): "`) {
+		t.Error("internal/config/config.go no longer prints the state_dir refusal this pattern matches")
+	}
+}
+
+func TestDumpNeverReadsTheVaultNamespace(t *testing.T) {
+	got := DumpNamespaces([]string{"default", "vault", "port49", "", "kube-system"})
+	if strings.Join(got, ",") != "default,port49,kube-system" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestRedactHidesALiteral(t *testing.T) {
+	r := Redact([]string{"create", "secret", "generic", "x", "--from-literal=k=SECRETVALUE", "--from-file=a=b"})
+	if strings.Contains(r, "SECRETVALUE") || !strings.Contains(r, "--from-file=a=b") {
+		t.Fatal(r)
+	}
+}
+
+func TestFilterDropsALineNamingASecret(t *testing.T) {
+	out := Filter("pod ready\nthe token is abc\nkeep this line\n")
+	if strings.Contains(out, "abc") || !strings.Contains(out, "keep this line") {
+		t.Fatalf("%q", out)
+	}
+}

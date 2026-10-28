@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -464,6 +464,39 @@ bin/helm-$(HELM_VERSION):
 helm-test: bin/helm-$(HELM_VERSION)
 	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
 
+# The Kubernetes shape end to end (plan 12b, Task 11): the chart on a kind cluster. kind and kubectl are
+# pinned by sha256 like helm. UNVERIFIED: none of these targets has run; the first `make kind-smoke` is
+# the check. Behind the `kind` tag so `go test ./...` never needs Docker or a cluster, and it fails,
+# never skips, without the pinned tools. The post-renderer for the fsGroup cell's red run is built
+# here, test-only, and is not part of the chart.
+KIND_VERSION ?= 0.29.0
+KIND_SHA256_LINUX_AMD64 = c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284
+KUBECTL_VERSION ?= 1.33.1
+KUBECTL_SHA256_LINUX_AMD64 = 5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3
+
+bin/kind-v$(KIND_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install kind v$(KIND_VERSION) yourself and put it at bin/kind-v$(KIND_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/kind.dl https://github.com/kubernetes-sigs/kind/releases/download/v$(KIND_VERSION)/kind-linux-amd64
+	echo "$(KIND_SHA256_LINUX_AMD64)  bin/kind.dl" | sha256sum -c -
+	chmod 0755 bin/kind.dl
+	mv bin/kind.dl bin/kind-v$(KIND_VERSION)
+
+bin/kubectl-$(KUBECTL_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install kubectl v$(KUBECTL_VERSION) yourself and put it at bin/kubectl-$(KUBECTL_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/kubectl.dl https://dl.k8s.io/release/v$(KUBECTL_VERSION)/bin/linux/amd64/kubectl
+	echo "$(KUBECTL_SHA256_LINUX_AMD64)  bin/kubectl.dl" | sha256sum -c -
+	chmod 0755 bin/kubectl.dl
+	mv bin/kubectl.dl bin/kubectl-$(KUBECTL_VERSION)
+
+kind-smoke: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	go build -o bin/oldroot ./tests/kind/cmd/oldroot
+	KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
+	  go test -tags kind ./tests/kind/ -count=1 -v -timeout 40m
+
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v
 
@@ -475,3 +508,12 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 	bin/gitleaks-$(GITLEAKS_VERSION) git $(GITLEAKS_FLAGS) --log-opts=HEAD .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --pre-commit $(GITLEAKS_FLAGS) .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
+
+# The fsGroup cell's red run: the same install with the first design's 2755 volume root, by the
+# test-only post-renderer. It must FAIL to be red: the broker's second generation crash-loops on its
+# state_dir refusal. This target passes when it does.
+kind-smoke-red: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	go build -o bin/oldroot ./tests/kind/cmd/oldroot
+	KIND_OLD_ROOT=1 KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
+	  go test -tags kind ./tests/kind/ -run TestKindSmoke -count=1 -v -timeout 40m
