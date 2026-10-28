@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -444,6 +444,25 @@ packages: bin/goreleaser-$(GORELEASER_VERSION)
 # Never run locally; make packages is the local build.
 release-packages: bin/goreleaser-$(GORELEASER_VERSION)
 	bin/goreleaser-$(GORELEASER_VERSION) release --clean
+
+# The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the
+# one get.helm.sh's .sha256sum and the GitHub release both give). UNVERIFIED: this target has not
+# been run; the first `make helm-test` is the check. tests/helm's helm-tagged files fail, never
+# skip, when bin/helm-$(HELM_VERSION) is absent; `make test` never builds them.
+HELM_VERSION ?= 3.22.0
+HELM_SHA256_LINUX_AMD64 = 1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
+
+bin/helm-$(HELM_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install helm $(HELM_VERSION) yourself and put it at bin/helm-$(HELM_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/helm.tar.gz https://get.helm.sh/helm-v$(HELM_VERSION)-linux-amd64.tar.gz
+	echo "$(HELM_SHA256_LINUX_AMD64)  bin/helm.tar.gz" | sha256sum -c -
+	tar -xzf bin/helm.tar.gz -C bin --strip-components=1 linux-amd64/helm
+	mv bin/helm bin/helm-$(HELM_VERSION)
+	rm bin/helm.tar.gz
+
+helm-test: bin/helm-$(HELM_VERSION)
+	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
 
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v

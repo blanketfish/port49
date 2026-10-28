@@ -18,8 +18,7 @@ const (
 	ChartFile  = "deploy/helm/port49/Chart.yaml"
 )
 
-// Versions are the values as the files write them. Chart and ChartApp are
-// empty while the chart does not exist.
+// Versions are the values as the files write them.
 type Versions struct{ PyPI, Galaxy, Chart, ChartApp string }
 
 var (
@@ -30,8 +29,7 @@ var (
 	preReleaseTo = map[string]string{"rc": "rc", "a": "a", "b": "b", "alpha": "a", "beta": "b"}
 )
 
-// Read reads the versions under root. The chart is optional: with no Chart.yaml
-// its two values are empty.
+// Read reads the versions under root. A tree with no Chart.yaml is an error.
 func Read(root string) (Versions, error) {
 	var v Versions
 	py, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(PyPIFile)))
@@ -53,17 +51,14 @@ func Read(root string) (Versions, error) {
 		return v, fmt.Errorf("%s: no version line", GalaxyFile)
 	}
 	chart, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(ChartFile)))
-	switch {
-	case os.IsNotExist(err):
-	case err != nil:
+	if err != nil {
 		return v, fmt.Errorf("Chart.yaml: %w", err)
-	default:
-		if m := yamlVersion.FindSubmatch(chart); m != nil {
-			v.Chart = string(m[1])
-		}
-		if m := yamlAppVers.FindSubmatch(chart); m != nil {
-			v.ChartApp = string(m[1])
-		}
+	}
+	if m := yamlVersion.FindSubmatch(chart); m != nil {
+		v.Chart = string(m[1])
+	}
+	if m := yamlAppVers.FindSubmatch(chart); m != nil {
+		v.ChartApp = string(m[1])
 	}
 	return v, nil
 }

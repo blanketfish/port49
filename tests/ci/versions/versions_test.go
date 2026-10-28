@@ -36,18 +36,17 @@ func TestReadFindsEachVersion(t *testing.T) {
 	}
 }
 
-func TestTheChartIsOptionalUntilItExists(t *testing.T) {
-	v, err := Read(tree(t, "0.1.0", "0.1.0", "", ""))
-	if err != nil || v.Chart != "" || v.ChartApp != "" || v.PyPI != "0.1.0" {
-		t.Fatalf("%+v, %v", v, err)
-	}
-	if got := Check(v, ""); len(got) != 0 {
-		t.Errorf("no tag, no chart: %v", got)
+// The chart exists from plan 12b's Task 10: a tree without Chart.yaml is a finding, never a
+// release with the chart left out (pre-flight M3).
+func TestAMissingChartIsAFinding(t *testing.T) {
+	_, err := Read(tree(t, "0.1.0", "0.1.0", "", ""))
+	if err == nil || !strings.Contains(err.Error(), "Chart.yaml") {
+		t.Fatalf("a tree with no Chart.yaml: %v, want an error naming Chart.yaml", err)
 	}
 }
 
 func TestAMissingPyprojectIsAnError(t *testing.T) {
-	root := tree(t, "0.1.0", "0.1.0", "", "")
+	root := tree(t, "0.1.0", "0.1.0", "0.1.0", "0.1.0")
 	if err := os.Remove(filepath.Join(root, filepath.FromSlash(PyPIFile))); err != nil {
 		t.Fatal(err)
 	}
