@@ -254,7 +254,8 @@ func TestSystemdSmoke(t *testing.T) {
 	// etcd: the user, the three members, from deploy/systemd/examples.
 	ex := filepath.Join(root, "deploy", "systemd", "examples")
 	b.put("/etc/sysusers.d/etcd.conf", "root:root", "0644", readHost(t, filepath.Join(ex, "sysusers-etcd.conf")))
-	b.sh("systemd-sysusers etcd.conf && install -d -o etcd -g etcd -m 0700 /var/lib/etcd && install -d -m 0755 /etc/etcd /etc/etcd/pki")
+	b.put("/etc/tmpfiles.d/port49-etcd.conf", "root:root", "0644", readHost(t, filepath.Join(ex, "tmpfiles-etcd.conf")))
+	b.sh("systemd-sysusers etcd.conf && systemd-tmpfiles --create port49-etcd.conf && install -d -m 0755 /etc/etcd /etc/etcd/pki")
 	b.put("/etc/systemd/system/etcd@.service", "root:root", "0644", readHost(t, filepath.Join(ex, "etcd@.service")))
 	b.putFile("/etc/etcd/pki/ca.pem", "root:root", "0644", filepath.Join(pki, "etcd", "ca.pem"))
 	b.putFile("/etc/etcd/pki/root.pem", "root:root", "0644", filepath.Join(pki, "etcd", "root.pem"))
@@ -407,36 +408,23 @@ func TestSystemdSmoke(t *testing.T) {
 	b.sh("rm -rf " + dropIn + "; chmod " + etcMode + " /etc; systemctl daemon-reload; systemctl restart port49d")
 	shapetest.Ready(t, "127.0.0.1:9049")
 
-	// 5. Review focus 2: a policy with no keys: is refused at every start. With the shipped units'
-	// StartLimitIntervalSec=0 the unit retries every RestartSec and never reaches `failed`, so a
-	// host that boots before its policy is right recovers when it is; with a start limit the unit
-	// must end `failed` after five or fewer restarts. The cell asserts whichever the unit says.
+	// 5. A policy with no keys: is refused at every start. The units set StartLimitIntervalSec=0 (plan
+	// 7's 3am ruling, which supersedes the brief's Review Focus 2: a broker waiting on a bad or late
+	// policy recovers by itself), so the unit retries every RestartSec and never reaches `failed`.
+	// The cell asserts only that: two restarts at least, never failed, back without reset-failed.
 	cur := b.sh("cat /etc/port49/policy.yaml")
 	broken := must(sdtest.NoKeys(cur))
 	b.put("/etc/port49/policy.yaml", "root:root", "0644", broken)
 	b.sh("systemctl restart port49d")
-	limit := b.show("port49d", "StartLimitIntervalUSec")["StartLimitIntervalUSec"]
-	if limit == "infinity" || limit == "0" {
-		shapetest.WaitFor(t, "port49d to retry a start its policy refuses", 3*time.Minute, func() bool {
-			s := b.show("port49d", "NRestarts", "ActiveState")
-			return atLeast(s["NRestarts"], 2) && s["ActiveState"] != "failed"
-		})
-		if s := b.show("port49d", "ActiveState"); s["ActiveState"] == "failed" {
-			t.Fatal("port49d is failed under StartLimitIntervalSec=0: the unit must keep retrying")
-		}
-		b.put("/etc/port49/policy.yaml", "root:root", "0644", cur)
-		shapetest.Ready(t, "127.0.0.1:9049") // back with no reset-failed: nothing was ever failed
-	} else {
-		shapetest.WaitFor(t, "port49d to end failed after its start limit", 360*time.Second, func() bool {
-			return b.show("port49d", "ActiveState")["ActiveState"] == "failed"
-		})
-		if n := b.show("port49d", "NRestarts")["NRestarts"]; !atMost(n, 5) {
-			t.Fatalf("NRestarts is %s at failed, want at most 5", n)
-		}
-		b.put("/etc/port49/policy.yaml", "root:root", "0644", cur)
-		b.sh("systemctl reset-failed port49d && systemctl start port49d")
-		shapetest.Ready(t, "127.0.0.1:9049")
+	shapetest.WaitFor(t, "port49d to retry a start its policy refuses", 3*time.Minute, func() bool {
+		s := b.show("port49d", "NRestarts", "ActiveState")
+		return atLeast(s["NRestarts"], 2) && s["ActiveState"] != "failed"
+	})
+	if s := b.show("port49d", "ActiveState"); s["ActiveState"] == "failed" {
+		t.Fatal("port49d is failed: the unit must keep retrying")
 	}
+	b.put("/etc/port49/policy.yaml", "root:root", "0644", cur)
+	shapetest.Ready(t, "127.0.0.1:9049") // back with no reset-failed: nothing was ever failed
 
 	// 6. The admin calls: an unproved revoke is 401 with a challenge; then the break-glass with the
 	// broker stopped, as the broker's user (as root it refuses and names the sudo line), revokes bob,
@@ -449,8 +437,16 @@ func TestSystemdSmoke(t *testing.T) {
 		}
 		b.sh("systemctl stop port49-broker")
 		if !lift {
-			if out, err := b.exec("", args...); err == nil || !strings.Contains(out, "sudo -u port49-broker") {
-				t.Fatalf("`port49-broker revoke --offline` as root must refuse and name the sudo -u line (err %v)", err)
+			// The refusal's words are internal/port49d/offline.go:offlineOwnerHint (line 230 on).
+			out, err := b.exec("", args...)
+			for _, want := range []string{
+				"run it as the user that owns broker.state_dir",
+				"e.g. sudo -u port49-broker port49-broker revoke --offline ...",
+				"do not chown the directory",
+			} {
+				if err == nil || !strings.Contains(out, want) {
+					t.Fatalf("`port49-broker revoke --offline` as root must refuse with %q (err %v)", want, err)
+				}
 			}
 		}
 		b.sh("runuser -u port49-broker -- " + strings.Join(args, " "))
@@ -470,4 +466,3 @@ func atLeast(s string, n int) bool {
 	_, err := fmt.Sscan(s, &v)
 	return err == nil && v >= n
 }
-func atMost(s string, n int) bool { var v int; _, err := fmt.Sscan(s, &v); return err == nil && v <= n }

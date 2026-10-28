@@ -3,6 +3,7 @@ package sdtest
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -174,5 +175,26 @@ func TestRefusalNamesTheDirectory(t *testing.T) {
 	}
 	if Refusal(line, "/var/spool") || Refusal("port49d: /etc is mode drwxr-xr-x; fine", "/etc") {
 		t.Error("a line about another directory, or one that is not a refusal, was recognised")
+	}
+}
+
+// Plan 7's 3am ruling: a unit waiting on a down store or a bad policy recovers by itself, so neither
+// unit may ever reach `failed` from restarts (the smoke asserts the behaviour, this the setting).
+func TestBothUnitsHaveNoStartLimit(t *testing.T) {
+	for _, u := range []string{"port49d.service", "port49-broker.service"} {
+		if !regexp.MustCompile(`(?m)^StartLimitIntervalSec=0$`).MatchString(shipped(t, u)) {
+			t.Errorf("%s does not set StartLimitIntervalSec=0", u)
+		}
+	}
+}
+
+// The smoke does not make /var/lib/etcd; the shipped tmpfiles file does, 0700 etcd:etcd.
+func TestTmpfilesMakesEtcdsDataDirectory(t *testing.T) {
+	live := withoutComments(shipped(t, "examples", "tmpfiles-etcd.conf"))
+	if !regexp.MustCompile(`(?m)^d /var/lib/etcd 0700 etcd etcd -$`).MatchString(live) {
+		t.Errorf("tmpfiles-etcd.conf does not make /var/lib/etcd 0700 etcd:etcd:\n%s", live)
+	}
+	if !strings.Contains(shipped(t, "README.md"), "`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700") {
+		t.Error("the README does not say tmpfiles-etcd.conf makes /var/lib/etcd")
 	}
 }
