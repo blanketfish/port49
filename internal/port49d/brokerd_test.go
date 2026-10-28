@@ -1283,14 +1283,21 @@ func TestBrokerMainTakesConfigAlone(t *testing.T) {
 }
 
 // floorIn polls the ledger record at key, as etcd's root, until it holds a
-// revocation floor, or 10s pass.
+// revocation floor, or 10s pass. A floor is a non-zero revoked_at and a
+// floor_seq above 0: the encoder writes a zero revoked_at into a record that
+// has none, so the key alone proves nothing.
 func floorIn(t *testing.T, root *clientv3.Client, key string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 &&
-			strings.Contains(string(resp.Kvs[0].Value), `"revoked_at":`) {
-			return
+		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 {
+			var rec struct {
+				RevokedAt time.Time `json:"revoked_at"`
+				FloorSeq  uint64    `json:"floor_seq"`
+			}
+			if json.Unmarshal(resp.Kvs[0].Value, &rec) == nil && !rec.RevokedAt.IsZero() && rec.FloorSeq > 0 {
+				return
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
