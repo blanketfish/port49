@@ -34,7 +34,7 @@ const storeClaim = "When port49d's store hangs (etcd cut off from port49d), port
 // storeLab is the lab's etcd: a TLS member with port49's roles, behind a
 // proxy the test hangs, and the two stores: blocks that point the split's
 // processes at it: block is port49d.yaml's (the daemon's identity, with the
-// admin_socket etcd requires), brokerBlock port49-broker.yaml's (the
+// daemon's own certificate), brokerBlock port49-broker.yaml's (the
 // broker's identity). keys counts what the keyspace holds, read as etcd's
 // root.
 func storeLab(t *testing.T) (block, brokerBlock string, proxy *etcdtest.Proxy, keys func() (int64, error)) {

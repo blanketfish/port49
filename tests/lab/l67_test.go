@@ -958,7 +958,7 @@ func (x *l67X) startBroker(t *testing.T, opts l67BrokerOpts) {
 		return
 	}
 	x.broker = newL67Broker(t, x.owner, x.dir, opts)
-	if out, code := x.broker.port49(t, "directory", "init-enrollments", "--socket", x.broker.admin); code != 0 {
+	if out, code := x.broker.initEnrollments(t); code != 0 {
 		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, oneLineMax(out, 300))
 	}
 	a := x.broker.api(t)
@@ -1136,7 +1136,7 @@ func (x *l67X) cellG(t *testing.T) {
 	if ans.Status != http.StatusServiceUnavailable || ans.Error != "enrollment_store_lost" || statErr == nil {
 		t.Fatalf("INVALID: before init-enrollments: %d %s, enrollments.json exists %v", ans.Status, ans.Error, statErr == nil)
 	}
-	if out, code := b.port49(t, "directory", "init-enrollments", "--socket", b.admin); code != 0 {
+	if out, code := b.initEnrollments(t); code != 0 {
 		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, oneLineMax(out, 300))
 	}
 	if _, err := os.Stat(filepath.Join(b.dir, "enrollments.json")); err != nil {
@@ -1337,8 +1337,7 @@ func (x *l67X) composeHalf(t *testing.T) {
 	if ans.Status != http.StatusServiceUnavailable || ans.Error != "enrollment_store_lost" {
 		t.Fatalf("INVALID: before init-enrollments: %d %s, want 503 enrollment_store_lost", ans.Status, ans.Error)
 	}
-	if out, err := c.run("exec", "-T", "port49-broker", "port49", "directory", "init-enrollments", "--socket",
-		"/run/port49/port49-broker.sock"); err != nil {
+	if out, err := c.run("exec", "-T", "port49-broker", "port49-broker", "init-enrollments"); err != nil {
 		t.Fatalf("INVALID: init-enrollments: %v: %s", err, oneLineMax(out, 300))
 	}
 	// The broker over etcd holds mints until its runner's first takeover is
@@ -1534,6 +1533,10 @@ func TestL67Windows(t *testing.T) {
 const l67Device = "leaf1"
 
 // l67BrokerOpts is what a cell changes about the broker's configuration.
+// l67OncallEmail is the person who unlocks: alice, whose directory entry and
+// certificate agree on this address.
+const l67OncallEmail = "alice@corp.example.com"
+
 type l67BrokerOpts struct {
 	Window time.Duration // rate_limits.window; 0 is port49's default
 	DirURI string        // the directory's URI as the broker reaches it; "" is the directory's own
@@ -1552,7 +1555,8 @@ func l67HostPort(uri string) string {
 
 // l67BrokerFiles are port49d.yaml, policy.yaml and inventory.yaml for a broker
 // in dir with the TLS files of pki, a directory_password verifier over x, and
-// admin_socket, by name.
+// an x509 one for the on-call who unlocks (adminRolesFile in dir holds the roots
+// the on-call's software key chains to).
 func l67BrokerFiles(dir, pki string, x *labDir, o l67BrokerOpts) map[string]string {
 	uri := o.DirURI
 	if uri == "" {
@@ -1564,52 +1568,60 @@ func l67BrokerFiles(dir, pki string, x *labDir, o l67BrokerOpts) map[string]stri
 	}
 	cfg := fmt.Sprintf(`listen: "127.0.0.1:0"
 metrics_listen: "127.0.0.1:0"
-admin_socket: %[1]s
-inventory_file: %[2]s
+inventory_file: %[1]s
 encryption:
   current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
-accounting: {spool_path: %[3]s}
+accounting: {spool_path: %[2]s}
 broker:
   listen: "127.0.0.1:0"
-  tls_cert_file: %[4]s
-  tls_key_file: %[5]s
+  tls_cert_file: %[3]s
+  tls_key_file: %[4]s
   identity:
     humans:
       - type: directory_password
         principal_domains: [corp.example.com]
         second_factor: totp
-%[6]s    issuance: {}
-  policy_file: %[7]s
-  revocations_file: %[8]s
+%[5]s      - {type: x509, trust_anchor_file: %[16]s}
+    per_login_mfa:
+      hardware_key_touch: {attestation_roots_file: %[17]s}
+    issuance: {}
+  policy_file: %[6]s
+  revocations_file: %[7]s
   policy_watch_interval: 1s
   refresh_interval: 5m
+  certificate_status: {disabled: true}
   directory:
     servers:
-      - {uri: "%[9]s", priority: 100, site: lab}
+      - {uri: "%[8]s", priority: 100, site: lab}
     site: lab
-    ca_file: %[10]s
+    ca_file: %[9]s
     bind:
       mechanism: simple
-      bind_dn: "%[11]s"
+      bind_dn: "%[10]s"
       password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD
-    base_dn: "%[12]s"
-    groups_base_dn: "%[13]s"
-    user_filter: "%[14]s"
-    group_filter: "%[15]s"
+    base_dn: "%[11]s"
+    groups_base_dn: "%[12]s"
+    user_filter: "%[13]s"
+    group_filter: "%[14]s"
     principal_attribute: mail
-    username_attribute: %[16]s
+    username_attribute: %[15]s
+    certificate_mapping:
+      kind: san_email
+      allow_weak: true
+      issuers: ["CN=port49 lab slice CA"]
     nested_groups: direct
     grace: 4h
-`, filepath.Join(dir, "admin.sock"), filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
+`, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
 		filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey), limits,
 		filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "revocations.json"), uri, x.d.pki.caFile, x.bindDN, x.baseDN,
-		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr)
+		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr, filepath.Join(pki, testpki.LabCA),
+		filepath.Join(dir, adminRolesFile))
 	policy := `scopes:
   - {name: all_devices, match: {}}
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}
 subjects:
-  - {name: alice, identity: ["user:alice@corp.example.com"], token_ttl: 900s}
+  - {name: alice, identity: ["user:alice@corp.example.com"], token_ttl: 900s, api: [unlock_sign_in]}
 grants:
   - {subject: alice, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups:
@@ -1624,13 +1636,17 @@ keys:
 
 // l67Broker is bin/port49d running a broker over a directory.
 type l67Broker struct {
-	x                  *labDir
-	dir, pki, cfg      string
-	admin, addr, errTo string
-	bin, cli           string
-	cmd                *exec.Cmd
-	done               chan struct{}
-	opts               l67BrokerOpts
+	x             *labDir
+	dir, pki, cfg string
+	addr, errTo   string
+	bin, cli      string
+	// piv and admin are the on-call's software key hierarchy and agent, for
+	// unlock (startLabAdmin); admin is nil until the first unlock.
+	piv   *testpki.PIV
+	admin *labAdmin
+	cmd   *exec.Cmd
+	done  chan struct{}
+	opts  l67BrokerOpts
 }
 
 func l67Bins(t *testing.T) (port49d, port49 string) {
@@ -1663,10 +1679,14 @@ func newL67Broker(t, owner *testing.T, x *labDir, o l67BrokerOpts) *l67Broker {
 		t.Fatal(err)
 	}
 	b := &l67Broker{x: x, dir: dir, pki: filepath.Join(dir, "pki"), cfg: filepath.Join(dir, "port49d.yaml"),
-		admin: filepath.Join(dir, "admin.sock"), errTo: filepath.Join(dir, "port49d.err"), bin: port49d, cli: port49, opts: o}
-	if err := testpki.WriteLab(b.pki, sliceEmail, time.Now()); err != nil {
+		errTo: filepath.Join(dir, "port49d.err"), bin: port49d, cli: port49, opts: o}
+	// The unlock is alice's, by certificate: her directory entry's mail is on a
+	// second certificate from the lab CA (l67OncallEmail), which the broker maps
+	// by san_email.
+	if err := testpki.WriteLabWith(b.pki, sliceEmail, []string{l67OncallEmail}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	b.piv, _ = adminTouchRoots(t, dir)
 	b.write(t, o)
 	env := b.env()
 	for _, args := range [][]string{{"init-revocations", "--config", b.cfg}, {"init-issuer", "--config", b.cfg}} {
@@ -1701,7 +1721,6 @@ func (b *l67Broker) said() string {
 
 func (b *l67Broker) start(t *testing.T) {
 	t.Helper()
-	_ = os.Remove(b.admin)
 	errf, err := os.Create(b.errTo)
 	if err != nil {
 		t.Fatal(err)
@@ -1732,12 +1751,6 @@ func (b *l67Broker) start(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	for ; time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if _, err := os.Stat(b.admin); err == nil {
-			return
-		}
-	}
-	t.Fatalf("port49d's admin socket never appeared; its stderr:\n%s", tailOf(b.said(), 2000))
 }
 
 func (b *l67Broker) stop() {
@@ -1778,11 +1791,35 @@ func (b *l67Broker) port49(t *testing.T, args ...string) (string, int) {
 	return string(out) + err.Error(), -1
 }
 
-// unlock clears name's failed-sign-in count at the broker (the operator's
-// `port49 directory unlock`).
+// initEnrollments is `port49d init-enrollments` on the broker's config: the
+// local command that creates its sealed enrollment store once.
+func (b *l67Broker) initEnrollments(t *testing.T) (string, int) {
+	t.Helper()
+	cmd := exec.Command(b.bin, "init-enrollments", "--config", b.cfg)
+	cmd.Dir = b.dir
+	cmd.Env = b.env()
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return string(out), 0
+	case errors.As(err, &ee):
+		return string(out), ee.ExitCode()
+	}
+	return string(out) + err.Error(), -1
+}
+
+// unlock clears name's failed-sign-in count at the broker (the on-call's
+// `port49 directory unlock`, through the broker API with a software key's
+// press).
 func (b *l67Broker) unlock(t *testing.T, name string) {
 	t.Helper()
-	if out, code := b.port49(t, "directory", "unlock", "--socket", b.admin, "user:"+name+"@corp.example.com"); code != 0 {
+	if b.admin == nil {
+		cert, key := testpki.LabClientFiles(l67OncallEmail)
+		b.admin = startLabAdmin(t, b.piv, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA),
+			filepath.Join(b.pki, cert), filepath.Join(b.pki, key))
+	}
+	if out, code := b.admin.runCmd("directory", "unlock", "user:"+name+"@corp.example.com"); code != 0 {
 		t.Fatalf("INVALID: directory unlock %s: exit %d: %s", name, code, oneLineMax(out, 300))
 	}
 }

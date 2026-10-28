@@ -37,7 +37,6 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/hwkey"
 	"github.com/rhwendt/port49/internal/mfatouch"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -166,13 +165,12 @@ var connectTimeout = 10 * time.Second
 
 // revokeWait is how long the agent waits on POST /v1/tokens/revoke: the
 // broker's wait for its revocation slot (api.RevokeSlotWait), the run it
-// bounds at RevokeTimeout, which port49d sets to admin.OpTimeout, the
-// revocations_file save (admin.PersistTimeout, headroom as port49d's admin
-// socket gives it) and a margin for the answer. Every other call keeps the
+// bounds at RevokeTimeout, which the daemons set to api.OpTimeout, the
+// revocations_file save (api.PersistTimeout, headroom) and a margin for the answer. Every other call keeps the
 // client's thirty seconds, which a revocation behind a slow store outlives:
 // the agent would give up on a revocation that went on to finish (final
 // review I1).
-const revokeWait = api.RevokeSlotWait + admin.OpTimeout + admin.PersistTimeout + revokeAnswerMargin
+const revokeWait = api.RevokeSlotWait + api.OpTimeout + api.PersistTimeout + revokeAnswerMargin
 
 // revokeAnswerMargin is the time past the broker's bounds a revocation's
 // answer is given to arrive.
@@ -916,8 +914,7 @@ func (a *Agent) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeRe
 
 // UnansweredRevokeError is a revocation sent and never answered, by the
 // broker or by the agent: it may have run, and the operator looks before
-// asking again. Its text is port49 revoke's on the admin socket for the same
-// case. A self or key revocation leaves no mark for --list to show; the
+// asking again. Its text is port49 revoke's for the same case. A self or key revocation leaves no mark for --list to show; the
 // decision log names it.
 type UnansweredRevokeError struct {
 	Who       string // who did not answer: "the broker at …", "your agent at …"

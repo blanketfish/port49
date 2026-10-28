@@ -32,7 +32,7 @@ func etcdYAML(dir string) storeYAML {
 }
 
 func TestTheStoreDefaultsToMemoryWithAPacketDeadline(t *testing.T) {
-	s, err := checkStore("stores.directory", storeYAML{}, true, RoleDaemon, false, false, false)
+	s, err := checkStore("stores.directory", storeYAML{}, true, RoleDaemon, false, false)
 	if err != nil || s.Backend != BackendMemory || s.PacketDeadline != 2*time.Second || s.Etcd != nil {
 		t.Fatalf("%+v %v", s, err)
 	}
@@ -125,44 +125,42 @@ func TestEachRoleHoldsItsOwnIdentityAlone(t *testing.T) {
 	daemon := func(s *storeYAML) { s.Etcd.Broker = nil }
 	brk := func(s *storeYAML) { s.Etcd.Daemon = EtcdIdentity{} }
 	for _, c := range []struct {
-		name                 string
-		role                 Role
-		edit                 func(*storeYAML)
-		broker, policy, sock bool
-		want                 string
+		name           string
+		role           Role
+		edit           func(*storeYAML)
+		broker, policy bool
+		want           string
 	}{
-		{"the daemon with a broker block", RoleDaemon, daemon, true, false, true, "move the broker: block"},
-		{"the daemon with no policy", RoleDaemon, daemon, false, false, true, "under policy: (file, watch_interval)"},
-		{"the daemon naming the broker's identity", RoleDaemon, func(*storeYAML) {}, false, true, true,
+		{"the daemon with a broker block", RoleDaemon, daemon, true, false, "move the broker: block"},
+		{"the daemon with no policy", RoleDaemon, daemon, false, false, "under policy: (file, watch_interval)"},
+		{"the daemon naming the broker's identity", RoleDaemon, func(*storeYAML) {}, false, true,
 			"stores.directory.etcd.broker: the broker's identity is port49-broker's alone"},
 		{"the daemon with no identity", RoleDaemon, func(s *storeYAML) { daemon(s); s.Etcd.Daemon = EtcdIdentity{} },
-			false, true, true, "stores.directory.etcd.daemon is missing"},
-		{"the daemon with no admin socket", RoleDaemon, daemon, false, true, false, "stores.directory.backend etcd needs admin_socket"},
-		{"the broker with no identity", RoleBroker, func(s *storeYAML) { brk(s); s.Etcd.Broker = nil }, true, false, true,
+			false, true, "stores.directory.etcd.daemon is missing"},
+		{"the broker with no identity", RoleBroker, func(s *storeYAML) { brk(s); s.Etcd.Broker = nil }, true, false,
 			"stores.directory.etcd.broker is missing"},
-		{"the broker naming the daemon's identity", RoleBroker, func(*storeYAML) {}, true, false, true,
+		{"the broker naming the daemon's identity", RoleBroker, func(*storeYAML) {}, true, false,
 			"stores.directory.etcd.daemon: the daemon's identity is port49d's alone"},
-		{"the broker on memory", RoleBroker, func(s *storeYAML) { *s = storeYAML{} }, true, false, true,
+		{"the broker on memory", RoleBroker, func(s *storeYAML) { *s = storeYAML{} }, true, false,
 			"port49-broker runs on etcd"},
-		{"the broker with no admin socket", RoleBroker, brk, true, false, false, "stores.directory.backend etcd needs admin_socket"},
 	} {
 		y := etcdYAML(dir)
 		c.edit(&y)
-		if _, err := checkStore("stores.directory", y, true, c.role, c.broker, c.policy, c.sock); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := checkStore("stores.directory", y, true, c.role, c.broker, c.policy); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
 	y := etcdYAML(dir)
 	daemon(&y)
-	if s, err := checkStore("stores.directory", y, true, RoleDaemon, false, true, true); err != nil || s.Etcd.Broker != nil {
+	if s, err := checkStore("stores.directory", y, true, RoleDaemon, false, true); err != nil || s.Etcd.Broker != nil {
 		t.Errorf("the split daemon: %+v %v", s, err)
 	}
 	y = etcdYAML(dir)
 	brk(&y)
-	if s, err := checkStore("stores.directory", y, true, RoleBroker, true, false, true); err != nil || s.Etcd.Broker == nil {
+	if s, err := checkStore("stores.directory", y, true, RoleBroker, true, false); err != nil || s.Etcd.Broker == nil {
 		t.Errorf("the broker: %+v %v", s, err)
 	}
-	if s, err := checkStore("stores.directory", storeYAML{}, true, RoleDaemon, true, false, false); err != nil || s.Backend != BackendMemory {
+	if s, err := checkStore("stores.directory", storeYAML{}, true, RoleDaemon, true, false); err != nil || s.Backend != BackendMemory {
 		t.Errorf("the in-process broker on memory: %+v %v", s, err)
 	}
 }
@@ -185,7 +183,7 @@ func TestAnEndpointsCredentialIsNeverPrinted(t *testing.T) {
 // storeDoc is a port49d.yaml whose store is etcd, with startTimeout as
 // the start_timeout line ("" for none).
 func storeDoc(dir, startTimeout string) string {
-	doc := "admin_socket: /run/port49/admin.sock\nbroker: {listen: \":8443\"}\nstores:\n  directory:\n    backend: etcd\n    etcd:\n" +
+	doc := "broker: {listen: \":8443\"}\nstores:\n  directory:\n    backend: etcd\n    etcd:\n" +
 		"      endpoints: [https://etcd-0:2379]\n      ca_file: " + filepath.Join(dir, "ca.pem") + "\n" +
 		"      daemon: {cert_file: " + filepath.Join(dir, "d.pem") + ", key_file: " + filepath.Join(dir, "d-key.pem") + "}\n" +
 		"      broker: {cert_file: " + filepath.Join(dir, "b.pem") + ", key_file: " + filepath.Join(dir, "b-key.pem") + "}\n"
@@ -370,7 +368,7 @@ func TestTheBrokerRefusesTheDaemonsStoresBlocks(t *testing.T) {
 		y := etcdYAML(dir)
 		y.Etcd.Daemon = EtcdIdentity{}
 		c.edit(&y)
-		if _, err := checkStore("stores.directory", y, true, RoleBroker, true, false, true); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := checkStore("stores.directory", y, true, RoleBroker, true, false); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%v, want %q", err, c.want)
 		}
 	}
@@ -396,18 +394,18 @@ func TestHealthIntervalAgainstCallTimeoutIsPort49dsAlone(t *testing.T) {
 	y := etcdYAML(storeFiles(t))
 	y.Etcd.Broker = nil
 	y.Etcd.CallTimeout = 2 * time.Second
-	if _, err := checkStore("stores.directory", y, true, RoleDaemon, false, true, true); err == nil ||
+	if _, err := checkStore("stores.directory", y, true, RoleDaemon, false, true); err == nil ||
 		!strings.Contains(err.Error(), "stores.directory.etcd.health.interval 1s: must be at least stores.directory.etcd.call_timeout (2s), which bounds each check") {
 		t.Errorf("daemon: %v", err)
 	}
 	y.Etcd.HealthSet = &EtcdHealth{Interval: 2 * time.Second}
-	if _, err := checkStore("stores.directory", y, true, RoleDaemon, false, true, true); err != nil {
+	if _, err := checkStore("stores.directory", y, true, RoleDaemon, false, true); err != nil {
 		t.Errorf("daemon with interval raised: %v", err)
 	}
 	b := etcdYAML(storeFiles(t))
 	b.Etcd.Daemon = EtcdIdentity{}
 	b.Etcd.CallTimeout = 2 * time.Second
-	if _, err := checkStore("stores.directory", b, true, RoleBroker, true, false, true); err != nil {
+	if _, err := checkStore("stores.directory", b, true, RoleBroker, true, false); err != nil {
 		t.Errorf("broker: %v", err)
 	}
 }

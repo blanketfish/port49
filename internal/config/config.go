@@ -162,8 +162,7 @@ type TokenConfig struct {
 // not (Junos, spec §13 decision 21) the live shell keeps its access until
 // logout: the refresh line counts those and the process log names each
 // ctx_id, so close them on the device. To end a principal's or a
-// certificate's sessions at once, use `port49 revoke` over `admin_socket`
-// (plan 7a).
+// certificate's sessions at once, use `port49 revoke` (spec §5.1.6).
 //
 // A relative path resolves against port49d's working directory, not the
 // config file's, as inventory_file does.
@@ -308,8 +307,8 @@ type CertificateStatusOCSP struct {
 // StoreConfig is one block of `stores:` (stores.directory or stores.session), resolved (plan 7d; plan 11a; spec §13, decisions 35 and 51): the
 // backend and every packet's store deadline, and on etcd its client.
 type StoreConfig struct {
-	// Backend is memory (the default) or etcd. etcd requires admin_socket,
-	// and in port49d.yaml policy: and no broker: block (plan 7e).
+	// Backend is memory (the default) or etcd. etcd, in port49d.yaml, requires policy: and no broker:
+	// block (plan 7e).
 	Backend string
 	// PacketDeadline bounds every TACACS+ packet's store work: default 2s,
 	// 100ms to 2s (Junos times out a reply at about 3s; spec §15, L13), and
@@ -524,7 +523,6 @@ type fileConfig struct {
 	Broker         *BrokerConfig             `yaml:"broker"`
 	Lab            *LabConfig                `yaml:"lab"`
 	InventoryOpts  inventoryYAML             `yaml:"inventory"`
-	AdminSocket    string                    `yaml:"admin_socket"`
 	Stores         storesYAML                `yaml:"stores"`
 	Policy         *policyYAML               `yaml:"policy"`
 	// KeySecretRefs is where a policy's key references may point (decision 53
@@ -601,11 +599,6 @@ type Config struct {
 	// block is.
 	Broker *BrokerConfig
 	Lab    *LabConfig
-
-	// AdminSocket is where port49d answers `port49 keys diagnose` (plan 6a
-	// owner decision 2): a Unix socket, 0600, for port49d's user and root.
-	// Empty, the default, is off, and no packet is held.
-	AdminSocket string
 
 	// Stores is where records live (plan 11a; spec §13 decision 51): the
 	// directory store and the session store, one store when Shared.
@@ -733,7 +726,7 @@ func inventoryBound(o inventoryYAML) (int, error) {
 // no secret, so the command runs where the daemon's environment is not, and
 // decodes as strictly as Load, so a typo is an error, never "no path". It
 // refuses the paths Load refuses (ownRevocationsFile), each read from the
-// same bytes, so init never drops a file where admin_socket, the spool or
+// same bytes, so init never drops a file where the spool or
 // the policy will be (pre-flight M10).
 func RevocationsFile(raw []byte) (string, error) {
 	var f fileConfig
@@ -744,7 +737,7 @@ func RevocationsFile(raw []byte) (string, error) {
 		return "", errors.New("config: no broker.revocations_file: init-revocations is for a port49d with a broker")
 	}
 	c := Config{InventoryFile: f.InventoryFile, InventoryService: f.InventoryOpts.Service, Accounting: f.Accounting,
-		Lab: f.Lab, AdminSocket: f.AdminSocket}
+		Lab: f.Lab}
 	if c.Accounting.SpoolPath == "" {
 		c.Accounting.SpoolPath = defaultSpoolPath
 	}
@@ -862,7 +855,6 @@ func load(path string, role Role) (Config, error) {
 		Keys:           f.Keys,
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
 		Lab:            f.Lab,
-		AdminSocket:    f.AdminSocket,
 		Session: SessionConfig{
 			StalenessCeiling:        DefaultStalenessCeiling,
 			GraceWindow:             orD(f.Session.GraceWindow, 10*time.Minute),
@@ -1001,7 +993,7 @@ func load(path string, role Role) (Config, error) {
 		c.Policy = &p
 	}
 	if c.Stores, err = checkStores(f.Stores, func(at string, s storeYAML, session bool) (StoreConfig, error) {
-		return checkStore(at, s, session, role, f.Broker != nil, f.Policy != nil, f.AdminSocket != "")
+		return checkStore(at, s, session, role, f.Broker != nil, f.Policy != nil)
 	}); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
@@ -1620,7 +1612,6 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
 		{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
 		{"inventory_file", c.InventoryFile}, {"accounting.spool_path", c.Accounting.SpoolPath},
-		{"admin_socket", c.AdminSocket},
 	}
 	for _, iss := range identityIssuers(&b) {
 		others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
@@ -1861,6 +1852,9 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 // Decode would ignore (decision 53 ruling 6), and so is a key decision 53
 // removed, named with its replacement. No error quotes the file.
 func decodeFile(raw []byte, f *fileConfig) error {
+	if err := removedAdminSocket(raw); err != nil {
+		return err
+	}
 	if err := yamlfault.Replaced(raw, removedSecretKeys); err != nil {
 		return err
 	}
@@ -2048,8 +2042,7 @@ func checkStoreShape(at string, s storeYAML, session bool) (StoreConfig, error) 
 //   - port49d on etcd names its own identity alone, the policy it admits
 //     from under policy:, and no broker: block;
 //   - port49-broker names its own identity alone, and runs on etcd;
-//   - either on etcd names admin_socket.
-func checkStore(at string, s storeYAML, session bool, role Role, hasBroker, hasPolicy, hasAdminSocket bool) (StoreConfig, error) {
+func checkStore(at string, s storeYAML, session bool, role Role, hasBroker, hasPolicy bool) (StoreConfig, error) {
 	out, err := checkStoreShape(at, s, session)
 	if err != nil {
 		return StoreConfig{}, err
@@ -2104,11 +2097,6 @@ func checkStore(at string, s storeYAML, session bool, role Role, hasBroker, hasP
 			return StoreConfig{}, fmt.Errorf(at+".etcd.health.interval %v: must be at least "+at+".etcd.call_timeout "+
 				"(%v), which bounds each check", e.Health.Interval, e.CallTimeout)
 		}
-	}
-	if !hasAdminSocket {
-		return StoreConfig{}, errors.New(at + ".backend etcd needs admin_socket: port49-broker's answers " +
-			"'port49 revoke', the one way to lift a mark on etcd, and port49d's 'port49 keys diagnose' " +
-			"(decision 35; plan 7e)")
 	}
 	return out, nil
 }
@@ -2390,4 +2378,22 @@ func orI(v, d int) int {
 		return d
 	}
 	return v
+}
+
+// removedAdminSocket refuses admin_socket, in either file, by name: the
+// sockets are gone, and admin operations go over the broker API with a
+// security key press (spec §5.1.6, §12). No alias and no warning: pre-beta.
+func removedAdminSocket(raw []byte) error {
+	var doc yaml.Node
+	if yaml.Unmarshal(raw, &doc) != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil
+	}
+	top := doc.Content[0]
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if k := top.Content[i]; k.Kind == yaml.ScalarNode && k.Value == "admin_socket" {
+			return fmt.Errorf("line %d: admin_socket was removed: admin operations go over the broker API with a "+
+				"security key press (spec §5.1.6); delete the key", k.Line)
+		}
+	}
+	return nil
 }

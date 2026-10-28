@@ -805,7 +805,7 @@ func TestAFailedWriteIsMatchedByKindKeyAndTime(t *testing.T) {
 	now := time.Now()
 	m := NewMarks()
 	m.now = func() time.Time { return now }
-	mine := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Now(), Origin: "admin_socket uid 0"}
+	mine := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Now(), Origin: "offline uid 0"}
 	m.Set(mine, true)
 	m.NoteFailedWrite(mine)
 	m.Set(mine, false) // a lift the feed brought between the failure and the late put
@@ -871,7 +871,7 @@ func TestAReloadTellsAMarkMadeAgainAndNothingElse(t *testing.T) {
 	m.Set(alice, true)
 	m.Set(bob, true)
 	again := alice
-	again.At, again.Origin, again.LandedAfterLift = time.Unix(20, 0), "admin_socket uid 0", true
+	again.At, again.Origin, again.LandedAfterLift = time.Unix(20, 0), "offline uid 0", true
 	f.setMarks([]Revocation{again, bob})
 	var got []MarkChange
 	if _, err := LoadMarks(context.Background(), f, m, func(c MarkChange) { got = append(got, c) }); err != nil {

@@ -63,7 +63,7 @@ type RevokeReport struct {
 	Key store.TokenKey
 	// LiftNote says where a standing mark made over HTTP is lifted: the
 	// endpoint sets it (liftNote; decision 34), and Text prints
-	// it after the mark's own text. Empty from the admin socket, whose
+	// it after the mark's own text. Empty from `revoke --offline`, whose
 	// caller is already there.
 	LiftNote string
 	// OwnNote is the first line of a self revocation the request named by
@@ -185,8 +185,8 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		return RevokeReport{}, err
 	}
 	if b.Sessions == nil {
-		// A wiring fault, said rather than panicked on: the admin socket's
-		// goroutine shares the process with TACACS+ (M12).
+		// A wiring fault, said rather than panicked on: a request goroutine
+		// shares the process with TACACS+ (M12).
 		return RevokeReport{}, errors.New("broker: revocation is not wired (no session manager); nothing was revoked")
 	}
 	release, err := b.acquireRevoke(ctx)
@@ -481,8 +481,8 @@ func (b *Broker) acquireRevoke(ctx context.Context) (func(), error) {
 	}
 }
 
-// DefaultRevokeTimeout is RevokeTimeout's zero value. port49d sets
-// RevokeTimeout to the admin socket's own bound (admin.OpTimeout).
+// DefaultRevokeTimeout is RevokeTimeout's zero value. The daemons set
+// RevokeTimeout to api.OpTimeout.
 const DefaultRevokeTimeout = 60 * time.Second
 
 // detach is the ctx a revocation or lift runs on once it holds revokeSem:

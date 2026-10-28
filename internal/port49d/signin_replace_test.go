@@ -75,7 +75,7 @@ func goodThenUnreadable(t *testing.T) (b *broker.Broker, path string, exported [
 func TestAllRightAfterFixingTheModeKeepsTheGoodFile(t *testing.T) {
 	b, file, _, fix, created, _, enrolled := goodThenUnreadable(t)
 	fix()
-	if _, err := b.ResetSecondFactor(context.Background(), "", true, "admin_socket uid 0"); err != nil {
+	if _, err := b.ResetSecondFactor(context.Background(), "", true, "offline uid 0"); err != nil {
 		t.Fatal(err)
 	}
 	if kept, _ := filepath.Glob(file + ".unreadable-*"); len(kept) != 0 {
@@ -94,7 +94,7 @@ func TestAllRightAfterFixingTheModeKeepsTheGoodFile(t *testing.T) {
 func TestAnImportRightAfterFixingTheModeKeepsTheGoodFile(t *testing.T) {
 	b, file, exported, fix, _, _, enrolled := goodThenUnreadable(t)
 	fix()
-	if _, err := b.ImportEnrollments(context.Background(), exported, true, "admin_socket uid 0"); err != nil {
+	if _, err := b.ImportEnrollments(context.Background(), exported, true, "offline uid 0"); err != nil {
 		t.Fatal(err)
 	}
 	if kept, _ := filepath.Glob(file + ".unreadable-*"); len(kept) != 0 {

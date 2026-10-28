@@ -100,10 +100,10 @@ const usage = `usage:
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 keys status --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE DEVICE
-  port49 keys diagnose [--socket PATH] DEVICE
-  port49 store status [--socket PATH]
-                (each store as port49d or port49-broker sees it: backend, members, reachable, the
-                directory cache's age; exits 3 when a store does not answer)
+  port49 store status [--metrics ADDR]
+                (reads GET /store/status on the metrics listener of port49d or port49-broker: each
+                store as that process sees it, backend, members, reachable, the directory cache's
+                age; exits 3 when a store does not answer)
   port49 revoke (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX | --device NAME --username NAME) [--yes]
   port49 revoke --sid SID --sid-issuer ISSUER
   port49 revoke --lift (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX)

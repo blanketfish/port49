@@ -1408,7 +1408,7 @@ type Revocation struct {
 	// At is when the mark took force. A second put of the same key keeps the
 	// first mark whole: the refusal has stood since then.
 	At time.Time
-	// Origin says who asked: "admin_socket uid 0".
+	// Origin says who asked: "offline uid 0".
 	Origin string
 	// LandedAfterLift is set by the store when the mark was created over a
 	// lift of its key that its writer's marks feed had not delivered (spec

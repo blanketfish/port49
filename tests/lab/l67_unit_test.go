@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/totp"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
@@ -498,8 +499,12 @@ func TestL67BrokerConfigLoads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s window %v: %v\n%s", name, window, err, files["port49d.yaml"])
 			}
-			if cfg.Broker.ClientCAFile != "" {
-				t.Fatalf("%s: the broker sets client_ca_file %q; the shape under test has no x509 verifier", name, cfg.Broker.ClientCAFile)
+			// The one x509 verifier is the on-call's, who unlocks by certificate.
+			if want := filepath.Join(sub, "pki", testpki.LabCA); cfg.Broker.ClientCAFile != want {
+				t.Fatalf("%s: the x509 anchor is %q, want the lab CA %q", name, cfg.Broker.ClientCAFile, want)
+			}
+			if m := cfg.Broker.Identity.PerLoginMFA; m == nil || m.AttestationRootsFile != filepath.Join(sub, adminRolesFile) {
+				t.Fatalf("%s: per_login_mfa is %+v; the broker must read the run's attestation roots", name, m)
 			}
 			ps := cfg.Broker.Identity.PasswordSignIn
 			if ps == nil || len(ps.PrincipalDomains) != 1 || ps.PrincipalDomains[0] != "corp.example.com" {

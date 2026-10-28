@@ -960,8 +960,8 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 
 		at := time.Date(2026, 10, 2, 3, 12, 9, 0, time.UTC)
 		for i, mark := range []store.Revocation{
-			{Kind: store.RevocationCert, Key: aliceCertKey(t, pki), At: at, Origin: "admin_socket uid 0"},
-			{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"},
+			{Kind: store.RevocationCert, Key: aliceCertKey(t, pki), At: at, Origin: "offline uid 0"},
+			{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "offline uid 0"},
 		} {
 			held := memory.New(time.Now)
 			if err := held.PutRevocation(context.Background(), mark); err != nil {
@@ -993,7 +993,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(cfg.Broker.RevocationsFile, []byte(`{"revocations":[{"kind":"principal",`+
-			`"key":"user:alice@example.com","at":"2026-10-02T03:12:09Z","origin":"admin_socket uid 0"}]}`), 0o600); err != nil {
+			`"key":"user:alice@example.com","at":"2026-10-02T03:12:09Z","origin":"offline uid 0"}]}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		st := memory.New(time.Now)

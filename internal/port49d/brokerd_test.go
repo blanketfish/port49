@@ -26,7 +26,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
@@ -97,7 +96,7 @@ func splitFleetOpts(t *testing.T, policyBody string, others []string, o etcdtest
 // brokerVia writes a port49-broker.yaml reaching etcd at endpoint as the
 // etcd user cn, with extra appended under stores.directory.etcd, and returns its
 // path. Each has its own broker.listen and metrics_listen (both
-// 127.0.0.1:0), its own admin_socket, its own broker.state_dir (mode
+// 127.0.0.1:0), its own broker.state_dir (mode
 // 0700), and its own broker.policy_file, a copy of f.policy, in a safeDir.
 func (f *fleet) brokerVia(t *testing.T, endpoint, cn, extra string) string {
 	t.Helper()
@@ -119,7 +118,6 @@ metrics_listen: "127.0.0.1:0"
 inventory_file: %s
 encryption:
   current: {id: v1, secret_ref: env:T_RUN_ENC}
-admin_socket: %s
 broker:
   listen: "127.0.0.1:0"
   tls_cert_file: %s
@@ -139,7 +137,7 @@ stores:
       call_timeout: 200ms
       hold_ttl: 10s
       breaker: {failures: 3, open_for: 2s}
-%s`, f.inventory, filepath.Join(dir, "b.sock"), filepath.Join(f.pki, testpki.LabServerCert),
+%s`, f.inventory, filepath.Join(f.pki, testpki.LabServerCert),
 		filepath.Join(f.pki, testpki.LabServerKey), filepath.Join(f.pki, testpki.LabCA), pol, state, endpoint,
 		filepath.Join(f.srv.Dir, "ca.pem"), bc, bk, extra)), 0o600); err != nil {
 		t.Fatal(err)
@@ -148,7 +146,7 @@ stores:
 }
 
 // copyBroker writes another replica's port49-broker.yaml: f.broker's, with
-// its own listeners, admin socket, state_dir and policy file.
+// its own listeners, state_dir and policy file.
 func (f *fleet) copyBroker(t *testing.T) string {
 	t.Helper()
 	return f.brokerVia(t, f.proxy.Addr(), "port49-broker", "")
@@ -275,16 +273,6 @@ func copyHolds(t *testing.T, dir string, keys ...string) string {
 		b.WriteString(held)
 	}
 	return b.String()
-}
-
-// adminSocketOf is the admin_socket the config at cfg names.
-func adminSocketOf(t *testing.T, cfg string) string {
-	t.Helper()
-	raw, err := os.ReadFile(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return regexp.MustCompile(`(?m)^admin_socket: (\S+)$`).FindStringSubmatch(string(raw))[1]
 }
 
 // startBroker runs port49-broker on cfg until the test ends or stop is
@@ -1161,7 +1149,7 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 	principal := lastCommandPrincipal(t, &log)
 	waitBrokerMetric(t, &out, `port49_store_feed_up{feed="marks"} 1`) // B's marks feed runs (review M4)
 	conn := heldBrokerConn(t, f.pki, apiB)
-	if r := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: principal}); r.Error != "" {
+	if r := revokeAt(t, f.broker, revokeReq{Principal: principal}); r.Error != "" {
 		t.Fatalf("revoke on A's socket: %+v", r)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -1177,7 +1165,7 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
 		t.Fatalf("the denial: %v", r)
 	}
-	if r := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: principal,
+	if r := revokeAt(t, f.broker, revokeReq{Principal: principal,
 		Lift: true}); r.Error != "" {
 		t.Fatalf("lift on A's socket: %+v", r)
 	}
@@ -1598,13 +1586,12 @@ func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	root := f.srv.Client(t, "root")
 	_, stop := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	sock := adminSocketOf(t, f.broker)
-	for _, req := range []admin.Request{
-		{Op: "revoke", Principal: "user:alice@example.com"},
-		{Op: "revoke", Principal: "user:carol@example.com"},
-		{Op: "revoke", Principal: "user:carol@example.com", Lift: true},
+	for _, req := range []revokeReq{
+		{Principal: "user:alice@example.com"},
+		{Principal: "user:carol@example.com"},
+		{Principal: "user:carol@example.com", Lift: true},
 	} {
-		if resp := askSocket(t, sock, req); resp.Error != "" {
+		if resp := revokeAt(t, f.broker, req); resp.Error != "" {
 			t.Fatalf("%+v: %+v", req, resp)
 		}
 	}
@@ -1613,7 +1600,7 @@ func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	// after her lift, not one the watch has yet to reach. Without the fix
 	// this check is racy: the put-back line below, whose count would then
 	// name carol, is what catches a regression here; the unit test
-	// (TestALiftOnTheAdminSocketLeavesTheCopyBeforeItIsAnswered) is the
+	// (TestALiftLeavesTheCopyBeforeItIsAnswered) is the
 	// deterministic one.
 	if got := copyHolds(t, f.stateDir(t), "user:carol@example.com"); got != "0" {
 		t.Fatalf("carol is in the copy after her lift was answered")
@@ -1658,7 +1645,7 @@ func TestALiftAcrossAShortWatchBreakIsNotPutBack(t *testing.T) {
 	startBroker(t, cfgB, &out, 2)
 	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
 	const alice = "user:alice@example.com"
-	if resp := askSocket(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+	if resp := revokeAt(t, cfgB, revokeReq{Principal: alice}); resp.Error != "" {
 		t.Fatalf("revoke on B: %+v", resp)
 	}
 	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
@@ -1678,7 +1665,7 @@ func TestALiftAcrossAShortWatchBreakIsNotPutBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxyA.Hang(true)
-	if resp := askSocket(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice,
+	if resp := revokeAt(t, cfgB, revokeReq{Principal: alice,
 		Lift: true}); resp.Error != "" {
 		t.Fatalf("lift on B: %+v", resp)
 	}
@@ -1707,7 +1694,7 @@ func TestARestartedReplicaKeepsAMarkTheStoreLost(t *testing.T) {
 	const alice = "user:alice@example.com"
 	_, stopA := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	if resp := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+	if resp := revokeAt(t, f.broker, revokeReq{Principal: alice}); resp.Error != "" {
 		t.Fatalf("revoke: %+v", resp)
 	}
 	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDir(t), alice) == "1" })
@@ -2008,7 +1995,7 @@ func TestARestoreUnderARunningRunnerIsPutBackBeforeTheReload(t *testing.T) {
 	cfgA, proxyA := f.copyBrokerVia(t)
 	apiA, _ := startBroker(t, cfgA, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	if resp := askSocket(t, adminSocketOf(t, cfgA), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+	if resp := revokeAt(t, cfgA, revokeReq{Principal: alice}); resp.Error != "" {
 		t.Fatalf("revoke: %+v", resp)
 	}
 	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })

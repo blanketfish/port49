@@ -1,6 +1,7 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/pem"
@@ -19,7 +20,6 @@ import (
 	"github.com/go-ldap/ldap/v3"
 
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
@@ -150,13 +150,13 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: svc, scope: all
 // stderr and recs its decision log (stdout).
 func startWorkloadDaemon(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir string, out, recs *syncBuffer) {
 	t.Helper()
-	brokerAddr, tacacsAddr, pki, workDir, out, recs, _ = startWorkloadDaemonAt(t)
+	brokerAddr, tacacsAddr, pki, workDir, out, recs, _, _ = startWorkloadDaemonAt(t)
 	return brokerAddr, tacacsAddr, pki, workDir, out, recs
 }
 
-// startWorkloadDaemonAt is startWorkloadDaemon with an admin socket, whose
-// path it returns.
-func startWorkloadDaemonAt(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir string, out, recs *syncBuffer, socket string) {
+// startWorkloadDaemonAt is startWorkloadDaemon that also returns the config's
+// path and a stop, which ends the run and waits for it (the cleanup does too).
+func startWorkloadDaemonAt(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir string, out, recs *syncBuffer, cfgPath string, stop func()) {
 	t.Helper()
 	out, recs = &syncBuffer{}, &syncBuffer{}
 	e, o := stderr, stdout
@@ -168,30 +168,28 @@ func startWorkloadDaemonAt(t *testing.T) (brokerAddr, tacacsAddr, pki, workDir s
 	if err := testpki.WriteWorkloadLab(workDir, e2eWorkloadID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	cfgPath := writeWorkloadRunConfig(t, b, workDir)
-	socket = filepath.Join(filepath.Dir(cfgPath), "port49d.sock")
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfgPath, append([]byte("admin_socket: "+socket+"\n"), raw...), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	cfgPath = writeWorkloadRunConfig(t, b, workDir)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfgPath) }()
-	t.Cleanup(func() {
+	stopped := false
+	stop = func() {
+		if stopped {
+			return
+		}
+		stopped = true
 		cancel()
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
 			t.Error("run did not return")
 		}
-	})
+	}
+	t.Cleanup(stop)
 	waitForCount(t, out, "port49d: broker listening on ", 1)
 	brokerAddr = regexp.MustCompile(`port49d: broker listening on (\S+)`).FindStringSubmatch(out.String())[1]
 	tacacsAddr = regexp.MustCompile(`port49d: listening on ([^,\s]+),`).FindStringSubmatch(out.String())[1]
-	return brokerAddr, tacacsAddr, pki, workDir, out, recs, socket
+	return brokerAddr, tacacsAddr, pki, workDir, out, recs, cfgPath, stop
 }
 
 func workloadClient(t *testing.T, brokerAddr, pki, workDir string) *workload.Client {
@@ -257,7 +255,7 @@ func TestARenewedCertificateMintsAsTheSamePrincipal(t *testing.T) {
 // the same principal (decision 40 ruling 8). Revoking the principal is the
 // mark that follows a renewal.
 func TestAMarkOnAWorkloadCertificateDoesNotFollowItsRenewal(t *testing.T) {
-	brokerAddr, _, pki, workDir, _, _, socket := startWorkloadDaemonAt(t)
+	brokerAddr, _, pki, workDir, out, _, cfgPath, stop := startWorkloadDaemonAt(t)
 	ctx := context.Background()
 	opts := workload.MintOptions{Devices: []string{"leaf1"}}
 	if _, err := workloadClient(t, brokerAddr, pki, workDir).Mint(ctx, opts); err != nil {
@@ -275,10 +273,28 @@ func TestAMarkOnAWorkloadCertificateDoesNotFollowItsRenewal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp := askSocket(t, socket, admin.Request{Op: "revoke", CertIssuer: old.Issuer.String(),
-		CertSerial: old.SerialNumber.Text(16)}); resp.Error != "" {
-		t.Fatalf("revoke: %+v", resp)
+	// The mark is made with port49d stopped, the break-glass form, and the
+	// next start loads it from broker.revocations_file before it serves.
+	stop()
+	var rout, rerr bytes.Buffer
+	if code := offlineRevokeDaemon([]string{"--offline", "--config", cfgPath, "--cert-issuer", old.Issuer.String(),
+		"--cert-serial", old.SerialNumber.Text(16)}, &rout, &rerr); code != 0 {
+		t.Fatalf("revoke --offline: exit %d: %s", code, rerr.String())
 	}
+	rctx, rcancel := context.WithCancel(context.Background())
+	rdone := make(chan error, 1)
+	go func() { rdone <- run(rctx, cfgPath) }()
+	t.Cleanup(func() {
+		rcancel()
+		select {
+		case <-rdone:
+		case <-time.After(10 * time.Second):
+			t.Error("the restarted run did not return")
+		}
+	})
+	waitForCount(t, out, "port49d: broker listening on ", 2)
+	addrs := regexp.MustCompile(`port49d: broker listening on (\S+)`).FindAllStringSubmatch(out.String(), -1)
+	brokerAddr = addrs[len(addrs)-1][1]
 	var apiErr *workload.APIError
 	if _, err := workloadClient(t, brokerAddr, pki, workDir).Mint(ctx, opts); !errors.As(err, &apiErr) ||
 		apiErr.Status != http.StatusUnauthorized || apiErr.Code != "credential_revoked" {

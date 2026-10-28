@@ -4,7 +4,7 @@ import "time"
 
 // The admin endpoints (spec §2, §5.1.4, §5.1.6; plan 12b): each write needs
 // its right and a touch bound to the request (AdminProofHeader), and answers
-// the text the admin socket used to print.
+// the text the removed admin socket used to print.
 
 // MaxImportBytes bounds POST /v1/directory/import's body.
 const MaxImportBytes = 16 << 20

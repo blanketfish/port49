@@ -67,7 +67,7 @@ func TestKindAndNodeArePinned(t *testing.T) {
 }
 
 // The configuration the harness runs port49d on is one the real loader
-// accepts: two clusters, one admin socket, no x509 machine verifier.
+// accepts: two clusters, an on-call with a touch key's roots, no x509 machine verifier.
 func TestL69BrokerFilesLoad(t *testing.T) {
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca.pem")
@@ -78,7 +78,7 @@ func TestL69BrokerFilesLoad(t *testing.T) {
 	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	cfg, policy, inventory := k8sBrokerFiles(dir, pki, []k8sVerifier{
+	cfg, policy, inventory := k8sBrokerFiles(dir, pki, filepath.Join(dir, adminRolesFile), []k8sVerifier{
 		{Cluster: "l69_a", Issuer: l69IssuerA, JWKS: "https://127.0.0.1:16443/openid/v1/jwks", CAFile: ca, Namespaces: []string{"netops"}},
 		{Cluster: "l69_b", Issuer: l69IssuerB, JWKS: "https://127.0.0.1:16444/openid/v1/jwks", CAFile: ca, Namespaces: []string{"netops", "backup"}},
 	})

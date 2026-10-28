@@ -25,7 +25,6 @@ import (
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/certstatus"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/inventory"
@@ -43,11 +42,14 @@ import (
 // BrokerMain runs port49-broker with args (os.Args[1:]) and returns its
 // exit code (plan 7e): port49d's broker path as a process of its own on
 // etcd, with no TACACS+ listener, on the broker's identity alone. It takes
-// --config and nothing else, or the subcommand `revoke --offline`
-// (offlineRevoke; Ruling 13).
+// --config and nothing else, or the subcommands `revoke --offline`
+// (offlineRevoke; Ruling 13) and init-enrollments and export-enrollments.
 func BrokerMain(args []string) int {
 	if len(args) > 0 && args[0] == "revoke" {
 		return offlineRevoke(args[1:], os.Stdout, os.Stderr)
+	}
+	if len(args) > 0 && (args[0] == "init-enrollments" || args[0] == "export-enrollments") {
+		return enrollmentsCmd("port49-broker", args[0], args[1:], os.Stdout, os.Stderr)
 	}
 	if len(args) > 0 && args[0] == "forget-issuer" {
 		return forgetIssuer(args[1:], os.Stdout, os.Stderr)
@@ -66,7 +68,7 @@ func BrokerMain(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-issuer|rotate-issuer|forget-issuer …")
+		fmt.Fprintln(os.Stderr, "usage: port49-broker [--config FILE], or port49-broker revoke|init-enrollments|export-enrollments|init-issuer|rotate-issuer|forget-issuer …")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -412,7 +414,7 @@ func announceBroker(w io.Writer, cfg *config.Config) {
 //     the bundle last judged; this replica's bundle record (keepBundle) and
 //     its ask for a full context pass; its certificate status, its
 //     listener with every mark in it, and only then the marks feed;
-//  7. the admin socket, the lab's seeds, and the API serving;
+//  7. the lab's seeds, and the API serving;
 //  8. the reloader, whose pass is the whole Refresh while this replica
 //     runs and its token half otherwise (Ruling 6);
 //  9. the runner (runner.run): the hold, the takeover, the duties.
@@ -456,11 +458,13 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// /readyz is the broker's own (broker.ReadyStarting until it serves),
 	// on the metrics listener as on the API, with no certificate.
 	var api atomic.Pointer[http.Handler]
+	status := &statusHandler{} // GET /store/status, given the stores once they are open
 	metricsErr := make(chan error, 1)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		mux.Handle("GET /store/status", status)
 		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 			if h := api.Load(); h != nil {
 				(*h).ServeHTTP(w, r)
@@ -583,9 +587,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 	go func() { defer wg.Done(); runKeySets(ctx, brk.Identity) }()
 	brk.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Marks = marks
-	brk.RevokeTimeout = admin.OpTimeout
+	brk.RevokeTimeout = revokeRunTimeout
 	brk.Proc = "port49-broker"
-	brk.OnLift = marksCopy.Lifted // a lift over the API leaves the copy as the admin socket's did
+	brk.OnLift = marksCopy.Lifted // a lift over the API leaves the copy
 	// MarkChanged's lines, a held connection closed and a lift a reload
 	// found, go to port49-broker's stderr (Ruling T9-c).
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) }
@@ -758,7 +762,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// revision, which the feed follows from. Keep that order. The feed tells
 	// the copy every change the watch delivers and every mark a reload
 	// reads (copyingFeed), this replica's own revocations included; its
-	// own lifts leave the copy as the admin socket answers them (Lifted).
+	// own lifts leave the copy (Lifted).
 	// Before a reload the runner's hook puts back what the store lost,
 	// refusing the reload when that fails, and every other replica's keeps
 	// what its copy holds and the store lacks, refusing the reload when the
@@ -881,24 +885,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 		keepFresh(ctx, bs.dir, bs.fresh, dirTimeout, stderr, "port49-broker", cfg.Stores.Shared)
 	}()
 
-	aln, err := admin.Listen(cfg.AdminSocket)
-	if err != nil {
-		bln.Close()
-		return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
-	}
 	st := newStoreStatus(cfg, bs.dir, bs.raw, bs.fresh)
 	st.pending = func() int { return int(rn.pending.Load()) }
-	asrv := &admin.Server{Revoke: adminRevoke(brk, marksCopy), Revocations: adminRevocations(bs.st),
-		Forget: adminForget(brk), Now: time.Now, StoreStatus: st.answer,
-		DiagnoseElsewhere: "port49d's admin socket", Proc: "port49-broker"}
-	serveSignInOps(asrv, brk)
-	wg.Add(1)
-	go func() { defer wg.Done(); asrv.Serve(ctx, aln) }()
-	ops := "port49 revoke, port49 directory forget"
-	if brk.PasswordSignIn != nil {
-		ops += ", reset-second-factor, unlock, init-enrollments, export, import"
-	}
-	fmt.Fprintf(stderr, "port49-broker: admin socket on %s (%s)\n", cfg.AdminSocket, ops)
+	status.set(st)
 
 	if cfg.Lab != nil && len(cfg.Lab.SeedTokens) > 0 {
 		logins, enables, err := mintSeeds(ctx, cfg, minter)

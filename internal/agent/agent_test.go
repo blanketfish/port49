@@ -31,7 +31,6 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -2355,15 +2354,15 @@ func TestARevocationsEmptyAnswerMayBeInForce(t *testing.T) {
 }
 
 // The agent's wait on a revocation outlasts the broker's worst case: the
-// wait for the slot, the run port49d bounds at admin.OpTimeout, the
+// wait for the slot, the run port49d bounds at api.OpTimeout, the
 // revocations_file save. The socket client outlasts the agent, so the agent
 // is always the side that gives up and says so (final review I1).
 func TestTheRevocationWaitsOutlastTheBroker(t *testing.T) {
-	if broker.DefaultRevokeTimeout > admin.OpTimeout {
-		t.Fatalf("the broker's default run bound %v is past the admin.OpTimeout %v the agent waits on",
-			broker.DefaultRevokeTimeout, admin.OpTimeout)
+	if broker.DefaultRevokeTimeout > api.OpTimeout {
+		t.Fatalf("the broker's default run bound %v is past the api.OpTimeout %v the agent waits on",
+			broker.DefaultRevokeTimeout, api.OpTimeout)
 	}
-	worst := api.RevokeSlotWait + admin.OpTimeout + admin.PersistTimeout
+	worst := api.RevokeSlotWait + api.OpTimeout + api.PersistTimeout
 	if revokeWait <= worst || socketTimeout <= revokeWait {
 		t.Fatalf("broker %v, agent %v, socket %v", worst, revokeWait, socketTimeout)
 	}

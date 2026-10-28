@@ -333,11 +333,11 @@ func TestSplitEndToEnd(t *testing.T) {
 				t.Fatalf("the agent minted no token before the revocation: %s", said)
 			}
 		}
-		revText, revOK := revokeCLI(s.AdminBroker, "--principal", slicePrincipal)
+		revText, revOK := s.revoke(t, "--principal", slicePrincipal)
 		if !revOK {
-			fail("port49 revoke --principal on the broker's socket: %s", revText)
+			fail("port49 revoke --principal through the broker's API: %s", revText)
 		}
-		wide("4. `port49 revoke --principal` on the broker's socket", firstLine(revText))
+		wide("4. `port49 revoke --principal` through the broker's API", firstLine(revText))
 		if sessionOnly {
 			wide("4. the session's next command", "not applicable: Junos authorizes no command (decision 21); the "+
 				"revocation's reach on the session is L36's, and its reach on a login through B is measured here")
@@ -430,7 +430,7 @@ func TestSplitEndToEnd(t *testing.T) {
 
 		// 5. Lift; the store hangs. Each port49d goes dark on its own store
 		// health checks (decision 37). Break-glass logs in once both are.
-		liftText, liftOK := revokeCLI(s.AdminBroker, "--lift", "--principal", slicePrincipal)
+		liftText, liftOK := s.revoke(t, "--lift", "--principal", slicePrincipal)
 		if !liftOK {
 			fail("port49 revoke --lift: %s", liftText)
 		}
@@ -799,12 +799,12 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 			t.Fatalf("SSH login of the second session through A: %v\nrecords:%s", err, summarize(l.recordsSince(offA)))
 		}
 		defer sh2.Close()
-		revText, revOK := revokeCLI(s.AdminBroker, "--principal", slicePrincipal)
+		revText, revOK := s.revoke(t, "--principal", slicePrincipal)
 		if !revOK {
 			fail("port49 revoke --principal: %s", revText)
 		}
 		revokeAt := time.Now()
-		wide("3. a second session logged in through A, then `port49 revoke --principal` on the broker's socket (the first closed)",
+		wide("3. a second session logged in through A, then `port49 revoke --principal` through the broker's API (the first closed)",
 			fmt.Sprintf("%s; login %s before the revocation", firstLine(revText), revokeAt.Sub(login2At).Round(time.Second)))
 		w2 := awaitReauthorization(t, l, sh2, capPath, revokeAt, 20*time.Minute)
 		sh = sh2

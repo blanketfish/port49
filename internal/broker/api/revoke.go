@@ -9,6 +9,15 @@ import "time"
 // never the side that gives up on a revocation that goes on to finish.
 const RevokeSlotWait = 10 * time.Second
 
+// OpTimeout bounds a revocation's or lift's run once it holds the slot, and
+// a list. Every process that runs a broker sets Broker.RevokeTimeout to it,
+// so a client sizing its wait from it never gives up first.
+const OpTimeout = 60 * time.Second
+
+// PersistTimeout bounds the revocations_file write a revocation or lift
+// waits on; the persister gives up on the file at it.
+const PersistTimeout = 5 * time.Second
+
 // RevokeRequest is POST /v1/tokens/revoke (design §17; spec §5.1.4). Exactly
 // one form: Mine (alone, or with Device and Username for the caller's own
 // on one key); Principal; or Device and Username (whoever holds the key,

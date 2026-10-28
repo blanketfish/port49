@@ -27,9 +27,9 @@ func LandedAfterLift(t *testing.T, procs Processes, now time.Time) {
 	ctx := context.Background()
 	a, b := procs(t)
 	mark := func(key string, at time.Time) store.Revocation {
-		return store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: at, Origin: "admin_socket uid 0"}
+		return store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: at, Origin: "offline uid 0"}
 	}
-	lift := store.Lift{At: now, Origin: "admin_socket uid 1000"}
+	lift := store.Lift{At: now, Origin: "offline uid 1000"}
 	put := func(s store.Store, r store.Revocation, floor uint64) store.Revocation {
 		t.Helper()
 		if err := s.PutRevocation(store.WithMarkFloor(ctx, floor), r); err != nil {
@@ -68,7 +68,7 @@ func LandedAfterLift(t *testing.T, procs Processes, now time.Time) {
 	again := mark(alice, now.Add(time.Hour))
 	again.Origin = "api user:carol@example.com"
 	if got := put(a, again, 0); !got.LandedAfterLift || !got.At.Equal(now.Add(-time.Minute)) ||
-		got.Origin != "admin_socket uid 0" {
+		got.Origin != "offline uid 0" {
 		t.Fatalf("a put on a standing mark changed it: %+v", got)
 	}
 	// Flag clear: the writer's floor is at the lift.
@@ -144,7 +144,7 @@ func MemoryKeepsNoLiftRecord(t *testing.T, s store.Store, now time.Time) {
 	if err := s.PutRevocation(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
+	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{At: now, Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetLift(ctx, r.Kind, r.Key); !errors.Is(err, store.ErrNotFound) {

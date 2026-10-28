@@ -68,7 +68,7 @@ func TestAnUnlockReachesEveryRegionsCount(t *testing.T) {
 	if w := b.signIn(t, req); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("setup: region b did not throttle: %s", shown(w))
 	}
-	text, err := a.b.UnlockSignIn(ctx, alicePrincipal, "admin_socket uid 0")
+	text, err := a.b.UnlockSignIn(ctx, alicePrincipal, "offline uid 0")
 	if err != nil || text != "cleared 0 failed sign-ins for "+alicePrincipal+" here; every region's count starts again" {
 		t.Fatalf("%q %v", text, err)
 	}
@@ -144,7 +144,7 @@ func (p failingPuts) PutUnlock(context.Context, string, time.Time) error { retur
 func TestUnlockOnALostStoreSaysSo(t *testing.T) {
 	f, _ := newSignInFixture(t)
 	f.b.Enrollments = failingPuts{f.b.Enrollments, store.ErrEnrollmentStoreLost}
-	_, err := f.b.UnlockSignIn(context.Background(), alicePrincipal, "admin_socket uid 0")
+	_, err := f.b.UnlockSignIn(context.Background(), alicePrincipal, "offline uid 0")
 	if err == nil || !strings.Contains(err.Error(), "is lost") || !strings.Contains(err.Error(), lostRemedy) ||
 		strings.Contains(err.Error(), "run it again") {
 		t.Fatalf("%v", err)
@@ -163,7 +163,7 @@ func (failingClears) ClearSignInAttempts(context.Context, string) (int, error) {
 func TestUnlockWithAFailedClearRecordsNoCount(t *testing.T) {
 	f, _ := newSignInFixture(t)
 	f.b.Store = failingClears{f.b.Store}
-	text, err := f.b.UnlockSignIn(context.Background(), alicePrincipal, "admin_socket uid 0")
+	text, err := f.b.UnlockSignIn(context.Background(), alicePrincipal, "offline uid 0")
 	if err != nil || !strings.Contains(text, "unknown") || strings.Contains(text, "cleared 0") {
 		t.Fatalf("%q %v", text, err)
 	}

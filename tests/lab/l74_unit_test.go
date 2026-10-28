@@ -21,6 +21,7 @@ import (
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 func TestRegionNetworkCommands(t *testing.T) {
@@ -818,6 +819,34 @@ func TestL74BrokerMetricsAreTheBrokersPort(t *testing.T) {
 	}
 }
 
+// The region broker's config is one the real loader accepts with the on-call's
+// touch roots in it: the x509 anchor moves to broker.identity.humans beside
+// per_login_mfa, and the policy's oncall subject holds the rights the API
+// guards.
+func TestL74BrokerConfigNamesTheTouchRoots(t *testing.T) {
+	t.Setenv("L74_ENC_KEY", labEncKeyDefault)
+	dir := t.TempDir()
+	w := &regionWorld{dir: dir, pki: newRegionPKI(t)}
+	p := filepath.Join(dir, "r1-port49-broker.yaml")
+	if err := os.WriteFile(p, []byte(w.brokerYAML(1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadBroker(p)
+	if err != nil {
+		t.Fatalf("the region broker's config does not load: %v\n%s", err, w.brokerYAML(1))
+	}
+	want := filepath.Join(dir, adminRolesFile)
+	if m := cfg.Broker.Identity.PerLoginMFA; m == nil || m.AttestationRootsFile != want {
+		t.Fatalf("per_login_mfa is %+v, want the roots at %s", m, want)
+	}
+	if cfg.Broker.ClientCAFile != filepath.Join(w.pki.lab, testpki.LabCA) {
+		t.Fatalf("the x509 anchor is %q", cfg.Broker.ClientCAFile)
+	}
+	if !strings.Contains(regionPolicy(), "api: [revoke_others, lift_revocations]") {
+		t.Fatal("the region policy gives the on-call no api rights")
+	}
+}
+
 // A region log goes into the evidence with its token and credential hashes
 // redacted, the array form a mint record writes included.
 func TestL74RegionEvidenceLogRedactsTheHashes(t *testing.T) {
@@ -886,11 +915,11 @@ func TestL79CellKNeedsEveryLandedLine(t *testing.T) {
 		"it: a copy sent while its writer was cut off; it stands everywhere; " + l79Own
 	b1 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
 		"it: a copy sent while its writer was cut off; it stands everywhere"
-	list := "principal user:alice@example.com since T0 (admin_socket uid 0); landed after the lift at T1 (revision 8)"
+	list := "principal user:alice@example.com since T0 (offline uid 0); landed after the lift at T1 (revision 8)"
 	if !l79KAgrees(1, true, cli, b3, b1, list) {
 		t.Fatal("every line said, and the mark back: cell k agrees")
 	}
-	after := "port49-broker: broker: a revocation of user:alice@example.com made at T2 (admin_socket uid 0) after the " +
+	after := "port49-broker: broker: a revocation of user:alice@example.com made at T2 (offline uid 0) after the " +
 		"lift at T1, by a writer whose marks feed had not yet shown the lift; it stands everywhere"
 	for name, c := range map[string][]any{
 		"revoke exited 0":         {0, true, cli, b3, b1, list},
@@ -899,7 +928,7 @@ func TestL79CellKNeedsEveryLandedLine(t *testing.T) {
 		"broker 3 says elsewhere": {1, true, cli, "a revocation of user:alice@example.com made elsewhere reached", b1, list},
 		"region 1 silent":         {1, true, cli, b3, "", list},
 		"region 1 after form":     {1, true, cli, b3, after, list},
-		"list unflagged":          {1, true, cli, b3, b1, "principal user:alice@example.com since T0 (admin_socket uid 0)"},
+		"list unflagged":          {1, true, cli, b3, b1, "principal user:alice@example.com since T0 (offline uid 0)"},
 	} {
 		if l79KAgrees(c[0].(int), c[1].(bool), c[2].(string), c[3].(string), c[4].(string), c[5].(string)) {
 			t.Errorf("%s: cell k agreed", name)
@@ -952,7 +981,7 @@ func TestL79CellKNeedsOneLineNamingAlice(t *testing.T) {
 	cli := "port49 revoke: broker: " + l79Unrecorded + " when the directory answers again"
 	b3 := "port49-broker: broker: a revocation of user:alice@example.com made at T0 before the lift at T1 landed after " +
 		"it: a copy sent while its writer was cut off; it stands everywhere; " + l79Own
-	list := "principal user:alice@example.com since T0 (admin_socket uid 0); landed after the lift at T1 (revision 8)"
+	list := "principal user:alice@example.com since T0 (offline uid 0); landed after the lift at T1 (revision 8)"
 	split := "port49-broker: broker: a revocation of user:bob@example.com made at T0 before the lift at T1 landed\n" +
 		"port49-broker: broker: a revocation of user:alice@example.com made at T2 (x) after the lift at T1: a copy " +
 		"sent " + l79Before

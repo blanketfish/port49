@@ -169,8 +169,8 @@ type Broker struct {
 
 	// OnLift, when set, is told of each mark a lift over the API removed,
 	// after the store committed it and before the lift is answered: the
-	// runner's copy of the marks drops it (port49-broker's Lifted), as it did
-	// for a lift on the admin socket.
+	// runner's copy of the marks drops it (port49-broker's Lifted), and an
+	// offline lift's copy leaves the same way.
 	OnLift func(store.Revocation)
 
 	// MintGate, when set, is asked of the policy a mint would run under,

@@ -1110,21 +1110,6 @@ func TestANoBrokerPinThatIsNoNameIsRefusedUnprinted(t *testing.T) {
 	}
 }
 
-// admin_socket is off unless set (plan 6a owner decision 2), and Load
-// carries the path it names.
-func TestLoadCarriesAdminSocketOffByDefault(t *testing.T) {
-	setKeyEnv(t)
-	invPath := write(t, "inventory.yaml", inv)
-	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
-	if err != nil || c.AdminSocket != "" {
-		t.Fatalf("%q, %v", c.AdminSocket, err)
-	}
-	c, err = Load(write(t, "admin.yaml", "admin_socket: /run/port49/port49d.sock\n"+fmt.Sprintf(sample, invPath)))
-	if err != nil || c.AdminSocket != "/run/port49/port49d.sock" {
-		t.Fatalf("%q, %v", c.AdminSocket, err)
-	}
-}
-
 // session.ceiling_warning defaults to 30m, an explicit 0s turns it off, and
 // above 24h is refused by name (spec §5.6; decision 33).
 func TestCeilingWarning(t *testing.T) {
@@ -1197,10 +1182,6 @@ func TestRevocationsFileReadsThePathAlone(t *testing.T) {
 	if _, err := RevocationsFile([]byte("listen: 127.0.0.1:49\n")); err == nil ||
 		!strings.Contains(err.Error(), "no broker.revocations_file") {
 		t.Fatalf("no broker: %v", err)
-	}
-	if _, err := RevocationsFile([]byte("admin_socket: /var/lib/port49/r.json\nbroker:\n" +
-		"  revocations_file: /var/lib/port49/r.json\n")); err == nil || !strings.Contains(err.Error(), "may not be admin_socket") {
-		t.Fatalf("revocations_file over admin_socket: %v", err)
 	}
 }
 
@@ -1534,7 +1515,7 @@ func TestKeysBesideAPolicyIsRefused(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	raw := strings.Replace(brokerRoleYAML(t), "admin_socket:", "key_refs: [k]\nadmin_socket:", 1)
+	raw := strings.Replace(brokerRoleYAML(t), "inventory_file:", "key_refs: [k]\ninventory_file:", 1)
 	if _, err := loadBrokerRole(t, raw); err == nil ||
 		!strings.Contains(err.Error(), "key_refs was replaced by the policy's keys: block") {
 		t.Errorf("key_refs in port49-broker.yaml: %v", err)
@@ -1565,7 +1546,7 @@ func TestAConfigSecretInsideTheAllowanceIsRefused(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
 		}
 	}
-	raw := strings.Replace(brokerRoleYAML(t), "admin_socket:", "key_secret_refs: {file_dir: /run/k}\nadmin_socket:", 1)
+	raw := strings.Replace(brokerRoleYAML(t), "inventory_file:", "key_secret_refs: {file_dir: /run/k}\ninventory_file:", 1)
 	if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "key_secret_refs") {
 		t.Errorf("key_secret_refs in port49-broker.yaml: %v", err)
 	}

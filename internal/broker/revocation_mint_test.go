@@ -463,8 +463,8 @@ func TestACAMarkIsAnsweredAsTheCAsAndOffersNoLift(t *testing.T) {
 	}{
 		{store.RevocationCert, "crl corp", "this certificate was revoked at its CA (crl corp) and marked at 2026-10-01T00:00:00Z; nothing is minted for it; request a new certificate", false},
 		{store.RevocationCert, "ocsp http://ocsp.example.com", "this certificate was revoked at its CA (ocsp http://ocsp.example.com) and marked at 2026-10-01T00:00:00Z; nothing is minted for it; request a new certificate", false},
-		{store.RevocationCert, "admin_socket uid 0", "this certificate was revoked at 2026-10-01T00:00:00Z", true},
-		{store.RevocationPrincipal, "admin_socket uid 0", "this principal was revoked at 2026-10-01T00:00:00Z", true},
+		{store.RevocationCert, "offline uid 0", "this certificate was revoked at 2026-10-01T00:00:00Z", true},
+		{store.RevocationPrincipal, "offline uid 0", "this principal was revoked at 2026-10-01T00:00:00Z", true},
 	} {
 		e := revokedError(store.Revocation{Kind: tc.kind, Origin: tc.origin, At: at})
 		if e.Error != string(decision.CredentialRevoked) || !strings.Contains(e.Detail, tc.want) ||

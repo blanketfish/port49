@@ -12,13 +12,12 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // copyDaemon writes another port49d's config: f.daemon's, with its own
-// admin socket, accounting spool and metrics address.
+// accounting spool and metrics address.
 func (f *fleet) copyDaemon(t *testing.T) string {
 	t.Helper()
 	return copyDaemon(t, f.daemon)
@@ -76,12 +75,6 @@ func mintStatus(t *testing.T, api, pki, device string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
-// askAdminAt asks the admin socket at p req.
-func askAdminAt(t *testing.T, p string, req admin.Request) admin.Response {
-	t.Helper()
-	return askSocket(t, p, req)
-}
-
 // A login on one port49d is answered on another at its next command, as
 // a device that opens a connection per transaction sends it to whichever
 // server answers (Review Focus 1).
@@ -115,13 +108,13 @@ func TestARevocationOnOneBrokerReachesTheOther(t *testing.T) {
 	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	apiA, _ := startBroker(t, f.broker, &out, 1)
-	cfgB := f.copyBroker(t) // its own API address and admin socket
+	cfgB := f.copyBroker(t) // its own API address
 	startBroker(t, cfgB, &out, 2)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	loginSession(t, dev, mintOn(t, apiA, f.pki, "leaf1"), &log)
 	principal := lastCommandPrincipal(t, &log)
 	held := heldBrokerConn(t, f.pki, apiA) // alice's connection to A, one request answered, kept open
-	resp := askAdminAt(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: principal})
+	resp := revokeAt(t, cfgB, revokeReq{Principal: principal})
 	if resp.Error != "" {
 		t.Fatalf("the revocation on B: %+v", resp)
 	}

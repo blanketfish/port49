@@ -36,7 +36,7 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 	}
 	d := files["port49d.yaml"]
 	for _, want := range []string{`listen: ":49"`, "/etc/port49/policy.yaml", "/etc/port49/inventory.yaml",
-		"https://etcd-1:2379", "/etc/port49/etcd/port49d-key.pem", "/run/port49/port49d.sock"} {
+		"https://etcd-1:2379", "/etc/port49/etcd/port49d-key.pem"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("port49d.yaml lacks %q:\n%s", want, d)
 		}

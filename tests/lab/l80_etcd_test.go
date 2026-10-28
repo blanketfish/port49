@@ -50,12 +50,11 @@ func l80EtcdUp(t *testing.T, l *lab, q *qualEnv, e *l73Env) *l80EtcdStack {
 	if err := os.MkdirAll(state, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	socks := t.TempDir() // a short path, in a directory only this user can write
 	daemonStore := fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://%s]\n      ca_file: %s\n"+
 		"      daemon: {cert_file: %s, key_file: %s}\n      hold_ttl: 20s\n", re.client, re.ca, re.daemC, re.daemK)
 	brokerStore := fmt.Sprintf("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://%s]\n      ca_file: %s\n"+
 		"      broker: {cert_file: %s, key_file: %s}\n      hold_ttl: 20s\n", re.client, re.ca, re.brokC, re.brokK)
-	text, policy, err := l80EtcdDaemonYAML(q.cfgText, filepath.Join(socks, "d.sock"), daemonStore)
+	text, policy, err := l80EtcdDaemonYAML(q.cfgText, daemonStore)
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
@@ -69,7 +68,7 @@ func l80EtcdUp(t *testing.T, l *lab, q *qualEnv, e *l73Env) *l80EtcdStack {
 		t.Fatal(err)
 	}
 	broker, err := splitBrokerYAML(string(labRaw), string(sliceBroker), splitBrokerOpts{Policy: policy, Inventory: e.invTLS,
-		State: state, Metrics: splitMetricsBroker, Admin: filepath.Join(socks, "b.sock"), Store: brokerStore,
+		State: state, Metrics: splitMetricsBroker, Store: brokerStore,
 		PKI: filepath.Join(root, slicePKIDir)})
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)

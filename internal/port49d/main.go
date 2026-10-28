@@ -45,7 +45,6 @@ import (
 	"github.com/rhwendt/port49/internal/certstatus"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/daemon/limits"
@@ -75,6 +74,12 @@ func Main(args []string) int {
 	if len(args) > 0 && args[0] == "init-revocations" {
 		return initRevocationsCmd(args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && args[0] == "revoke" {
+		return offlineRevokeDaemon(args[1:], os.Stdout, os.Stderr)
+	}
+	if len(args) > 0 && (args[0] == "init-enrollments" || args[0] == "export-enrollments") {
+		return enrollmentsCmd("port49d", args[0], args[1:], os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && args[0] == "store-roles" {
 		return storeRolesCmd(args[1:], os.Stdout, os.Stderr)
 	}
@@ -94,7 +99,8 @@ func Main(args []string) int {
 	// otherwise start the daemon (pre-flight M20).
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], "+
-			"port49d init-revocations|init-issuer|rotate-issuer [--config FILE], or port49d store-roles [--config FILE] (a subcommand comes first)")
+			"port49d init-revocations|init-issuer|rotate-issuer|init-enrollments|export-enrollments [--config FILE], "+
+			"port49d revoke --offline …, or port49d store-roles [--config FILE] (a subcommand comes first)")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -880,12 +886,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// rd is /readyz: 200 while the TACACS+ listener serves, and 503 with
 	// why before it opens and from the start of shutdown.
 	rd := newReadiness()
+	// status is GET /store/status, given the stores once they are open.
+	status := &statusHandler{}
 	metricsErr := make(chan error, 1)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 		mux.Handle("/readyz", rd)
+		mux.Handle("GET /store/status", status)
 		metricsErr <- http.Serve(mln, mux)
 	}()
 	fmt.Fprintf(stderr, "port49d: metrics on %s\n", mln.Addr())
@@ -988,6 +997,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		return err
 	}
+	status.set(newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh))
 	defer sts.close()
 	if sts.health != nil {
 		sts.health.state = hs
@@ -1409,47 +1419,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		brk.Wire(bl)
 		brk.Conns = bl
 	}
-	// The admin socket binds before anything says "listening", as the broker
-	// does, and a failure lets go of every listener already bound (pre-flight
-	// M6). Only with it configured is any packet held: off, nothing is.
-	if cfg.AdminSocket != "" {
-		held := &keyring.Held{}
-		deps.Held = held
-		aln, err := admin.Listen(cfg.AdminSocket)
-		if err != nil {
-			if bln != nil {
-				bln.Close()
-			}
-			closeListeners()
-			mln.Close()
-			stopSpool()
-			<-spoolDone
-			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
-		}
-		srv := &admin.Server{Held: held, Keys: allKeys, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
-			StoreStatus: newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh).answer}
-		if brk != nil {
-			// The socket's deadline covers the wait and the run; one bound
-			// for both, so they cannot drift apart.
-			brk.RevokeTimeout = admin.OpTimeout
-			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk, nil), adminRevocations(brk.Store), adminForget(brk)
-			serveSignInOps(srv, brk)
-		} else if sts.persistent {
-			// Beside port49-broker on etcd (plan 7e, Ruling 13).
-			srv.RevokeElsewhere = "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"
-		}
-		go srv.Serve(ctx, aln)
-		ops := "port49 keys diagnose, port49 revoke"
-		if brk != nil && brk.PasswordSignIn != nil {
-			ops += ", port49 directory reset-second-factor, unlock, init-enrollments, export, import"
-		}
-		fmt.Fprintf(stderr, "port49d: admin socket on %s (%s)\n", cfg.AdminSocket, ops)
-	}
-	if brk != nil && cfg.AdminSocket == "" {
-		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+
-			"under api: revoke_others) is made, but none can be lifted, nor a certificate revoked, short of stopping "+
-			"port49d and editing broker.revocations_file; set admin_socket. To cut someone off meanwhile, remove "+
-			"their grants from broker.policy_file")
+	if brk != nil {
+		brk.RevokeTimeout = revokeRunTimeout
 	}
 
 	// The bound address, not the configured one: `:49` says nothing about

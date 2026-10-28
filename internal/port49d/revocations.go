@@ -17,9 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/fence"
@@ -405,12 +404,16 @@ func withHeld(rs, held []store.Revocation, enforced *store.Marks) []store.Revoca
 	return out
 }
 
+// revokeRunTimeout is the bound every process that runs a broker sets as
+// Broker.RevokeTimeout.
+const revokeRunTimeout = api.OpTimeout
+
 // writeRevocations is persister's write, swapped in tests; persistDeadline
 // bounds one call of it. persistHook is called at the named points where a
 // call gives up, so a test can hold it there; it does nothing in port49d.
 var (
 	writeRevocations = saveRevocations
-	persistDeadline  = admin.PersistTimeout // the admin socket holds a revoke open for it
+	persistDeadline  = api.PersistTimeout // a revoke over the API waits on it
 	persistHook      = func(point string) {}
 )
 
@@ -525,92 +528,6 @@ func persister(st store.Store, path string, held []store.Revocation, enforced *s
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		return nil
-	}
-}
-
-// adminForget is the admin socket's directory_forget (plan 7g, Ruling 3's
-// escape), its origin the caller's uid as a revocation's is.
-func adminForget(brk *broker.Broker) func(context.Context, string, uint32) (string, error) {
-	return func(ctx context.Context, principal string, uid uint32) (string, error) {
-		return brk.Forget(ctx, principal, fmt.Sprintf("admin_socket uid %d", uid))
-	}
-}
-
-// adminSecondFactorReset is the admin socket's second_factor_reset (plan 9e),
-// its origin the caller's uid.
-func adminSecondFactorReset(brk *broker.Broker) func(context.Context, string, bool, uint32) (string, error) {
-	return func(ctx context.Context, principal string, all bool, uid uint32) (string, error) {
-		return brk.ResetSecondFactor(ctx, principal, all, fmt.Sprintf("admin_socket uid %d", uid))
-	}
-}
-
-// adminSignInUnlock is the admin socket's sign_in_unlock.
-func adminSignInUnlock(brk *broker.Broker) func(context.Context, string, uint32) (string, error) {
-	return func(ctx context.Context, principal string, uid uint32) (string, error) {
-		return brk.UnlockSignIn(ctx, principal, fmt.Sprintf("admin_socket uid %d", uid))
-	}
-}
-
-// adminEnrollmentsInit is the admin socket's enrollments_init.
-func adminEnrollmentsInit(brk *broker.Broker) func(context.Context, uint32) (string, error) {
-	return func(ctx context.Context, uid uint32) (string, error) {
-		return brk.InitEnrollments(ctx, fmt.Sprintf("admin_socket uid %d", uid))
-	}
-}
-
-// adminEnrollmentsExport is the admin socket's enrollments_export.
-func adminEnrollmentsExport(brk *broker.Broker) func(context.Context, uint32) ([]byte, error) {
-	return func(ctx context.Context, _ uint32) ([]byte, error) { return brk.ExportEnrollments(ctx) }
-}
-
-// adminEnrollmentsImport is the admin socket's enrollments_import.
-func adminEnrollmentsImport(brk *broker.Broker) func(context.Context, []byte, bool, uint32) (string, error) {
-	return func(ctx context.Context, sealed []byte, replace bool, uid uint32) (string, error) {
-		return brk.ImportEnrollments(ctx, sealed, replace, fmt.Sprintf("admin_socket uid %d", uid))
-	}
-}
-
-// serveSignInOps gives srv the sign-in ops when brk runs a directory_password
-// verifier; without one they stay nil, and the socket says where they run.
-func serveSignInOps(srv *admin.Server, brk *broker.Broker) {
-	if brk == nil || brk.PasswordSignIn == nil {
-		return
-	}
-	srv.SecondFactorReset, srv.SignInUnlock = adminSecondFactorReset(brk), adminSignInUnlock(brk)
-	srv.EnrollmentsInit, srv.EnrollmentsExport = adminEnrollmentsInit(brk), adminEnrollmentsExport(brk)
-	srv.EnrollmentsImport = adminEnrollmentsImport(brk)
-}
-
-// adminRevoke is the admin socket's revoke op over brk (plan 7a). The
-// record's origin is the uid the socket read off the caller.
-func adminRevoke(brk *broker.Broker, mc *marksCopy) func(context.Context, admin.RevokeOp) (string, bool, error) {
-	return func(ctx context.Context, op admin.RevokeOp) (string, bool, error) {
-		req := broker.RevokeRequest{Principal: op.Principal, Issuer: op.Issuer, Serial: op.Serial,
-			Origin: fmt.Sprintf("admin_socket uid %d", op.UID)}
-		if op.Lift {
-			rep, err := brk.Lift(ctx, req)
-			if err != nil {
-				return "", false, err
-			}
-			mc.Lifted(rep.Mark)
-			return rep.LiftedText(), rep.Partial(), nil
-		}
-		rep, err := brk.Revoke(ctx, req)
-		if err != nil {
-			return "", false, err
-		}
-		return rep.Text(), rep.Partial(), nil
-	}
-}
-
-// adminRevocations is the admin socket's revocations op.
-func adminRevocations(st store.Store) func(context.Context) (string, error) {
-	return func(ctx context.Context) (string, error) {
-		rs, err := st.ListRevocations(ctx)
-		if err != nil {
-			return "", fmt.Errorf("broker: the revocations in force could not be read (%w)", err)
-		}
-		return broker.RevocationsText(rs, func(kind, key string) (store.Lift, error) { return st.GetLift(ctx, kind, key) }), nil
 	}
 }
 

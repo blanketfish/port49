@@ -211,7 +211,7 @@ func TestAMarkRefusesTheOIDCPath(t *testing.T) {
 	f := newFixture(t, 8)
 	iss := f.withOIDC(t)
 	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
-		Key: alicePrincipal, At: f.b.Now(), Origin: "admin_socket uid 0"}); err != nil {
+		Key: alicePrincipal, At: f.b.Now(), Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))

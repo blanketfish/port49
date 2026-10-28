@@ -44,8 +44,8 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 	at := time.Date(2026, 10, 2, 3, 12, 9, 0, time.UTC)
 	before := memory.New(time.Now)
 	for _, r := range []store.Revocation{
-		{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"},
-		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at, Origin: "admin_socket uid 0"},
+		{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "offline uid 0"},
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at, Origin: "offline uid 0"},
 	} {
 		if err := before.PutRevocation(ctx, r); err != nil {
 			t.Fatal(err)
@@ -63,7 +63,7 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 		t.Fatalf("%d %v", len(rs), err)
 	}
 	got, err := after.GetRevocation(ctx, store.RevocationPrincipal, "user:alice@example.com")
-	if err != nil || !got.At.Equal(at) || got.Origin != "admin_socket uid 0" {
+	if err != nil || !got.At.Equal(at) || got.Origin != "offline uid 0" {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
@@ -81,10 +81,10 @@ func TestAPersistBeforeTheReloadKeepsAMarkARestoreLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 10, 3, 3, 0, 0, 0, time.UTC)
-	lost := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"}
-	lifted := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: at, Origin: "admin_socket uid 0"}
+	lost := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "offline uid 0"}
+	lifted := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: at, Origin: "offline uid 0"}
 	kept := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at,
-		Origin: "admin_socket uid 0"}
+		Origin: "offline uid 0"}
 	held := []store.Revocation{kept, lost, lifted}
 	if err := saveRevocations(path, held); err != nil {
 		t.Fatal(err)
@@ -155,8 +155,8 @@ func TestAPersistKeepsAMarkMadeSinceTheStartThatARestoreLost(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 10, 3, 3, 0, 0, 0, time.UTC)
-	a := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"}
-	z := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:zed@example.com", At: at, Origin: "admin_socket uid 0"}
+	a := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "offline uid 0"}
+	z := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:zed@example.com", At: at, Origin: "offline uid 0"}
 	st := memory.New(time.Now)
 	enforced := store.NewMarks()
 	for _, r := range []store.Revocation{a, z} {

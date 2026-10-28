@@ -7,7 +7,7 @@ import (
 
 // reserveFDs are the descriptors the global cap leaves for everything but
 // TACACS+ connections when it is sized from the limit: the spool, the store's
-// connections, the decision log, the admin socket and metrics, the policy and
+// connections, the decision log, the metrics listener, the policy and
 // inventory reads. minReserveFDs is the least an explicit cap may leave.
 const (
 	reserveFDs    = 1024

@@ -190,21 +190,21 @@ func TestTheWritersOwnLateMarkIsSaidAsItsOwnWhenAlreadyHeld(t *testing.T) {
 	said := &saidLines{}
 	f.b.Say = said.say
 	f.b.Marks = store.NewMarks()
-	first := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now.Add(-time.Hour), Origin: "admin_socket uid 0"}
+	first := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now.Add(-time.Hour), Origin: "offline uid 0"}
 	f.b.Marks.Set(first, true)
 	cs := &cutStore{Store: f.st, cut: true}
 	f.b.Store = cs
 	feed := &scriptFeed{marks: []store.Revocation{first}, events: make(chan scriptEvent)}
 	follow(t, f.b, feed)
-	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice, Origin: "admin_socket uid 0"}); err == nil {
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice, Origin: "offline uid 0"}); err == nil {
 		t.Fatal("the cut revoke succeeded")
 	}
 	liftAt := f.now.Add(time.Second)
 	cs.mu.Lock()
-	cs.lift = &store.Lift{At: liftAt, Origin: "admin_socket uid 1000", Revision: 8}
+	cs.lift = &store.Lift{At: liftAt, Origin: "offline uid 1000", Revision: 8}
 	cs.mu.Unlock()
 	late := roundTrip(t, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now,
-		Origin: "admin_socket uid 0", LandedAfterLift: true})
+		Origin: "offline uid 0", LandedAfterLift: true})
 	feed.events <- scriptEvent{r: store.Revocation{Kind: late.Kind, Key: late.Key}, lifted: true, rev: 8}
 	feed.events <- scriptEvent{r: late, rev: 9}
 	all := waitSaid(t, said, "landed after it")
@@ -217,7 +217,7 @@ func TestTheWritersOwnLateMarkIsSaidAsItsOwnWhenAlreadyHeld(t *testing.T) {
 	// Another process's mark of the same key, at its own time, after
 	// another lift: not this broker's.
 	other := roundTrip(t, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now.Add(2 * time.Second),
-		Origin: "admin_socket uid 0", LandedAfterLift: true})
+		Origin: "offline uid 0", LandedAfterLift: true})
 	feed.events <- scriptEvent{r: store.Revocation{Kind: late.Kind, Key: late.Key}, lifted: true, rev: 10}
 	feed.events <- scriptEvent{r: other, rev: 11}
 	all = waitSaid(t, said, "check with whoever revoked before lifting")
@@ -239,11 +239,11 @@ func TestTheWritersOwnLateMarkIsSaidAsItsOwnAfterALift(t *testing.T) {
 	f.b.Store = cs
 	feed := &scriptFeed{events: make(chan scriptEvent)}
 	follow(t, f.b, feed)
-	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice, Origin: "admin_socket uid 0"}); err == nil {
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice, Origin: "offline uid 0"}); err == nil {
 		t.Fatal("the cut revoke succeeded")
 	}
 	feed.events <- scriptEvent{r: store.Revocation{Kind: store.RevocationPrincipal, Key: alice}, lifted: true, rev: 8}
-	late := roundTrip(t, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now, Origin: "admin_socket uid 0"})
+	late := roundTrip(t, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now, Origin: "offline uid 0"})
 	feed.events <- scriptEvent{r: late, rev: 9}
 	all := waitSaid(t, said, "made on this port49-broker, reported unrecorded then")
 	if strings.Contains(all, "made elsewhere") || strings.Contains(all, "landed after") {
@@ -258,7 +258,7 @@ func TestTheWritersOwnLateMarkIsSaidAsItsOwnAfterALift(t *testing.T) {
 func TestAFlaggedMarkIsSaidInTheFormItsTimesCall(t *testing.T) {
 	liftAt := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
 	before := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: liftAt.Add(-20 * time.Second),
-		Origin: "admin_socket uid 0", LandedAfterLift: true}
+		Origin: "offline uid 0", LandedAfterLift: true}
 	after := before
 	after.At, after.Origin = liftAt.Add(2*time.Second), "api user:carol@example.com"
 	for _, c := range []struct {
@@ -328,7 +328,7 @@ func TestARevokeOverAnEarlierFlaggedMarkClaimsNoLanding(t *testing.T) {
 	f := newFixture(t, 8)
 	f.b.Marks = store.NewMarks()
 	earlier := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.b.Now().Add(-time.Hour).Round(0),
-		Origin: "admin_socket uid 0", LandedAfterLift: true}
+		Origin: "offline uid 0", LandedAfterLift: true}
 	if err := f.st.PutRevocation(context.Background(), earlier); err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func (refusingPuts) PutRevocation(context.Context, store.Revocation) error {
 func TestAPutBackOverALiftIsSaidAsAPutBack(t *testing.T) {
 	liftAt := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
 	before := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: liftAt.Add(-20 * time.Second),
-		Origin: store.PutBackOrigin("admin_socket uid 0"), LandedAfterLift: true}
+		Origin: store.PutBackOrigin("offline uid 0"), LandedAfterLift: true}
 	after := before
 	after.At, after.Origin = liftAt.Add(2*time.Second), store.PutBackOrigin("") // the copy keeps no origin
 	for _, c := range []struct {
@@ -478,7 +478,7 @@ func TestPutBackOriginKeepsTheOriginAndSaysItOnce(t *testing.T) {
 	if orig, ok := store.PutBackOf(once); !ok || orig != "crl corp-ca" {
 		t.Fatalf("%q %v", orig, ok)
 	}
-	if _, ok := store.PutBackOf("admin_socket uid 0"); ok {
+	if _, ok := store.PutBackOf("offline uid 0"); ok {
 		t.Fatal("a revoke's own origin read as a put-back")
 	}
 }
@@ -553,10 +553,10 @@ func (liftUnreadable) GetLift(context.Context, string, string) (store.Lift, erro
 func TestRevocationsTextNamesAFlaggedMarksLift(t *testing.T) {
 	at := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
 	rs := []store.Revocation{
-		{Kind: store.RevocationPrincipal, Key: alice, At: at, Origin: "admin_socket uid 0", LandedAfterLift: true},
-		{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: at, Origin: "admin_socket uid 0",
+		{Kind: store.RevocationPrincipal, Key: alice, At: at, Origin: "offline uid 0", LandedAfterLift: true},
+		{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: at, Origin: "offline uid 0",
 			LandedAfterLift: true},
-		{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: at, Origin: "admin_socket uid 0"},
+		{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: at, Origin: "offline uid 0"},
 	}
 	text := RevocationsText(rs, func(kind, key string) (store.Lift, error) {
 		switch key {
@@ -567,11 +567,11 @@ func TestRevocationsTextNamesAFlaggedMarksLift(t *testing.T) {
 		}
 		return store.Lift{}, store.ErrNotFound
 	})
-	want := "principal user:alice@example.com since 2026-10-21T03:00:00Z (admin_socket uid 0); landed after the lift " +
+	want := "principal user:alice@example.com since 2026-10-21T03:00:00Z (offline uid 0); landed after the lift " +
 		"at 2026-10-21T02:59:00Z (revision 42)" +
-		"\nprincipal user:bob@example.com since 2026-10-21T03:00:00Z (admin_socket uid 0); landed after a lift; " +
+		"\nprincipal user:bob@example.com since 2026-10-21T03:00:00Z (offline uid 0); landed after a lift; " +
 		"the lift's record has expired" +
-		"\nprincipal user:carol@example.com since 2026-10-21T03:00:00Z (admin_socket uid 0)"
+		"\nprincipal user:carol@example.com since 2026-10-21T03:00:00Z (offline uid 0)"
 	if text != want {
 		t.Fatalf("got\n%s\nwant\n%s", text, want)
 	}

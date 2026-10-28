@@ -18,9 +18,9 @@ roles:
 subjects:
   - {name: slice_operator, identity: ["user:alice@slice.port49.test"], username: slice01,
      enable: token, token_ttl: 60s}
-  # The on-call: no grant on any device, and the right to revoke others (spec §2).
+  # The on-call: no grant on any device, and the rights to revoke others and to lift (spec §2).
   - {name: slice_oncall, identity: ["user:bob@slice.port49.test"], username: slice02, token_ttl: 60s,
-     api: [revoke_others]}
+     api: [revoke_others, lift_revocations]}
   # A peer: no grant and no right. What it asks of anyone else is refused.
   - {name: slice_peer, identity: ["user:carol@slice.port49.test"], username: slice03, token_ttl: 60s}
 grants:

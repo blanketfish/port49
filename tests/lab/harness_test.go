@@ -2373,11 +2373,11 @@ type splitCfg struct {
 type splitStore struct{ Daemon, Broker string }
 
 // splitNode is what differs between two port49d replicas' configs.
-type splitNode struct{ Listen, Metrics, Admin, Spool string }
+type splitNode struct{ Listen, Metrics, Spool string }
 
 // splitBrokerOpts is what port49-broker.yaml names beyond port49d-lab.yaml's.
 type splitBrokerOpts struct {
-	Policy, Inventory, State, Metrics, Admin, Store, PKI string
+	Policy, Inventory, State, Metrics, Store, PKI string
 }
 
 // swapLine replaces the exact text old in s by new, or says it is not there:
@@ -2390,7 +2390,7 @@ func swapLine(s, old, new string) (string, error) {
 }
 
 // splitDaemonYAML derives one port49d replica's config from port49d-lab.yaml's
-// text (base): its own listener, metrics address, admin socket and spool; no
+// text (base): its own listener, metrics address and spool; no
 // seeds; the policy it admits from under policy:; the inventory behind the
 // fence; and the daemon's stores: block, which carries no broker: block.
 func splitDaemonYAML(base string, n splitNode, policy, inventory, store string) (string, error) {
@@ -2414,7 +2414,7 @@ func splitDaemonYAML(base string, n splitNode, policy, inventory, store string) 
 			return "", err
 		}
 	}
-	return out + "\npolicy:\n  file: " + policy + "\n  watch_interval: 1s\n" + store + "admin_socket: " + n.Admin + "\n", nil
+	return out + "\npolicy:\n  file: " + policy + "\n  watch_interval: 1s\n" + store, nil
 }
 
 // splitBrokerYAML writes port49-broker.yaml: slice/broker.yaml's block with
@@ -2443,7 +2443,7 @@ func splitBrokerYAML(base, sliceBroker string, o splitBrokerOpts) (string, error
 		}
 	}
 	return "metrics_listen: \"" + o.Metrics + "\"\ninventory_file: " + o.Inventory + "\n" +
-		"encryption:\n  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}\nadmin_socket: " + o.Admin + "\n" +
+		"encryption:\n  current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}\n" +
 		strings.Join(block, "\n") + "\n  state_dir: " + o.State + "\n  policy_watch_interval: 1s\n" +
 		o.Store + "lab:\n" + base[cut:], nil
 }
@@ -2689,16 +2689,35 @@ type split struct {
 	// KeysAtStart is what the keyspace held before any process started.
 	KeysAtStart int64
 
-	Policy                      string // the one policy file all three processes read, a private copy
-	CfgA, CfgB, CfgBroker       string
-	AdminA, AdminB, AdminBroker string
-	B, Broker                   *proc
+	Policy                string // the one policy file all three processes read, a private copy
+	CfgA, CfgB, CfgBroker string
+	B, Broker             *proc
+
+	// piv is the hierarchy the broker's attestation roots came from, and
+	// admin the on-call's agent (revoke starts it on first use).
+	piv   *testpki.PIV
+	roots string
+	admin *labAdmin
 
 	addrAdded, serverPushed bool
 
 	// Readback is the device's TACACS+ servers as it showed them after the
 	// second server was pushed: the first row of an L37, L38 or L36 note.
 	Readback string
+}
+
+// revoke is `port49 revoke args…` as the split's on-call, bob: through the
+// broker's API with a software key's press. His agent is started on the first
+// call, so the broker is up by then.
+func (s *split) revoke(t *testing.T, args ...string) (string, bool) {
+	t.Helper()
+	if s.admin == nil {
+		pki := filepath.Join(root, slicePKIDir)
+		cert, key := testpki.LabClientFiles(oncallEmail)
+		s.admin = startLabAdmin(t, s.piv, sliceBrokerURL, filepath.Join(pki, testpki.LabCA), filepath.Join(pki, cert),
+			filepath.Join(pki, key))
+	}
+	return s.admin.cli(args...)
 }
 
 // startSplit prepares the split and starts it, in the order a deployment
@@ -2719,7 +2738,7 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 	t.Helper()
 	s := &split{l: l, cfg: cfg}
 	pki := filepath.Join(root, slicePKIDir)
-	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+	if err := testpki.WriteLabWith(pki, sliceEmail, []string{oncallEmail}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	var daemonStore, brokerStore string
@@ -2757,11 +2776,11 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 		}
 		return dst
 	}
-	s.Policy = copyPrivate("tests/lab/slice/policy.yaml", "policy.yaml")
+	// The slice policy with an on-call, who revokes and lifts through the broker
+	// API with a software key (admin_api_test.go).
+	s.Policy = copyPrivate("tests/lab/slice/api-policy.yaml", "policy.yaml")
+	s.piv, s.roots = adminTouchRoots(t, dir)
 	inventory := copyPrivate("tests/lab/inventory-lab.yaml", "inventory.yaml")
-	socks := t.TempDir() // admin sockets: a path short enough, in a directory only this user can write
-	s.AdminA, s.AdminB, s.AdminBroker = filepath.Join(socks, "a.sock"), filepath.Join(socks, "b.sock"),
-		filepath.Join(socks, "broker.sock")
 
 	// The standing config with this platform's session attributes, which the
 	// split's configs derive from.
@@ -2780,7 +2799,7 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 		}
 		return p
 	}
-	a, err := splitDaemonYAML(string(base), splitNode{Listen: tacacsAddr, Metrics: metricsAddr, Admin: s.AdminA,
+	a, err := splitDaemonYAML(string(base), splitNode{Listen: tacacsAddr, Metrics: metricsAddr,
 		Spool: spoolPath}, s.Policy, inventory, daemonStore)
 	if err != nil {
 		t.Fatal(err)
@@ -2788,7 +2807,7 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 	s.CfgA = write("port49d-a.yaml", a)
 	if cfg.SecondServer {
 		b, err := splitDaemonYAML(string(base), splitNode{Listen: splitSecondAddr + ":49", Metrics: splitMetricsB,
-			Admin: s.AdminB, Spool: "/tmp/port49-lab-acct-b.jsonl"}, s.Policy, inventory, daemonStore)
+			Spool: "/tmp/port49-lab-acct-b.jsonl"}, s.Policy, inventory, daemonStore)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2805,8 +2824,11 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 		t.Fatal(err)
 	}
 	br, err := splitBrokerYAML(string(labRaw), string(sliceBroker), splitBrokerOpts{Policy: s.Policy,
-		Inventory: inventory, State: state, Metrics: splitMetricsBroker, Admin: s.AdminBroker, Store: brokerStore})
+		Inventory: inventory, State: state, Metrics: splitMetricsBroker, Store: brokerStore})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if br, err = withAdminTouch(br, s.roots); err != nil {
 		t.Fatal(err)
 	}
 	s.CfgBroker = write("port49-broker.yaml", br)

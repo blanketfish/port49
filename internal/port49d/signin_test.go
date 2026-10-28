@@ -26,7 +26,6 @@ import (
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
@@ -156,14 +155,8 @@ func TestPort49dWiresThePasswordSignIn(t *testing.T) {
 		}
 	}
 
-	// The operator's init, through the admin socket's adapter.
-	srv := &admin.Server{}
-	serveSignInOps(srv, b)
-	if srv.EnrollmentsInit == nil || srv.SecondFactorReset == nil || srv.SignInUnlock == nil ||
-		srv.EnrollmentsExport == nil || srv.EnrollmentsImport == nil {
-		t.Fatal("the sign-in ops are not wired")
-	}
-	if text, err := srv.EnrollmentsInit(ctx, 1000); err != nil || text == "" {
+	// The operator's init, as the local subcommand runs it (enrollmentsCmd).
+	if text, err := b.InitEnrollments(ctx, "offline uid 1000"); err != nil || text == "" {
 		t.Fatalf("init: %q %v", text, err)
 	}
 	if v := testutil.ToFloat64(m.DirectoryEnrollmentStoreOK); v != 1 {
@@ -175,7 +168,7 @@ func TestPort49dWiresThePasswordSignIn(t *testing.T) {
 }
 
 // A broker with no directory_password verifier gets none of it, and the
-// admin socket leaves the sign-in ops to say where they run.
+// sign-in ops say where they run.
 func TestNoPasswordSignInWiresNothing(t *testing.T) {
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	cfg.Broker.Identity.PasswordSignIn = nil
@@ -186,11 +179,9 @@ func TestNoPasswordSignInWiresNothing(t *testing.T) {
 	if b.PasswordSignIn != nil || b.Enrollments != nil || out.String() != "" {
 		t.Fatalf("wired: %v %v %q", b.PasswordSignIn, b.Enrollments, out.String())
 	}
-	srv := &admin.Server{}
-	serveSignInOps(srv, b)
-	serveSignInOps(srv, nil)
-	if srv.EnrollmentsInit != nil || srv.SecondFactorReset != nil {
-		t.Fatal("the ops are wired with no verifier")
+	if _, err := b.InitEnrollments(context.Background(), "offline uid 1000"); err == nil ||
+		!strings.Contains(err.Error(), "no directory_password verifier") {
+		t.Fatalf("an op with no verifier: %v", err)
 	}
 }
 

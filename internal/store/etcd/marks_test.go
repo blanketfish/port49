@@ -55,7 +55,7 @@ func TestALiftsRecordIsBesideTheMarksOnALease(t *testing.T) {
 	if err := s.PutRevocation(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{At: t0, Origin: "admin_socket uid 0"}); err != nil {
+	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{At: t0, Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	key := s.k.lift(r.Kind, r.Key)
@@ -154,7 +154,7 @@ func TestALiftAnsweredByItsOwnCopyIsStillOwn(t *testing.T) {
 	if err := b.PutRevocation(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	by := store.Lift{At: t0.Add(time.Second), Origin: "admin_socket uid 0"}
+	by := store.Lift{At: t0.Add(time.Second), Origin: "offline uid 0"}
 	// Between a's read and its transaction, the same lift commits (b stands
 	// in for a's first copy, whose reply was lost): a's transaction finds
 	// the mark gone and by's own record.

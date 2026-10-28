@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
@@ -13,6 +15,54 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 )
+
+// statusOpTimeout bounds a store status: its reads run at once, each store's
+// Ping beside its member count, which is a member list and then a status
+// read, so it takes about two call_timeouts, and call_timeout is at most
+// config.MaxCallTimeout.
+const statusOpTimeout = 2 * config.MaxCallTimeout
+
+// statusHandler is GET /store/status on the metrics listener (spec §12): the
+// lines port49 store status prints, as plain text. The listener has no
+// authentication, so the body is store health from a fixed allowlist (roleStatus.line)
+// and never a member URL, an error's text, a principal or a key. One runs at a
+// time; a second is answered 429. A store that does not answer is a 503 with
+// the same lines, and a process whose stores are not open yet is a 503 too.
+type statusHandler struct {
+	cur  atomic.Pointer[storeStatus]
+	busy atomic.Bool
+}
+
+// set gives the handler the stores it reports on, once they are open.
+func (h *statusHandler) set(s *storeStatus) { h.cur.Store(s) }
+
+func (h *statusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	s := h.cur.Load()
+	if s == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintln(w, "stores    not opened yet")
+		return
+	}
+	if !h.busy.CompareAndSwap(false, true) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprintln(w, "a store status is already running; ask again when it has answered")
+		return
+	}
+	defer h.busy.Store(false)
+	ctx, cancel := context.WithTimeout(r.Context(), statusOpTimeout)
+	defer cancel()
+	text, degraded, err := s.answer(ctx)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintln(w, "the store status could not be read")
+		return
+	}
+	if degraded {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	fmt.Fprintln(w, text)
+}
 
 // roleStatus is one store's line of port49 store status (plan 11a, R21).
 type roleStatus struct {
@@ -133,7 +183,7 @@ func (s *storeStatus) answer(ctx context.Context) (string, bool, error) {
 func (s *storeStatus) read(ctx context.Context, role string, h *etcdstore.Store, timeout time.Duration) roleStatus {
 	r := roleStatus{role: role, backend: config.BackendEtcd}
 	if h == nil {
-		r.membersErr, r.why = true, errNoDirectory.Error()
+		r.membersErr, r.why = true, outageCause(errNoDirectory)
 		return r
 	}
 	// The ping and the member count at once: the count is a member list and
@@ -164,7 +214,7 @@ func (s *storeStatus) read(ctx context.Context, role string, h *etcdstore.Store,
 	case perr != nil:
 		r.why = outageCause(perr)
 	case merr != nil:
-		r.why = "the member list: " + outageCause(merr)
+		r.why = outageCause(merr)
 	}
 	return r
 }

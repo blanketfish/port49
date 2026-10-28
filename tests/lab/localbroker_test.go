@@ -27,6 +27,10 @@ type localBroker struct {
 	cmd                                    *exec.Cmd
 	repo                                   string
 	stop                                   func() // stops the process; safe to call more than once
+	// piv and admin are the on-call's software key hierarchy and agent, for
+	// the tests that revoke (startLabAdmin); nil until one does.
+	piv   *testpki.PIV
+	admin *labAdmin
 }
 
 const (

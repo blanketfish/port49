@@ -70,7 +70,7 @@ func composeStoreBlock(component string) string {
 // slice/broker.yaml's, slice/policy.yaml's and inventory-lab.yaml's.
 // It reads no file. The device key is port49d's env alone.
 func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]string, error) {
-	daemon, err := splitDaemonYAML(base, splitNode{Listen: ":49", Metrics: ":9049", Admin: "/run/port49/port49d.sock",
+	daemon, err := splitDaemonYAML(base, splitNode{Listen: ":49", Metrics: ":9049",
 		Spool: "/var/spool/port49d/acct.jsonl"}, "/etc/port49/policy.yaml", "/etc/port49/inventory.yaml",
 		composeStoreBlock("daemon"))
 	if err != nil {
@@ -78,7 +78,7 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 	}
 	broker, err := splitBrokerYAML(base, brokerSlice, splitBrokerOpts{Policy: "/etc/port49/policy.yaml",
 		Inventory: "/etc/port49/inventory.yaml", State: "/var/lib/port49-broker", Metrics: ":9050",
-		Admin: "/run/port49/port49-broker.sock", Store: composeStoreBlock("broker"), PKI: "/etc/port49/broker"})
+		Store: composeStoreBlock("broker"), PKI: "/etc/port49/broker"})
 	if err != nil {
 		return nil, err
 	}
@@ -269,12 +269,13 @@ func (c *composeStack) StartDaemon() error {
 	return c.follow(composeProject+"-port49d-1", since, c.l.logPath, c.l.errPath)
 }
 
-// Revoke runs `port49 revoke` on the broker's admin socket, in its
-// container, and returns what it printed and whether it exited 0, as
-// revokeCLI does.
+// Revoke runs `port49-broker revoke --offline` in a container of the
+// broker's image, the break-glass form that writes the mark through etcd
+// (the live form is the API with a security key press, which a stack with no
+// key cannot make), and returns what it printed and whether it exited 0.
 func (c *composeStack) Revoke(args ...string) (string, bool) {
-	out, err := c.run(append([]string{"exec", "-T", "port49-broker", "port49", "revoke", "--socket",
-		"/run/port49/port49-broker.sock"}, args...)...)
+	out, err := c.run(append([]string{"run", "--rm", "--no-deps", "--entrypoint", "port49-broker", "port49-broker",
+		"revoke", "--offline"}, args...)...)
 	return out, err == nil
 }
 

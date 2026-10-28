@@ -10,13 +10,19 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
-// revoke without --offline is port49 revoke's, on the admin socket: said,
-// exit 2.
-func TestARevokeWithoutOfflineNamesTheSocket(t *testing.T) {
+// revoke without --offline is port49 revoke's, through the broker API: said,
+// exit 2, on both binaries.
+func TestARevokeWithoutOfflineNamesTheAPI(t *testing.T) {
 	var o, e bytes.Buffer
 	if code := offlineRevoke([]string{"--principal", "user:alice@example.com"}, &o, &e); code != 2 ||
-		!strings.Contains(e.String(), "port49 revoke --socket") {
+		!strings.Contains(e.String(), "use port49 revoke, which asks the broker API with a security key press") {
 		t.Fatalf("exit %d: %s", code, e.String())
+	}
+	o.Reset()
+	e.Reset()
+	if code := offlineRevokeDaemon([]string{"--principal", "user:alice@example.com"}, &o, &e); code != 2 ||
+		!strings.Contains(e.String(), "port49d revoke: this is the break-glass form") {
+		t.Fatalf("port49d: exit %d: %s", code, e.String())
 	}
 }
 

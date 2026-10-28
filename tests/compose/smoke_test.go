@@ -132,16 +132,19 @@ func TestComposeSmoke(t *testing.T) {
 
 	// A revocation writes the broker's copy of the marks into
 	// broker.state_dir (marks.json), which the recreate must keep.
-	s.run("exec", "-T", "port49-broker", "port49", "revoke", "--socket", "/run/port49/port49-broker.sock",
+	// The live form is the API with a security key press (spec §5.1.6), which a
+	// stack with no key cannot make: the break-glass form writes the same mark
+	// through etcd as the broker's own user.
+	s.run("run", "--rm", "--no-deps", "--entrypoint", "port49-broker", "port49-broker", "revoke", "--offline",
 		"--principal", "user:bob@example.com") // s.run fails the test on a non-zero exit
 	first := s.run("logs", "--no-color", "port49-broker")
 	if !strings.Contains(first, "broker.state_dir/marks.json is absent") {
 		t.Fatalf("a first start did not say its copy starts from the store:\n%s", first)
 	}
 
-	// The broker writes its copy from the store's watch, after `port49
-	// revoke` has returned (internal/port49d/markscopy.go:303-311): wait for
-	// marks.json before the recreate, or a fast `down` makes "is absent" flaky.
+	// The broker writes its copy from the store's watch, after the offline
+	// revoke has returned (internal/port49d/markscopy.go): wait for marks.json
+	// before the recreate, or a fast `down` makes "is absent" flaky.
 	waitMarks(t)
 
 	// Recreate every container; the named volumes stay.

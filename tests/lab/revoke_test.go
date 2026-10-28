@@ -24,8 +24,8 @@ import (
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
-const revokeClaim = "A revocation by principal or by certificate (`port49 revoke` over the admin socket, plan " +
-	"7a; spec §5.1.4) reaches a live SSH session and everything behind it: on a platform that authorizes each " +
+const revokeClaim = "A revocation by principal or by certificate (`port49 revoke` through the broker API under an on-call's api: rights and a press of their " +
+	"security key, plans 7a and 12b; spec §5.1.4, §5.1.6) reaches a live SSH session and everything behind it: on a platform that authorizes each " +
 	"command the session's next command is refused and the session stays open; on Junos the open session keeps " +
 	"what it had at login (spec §13 decision 21), and the revocation names it as not reached; a token minted " +
 	"before the revocation and not yet spent is deleted, so its login is refused token_not_found; the revocation " +
@@ -88,28 +88,15 @@ func revokeOutcome(platform string, sh *labShell, cmd string, fail func(string, 
 		revokeVersion[platform], l29Cell(firstLine(out)))
 }
 
-// revokeCLI runs bin/port49 revoke with args against socket and returns
-// its output and whether it exited 0.
-func revokeCLI(socket string, args ...string) (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"),
-		append([]string{"revoke", "--socket", socket}, args...)...)
-	// From the repository root, so a --cert path relative to it is what the
-	// note quotes, not this machine's checkout.
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err == nil
-}
-
 // agentRevoke runs `port49 revoke` with args against the agent at sock, and
 // returns what it printed and its exit code.
 func agentRevoke(sock string, args ...string) (string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"),
-		append(append([]string{"revoke"}, args...), "--agent-socket", sock)...)
+		append([]string{"revoke"}, args...)...)
 	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "PORT49_TEST_AGENT_SOCKET="+sock)
 	out, err := cmd.CombinedOutput()
 	code := 0
 	var ee *exec.ExitError
@@ -352,18 +339,25 @@ func TestRevokeEndToEnd(t *testing.T) {
 		sessionOnly := strings.HasPrefix(l.p.name, "juniper_")
 
 		pki := filepath.Join(root, slicePKIDir)
-		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+		if err := testpki.WriteLabWith(pki, sliceEmail, []string{oncallEmail}, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		brokerYAML, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "broker.yaml"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		socket := filepath.Join(root, "tests", "lab", "logs", "revoke-admin.sock")
+		// The slice's policy with an on-call (bob, who may revoke and lift), and
+		// the roots the on-call's software key chains to.
+		brokerYAML = []byte(strings.Replace(string(brokerYAML), "tests/lab/slice/policy.yaml",
+			"tests/lab/slice/api-policy.yaml", 1))
+		piv, roots := adminTouchRoots(t, filepath.Join(root, "tests", "lab", "logs", "revoke-pki"))
+		touchYAML, err := withAdminTouch(string(brokerYAML), roots)
+		if err != nil {
+			t.Fatal(err)
+		}
 		// The revocations file is rewritten into the derived config's private
 		// directory, fresh at each start (privatePolicy; pre-flight I6).
-		cfg, err := l.derivedConfig("revoke", platformSessionAttributes[l.p.name],
-			string(brokerYAML)+"\nadmin_socket: "+socket+"\n")
+		cfg, err := l.derivedConfig("revoke", platformSessionAttributes[l.p.name], touchYAML)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -372,7 +366,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		}
 		errOff := l.errLogSize()
 		if err := l.startDaemonWith(cfg, true); err != nil {
-			t.Fatalf("port49d would not start with the broker and the admin socket: %v", err)
+			t.Fatalf("port49d would not start with the broker and its admin roots: %v", err)
 		}
 		if err := l.awaitTACACS(); err != nil {
 			t.Fatal(err)
@@ -393,6 +387,9 @@ func TestRevokeEndToEnd(t *testing.T) {
 		stop := l.capture(t, "revoke")
 		defer stop()
 		off := l.mark()
+		bobCert, bobKey := testpki.LabClientFiles(oncallEmail)
+		bob := startLabAdmin(t, piv, sliceBrokerURL, filepath.Join(pki, testpki.LabCA), filepath.Join(pki, bobCert),
+			filepath.Join(pki, bobKey))
 
 		// 1. A live session, and an unspent token beside it.
 		sock, pid, stopAgent := revokeAgent(t)
@@ -413,7 +410,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		}
 
 		// 2. Revoke the principal.
-		revokedText, revokedOK := revokeCLI(socket, "--principal", slicePrincipal)
+		revokedText, revokedOK := bob.cli("--principal", slicePrincipal)
 		if !revokedOK {
 			fail("port49 revoke --principal: %s", revokedText)
 		}
@@ -449,7 +446,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		loginSaid := revokedLogin(t, fail)
 
 		// 3. Lift, and a new login works.
-		liftText, ok := revokeCLI(socket, "--lift", "--principal", slicePrincipal)
+		liftText, ok := bob.cli("--lift", "--principal", slicePrincipal)
 		if !ok {
 			fail("port49 revoke --lift: %s", liftText)
 		}
@@ -470,14 +467,14 @@ func TestRevokeEndToEnd(t *testing.T) {
 
 		// 4. Revoke the certificate the agent holds: its next mint is refused,
 		// and the agent ends.
-		certText, ok := revokeCLI(socket, "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
+		certText, ok := bob.cli("--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
 		if !ok {
 			fail("port49 revoke --cert: %s", certText)
 		}
 		revokeReport(certText, l.p.node, sessionOnly, "the certificate's", fail)
 		offC := l.mark()
 		certSaid, agent2Gone, agent2After := revokedMint(sock2, pid2, l.p.node, "the certificate's", fail)
-		certLift, ok := revokeCLI(socket, "--lift", "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
+		certLift, ok := bob.cli("--lift", "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
 		if !ok {
 			fail("lifting the certificate: %s", certLift)
 		}

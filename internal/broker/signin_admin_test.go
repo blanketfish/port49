@@ -179,7 +179,7 @@ func TestTheReSealPassNeverRevertsAResetAll(t *testing.T) {
 	w := &staleEnrollments{Enrollments: f.b.Enrollments, markStale: true}
 	f.b.Enrollments = w
 	w.onMark = func() {
-		if _, err := f.b.ResetSecondFactor(ctx, "", true, "admin_socket uid 0"); err != nil {
+		if _, err := f.b.ResetSecondFactor(ctx, "", true, "offline uid 0"); err != nil {
 			t.Error(err)
 		}
 	}
@@ -200,7 +200,7 @@ func TestResetReopensEnrollment(t *testing.T) {
 	ctx := context.Background()
 	f, _ := newSignInFixture(t)
 	secret := f.enrolled(t, alicePrincipal, "uuid:alice")
-	text, err := f.b.ResetSecondFactor(ctx, "USER:Alice@Example.com", false, "admin_socket uid 0")
+	text, err := f.b.ResetSecondFactor(ctx, "USER:Alice@Example.com", false, "offline uid 0")
 	until := decision.FormatTime(f.now.Add(f.b.PasswordSignIn.ReopenFor))
 	if err != nil || !strings.Contains(text, "enrolled "+decision.FormatTime(f.now.Add(-time.Hour))+" from 192.0.2.0/32") ||
 		!strings.Contains(text, "they may enroll until "+until) {
@@ -215,7 +215,7 @@ func TestResetReopensEnrollment(t *testing.T) {
 		t.Fatalf("%v", recs)
 	}
 	body := recs[0]["second_factor_reset"].(map[string]any)
-	if body["origin"] != "admin_socket uid 0" || body["reopen_until"] != until || body["enrolled_from"] != "192.0.2.0/32" {
+	if body["origin"] != "offline uid 0" || body["reopen_until"] != until || body["enrolled_from"] != "192.0.2.0/32" {
 		t.Fatalf("%v", body)
 	}
 	if strings.Contains(f.logs(), base64.StdEncoding.EncodeToString(secret)) {
@@ -234,7 +234,7 @@ func TestResetClearsAPendingSecretInAReopenedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	e, secret := enrollAlice(t, f)
-	text, err := f.b.ResetSecondFactor(ctx, alicePrincipal, false, "admin_socket uid 0")
+	text, err := f.b.ResetSecondFactor(ctx, alicePrincipal, false, "offline uid 0")
 	if err != nil || !strings.Contains(text, "unconfirmed enrollment") {
 		t.Fatalf("%q, %v", text, err)
 	}
@@ -345,7 +345,7 @@ func TestResetAllReplacesALostStoreAndOpensTheWindow(t *testing.T) {
 		!strings.Contains(err.Error(), "reset-second-factor --all") {
 		t.Fatalf("a reset of one person on a lost store: %v", err)
 	}
-	text, err := f.b.ResetSecondFactor(ctx, "", true, "admin_socket uid 0")
+	text, err := f.b.ResetSecondFactor(ctx, "", true, "offline uid 0")
 	until := decision.FormatTime(f.now.Add(f.b.PasswordSignIn.ReopenFor))
 	kept, _ := filepath.Glob(path + ".unreadable-*")
 	if err != nil || len(kept) != 1 || !strings.Contains(text, "every entry with no active second factor may enroll until "+until) ||
@@ -394,7 +394,7 @@ func TestResetAllAfterALostKeyOnEtcdReplacesWhatWillNotOpen(t *testing.T) {
 
 	var said []string
 	f.b.Say = func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
-	text, err := f.b.ResetSecondFactor(ctx, "", true, "admin_socket uid 0")
+	text, err := f.b.ResetSecondFactor(ctx, "", true, "offline uid 0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestInitEnrollmentsCreatesTheStoreOnce(t *testing.T) {
 		testutil.ToFloat64(f.b.Metrics.DirectoryEnrollmentStoreOK) != 0 {
 		t.Fatalf("setup: %v", err)
 	}
-	text, err := f.b.InitEnrollments(ctx, "admin_socket uid 0")
+	text, err := f.b.InitEnrollments(ctx, "offline uid 0")
 	if err != nil || !strings.Contains(text, "created the enrollment store") {
 		t.Fatalf("%q, %v", text, err)
 	}
@@ -557,7 +557,7 @@ func TestExportImport(t *testing.T) {
 	if g.b.EnrollmentStoreLost() == "" {
 		t.Fatal("setup: the empty store is not lost")
 	}
-	text, err := g.b.ImportEnrollments(ctx, exp, false, "admin_socket uid 0")
+	text, err := g.b.ImportEnrollments(ctx, exp, false, "offline uid 0")
 	if err != nil || !strings.HasPrefix(text, "imported 1 second factors exported at ") {
 		t.Fatalf("%q, %v", text, err)
 	}
@@ -572,7 +572,7 @@ func TestExportImport(t *testing.T) {
 	if len(imports) != 1 {
 		t.Fatalf("%v", imports)
 	}
-	if body := imports[0]["enrollments_import"].(map[string]any); body["origin"] != "admin_socket uid 0" ||
+	if body := imports[0]["enrollments_import"].(map[string]any); body["origin"] != "offline uid 0" ||
 		body["records"] != float64(1) || body["replaced"] != nil {
 		t.Fatalf("%v", body)
 	}
@@ -621,14 +621,14 @@ func TestUnlockClearsTheCount(t *testing.T) {
 		t.Fatalf("setup: %s", shown(w))
 	}
 	// The throttled attempt was itself counted: six are held.
-	text, err := f.b.UnlockSignIn(ctx, "User:Alice@example.com", "admin_socket uid 0")
+	text, err := f.b.UnlockSignIn(ctx, "User:Alice@example.com", "offline uid 0")
 	if err != nil || text != "cleared 6 failed sign-ins for "+alicePrincipal+" here; every region's count starts again" {
 		t.Fatalf("%q, %v", text, err)
 	}
 	recs := eventsOf(f.records(t), decision.EventSignInUnlock)
 	if len(recs) != 1 || recs[0]["principal"] != alicePrincipal ||
 		recs[0]["sign_in_unlock"].(map[string]any)["failures"] != float64(6) ||
-		recs[0]["sign_in_unlock"].(map[string]any)["origin"] != "admin_socket uid 0" {
+		recs[0]["sign_in_unlock"].(map[string]any)["origin"] != "offline uid 0" {
 		t.Fatalf("%v", recs)
 	}
 	if w := f.signIn(t, req); w.Code != 200 {
