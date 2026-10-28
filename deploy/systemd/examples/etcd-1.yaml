@@ -1,0 +1,26 @@
+# etcd member 1 of 3 (cluster port49). Replace the example.com names and the PKI paths.
+# TLS and client-certificate auth are on: port49d and port49-broker each present their own
+# client certificate, and `port49d store-roles` prints the roles to apply.
+name: etcd-1
+data-dir: /var/lib/etcd/etcd-1
+listen-client-urls: https://0.0.0.0:2379
+advertise-client-urls: https://etcd-1.example.com:2379
+listen-peer-urls: https://0.0.0.0:2380
+initial-advertise-peer-urls: https://etcd-1.example.com:2380
+initial-cluster: etcd-1=https://etcd-1.example.com:2380,etcd-2=https://etcd-2.example.com:2380,etcd-3=https://etcd-3.example.com:2380
+initial-cluster-state: new
+initial-cluster-token: port49
+client-transport-security:
+  cert-file: /etc/etcd/pki/etcd-1.pem
+  key-file: /etc/etcd/pki/etcd-1-key.pem
+  trusted-ca-file: /etc/etcd/pki/ca.pem
+  client-cert-auth: true
+peer-transport-security:
+  cert-file: /etc/etcd/pki/etcd-1.pem
+  key-file: /etc/etcd/pki/etcd-1-key.pem
+  trusted-ca-file: /etc/etcd/pki/ca.pem
+  client-cert-auth: true
+# Without compaction etcd grows until it hits its quota and refuses every write.
+auto-compaction-mode: periodic
+auto-compaction-retention: "1h"
+quota-backend-bytes: 8589934592

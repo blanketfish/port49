@@ -72,6 +72,8 @@ the env files. A `secret_file` source is plan 12's to weigh.
   `port49d store-roles` then prints a section per store: run the directory's once against the stretched cluster, and each region's session section against that region's etcd. `port49 store status` (inside the
   port49d container: `docker compose exec port49d port49 store status`) shows each store as port49d
   sees it.
+  Complete single-site and multi-region store blocks are in `deploy/examples/stores/` (written at the
+  systemd paths: change the `/etc/port49` prefix only if your volumes differ).
 - `context_cache` is off here, as everywhere by default, and so is `broker.directory` (see
   Directory below).
 
