@@ -11,6 +11,9 @@
 # Base images are pinned by digest (the tag is the comment); bump both together.
 # The build stage runs on the builder's own architecture and cross-compiles, so
 # an arm64 image needs no emulation: nothing after it runs a target binary.
+# static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS base
+
 # golang:1.26
 FROM --platform=$BUILDPLATFORM golang:1.26@sha256:3e81679b4c293b7eecc6f8a044b355a3062a09db22cca961731c81a2dbcd8f83 AS build
 ARG TARGETOS TARGETARCH
@@ -22,14 +25,21 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -buildvcs
       ./cmd/port49d ./cmd/port49-broker ./cmd/port49 ./cmd/port49-inventory
 # the three 0700 directories, as a tree COPY carries whole (see port49 below)
 RUN install -d -m 0700 /out/tree/var/lib/port49-broker /out/tree/var/spool/port49d /out/tree/run/port49
-# the base ships /var/local as root:staff 2775, which the layout check refuses (group write)
-RUN install -d -m 0755 /out/tree/var/local
+# The base ships /var/local as root:staff 2775, which the layout check refuses (group write),
+# and a COPY into an existing directory keeps the directory's own metadata. So the final image
+# is the base's tree, corrected here, on scratch: /var/local becomes root:root 0755 and the
+# one directory the base gives the nonroot user keeps it.
+COPY --from=base / /rootfs/
+RUN chown 65532:65532 /rootfs/home/nonroot && chown 0:0 /rootfs/var/local && chmod 00755 /rootfs/var/local
 
 # v3.6.15
 FROM gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1 AS etcd
 
-# static-debian12:nonroot
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS port49
+FROM scratch AS port49
+COPY --from=build /rootfs/ /
+# what the base image's config sets
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+WORKDIR /home/nonroot
 COPY --from=build /out/port49d /out/port49-broker /out/port49 /out/port49-inventory /usr/local/bin/
 # Each directory a process writes, 0700 and owned by the user it runs as. A
 # named volume first mounted on one is created from it, ownership and mode
@@ -41,7 +51,6 @@ COPY --from=build /out/port49d /out/port49-broker /out/port49 /out/port49-invent
 # and COPY --chmod needs BuildKit.
 COPY --from=build --chown=65532:65532 /out/tree/var/lib/ /var/lib/
 COPY --from=build --chown=65532:65532 /out/tree/var/spool/ /var/spool/
-COPY --from=build /out/tree/var/local/ /var/local/
 COPY --from=build --chown=65532:65532 /out/tree/run/ /run/
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/port49d"]
