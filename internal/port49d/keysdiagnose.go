@@ -11,6 +11,7 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 // keysDiagnoseCmd is `port49d keys-diagnose --device NAME --capture FILE|-
@@ -86,6 +87,9 @@ func keysDiagnoseCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 			"capture at the device's side with the full packet (tcpdump -s 0 -w FILE 'tcp dst port 49 and src host %s')\n",
 			printsafe.Line(*device, 80), addrs[0])
 		return 1
+	}
+	if p.hdr.Flags&wire.FlagUnencrypted != 0 { // from the header alone, never the body
+		fmt.Fprintln(stderr, "port49d keys-diagnose: the device sent this packet unencrypted, so no key applies")
 	}
 	matches := keyring.Try(p.hdr, p.body, sets, time.Now())
 	if len(matches) == 0 {

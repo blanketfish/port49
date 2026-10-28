@@ -266,3 +266,32 @@ func TestDiagnoseExitCodes(t *testing.T) {
 		}
 	}
 }
+
+// A packet whose header says it is unencrypted names that on stderr, since a
+// device with no key configured for this server would otherwise read as a
+// wrong key. Stdout stays the two forms, and the note comes from the header
+// flag alone: an encrypted packet that no key validates gets none.
+func TestDiagnoseNotesAPacketSentUnencrypted(t *testing.T) {
+	cfg := diagConfig(t)
+	h := wire.Header{MajorVersion: wire.MajorVersion, Type: wire.TypeAuthen, SeqNo: 1, Flags: wire.FlagUnencrypted, SessionID: 7}
+	body := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("fake-user"), Data: []byte("fake-credential")}.Encode()
+	h.Length = uint32(len(body))
+	pkt := append(h.Encode(), body...) // the body is sent as it is
+	segs := []diagSegment{
+		{src: leaf19, sport: 40001, dport: 49, flags: 0x02, seq: 1000},
+		{src: leaf19, sport: 40001, dport: 49, flags: 0x18, seq: 1001, payload: pkt},
+	}
+	code, out, errs := diagRun(t, "", "--config", cfg, "--device", "leaf-19", "--capture", writeCapture(t, diagPcap(segs)))
+	if code != 1 || out != "no key port49d holds validates this packet\n" ||
+		errs != "port49d keys-diagnose: the device sent this packet unencrypted, so no key applies\n" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errs)
+	}
+	if strings.Contains(errs, "fake-") || strings.Contains(out, "fake-") {
+		t.Fatal("a body byte was printed")
+	}
+	code, out, errs = diagRun(t, "", "--config", cfg, "--device", "leaf-19", "--capture", writeCapture(t, diagPcap(diagLogin(leaf19, diagNobody))))
+	if code != 1 || out != "no key port49d holds validates this packet\n" || errs != "" {
+		t.Fatalf("an encrypted packet no key validates: exit %d, stdout %q, stderr %q", code, out, errs)
+	}
+}
