@@ -799,7 +799,7 @@ broker:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait(); errf.Close() })
-	s.c.Guard.OnKill(kindtest.StopPID(cmd.Process.Pid)) // a killed run stops it by its recorded pid
+	s.c.Guard.OnKill(shapetest.StopPID(cmd.Process.Pid)) // a killed run stops it by its recorded pid
 	shapetest.WaitFor(t, "the host broker to listen on the gateway", 30*time.Second, func() bool {
 		c, err := net.DialTimeout("tcp", net.JoinHostPort(s.gateway, fmt.Sprint(port)), time.Second)
 		if err == nil {

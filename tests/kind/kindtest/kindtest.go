@@ -13,16 +13,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/tests/shapes/shapetest"
 )
 
 // Root is the repository root.
@@ -53,21 +52,21 @@ type Cluster struct {
 	kubectl    string
 	kind       string
 	// Guard runs the kill functions when the run is killed; a test registers each process it
-	// starts (OnKill with StopPID) beside the cluster's own deletion.
-	Guard *Guard
+	// starts (OnKill with shapetest.StopPID) beside the cluster's own deletion.
+	Guard *shapetest.Guard
 }
 
 // Up creates the cluster from tests/kind/kind.yaml. A stale cluster of the same name (a killed
 // earlier run) is deleted first, and the deletion is registered before the create, so a cluster
 // made halfway is deleted too and it is always deleted, failed or not. A SIGINT, a SIGTERM or the
 // test's own deadline a grace period away runs the same deletion and the guard's other kill
-// functions (Guard), because the testing package runs no t.Cleanup on any of them.
+// functions (shapetest.Guard), because the testing package runs no t.Cleanup on any of them.
 func Up(t *testing.T, name string) *Cluster {
 	t.Helper()
 	kind := Bin(t, "KIND_BIN")
 	c := &Cluster{T: t, Name: name, Kubeconfig: filepath.Join(t.TempDir(), "kubeconfig"), kubectl: Bin(t, "KUBECTL_BIN"), kind: kind}
 	deadline, _ := t.Deadline()
-	c.Guard = NewGuard(t, exitFn, deadline, KillGrace)
+	c.Guard = shapetest.NewGuard(t, exitFn, deadline, shapetest.KillGrace)
 	c.Guard.OnKill(func() { _ = exec.Command(kind, "delete", "cluster", "--name", name).Run() })
 	c.deleteCluster(t, "stale")
 	t.Cleanup(func() {
@@ -93,67 +92,6 @@ func (c *Cluster) deleteCluster(t *testing.T, what string) {
 
 // exitFn is os.Exit, a variable so a unit test can see the guard's exit.
 var exitFn = os.Exit
-
-// KillGrace is how long before the test binary's own deadline the guard cleans up and exits.
-var KillGrace = 45 * time.Second
-
-// Guard makes a killed run clean up what t.Cleanup would. Go's testing package runs no t.Cleanup on
-// a signal or on its -timeout panic, so a Ctrl-C, a SIGTERM or a deadline a grace period away runs
-// every OnKill function, last registered first, then calls exit(2). It is dropped when the test
-// ends normally.
-type Guard struct {
-	mu   sync.Mutex
-	kill []func()
-}
-
-// OnKill registers a function the guard runs when the run is killed: stopping a process by its
-// recorded pid, deleting the cluster.
-func (g *Guard) OnKill(f func()) {
-	g.mu.Lock()
-	g.kill = append(g.kill, f)
-	g.mu.Unlock()
-}
-
-// NewGuard starts the guard. A zero deadline arms no timer.
-func NewGuard(t *testing.T, exit func(int), deadline time.Time, grace time.Duration) *Guard {
-	t.Helper()
-	g := &Guard{}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	done := make(chan struct{})
-	var timeout <-chan time.Time
-	if !deadline.IsZero() {
-		tm := time.NewTimer(time.Until(deadline) - grace)
-		timeout = tm.C
-		t.Cleanup(func() { tm.Stop() })
-	}
-	t.Cleanup(func() { signal.Stop(sig); close(done) })
-	go func() {
-		var why string
-		select {
-		case s := <-sig:
-			why = "got " + s.String()
-		case <-timeout:
-			why = "the test's own deadline is " + grace.String() + " away"
-		case <-done:
-			return
-		}
-		fmt.Fprintf(os.Stderr, "\n  kind smoke: %s; deleting the cluster and stopping what it started, then exiting\n", why)
-		g.mu.Lock()
-		kill := append([]func(){}, g.kill...)
-		g.mu.Unlock()
-		for i := len(kill) - 1; i >= 0; i-- {
-			kill[i]()
-		}
-		exit(2)
-	}()
-	return g
-}
-
-// StopPID kills the process with a recorded pid, for a guard's OnKill: by pid, never by name.
-func StopPID(pid int) func() {
-	return func() { _ = syscall.Kill(pid, syscall.SIGKILL) }
-}
 
 // CheckLocalPV reads `kubectl get pv -o json` and fails unless the volume is a `local` PV and not
 // a hostPath one, naming the StorageClass: the kubelet applies fsGroup to a local volume and never
