@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image image-check compose-smoke leaks
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -412,6 +412,28 @@ bin/gitleaks-$(GITLEAKS_VERSION):
 	tar -xzf bin/gitleaks.tar.gz -C bin gitleaks
 	mv bin/gitleaks bin/gitleaks-$(GITLEAKS_VERSION)
 	rm bin/gitleaks.tar.gz
+
+# Release packages (plan 12b, Task 8). GoReleaser is pinned by sha256 like gitleaks. UNVERIFIED:
+# this target and the pinned digest have not been run; the first `make packages` is the check.
+# `make packages` builds dist/ locally and publishes nothing (--snapshot --skip=publish).
+# `make packages-check` then runs tests/packages, which fails, never skips, when dist/ is empty.
+GORELEASER_VERSION ?= 2.19.0
+GORELEASER_SHA256_LINUX_X64 = ebc3194ad1d1b1787614405285a0039665cd4c5bd3305215a1b201600f90630b
+
+bin/goreleaser-$(GORELEASER_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install goreleaser $(GORELEASER_VERSION) yourself and put it at bin/goreleaser-$(GORELEASER_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/goreleaser.tar.gz https://github.com/goreleaser/goreleaser/releases/download/v$(GORELEASER_VERSION)/goreleaser_Linux_x86_64.tar.gz
+	echo "$(GORELEASER_SHA256_LINUX_X64)  bin/goreleaser.tar.gz" | sha256sum -c -
+	tar -xzf bin/goreleaser.tar.gz -C bin goreleaser
+	mv bin/goreleaser bin/goreleaser-$(GORELEASER_VERSION)
+	rm bin/goreleaser.tar.gz
+
+packages: bin/goreleaser-$(GORELEASER_VERSION)
+	bin/goreleaser-$(GORELEASER_VERSION) release --snapshot --clean --skip=publish
+
+packages-check:
+	go test -tags packages ./tests/packages/ -count=1 -v
 
 # The history scan is of the checked-out branch only (--log-opts=HEAD), which is what CI scans;
 # other local branches and refs do not fail it. The working tree is scanned through git

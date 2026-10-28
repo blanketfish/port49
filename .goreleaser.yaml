@@ -1,0 +1,144 @@
+# GoReleaser (version 2) for port49: archives, packages and checksums (plan 12b, Task 8). Run by
+# `make packages` from a sha256-pinned binary, and by the release workflow on a v* tag. Nothing
+# here publishes: the release workflow does that, after its builds.
+version: 2
+project_name: port49
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  # The static build: CGO_ENABLED=0, no tag (decision 45 ruling 22). These are the four binaries
+  # the image and the server package carry.
+  - id: port49d
+    main: ./cmd/port49d
+    binary: port49d
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+  - id: port49-broker
+    main: ./cmd/port49-broker
+    binary: port49-broker
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+  - id: port49-inventory
+    main: ./cmd/port49-inventory
+    binary: port49-inventory
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+  - id: port49-static
+    main: ./cmd/port49
+    binary: port49
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: [-s -w]
+  # The client build: the PKCS#11 backend through purego (still CGO_ENABLED=0). It and
+  # port49-static are both /usr/bin/port49, so no archive and no package holds both.
+  - id: port49-client
+    main: ./cmd/port49
+    binary: port49
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    tags: [hwkey_dlopen]
+    ldflags: [-s -w]
+
+archives:
+  - id: server
+    ids: [port49d, port49-broker, port49-inventory, port49-static]
+    formats: [tar.gz]
+    name_template: "port49-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: client
+    ids: [port49-client]
+    formats: [tar.gz]
+    name_template: "port49_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+nfpms:
+  - id: port49-server
+    package_name: port49-server
+    ids: [port49d, port49-broker, port49-inventory, port49-static]
+    file_name_template: "port49-server_{{ .Version }}_{{ .Arch }}"
+    vendor: port49
+    homepage: https://github.com/rhwendt/port49
+    maintainer: port49 maintainers <noreply@example.com> # placeholder: Ryan sets the real address
+    description: port49 TACACS+ server and broker
+    license: Apache-2.0
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    conflicts: [port49]
+    contents:
+      - src: deploy/systemd/port49d.service
+        dst: /usr/lib/systemd/system/port49d.service
+      - src: deploy/systemd/port49-broker.service
+        dst: /usr/lib/systemd/system/port49-broker.service
+      - src: deploy/systemd/sysusers.d/port49.conf
+        dst: /usr/lib/sysusers.d/port49.conf
+      - src: deploy/systemd/tmpfiles.d/port49.conf
+        dst: /usr/lib/tmpfiles.d/port49.conf
+      - src: deploy/systemd/config/
+        dst: /usr/share/doc/port49-server/examples/
+        type: tree
+    # Every binary is 0755, owned by root, with no setuid, setgid or file capability: port49d
+    # binds 49 through the unit's AmbientCapabilities. packages_test.go checks it.
+    scripts:
+      postinstall: packaging/server/postinstall.sh
+  - id: port49
+    package_name: port49
+    ids: [port49-client]
+    file_name_template: "port49_{{ .Version }}_{{ .Arch }}"
+    vendor: port49
+    homepage: https://github.com/rhwendt/port49
+    maintainer: port49 maintainers <noreply@example.com> # placeholder: Ryan sets the real address
+    description: port49 client, Python library and Ansible collection
+    license: Apache-2.0
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    conflicts: [port49-server]
+    contents:
+      - src: packaging/client/config.yaml
+        dst: /etc/port49/config.yaml
+        type: config|noreplace
+        file_info: {mode: 0644, owner: root, group: root}
+      # The collection without its tests/ directory.
+      - src: clients/ansible/ansible_collections/port49/client/galaxy.yml
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/galaxy.yml
+      - src: clients/ansible/ansible_collections/port49/client/README.md
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/README.md
+      - src: clients/ansible/ansible_collections/port49/client/meta/
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/meta/
+        type: tree
+      - src: clients/ansible/ansible_collections/port49/client/plugins/
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/plugins/
+        type: tree
+      # The library is pure Python, so the .deb installs it at Debian's version-independent path.
+      # An .rpm has no such path (site-packages is per Python minor version): its library comes
+      # from `pip install port49`, and packaging/README.md says so.
+      - src: clients/python/src/port49/
+        dst: /usr/lib/python3/dist-packages/port49/
+        type: tree
+        packager: deb
+
+release:
+  draft: false
+  github:
+    owner: rhwendt
+    name: port49
+
+changelog:
+  use: git
