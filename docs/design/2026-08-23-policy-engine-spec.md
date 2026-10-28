@@ -6814,7 +6814,9 @@ creation mark, refuse when a store or a mark is already there, and record `secon
 with `"created": true`; port49d never creates the store itself, and until this runs password
 sign-in is refused `enrollment_store_lost`. **`port49-broker export-enrollments`** and
 **`port49d export-enrollments`** read the sealed store through the process's own store identity
-and write it, still sealed, to stdout, refusing a terminal. Neither is admin-level (§2): one
+and write it, still sealed, to stdout, refusing a terminal, or with `--out FILE` to a new file created
+0600 that never replaces an existing one (`O_EXCL`; synced; a failed export leaves no partial file), so a
+scheduled backup needs no shell redirect and writes nothing sealed to a log. Neither is admin-level (§2): one
 creates nothing that exists, and the other reads sealed bytes.
 
 **`port49 devices trust`** was removed by plan 9d (§13 decision 46 ruling 4): port49 keeps no host
@@ -10312,7 +10314,7 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   lost enrollment store (an unreadable file renamed aside, never deleted). `port49 directory unlock
   <principal>` clears the principal's attempt count. `port49-broker init-enrollments` (or `port49d init-enrollments`) creates the
   enrollment store once per install (D7; refused when a store or a mark is there). `port49-broker
-  export-enrollments` (or `port49d export-enrollments`) writes the store, still sealed, to stdout; `port49 directory import [--replace]`
+  export-enrollments` (or `port49d export-enrollments`) writes the store, still sealed, to stdout or with `--out FILE` to a new 0600 file; `port49 directory import [--replace]`
   fills it from an export (D13). None needs the directory, and none prints a secret.
 - **14. `/v1/config`.** It adds `"directory_password"` to `methods` and `sign_in: {second_factor:
   "totp"}`; its `issuance.available` already says when nothing can be issued, so the client says so
