@@ -41,6 +41,8 @@ func readUnit(t *testing.T, rel string) unit {
 }
 
 // one is the key's single value, and whether it is set at all.
+func (u unit) get(section, key string) []string { return u[section][key] }
+
 func (u unit) one(t *testing.T, section, key string) (string, bool) {
 	t.Helper()
 	v := u[section][key]
@@ -57,8 +59,11 @@ func TestTheUnitsCarryTheirLimits(t *testing.T) {
 	const absent = "\x00absent"
 	type want struct{ section, key, daemon, broker string }
 	for _, w := range []want{
-		{"Unit", "StartLimitIntervalSec", "300", "300"},
-		{"Unit", "StartLimitBurst", "5", "5"},
+		// 0 turns the start limit off: a port49d whose store is down at boot (30s start_timeout,
+		// then exit 1, then RestartSec) would otherwise use up five starts in under five
+		// minutes and stay failed after etcd came back.
+		{"Unit", "StartLimitIntervalSec", "0", "0"},
+		{"Unit", "StartLimitBurst", absent, absent},
 		{"Service", "Restart", "on-failure", "on-failure"},
 		{"Service", "RestartSec", "10s", "10s"},
 		{"Service", "LimitNOFILE", "65536", "65536"},
@@ -74,6 +79,21 @@ func TestTheUnitsCarryTheirLimits(t *testing.T) {
 		{"Service", "NoNewPrivileges", "yes", "yes"},
 		{"Service", "PrivateTmp", "yes", "yes"},
 		{"Service", "ProtectHome", "yes", "yes"},
+		// None of these makes /etc read-only, so the fence's argument below still holds.
+		{"Service", "PrivateDevices", "yes", "yes"},
+		{"Service", "ProtectKernelTunables", "yes", "yes"},
+		{"Service", "ProtectKernelModules", "yes", "yes"},
+		{"Service", "ProtectKernelLogs", "yes", "yes"},
+		{"Service", "ProtectControlGroups", "yes", "yes"},
+		{"Service", "ProtectClock", "yes", "yes"},
+		{"Service", "ProtectHostname", "yes", "yes"},
+		{"Service", "RestrictNamespaces", "yes", "yes"},
+		{"Service", "RestrictSUIDSGID", "yes", "yes"},
+		{"Service", "LockPersonality", "yes", "yes"},
+		{"Service", "RestrictRealtime", "yes", "yes"},
+		{"Service", "SystemCallArchitectures", "native", "native"},
+		{"Service", "RestrictAddressFamilies", "AF_INET AF_INET6 AF_UNIX AF_NETLINK", "AF_INET AF_INET6 AF_UNIX AF_NETLINK"},
+		{"Service", "SystemCallFilter", "@system-service", "@system-service"},
 		{"Service", "CapabilityBoundingSet", "CAP_NET_BIND_SERVICE", ""},
 	} {
 		for i, name := range []string{"port49d", "port49-broker"} {
@@ -91,6 +111,13 @@ func TestTheUnitsCarryTheirLimits(t *testing.T) {
 		}
 	}
 }
+
+// exportCommand is the export unit's ExecStart: a dated file, written to a temporary name in a
+// directory only the broker's user can use, synced, and renamed into place, so an export that
+// is shorter than the last, or that fails, never leaves another's bytes in a file.
+const exportCommand = `/bin/sh -c 'set -eu; umask 077; d=/var/backups/port49-broker; f=$$d/enrollments-$$(date +%%F).json; ` +
+	`if /usr/bin/port49-broker export-enrollments > "$$f.tmp"; then sync "$$f.tmp"; mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; ` +
+	`/usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete'`
 
 // Ruling 3: nothing makes /etc read-only inside the unit, since the fence
 // excuses a directory's mode on a read-only mount, and a group-writable
@@ -137,7 +164,7 @@ func TestTheUsersAndDirectoriesAreDeclared(t *testing.T) {
 		"d /etc/port49/keys 0750 root port49d -",
 		"d /etc/port49/secrets 0755 root root -",
 		"d /var/spool/port49d 0700 port49d port49d -",
-		"d /var/backups/port49 0700 root root -",
+		"d /var/backups/port49-broker 0700 port49-broker port49-broker -",
 	} {
 		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(want) + `\s*$`).MatchString(tmp) {
 			t.Errorf("tmpfiles.d/port49.conf lacks the line %q", want)
@@ -183,13 +210,24 @@ func TestTheEtcdAndBackupExamples(t *testing.T) {
 	if v, _ := snap.one(t, "Service", "ExecStart"); v != `/bin/sh -c 'etcdctl snapshot save /var/backups/port49/etcd-$$(date +%%F).db'` {
 		t.Errorf("the snapshot unit's ExecStart=%q", v)
 	}
+	// Each day's snapshot replaces the last, so a prune is for the days a host was off or the
+	// date changed; two weeks stay.
+	if v := snap.get("Service", "ExecStartPost"); len(v) != 1 || v[0] != `/usr/bin/find /var/backups/port49 -name 'etcd-*.db' -mtime +14 -delete` {
+		t.Errorf("the snapshot unit's ExecStartPost=%q", v)
+	}
+	// The snapshot's directory is made on an etcd host by the etcd tmpfiles file, since
+	// tmpfiles.d/port49.conf is not installed there.
+	if !regexp.MustCompile(`(?m)^d /var/backups/port49 0700 root root -\s*$`).MatchString(read(t, "deploy/systemd/examples/tmpfiles-etcd.conf")) {
+		t.Error("examples/tmpfiles-etcd.conf does not make /var/backups/port49 0700 root")
+	}
 	exp := readUnit(t, "deploy/systemd/examples/port49-enrollments-export.service")
-	for k, want := range map[string]string{"User": "port49-broker", "UMask": "0077",
-		"ExecStart":      "/usr/bin/port49-broker export-enrollments",
-		"StandardOutput": "file:/var/backups/port49/directory-export.json"} {
+	for k, want := range map[string]string{"User": "port49-broker", "UMask": "0077", "ExecStart": exportCommand} {
 		if v, _ := exp.one(t, "Service", k); v != want {
 			t.Errorf("the export unit's %s=%q, want %q", k, v, want)
 		}
+	}
+	if v := exp.get("Service", "StandardOutput"); len(v) != 0 {
+		t.Errorf("the export unit sets StandardOutput=%q: systemd's file: does not truncate", v)
 	}
 	for n, cal := range map[string]string{"port49-etcd-snapshot": "hourly", "port49-enrollments-export": "daily"} {
 		tm := readUnit(t, "deploy/systemd/examples/"+n+".timer")

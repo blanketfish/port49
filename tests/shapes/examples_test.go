@@ -80,6 +80,8 @@ func (tr *tree) write(abs, body string, mode os.FileMode) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		tr.t.Fatal(err)
 	}
+	// a file made 0400 cannot be opened for writing again
+	_ = os.Remove(p)
 	if err := os.WriteFile(p, []byte(body), mode); err != nil {
 		tr.t.Fatal(err)
 	}

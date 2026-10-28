@@ -12,8 +12,6 @@ process on etcd:
 The two users are separate on purpose: no process holds both etcd identities (plan 7e, ruling
 1). The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories.
 
-This shape's CI test is `make systemd-smoke`: real systemd as PID 1 in a container.
-
 ## The four things every shape needs
 
 1. **The device's source address reaches port49d unrewritten** (design §13). On a host this is
@@ -61,16 +59,20 @@ unit.
 | `/etc/port49/secrets/encryption.key` | `port49d:port49d` 0400 | port49d's 32-byte sealing key |
 | `/etc/port49/secrets/broker-encryption.key` | `port49-broker:port49-broker` 0400 | the broker's, the same 32 bytes |
 | `/etc/port49/etcd/*-key.pem` | each process's own, 0400 | its etcd client key |
+| `/etc/port49/broker/broker-key.pem` | `port49-broker:port49-broker` 0400 | the broker's TLS key; a root-owned 0600 file passes the key-file rule and then cannot be read by the broker |
+| `/etc/port49/directory/svc-port49.keytab` | `port49-broker:port49-broker` 0600 | the directory's Kerberos keytab, if you use one |
 
 The two encryption files hold one value and are owned apart, so neither process can read the
 other's copy. They sit outside the key directory because a policy may name any file under
 `key_secret_refs.file_dir`. Never put them there.
 
-Make a sealing key (32 raw bytes, no newline) once, and install it for both:
+Make a sealing key once, and install it for both. It is 32 printable characters (192 bits):
+a key file loses one trailing newline when it is read, so a raw random key would end in one
+and load a byte short one time in 256.
 
 ```sh
 umask 077
-head -c 32 /dev/urandom > /tmp/encryption.key
+openssl rand -base64 24 > /tmp/encryption.key
 install -o port49d -g port49d -m 0400 /tmp/encryption.key /etc/port49/secrets/encryption.key
 install -o port49-broker -g port49-broker -m 0400 /tmp/encryption.key /etc/port49/secrets/broker-encryption.key
 shred -u /tmp/encryption.key
@@ -81,11 +83,12 @@ Use the same value on every host of one deployment, from one secret.
 ### Adding a key version
 
 A device key is a file named in the policy. Add a version by writing a new file and a new
-line; never rewrite a file in place.
+line; never rewrite a file in place. Hex gives 32 characters you can type into the device's CLI
+(`tacacs-server key`, `key`, `secret`), and the newline the file ends in is dropped when it is read.
 
 ```sh
 umask 077
-head -c 32 /dev/urandom > /tmp/k && install -o root -g port49d -m 0440 /tmp/k /etc/port49/keys/core-v2 && shred -u /tmp/k
+openssl rand -hex 16 > /tmp/k && install -o root -g port49d -m 0440 /tmp/k /etc/port49/keys/core-v2 && shred -u /tmp/k
 ```
 
 Then add `{version: 2, secret_ref: "file:/etc/port49/keys/core-v2"}` to the key set in the
@@ -145,7 +148,7 @@ For that, the broker needs three things.
   right: a group's rights resolve through the directory, which may be down when you need them.
 - **A session key on the security key**, from `port49 login` (`key: pkcs11:...`).
 
-**Break-glass.** With every broker stopped, as root or the broker's user, on a broker host:
+**Break-glass.** With every broker stopped, on a broker host, as the broker's user:
 
 ```sh
 systemctl stop port49-broker              # on every broker host
@@ -155,8 +158,8 @@ systemctl start port49-broker
 
 `port49-broker revoke --offline --list` shows the marks. This stops issuance fleet-wide while the
 brokers are down, so use it only when no admin can reach a running broker. A port49d that runs its broker
-in process has `port49d revoke --offline`. The offline command needs a uid that owns the revocations
-file; as root it refuses and names the `sudo -u` to use.
+in process has `port49d revoke --offline`. Both offline commands need a uid that owns the revocations
+file; as root they refuse and name the `sudo -u` to use.
 
 ### The 3am table
 
@@ -193,7 +196,9 @@ The broker checks whether a client certificate is revoked through `certificate_s
 shipped file asks each certificate's own OCSP responder. To use CRLs instead, name each under
 `crls:` with a `file:` the broker can read (or a `url:`); a CRL served over https from a private
 CA needs that CA's root in the broker's trust store, which is the system's, or a file named by
-`SSL_CERT_FILE` in the unit (`systemctl edit port49-broker`). Never set `disabled: true` outside a
+`SSL_CERT_FILE` in the unit (`systemctl edit port49-broker`). If your CA has no OCSP responder (AD CS
+and step-ca often have none), switch to `crls:` before the first sign-in: the shipped setting
+refuses every certificate whose CA names no responder, and the broker's log says why. Never set `disabled: true` outside a
 trial.
 
 ## etcd
@@ -224,8 +229,12 @@ Single-site and multi-region store blocks, complete files, are in
 
 `examples/port49-etcd-snapshot.{service,timer}` take an hourly snapshot into
 `/var/backups/port49` (0700 root, `UMask=0077`), on an etcd host, since it needs etcd's root
-certificate. `examples/port49-enrollments-export.{service,timer}` export the directory's sealed
-enrollment store daily from a broker host. Run each once by hand before you rely on its timer.
+certificate; it needs `examples/tmpfiles-etcd.conf` (the directory) and keeps two weeks.
+`examples/port49-enrollments-export.{service,timer}` export the directory's sealed
+enrollment store daily from a broker host, into a dated file in `/var/backups/port49-broker` (0700,
+the broker's): the unit writes a temporary file and renames it, because systemd's `StandardOutput=file:`
+does not truncate and a shorter export would keep the older one's tail. Run each once by hand before you
+rely on its timer.
 Each cluster has its own snapshot: the directory etcd's, and each region's session etcd.
 
 ## Two groups of servers
@@ -255,7 +264,7 @@ bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of
 
 One key, everywhere, from one secret, in three steps. In each, `reload` is `systemctl reload`.
 
-1. Make the new key (32 bytes, id `e2`) and install it on every host, beside the old, as
+1. Make the new key (the same recipe, id `e2`) and install it on every host, beside the old, as
    `/etc/port49/secrets/encryption-e2.key` and `broker-encryption-e2.key`. Add it to every
    `port49d.yaml` and `port49-broker.yaml` as `previous:`, in every region, and reload
    everything. Every process now opens what either key sealed.
@@ -272,9 +281,10 @@ refused too.
 
 ## When it will not start
 
-`journalctl -u port49d -b` (or `-u port49-broker`) holds the line. After five failed starts in
-five minutes (`StartLimitBurst`), systemd stops trying: fix the cause, then
-`systemctl reset-failed port49d && systemctl start port49d`.
+`journalctl -u port49d -b` (or `-u port49-broker`) holds the line. The units set no start limit, so
+a start that fails is tried again every ten seconds, and a port49d whose etcd is down at boot
+comes back on its own when etcd does; journald rate-limits a repeated line. Fix the cause and the next
+try starts.
 
 | Refusal | The line | Where | Fix |
 |---|---|---|---|
@@ -282,4 +292,4 @@ five minutes (`StartLimitBurst`), systemd stops trying: fix the cause, then
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | `chmod go-w` the directory the line names, or an ancestor of it |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `journalctl -u port49-broker -b` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
-| The unit stopped after `StartLimitBurst` | `Start request repeated too quickly` | `systemctl status port49d` | `systemctl reset-failed port49d && systemctl start port49d` |
+| etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |

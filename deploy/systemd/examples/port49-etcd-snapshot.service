@@ -1,7 +1,8 @@
 # An hourly etcd snapshot, on an etcd host: it needs etcd's root client certificate, so it
 # is not a port49 host's unit. Set ETCDCTL_ENDPOINTS, ETCDCTL_CACERT, ETCDCTL_CERT and
 # ETCDCTL_KEY with `systemctl edit port49-etcd-snapshot`. The file is written 0600
-# (UMask=0077) into /var/backups/port49, which tmpfiles.d makes 0700 root. systemd does no
+# (UMask=0077) into /var/backups/port49, which tmpfiles-etcd.conf makes 0700 root; each
+# snapshot replaces its day's, and ExecStartPost keeps two weeks. systemd does no
 # $(...) or redirection itself, so the command runs under sh; $$ and %% are systemd's
 # escapes for $ and %.
 [Unit]
@@ -11,3 +12,4 @@ Description=port49 etcd snapshot
 Type=oneshot
 UMask=0077
 ExecStart=/bin/sh -c 'etcdctl snapshot save /var/backups/port49/etcd-$$(date +%%F).db'
+ExecStartPost=/usr/bin/find /var/backups/port49 -name 'etcd-*.db' -mtime +14 -delete
