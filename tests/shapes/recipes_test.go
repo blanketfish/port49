@@ -15,14 +15,14 @@ import (
 // newline when it is read (decision 53 ruling 1), so a recipe whose output can end in one
 // makes a 31-byte key one time in 256, and a raw device key cannot be typed into a device.
 const (
-	sealRecipe   = "openssl rand -base64 24 > /tmp/encryption.key"
+	sealRecipe   = `until head -c 32 /dev/urandom > /tmp/encryption.key; [ "$(tail -c1 /tmp/encryption.key | od -An -tx1 | tr -d ' ')" != 0a ]; do :; done`
 	deviceRecipe = "openssl rand -hex 16 > /tmp/k"
 )
 
 // runRecipe runs cmd with /tmp moved under dir and returns the file it wrote.
 func runRecipe(t *testing.T, cmd, dir, name string) []byte {
 	t.Helper()
-	cmd = strings.ReplaceAll(cmd, "/tmp/", dir+"/")
+	cmd = strings.NewReplacer("/tmp/encryption.key", dir+"/encryption.key", "/tmp/k", dir+"/k").Replace(cmd)
 	if out, err := exec.Command("sh", "-c", cmd).CombinedOutput(); err != nil {
 		t.Fatalf("%s: %v: %s", cmd, err, out)
 	}
@@ -40,13 +40,16 @@ func TestTheKeyRecipesNeverMakeAKeyThatFails(t *testing.T) {
 			t.Errorf("README.md does not hold the recipe %q", r)
 		}
 	}
-	if strings.Contains(readme, "/dev/urandom") {
-		t.Error("README.md makes a key from raw bytes: one in 256 ends in a newline that file: drops")
+	if strings.Contains(readme, "head -c 32 /dev/urandom > /tmp/k") {
+		t.Error("README.md makes a device key from raw bytes: it cannot be typed into a device")
 	}
 	for i := 0; i < 40; i++ {
 		dir := t.TempDir()
 		tr := newTree(t)
 		seal := runRecipe(t, sealRecipe, dir, "encryption.key")
+		if len(seal) != 32 || seal[31] == '\n' {
+			t.Fatalf("a sealing key from the recipe is %d bytes and ends in a newline: %v", len(seal), len(seal) == 32 && seal[31] == '\n')
+		}
 		tr.write("/etc/port49/secrets/encryption.key", string(seal), 0o400)
 		d, _ := tr.load("deploy/systemd/config")
 		if _, err := d.EncryptionKeys(); err != nil {
@@ -61,6 +64,22 @@ func TestTheKeyRecipesNeverMakeAKeyThatFails(t *testing.T) {
 		if got := s.Bytes(); len(got) != 32 || !regexp.MustCompile(`^[0-9a-f]{32}$`).Match(got) {
 			t.Fatalf("a device key from the recipe is %d bytes and not 32 hex characters: it cannot be typed into a device", len(got))
 		}
+	}
+}
+
+// The loop does regenerate: the generator is replaced by one that makes a key ending in a
+// newline twice, then a good one, and the recipe's result is the good one.
+func TestTheSealingRecipeRegeneratesAKeyEndingInANewline(t *testing.T) {
+	dir := t.TempDir()
+	gen := filepath.Join(dir, "gen")
+	script := "#!/bin/sh\nn=$(cat " + dir + "/n 2>/dev/null || echo 0); echo $((n+1)) > " + dir + "/n\n" +
+		"if [ \"$n\" -lt 2 ]; then printf 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk\\n'; else printf 'gggggggggggggggggggggggggggggggg'; fi\n"
+	if err := os.WriteFile(gen, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := strings.Replace(sealRecipe, "head -c 32 /dev/urandom", gen, 1)
+	if got := string(runRecipe(t, r, dir, "encryption.key")); got != strings.Repeat("g", 32) {
+		t.Errorf("the recipe kept a key of %d bytes, want the third try's 32", len(got))
 	}
 }
 

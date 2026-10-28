@@ -66,13 +66,13 @@ The two encryption files hold one value and are owned apart, so neither process 
 other's copy. They sit outside the key directory because a policy may name any file under
 `key_secret_refs.file_dir`. Never put them there.
 
-Make a sealing key once, and install it for both. It is 32 printable characters (192 bits):
-a key file loses one trailing newline when it is read, so a raw random key would end in one
-and load a byte short one time in 256.
+Make a sealing key (32 raw bytes) once, and install it for both. The loop regenerates until the
+last byte is not a newline: a key file loses one trailing newline when it is read, so such a key
+would load a byte short, one time in 256.
 
 ```sh
 umask 077
-openssl rand -base64 24 > /tmp/encryption.key
+until head -c 32 /dev/urandom > /tmp/encryption.key; [ "$(tail -c1 /tmp/encryption.key | od -An -tx1 | tr -d ' ')" != 0a ]; do :; done
 install -o port49d -g port49d -m 0400 /tmp/encryption.key /etc/port49/secrets/encryption.key
 install -o port49-broker -g port49-broker -m 0400 /tmp/encryption.key /etc/port49/secrets/broker-encryption.key
 shred -u /tmp/encryption.key
