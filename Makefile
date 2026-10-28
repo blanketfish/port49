@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke leaks
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest test-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke leaks
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -58,11 +58,37 @@ HW_PACKAGES = ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/...
 test-hw: check-static
 	CGO_ENABLED=0 PORT49_TEST_HW_REQUIRED=1 go test -tags hwkey,hwkey_dlopen $(HW_PACKAGES) -count=1 -timeout 20m
 
-# internal/port49d runs about 9.5 minutes under the full parallel suite, close
-# to go test's 10-minute default, so the limit is set here rather than left to
-# turn a slow machine into a timeout panic.
+# internal/port49d took about 943 s under the full parallel suite (12a), against
+# a 20-minute limit, so the limit is set here rather than left to turn a slow
+# machine into a timeout panic.
 test: lab-unit test-python
-	go test ./... -count=1 -timeout 20m
+	go test ./... -count=1 -timeout 30m
+
+# CI runs the suite in three kinds of job (.github/workflows/test.yml):
+#   test-rest   everything but internal/port49d, plus the ACL test that must
+#               not skip;
+#   test-shard  one third of internal/port49d, SHARD=i/n. tests/ci/cmd/testshard
+#               builds the regex from `go test -list`, and fails when it lists
+#               nothing or the shard is empty; a separate job checks that the
+#               shards together hold every test;
+#   test-root   the tests that skip unless run as root, which must pass, not skip.
+# A skip in a must-pass test fails: tests/ci/cmd/mustpass reads go test -json.
+PORT49D_PKG = github.com/rhwendt/port49/internal/port49d
+ACL_TEST = TestAnACLGrantingWriteIsRefused
+ROOT_TESTS = TestAKeyFileTheBrokerDidNotWriteIsRefused
+
+test-rest: lab-unit test-python
+	go test $$(go list -f '{{if ne .ImportPath "$(PORT49D_PKG)"}}{{.ImportPath}}{{end}}' ./...) -count=1 -timeout 30m
+	go test -json ./internal/fence/ -run '^$(ACL_TEST)$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(ACL_TEST)
+
+test-shard:
+	@test -n "$(SHARD)" || { echo "usage: make test-shard SHARD=i/n"; exit 2; }
+	@re=$$(go run ./tests/ci/cmd/testshard -pkg ./internal/port49d -shard $(SHARD)) || exit 1; \
+	  go test ./internal/port49d/ -count=1 -timeout 30m -run "$$re"
+
+test-root:
+	@test "$$(id -u)" = 0 || { echo "make test-root must run as root (sudo -E env \"PATH=\$$PATH\" make test-root)"; exit 1; }
+	go test -json ./internal/port49d/ -run '^($(ROOT_TESTS))$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(ROOT_TESTS)
 
 # The Python library and the Ansible lookup (plan 9d), stdlib unittest. A
 # missing python3 fails it: make test runs it (decision 46 ruling 14).
@@ -137,6 +163,8 @@ vet:
 	go vet -tags compose ./tests/compose/...
 	go vet -tags hwkey_dlopen ./...
 	go vet -tags hwkey,hwkey_dlopen $(HW_PACKAGES) ./tests/lab/l60/
+	go vet -tags systemd,helm,kind,image,packages ./tests/...
+	go vet -tags lab ./tests/lab/
 
 # Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
 # unauthenticated connection; CI-sized. keyring is here because Resolve runs

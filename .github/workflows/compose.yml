@@ -1,6 +1,4 @@
-# The container shape's smoke test (plan 7f, Task 1). The repository's
-# only workflow: `make test` needs the lab's captures, which live on the
-# lab machine alone (the labpcap audit), so it is run there and by hand.
+# The container shape's smoke; test.yml runs `make test` and `make vet`.
 name: compose
 on:
   push: {branches: [main]}
