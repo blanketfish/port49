@@ -62,11 +62,16 @@ func TestAnOfflineOwnerRefusalNeverAdvisesAChown(t *testing.T) {
 	if want := "e.g. sudo -u port49-broker port49-broker revoke --offline ..."; !strings.Contains(s, want) {
 		t.Errorf("the refusal lacks %q: %s", want, s)
 	}
-	// an owner with no name on this host is said by its number, quoted for sudo
+	// an owner with no name on this host is said by its number, with no sudo line: sudo refuses
+	// a #uid unless runas_allow_unknown_id is set
 	offlineOwnerName = old
-	if s := offlineOwnerHint(&wrongOwnerError{what: "x", uid: 4242, euid: 0}).Error(); !strings.Contains(s, "sudo -u '#4242' port49-broker revoke --offline ...") {
+	offlineOwnerName = func(uint32) string { return "" }
+	s = offlineOwnerHint(&wrongOwnerError{what: "broker.state_dir /var/lib/port49", uid: 4242, euid: 0}).Error()
+	if strings.Contains(s, "sudo") || !strings.Contains(s, "run it as uid 4242, the owner of broker.state_dir") ||
+		!strings.Contains(s, "do not chown the directory") {
 		t.Errorf("an unnamed owner: %s", s)
 	}
+	offlineOwnerName = old
 }
 
 // A revocation or lift the store refused says the tool's own words: what

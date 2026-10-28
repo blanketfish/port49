@@ -98,7 +98,16 @@ next:
 	return out
 }
 
-const sealMarker, deviceMarker = "broker-encryption.key", "openssl rand -hex 16"
+const sealMarker, deviceMarker = `ln "$u" "$b"`, "openssl rand -hex 16"
+
+// withID sets the recipe's KEY_ID line, and withDevice its DEVICE_KEY line.
+func withID(block, id string) string {
+	return strings.Replace(block, "KEY_ID=   #", "KEY_ID="+id+"   #", 1)
+}
+
+func withDevice(block, name string) string {
+	return strings.Replace(block, "DEVICE_KEY=core-v2 ", "DEVICE_KEY="+name+" ", 1)
+}
 
 func TestTheKeyRecipesNeverMakeAKeyThatFails(t *testing.T) {
 	seal, dev := readmeBlock(t, sealMarker), readmeBlock(t, deviceMarker)
@@ -193,7 +202,7 @@ func TestTheSealingRecipeRefusesWhatItCannotMakeWell(t *testing.T) {
 	// a step after the draw that fails stops the install
 	e = newRecipeEnv(t)
 	e.stub("chown", "exit 1\n")
-	if out, err := e.run(seal); err == nil || !strings.Contains(out, "the sealing key was not installed") {
+	if out, err := e.run(seal); err == nil || !strings.Contains(out, "the sealing key was not made") {
 		t.Errorf("a failed chown: exit %v, output %q", err, out)
 	}
 	if l := leftovers(t, filepath.Join(e.root, "secrets")); len(l) != 0 {
@@ -201,32 +210,151 @@ func TestTheSealingRecipeRefusesWhatItCannotMakeWell(t *testing.T) {
 	}
 }
 
-// A file or a link another user planted at the final name is replaced, never read or written
-// through, and its target is untouched.
-func TestTheKeyRecipesReplaceAPlantedFile(t *testing.T) {
-	for _, c := range []struct{ block, dir, name string }{
-		{readmeBlock(t, sealMarker), "secrets", "encryption.key"},
-		{readmeBlock(t, sealMarker), "secrets", "broker-encryption.key"},
-		{readmeBlock(t, deviceMarker), "keys", "core-v2"},
+// A key that is already there is never replaced: a file or a link at either final name is
+// refused with the line, its bytes (or its link's target) are unchanged, nothing else is made and
+// no temporary file stays. The rotation recipe, pasted with the old id, would otherwise destroy
+// the current key and everything it sealed.
+func TestTheKeyRecipesNeverOverwrite(t *testing.T) {
+	seal, dev := readmeBlock(t, sealMarker), readmeBlock(t, deviceMarker)
+	for _, c := range []struct{ block, dir, planted string }{
+		{seal, "secrets", "encryption.key"},
+		{seal, "secrets", "broker-encryption.key"},
+		{dev, "keys", "core-v2"},
 	} {
+		for _, how := range []string{"file", "link", "dangling"} {
+			link := how != "file"
+			e := newRecipeEnv(t)
+			victim := filepath.Join(e.stubs, "victim")
+			if err := os.WriteFile(victim, []byte("EXISTING-NOT-A-REAL-KEY"), 0o400); err != nil {
+				t.Fatal(err)
+			}
+			at := filepath.Join(e.root, c.dir, c.planted)
+			if how == "dangling" {
+				if err := os.Symlink(filepath.Join(e.stubs, "nowhere"), at); err != nil {
+					t.Fatal(err)
+				}
+			} else if link {
+				if err := os.Symlink(victim, at); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(at, []byte("EXISTING-NOT-A-REAL-KEY"), 0o400); err != nil {
+				t.Fatal(err)
+			}
+			out, err := e.run(c.block)
+			if err == nil || !strings.Contains(out, c.planted+" exists; pick a new key id") {
+				t.Errorf("%s (%s): exit %v, output %q, want a refusal naming it", c.planted, how, err, out)
+			}
+			if how != "dangling" {
+				if got := mustRead(t, at); got != "EXISTING-NOT-A-REAL-KEY" {
+					t.Errorf("%s (%s): its bytes changed to %d bytes", c.planted, how, len(got))
+				}
+			} else if _, err := os.Lstat(filepath.Join(e.stubs, "nowhere")); err == nil {
+				t.Errorf("%s (dangling): the recipe wrote through the link", c.planted)
+			}
+			// the check comes first: no temporary file is made, no key drawn, for a name taken
+			if calls, _ := os.ReadFile(e.log()); strings.Contains(string(calls), "mktemp") {
+				t.Errorf("%s (%s): the recipe made temporary files for a name already taken", c.planted, how)
+			}
+			if l := leftovers(t, filepath.Join(e.root, c.dir), c.planted); len(l) != 0 {
+				t.Errorf("%s (%s): left %v", c.planted, how, l)
+			}
+		}
+	}
+}
+
+// A final name that appears after the first check (another run, a planted file) is still not
+// replaced: the link fails, and when the second of the two fails the first is taken back, so a
+// failure never leaves half a key in place.
+func TestTheSealingRecipeLeavesNoHalfAKey(t *testing.T) {
+	seal := readmeBlock(t, sealMarker)
+	for _, planted := range []string{"encryption.key", "broker-encryption.key"} {
 		e := newRecipeEnv(t)
-		victim := filepath.Join(e.stubs, "victim")
-		if err := os.WriteFile(victim, []byte("PLANTED-NOT-A-REAL-KEY"), 0o666); err != nil {
-			t.Fatal(err)
+		// chown runs in the destination directory, after the checks and before the links
+		e.stub("chown", "[ -e "+planted+" ] || echo EXISTING-NOT-A-REAL-KEY > "+planted+"\n")
+		out, err := e.run(seal)
+		if err == nil || !strings.Contains(out, planted+" exists; pick a new key id") {
+			t.Errorf("%s appearing late: exit %v, output %q", planted, err, out)
 		}
-		if err := os.Symlink(victim, filepath.Join(e.root, c.dir, c.name)); err != nil {
-			t.Fatal(err)
+		if got := mustRead(t, filepath.Join(e.root, "secrets", planted)); got != "EXISTING-NOT-A-REAL-KEY\n" {
+			t.Errorf("%s was replaced: %d bytes", planted, len(got))
 		}
-		if out, err := e.run(c.block); err != nil {
-			t.Fatalf("%s: %v: %s", c.name, err, out)
+		if l := leftovers(t, filepath.Join(e.root, "secrets"), planted); len(l) != 0 {
+			t.Errorf("%s appearing late: left %v", planted, l)
 		}
-		if got := mustRead(t, victim); got != "PLANTED-NOT-A-REAL-KEY" {
-			t.Errorf("%s: the recipe wrote through a planted link: %d bytes", c.name, len(got))
+	}
+}
+
+// The device recipe's name appearing after the check is not replaced either.
+func TestTheDeviceRecipeLeavesALateKeyAlone(t *testing.T) {
+	e := newRecipeEnv(t)
+	e.stub("chown", "[ -e core-v2 ] || echo EXISTING-NOT-A-REAL-KEY > core-v2\n")
+	out, err := e.run(readmeBlock(t, deviceMarker))
+	if err == nil || !strings.Contains(out, "core-v2 exists; pick a new key id") {
+		t.Errorf("core-v2 appearing late: exit %v, output %q", err, out)
+	}
+	if got := mustRead(t, filepath.Join(e.root, "keys", "core-v2")); got != "EXISTING-NOT-A-REAL-KEY\n" {
+		t.Errorf("core-v2 was replaced: %d bytes", len(got))
+	}
+	if l := leftovers(t, filepath.Join(e.root, "keys"), "core-v2"); len(l) != 0 {
+		t.Errorf("left %v", l)
+	}
+}
+
+// A rotation makes the e2 pair beside an e1 pair it leaves untouched; a pasted rerun with the
+// old id is refused.
+func TestARotationLeavesTheOldKeyAlone(t *testing.T) {
+	const e2 = "-e2"
+	seal := readmeBlock(t, sealMarker)
+	e := newRecipeEnv(t)
+	if out, err := e.run(seal); err != nil {
+		t.Fatalf("the first key: %v: %s", err, out)
+	}
+	old := mustRead(t, filepath.Join(e.root, "secrets", "encryption.key"))
+	oldB := mustRead(t, filepath.Join(e.root, "secrets", "broker-encryption.key"))
+	if out, err := e.run(withID(seal, "e2")); err != nil {
+		t.Fatalf("the rotation: %v: %s", err, out)
+	}
+	for n, was := range map[string]string{"encryption.key": old, "broker-encryption.key": oldB} {
+		if got := mustRead(t, filepath.Join(e.root, "secrets", n)); got != was {
+			t.Errorf("the rotation changed %s", n)
 		}
-		fi, err := os.Lstat(filepath.Join(e.root, c.dir, c.name))
-		if err != nil || fi.Mode()&os.ModeSymlink != 0 {
-			t.Errorf("%s is still the planted link (%v)", c.name, err)
+	}
+	rotated := []string{"encryption" + e2 + ".key", "broker-encryption" + e2 + ".key"}
+	for _, n := range rotated {
+		if b := mustRead(t, filepath.Join(e.root, "secrets", n)); len(b) != 32 || b[31] == '\n' {
+			t.Errorf("%s is %d bytes", n, len(b))
 		}
+	}
+	if mustRead(t, filepath.Join(e.root, "secrets", rotated[0])) == old {
+		t.Error("the e2 key is the e1 key")
+	}
+	if out, err := e.run(seal); err == nil || !strings.Contains(out, "exists; pick a new key id") {
+		t.Errorf("a rerun with the old id: exit %v, output %q", err, out)
+	}
+	if l := leftovers(t, filepath.Join(e.root, "secrets"), "encryption.key", "broker-encryption.key",
+		rotated[0], rotated[1]); len(l) != 0 {
+		t.Errorf("left %v", l)
+	}
+	// the device recipe's other name sits beside the first
+	d := newRecipeEnv(t)
+	dev := readmeBlock(t, deviceMarker)
+	for _, n := range []string{"core-v2", "core-v3"} {
+		if out, err := d.run(withDevice(dev, n)); err != nil {
+			t.Fatalf("%s: %v: %s", n, err, out)
+		}
+	}
+}
+
+// An interrupted run leaves no temporary file, including one whose second mktemp failed.
+func TestTheRecipesCleanUpWhenInterrupted(t *testing.T) {
+	e := newRecipeEnv(t)
+	e.stub("mktemp", "n=$(cat '"+e.stubs+"/m' 2>/dev/null || echo 0); echo $((n+1)) > '"+e.stubs+"/m'\n"+
+		"[ \"$n\" -ge 1 ] && exit 1\nexec /usr/bin/mktemp \"$@\"\n")
+	if _, err := e.run(readmeBlock(t, sealMarker)); err == nil {
+		t.Error("a failed second mktemp does not fail the recipe")
+	}
+	if l := leftovers(t, filepath.Join(e.root, "secrets")); len(l) != 0 {
+		t.Errorf("a failed second mktemp left %v", l)
 	}
 }
 
