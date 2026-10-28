@@ -56,20 +56,20 @@ func adminFailed(name string, err error, unanswered string, stderr io.Writer) in
 	case errors.Is(err, agent.ErrConnectionChanged):
 		fmt.Fprintf(stderr, "%s: the connection changed during the touch; nothing was sent: run it again\n", name)
 	case errors.Is(err, agent.ErrTouchBusy):
-		fmt.Fprintf(stderr, "%s: %s\n", name, unprefixed(err))
+		fmt.Fprintf(stderr, "%s: %s\n", name, safeLine(unprefixed(err)))
 	case errors.Is(err, agent.ErrChallengeMismatch):
-		fmt.Fprintf(stderr, "%s: %s\n", name, unprefixed(err))
+		fmt.Fprintf(stderr, "%s: %s\n", name, safeLine(unprefixed(err)))
 	case errors.As(err, &refused):
-		fmt.Fprintf(stderr, "%s: the agent will not send that: %s\n", name, refused.Detail)
+		fmt.Fprintf(stderr, "%s: the agent will not send that: %s\n", name, safeLine(refused.Detail))
 	case errors.As(err, &lost):
 		if unanswered == "" {
 			unanswered = "check the broker's decision log before trying again"
 		}
-		fmt.Fprintf(stderr, "%s: the broker did not answer (%v); %s\n", name, lost.Err, unanswered)
+		fmt.Fprintf(stderr, "%s: the broker did not answer (%v); %s\n", name, safeLine(lost.Err.Error()), unanswered)
 	default:
 		// The key's own words (no touch within 15s, locked, absent), a session
 		// that is over, an unreachable broker: each says what to do.
-		fmt.Fprintf(stderr, "%s: %s\n", name, unprefixed(err))
+		fmt.Fprintf(stderr, "%s: %s\n", name, safeLine(unprefixed(err)))
 	}
 	return 1
 }
@@ -110,7 +110,7 @@ func adminRefused(name string, resp agent.AdminResponse, touched bool, stderr io
 		fmt.Fprintf(stderr, "%s: the broker refused the request: %s; fix that and run it again\n", name, detail)
 	case resp.Status == 503:
 		fmt.Fprintf(stderr, "%s: the broker is unavailable just now (%s: %s); nothing was done: run it again shortly\n",
-			name, e.Error, detail)
+			name, safeLine(e.Error), detail)
 	default:
 		fmt.Fprintf(stderr, "%s: the broker answered %d %s: %s; nothing is known to have run: look at the broker's "+
 			"log, then run it again\n", name, resp.Status, printsafe.Line(e.Error, 60), detail)
@@ -127,10 +127,24 @@ func printAdminResult(name string, resp agent.AdminResponse, stdout, stderr io.W
 			"before trying again\n", name)
 		return 1
 	}
-	fmt.Fprintln(stdout, res.Text)
+	fmt.Fprintln(stdout, safeText(res.Text))
 	if res.Partial {
 		fmt.Fprintf(stderr, "%s: a step did not finish: run the same command again\n", name)
 		return 3
 	}
 	return 0
+}
+
+// safeLine is a broker's or an agent's one line of text made safe for the
+// terminal: the text crosses a network, so a hostile or broken broker must not
+// put an escape sequence or a forged line in front of an operator.
+func safeLine(s string) string { return printsafe.Line(s, 600) }
+
+// safeText is a broker's multi-line text with each line made safe.
+func safeText(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = printsafe.Line(l, 2000)
+	}
+	return strings.Join(lines, "\n")
 }

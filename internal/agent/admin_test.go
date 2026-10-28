@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/hwkey"
 )
 
 // The agent makes admin calls (spec §5.1.6; plan 12b task 3d): it derives the
@@ -128,6 +130,14 @@ func TestThePathIsAllowlisted(t *testing.T) {
 		{Method: "POST", Path: "/v1/revocations", Body: []byte(`{}`)},
 		{Method: "POST", Path: "/v1/directory/import?replace=maybe", Body: []byte("x")},
 		{Method: "POST", Path: "/v1/directory/import?force=1", Body: []byte("x")},
+		{Method: "POST", Path: "/v1/directory/import?replace=true&replace=false", Body: []byte("x")},
+		{Method: "POST", Path: "/v1/revocations/../tokens/revoke", Body: []byte(bobBody)},
+		{Method: "POST", Path: "/v1/directory%2Fforget", Body: []byte(bobBody)},
+		{Method: "POST", Path: "/v1/directory/forget?x=1", Body: []byte(bobBody)},
+		{Method: "POST", Path: "/v1/directory/forget/", Body: []byte(bobBody)},
+		{Method: "GET", Path: "/v1/revocationsX"},
+		{Method: "GET", Path: "/v1/revocations?x=1"},
+		{Method: "GET", Path: "/v1/revocations/lift"},
 		{Method: "POST", Path: "/v1/directory/export", Body: []byte(`{}`)},
 		revokeCall(`{"mine":true}`),
 		revokeCall(`{"principal":"user:bob@example.com","force":true}`),
@@ -283,5 +293,39 @@ func TestTheSidFormIsShownAsSidAtIssuer(t *testing.T) {
 	var refused *AdminRefusedError
 	if _, err := classifyAdmin(revokeCall(`{"sid":"s-1"}`)); !errors.As(err, &refused) {
 		t.Fatalf("a sid with no issuer: %v", err)
+	}
+}
+
+// An absent or a locked touch key sends nothing: the broker sees no request.
+func TestAnAbsentOrLockedKeySendsNothing(t *testing.T) {
+	for name, st := range map[string]hwkey.State{"absent": hwkey.Absent, "locked": hwkey.Locked} {
+		t.Run(name, func(t *testing.T) {
+			r := newRealRigWith(t, realOpts{mfa: true, admin: true})
+			r.touch.SetState(st)
+			if _, err := r.a.Admin(context.Background(), revokeCall(bobBody)); err == nil {
+				t.Fatal("no error")
+			}
+			if r.logRecords(t, "admin_touch", "") != 0 || r.touch.Signs() != 0 {
+				t.Fatal("the broker saw a request or the key signed")
+			}
+		})
+	}
+}
+
+// Each prompt the agent shows is also in its own log, with the operation, the
+// target and the uid, and never the challenge or the signature.
+func TestThePromptIsInTheAgentsLog(t *testing.T) {
+	r := newRealRigWith(t, realOpts{mfa: true, admin: true})
+	var log bytes.Buffer
+	r.a.log = &log
+	if _, err := r.a.AdminPrompt(context.Background(), revokeCall(bobBody), func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("admin_prompt operation=revoke_principal target=%q uid=%d", "user:bob@example.com", getuid())
+	if !strings.Contains(log.String(), want) {
+		t.Fatalf("the log lacks %q: %q", want, log.String())
+	}
+	if strings.Contains(strings.ToLower(log.String()), "challenge") || strings.Contains(log.String(), "signature") {
+		t.Fatalf("the log carries proof material: %q", log.String())
 	}
 }

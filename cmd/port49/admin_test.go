@@ -230,6 +230,18 @@ func TestTheImportPromptShowsReplace(t *testing.T) {
 	if m.touch.Signs() != 2 {
 		t.Fatalf("the key signed %d times, want 2", m.touch.Signs())
 	}
+	// The broker judged both proofs: the request hash the agent signed over
+	// (the path with its ?replace=, and the body) is the one the broker
+	// computed.
+	proved := 0
+	for _, l := range strings.Split(m.logs.String(), "\n") {
+		if strings.Contains(l, `"reason":"admin_touch_proved"`) {
+			proved++
+		}
+	}
+	if proved != 2 {
+		t.Fatalf("the broker proved %d imports, want 2", proved)
+	}
 	directoryStdin = nil
 }
 
@@ -286,5 +298,53 @@ func TestRevokeSidSendsTheSidAndItsIssuer(t *testing.T) {
 	}
 	if n := len(stub.requests()); n != 1 {
 		t.Fatalf("a usage error sent a request: %d", n)
+	}
+}
+
+// A broker's text crosses a network: whatever it puts in an answer, no escape
+// sequence and no forged line reaches the terminal.
+func TestBrokerTextNeverReachesTheTerminalRaw(t *testing.T) {
+	withNoQuestion(t)
+	evil := "ok\x1b[31mred\x1b]0;title\a\nforged: all clear\r"
+	stub := newAdminStub(t, func(req agent.AdminRequest) (int, any) {
+		switch {
+		case req.Method == "GET":
+			return 200, api.RevocationList{Text: evil}
+		case req.Path == "/v1/revocations/lift":
+			return 200, api.AdminResult{Text: evil}
+		case strings.Contains(string(req.Body), "bob"):
+			return 503, api.Error{Error: "bad\x1b[2Jcode", Detail: evil}
+		case strings.Contains(string(req.Body), "carol"):
+			return 409, api.Error{Error: "admin_operation_failed", Detail: evil}
+		}
+		return 200, api.RevokeResponse{By: "principal", Principal: "user:dave@example.com\x1b[1m", Text: evil}
+	})
+	_ = stub
+	for _, args := range [][]string{
+		{"revoke", "--list"},
+		{"revoke", "--lift", "--principal", "user:alice@example.com"},
+		{"revoke", "--principal", "user:bob@example.com", "--yes"},
+		{"revoke", "--principal", "user:carol@example.com", "--yes"},
+		{"revoke", "--principal", "user:dave@example.com", "--yes"},
+		{"directory", "unlock", "user:alice@example.com"},
+	} {
+		_, so, se := cli(args...)
+		if strings.ContainsAny(so+se, "\x1b\a\r") {
+			t.Errorf("%v: a control character reached the terminal: %q %q", args, so, se)
+		}
+	}
+}
+
+// A 409 that arrives before any touch gives its one line and no prompt, and
+// says nothing was pressed.
+func TestAnUntouched409GivesOneLineAndNoPrompt(t *testing.T) {
+	withNoQuestion(t)
+	newAdminStub(t, func(agent.AdminRequest) (int, any) {
+		return 409, api.Error{Error: "admin_operation_failed", Detail: "this broker has no directory"}
+	})
+	code, so, se := cli("directory", "forget", "user:alice@example.com")
+	if code != 1 || so != "" || strings.Count(se, "\n") != 1 || !strings.Contains(se, "this broker cannot run that") ||
+		!strings.Contains(se, "no key press was asked") || strings.Contains(se, "touch your key") {
+		t.Fatalf("exit %d %q %q", code, so, se)
 	}
 }

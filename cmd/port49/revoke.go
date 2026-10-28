@@ -184,7 +184,7 @@ func revokeList(stdout, stderr io.Writer) int {
 			"the broker's log if it does it again")
 		return 1
 	}
-	fmt.Fprintln(stdout, list.Text)
+	fmt.Fprintln(stdout, safeText(list.Text))
 	fmt.Fprintln(stderr, "port49 revoke: a self or key revocation (--mine, or --device and --username) leaves no mark "+
 		"and is not listed: the broker's decision log names each (event revoke, revocation.by self or key)")
 	return 0
@@ -201,13 +201,13 @@ func revokeMine(req api.RevokeRequest, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 revoke: no agent is running for you; run 'port49 login', then run this again")
 		return 1
 	case errors.As(err, &refused):
-		fmt.Fprintf(stderr, "port49 revoke: refused: %s: %s\n", refused.Code, refused.Detail)
+		fmt.Fprintf(stderr, "port49 revoke: refused: %s: %s\n", safeLine(refused.Code), safeLine(refused.Detail))
 		return 1
 	case err != nil:
 		// A 503 (revocation_busy among them) carries its code, detail and
 		// retry hint in the APIError's text; ErrAgentTooOld says to log in
 		// again; a RevokedError says why the session ended.
-		fmt.Fprintln(stderr, "port49 revoke:", unprefixed(err))
+		fmt.Fprintln(stderr, "port49 revoke:", safeLine(unprefixed(err)))
 		return 1
 	}
 	printRevokeReport(rep, stdout)
@@ -224,11 +224,11 @@ func printRevokeReport(rep api.RevokeResponse, stdout io.Writer) {
 		// colleague is seen at once (pre-flight M11).
 		subject := "no subject in the policy in force names it"
 		if rep.Subject != "" {
-			subject = "subject " + rep.Subject
+			subject = "subject " + safeLine(rep.Subject)
 		}
-		fmt.Fprintf(stdout, "target: %s (%s)\n", rep.Principal, subject)
+		fmt.Fprintf(stdout, "target: %s (%s)\n", safeLine(rep.Principal), subject)
 	}
-	fmt.Fprintln(stdout, rep.Text)
+	fmt.Fprintln(stdout, safeText(rep.Text))
 }
 
 // confirmIn and confirmTTY are where port49 revoke --principal asks before it
