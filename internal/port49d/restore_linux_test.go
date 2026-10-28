@@ -94,8 +94,8 @@ func TestARestoreUnderARunningDaemonKeepsItsMarks(t *testing.T) {
 }
 
 // brokerOn is a broker on the store srv serves, as port49-broker's
-// identity, with daemonCfg's policy: what port49 revoke reaches on
-// port49-broker's admin socket.
+// identity, with daemonCfg's policy: what port49 revoke reaches through
+// port49-broker's API.
 func brokerOn(t *testing.T, srv *etcdtest.Server, daemonCfg string) *broker.Broker {
 	t.Helper()
 	cfg, err := config.Load(daemonCfg)

@@ -1148,6 +1148,22 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// cannot drift apart (Task 9 review M6).
 		// The in-process broker is on the memory store alone (plan 7e,
 		// Ruling 1), so an error is a file that does not load.
+		// The file is this process's alone for its whole life: an offline
+		// revoke holds the same lock while it writes, so it is never read half
+		// through and never overwritten from a load older than its mark.
+		unlock, lerr := lockRevocationsWait(cfg.Broker.RevocationsFile, revocationsLockWait)
+		switch {
+		case errors.Is(lerr, errRevocationsLocked):
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("broker.revocations_file %s is locked: an offline revoke or lift (port49d revoke --offline) "+
+				"or another port49d holds it; wait for it to finish, or stop that port49d", cfg.Broker.RevocationsFile)
+		case lerr != nil:
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, lerr)
+		}
+		defer unlock()
 		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
 		if err != nil {
 			stopSpool()

@@ -1125,7 +1125,7 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	}
 }
 
-// A mark made on one port49-broker's admin socket reaches the other
+// A mark made through one port49-broker's revoke reaches the other
 // replica through the marks feed (plan 7e, Ruling 5): alice's held
 // connection to it is closed, said on port49-broker's stderr through
 // brk.Say (Ruling T9-c), and the daemon's marks deny her next command
@@ -1575,7 +1575,7 @@ func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
 // After a restore loses a revocation, the runner's takeover puts it back
 // from its copy and says so; a mark lifted through the watch is not put
 // back (Ruling 12; pre-flight I5). Both were made and the lift lifted on
-// the runner's own admin socket: its own changes reach its copy too, a
+// the runner's own revoke: its own changes reach its copy too, a
 // lift before it is answered (marksCopy.Lifted).
 func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	var out syncBuffer

@@ -117,9 +117,8 @@ func TestTheStoreRefusesWhatWouldRunUnsafely(t *testing.T) {
 }
 
 // Each role on etcd holds its own identity alone (plan 7e, Rulings 1, 2):
-// port49d.yaml names the daemon's, its policy and an admin socket, and no
-// broker; port49-broker.yaml names the broker's and an admin socket, and
-// never runs on memory. Each refusal names the key.
+// port49d.yaml names the daemon's, its policy, and no broker;
+// port49-broker.yaml names the broker's, and never runs on memory. Each refusal names the key.
 func TestEachRoleHoldsItsOwnIdentityAlone(t *testing.T) {
 	dir := storeFiles(t)
 	daemon := func(s *storeYAML) { s.Etcd.Broker = nil }

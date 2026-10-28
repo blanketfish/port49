@@ -25,7 +25,7 @@ import (
 // refused 403 api_right_missing without its right, then asks for a touch
 // bound to its own request, then runs. In that order, so a caller without the
 // right never presses the key, and a refused proof changes nothing. The
-// answers carry the text the admin socket printed (api.AdminResult).
+// answers carry the text the removed admin socket printed (api.AdminResult).
 
 // importReadTimeout is api.ImportReadTimeout, a variable so a test can shorten it.
 var importReadTimeout = api.ImportReadTimeout

@@ -44,11 +44,12 @@ func offlineRevokeDaemon(args []string, log, out io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	brk, file, err := offlineDaemon(ctx, f.cfgPath, log)
+	brk, file, release, err := offlineDaemon(ctx, f.cfgPath, log)
 	if err != nil {
 		fmt.Fprintf(out, "%s%v; nothing was changed\n", daemonOfflineSay, err)
 		return 1
 	}
+	defer release() // held through the write: a port49d that starts meanwhile waits for it
 	if f.list {
 		return offlineList(ctx, brk.Store, daemonOfflineSay, out)
 	}
@@ -85,25 +86,38 @@ func offlineRevokeDaemon(args []string, log, out io.Writer) int {
 // offlineDaemon is the broker offlineRevokeDaemon runs on: the memory store
 // loaded from broker.revocations_file at cfgPath's port49d.yaml, saved to it
 // by every revocation or lift. It refuses a config with no broker: block, and
-// a port49d that is running. file is the path of broker.revocations_file.
-func offlineDaemon(ctx context.Context, cfgPath string, log io.Writer) (*broker.Broker, string, error) {
+// a port49d that is running. file is the path of broker.revocations_file, and
+// release gives up the lock on it, which the caller holds through its write.
+func offlineDaemon(ctx context.Context, cfgPath string, log io.Writer) (*broker.Broker, string, func(), error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	if cfg.Broker == nil {
-		return nil, "", errors.New("this port49d.yaml has no broker: block, so port49d holds no revocations; " +
+		return nil, "", nil, errors.New("this port49d.yaml has no broker: block, so port49d holds no revocations; " +
 			"revocations are port49-broker's: run port49-broker revoke --offline")
 	}
 	if err := daemonAnswering(ctx, cfg.MetricsListen); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	file := cfg.Broker.RevocationsFile
+	// A port49d that answers nothing may still be starting, or be another
+	// config's on the same file: the lock is what keeps it out of the file
+	// between this load and this save.
+	release, err := lockRevocations(file)
+	switch {
+	case errors.Is(err, errRevocationsLocked):
+		return nil, "", nil, fmt.Errorf("broker.revocations_file %s is locked: a port49d is running or starting on it "+
+			"(or another offline revoke is); stop it, or revoke through the API with port49 revoke", file)
+	case err != nil:
+		return nil, "", nil, fmt.Errorf("broker.revocations_file %s: %w", file, err)
+	}
 	st := memory.New(time.Now)
 	marks := store.NewMarks()
 	held, err := restoreRevocations(ctx, st, file)
 	if err != nil {
-		return nil, "", fmt.Errorf("broker.revocations_file %s: %w", file, err)
+		release()
+		return nil, "", nil, fmt.Errorf("broker.revocations_file %s: %w", file, err)
 	}
 	for _, r := range held {
 		marks.Set(r, true)
@@ -117,7 +131,7 @@ func offlineDaemon(ctx context.Context, cfgPath string, log io.Writer) (*broker.
 	brk.Redact = redactorFor(brk.Policy)
 	brk.Sessions = session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Say = func(format string, args ...any) {}
-	return brk, file, nil
+	return brk, file, release, nil
 }
 
 // daemonAnswering is nil when nothing answers /readyz on port49d's metrics

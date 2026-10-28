@@ -36,7 +36,7 @@ import (
 // The directory sign-in's 3am cases, end to end: the real port49 CLI against
 // the lab broker (a real broker behind its own Listener, as port49d serves
 // it), the directory a fake, the enrollment store a sealed file, and the
-// operator's commands the real `port49 directory ...` over an admin socket.
+// operator's commands the real `port49 directory ...` over the broker API.
 // The passwords and keys are fixed fakes, and the codes are computed from
 // them; a failure names the case and never the value.
 

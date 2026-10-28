@@ -439,8 +439,8 @@ with `docker logs -f` into `l.logPath` and `l.errPath`, so the host harness's `m
 `composeStack` carries what a test does to the stack: `HangStore()` is `docker compose pause`
 on the three etcd members (the store stops answering without a reset) and `ReleaseStore()`
 unpauses them; `StopDaemon()` and `StartDaemon()` stop and start port49d's container, the
-follower resuming from the stop's time; `Revoke(args...)` runs `port49 revoke` on the broker's
-admin socket inside its container; `ProxyMode()` says whether Docker's userland proxy serves
+follower resuming from the stop's time; `Revoke(args...)` runs `port49-broker revoke --offline` inside
+its container; `ProxyMode()` says whether Docker's userland proxy serves
 the published port.
 
 New register rows run on it. Rows already closed keep their re-checks on the host harness

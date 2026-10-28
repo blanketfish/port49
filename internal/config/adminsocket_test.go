@@ -55,7 +55,7 @@ func TestEtcdNoLongerRequiresAnAdminSocket(t *testing.T) {
 // The admin sockets are gone from the tree (spec §5.1.6, §12): no Go file
 // under internal/ or cmd/ imports the package that served them, the package is
 // not there, and no config, script or Go fixture under deploy/ or tests/ sets
-// admin_socket. Historical notes (results, evidence, markdown) are not config.
+// admin_socket (deploy/'s markdown included). Historical notes (results, evidence) are not config.
 func TestNoAdminSocketRemains(t *testing.T) {
 	root := "../.."
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
@@ -95,7 +95,8 @@ func TestNoAdminSocketRemains(t *testing.T) {
 				}
 				return nil
 			}
-			if !configExt[filepath.Ext(p)] {
+			// Operator docs live under deploy/, so its markdown is read too.
+			if ext := filepath.Ext(p); !configExt[ext] && !(top == "deploy" && ext == ".md") {
 				return nil
 			}
 			raw, err := os.ReadFile(p)

@@ -381,7 +381,7 @@ type labBroker struct {
 	bl   *broker.Listener
 	// The directory sign-in (labOpts.signIn): the directory it asks, the
 	// sealed file its second factors live in, the key that seals it, and the
-	// admin socket `port49 directory ...` is run against.
+	// broker API `port49 directory ...` is run against.
 	signIn     *fakeSignInDirectory
 	enrollPath string
 	enrollKeys crypt.Keys
