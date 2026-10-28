@@ -111,6 +111,7 @@ func gate(t *testing.T, name, what string) {
 // started, and where the observations go.
 type lab struct {
 	t       *testing.T
+	study   string // the register entry the observations belong to: "L60", or "L86" (l86_test.go)
 	cell    string
 	dir     string    // the lab directory
 	tty     *os.File  // nil in the self-test, which asks nothing
@@ -127,20 +128,28 @@ type lab struct {
 
 // newLab opens Ryan's terminal and the lab directory, and with build builds
 // port49.
-func newLab(t *testing.T, cell string, build bool) *lab {
+func newLab(t *testing.T, cell string, build bool) *lab { return newStudyLab(t, "L60", cell, build) }
+
+// newStudyLab is newLab for the register entry study.
+func newStudyLab(t *testing.T, study, cell string, build bool) *lab {
 	t.Helper()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("no terminal: run this from your own terminal, not under a tool (%v)", err)
 	}
 	t.Cleanup(func() { tty.Close() })
-	return setupLab(t, cell, build, tty, tty, labDir(t))
+	return setupStudyLab(t, study, cell, build, tty, tty, labDir(t))
 }
 
 // setupLab is newLab on a given terminal (nil for none) and lab directory.
 func setupLab(t *testing.T, cell string, build bool, tty *os.File, out io.Writer, dir string) *lab {
 	t.Helper()
-	h := &lab{t: t, cell: cell, tty: tty, out: out, module: cmpOr(os.Getenv(envModule), defaultModule),
+	return setupStudyLab(t, "L60", cell, build, tty, out, dir)
+}
+
+func setupStudyLab(t *testing.T, study, cell string, build bool, tty *os.File, out io.Writer, dir string) *lab {
+	t.Helper()
+	h := &lab{t: t, study: study, cell: cell, tty: tty, out: out, module: cmpOr(os.Getenv(envModule), defaultModule),
 		agents: map[string]int{}, dir: dir}
 	if tty != nil {
 		if st, err := term.GetState(int(tty.Fd())); err == nil {
@@ -158,7 +167,7 @@ func setupLab(t *testing.T, cell string, build bool, tty *os.File, out io.Writer
 		h.restoreTTY()
 		h.obsFile.Close()
 	})
-	h.say("\n=== L60 cell %s, %s ===", cell, time.Now().Format(time.RFC3339))
+	h.say("\n=== %s cell %s, %s ===", study, cell, time.Now().Format(time.RFC3339))
 	h.obs("run_started", time.Now().UTC().Format(time.RFC3339))
 	if build {
 		h.bin = buildPort49(t, h)
@@ -227,6 +236,13 @@ func repoRoot(t *testing.T) string {
 // the lab directory, fresh each run so it is this tree's port49.
 func buildPort49(t *testing.T, h *lab) string {
 	t.Helper()
+	if p := os.Getenv("PORT49_L86_BIN"); p != "" && h.study == "L86" {
+		// make l86-build's client, so the run is that build's (tests/lab/L86-runbook.md).
+		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+			t.Fatalf("PORT49_L86_BIN=%s is not an executable file: run make l86-build", p)
+		}
+		return p
+	}
 	out := filepath.Join(h.dir, "bin", "port49-client")
 	h.say("building port49 with the hwkey_dlopen tag (under a minute)...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -252,7 +268,12 @@ func (h *lab) step(n, format string, a ...any) {
 
 // obs records one observation: in the test log and in observations.log.
 func (h *lab) obs(field, value string) {
-	line := fmt.Sprintf("L60 %s %s: %s", h.cell, field, oneLine(redact(value)))
+	if h.study == "L86" {
+		// An admin call's words never carry a token, a challenge or a signature; a long opaque
+		// run is masked all the same.
+		value = longOpaque.ReplaceAllString(value, "<opaque>")
+	}
+	line := fmt.Sprintf("%s %s %s: %s", h.study, h.cell, field, oneLine(redact(value)))
 	h.t.Log(line)
 	fmt.Fprintf(h.obsFile, "%s %s\n", time.Now().UTC().Format(time.RFC3339), line)
 }
@@ -275,6 +296,9 @@ func oneLine(s string) string {
 	}
 	return s
 }
+
+// longOpaque is a run that can only be a token, a hash or a signature.
+var longOpaque = regexp.MustCompile(`[A-Za-z0-9+_=-]{40,}`)
 
 var (
 	serialHash  = regexp.MustCompile(`(#|%23)\d+`)

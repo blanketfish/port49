@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -11,6 +11,13 @@ build:
 # system's dynamic loader. Written beside, never over, bin/port49.
 build-client:
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+
+# L86's binaries, at the fixed paths tests/lab/L86-runbook.md runs: the client and the L86 cells
+# as one compiled test binary, so what Ryan runs is this tree's. Nothing here touches a token.
+l86-build:
+	mkdir -p bin/l86
+	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/l86/port49 ./cmd/port49
+	CGO_ENABLED=0 go test -tags hwkey_dlopen -c -o bin/l86/l60.test ./tests/lab/l60
 
 # The Secure Enclave backend and the L63 spike, built and vetted for macOS
 # without a Mac (decision 45 ruling 6): the client build of port49 and the

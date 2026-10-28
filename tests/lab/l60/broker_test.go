@@ -97,6 +97,14 @@ func labDevices() []admission.Device {
 // root in the unit test), and the touch devices ask for a touch. logTo
 // receives the decision log (no token, no credential in it).
 func startBroker(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.Writer) *labBroker {
+	return startBrokerWith(t, clientCA, pivRoots, logTo, labPolicy)
+}
+
+// startBrokerWith is startBroker with its own policy: policyFor is given
+// whether the touch devices are on (labAdminPolicy gives the subject the
+// broker API's admin rights, for L86).
+func startBrokerWith(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.Writer,
+	policyFor func(touch bool) string) *labBroker {
 	t.Helper()
 	now := time.Now()
 	dir := t.TempDir()
@@ -114,7 +122,7 @@ func startBroker(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.W
 		t.Fatal(err)
 	}
 	policyFile := filepath.Join(dir, "policy.yaml")
-	if err := os.WriteFile(policyFile, []byte(labPolicy(pivRoots != nil)), 0o600); err != nil {
+	if err := os.WriteFile(policyFile, []byte(policyFor(pivRoots != nil)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	devices := labDevices()
@@ -185,12 +193,18 @@ func startBroker(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo io.W
 // decisions-<cell>.jsonl in the lab directory.
 func (h *lab) startLabBroker(ca *testpki.CA, pivRoots []byte) *labBroker {
 	h.t.Helper()
+	return h.startLabBrokerWith(ca, pivRoots, labPolicy)
+}
+
+// startLabBrokerWith is startLabBroker under its own policy.
+func (h *lab) startLabBrokerWith(ca *testpki.CA, pivRoots []byte, policyFor func(touch bool) string) *labBroker {
+	h.t.Helper()
 	f, err := os.OpenFile(filepath.Join(h.dir, "decisions-"+h.cell+".jsonl"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	h.t.Cleanup(func() { f.Close() })
-	b := startBroker(h.t, ca, pivRoots, f)
+	b := startBrokerWith(h.t, ca, pivRoots, f, policyFor)
 	h.broker = b
 	h.obs("broker", b.url+" (in-process; touch devices: "+map[bool]string{true: "yes", false: "no"}[pivRoots != nil]+")")
 	return b
