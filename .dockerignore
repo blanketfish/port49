@@ -9,3 +9,5 @@ deploy/compose/local/
 .worktrees/
 .superpowers/
 **/deploy/compose/local/
+.claude/
+**/tests/lab/logs/

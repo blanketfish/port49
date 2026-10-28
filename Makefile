@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest test-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke leaks
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest test-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image image-check compose-smoke leaks
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -366,6 +366,11 @@ lab:
 # The container image (plan 7f, Task 1): one peer shape, never required.
 image:
 	docker build --target port49 -t port49:dev .
+
+# The image's directory and binary modes (plan 12b, Task 5): builds, then reads the
+# exported filesystem. Behind the image tag so `go test ./...` never needs Docker.
+image-check: image
+	go test -tags image ./tests/image/ -count=1 -v
 
 # The compose stack end to end: up, a device login, the stack recreated
 # with its volumes kept, the session and the broker's state_dir kept. Needs
