@@ -12,6 +12,8 @@
 package compose
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,6 +91,8 @@ func newStack(t *testing.T) stack {
 		}
 	}
 	s := stack{t: t, file: filepath.Join(root, "deploy", "compose", "compose.yaml"), local: local, config: cfg}
+	// A run that was killed leaves its project, volumes included, behind: start from nothing.
+	s.try("down", "-v", "--remove-orphans")
 	t.Cleanup(func() {
 		if t.Failed() {
 			out, _ := s.try("logs", "--no-color")
@@ -145,19 +149,45 @@ func (c composeRotator) sh(stdin []byte, script string, args ...string) error {
 	return nil
 }
 
-// WritePolicy puts the policy into both -etc volumes, each by a temporary
-// file and mv, so a reader never sees half a file.
+// WritePolicy is the operator's way (README): write config/policy.yaml, then
+// `docker compose up -d`, whose setup copies it into both -etc volumes. port49d
+// reads it at policy.watch_interval, with no restart.
 func (c composeRotator) WritePolicy(policyYAML []byte) error {
-	return c.sh(policyYAML, `set -eu; cat > /tmp/p
-for d in /e /b; do install -o 0 -g 0 -m 0644 /tmp/p $d/.policy.new && mv $d/.policy.new $d/policy.yaml; done`)
+	if err := os.WriteFile(filepath.Join(c.s.config, "policy.yaml"), policyYAML, 0o644); err != nil {
+		return err
+	}
+	if out, err := c.s.try("up", "-d"); err != nil {
+		return fmt.Errorf("docker compose up -d: %v\n%s", err, out)
+	}
+	return nil
 }
 
 // WriteKey makes keys/<name> root:65532 0440 in port49d-keys, never replacing one.
 func (c composeRotator) WriteKey(name string, secret []byte) error {
 	return c.sh(secret, `set -eu; umask 077; cd /k
-[ ! -e "$1" ] && [ ! -L "$1" ]
+{ [ ! -e "$1" ] && [ ! -L "$1" ]; } || exit 1
 t=$(mktemp ./.key.XXXXXX); trap 'rm -f "$t"' EXIT
 cat > "$t"; chown 0:65532 "$t"; chmod 0440 "$t"; ln "$t" "$1"`, name)
+}
+
+// volumeSHA256 is the sha256 of path in volume, hashed in a throwaway container
+// (hex only: the bytes never leave it).
+func volumeSHA256(t *testing.T, volume, path string) string {
+	t.Helper()
+	out, err := exec.Command("docker", "run", "--rm", "-v", project+"_"+volume+":/v:ro", "--entrypoint", "sha256sum",
+		"port49-setup:dev", "/v/"+path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("sha256sum %s in %s: %v", path, volume, err)
+	}
+	return strings.Fields(string(out))[0]
+}
+
+// volumeHolds reports whether file in volume contains text.
+func volumeHolds(t *testing.T, volume, file, text string) bool {
+	t.Helper()
+	err := exec.Command("docker", "run", "--rm", "-v", project+"_"+volume+":/v:ro", "--entrypoint", "grep",
+		"port49-setup:dev", "-q", text, "/v/"+file).Run()
+	return err == nil
 }
 
 func (c composeRotator) StartedAt() string {
@@ -250,6 +280,50 @@ func TestComposeSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	shapetest.RotateCell(t, dev, "alice", mint, "127.0.0.1:9049", 90*time.Second, composeRotator{s: s, policy: policy})
+
+	// The policy is config/'s, copied at every up: the version 2 line the
+	// rotation added through config/ is still in both volumes after another up.
+	s.run("up", "-d")
+	for _, v := range []string{"port49d-etc", "broker-etc"} {
+		if !volumeHolds(t, v, "policy.yaml", "tacacs_v2") {
+			t.Fatalf("a second `up -d` reverted the version 2 policy in %s", v)
+		}
+	}
+
+	// A key is placed once (setup.sh): a different local/keys/tacacs_v1 is
+	// refused with a line naming the file and the volume's bytes stay; a key
+	// removed from local/ stops nothing and is kept.
+	keyPath := filepath.Join(s.local, "keys", "tacacs_v1")
+	want := sha256.Sum256(key)
+	wantHex := hex.EncodeToString(want[:])
+	if err := os.WriteFile(keyPath, []byte("a-different-fake-key-value-0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.try("up", "-d"); err == nil {
+		t.Fatalf("`up -d` with a changed local/keys/tacacs_v1 succeeded:\n%s", out)
+	}
+	if logs := s.run("logs", "--no-color", "setup"); !strings.Contains(logs, "tacacs_v1") ||
+		!strings.Contains(logs, "keys are never replaced in place") {
+		t.Fatalf("setup's refusal does not name the file and say keys are never replaced in place:\n%s", logs)
+	}
+	if got := volumeSHA256(t, "port49d-keys", "tacacs_v1"); got != wantHex {
+		t.Fatal("the key in the port49d-keys volume changed under a different local/keys/tacacs_v1")
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	s.run("up", "-d") // a key gone from local/ stops nothing
+	if logs := s.run("logs", "--no-color", "setup"); !strings.Contains(logs, "is gone; keeping the installed") {
+		t.Fatalf("setup did not say it kept the installed key:\n%s", logs)
+	}
+	if got := volumeSHA256(t, "port49d-keys", "tacacs_v1"); got != wantHex {
+		t.Fatal("the key in the port49d-keys volume changed when local/keys/tacacs_v1 was removed")
+	}
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.run("up", "-d")
+	s.ready("127.0.0.1:9049")
 
 	// The admin cells: a revoke with no touch is 401 and changes nothing, and
 	// the break-glass form (every broker stopped) revokes and lifts.

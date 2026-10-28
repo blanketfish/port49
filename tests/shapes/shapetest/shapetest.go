@@ -421,6 +421,11 @@ func WithAcceptV2(policyYAML []byte, keyDir string) ([]byte, error) {
 	return yaml.Marshal(doc)
 }
 
+// v1Back is how long RotateCell waits for the version 1 login after the version 2
+// miss: the strike's backoff (limits.malformed_backoff_max, 5 s) and the policy's
+// watch interval, with margin.
+const v1Back = 15 * time.Second
+
 // RotateCell adds a device key version with no restart (spec §13 decision 54
 // ruling 2). In order: the policy names version 2 while its file is absent,
 // where a v2-keyed login fails and a v1 login passes; then the file is
@@ -453,7 +458,9 @@ func RotateCell(t *testing.T, d Device, user string, mint func() string, metrics
 		t.Fatal("a login keyed with version 2 passed before its file existed")
 	}
 	tok = mint()
-	WaitFor(t, "a login keyed with version 1, after the policy names version 2 and the key miss backoff", within, func() bool {
+	// The v1 login waits the backoff (5 s at most) and the watch interval, not
+	// within: a version 1 login that is not back in 15 s is a failure.
+	WaitFor(t, "a login keyed with version 1, after the policy names version 2 and the key miss backoff", v1Back, func() bool {
 		st, err := d.TryLogin(user, tok)
 		return err == nil && st == wire.AuthenStatusPass
 	})
