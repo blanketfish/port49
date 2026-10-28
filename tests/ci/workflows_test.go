@@ -112,13 +112,13 @@ func TestOnlyThreeJobsHoldIDToken(t *testing.T) {
 		}
 	}
 	f, _ := release(t)
-	for id, want := range map[string]string{"pypi": "pypi", "galaxy": "galaxy"} {
+	for id, want := range map[string]string{"pypi": "pypi", "galaxy": "galaxy", "goreleaser": "release", "image": "release", "chart": "release"} {
 		if f.Jobs[id].Environment != want {
 			t.Errorf("job %s has environment %v, want %s", id, f.Jobs[id].Environment, want)
 		}
 	}
 	for id, j := range f.Jobs {
-		if id != "pypi" && id != "galaxy" && j.Environment != nil {
+		if _, named := map[string]bool{"pypi": true, "galaxy": true, "goreleaser": true, "image": true, "chart": true}[id]; !named && j.Environment != nil {
 			t.Errorf("job %s names an environment (%v)", id, j.Environment)
 		}
 	}
@@ -138,6 +138,14 @@ func TestOnlyThreeJobsHoldIDToken(t *testing.T) {
 			}
 		}
 	}
+}
+
+func envNames(m map[string]string) []string {
+	var n []string
+	for k := range m {
+		n = append(n, k)
+	}
+	return n
 }
 
 func hasUses(j job, prefix string) bool {
@@ -170,16 +178,31 @@ func TestPublishJobsBuildNothing(t *testing.T) {
 			runs = append(runs, s)
 		}
 	}
-	if len(gx.Steps) != 2 || !strings.HasPrefix(gx.Steps[0].Uses, "actions/download-artifact@") || len(runs) != 1 {
-		t.Fatalf("galaxy is not a download-artifact and one run step: %+v", gx.Steps)
+	if len(gx.Steps) != 3 || !strings.HasPrefix(gx.Steps[0].Uses, "actions/download-artifact@") ||
+		!strings.HasPrefix(gx.Steps[1].Uses, "actions/setup-python@") || len(runs) != 1 {
+		t.Fatalf("galaxy is not a download-artifact, a setup-python and one run step: %+v", gx.Steps)
 	}
 	lines := strings.Split(strings.TrimSpace(runs[0].Run), "\n")
-	if len(lines) != 2 || lines[0] != "pip install --require-hashes -r requirements-release.txt" ||
-		lines[1] != `ansible-galaxy collection publish port49-client-*.tar.gz --token "$GALAXY_API_KEY" 2>&1 | tee publish.log || grep -q "already exists" publish.log` {
+	if len(lines) != 4 || lines[0] != "pip install --require-hashes -r requirements-release.txt" ||
+		lines[1] != "set +e" ||
+		lines[2] != "ansible-galaxy collection publish port49-client-*.tar.gz > publish.log 2>&1" ||
+		!strings.HasPrefix(lines[3], "rc=$?") {
 		t.Errorf("galaxy's commands are %q", lines)
 	}
-	if runs[0].Env["GALAXY_API_KEY"] != "${{ secrets.GALAXY_API_KEY }}" {
-		t.Errorf("galaxy's publish env is %v", runs[0].Env)
+	// the token reaches ansible-galaxy through its server config in the environment, never argv
+	for _, bad := range []string{"--token", "--api-key", "GALAXY_API_KEY"} {
+		if strings.Contains(runs[0].Run, bad) {
+			t.Errorf("galaxy's run text names %s: the token must go through env, not argv", bad)
+		}
+	}
+	if runs[0].Env["ANSIBLE_GALAXY_SERVER_LIST"] != "public" ||
+		runs[0].Env["ANSIBLE_GALAXY_SERVER_PUBLIC_URL"] != "https://galaxy.ansible.com/" ||
+		runs[0].Env["ANSIBLE_GALAXY_SERVER_PUBLIC_TOKEN"] != "${{ secrets.GALAXY_API_KEY }}" || len(runs[0].Env) != 3 {
+		t.Errorf("galaxy's publish env is %v (names only)", envNames(runs[0].Env))
+	}
+	// only Galaxy's exact, anchored refusal for an existing version is success
+	if !strings.Contains(runs[0].Run, "grep -qE '^ERROR! Error when publishing collection to .* \\(HTTP Code: 400, Message: Artifact already exists' publish.log") {
+		t.Error("galaxy's already-exists match is not the anchored message")
 	}
 	for _, id := range []string{"build-python", "build-galaxy"} {
 		j := f.Jobs[id]
@@ -218,9 +241,8 @@ func TestCheckoutsKeepNoCredentials(t *testing.T) {
 			if !strings.HasPrefix(s.Uses, "actions/checkout@") {
 				continue
 			}
-			keeps := s.With["persist-credentials"] != false
-			if keeps != (id == "goreleaser") {
-				t.Errorf("job %s: checkout persist-credentials is %v: only goreleaser's keeps them", id, s.With["persist-credentials"])
+			if s.With["persist-credentials"] != false {
+				t.Errorf("job %s: checkout persist-credentials is %v, want false (GoReleaser takes GITHUB_TOKEN from env)", id, s.With["persist-credentials"])
 			}
 		}
 	}
@@ -233,14 +255,32 @@ func TestGoReleaserIsThePinnedBinary(t *testing.T) {
 		}
 	}
 	f, _ := release(t)
-	var runs []string
+	// a draft release, then the attestation over the real artifacts, then the publish
+	var order []string
 	for _, s := range f.Jobs["goreleaser"].Steps {
-		if s.Run != "" {
-			runs = append(runs, strings.TrimSpace(s.Run))
+		switch {
+		case strings.TrimSpace(s.Run) == "make release-packages":
+			order = append(order, "release")
+			if s.Env["GITHUB_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" {
+				t.Error("make release-packages does not take GITHUB_TOKEN from env")
+			}
+		case strings.HasPrefix(s.Uses, "actions/attest-build-provenance@"):
+			order = append(order, "attest")
+		case strings.TrimSpace(s.Run) == `gh release edit "$GITHUB_REF_NAME" --draft=false`:
+			order = append(order, "publish")
+			if s.Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" || s.Env["GH_REPO"] != "${{ github.repository }}" {
+				t.Error("the publish step lacks GH_TOKEN or GH_REPO in env")
+			}
+		case s.Run != "":
+			t.Errorf("the goreleaser job runs %q", s.Run)
 		}
 	}
-	if len(runs) != 1 || runs[0] != "make release-packages" {
-		t.Fatalf("the goreleaser job's commands are %q, want exactly make release-packages", runs)
+	if strings.Join(order, ",") != "release,attest,publish" {
+		t.Errorf("the goreleaser job's order is %v, want release, attest, publish", order)
+	}
+	gr, _ := os.ReadFile("../../.goreleaser.yaml")
+	if !regexp.MustCompile(`(?m)^release:\n  draft: true$`).Match(gr) {
+		t.Error(".goreleaser.yaml does not create a draft release")
 	}
 	mk, _ := os.ReadFile("../../Makefile")
 	if !regexp.MustCompile(`(?m)^release-packages: bin/goreleaser-\$\(GORELEASER_VERSION\)\n\tbin/goreleaser-\$\(GORELEASER_VERSION\) release --clean$`).Match(mk) {
@@ -317,6 +357,54 @@ func TestTheImageJobTagsAndAttests(t *testing.T) {
 			if !got[w] {
 				t.Errorf("%s does not wait for %s", id, w)
 			}
+		}
+	}
+}
+
+// Every publishing job waits for check, and check refuses a tag that is not on main and a tag
+// that disagrees with the version files: a release from an unreviewed commit never publishes.
+func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
+	f, _ := release(t)
+	for id, j := range f.Jobs {
+		if id == "check" {
+			continue
+		}
+		var needs []string
+		switch n := j.Needs.(type) {
+		case string:
+			needs = []string{n}
+		case []any:
+			for _, x := range n {
+				needs = append(needs, x.(string))
+			}
+		}
+		found := false
+		for _, n := range needs {
+			found = found || n == "check"
+		}
+		if !found {
+			t.Errorf("job %s does not need check (needs %v)", id, needs)
+		}
+	}
+	var runs []string
+	for _, s := range f.Jobs["check"].Steps {
+		if s.Run != "" {
+			runs = append(runs, strings.TrimSpace(s.Run))
+		}
+		if strings.HasPrefix(s.Uses, "actions/checkout@") && s.With["fetch-depth"] != 0 {
+			t.Errorf("check's checkout has fetch-depth %v, want 0 (the ancestor test needs main)", s.With["fetch-depth"])
+		}
+	}
+	for _, want := range []string{
+		`go run ./tests/ci/cmd/versioncheck -tag "$GITHUB_REF_NAME"`,
+		`git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "tag is not on main"; exit 1; }`,
+	} {
+		found := false
+		for _, r := range runs {
+			found = found || r == want
+		}
+		if !found {
+			t.Errorf("check does not run %q", want)
 		}
 	}
 }

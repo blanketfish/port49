@@ -146,8 +146,9 @@ nfpms:
         type: tree
         packager: deb
 
+# A draft until release.yml has attested the artifacts and publishes it.
 release:
-  draft: false
+  draft: true
   github:
     owner: rhwendt
     name: port49

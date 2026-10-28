@@ -134,9 +134,7 @@ func workflowProblems(name string, raw []byte) []string {
 			if s.Uses != "" && !pinned.MatchString(s.Uses) {
 				add("job %s: %q is not pinned by a full commit SHA", id, s.Uses)
 			}
-			// the one checkout that keeps its credentials: GoReleaser creates the release with them
-			keeps := name == "release.yml" && id == "goreleaser"
-			if strings.HasPrefix(s.Uses, "actions/checkout@") && !keeps && fmt.Sprint(s.With["persist-credentials"]) != "false" {
+			if strings.HasPrefix(s.Uses, "actions/checkout@") && fmt.Sprint(s.With["persist-credentials"]) != "false" {
 				add("job %s: a checkout without persist-credentials: false", id)
 			}
 			for _, bad := range []string{"github.event", "github.head_ref", "github.ref_name", "secrets."} {
