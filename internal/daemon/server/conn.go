@@ -518,9 +518,6 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 			// more: no admission, no reply. The strike is counted, and the next
 			// connection inside its backoff is refused at Accept; this one is
 			// closed at once with a reset, never held silent (L28 branch H).
-			if s.d.Held != nil {
-				s.d.Held.Put(s.dev.Device.Name, s.src, h, obf, s.d.Now())
-			}
 			s.keyMiss(h, obf, r.Diagnosis, r.Version)
 			return nil, false
 		}

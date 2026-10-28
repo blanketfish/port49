@@ -80,6 +80,9 @@ func Main(args []string) int {
 	if len(args) > 0 && (args[0] == "init-enrollments" || args[0] == "export-enrollments") {
 		return enrollmentsCmd("port49d", args[0], args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && args[0] == "keys-diagnose" {
+		return keysDiagnoseCmd(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && args[0] == "store-roles" {
 		return storeRolesCmd(args[1:], os.Stdout, os.Stderr)
 	}
@@ -100,6 +103,7 @@ func Main(args []string) int {
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], "+
 			"port49d init-revocations|init-issuer|rotate-issuer|init-enrollments|export-enrollments [--config FILE], "+
+			"port49d keys-diagnose --device NAME --capture FILE|-, "+
 			"port49d revoke --offline …, or port49d store-roles [--config FILE] (a subcommand comes first)")
 		return 2
 	}
@@ -1543,7 +1547,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		r.mfaUnavailable, r.adminTouch = mfaUnavailable, adminTouch
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)
-		r.seen, r.held = seen, deps.Held
+		r.seen = seen
 		var fetchDone <-chan struct{}
 		if cfg.InventoryService != nil {
 			// The fetcher asks the service every poll_interval from here on;
@@ -1676,29 +1680,6 @@ func (r *readiness) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	http.Error(w, why, http.StatusServiceUnavailable)
-}
-
-// assignedKeyRef is the key_ref a device is assigned now, for keys diagnose:
-// the policy in force's with a broker, and without one the admission index
-// config.Load built, by the device's first address. Empty is a name port49d
-// does not admit.
-func assignedKeyRef(cfg config.Config, live *policy.Live) func(string) string {
-	return func(name string) string {
-		if live != nil {
-			r, _ := live.Load().Admitted(name)
-			return r.KeyRef
-		}
-		if cfg.Admission == nil {
-			return ""
-		}
-		for _, d := range cfg.Inventory.Devices {
-			if d.Name == name && len(d.Addresses) > 0 {
-				r, _ := cfg.Admission.Lookup(d.Addresses[0])
-				return r.KeyRef
-			}
-		}
-		return ""
-	}
 }
 
 // labHandlerStore is the store the request handlers see: st itself unless the

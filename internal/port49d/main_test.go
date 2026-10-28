@@ -5,14 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"io"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/decision"
@@ -136,25 +134,5 @@ func TestTheStartSaysAKeyMoved(t *testing.T) {
 	announce(&out, &config.Config{Notices: []string{"platforms.cisco_iosxe.enable_username moved to the policy file"}})
 	if out.String() != "port49d: platforms.cisco_iosxe.enable_username moved to the policy file\n" {
 		t.Fatalf("%q", out.String())
-	}
-}
-
-// Without a broker, keys diagnose reads a device's assigned group from the
-// admission index config.Load built; a name not in the inventory is none.
-func TestAssignedKeyRefWithoutABroker(t *testing.T) {
-	inv := admission.Inventory{
-		Devices:   []admission.Device{{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}},
-		KeyGroups: []admission.KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "prod_key"}},
-	}
-	trie, err := admission.Build(inv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assigned := assignedKeyRef(config.Config{Inventory: inv, Admission: trie}, nil)
-	if got := assigned("leaf-01"); got != "prod_key" {
-		t.Fatalf("%q", got)
-	}
-	if got := assigned("spine-99"); got != "" {
-		t.Fatalf("%q", got)
 	}
 }

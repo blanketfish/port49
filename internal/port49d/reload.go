@@ -133,12 +133,10 @@ type reloader struct {
 	// cfgPath is port49d.yaml, whose inventory.max_removed_percent SIGHUP
 	// re-reads (plan 6a, I1); run sets it.
 	cfgPath string
-	// seen and held are the daemon's key-version marks and the packets it
-	// holds for keys diagnose; each swap forgets the devices the new bundle
-	// no longer admits under the key_ref they were seen on (plan 6a final
-	// review m6). Either may be nil; run sets them.
+	// seen is the daemon's key-version marks; each swap forgets the devices
+	// the new bundle no longer admits under the key_ref they were seen on
+	// (plan 6a final review m6). It may be nil; run sets it.
 	seen *keyring.Seen
-	held *keyring.Held
 	// generic writes the generic_platform records a bundle owes, at each swap
 	// (spec §5.7, §8). Daemon-only: nil in port49-broker, so a split
 	// deployment writes one record per port49d.
@@ -1260,9 +1258,6 @@ func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 	}
 	if r.seen != nil {
 		r.seen.Keep(assigned)
-	}
-	if r.held != nil {
-		r.held.Keep(assigned)
 	}
 	now := r.now()
 	if r.pass == nil {
