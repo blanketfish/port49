@@ -76,7 +76,16 @@ is the opposite: `setup` copies `config/policy.yaml` over the volumes' at every 
 `policy.watch_interval` with no restart. A policy edited inside a volume is reverted at the next `up`.
 
 Docker API access is root-equivalent, so guard it as you would the host: `docker run` with a volume
-reads every file in it. Compose's own `secrets:` is not used here.
+reads every file in it.
+
+Compose's own `secrets:` is measured (lab L84, `tests/lab/results/L84-systemd-docker.md`) and is **not used
+for device keys**. A file-backed secret starts port49d only if the host file is `root:65532` mode 0440:
+Compose bind-mounts it as it is and does not apply the long syntax's `uid`, `gid` or `mode`, and the file
+fence refuses `0444` (the short syntax's documented mode) and a file the operator owns. And adding a second
+secret means `docker compose up -d`, which recreates port49d: a key version cannot be added with no restart.
+The `port49d-keys` volume below is the way for device keys. `secrets:` may carry the encryption key, which is
+read at start and goes through the same file fence (the cell measured a device key's file; the encryption key
+was not measured on its own).
 
 ## Adding a key version
 

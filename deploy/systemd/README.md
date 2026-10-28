@@ -312,7 +312,7 @@ check on a read-only mount, since nothing there can change. `ProtectSystem=stric
 read-only. The units set `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes` and a capability
 bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of these.
 
-`LoadCredential=` is unmeasured (L84): it is not offered for a device key.
+`LoadCredential=` is unmeasured (L84, whose systemd cells are written and not yet run): it is not offered for a device key.
 
 ## Rotating the `encryption:` key
 
