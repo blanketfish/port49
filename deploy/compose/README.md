@@ -115,6 +115,11 @@ old version out of `current:` once each device carries the new key), and run `do
 `setup` copies the policy into both `-etc` volumes. port49d reads the policy at `policy.watch_interval` (5 s
 here) and the new version takes effect with no restart: `port49_key_secret_files_changed` stays 0.
 
+**Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
+key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
+file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
+crash-loops until you restore the file in the `port49-keys` volume or take the policy line out.
+
 ## A deployment
 
 - Bring your own PKI under `PORT49_COMPOSE_LOCAL`, in the layout `compose-pki` writes

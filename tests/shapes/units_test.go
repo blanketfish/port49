@@ -239,3 +239,21 @@ func TestTheEtcdAndBackupExamples(t *testing.T) {
 		}
 	}
 }
+
+// A key version is added file first, then the policy line, and removed policy line first: the other order
+// crash-loops port49d on a missing file. Every shape's README says so and names the failure.
+func TestEveryReadmeStatesTheKeyOrder(t *testing.T) {
+	for _, rel := range []string{"deploy/compose/README.md", "deploy/systemd/README.md", "deploy/helm/port49/README.md"} {
+		doc := strings.Join(strings.Fields(read(t, rel)), " ")
+		for _, want := range []string{
+			"Put the key file in place first, then add the policy line",
+			"take the policy line out first, then the file",
+			"`lstat ...: no such file`",
+			"crash-loops",
+		} {
+			if !strings.Contains(doc, want) {
+				t.Errorf("%s does not say %q", rel, want)
+			}
+		}
+	}
+}

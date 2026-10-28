@@ -71,6 +71,11 @@ root it must crash-loop on the `state_dir` refusal, which proves the cell detect
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
 remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. Vault Agent
 and the Secrets Store CSI driver are unmeasured here (L83) and not documented as supported.
+
+**Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
+key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
+file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
+crash-loops until you restore the key in the Secret or take the policy line out; the pod shows `CrashLoopBackOff` and `kubectl logs --previous` repeats the line.
 The example's store is a namespaced `SecretStore`, usable only from the release's namespace. A
 cluster-wide `ClusterSecretStore` without `conditions` can be used from every namespace: anyone who
 can create an ExternalSecret anywhere could read the device keys through your Vault role.
