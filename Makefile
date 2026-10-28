@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -250,6 +250,17 @@ lab-qualify:
 lab-l80:
 	@case "$(ARM)" in baseline|fixed) ;; *) echo "usage: make lab-l80 ARM=baseline|fixed [CELLS=...]"; exit 2;; esac
 	PORT49_L80_ARM=$(ARM) PORT49_L80_CELLS=$(CELLS) PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL80Remeasure$$' -count=1 -v -timeout 240m
+
+# L84 (plan 12b, Task 15): host credential mechanisms against fence.ReadSecret. lab-l84 runs the Compose
+# cells on the local images (nothing is pulled or built) and writes the note from the cells; with
+# A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
+# Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
+lab-l84:
+	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
+
+lab-l84-systemd: packages
+	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
+	PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+

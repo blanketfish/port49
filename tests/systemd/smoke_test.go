@@ -223,7 +223,19 @@ func (r rotator) StartedAt() string {
 	return r.b.show("port49d", "ExecMainStartTimestamp")["ExecMainStartTimestamp"]
 }
 
-func TestSystemdSmoke(t *testing.T) {
+// stack is a running port49 install in the container: the package, three etcd members, the broker
+// and port49d as their units, with the shipped configs rewritten to the container's endpoints.
+type stack struct {
+	b               box
+	root, pki       string
+	brokerDir       string
+	policy, subject string
+	dev             shapetest.Device
+	mint            func() string
+}
+
+// bringUp is everything TestSystemdSmoke does before its first cell, shared with L84's cell (a).
+func bringUp(t *testing.T) stack {
 	b := newBox(t)
 	root := b.root
 
@@ -351,6 +363,20 @@ func TestSystemdSmoke(t *testing.T) {
 	key := []byte(readHost(t, filepath.Join(pki, "keys", "tacacs_v1")))
 	dev := shapetest.Device{T: t, Addr: "127.0.0.1:49", Key: key}
 	mint := func() string { return shapetest.Mint(t, brokerDir, "127.0.0.1:8443", "smoke1") }
+	return stack{b: b, root: root, pki: pki, brokerDir: brokerDir, policy: policy, subject: subject, dev: dev, mint: mint}
+}
+
+func TestSystemdSmoke(t *testing.T) {
+	u := bringUp(t)
+	b, root, brokerDir, policy, dev, mint := u.b, u.root, u.brokerDir, u.policy, u.dev, u.mint
+	_ = root
+	must := func(s string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
 
 	// 1. The login and the floor line, naming every member.
 	if st := dev.Login("alice", mint()); st != wire.AuthenStatusPass {
