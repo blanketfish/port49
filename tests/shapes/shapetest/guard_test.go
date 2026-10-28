@@ -64,18 +64,34 @@ func TestGuardIsQuietWhenTheTestEndsNormally(t *testing.T) {
 	}
 }
 
-func TestStopPIDKillsThatProcess(t *testing.T) {
-	cmd := exec.Command("sleep", "60")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+func TestProcessIsKilledByPidUntilItIsReaped(t *testing.T) {
+	var mu sync.Mutex
+	var killed []int
+	defer func(f func(int)) { killPID = f }(killPID)
+	killPID = func(pid int) { mu.Lock(); killed = append(killed, pid); mu.Unlock() }
+	run := func() (*exec.Cmd, *Guard) {
+		cmd := exec.Command("sleep", "60")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return cmd, &Guard{}
 	}
-	StopPID(cmd.Process.Pid)()
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		_ = cmd.Process.Kill()
-		t.Fatal("the process survived StopPID")
+	live, g := run()
+	g.Process(live)
+	reapedCmd, g2 := run()
+	reaped := g2.Process(reapedCmd)
+	_ = reapedCmd.Process.Kill()
+	_ = reapedCmd.Wait()
+	reaped() // Wait returned: its pid may now belong to someone else
+	for _, c := range []*exec.Cmd{live, reapedCmd} {
+		defer c.Process.Kill()
+	}
+	for _, gg := range []*Guard{g, g2} {
+		for _, f := range gg.kill {
+			f()
+		}
+	}
+	if len(killed) != 1 || killed[0] != live.Process.Pid {
+		t.Errorf("signalled %v, want only the live process %d", killed, live.Process.Pid)
 	}
 }

@@ -52,7 +52,7 @@ type Cluster struct {
 	kubectl    string
 	kind       string
 	// Guard runs the kill functions when the run is killed; a test registers each process it
-	// starts (OnKill with shapetest.StopPID) beside the cluster's own deletion.
+	// starts (Process) beside the cluster's own deletion.
 	Guard *shapetest.Guard
 }
 

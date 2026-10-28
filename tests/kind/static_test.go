@@ -125,7 +125,7 @@ func TestKindTargetsDeleteTheClusterWhateverTheResult(t *testing.T) {
 // The smoke's own guard: Up arms it, and the host port49d is registered with it by pid.
 func TestSmokeRegistersWhatAKilledRunMustStop(t *testing.T) {
 	smoke := read(t, "tests", "kind", "smoke_test.go")
-	if !strings.Contains(smoke, "s.c.Guard.OnKill(shapetest.StopPID(cmd.Process.Pid))") {
+	if !strings.Contains(smoke, "s.c.Guard.Process(cmd)") {
 		t.Error("the host port49d is not registered with the guard by pid")
 	}
 	up := read(t, "tests", "kind", "kindtest", "kindtest.go")

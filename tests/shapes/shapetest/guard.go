@@ -3,6 +3,7 @@ package shapetest
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -66,7 +67,22 @@ func NewGuard(t *testing.T, exit func(int), deadline time.Time, grace time.Durat
 	return g
 }
 
-// StopPID kills the process with a recorded pid, for a guard's OnKill: by pid, never by name.
-func StopPID(pid int) func() {
-	return func() { _ = syscall.Kill(pid, syscall.SIGKILL) }
+// killPID is syscall.Kill, a variable so a test can see which pids a guard signals.
+var killPID = func(pid int) { _ = syscall.Kill(pid, syscall.SIGKILL) }
+
+// Process registers a started command: a killed run kills it by its recorded pid, never by name. The
+// returned func is called right after cmd.Wait returns; from then on the kill does nothing, because
+// the pid is free to be reused and a later signal could hit an unrelated process.
+func (g *Guard) Process(cmd *exec.Cmd) (reaped func()) {
+	pid := cmd.Process.Pid
+	var mu sync.Mutex
+	done := false
+	g.OnKill(func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if !done {
+			killPID(pid)
+		}
+	})
+	return func() { mu.Lock(); done = true; mu.Unlock() }
 }
