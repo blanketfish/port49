@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red
+.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -517,3 +517,10 @@ kind-smoke-red: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERS
 	KIND_OLD_ROOT=1 KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
 	  go test -tags kind ./tests/kind/ -run TestKindSmoke -count=1 -v -timeout 40m
+
+# The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
+# installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker with
+# --privileged and a cgroup v2 host. It builds tests/systemd/Dockerfile (apt and the etcd image
+# are pulled by that build) and fails, never skips, when dist/ holds no package.
+systemd-smoke: packages
+	go test -tags systemd ./tests/systemd/ -count=1 -v -timeout 30m
