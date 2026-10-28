@@ -234,7 +234,8 @@ The `.rpm` item is ruled by the team lead (2026-10-27) and written into ruling 6
 - **One-time actions before the first tag:**
   - register the PyPI trusted publisher: project `port49`, repository `rhwendt/port49`, workflow `release.yml`, environment `pypi`;
   - create the `galaxy` environment holding the secret `GALAXY_API_KEY`;
-  - restrict the `pypi` and `galaxy` environments' deployment branches and tags to `v*` tags;
+  - create the `release` environment (goreleaser, image and chart jobs) with Ryan as its required reviewer, so no tag publishes without approval;
+  - restrict the `pypi`, `galaxy` and `release` environments' deployment branches and tags to `v*` tags;
   - add a repository tag ruleset protecting `v*`;
   - make the GHCR package `port49` and the chart public when the repository goes public.
 
