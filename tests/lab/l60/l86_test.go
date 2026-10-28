@@ -283,19 +283,20 @@ func (h *lab) l86Lock(t *testing.T, cell string) {
 
 // l86Versions records the firmware Ryan named and libykcs11's package
 // version, from the package manager's metadata (no token is touched).
-func (h *lab) l86Versions() {
+func (h *lab) l86Versions() error {
 	h.t.Helper()
 	fw, err := l86Firmware(os.Getenv(envFirmware))
 	if err != nil {
-		h.t.Fatalf("INVALID: %v (the register needs the firmware recorded; RUNBOOK step 3)", err)
+		return fmt.Errorf("INVALID: %v (the register needs the firmware recorded; RUNBOOK step 3)", err)
 	}
 	h.obs("firmware_operator_reported_from_ykman", fw) // typed by Ryan: port49 does not read it
 	h.obs("libykcs11_module", h.module)
 	out, err := exec.Command("dpkg-query", "-W", "-f=${Version}", "ykcs11").Output()
 	if err != nil || len(out) == 0 {
-		h.t.Fatalf("INVALID: dpkg-query found no ykcs11 package: libykcs11's version cannot be recorded")
+		return fmt.Errorf("INVALID: dpkg-query found no ykcs11 package: libykcs11's version cannot be recorded")
 	}
 	h.obs("libykcs11_package_version", string(out))
+	return nil
 }
 
 // l86Cell is a cell's running state.
@@ -318,10 +319,21 @@ func l86Begin(t *testing.T, cell string) *lab {
 	h.needPKCS11()
 	h.l86Lock(t, cell)
 	dl, _ := t.Deadline()
-	h.l86Guard(os.Exit, dl)
-	h.l86Need9c()
-	h.l86Versions()
+	if err := h.l86Ready(os.Exit, dl); err != nil {
+		t.Fatal(err)
+	}
 	return h
+}
+
+// l86Ready is what a cell does before it starts anything: the kill guard, the check that
+// slot 9c's key is there (INVALID, before any agent exists), and the recorded versions.
+func (h *lab) l86Ready(exit func(int), deadline time.Time) error {
+	h.t.Helper()
+	h.l86Guard(exit, deadline)
+	if err := h.l86Need9c(); err != nil {
+		return err
+	}
+	return h.l86Versions()
 }
 
 // l86KillGrace is how long before the test binary's own deadline the cell cleans
@@ -372,17 +384,19 @@ func (h *lab) l86Guard(exit func(int), deadline time.Time) {
 
 // l86Need9c refuses to go on when slot 9c's key is not on the token. The runbook never makes,
 // resets or overwrites a slot: the touch key is the 9c key provisioned for L60 (touch always).
-func (h *lab) l86Need9c() {
+func (h *lab) l86Need9c() error {
 	h.t.Helper()
-	if err := l86CheckSlot(func() error {
-		k, err := clientkey.Open(h.keyRef(slot9c, false), nil)
-		if err == nil {
-			_ = k.Close()
-		}
-		return err
-	}); err != nil {
-		h.t.Fatal(err)
+	return l86CheckSlot(func() error { return openSlot(h.keyRef(slot9c, false)) })
+}
+
+// openSlot opens the key at ref read-only and closes it; a variable so a unit test can say
+// the slot is absent without a token.
+var openSlot = func(ref string) error {
+	k, err := clientkey.Open(ref, nil)
+	if err == nil {
+		_ = k.Close()
 	}
+	return err
 }
 
 // l86CheckSlot is the INVALID a missing 9c key reads as. It names no key and no PIN.

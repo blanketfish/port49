@@ -530,3 +530,52 @@ func TestL86KilledCellReleasesTheLabLock(t *testing.T) {
 	}
 	_ = syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
 }
+
+// A killed cell takes Keycloak down: the guard calls compose-down (a fake counts it).
+func TestL86KilledCellTakesKeycloakDown(t *testing.T) {
+	old := kcDown
+	t.Cleanup(func() { kcDown = old }) // registered first, so it runs after the lab's own clean-up
+	var calls []string
+	kcDown = func(root string) error { calls = append(calls, root); return nil }
+	h := setupLab(t, "kc", false, nil, io.Discard, privateDir(t, "l86kc"))
+	h.l86RegisterDown("/repo")
+	exit := make(chan int, 1)
+	h.l86Guard(func(c int) { exit <- c }, time.Time{})
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-exit:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the guard did not exit")
+	}
+	if len(calls) != 1 || calls[0] != "/repo" {
+		t.Fatalf("compose down -v calls on a kill: %v, want one for /repo", calls)
+	}
+}
+
+// A cell whose slot check says 9c is absent is INVALID before it starts anything: no agent is
+// recorded and no version is written.
+func TestL86AbsentSlot9cIsInvalidBeforeAnythingStarts(t *testing.T) {
+	old := openSlot
+	defer func() { openSlot = old }()
+	openSlot = func(string) error { return fmt.Errorf("no object with CKA_ID 02") }
+	h := setupLab(t, "absent", false, nil, io.Discard, privateDir(t, "l86absent"))
+	err := h.l86Ready(func(int) {}, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "INVALID: slot 9c") {
+		t.Fatalf("l86Ready with 9c absent: %v", err)
+	}
+	if h.agentsRunning() != 0 {
+		t.Error("an agent was started")
+	}
+	text, _ := os.ReadFile(filepath.Join(h.dir, fileObs))
+	if strings.Contains(string(text), "libykcs11_module") {
+		t.Error("the cell went on to record versions after the slot check failed")
+	}
+	// With the slot present the failure, if any, is not about 9c.
+	openSlot = func(string) error { return nil }
+	t.Setenv(envFirmware, "5.4.3")
+	if err := h.l86Ready(func(int) {}, time.Time{}); err != nil && strings.Contains(err.Error(), "slot 9c") {
+		t.Errorf("a present slot was refused: %v", err)
+	}
+}

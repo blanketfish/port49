@@ -106,6 +106,34 @@ func l86Docker(args ...string) *exec.Cmd {
 	return exec.Command("sg", "docker", "-c", "docker "+strings.Join(q, " "))
 }
 
+// kcDown is `docker compose down -v` on the lab's project; a variable so a unit test can
+// count the calls without Docker.
+var kcDown = func(root string) error {
+	d := kcCompose(root, "down", "-v")
+	d.Dir = root
+	if o, err := d.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v\n%s", err, tailText(string(o), 500))
+	}
+	return nil
+}
+
+// l86RegisterDown makes Keycloak come down when the cell ends and when it is killed.
+func (h *lab) l86RegisterDown(root string) {
+	h.t.Cleanup(func() {
+		if err := kcDown(root); err != nil {
+			h.t.Errorf("docker compose down -v (project %s) failed: %v\nrun it yourself: see tests/lab/L86-runbook.md, \"If a cell was killed\"",
+				kcProject, err)
+		}
+	})
+	h.mu.Lock()
+	h.onKill = append(h.onKill, func() {
+		if err := kcDown(root); err != nil {
+			h.say("  docker compose down -v (project %s) failed: %v\n  run it yourself: tests/lab/L86-runbook.md, \"If a cell was killed\"", kcProject, err)
+		}
+	})
+	h.mu.Unlock()
+}
+
 // kcUpDeadline bounds `docker compose up`: a first pull on a slow link must not eat the
 // cell's whole -test.timeout. Keycloak's own discovery wait is separate.
 const kcUpDeadline = 8 * time.Minute
@@ -205,27 +233,7 @@ func (h *lab) l86StartKeycloak() *l86Keycloak {
 	cmd := kcComposeCtx(ctx, root, "up", "-d")
 	cmd.Dir = root
 	h.say("  starting the lab's Keycloak (docker compose -p %s; the first run pulls the image and imports the realm: minutes)", kcProject)
-	down := func() error {
-		d := kcCompose(root, "down", "-v")
-		d.Dir = root
-		if o, err := d.CombinedOutput(); err != nil {
-			return fmt.Errorf("%v\n%s", err, tailText(string(o), 500))
-		}
-		return nil
-	}
-	h.t.Cleanup(func() {
-		if err := down(); err != nil {
-			h.t.Errorf("docker compose down -v (project %s) failed: %v\nrun it yourself: see tests/lab/L86-runbook.md, \"If a cell was killed\"",
-				kcProject, err)
-		}
-	})
-	h.mu.Lock()
-	h.onKill = append(h.onKill, func() {
-		if err := down(); err != nil {
-			h.say("  docker compose down -v (project %s) failed: %v\n  run it yourself: tests/lab/L86-runbook.md, \"If a cell was killed\"", kcProject, err)
-		}
-	})
-	h.mu.Unlock()
+	h.l86RegisterDown(root)
 	if o, err := cmd.CombinedOutput(); err != nil {
 		why := ""
 		if ctx.Err() != nil {
