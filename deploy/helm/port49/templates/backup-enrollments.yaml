@@ -1,0 +1,93 @@
+{{- if .Values.backup.enrollments.enabled }}
+{{- $c := dict "root" . "component" "broker" -}}
+# The sealed enrollment store (`port49-broker export-enrollments --out`), daily, into the PVC named
+# backup.enrollments.claimName: a stale-check that fails loudly, an export into `enrollments.new`, then a
+# finish step that does umask 077, renames to a dated name and prunes after 14 days. The pod mounts
+# what the broker's does (port49.brokerMounts), with an emptyDir for the data volume. Neither the
+# port49 image nor etcd's has a shell, hence the alpine steps. `--out` creates the file with O_EXCL
+# and mode 0600, syncs it and removes it on failure, so the export never touches a log. Restore with
+# `port49 directory import`, which needs an admin and a key press.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-enrollments-export
+  labels:
+    {{- include "port49.labels" $c | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.enrollments.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            fsGroupChangePolicy: OnRootMismatch
+          initContainers:
+            - name: state-dir
+              image: {{ .Values.initImage }}
+              command: [sh, -c, "install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chmod 0755 /var/lib/port49-broker"]
+              securityContext:
+                runAsNonRoot: false
+                runAsUser: 0
+                runAsGroup: 0
+                privileged: false
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL], add: [CHOWN, FOWNER, FSETID, DAC_READ_SEARCH]}
+                seccompProfile: {type: RuntimeDefault}
+              volumeMounts:
+                - {name: state, mountPath: /var/lib/port49-broker}
+            - name: stale-check
+              image: {{ .Values.initImage }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  [ ! -e /backup/enrollments.new ] || { echo "/backup/enrollments.new is left from a run that did not finish: check it, remove it, and the next run proceeds" >&2; exit 1; }
+              securityContext:
+                {{- include "port49.containerSecurity" . | nindent 16 }}
+              volumeMounts:
+                - {name: backups, mountPath: /backup, readOnly: true}
+            - name: export
+              image: {{ include "port49.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: [/usr/local/bin/port49-broker]
+              args: [export-enrollments, --config, /etc/port49/config/port49-broker.yaml, --out, /backup/enrollments.new]
+              securityContext:
+                {{- include "port49.containerSecurity" . | nindent 16 }}
+              volumeMounts:
+                {{- include "port49.brokerMounts" . | nindent 16 }}
+                - {name: state, mountPath: /var/lib/port49-broker}
+                - {name: backups, mountPath: /backup}
+          containers:
+            - name: finish
+              image: {{ .Values.initImage }}
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu; umask 077
+                  new=/backup/enrollments.new
+                  dated=/backup/enrollments-$(date -u +%Y%m%dT%H%M%SZ).json
+                  [ ! -e "$dated" ] || { echo "$dated exists: not replaced" >&2; exit 1; }
+                  chmod 0600 "$new"
+                  mv "$new" "$dated"
+                  find /backup -name 'enrollments-*.json' -mtime +14 -delete
+              securityContext:
+                {{- include "port49.containerSecurity" . | nindent 16 }}
+              volumeMounts:
+                - {name: backups, mountPath: /backup}
+          volumes:
+            {{- include "port49.brokerVolumes" . | nindent 12 }}
+            - name: state
+              emptyDir: {}
+            - name: backups
+              persistentVolumeClaim: {claimName: {{ required "backup.enrollments.claimName is the PVC the export is written to" .Values.backup.enrollments.claimName }}}
+{{- end }}

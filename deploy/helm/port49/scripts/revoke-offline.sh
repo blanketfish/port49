@@ -31,9 +31,11 @@ replicas=$(sts_field '{.spec.replicas}')
 prime_node 0
 
 scaled=
+# The one-shot pod is gone (waited for) before the brokers come back: broker-0 would otherwise restart
+# on the same node and PVC while `revoke --offline` may still be writing state/marks.json.
 restore() {
-  [ -z "$scaled" ] || K scale "statefulset/$sts" --replicas="$replicas" >/dev/null
   cleanup
+  [ -z "$scaled" ] || K scale "statefulset/$sts" --replicas="$replicas" >/dev/null
 }
 trap restore EXIT
 
@@ -49,7 +51,7 @@ args+=']'
 echo "stopping the brokers (replicas $replicas -> 0)"
 scaled=1
 K scale "statefulset/$sts" --replicas=0 >/dev/null
-K wait --for=delete pod -l "app.kubernetes.io/name=port49,app.kubernetes.io/instance=$rel,app.kubernetes.io/component=broker" --timeout=120s >/dev/null
+wait_none "app.kubernetes.io/name=port49,app.kubernetes.io/instance=$rel,app.kubernetes.io/component=broker"
 
 run=$sts-revoke-$$
 broker_pod 0 "$run" '["/usr/local/bin/port49-broker"]' "$args"

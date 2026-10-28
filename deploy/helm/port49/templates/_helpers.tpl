@@ -44,7 +44,11 @@ topologySpreadConstraints:
 runAsNonRoot: true
 runAsUser: 65532
 runAsGroup: 65532
+privileged: false
 allowPrivilegeEscalation: false
+# Neither process writes outside its volumes (no temporary files: none in the code); the kind smoke
+# is the check, and an emptyDir at /tmp is the fix if it finds one.
+readOnlyRootFilesystem: true
 capabilities:
   drop: [ALL]
 seccompProfile:
@@ -76,10 +80,17 @@ securityContext:
   runAsNonRoot: false
   runAsUser: 0
   runAsGroup: 0
+  privileged: false
   allowPrivilegeEscalation: false
+  # Writes only to the PVC; every command changes owner, mode or bits, never file contents.
+  readOnlyRootFilesystem: true
   capabilities:
     drop: [ALL]
-    add: [CHOWN, FOWNER, FSETID, DAC_OVERRIDE]
+    # CHOWN: chown 0:65532 and chown -R. FOWNER: chmod on files 65532 owns. FSETID: keeps setgid on
+    # the root's chmod. DAC_READ_SEARCH: descend into state/, 0700 and not root's. DAC_OVERRIDE is
+    # not needed: root owns the mount root, so creating state/ in it is the owner's write. UNVERIFIED
+    # until the kind smoke's two-generation cell passes with this set.
+    add: [CHOWN, FOWNER, FSETID, DAC_READ_SEARCH]
   seccompProfile:
     type: RuntimeDefault
 volumeMounts:
@@ -100,4 +111,44 @@ livenessProbe:
   httpGet: {path: /healthz, port: metrics, scheme: HTTP}
   periodSeconds: 10
   failureThreshold: 6
+{{- end }}
+
+{{/*
+The broker's mounts and volumes but its data volume: the StatefulSet and the enrollments CronJob
+render them from here, so a mount added for one reaches the other (the config load fences each file
+the config names, so a drift would fail loudly, not silently). Called with the root context.
+*/}}
+{{- define "port49.brokerMounts" -}}
+- {name: config, mountPath: /etc/port49/config, readOnly: true}
+- {name: encryption, mountPath: /etc/port49/secrets, readOnly: true}
+- {name: etcd-ca, mountPath: /etc/port49/etcd-ca, readOnly: true}
+- {name: etcd-client, mountPath: /etc/port49/etcd, readOnly: true}
+- {name: broker-tls, mountPath: /etc/port49/broker, readOnly: true}
+{{- if .Values.broker.attestationRootsConfigMap }}
+- {name: attestation-roots, mountPath: /etc/port49/attestation, readOnly: true}
+{{- end }}
+{{- if .Values.broker.directory.keytabSecret }}
+- {name: directory, mountPath: /etc/port49/directory, readOnly: true}
+{{- end }}
+{{- end }}
+
+{{- define "port49.brokerVolumes" -}}
+- name: config
+  configMap: {name: {{ .Release.Name }}-broker}
+- name: encryption
+  secret: {secretName: {{ .Values.encryption.existingSecret }}, defaultMode: 0440}
+- name: etcd-ca
+  secret: {secretName: {{ .Values.etcd.caSecret }}, defaultMode: 0440}
+- name: etcd-client
+  secret: {secretName: {{ .Values.etcd.broker.existingSecret }}, defaultMode: 0440}
+- name: broker-tls
+  secret: {secretName: {{ .Values.broker.tls.existingSecret }}, defaultMode: 0440}
+{{- if .Values.broker.attestationRootsConfigMap }}
+- name: attestation-roots
+  configMap: {name: {{ .Values.broker.attestationRootsConfigMap }}}
+{{- end }}
+{{- if .Values.broker.directory.keytabSecret }}
+- name: directory
+  secret: {secretName: {{ .Values.broker.directory.keytabSecret }}, defaultMode: 0440}
+{{- end }}
 {{- end }}

@@ -19,6 +19,7 @@ spec:
     metadata:
       labels: {app.kubernetes.io/name: etcd}
     spec:
+      automountServiceAccountToken: false   # etcd does not call the Kubernetes API
       terminationGracePeriodSeconds: 60
       securityContext: {runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch}
       containers:

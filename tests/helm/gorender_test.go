@@ -140,6 +140,12 @@ func goRender(t *testing.T, valuesFiles ...string) []doc {
 			n, _ := strconv.Atoi(fmt.Sprint(v))
 			return n
 		},
+		"required": func(msg string, v any) (any, error) {
+			if isEmpty(v) {
+				return nil, fmt.Errorf("%s", msg)
+			}
+			return v, nil
+		},
 		"list": func(v ...any) []any { return v },
 		"dict": func(kv ...any) map[string]any {
 			m := map[string]any{}

@@ -67,12 +67,13 @@ func TestTheSchemaRefusesWhatTheChartCannotRun(t *testing.T) {
 	dir := t.TempDir()
 	ci := filepath.Join(chartDir, "ci", "values.yaml")
 	for name, body := range map[string]string{
-		"one etcd member":      "etcd: {endpoints: [\"https://etcd-0:2379\"]}\n",
-		"a repeated member":    "etcd: {endpoints: [\"https://a:2379\", \"https://a:2379\", \"https://b:2379\"]}\n",
-		"a plain http member":  "etcd: {endpoints: [\"http://a:2379\", \"https://b:2379\", \"https://c:2379\"]}\n",
-		"an empty keys secret": "keys: {existingSecret: \"\"}\n",
-		"tls without a secret": "tlsListener: {enabled: true}\n",
-		"a nonsense type":      "service: {type: Bogus}\n",
+		"one etcd member":                     "etcd: {endpoints: [\"https://etcd-0:2379\"]}\n",
+		"a repeated member":                   "etcd: {endpoints: [\"https://a:2379\", \"https://a:2379\", \"https://b:2379\"]}\n",
+		"a plain http member":                 "etcd: {endpoints: [\"http://a:2379\", \"https://b:2379\", \"https://c:2379\"]}\n",
+		"an empty keys secret":                "keys: {existingSecret: \"\"}\n",
+		"tls without a secret":                "tlsListener: {enabled: true}\n",
+		"a nonsense type":                     "service: {type: Bogus}\n",
+		"an enrollments backup with no claim": "backup: {enrollments: {enabled: true}}\n",
 	} {
 		f := filepath.Join(dir, strings.ReplaceAll(name, " ", "-")+".yaml")
 		if err := os.WriteFile(f, []byte(body), 0o644); err != nil {

@@ -11,7 +11,9 @@ started=()
 cleanup() {
   local p
   for p in ${started[@]+"${started[@]}"}; do
-    K delete pod "$p" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    # --wait: a helper pod that mounts a broker's PVC (and may hold the CA key) is gone before the
+    # script returns, so a caller never scales a broker back onto a PVC a pod still writes.
+    K delete pod "$p" --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
   done
 }
 trap cleanup EXIT
@@ -58,7 +60,7 @@ broker_pod() { # ordinal name command-json args-json
   started+=("$name")
   K apply -f - >/dev/null <<JSON
 {"apiVersion":"v1","kind":"Pod","metadata":{"name":"$name","labels":{"app.kubernetes.io/name":"port49-oneshot"}},
- "spec":{"restartPolicy":"Never",${nodefrag}"automountServiceAccountToken":false,
+ "spec":{"restartPolicy":"Never","activeDeadlineSeconds":420,${nodefrag}"automountServiceAccountToken":false,
   "securityContext":$psec,"initContainers":$init,"volumes":$vols,
   "containers":[{"name":"run","image":"$image","command":$cmd,"args":$args,
     "securityContext":$csec,"volumeMounts":$mounts}]}}
@@ -66,7 +68,10 @@ JSON
 }
 
 # A root debug pod on broker $1's PVC (alpine, as the chart's initContainers), mounted at $3.
-# $4 is "true" for a read-only claim.
+# $4 is "true" for a read-only claim. It can hold the CA key, so it has a deadline: 300 s is the
+# 180 s the script waits for it to be Ready plus the few seconds a copy of two small files takes, and
+# a script that is SIGKILLed leaves it for five minutes, not an hour. The one-shot broker pod's 420 s is
+# the 360 s `finish` waits plus a minute.
 shell_pod() { # ordinal name mountpath readonly
   local ord=$1 name=$2 mnt=$3 ro=$4 node nodefrag image
   node=$(node_of "$ord")
@@ -76,13 +81,22 @@ shell_pod() { # ordinal name mountpath readonly
   started+=("$name")
   K apply -f - >/dev/null <<JSON
 {"apiVersion":"v1","kind":"Pod","metadata":{"name":"$name","labels":{"app.kubernetes.io/name":"port49-oneshot"}},
- "spec":{"restartPolicy":"Never",${nodefrag}"automountServiceAccountToken":false,
+ "spec":{"restartPolicy":"Never","activeDeadlineSeconds":300,${nodefrag}"automountServiceAccountToken":false,
   "volumes":[{"name":"v","persistentVolumeClaim":{"claimName":"data-$sts-$ord","readOnly":$ro}}],
-  "containers":[{"name":"sh","image":"$image","command":["sleep","3600"],
+  "containers":[{"name":"sh","image":"$image","command":["sleep","300"],
     "securityContext":{"runAsUser":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","FOWNER","DAC_OVERRIDE"]}},
     "volumeMounts":[{"name":"v","mountPath":"$mnt","readOnly":$ro}]}]}}
 JSON
   K wait --for=condition=Ready "pod/$name" --timeout=180s >/dev/null
+}
+
+# Waits until no pod matches selector $1 (a label selector), and does nothing when none do: with no
+# matching pod some kubectl versions answer `kubectl wait --for=delete` with exit 1 ("no matching
+# resources found"), which under `set -e` would end a break-glass before it started.
+wait_none() { # selector
+  local n
+  n=$(K get pods -l "$1" -o name 2>/dev/null | grep -c . || true)
+  [ "${n:-0}" -eq 0 ] || K wait --for=delete pod -l "$1" --timeout=120s >/dev/null
 }
 
 # Waits for a one-shot pod to finish, prints its log, and succeeds only if it did.

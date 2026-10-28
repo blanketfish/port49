@@ -57,37 +57,10 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-            - {name: config, mountPath: /etc/port49/config, readOnly: true}
-            - {name: encryption, mountPath: /etc/port49/secrets, readOnly: true}
-            - {name: etcd-ca, mountPath: /etc/port49/etcd-ca, readOnly: true}
-            - {name: etcd-client, mountPath: /etc/port49/etcd, readOnly: true}
-            - {name: broker-tls, mountPath: /etc/port49/broker, readOnly: true}
-            {{- if .Values.broker.attestationRootsConfigMap }}
-            - {name: attestation-roots, mountPath: /etc/port49/attestation, readOnly: true}
-            {{- end }}
-            {{- if .Values.broker.directory.keytabSecret }}
-            - {name: directory, mountPath: /etc/port49/directory, readOnly: true}
-            {{- end }}
+            {{- include "port49.brokerMounts" . | nindent 12 }}
             - {name: data, mountPath: /var/lib/port49-broker}
       volumes:
-        - name: config
-          configMap: {name: {{ .Release.Name }}-broker}
-        - name: encryption
-          secret: {secretName: {{ .Values.encryption.existingSecret }}, defaultMode: 0440}
-        - name: etcd-ca
-          secret: {secretName: {{ .Values.etcd.caSecret }}, defaultMode: 0440}
-        - name: etcd-client
-          secret: {secretName: {{ .Values.etcd.broker.existingSecret }}, defaultMode: 0440}
-        - name: broker-tls
-          secret: {secretName: {{ .Values.broker.tls.existingSecret }}, defaultMode: 0440}
-        {{- if .Values.broker.attestationRootsConfigMap }}
-        - name: attestation-roots
-          configMap: {name: {{ .Values.broker.attestationRootsConfigMap }}}
-        {{- end }}
-        {{- if .Values.broker.directory.keytabSecret }}
-        - name: directory
-          secret: {secretName: {{ .Values.broker.directory.keytabSecret }}, defaultMode: 0440}
-        {{- end }}
+        {{- include "port49.brokerVolumes" . | nindent 8 }}
   volumeClaimTemplates:
     - metadata:
         name: data

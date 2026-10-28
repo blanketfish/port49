@@ -1,6 +1,6 @@
 # The etcd snapshot (design §13's runbook), as a CronJob. Every name is fake: the PVC
 # `port49-backups` and the Secret `port49-etcd-root` (etcd's root certificate and key, ca.crt
-# tls.crt tls.key) are yours. backup-enrollments-cronjob.yaml is the same pattern.
+# tls.crt tls.key) are yours. The chart renders the same pattern for the enrollment store (backup.enrollments.enabled).
 #
 # The pattern, for both backups, because neither the etcd nor the port49 image has a shell:
 #   1. stale-check (alpine): refuses to run when `<name>.new` or `<name>.new.part` is there, from a
@@ -29,6 +29,8 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          # No container here calls the Kubernetes API, and this pod holds etcd's root key.
+          automountServiceAccountToken: false
           securityContext: {runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch}
           initContainers:
             - name: stale-check
@@ -41,7 +43,7 @@ spec:
                   for f in /backup/etcd-snapshot.new /backup/etcd-snapshot.new.part; do
                     [ ! -e "$f" ] || { echo "$f is left from a run that did not finish: check it, remove it, and the next run proceeds" >&2; exit 1; }
                   done
-              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
               volumeMounts:
                 - {name: backups, mountPath: /backup, readOnly: true}
             - name: snapshot
@@ -55,7 +57,7 @@ spec:
                 - snapshot
                 - save
                 - /backup/etcd-snapshot.new
-              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
               volumeMounts:
                 - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
                 - {name: backups, mountPath: /backup}
@@ -73,7 +75,7 @@ spec:
                   chmod 0600 "$new"
                   mv "$new" "$dated"
                   find /backup -name 'etcd-snapshot-*.db' -mtime +14 -delete
-              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+              securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
               volumeMounts:
                 - {name: backups, mountPath: /backup}
           volumes:

@@ -283,7 +283,7 @@ config:
 
 	// The issuing CA, once, then every broker is the same CA (cell 6 asserts it).
 	script := filepath.Join(s.chart, "scripts", "copy-issuer.sh")
-	cmd := exec.Command("bash", script, ns, release)
+	cmd := exec.Command("bash", script, ns, release, "--from", "0")
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+s.c.Kubeconfig, "PATH="+filepath.Dir(kindtest.Bin(t, "KUBECTL_BIN"))+":"+os.Getenv("PATH"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("copy-issuer.sh: %v\n%s", err, kindtest.Filter(string(out)))
@@ -574,6 +574,16 @@ func (s *smoke) cellIssuerCopy(t *testing.T) {
 	if len(sums) != 2 || sums[0] == "" || sums[0] != sums[1] {
 		t.Fatalf("issuing-ca.pem differs between the brokers' volumes: %v", sums)
 	}
+	// Run again, it changes nothing: the target holds the same CA, so it is skipped (review I-1). Run from
+	// the other broker, it is the same CA too. (The refusal of a different CA is the fake-kubectl tests'.)
+	for _, from := range []string{"0", "1"} {
+		cmd := exec.Command("bash", filepath.Join(s.chart, "scripts", "copy-issuer.sh"), ns, release, "--from", from)
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+s.c.Kubeconfig, "PATH="+filepath.Dir(kindtest.Bin(t, "KUBECTL_BIN"))+":"+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "already holds this issuing CA") {
+			t.Fatalf("copy-issuer.sh --from %s again: %v\n%s", from, err, kindtest.Filter(string(out)))
+		}
+	}
 }
 
 // Cell 7: an unproved revoke is 401 (the roots are in a ConfigMap, the subject in the policy), then
@@ -652,10 +662,11 @@ spec:
 `)
 	chart := s.chart
 	s.c.Apply(s.example(filepath.Join(chart, "examples", "backup-cronjob.yaml")))
-	s.c.Apply(s.example(filepath.Join(chart, "examples", "backup-enrollments-cronjob.yaml")))
+	// The enrollments export is the chart's own CronJob (backup.enrollments), from the same volumes template.
+	s.install("--set", "backup.enrollments.enabled=true", "--set", "backup.enrollments.claimName=port49-backups")
 	for _, b := range []struct{ cron, glob, stale string }{
 		{"port49-etcd-snapshot", "etcd-snapshot-*.db", "etcd-snapshot.new"},
-		{"port49-enrollments-export", "enrollments-*.json", "enrollments.new"},
+		{release + "-enrollments-export", "enrollments-*.json", "enrollments.new"},
 	} {
 		if got := s.backup(b.cron, b.cron+"-run1"); got != "succeeded" {
 			t.Fatalf("%s: the first run %s", b.cron, got)

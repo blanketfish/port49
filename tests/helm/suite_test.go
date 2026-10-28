@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -399,6 +400,87 @@ func checkPVCRootAndRepair(t *testing.T, r renderer) {
 	}
 }
 
+// strs is a rendered list of strings, sorted.
+func strs(v any) []string {
+	var out []string
+	for _, e := range list(v) {
+		out = append(out, str(e))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checkContainerSecurity holds the exact hardening of every container the chart renders (Task 10
+// review m-2, m-3, m-4): the root init container has the four capabilities its commands need and
+// nothing else (DAC_READ_SEARCH, not DAC_OVERRIDE: it searches a 0700 directory it does not own and
+// never writes through a mode), is not privileged, cannot escalate, drops ALL, has the runtime
+// default seccomp profile and a read-only root filesystem; the main containers add nothing and are
+// non-root with a read-only root filesystem. `extra` values render the enrollments CronJob too.
+func checkContainerSecurity(t *testing.T, r renderer) {
+	docs := render(t, r, "backup: {enrollments: {enabled: true, claimName: port49-backups}}\n")
+	var pods []struct {
+		name string
+		spec any
+	}
+	for _, d := range docs {
+		switch kindOf(d) {
+		case "StatefulSet":
+			pods = append(pods, struct {
+				name string
+				spec any
+			}{nameOf(d), pod(d)})
+		case "CronJob":
+			pods = append(pods, struct {
+				name string
+				spec any
+			}{nameOf(d), at(d, "spec", "jobTemplate", "spec", "template", "spec")})
+		}
+	}
+	if len(pods) != 3 {
+		t.Fatalf("%d pod specs rendered, want both StatefulSets and the enrollments CronJob", len(pods))
+	}
+	wantAdd := []string{"CHOWN", "DAC_READ_SEARCH", "FOWNER", "FSETID"}
+	for _, p := range pods {
+		for _, c := range append(list(at(p.spec, "initContainers")), list(at(p.spec, "containers"))...) {
+			name := p.name + "/" + str(at(c, "name"))
+			sc := at(c, "securityContext")
+			if at(sc, "privileged") != false {
+				t.Errorf("%s: privileged is %v, want an explicit false", name, at(sc, "privileged"))
+			}
+			if at(sc, "allowPrivilegeEscalation") != false {
+				t.Errorf("%s: allowPrivilegeEscalation is %v, want false", name, at(sc, "allowPrivilegeEscalation"))
+			}
+			if got := strs(at(sc, "capabilities", "drop")); strings.Join(got, ",") != "ALL" {
+				t.Errorf("%s: capabilities.drop is %v, want [ALL]", name, got)
+			}
+			add := strs(at(sc, "capabilities", "add"))
+			for _, a := range add {
+				if a == "SYS_ADMIN" || a == "DAC_OVERRIDE" {
+					t.Errorf("%s adds %s", name, a)
+				}
+			}
+			if str(at(sc, "seccompProfile", "type")) != "RuntimeDefault" && str(at(p.spec, "securityContext", "seccompProfile", "type")) != "RuntimeDefault" {
+				t.Errorf("%s: no RuntimeDefault seccomp profile", name)
+			}
+			if at(sc, "readOnlyRootFilesystem") != true {
+				t.Errorf("%s: readOnlyRootFilesystem is %v, want true (the init and the processes write only to their volumes)", name, at(sc, "readOnlyRootFilesystem"))
+			}
+			if str(at(sc, "runAsUser")) == "0" {
+				if strings.Join(add, ",") != strings.Join(wantAdd, ",") {
+					t.Errorf("%s: the root container adds %v, want exactly %v", name, add, wantAdd)
+				}
+			} else {
+				if len(add) != 0 || at(sc, "runAsNonRoot") != true {
+					t.Errorf("%s: a non-root container adds %v with runAsNonRoot %v, want none and true", name, add, at(sc, "runAsNonRoot"))
+				}
+			}
+		}
+		if at(p.spec, "automountServiceAccountToken") != false {
+			t.Errorf("%s: automountServiceAccountToken is %v: no pod here calls the API", p.name, at(p.spec, "automountServiceAccountToken"))
+		}
+	}
+}
+
 func checkEtcdIdentities(t *testing.T, r renderer) {
 	docs := render(t, r, "")
 	d := secretsOf(pod(one(t, docs, "StatefulSet", "t-port49d")))
@@ -666,6 +748,7 @@ var checks = []struct {
 	{"TestServicesKeepTheSource", checkServices},
 	{"TestSeparationAndDisruption", checkSeparation},
 	{"TestPVCRootIsMadeSkippableAndTheDataDirRepaired", checkPVCRootAndRepair},
+	{"TestEveryContainerIsHardenedExactly", checkContainerSecurity},
 	{"TestNoPodHoldsTheOthersEtcdIdentity", checkEtcdIdentities},
 	{"TestProbesNeverNeedAClientCertificate", checkProbes},
 	{"TestIssuerDiscoveryIsOptIn", checkIssuerDiscovery},

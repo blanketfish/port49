@@ -92,6 +92,21 @@
       "type": "object",
       "properties": {"enabled": {"type": "boolean"}}
     },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "enrollments": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "claimName": {"type": "string"},
+            "schedule": {"type": "string", "minLength": 1}
+          },
+          "if": {"properties": {"enabled": {"const": true}}, "required": ["enabled"]},
+          "then": {"properties": {"claimName": {"minLength": 1}}, "required": ["claimName"]}
+        }
+      }
+    },
     "policy": {"type": "string"},
     "inventory": {"type": "string"},
     "config": {

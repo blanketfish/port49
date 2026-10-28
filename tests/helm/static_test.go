@@ -159,6 +159,65 @@ func TestTheExternalSecretOneKeyPerVersion(t *testing.T) {
 	}
 }
 
+// A ClusterSecretStore with no conditions lets an ExternalSecret in any namespace read the device
+// keys through the store's Vault role (Task 10 review I-2). The default example is a namespaced
+// SecretStore, and the cluster-wide one names the release's namespace.
+func TestNoExampleStoreIsOpenToEveryNamespace(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join(chartDir, "examples", "external-secret*.yaml"))
+	if len(files) < 2 {
+		t.Fatalf("found %d external-secret examples, want the namespaced default and the cluster-wide option", len(files))
+	}
+	kinds := map[string]bool{}
+	for _, f := range files {
+		dec := yaml.NewDecoder(strings.NewReader(read(t, "deploy/helm/port49/examples/"+filepath.Base(f))))
+		for {
+			var d doc
+			if err := dec.Decode(&d); err != nil {
+				break
+			}
+			switch kindOf(d) {
+			case "ClusterSecretStore":
+				c := list(at(d, "spec", "conditions"))
+				if len(c) == 0 {
+					t.Errorf("%s: a ClusterSecretStore with no spec.conditions is open to every namespace", filepath.Base(f))
+				}
+				for _, cond := range c {
+					if ns := list(at(cond, "namespaces")); len(ns) != 1 || str(ns[0]) != "port49" {
+						t.Errorf("%s: a condition's namespaces are %v, want exactly the release namespace port49", filepath.Base(f), ns)
+					}
+				}
+			case "SecretStore":
+				if at(d, "metadata", "namespace") == nil {
+					continue // applied into the release namespace by `kubectl -n`
+				}
+			case "ExternalSecret":
+				kinds[str(at(d, "spec", "secretStoreRef", "kind"))+":"+filepath.Base(f)] = true
+			}
+		}
+	}
+	if !kinds["SecretStore:external-secret.yaml"] {
+		t.Errorf("the default example's ExternalSecret does not use a namespaced SecretStore: %v", kinds)
+	}
+}
+
+// No pod an example makes calls the Kubernetes API except the workload CronJob, whose token is projected
+// for another audience: every other one drops the default token (review m-6).
+func TestExamplePodsDropTheServiceAccountToken(t *testing.T) {
+	for _, f := range []string{"backup-cronjob.yaml", "etcd/statefulset.yaml", "etcd/etcd-init-job.yaml"} {
+		var d doc
+		if err := yaml.Unmarshal([]byte(read(t, "deploy/helm/port49/examples/"+f)), &d); err != nil {
+			t.Fatal(err)
+		}
+		spec := at(d, "spec", "template", "spec")
+		if kindOf(d) == "CronJob" {
+			spec = at(d, "spec", "jobTemplate", "spec", "template", "spec")
+		}
+		if at(spec, "automountServiceAccountToken") != false {
+			t.Errorf("%s: automountServiceAccountToken is %v, want false", f, at(spec, "automountServiceAccountToken"))
+		}
+	}
+}
+
 // Every example decodes, and none sets a secret in an environment.
 func TestTheExamplesDecode(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(chartDir, "examples", "*.yaml"))
@@ -237,13 +296,24 @@ func TestTheScriptsAreSoundBash(t *testing.T) {
 // after 14 days. Neither image has a shell, and nothing sealed goes to a log.
 func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 	const alpine = "alpine:3.22@sha256:"
+	// The snapshot is an example; the enrollments CronJob is the chart's own (backup.enrollments).
+	var rendered doc
+	for _, d := range render(t, goRender, "backup: {enrollments: {enabled: true, claimName: port49-backups}}\n") {
+		if kindOf(d) == "CronJob" {
+			rendered = d
+		}
+	}
 	for file, w := range map[string]struct{ image, name string }{
-		"backup-cronjob.yaml":             {"gcr.io/etcd-development/etcd:v3.6.15@sha256:", "etcd-snapshot"},
-		"backup-enrollments-cronjob.yaml": {"ghcr.io/rhwendt/port49:", "enrollments"},
+		"backup-cronjob.yaml":     {"gcr.io/etcd-development/etcd:v3.6.15@sha256:", "etcd-snapshot"},
+		"enrollments (the chart)": {"ghcr.io/rhwendt/port49:", "enrollments"},
 	} {
 		var cj doc
-		if err := yaml.Unmarshal([]byte(read(t, "deploy/helm/port49/examples/"+file)), &cj); err != nil {
-			t.Fatalf("%s: %v", file, err)
+		if file == "backup-cronjob.yaml" {
+			if err := yaml.Unmarshal([]byte(read(t, "deploy/helm/port49/examples/"+file)), &cj); err != nil {
+				t.Fatalf("%s: %v", file, err)
+			}
+		} else {
+			cj = rendered
 		}
 		job := at(cj, "spec", "jobTemplate", "spec")
 		p := at(job, "template", "spec")
@@ -286,7 +356,7 @@ func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 				if !strings.Contains(joined, "/backup/"+w.name+".new") {
 					t.Errorf("%s: the writer does not write /backup/%s.new: %s", file, w.name, joined)
 				}
-				if file == "backup-enrollments-cronjob.yaml" && !strings.Contains(joined, "--out /backup/enrollments.new") {
+				if w.name == "enrollments" && !strings.Contains(joined, "--out /backup/enrollments.new") {
 					t.Errorf("%s: the export does not use --out: %s", file, joined)
 				}
 			}
@@ -304,9 +374,16 @@ func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 		if !strings.HasPrefix(str(at(fin, "image")), alpine) || len(list(at(p, "containers"))) != 1 {
 			t.Errorf("%s: the one main container is %s, want the pinned alpine", file, str(at(fin, "image")))
 		}
+		// Neither pod calls the API; the snapshot pod holds etcd's root key (review m-6).
+		if at(p, "automountServiceAccountToken") != false {
+			t.Errorf("%s: automountServiceAccountToken is %v, want false", file, at(p, "automountServiceAccountToken"))
+		}
 		for _, c := range append(inits, list(at(p, "containers"))...) {
 			if at(c, "env") != nil {
 				t.Errorf("%s: container %s sets env: secrets are files", file, str(at(c, "name")))
+			}
+			if at(c, "securityContext", "readOnlyRootFilesystem") != true {
+				t.Errorf("%s: container %s has no readOnlyRootFilesystem: true (the backup steps write only to their volumes)", file, str(at(c, "name")))
 			}
 		}
 	}

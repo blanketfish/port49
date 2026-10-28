@@ -19,6 +19,7 @@ spec:
   backoffLimit: 4
   template:
     spec:
+      automountServiceAccountToken: false   # etcdctl does not call the Kubernetes API
       restartPolicy: OnFailure
       containers:
         - name: etcd-init

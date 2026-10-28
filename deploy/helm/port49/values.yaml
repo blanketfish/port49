@@ -74,6 +74,14 @@ autoscaling:
 issuerDiscovery:
   enabled: false
 
+# The sealed enrollment store, exported daily by a CronJob into your PVC (never created here).
+# examples/backup-cronjob.yaml is the etcd snapshot, which needs etcd's root certificate and is yours.
+backup:
+  enrollments:
+    enabled: false
+    claimName: ""        # an existing PVC; required when enabled
+    schedule: "23 2 * * *"
+
 # The policy and the inventory, as YAML text. Required to be non-empty for a useful install.
 policy: ""
 inventory: ""
