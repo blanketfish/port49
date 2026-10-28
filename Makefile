@@ -501,12 +501,16 @@ bin/kubectl-$(KUBECTL_VERSION):
 	chmod 0755 bin/kubectl.dl
 	mv bin/kubectl.dl bin/kubectl-$(KUBECTL_VERSION)
 
+# Whatever the result, the cluster is deleted afterwards (the test's own guard covers a signal and the
+# deadline; this covers a make killed between them). To clean up by hand after any aborted run:
+# `bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke`, then `kind get clusters` is empty.
 kind-smoke: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
 	docker build --target setup -t port49-setup:dev .
 	go build -o bin/oldroot ./tests/kind/cmd/oldroot
-	KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
-	  go test -tags kind ./tests/kind/ -count=1 -v -timeout 40m
+	  go test -tags kind ./tests/kind/ -count=1 -v -timeout 40m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
 
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v
@@ -521,13 +525,17 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
 
 # The fsGroup cell's red run: the same install with the first design's 2755 volume root, by the
-# test-only post-renderer. It must FAIL to be red: the broker's second generation crash-loops on its
-# state_dir refusal. This target passes when it does.
+# test-only post-renderer. The test PASSES only when the broker's second generation crash-loops on
+# the exact state_dir refusal (a green broker, or a crash for another reason, fails it), so a passing
+# target is the red result observed. It builds the setup image the test loads, and deletes the
+# cluster afterwards like kind-smoke.
 kind-smoke-red: image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
 	go build -o bin/oldroot ./tests/kind/cmd/oldroot
-	KIND_OLD_ROOT=1 KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	rc=0; KIND_OLD_ROOT=1 KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
-	  go test -tags kind ./tests/kind/ -run TestKindSmoke -count=1 -v -timeout 40m
+	  go test -tags kind ./tests/kind/ -run TestKindSmoke -count=1 -v -timeout 40m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker with

@@ -291,6 +291,9 @@ config:
 	for _, p := range []string{"t-port49d-0", "t-port49d-1", "t-broker-0", "t-broker-1"} {
 		s.c.WaitReady(ns, p, 4*time.Minute)
 	}
+	// The fsGroup cell is vacuous on a hostPath volume (the kubelet never walks one): refuse that
+	// class now, naming it, before any cell runs.
+	s.c.RequireLocalPV(ns, "data-"+brokerPod)
 
 	// Each cell is a subtest whose own t every helper reports to.
 	cell := func(name string, f func(*testing.T)) {
@@ -726,8 +729,10 @@ func (s *smoke) cellWorkload(t *testing.T) {
 		t.Fatalf("the CronJob's Job against the in-cluster broker %s", got)
 	}
 	logs := s.c.Kubectl("-n", ns, "logs", "t-broker-0") + s.c.Kubectl("-n", ns, "logs", "t-broker-1")
-	if !strings.Contains(logs, principal) {
-		t.Errorf("neither broker's log names %s", principal)
+	// The decision record of a permitted mint: event mint, verdict permit, principal (minter.go:557;
+	// a deny record naming the principal does not count). The records are JSON on the broker's stdout.
+	if !kindtest.PermitMint(logs, principal) {
+		t.Errorf("neither broker's log holds a permit mint record for %s", principal)
 	}
 
 	// Outside: a host port49d with the broker block and the memory store (port49-broker runs on etcd
@@ -794,6 +799,7 @@ broker:
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait(); errf.Close() })
+	s.c.Guard.OnKill(kindtest.StopPID(cmd.Process.Pid)) // a killed run stops it by its recorded pid
 	shapetest.WaitFor(t, "the host broker to listen on the gateway", 30*time.Second, func() bool {
 		c, err := net.DialTimeout("tcp", net.JoinHostPort(s.gateway, fmt.Sprint(port)), time.Second)
 		if err == nil {
@@ -808,8 +814,8 @@ broker:
 		t.Fatalf("the CronJob's Job against the host broker %s", got)
 	}
 	said, _ := os.ReadFile(filepath.Join(dir, "port49d.err"))
-	if !strings.Contains(string(said), principal) {
-		t.Errorf("the host broker's log does not name %s", principal)
+	if !kindtest.PermitMint(string(said), principal) {
+		t.Errorf("the host broker's log holds no permit mint record for %s", principal)
 	}
 }
 
@@ -841,11 +847,19 @@ func (s *smoke) cellFSGroup(t *testing.T) {
 	}
 	want("before")
 	regen("second generation")
+	// A probe the init container never touches (it repairs state/ and the root only): root-owned,
+	// group 0, in the volume root. Only the kubelet's walk can give it group 65532, so the group
+	// afterwards is the proof that the walk happened on the forced generation.
+	s.debugPod("walk-probe", pvc, "echo probe > /v/walk-probe && chown 0:0 /v/walk-probe && chmod 0600 /v/walk-probe", false)
+	if err := s.statOn(pvc, "/v/walk-probe")[0].Want("600", 0, 0); err != nil {
+		t.Fatalf("the walk probe was not set up: %v", err)
+	}
 	s.debugPod("chgrp-root", pvc, "chgrp 0 /v", false)
 	regen("third generation after a forced walk")
-	// The kubelet says which: skipped on the unforced mounts, walked on the forced one. The line comes
-	// from the node's kubelet log, which this smoke does not read (UNVERIFIED which node text a
-	// kind kubelet prints); the assertions above are on the result, not the log.
+	if st := s.statOn(pvc, "/v/walk-probe")[0]; st.GID != 65532 {
+		t.Errorf("the kubelet did not walk the volume on the forced generation: %s is still group %d (fsGroup 65532 expected); "+
+			"the cell passed on the init repair alone", st.Path, st.GID)
+	}
 }
 
 // Cell 9, red (KIND_OLD_ROOT=1): the first design's 2755 root. Generation one starts (its init has
@@ -857,6 +871,7 @@ func (s *smoke) cellFSGroupRed() {
 		p, err := s.c.Pod(ns, brokerPod)
 		return err == nil && p.Phase == "Running" && p.InitWaiting == ""
 	})
+	s.c.RequireLocalPV(ns, "data-"+brokerPod)
 	s.c.Kubectl("-n", ns, "delete", "pod", brokerPod)
 	if !s.c.WaitCrashLoop(ns, brokerPod, 4*time.Minute) {
 		t.Fatalf("%s did not crash-loop on its second generation: the old 2755 root was expected to fail (a green here means the red is not red)", brokerPod)

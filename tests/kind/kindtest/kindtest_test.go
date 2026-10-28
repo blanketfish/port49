@@ -2,9 +2,13 @@ package kindtest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const podJSON = `{"spec":{"nodeName":"kind-worker"},"status":{"phase":"Running","hostIP":"172.18.0.3",
@@ -120,5 +124,136 @@ func TestFilterDropsALineNamingASecret(t *testing.T) {
 	out := Filter("pod ready\nthe token is abc\nkeep this line\n")
 	if strings.Contains(out, "abc") || !strings.Contains(out, "keep this line") {
 		t.Fatalf("%q", out)
+	}
+}
+
+const localPV = `{"spec":{"storageClassName":"port49-fsgroup","local":{"path":"/var/local-path-provisioner/pvc-1"}}}`
+const hostPathPV = `{"spec":{"storageClassName":"standard","hostPath":{"path":"/var/local-path-provisioner/pvc-1","type":"DirectoryOrCreate"}}}`
+
+func TestCheckLocalPV(t *testing.T) {
+	if err := CheckLocalPV([]byte(localPV)); err != nil {
+		t.Errorf("a local PV was refused: %v", err)
+	}
+	err := CheckLocalPV([]byte(hostPathPV))
+	if err == nil || !strings.Contains(err.Error(), `"standard"`) || !strings.Contains(err.Error(), "hostPath") {
+		t.Errorf("a hostPath PV: %v, want a refusal naming the class and hostPath", err)
+	}
+	// both set is still hostPath
+	if CheckLocalPV([]byte(`{"spec":{"storageClassName":"x","hostPath":{"path":"/a"},"local":{"path":"/b"}}}`)) == nil {
+		t.Error("a PV with hostPath and local passed")
+	}
+	for _, bad := range []string{`{"spec":{"storageClassName":"nfs","nfs":{"server":"s"}}}`, `{"spec":{"local":{"path":""}}}`, `not json`} {
+		if CheckLocalPV([]byte(bad)) == nil {
+			t.Errorf("%s passed as a local PV", bad)
+		}
+	}
+}
+
+func TestPermitMintMatchesTheRecordNotASubstring(t *testing.T) {
+	const p = "system:serviceaccount:port49:oxidized"
+	permit := `{"ts":"2026-10-28T10:00:00Z","event":"mint","verdict":"permit","reason":"grants_matched","principal":"` + p + `"}`
+	deny := `{"event":"mint","verdict":"deny","reason":"no_grants_matched","principal":"` + p + `"}`
+	other := `{"event":"mint","verdict":"permit","principal":"system:serviceaccount:port49:other"}`
+	login := `{"event":"login","verdict":"permit","principal":"` + p + `"}`
+	noise := "level=info msg=\"serving " + p + "\""
+	if !PermitMint("starting\n"+noise+"\n"+permit+"\n", p) {
+		t.Error("a permit mint record was not found")
+	}
+	if !PermitMint("pod/t-broker-0 "+permit, p) {
+		t.Error("a permit mint record behind a prefix was not found")
+	}
+	for name, logs := range map[string]string{"deny": deny, "other principal": other, "other event": login, "noise": noise, "empty": ""} {
+		if PermitMint(logs, p) {
+			t.Errorf("%s satisfied the permit-mint check", name)
+		}
+	}
+}
+
+// A real SIGTERM, against fakes: the kill functions run, last registered first, then exit(2).
+func TestGuardRunsTheKillFunctionsOnSIGTERM(t *testing.T) {
+	exit := make(chan int, 1)
+	var mu sync.Mutex
+	var order []string
+	g := NewGuard(t, func(c int) { exit <- c }, time.Time{}, time.Second)
+	g.OnKill(func() { mu.Lock(); order = append(order, "cluster"); mu.Unlock() })
+	g.OnKill(func() { mu.Lock(); order = append(order, "port49d"); mu.Unlock() })
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case c := <-exit:
+		if c != 2 {
+			t.Errorf("exit %d, want 2", c)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGTERM did not reach the guard")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(order, ",") != "port49d,cluster" {
+		t.Errorf("kill order %v, want port49d then cluster", order)
+	}
+}
+
+func TestGuardRunsTheKillFunctionsBeforeTheDeadline(t *testing.T) {
+	exit := make(chan int, 1)
+	ran := make(chan struct{}, 1)
+	g := NewGuard(t, func(c int) { exit <- c }, time.Now().Add(400*time.Millisecond), 300*time.Millisecond)
+	g.OnKill(func() { ran <- struct{}{} })
+	select {
+	case <-exit:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the guard did not fire ahead of the deadline")
+	}
+	select {
+	case <-ran:
+	default:
+		t.Error("exit came without the kill function")
+	}
+}
+
+func TestGuardIsQuietWhenTheTestEndsNormally(t *testing.T) {
+	exit := make(chan int, 1)
+	t.Run("sub", func(t *testing.T) { NewGuard(t, func(c int) { exit <- c }, time.Now().Add(time.Hour), time.Second) })
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-exit:
+		t.Error("a guard of a finished test exited")
+	default:
+	}
+}
+
+func TestStopPIDKillsThatProcess(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	StopPID(cmd.Process.Pid)()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the process survived StopPID")
+	}
+}
+
+// Up deletes a stale cluster before the create, and deletes again at the end; against a fake kind.
+func TestUpDeletesAStaleClusterFirstAndAgainAtTheEnd(t *testing.T) {
+	dir := t.TempDir()
+	logf := filepath.Join(dir, "log")
+	fake := filepath.Join(dir, "kind")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$*\" >> "+logf+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KIND_BIN", fake)
+	t.Setenv("KUBECTL_BIN", fake)
+	t.Run("run", func(t *testing.T) { Up(t, "stalecheck") })
+	b, _ := os.ReadFile(logf)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 3 || lines[0] != "delete cluster --name stalecheck" || !strings.HasPrefix(lines[1], "create cluster --name stalecheck") ||
+		lines[2] != "delete cluster --name stalecheck" {
+		t.Errorf("kind was called as %q, want delete, create, delete", lines)
 	}
 }

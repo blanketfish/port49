@@ -87,3 +87,65 @@ func TestThePostRendererIsNotInTheChart(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// recipe is a Makefile target's text, from its name to the next blank line.
+func recipe(t *testing.T, target string) string {
+	t.Helper()
+	mk := read(t, "Makefile")
+	i := strings.Index(mk, "\n"+target+":")
+	if i < 0 {
+		t.Fatalf("the Makefile has no %s target", target)
+	}
+	rest := mk[i+1:]
+	if j := strings.Index(rest, "\n\n"); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
+// A killed or failed run must not leave the cluster: both targets delete it after go test whatever
+// its result, and keep go test's exit status; the red target builds the setup image the test loads.
+func TestKindTargetsDeleteTheClusterWhateverTheResult(t *testing.T) {
+	for _, target := range []string{"kind-smoke", "kind-smoke-red"} {
+		r := recipe(t, target)
+		goTest := strings.Index(r, "go test -tags kind")
+		del := strings.Index(r, "delete cluster --name port49smoke")
+		if goTest < 0 || del < goTest {
+			t.Errorf("%s does not delete the cluster after go test:\n%s", target, r)
+		}
+		if !strings.Contains(r, "|| rc=$$?") || !strings.Contains(r, "exit $$rc") {
+			t.Errorf("%s loses go test's exit status (needs || rc=$$? ... exit $$rc):\n%s", target, r)
+		}
+		if !strings.Contains(r, "docker build --target setup -t port49-setup:dev .") {
+			t.Errorf("%s does not build the setup image the test loads", target)
+		}
+	}
+}
+
+// The smoke's own guard: Up arms it, and the host port49d is registered with it by pid.
+func TestSmokeRegistersWhatAKilledRunMustStop(t *testing.T) {
+	smoke := read(t, "tests", "kind", "smoke_test.go")
+	if !strings.Contains(smoke, "s.c.Guard.OnKill(kindtest.StopPID(cmd.Process.Pid))") {
+		t.Error("the host port49d is not registered with the guard by pid")
+	}
+	up := read(t, "tests", "kind", "kindtest", "kindtest.go")
+	for _, want := range []string{"NewGuard(", `c.deleteCluster(t, "stale")`, `exec.Command(kind, "delete", "cluster"`} {
+		if !strings.Contains(up, want) {
+			t.Errorf("kindtest.Up lacks %q", want)
+		}
+	}
+}
+
+// The fsGroup cell asserts the volume is local, and the walk, before it counts as green.
+func TestFSGroupCellChecksTheVolumeAndTheWalk(t *testing.T) {
+	smoke := read(t, "tests", "kind", "smoke_test.go")
+	if n := strings.Count(smoke, "RequireLocalPV("); n != 2 {
+		t.Errorf("RequireLocalPV is called %d times, want in both the green and the red path", n)
+	}
+	if !strings.Contains(smoke, "walk-probe") {
+		t.Error("the fsGroup cell has no walk probe")
+	}
+	if !strings.Contains(smoke, "kindtest.PermitMint(") || strings.Contains(smoke, "strings.Contains(logs, principal)") {
+		t.Error("the workload cell does not match the permit mint record")
+	}
+}
