@@ -252,6 +252,10 @@ func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 		if str(at(job, "backoffLimit")) != "0" || str(at(p, "restartPolicy")) != "Never" {
 			t.Errorf("%s: a failed run must stay failed (backoffLimit 0, restartPolicy Never)", file)
 		}
+		// Secret files are root-owned 0440: only fsGroup lets uid 65532 read them.
+		if str(at(p, "securityContext", "fsGroup")) != "65532" || str(at(p, "securityContext", "runAsUser")) != "65532" {
+			t.Errorf("%s: the pod's securityContext %v, want runAsUser and fsGroup 65532 so the Secret mounts are readable", file, at(p, "securityContext"))
+		}
 		inits := list(at(p, "initContainers"))
 		var stale, writer = -1, -1
 		for i, c := range inits {
