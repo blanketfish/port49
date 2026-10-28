@@ -10,7 +10,8 @@ process on etcd:
 | `port49-broker.service` | `port49-broker` | the login broker on 8443, the issuing CA, the directory |
 
 The two users are separate on purpose: no process holds both etcd identities (plan 7e, ruling
-1). The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories.
+1). The package creates them with `sysusers.d`; `tmpfiles.d` makes the directories, `/etc/port49` and its
+`keys`, `secrets`, `etcd` and `broker` subdirectories among them.
 
 ## The four things every shape needs
 
@@ -211,7 +212,7 @@ systemctl start port49-broker
 `port49-broker revoke --offline --list` shows the marks. This stops issuance fleet-wide while the
 brokers are down, so use it only when no admin can reach a running broker. A port49d that runs its broker
 in process has `port49d revoke --offline`. Each needs the uid that owns the files it
-writes, and as root refuses and names the `sudo -u` line: `port49-broker revoke --offline` writes
+writes, and as root refuses, revokes nothing and names the `sudo -u` line: `port49-broker revoke --offline` writes
 `broker.state_dir` (the broker's user owns it), and `port49d revoke --offline` writes
 `broker.revocations_file`.
 
@@ -260,7 +261,7 @@ trial.
 The two examples in `examples/` are for your etcd hosts. The three `etcd-N.yaml` files each set
 `auto-compaction-mode: periodic`, `auto-compaction-retention: "1h"` and an 8 GiB quota, with TLS
 and client-certificate auth. Install etcd 3.6.15 or later at `/usr/local/bin/etcd`, create the user
-(`sysusers-etcd.conf`) and its data directory (`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700), copy `etcd@.service`, and `systemctl enable --now etcd@etcd-1` on the first host, and so
+(`sysusers-etcd.conf`) and its data directory (`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700; it also makes `/etc/etcd/pki` for the certificates), copy `etcd@.service`, and `systemctl enable --now etcd@etcd-1` on the first host, and so
 on. Then apply the roles once per cluster:
 
 ```sh

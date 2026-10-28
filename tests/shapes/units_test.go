@@ -164,6 +164,8 @@ func TestTheUsersAndDirectoriesAreDeclared(t *testing.T) {
 		"d /etc/port49 0755 root root -",
 		"d /etc/port49/keys 0750 root port49d -",
 		"d /etc/port49/secrets 0755 root root -",
+		"d /etc/port49/etcd 0755 root root -",
+		"d /etc/port49/broker 0755 root root -",
 		"d /var/spool/port49d 0700 port49d port49d -",
 		"d /var/backups/port49-broker 0700 port49-broker port49-broker -",
 	} {
