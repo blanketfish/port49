@@ -258,6 +258,15 @@ func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
 		"docker run --net host x":                                        "the host's network namespace",
 		"docker run --ipc=host x":                                        "the host's ipc namespace",
 		"docker run --uts host x":                                        "the host's uts namespace",
+		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:rw x":               "a bind mount of /sys",
+		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro x":               "a bind mount of /sys",
+		"docker run -v /sys/fs/cgroup/../..:/x x":                        "a bind mount of /sys",
+		"docker run -v /var/../sys:/s x":                                 "a bind mount of /sys",
+		"docker run --volume=/sys/fs/cgroup/../../../dev:/d x":           "a bind mount of /dev",
+		"docker run --mount type=bind,src=/sys/fs/cgroup,target=/x x":    "a bind mount of /sys",
+		"docker run --mount type=bind,source=/sys/fs/cgroup,dst=/x x":    "a bind mount of /sys",
+		"docker run --mount type=bind,src=/home/../sys,target=/x x":      "a bind mount of /sys",
+		`"-v", "/sys/fs/cgroup:/sys/fs/cgroup"`:                          "a bind mount of /sys",
 		"docker run -v /sys/kernel:/k x":                                 "a bind mount of /sys",
 		"docker run --mount type=bind,src=/sys,target=/s x":              "a bind mount of /sys",
 		"docker run -v /sys:/sys x":                                      "a bind mount of /sys",
@@ -271,10 +280,8 @@ func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
 	}
 	for _, ok := range []string{
 		"docker run --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run image",
-		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro image",
 		"docker run -v /var/devices:/x image",
 		"docker run --tmpfs /dev/shm image", // a tmpfs is not a host device
-		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro --cap-add=SYS_ADMIN image",
 		`"--cap-add", "SYS_ADMIN"`,
 	} {
 		if got := Forbidden(ok); len(got) != 0 {

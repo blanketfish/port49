@@ -6,6 +6,7 @@ package sdtest
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -166,8 +167,6 @@ func Forbidden(text string) []string {
 		{"--privileged", `--privileged`},
 		{"--device", `--device(\s|=)`},
 		{"--device-cgroup-rule", `--device-cgroup-rule`},
-		{"a bind mount of /dev", `(-v|--volume)(\s+|=)/dev(/|:|\s|$)|(source|src)=/dev(/|,|\s|$)`},
-		{"a bind mount of /", `(-v|--volume)(\s+|=)/:|(source|src)=/(,|\s|$)`},
 		{"seccomp=unconfined", `seccomp(=|:)unconfined`},
 		{"the host's pid namespace", `--pid(\s+|=)host`},
 		{"the host's user namespace", `--userns(\s+|=)host`},
@@ -179,11 +178,17 @@ func Forbidden(text string) []string {
 			found = append(found, f.name)
 		}
 	}
-	// /sys is bound only at the cgroup path the ruling allows.
-	for _, m := range regexp.MustCompile(`(?:-v|--volume)(?:\s+|=)(/sys[^\s:"]*)|(?:source|src)=(/sys[^\s,"]*)`).FindAllStringSubmatch(text, -1) {
-		if p := m[1] + m[2]; p != "/sys/fs/cgroup" && !strings.HasPrefix(p, "/sys/fs/cgroup/") {
+	// Host bind mounts: the source is cleaned first, so ../ cannot hide /sys, /dev or / behind another
+	// path. No smoke binds any of them; the cgroup remount happens inside the container.
+	for _, m := range regexp.MustCompile(`(?:-v|--volume)(?:\s+|=|"\s*,\s*")([^\s:"]+)|(?:source|src)=([^\s,"]+)`).FindAllStringSubmatch(text, -1) {
+		src := path.Clean(m[1] + m[2])
+		switch {
+		case src == "/":
+			found = append(found, "a bind mount of /")
+		case src == "/dev" || strings.HasPrefix(src, "/dev/"):
+			found = append(found, "a bind mount of /dev")
+		case src == "/sys" || strings.HasPrefix(src, "/sys/"):
 			found = append(found, "a bind mount of /sys")
-			break
 		}
 	}
 	for _, m := range regexp.MustCompile(`--cap-add(?:\s+|=)(\S+)`).FindAllStringSubmatch(text, -1) {
