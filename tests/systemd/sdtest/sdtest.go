@@ -178,9 +178,11 @@ func Forbidden(text string) []string {
 			found = append(found, f.name)
 		}
 	}
-	// Host bind mounts: the source is cleaned first, so ../ cannot hide /sys, /dev or / behind another
-	// path. No smoke binds any of them; the cgroup remount happens inside the container.
-	for _, m := range regexp.MustCompile(`(?:-v|--volume)(?:\s+|=|"\s*,\s*")([^\s:"]+)|(?:source|src)=([^\s,"]+)`).FindAllStringSubmatch(text, -1) {
+	// Host bind mounts: no smoke binds any host path, so every absolute source is refused, in -v and
+	// --volume (spaced, "=", attached as -v/x, or a separate quoted argument) and in --mount source=/src=.
+	// The source is cleaned first, so ../ cannot hide a path. A relative source is a named volume, and a
+	// tmpfs is not a bind; both stay allowed.
+	for _, m := range regexp.MustCompile(`(?:^|[\s"'`+"`"+`])(?:-v|--volume)(?:\s*=\s*|\s+|"\s*,\s*"|\s*)(/[^\s:"'`+"`"+`]*)|(?:source|src)=(/[^\s,"'`+"`"+`]*)`).FindAllStringSubmatch(text, -1) {
 		src := path.Clean(m[1] + m[2])
 		switch {
 		case src == "/":
@@ -189,6 +191,8 @@ func Forbidden(text string) []string {
 			found = append(found, "a bind mount of /dev")
 		case src == "/sys" || strings.HasPrefix(src, "/sys/"):
 			found = append(found, "a bind mount of /sys")
+		default:
+			found = append(found, "a host bind mount of "+src)
 		}
 	}
 	for _, m := range regexp.MustCompile(`--cap-add(?:\s+|=)(\S+)`).FindAllStringSubmatch(text, -1) {

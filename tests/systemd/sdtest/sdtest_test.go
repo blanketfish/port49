@@ -236,44 +236,56 @@ func TestRunArgsGrantsOnlySysAdminAndNoDevice(t *testing.T) {
 
 func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
 	for text, want := range map[string]string{
-		"docker run --privileged x":                                          "--privileged",
-		"docker run --device /dev/tpm0 x":                                    "--device",
-		"docker run --device=/dev/bus/usb x":                                 "--device",
-		"docker run -v /dev:/dev x":                                          "a bind mount of /dev",
-		"docker run --volume /dev/bus/usb:/dev/bus/usb x":                    "a bind mount of /dev",
-		"docker run --volume=/dev:/dev x":                                    "a bind mount of /dev",
-		"docker run --mount type=bind,source=/dev,target=/dev x":             "a bind mount of /dev",
-		"docker run --mount type=bind,src=/dev/hidraw0,target=/x x":          "a bind mount of /dev",
-		"docker run --cap-add ALL x":                                         "--cap-add ALL",
-		"docker run --cap-add=all x":                                         "--cap-add all",
-		`"run", "-d", "--privileged", "--cgroupns=private"`:                  "--privileged",
-		"docker run --cap-add SYS_ADMIN --privileged --tmpfs /run image":     "--privileged",
-		"docker run --cap-add SYS_PTRACE x":                                  "--cap-add SYS_PTRACE",
-		"docker run --device-cgroup-rule='c 10:* rmw' x":                     "--device-cgroup-rule",
-		"docker run --security-opt seccomp=unconfined x":                     "seccomp=unconfined",
-		"docker run --pid=host x":                                            "the host's pid namespace",
-		"docker run --pid host x":                                            "the host's pid namespace",
-		"docker run --userns=host x":                                         "the host's user namespace",
-		"docker run --network=host x":                                        "the host's network namespace",
-		"docker run --net host x":                                            "the host's network namespace",
-		"docker run --ipc=host x":                                            "the host's ipc namespace",
-		"docker run --uts host x":                                            "the host's uts namespace",
-		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:rw x":                   "a bind mount of /sys",
-		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro x":                   "a bind mount of /sys",
-		"docker run -v /sys/fs/cgroup/../..:/x x":                            "a bind mount of /sys",
-		"docker run --mount type=bind,src=/sys/fs/cgroup/../../,target=/h x": "a bind mount of /sys",
-		"docker run -v /sys/fs/cgroup/../..:/h x":                            "a bind mount of /sys",
-		"docker run -v /var/../sys:/s x":                                     "a bind mount of /sys",
-		"docker run --volume=/sys/fs/cgroup/../../../dev:/d x":               "a bind mount of /dev",
-		"docker run --mount type=bind,src=/sys/fs/cgroup,target=/x x":        "a bind mount of /sys",
-		"docker run --mount type=bind,source=/sys/fs/cgroup,dst=/x x":        "a bind mount of /sys",
-		"docker run --mount type=bind,src=/home/../sys,target=/x x":          "a bind mount of /sys",
-		`"-v", "/sys/fs/cgroup:/sys/fs/cgroup"`:                              "a bind mount of /sys",
-		"docker run -v /sys/kernel:/k x":                                     "a bind mount of /sys",
-		"docker run --mount type=bind,src=/sys,target=/s x":                  "a bind mount of /sys",
-		"docker run -v /sys:/sys x":                                          "a bind mount of /sys",
-		"docker run -v /:/host x":                                            "a bind mount of /",
-		"docker run --mount type=bind,source=/,target=/h x":                  "a bind mount of /",
+		"docker run --privileged x":                                            "--privileged",
+		"docker run --device /dev/tpm0 x":                                      "--device",
+		"docker run --device=/dev/bus/usb x":                                   "--device",
+		"docker run -v /dev:/dev x":                                            "a bind mount of /dev",
+		"docker run --volume /dev/bus/usb:/dev/bus/usb x":                      "a bind mount of /dev",
+		"docker run --volume=/dev:/dev x":                                      "a bind mount of /dev",
+		"docker run --mount type=bind,source=/dev,target=/dev x":               "a bind mount of /dev",
+		"docker run --mount type=bind,src=/dev/hidraw0,target=/x x":            "a bind mount of /dev",
+		"docker run --cap-add ALL x":                                           "--cap-add ALL",
+		"docker run --cap-add=all x":                                           "--cap-add all",
+		`"run", "-d", "--privileged", "--cgroupns=private"`:                    "--privileged",
+		"docker run --cap-add SYS_ADMIN --privileged --tmpfs /run image":       "--privileged",
+		"docker run --cap-add SYS_PTRACE x":                                    "--cap-add SYS_PTRACE",
+		"docker run --device-cgroup-rule='c 10:* rmw' x":                       "--device-cgroup-rule",
+		"docker run --security-opt seccomp=unconfined x":                       "seccomp=unconfined",
+		"docker run --pid=host x":                                              "the host's pid namespace",
+		"docker run --pid host x":                                              "the host's pid namespace",
+		"docker run --userns=host x":                                           "the host's user namespace",
+		"docker run --network=host x":                                          "the host's network namespace",
+		"docker run --net host x":                                              "the host's network namespace",
+		"docker run --ipc=host x":                                              "the host's ipc namespace",
+		"docker run --uts host x":                                              "the host's uts namespace",
+		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:rw x":                     "a bind mount of /sys",
+		"docker run -v /sys/fs/cgroup:/sys/fs/cgroup:ro x":                     "a bind mount of /sys",
+		"docker run -v /sys/fs/cgroup/../..:/x x":                              "a bind mount of /sys",
+		"docker run --mount type=bind,src=/sys/fs/cgroup/../../,target=/h x":   "a bind mount of /sys",
+		"docker run -v /sys/fs/cgroup/../..:/h x":                              "a bind mount of /sys",
+		"docker run -v /var/run/docker.sock:/s x":                              "a host bind mount of /var/run/docker.sock",
+		"docker run -v /proc:/p x":                                             "a host bind mount of /proc",
+		"docker run -v /var/devices:/x x":                                      "a host bind mount of /var/devices",
+		"docker run -v/x:/x y":                                                 "a host bind mount of /x",
+		"docker run -v/dev:/x y":                                               "a bind mount of /dev",
+		`"-v", "/home/ryan:/x"`:                                                "a host bind mount of /home/ryan",
+		`"-v","/home/ryan:/x"`:                                                 "a host bind mount of /home/ryan",
+		`"-v/home/ryan:/x"`:                                                    "a host bind mount of /home/ryan",
+		"docker run --volume /proc:/p x":                                       "a host bind mount of /proc",
+		"docker run --volume=/etc:/p x":                                        "a host bind mount of /etc",
+		"docker run --mount type=bind,source=/var/run/docker.sock,target=/s x": "a host bind mount of /var/run/docker.sock",
+		"docker run --mount type=bind,src=/etc/../proc,target=/s x":            "a host bind mount of /proc",
+		"docker run -v /var/../sys:/s x":                                       "a bind mount of /sys",
+		"docker run --volume=/sys/fs/cgroup/../../../dev:/d x":                 "a bind mount of /dev",
+		"docker run --mount type=bind,src=/sys/fs/cgroup,target=/x x":          "a bind mount of /sys",
+		"docker run --mount type=bind,source=/sys/fs/cgroup,dst=/x x":          "a bind mount of /sys",
+		"docker run --mount type=bind,src=/home/../sys,target=/x x":            "a bind mount of /sys",
+		`"-v", "/sys/fs/cgroup:/sys/fs/cgroup"`:                                "a bind mount of /sys",
+		"docker run -v /sys/kernel:/k x":                                       "a bind mount of /sys",
+		"docker run --mount type=bind,src=/sys,target=/s x":                    "a bind mount of /sys",
+		"docker run -v /sys:/sys x":                                            "a bind mount of /sys",
+		"docker run -v /:/host x":                                              "a bind mount of /",
+		"docker run --mount type=bind,source=/,target=/h x":                    "a bind mount of /",
 	} {
 		got := Forbidden(text)
 		if len(got) == 0 || got[0] != want {
@@ -282,7 +294,11 @@ func TestForbiddenFindsEveryWayToHandOverTheHostsDevices(t *testing.T) {
 	}
 	for _, ok := range []string{
 		"docker run --cgroupns=private --cap-add SYS_ADMIN --security-opt apparmor=unconfined --tmpfs /run image",
-		"docker run -v /var/devices:/x image",
+		"docker run -v port49data:/x image",
+		"docker run -v port49data:/x -v logs:/y image",
+		"docker run --mount type=volume,src=port49data,dst=/x image",
+		"docker run --mount type=tmpfs,dst=/run image",
+		`"-v", "port49data:/x"`,
 		"docker run --tmpfs /dev/shm image", // a tmpfs is not a host device
 		`"--cap-add", "SYS_ADMIN"`,
 	} {
@@ -529,62 +545,69 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 	}
 }
 
-// The key-host override is for GitHub-hosted runners only: a job sets it only when its runs-on is a
-// GitHub-hosted ubuntu label, the systemd smoke job does set it, and neither the Makefile nor any
-// non-test Go file but the guard itself names it. Agents and developers set it by hand, never in the tree.
-func TestTheKeyHostOverrideIsOnlyOnHostedRunners(t *testing.T) {
+// The key-host override is for GitHub-hosted runners only. In .github/ (workflows in .yml and .yaml, and
+// any action.yml or action.yaml), the variable's name may occur anywhere only as the job-level env key of
+// a job whose runs-on is a GitHub-hosted ubuntu label, with the value "1": a run line, a $GITHUB_ENV
+// write, a step env or a workflow-level env is refused, and so is any other occurrence in the file text.
+// The systemd smoke job must set it. Neither the Makefile (outside a comment) nor any Go file but the
+// guard's own files names it. A self-hosted runner that carries an ubuntu-* label cannot be told from a
+// hosted one statically; that case is a review matter, and agents never set the override locally.
+func TestTheKeyHostEscapeIsOnlyOnHostedRunners(t *testing.T) {
 	root := kindtest.Root()
-	wf, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
-	if err != nil || len(wf) == 0 {
-		t.Fatalf("no workflows found: %v", err)
+	var files []string
+	err := filepath.WalkDir(filepath.Join(root, ".github"), func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && (strings.HasSuffix(p, ".yml") || strings.HasSuffix(p, ".yaml")) {
+			files = append(files, p)
+		}
+		return nil
+	})
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no workflow files found under .github: %v", err)
 	}
 	hosted := regexp.MustCompile(`^ubuntu-(latest|[0-9]+\.[0-9]+)$`)
 	set := 0
-	for _, f := range wf {
+	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var w struct {
-			Env  map[string]any `yaml:"env"`
 			Jobs map[string]struct {
 				RunsOn any            `yaml:"runs-on"`
 				Env    map[string]any `yaml:"env"`
-				Steps  []struct {
-					Env map[string]any `yaml:"env"`
-				} `yaml:"steps"`
 			} `yaml:"jobs"`
 		}
 		if err := yaml.Unmarshal(b, &w); err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
-		if _, ok := w.Env[kindKeyHost]; ok {
-			t.Errorf("%s sets the override for the whole workflow: set it only in the job env of a hosted job", f)
-		}
+		allowed := 0
 		for name, j := range w.Jobs {
-			for _, st := range j.Steps {
-				if _, ok := st.Env[kindKeyHost]; ok {
-					t.Errorf("%s job %s sets the override on a step: set it in the job env", f, name)
-				}
-			}
 			v, ok := j.Env[kindKeyHost]
 			if !ok {
 				continue
 			}
-			set++
 			if ro, _ := j.RunsOn.(string); !hosted.MatchString(ro) || v != "1" {
 				t.Errorf("%s job %s sets the override (%v) with runs-on %v: only GitHub-hosted ubuntu-* runners may, and only to \"1\"", f, name, v, j.RunsOn)
+				continue
 			}
+			allowed++
 		}
+		if n := strings.Count(string(b), kindKeyHost); n != allowed {
+			t.Errorf("%s names the override %d times but %d hosted job envs set it: it may appear only as a hosted job's env key, never in a run line, a $GITHUB_ENV write, a step or workflow env, or a comment", f, n, allowed)
+		}
+		set += allowed
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "systemd.yml"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	var sm struct {
 		Jobs map[string]struct {
 			Env map[string]any `yaml:"env"`
 		} `yaml:"jobs"`
-	}
-	b, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "systemd.yml"))
-	if err != nil {
-		t.Fatal(err)
 	}
 	if err := yaml.Unmarshal(b, &sm); err != nil {
 		t.Fatal(err)
@@ -604,6 +627,8 @@ func TestTheKeyHostOverrideIsOnlyOnHostedRunners(t *testing.T) {
 			t.Errorf("Makefile:%d names the override outside a comment: %s", i+1, l)
 		}
 	}
+	// Go files: only the guard and its own test may name it, test files included. This file builds the
+	// name from two pieces so that it need not be exempt.
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -611,15 +636,15 @@ func TestTheKeyHostOverrideIsOnlyOnHostedRunners(t *testing.T) {
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == ".worktrees" || d.Name() == "node_modules" || d.Name() == "logs") {
 			return filepath.SkipDir
 		}
-		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, "shapetest/keyhost.go") {
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "shapetest/keyhost.go") || strings.HasSuffix(p, "shapetest/keyhost_test.go") {
 			return nil
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(b), kindKeyHost) || strings.Contains(string(b), "KeyHostOverride") {
-			t.Errorf("%s names the key-host override: only the guard may", p)
+		if strings.Contains(string(b), kindKeyHost) || strings.Contains(string(b), "KeyHost"+"Override") {
+			t.Errorf("%s names the key-host override: only the guard and its test may", p)
 		}
 		return nil
 	})
@@ -628,4 +653,4 @@ func TestTheKeyHostOverrideIsOnlyOnHostedRunners(t *testing.T) {
 	}
 }
 
-const kindKeyHost = "PORT49_SMOKE_ON_KEY_HOST"
+var kindKeyHost = "PORT49_SMOKE_ON_" + "KEY_HOST"
