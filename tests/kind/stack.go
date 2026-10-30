@@ -276,7 +276,7 @@ func (s *smoke) mint(brokerAddr string) func() string {
 
 // bringUp makes the cluster named name and installs the chart on it with port49's etcd, through
 // store-roles and the etcd-init job. The caller has refused on a key host already.
-func bringUp(t *testing.T, name string) *smoke {
+func bringUp(t *testing.T, name string, o Options) *smoke {
 	t.Helper()
 	root := kindtest.Root()
 	s := &smoke{t: t, root: root, chart: filepath.Join(root, "deploy", "helm", "port49"), helm: "helm"}
@@ -322,7 +322,18 @@ reclaimPolicy: Delete
 	s.secretFrom("port49-etcd-port49d", map[string]string{"tls.crt": s.pkiFile("etcd/port49d.pem"), "tls.key": s.pkiFile("etcd/port49d-key.pem")})
 	s.secretFrom("port49-etcd-broker", map[string]string{"tls.crt": s.pkiFile("etcd/port49-broker.pem"), "tls.key": s.pkiFile("etcd/port49-broker-key.pem")})
 	s.secretFrom("port49-etcd-root", map[string]string{"ca.crt": s.pkiFile("etcd/ca.pem"), "tls.crt": s.pkiFile("etcd/root.pem"), "tls.key": s.pkiFile("etcd/root-key.pem")})
-	s.secretFrom("port49-device-keys", map[string]string{"tacacs_v1": s.pkiFile("keys/tacacs_v1")})
+	if o.KeysFrom == nil {
+		s.secretFrom("port49-device-keys", map[string]string{"tacacs_v1": s.pkiFile("keys/tacacs_v1")})
+	} else {
+		v1, err := os.ReadFile(s.pkiFile("keys/tacacs_v1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.KeysFrom(s.c, ns, v1)
+		if _, err := s.c.KubectlTry("", "-n", ns, "get", "secret", "port49-device-keys", "-o", "name"); err != nil {
+			t.Fatalf("KeysFrom returned and the Secret port49-device-keys does not exist: %v", err)
+		}
+	}
 	s.secretFrom("port49-encryption", map[string]string{"encryption.key": s.pkiFile("secrets/port49d-encryption.key")})
 	s.secretFrom("port49-broker-tls", map[string]string{"tls.crt": filepath.Join(brokerDir, testpki.LabServerCert),
 		"tls.key": filepath.Join(brokerDir, testpki.LabServerKey), "ca.crt": filepath.Join(brokerDir, testpki.LabCA)})
@@ -345,6 +356,10 @@ reclaimPolicy: Delete
 	pol := readFile(t, filepath.Join(root, "deploy", "compose", "config", "policy.yaml"))
 	pol = strings.ReplaceAll(pol, "172.30.49.0/24", s.subnet)
 	pol = shapetest.AdminPolicy(t, pol, subject+"\n  - {name: svc_backup, identity: [\"system:serviceaccount:"+ns+":oxidized\"], username: svc-backup, token_ttl: 900s}")
+	if o.KeysFrom != nil {
+		// the shipped ESO example names its key files core_v1 and core_v2
+		pol = strings.ReplaceAll(pol, "keys/tacacs_v1", "keys/core_v1")
+	}
 	pol = strings.Replace(pol, "\ngrants:\n", "\ngrants:\n  - {subject: svc_backup, scope: all_devices, roles: [network_admin]}\n", 1)
 	s.policy = filepath.Join(cfgDir, "policy.yaml")
 	writeFile(t, s.policy, pol)
@@ -440,10 +455,23 @@ type Stack struct{ s *smoke }
 
 // BringUp refuses on a key host, makes the cluster named name, installs the chart and waits for
 // every pod. The cluster is deleted when t ends (kindtest.Up).
-func BringUp(t *testing.T, name string) *Stack {
+func BringUp(t *testing.T, name string) *Stack { return BringUpWith(t, name, Options{}) }
+
+// Options changes the bring-up.
+type Options struct {
+	// KeysFrom makes the device-key Secret port49-device-keys itself: the stack does not create it,
+	// and calls KeysFrom (cluster up, namespace made, nothing yet mounting the Secret) with the
+	// namespace and the version 1 key, which it must leave existing; the key's file is then core_v1,
+	// as in the shipped External Secrets example, and the policy names that. Version 1's bytes are
+	// never printed.
+	KeysFrom func(c *kindtest.Cluster, ns string, v1 []byte)
+}
+
+// BringUpWith is BringUp with options.
+func BringUpWith(t *testing.T, name string, o Options) *Stack {
 	t.Helper()
 	shapetest.RefuseOnKeyHost(t)
-	s := bringUp(t, name)
+	s := bringUp(t, name, o)
 	s.issuerAndPods()
 	return &Stack{s}
 }

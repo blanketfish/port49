@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Verdicts a cell can end with.
@@ -217,4 +219,43 @@ func nz(s string) string {
 
 func cell(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "|", "\\|"), "\n", " ")
+}
+
+// ExternalSecretFromExample is the ExternalSecret of the shipped example
+// (deploy/helm/port49/examples/external-secret.yaml) as JSON, with its store's name replaced by
+// store and nothing else changed, so that cell (d) measures what an operator copies, creationPolicy:
+// Owner included. With withV2 false the core_v2 entry is left out: the first phase, which the
+// second (the whole example) adds to. It refuses an example that is not a namespaced-store
+// ExternalSecret with core_v1 and core_v2 entries.
+func ExternalSecretFromExample(example []byte, store string, withV2 bool) ([]byte, error) {
+	dec := yaml.NewDecoder(strings.NewReader(string(example)))
+	for {
+		var doc map[string]any
+		if err := dec.Decode(&doc); err != nil {
+			return nil, fmt.Errorf("l82: the example holds no ExternalSecret")
+		}
+		if doc["kind"] != "ExternalSecret" {
+			continue
+		}
+		spec, _ := doc["spec"].(map[string]any)
+		ref, _ := spec["secretStoreRef"].(map[string]any)
+		data, _ := spec["data"].([]any)
+		if ref == nil || ref["kind"] != "SecretStore" {
+			return nil, fmt.Errorf("l82: the example's store is not a namespaced SecretStore")
+		}
+		var keep []any
+		var v1, v2 bool
+		for _, d := range data {
+			k, _ := d.(map[string]any)["secretKey"].(string)
+			v1, v2 = v1 || k == "core_v1", v2 || k == "core_v2"
+			if k != "core_v2" || withV2 {
+				keep = append(keep, d)
+			}
+		}
+		if !v1 || !v2 {
+			return nil, fmt.Errorf("l82: the example's data lacks core_v1 or core_v2")
+		}
+		ref["name"], spec["data"] = store, keep
+		return json.Marshal(doc)
+	}
 }

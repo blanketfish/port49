@@ -42,7 +42,7 @@ func sha(path string) string {
 
 func TestKindSmoke(t *testing.T) {
 	shapetest.RefuseOnKeyHost(t) // kind's nodes are privileged containers
-	s := bringUp(t, "port49smoke")
+	s := bringUp(t, "port49smoke", Options{})
 	if oldRoot() {
 		s.cellFSGroupRed()
 		return

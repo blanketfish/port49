@@ -31,8 +31,9 @@ import (
 //	    with the chart's securityContext; PASS iff port49d starts with the key
 //	(b) the delay from a Secret update that adds a key to its appearance in a whole-volume mount
 //	(c) a subPath mount of the same Secret after the update, 180 s later
-//	(d) an ExternalSecret (fake provider) gains a version: the delay to a login keyed with it, with
-//	    the policy naming it and no restart
+//	(d) the shipped ExternalSecret example (creationPolicy: Owner, only its store's name changed, fake
+//	    provider) gains core_v2: the delay to a login keyed with it, with the policy naming it and no
+//	    restart; the operator has made and owns the key Secret since before port49d started
 //
 // Every cell ends PASS or FAIL against the register's condition, and a FAIL is a measured answer,
 // not a test failure. A cell that could not be measured is NOT RUN and fails the test. The results
@@ -71,10 +72,13 @@ func TestL82(t *testing.T) {
 		}
 	}()
 
-	stack := kindstack.BringUp(t, "port49l82")
+	// The key Secret is the shipped External Secrets example's, made and owned by the operator.
+	v2 := l82Random(t)
+	var esoImage string
+	stack := kindstack.BringUpWith(t, "port49l82", kindstack.Options{KeysFrom: l82KeysFromESO(t, v2, &esoImage)})
 	stack.Run(t, "a_key_directory", func(t *testing.T) { l82CellA(t, stack, &cells[0]) })
 	stack.Run(t, "b_c_whole_mount_and_subpath", func(t *testing.T) { l82CellsBC(t, stack, &cells[1], &cells[2]) })
-	stack.Run(t, "d_external_secrets", func(t *testing.T) { l82CellD(t, stack, &cells[3]) })
+	stack.Run(t, "d_external_secrets", func(t *testing.T) { l82CellD(t, stack, v2, esoImage, &cells[3]) })
 }
 
 func l82Verdict(c l82.Cell) string {
@@ -283,61 +287,81 @@ func l82Manifest(t *testing.T, doc any) string {
 	return string(b)
 }
 
-// Cell (d): ESO installed from the pinned chart; a ClusterSecretStore with the fake provider
-// holding port49/devices/core-v1 and core-v2; an ExternalSecret that merges core_v1 into the
-// chart's key Secret (the smoke made it; creationPolicy Merge adopts it, where the shipped example's
-// Owner would make a new one), then gains core_v2. The delay runs from that edit to a login keyed
-// with version 2, with the policy naming it, and port49d's container neither restarted nor
-// started again.
-func l82CellD(t *testing.T, stack *kindstack.Stack, cell *l82.Cell) {
-	cl, ns := stack.Cluster(), stack.Namespace()
-	chart := kindtest.Bin(t, "ESO_CHART")
-	helm := exec.Command(kindtest.Bin(t, "HELM_BIN"), "--kubeconfig", cl.Kubeconfig, "--kube-context", cl.Context(),
-		"upgrade", "--install", "external-secrets", chart, "-n", "external-secrets", "--create-namespace",
-		"--set", "installCRDs=true", "--set", "bitwarden-sdk-server.enabled=false", "--wait", "--timeout", "6m")
-	if out, err := helm.CombinedOutput(); err != nil {
-		t.Fatalf("helm install of the External Secrets Operator: %v\n%s", err, kindtest.Filter(string(out)))
-	}
-	if img, err := cl.KubectlTry("", "-n", "external-secrets", "get", "deploy", "external-secrets", "-o",
-		"jsonpath={.spec.template.spec.containers[0].image}"); err == nil {
-		tag := img[strings.LastIndex(img, ":")+1:]
-		l82Row(cell, "the operator's image tag", strings.SplitN(tag, "@", 2)[0])
-	}
+const l82Store = "l82-fake"
 
-	v1b, err := os.ReadFile(stack.PKIFile("keys/tacacs_v1"))
+// l82Example is the shipped External Secrets example, which cell (d) applies as an operator would.
+func l82Example(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "external-secret.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	v2 := l82Random(t)
-	store := map[string]any{"apiVersion": "external-secrets.io/v1", "kind": "ClusterSecretStore", "metadata": map[string]any{"name": "l82-fake"},
-		"spec": map[string]any{"conditions": []map[string]any{{"namespaces": []string{ns}}},
-			"provider": map[string]any{"fake": map[string]any{"data": []map[string]any{
-				{"key": "port49/devices/core-v1", "value": string(v1b)},
-				{"key": "port49/devices/core-v2", "value": v2}}}}}}
-	// The operator's webhook takes a moment after its pods are Ready.
-	shapetest.WaitFor(t, "the ClusterSecretStore to be accepted", 3*time.Minute, func() bool {
-		_, err := cl.KubectlTry(l82Manifest(t, store), "apply", "-f", "-")
-		return err == nil
-	})
-	es := func(withV2 bool) string {
-		data := []map[string]any{{"secretKey": "tacacs_v1", "remoteRef": map[string]any{"key": "port49/devices/core-v1"}}}
-		if withV2 {
-			data = append(data, map[string]any{"secretKey": "tacacs_v2", "remoteRef": map[string]any{"key": "port49/devices/core-v2"}})
-		}
-		return l82Manifest(t, map[string]any{"apiVersion": "external-secrets.io/v1", "kind": "ExternalSecret",
-			"metadata": map[string]any{"name": "port49-device-keys", "namespace": ns},
-			"spec": map[string]any{"refreshInterval": "1h", "secretStoreRef": map[string]any{"name": "l82-fake", "kind": "ClusterSecretStore"},
-				"target": map[string]any{"name": "port49-device-keys", "creationPolicy": "Merge", "deletionPolicy": "Retain"}, "data": data}})
-	}
-	cl.Apply(es(false))
-	cl.Kubectl("-n", ns, "wait", "--for=condition=Ready", "externalsecret/port49-device-keys", "--timeout=180s")
+	return b
+}
 
-	// The policy names version 2 while its file is absent (as the rotation cell does), then version 1
-	// is checked to still pass: the operator merged the same bytes.
+// l82KeysFromESO is the stack's KeysFrom: the operator installed from the pinned chart, a namespaced
+// SecretStore with the fake provider holding port49/devices/core-v1 (the stack's version 1 key) and
+// core-v2 (random per run), and the shipped example's ExternalSecret less its core_v2 entry, which
+// creates and owns port49-device-keys (creationPolicy: Owner) before anything mounts it. The
+// operator's image tag is returned through image.
+func l82KeysFromESO(t *testing.T, v2 string, image *string) func(*kindtest.Cluster, string, []byte) {
+	return func(cl *kindtest.Cluster, ns string, v1 []byte) {
+		chart := kindtest.Bin(t, "ESO_CHART")
+		helm := exec.Command(kindtest.Bin(t, "HELM_BIN"), "--kubeconfig", cl.Kubeconfig, "--kube-context", cl.Context(),
+			"upgrade", "--install", "external-secrets", chart, "-n", "external-secrets", "--create-namespace",
+			"--set", "installCRDs=true", "--set", "bitwarden-sdk-server.enabled=false", "--wait", "--timeout", "6m")
+		if out, err := helm.CombinedOutput(); err != nil {
+			t.Fatalf("helm install of the External Secrets Operator: %v\n%s", err, kindtest.Filter(string(out)))
+		}
+		if img, err := cl.KubectlTry("", "-n", "external-secrets", "get", "deploy", "external-secrets", "-o",
+			"jsonpath={.spec.template.spec.containers[0].image}"); err == nil {
+			*image = strings.SplitN(img[strings.LastIndex(img, ":")+1:], "@", 2)[0]
+		}
+		store := l82Manifest(t, map[string]any{"apiVersion": "external-secrets.io/v1", "kind": "SecretStore",
+			"metadata": map[string]any{"name": l82Store, "namespace": ns},
+			"spec": map[string]any{"provider": map[string]any{"fake": map[string]any{"data": []map[string]any{
+				{"key": "port49/devices/core-v1", "value": string(v1)},
+				{"key": "port49/devices/core-v2", "value": v2}}}}}})
+		// The operator's webhook takes a moment after its pods are Ready.
+		shapetest.WaitFor(t, "the SecretStore to be accepted", 3*time.Minute, func() bool {
+			_, err := cl.KubectlTry(store, "apply", "-f", "-")
+			return err == nil
+		})
+		l82ApplyES(t, cl, ns, false)
+		cl.Kubectl("-n", ns, "wait", "--for=condition=Ready", "externalsecret/port49-device-keys", "--timeout=180s")
+	}
+}
+
+// l82ApplyES applies the example's ExternalSecret, with the store's name changed and nothing else.
+func l82ApplyES(t *testing.T, cl *kindtest.Cluster, ns string, withV2 bool) {
+	t.Helper()
+	b, err := l82.ExternalSecretFromExample(l82Example(t), l82Store, withV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.KubectlTry(string(b), "-n", ns, "apply", "-f", "-"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Cell (d): the shipped example, creationPolicy: Owner as shipped, has made and owns the key Secret
+// since before the pods started (l82KeysFromESO), so port49d started on it. The policy names
+// version 2 while its file is absent; then the whole example is applied, which adds core_v2. The
+// delay runs from that edit to a login keyed with version 2, with port49d's container neither
+// restarted nor started again. If the example cannot work as written, that is this cell's FAIL and
+// a chart bug, not something to route around.
+func l82CellD(t *testing.T, stack *kindstack.Stack, v2, image string, cell *l82.Cell) {
+	cl, ns := stack.Cluster(), stack.Namespace()
+	if image != "" {
+		l82Row(cell, "the operator's image tag", image)
+	}
+	l82Row(cell, "the key Secret's creationPolicy, as the example ships it", "Owner")
 	next, err := shapetest.WithAcceptV2(stack.Policy(), "/run/port49/keys")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// the example's key file for version 2 is core_v2
+	next = []byte(strings.ReplaceAll(string(next), "keys/tacacs_v2", "keys/core_v2"))
 	if err := stack.PatchPolicy(next); err != nil {
 		t.Fatalf("writing the policy with version 2 named: %v", err)
 	}
@@ -345,7 +369,7 @@ func l82CellD(t *testing.T, stack *kindstack.Stack, cell *l82.Cell) {
 	mint := stack.Mint(broker)
 	dev := stack.Device("t-port49d-0")
 	tok := mint()
-	shapetest.WaitFor(t, "a login keyed with version 1 after the operator merged the Secret and the policy names version 2", 60*time.Second, func() bool {
+	shapetest.WaitFor(t, "a login keyed with version 1 while the policy names version 2", 60*time.Second, func() bool {
 		st, err := dev.TryLogin("alice", tok)
 		return err == nil && st == wire.AuthenStatusPass
 	})
@@ -355,13 +379,13 @@ func l82CellD(t *testing.T, stack *kindstack.Stack, cell *l82.Cell) {
 	}
 
 	t0 := time.Now()
-	cl.Apply(es(true))
+	l82ApplyES(t, cl, ns, true)
 	gained := false
 	var tSecret time.Duration
 	keys := `go-template={{range $k, $v := .data}}{{$k}} {{end}}`
 	for time.Since(t0) < 6*time.Minute {
 		out, err := cl.KubectlTry("", "-n", ns, "get", "secret", "port49-device-keys", "-o", keys)
-		if err == nil && strings.Contains(" "+out, " tacacs_v2 ") {
+		if err == nil && strings.Contains(" "+out, " core_v2 ") {
 			gained, tSecret = true, time.Since(t0)
 			break
 		}

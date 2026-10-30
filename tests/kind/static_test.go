@@ -185,6 +185,9 @@ func TestL82TargetPinsTheChartAndDeletesTheCluster(t *testing.T) {
 	if !strings.Contains(src, `go-template={{range $k, $v := .data}}{{$k}} {{end}}`) {
 		t.Error("l82_test.go does not read the Secret's key names through the template that prints names only")
 	}
+	if !strings.Contains(src, "ExternalSecretFromExample(") || strings.Contains(src, `"creationPolicy"`) {
+		t.Error("l82_test.go does not build its ExternalSecret from the shipped example, or sets creationPolicy itself: (d) measures what operators copy, Owner included")
+	}
 	if strings.Contains(src, "labOccupyForRun") || strings.Contains(src, "labGuardAt") {
 		t.Error("l82_test.go takes the lab lock: there is no shared lab host in CI, and the key-host guard alone refuses on a developer machine")
 	}

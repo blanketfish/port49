@@ -539,7 +539,7 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 	for _, c := range []struct{ file, after string }{
 		{"tests/systemd/smoke_test.go", "func newBox(t *testing.T) box {\n\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)"},
 		{"tests/kind/smoke_test.go", "func TestKindSmoke(t *testing.T) {\n\tshapetest.RefuseOnKeyHost(t)"},
-		{"tests/kind/stack.go", "func BringUp(t *testing.T, name string) *Stack {\n\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)"},
+		{"tests/kind/stack.go", "func BringUpWith(t *testing.T, name string, o Options) *Stack {\n\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)"},
 		{"tests/kind/kindtest/kindtest.go", "\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)\n\tkind := Bin("},
 	} {
 		if !strings.Contains(read(strings.Split(c.file, "/")...), c.after) {

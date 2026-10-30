@@ -1,11 +1,15 @@
 package l82
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestJudgeStart(t *testing.T) {
@@ -165,4 +169,93 @@ func TestStatLine(t *testing.T) {
 			t.Errorf("StatLine(%q) did not fail", bad)
 		}
 	}
+}
+
+// Cell (d) measures what operators copy: the shipped example, with only the store's name changed
+// (and, for the first phase, the core_v2 entry left out, so that the second phase adds it).
+func example(t *testing.T) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "external-secret.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func decodeES(t *testing.T, b []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func shippedES(t *testing.T) map[string]any {
+	t.Helper()
+	dec := yaml.NewDecoder(strings.NewReader(string(example(t))))
+	for {
+		var m map[string]any
+		if err := dec.Decode(&m); err != nil {
+			t.Fatal("the example has no ExternalSecret")
+		}
+		if m["kind"] == "ExternalSecret" {
+			return m
+		}
+	}
+}
+
+func TestExternalSecretIsTheExampleExceptTheStoreName(t *testing.T) {
+	want := shippedES(t)
+	want["spec"].(map[string]any)["secretStoreRef"].(map[string]any)["name"] = "l82-fake"
+	b, err := ExternalSecretFromExample(example(t), "l82-fake", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decodeES(t, b), jsonRoundTrip(t, want)) {
+		t.Errorf("the ExternalSecret differs from the example in more than the store name:\n%s", b)
+	}
+	spec := want["spec"].(map[string]any)
+	if r := spec["target"].(map[string]any)["creationPolicy"]; r != "Owner" {
+		t.Errorf("the example's creationPolicy is %v: L82 must measure Owner", r)
+	}
+}
+
+func TestExternalSecretFirstPhaseLacksOnlyTheSecondVersion(t *testing.T) {
+	want := shippedES(t)
+	spec := want["spec"].(map[string]any)
+	spec["secretStoreRef"].(map[string]any)["name"] = "l82-fake"
+	data := spec["data"].([]any)
+	spec["data"] = data[:1]
+	b, err := ExternalSecretFromExample(example(t), "l82-fake", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decodeES(t, b), jsonRoundTrip(t, want)) {
+		t.Errorf("the first phase is not the example less its core_v2 entry:\n%s", b)
+	}
+	if strings.Contains(string(b), "core_v2") || !strings.Contains(string(b), "core_v1") {
+		t.Errorf("the first phase's keys are wrong:\n%s", b)
+	}
+}
+
+func TestExternalSecretRefusesAnExampleItDoesNotUnderstand(t *testing.T) {
+	for name, in := range map[string]string{
+		"no ExternalSecret": "kind: SecretStore\nmetadata: {name: x}\n",
+		"a cluster store":   "kind: ExternalSecret\nspec: {secretStoreRef: {name: x, kind: ClusterSecretStore}, data: [{secretKey: core_v1}, {secretKey: core_v2}]}\n",
+		"no core_v2":        "kind: ExternalSecret\nspec: {secretStoreRef: {name: x, kind: SecretStore}, data: [{secretKey: core_v1}]}\n",
+	} {
+		if _, err := ExternalSecretFromExample([]byte(in), "s", true); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}
+
+func jsonRoundTrip(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decodeES(t, b)
 }
