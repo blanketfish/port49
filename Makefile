@@ -546,9 +546,9 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
 
 # The fsGroup cell's red run: the same install with the first design's 2755 volume root, by the
-# test-only post-renderer. The test PASSES only when the broker's second generation crash-loops on
-# the exact state_dir refusal (a green broker, or a crash for another reason, fails it), so a passing
-# target is the red result observed. It builds the setup image the test loads, and deletes the
+# test-only post-renderer. The test PASSES only when the kubelet's walk
+# under that root leaves the broker's issuing-ca.key unusable (a broker that still issues fails it),
+# so a passing target is the red result observed. It builds the setup image the test loads, and deletes the
 # cluster afterwards like kind-smoke.
 kind-smoke-red: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
 	docker build --target setup -t port49-setup:dev .

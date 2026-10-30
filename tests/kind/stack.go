@@ -439,9 +439,9 @@ config:
 	return s
 }
 
-// issuerAndPods copies the issuing CA once, so that every broker is the same CA (cell 6 asserts
-// it), and waits for both port49d pods and both brokers.
-func (s *smoke) issuerAndPods() {
+// copyIssuer makes the issuing CA on broker-0 and copies it to the rest, so that every broker is the
+// same CA (cell 6 asserts it).
+func (s *smoke) copyIssuer() {
 	t := s.t
 	t.Helper()
 	script := filepath.Join(s.chart, "scripts", "copy-issuer.sh")
@@ -450,6 +450,13 @@ func (s *smoke) issuerAndPods() {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("copy-issuer.sh: %v\n%s", err, kindtest.Filter(string(out)))
 	}
+}
+
+// issuerAndPods copies the issuing CA once and waits for both port49d pods and both brokers.
+func (s *smoke) issuerAndPods() {
+	t := s.t
+	t.Helper()
+	s.copyIssuer()
 	for _, p := range []string{"t-port49d-0", "t-port49d-1", "t-broker-0", "t-broker-1"} {
 		s.c.WaitReady(ns, p, 4*time.Minute)
 	}

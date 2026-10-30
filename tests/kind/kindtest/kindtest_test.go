@@ -1,11 +1,16 @@
 package kindtest
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/tests/shapes/shapetest"
 )
 
@@ -242,5 +247,45 @@ func TestNamespaceCommandsShowLabelsEventsAndWorkloadsWithoutSecrets(t *testing.
 		if !strings.Contains(text, want) {
 			t.Errorf("the namespace commands lack %q:\n%s", want, text)
 		}
+	}
+}
+
+// The old 2755 root does not crash-loop the broker: the kubelet's walk gives issuing-ca.key group write,
+// and the broker, which "never fails" to load its CA, says the key is not usable and issues nothing. The
+// patterns are the broker's own lines, made by issuer.Load over the strict reader the broker uses.
+func TestTheIssuerLinesMatchWhatTheBrokerSays(t *testing.T) {
+	cert, key, err := issuer.New(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{issuer.CertFile: cert, issuer.KeyFile: key} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := issuer.Files{
+		Cert: func(n string) ([]byte, error) {
+			b, err := os.ReadFile(filepath.Join(dir, n))
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, nil
+			}
+			return b, err
+		},
+		Key: func(n string) ([]byte, error) { return keyfile.ReadOwn(filepath.Join(dir, n)) },
+	}
+	_, lines := issuer.Load(files, time.Now())
+	if joined := strings.Join(lines, "\n"); !IssuerIssuing.MatchString(joined) || IssuerWalked.MatchString(joined) {
+		t.Fatalf("a healthy CA's lines: %q", joined)
+	}
+	if err := os.Chmod(filepath.Join(dir, issuer.KeyFile), 0o660); err != nil { // what the walk does
+		t.Fatal(err)
+	}
+	_, lines = issuer.Load(files, time.Now())
+	if joined := strings.Join(lines, "\n"); IssuerIssuing.MatchString(joined) || !IssuerWalked.MatchString(joined) {
+		t.Fatalf("a walked CA key's lines: %q", joined)
 	}
 }

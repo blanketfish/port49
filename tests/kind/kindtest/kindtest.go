@@ -419,6 +419,15 @@ func (s Stat) Want(mode string, uid, gid int) error {
 // state_dir check; kindtest_test.go pins the format against that source).
 var StateDirRefusal = regexp.MustCompile(`config: broker\.state_dir /var/lib/port49-broker/state is writable by its group or others \(mode 0[0-7](?:[2367][0-7]|[0-7][2367])\)`)
 
+// IssuerIssuing and IssuerWalked are the broker's lines about its issuing CA (internal/issuer Load): that
+// it issues, and that a file of the CA is not usable. The old 2755 root's kubelet walk gives
+// issuing-ca.key group write, which the strict reader refuses, so the broker (which never fails to
+// start over its CA) prints the second and issues nothing.
+var (
+	IssuerIssuing = regexp.MustCompile(`(?m)(?:^|issuance: )issuing as `)
+	IssuerWalked  = regexp.MustCompile(`issuing-ca\.(?:key|pem) is not usable \(`)
+)
+
 // oldRootRE is the 3770 root init command's text, which OldRoot rewrites to the first design's;
 // ownerInitRE is the owner init's, which the first design did not have.
 var oldRootRE = regexp.MustCompile(`(?s)chown 0:65532 ([^\s"]+) && chmod 3770 [^\s"]+ && \{ \[ ! -L [^\s"]+ \].*?; \} && (install -d -m 0700 -o 65532 -g 65532 [^\s"]+) && chown -h 65532:65532 [^\s"]+ && chmod 0700 [^\s"]+ && chmod g-s [^\s"]+`)

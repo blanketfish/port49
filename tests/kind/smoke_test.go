@@ -475,9 +475,14 @@ func (s *smoke) cellFSGroup(t *testing.T) {
 	}
 }
 
-// Cell 9, red (KIND_OLD_ROOT=1): the first design's 2755 root. Generation one starts (its init has
-// run); generation two is a kubelet walk, which leaves state/ group-writable, and the broker refuses
-// it, by the line of internal/config/config.go, and crash-loops.
+// Cell 9, red (KIND_OLD_ROOT=1): the first design's 2755 root, with issuance on and the issuing CA
+// copied in. Every mount under that root is a kubelet walk (the old init puts the root back to 2755
+// at each start), and the walk gives issuing-ca.key group write, which the old init does not undo
+// below the data directory. The strict reader refuses the key, and the broker, which never fails to
+// start over its CA, says so and issues nothing. A generation after the copy shows it; one more is
+// tried if the copy's own restart did not. (The broker does not crash-loop: the old init's
+// `install -d -m 0700` still repairs state/, which this cell's first version expected to be refused.)
+// The green cell's `want` is the same file at 600.
 func (s *smoke) cellFSGroupRed() {
 	t := s.t
 	shapetest.WaitFor(t, brokerPod+"'s init container to finish", 5*time.Minute, func() bool {
@@ -485,17 +490,19 @@ func (s *smoke) cellFSGroupRed() {
 		return err == nil && p.Phase == "Running" && p.InitWaiting == ""
 	})
 	s.c.RequireLocalPV(ns, "data-"+brokerPod)
-	s.c.Kubectl("-n", ns, "delete", "pod", brokerPod)
-	if !s.c.WaitCrashLoop(ns, brokerPod, 4*time.Minute) {
-		t.Fatalf("%s did not crash-loop on its second generation: the old 2755 root was expected to fail (a green here means the red is not red)", brokerPod)
+	s.copyIssuer()
+	var log string
+	for gen := 1; gen <= 2; gen++ {
+		if gen > 1 {
+			s.c.Kubectl("-n", ns, "delete", "pod", brokerPod)
+		}
+		s.c.WaitReady(ns, brokerPod, 4*time.Minute)
+		log, _ = s.c.KubectlTry("", "-n", ns, "logs", brokerPod)
+		if kindtest.IssuerWalked.MatchString(log) && !kindtest.IssuerIssuing.MatchString(log) {
+			t.Logf("RED as expected: the 2755 root's walk leaves issuing-ca.key unusable (generation %d after the copy)", gen)
+			return
+		}
 	}
-	logs, _ := s.c.KubectlTry("", "-n", ns, "logs", brokerPod, "--previous")
-	if more, err := s.c.KubectlTry("", "-n", ns, "logs", brokerPod); err == nil {
-		logs += more
-	}
-	if !kindtest.StateDirRefusal.MatchString(logs) {
-		t.Fatalf("%s crash-looped, but not on the state_dir refusal; the broker's log is %d bytes, filtered:\n%s",
-			brokerPod, len(logs), kindtest.Filter(logs))
-	}
-	t.Logf("RED as expected: the 2755 root's second generation crash-loops on the state_dir refusal")
+	t.Fatalf("%s still issues after two generations under the old 2755 root: the walk was expected to leave "+
+		"issuing-ca.key unusable (a green here means the red is not red); its log, filtered:\n%s", brokerPod, kindtest.Filter(log))
 }

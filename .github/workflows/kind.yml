@@ -1,7 +1,7 @@
 # The Kubernetes shape's smoke (plan 12b, Task 11): the chart on a kind cluster with port49's own etcd.
 # make kind-smoke runs the cells; make kind-smoke-red runs the fsGroup cell against the first design's
-# 2755 volume root and passes only when the broker's second generation crash-loops on the state_dir
-# refusal, so a green job is the red result observed.
+# 2755 volume root, with issuance on, and passes only when the kubelet's walk leaves the broker's
+# issuing-ca.key unusable (its log says so and it issues nothing), so a green job is the red result observed.
 #
 # Kind's nodes are privileged containers, so the key-host guard refuses on a machine that holds a TPM or
 # a security key (tests/shapes/shapetest/keyhost.go). A hosted runner is ephemeral and holds nobody's key,

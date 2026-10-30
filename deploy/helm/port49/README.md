@@ -72,7 +72,8 @@ Unverified against a real kubelet until Task 11's kind smoke. Its two-generation
 volume type the kubelet applies fsGroup to (a `local` volume or csi-hostpath, never kind's default
 hostPath class, which never applies it): install, delete the pod, and check the broker starts again,
 the root is `3770 root:65532` and `state/issuing-ca.key` is still 0600. Run first with the old 2755
-root it must crash-loop on the `state_dir` refusal, which proves the cell detects it.
+root, with issuance on, it must leave `issuing-ca.key` unusable after the walk (the broker says so and
+issues nothing; it does not crash-loop), which proves the cell detects it.
 
 `examples/external-secret.yaml` syncs the device keys from Vault with External Secrets: one Secret key
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
