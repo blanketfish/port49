@@ -8103,6 +8103,7 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
   - whatever L83, L84 or L85 left FAIL that a later platform change might reopen. TODO(L83) TODO(L85)
 - **Plan 13:** install pages from each README, the "When it will not start" tables, and the `encryption:` rotation runbook; `--version` and
   `healthcheck`.
+  - **Versioning (Ryan 2026-10-30): SemVer.** `v0.1.0` is the beta, and 0.x may break config with loud notes. `1.0.0` is the compatibility promise. Bumps come from Conventional Commits, and there is one version across every artifact. Tags are manual and carry no pre-release suffix unless it is mapped to PEP 440. The release docs state this.
 - **Ryan:**
   - ruled: admin over the API with a key press (2026-10-27); smokes CI-only (2026-10-30); maintainer `port49 maintainers
     <port49@blanketfish.com>`; the `.rpm` library is pip-only (the lead's ruling, Ryan may override);
