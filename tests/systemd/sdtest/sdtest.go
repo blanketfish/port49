@@ -117,10 +117,54 @@ func ParseShow(out string) map[string]string {
 	return m
 }
 
-// Refusal reports whether line is the fence's refusal naming dir: it names the directory and says
-// it is writable by others.
+// Refusal reports whether line is the fence's refusal naming dir, as the fence words it (checked
+// against the fence itself in sdtest_test.go): for a group-writable ancestor of a file read, "the
+// directory D (above F) is mode drwxrwxr-x, writable by others than its owner ..."; for a directory
+// holding it, "... D is mode ...". It names the directory and says it is writable by others.
 func Refusal(line, dir string) bool {
-	return strings.Contains(line, " "+dir+" is mode ") && strings.Contains(line, "writable by others")
+	if !strings.Contains(line, "writable by others") {
+		return false
+	}
+	q := regexp.QuoteMeta(dir)
+	return regexp.MustCompile(`(^|[ :])(the directory )?` + q + `( \(above [^)]*\))? is mode `).MatchString(line)
+}
+
+var (
+	summaryPrefix = regexp.MustCompile(`^[A-Za-z0-9_/. ()-]{1,200}$`)
+	summaryMode   = regexp.MustCompile(`^[-dl][-rwxsStT]{9}$`)
+	summaryRun    = regexp.MustCompile(`[A-Za-z0-9_+=-]{24,}`)
+	summaryAdvice = regexp.MustCompile(`^[a-z]{1,12}`)
+)
+
+// RefusalSummary is what the smoke prints when the journal holds no refusal it was waiting for: for
+// each line holding " is mode ", only the fence's `what` prefix, the mode and the first word of the
+// advice, each in a closed alphabet, and never the line. A line that does not fit is left out, so
+// the output can go through tests/qual/secret-filter.sh whole and still say something.
+func RefusalSummary(journal string) string {
+	var out []string
+	for _, l := range strings.Split(journal, "\n") {
+		head, rest, ok := strings.Cut(l, " is mode ")
+		if !ok {
+			continue
+		}
+		if k := strings.LastIndex(head, ": "); k >= 0 {
+			head = head[k+2:]
+		}
+		if len(rest) < 10 || !summaryPrefix.MatchString(head) || summaryRun.MatchString(head) || !summaryMode.MatchString(rest[:10]) {
+			continue
+		}
+		advice := "none"
+		if k := strings.LastIndex(rest, " - "); k >= 0 {
+			if w := summaryAdvice.FindString(rest[k+3:]); w != "" {
+				advice = w
+			}
+		}
+		out = append(out, head+" | "+rest[:10]+" | "+advice)
+	}
+	if len(out) == 0 {
+		return `no line holds "is mode"`
+	}
+	return strings.Join(out, "\n")
 }
 
 // Ports are the host ports the container publishes, all on 127.0.0.1: TACACS+, the broker's API,

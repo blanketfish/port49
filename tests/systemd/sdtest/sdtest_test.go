@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/tests/kind/kindtest"
 	"gopkg.in/yaml.v3"
 )
@@ -708,5 +709,62 @@ func TestPutScriptCreatesTheParentDirectory(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(filepath.Dir(target)); len(ents) != 1 {
 		t.Errorf("the directory holds %d entries, want only the file (no temp left behind)", len(ents))
+	}
+}
+
+// The wording the smoke looks for is the fence's own, taken from the fence on a real tree: a
+// group-writable ancestor of the file read ("the directory D (above F) is mode drwxrwxr-x, writable
+// by others than its owner ... - chmod go-w it, or ..."). A regexp of the smoke's own guess is how the
+// two drift, so this test runs the fence.
+func TestRefusalMatchesTheFencesWordingForAnAncestor(t *testing.T) {
+	top := t.TempDir()
+	if err := os.Chmod(top, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mid := filepath.Join(top, "etc")
+	p := filepath.Join(mid, "port49", "port49d.yaml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("x: 1\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(mid, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fence.Read(p, 1<<20, "config file")
+	if err == nil {
+		t.Fatal("the fence accepted a group-writable ancestor")
+	}
+	line := "port49d: " + err.Error()
+	if !Refusal(line, mid) {
+		t.Errorf("Refusal does not match the fence's line for an ancestor: %q", line)
+	}
+	if Refusal(line, filepath.Join(top, "other")) || Refusal(line, "/etc") {
+		t.Errorf("Refusal matched a directory the line does not name: %q", line)
+	}
+	if Refusal("the directory "+mid+" (above x) is mode drwxr-xr-x, fine", mid) {
+		t.Error("Refusal matched a line that does not say writable by others")
+	}
+	// the old plain form still matches
+	if !Refusal("the directory "+mid+" is mode drwxrwxr-x, writable by others than its owner", mid) {
+		t.Error("Refusal no longer matches the plain form")
+	}
+}
+
+func TestRefusalSummaryIsAClosedAlphabet(t *testing.T) {
+	j := strings.Join([]string{
+		"port49d: the directory /etc (above /etc/port49/port49d.yaml) is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it, or, if others share it, move the file",
+		"unrelated line mentioning a token eyJhbGciOiJIUzI1NiJ9abcdefghijklmnop",
+		"port49d: /run/port49/keys/core_v1 is mode -rw-rw-rw-: a secret file may be group-readable, never world-readable",
+		"x is mode (secret-9f8e7d6c5b4a39281706f5e4d3c2b1a0) y",
+	}, "\n")
+	got := RefusalSummary(j)
+	want := "the directory /etc (above /etc/port49/port49d.yaml) | drwxrwxr-x | chmod\n/run/port49/keys/core_v1 | -rw-rw-rw- | none"
+	if got != want {
+		t.Errorf("RefusalSummary =\n%q\nwant\n%q", got, want)
+	}
+	if RefusalSummary("nothing here") != "no line holds \"is mode\"" {
+		t.Error("the empty summary is not said")
 	}
 }

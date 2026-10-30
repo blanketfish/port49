@@ -434,14 +434,23 @@ func TestSystemdSmoke(t *testing.T) {
 	})
 	since := b.epoch()
 	b.sh("chmod g+w /etc && systemctl restart port49d")
-	shapetest.WaitFor(t, "the journal's refusal of a group-writable /etc", time.Minute, func() bool {
+	refused := func() bool {
 		for _, l := range strings.Split(b.journal("port49d", since), "\n") {
 			if sdtest.Refusal(l, "/etc") {
 				return true
 			}
 		}
 		return false
-	})
+	}
+	deadline := time.Now().Add(time.Minute)
+	for !refused() {
+		if time.Now().After(deadline) {
+			// the journal is not printed (the exit line may name a secret): its "is mode" lines, as a closed summary
+			t.Fatalf("the journal's refusal of a group-writable /etc did not happen within 1m0s; the journal's mode refusals since %d:\n%s",
+				since, sdtest.RefusalSummary(b.journal("port49d", since)))
+		}
+		time.Sleep(2 * time.Second)
+	}
 	if resp, err := b.docker("", "exec", container, "systemctl", "is-active", "--quiet", "port49d"); err == nil {
 		t.Fatalf("port49d is active with a group-writable /etc (%s)", resp)
 	}
