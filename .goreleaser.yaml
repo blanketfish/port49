@@ -82,28 +82,42 @@ nfpms:
     formats: [deb, rpm]
     bindir: /usr/bin
     conflicts: [port49]
+    # Modes are set here, not taken from the checkout: a builder's umask must not change the package.
     contents:
       - src: deploy/systemd/port49d.service
         dst: /usr/lib/systemd/system/port49d.service
+        file_info: {mode: 0644, owner: root, group: root}
       - src: deploy/systemd/port49-broker.service
         dst: /usr/lib/systemd/system/port49-broker.service
+        file_info: {mode: 0644, owner: root, group: root}
       - src: deploy/systemd/sysusers.d/port49.conf
         dst: /usr/lib/sysusers.d/port49.conf
+        file_info: {mode: 0644, owner: root, group: root}
       - src: deploy/systemd/tmpfiles.d/port49.conf
         dst: /usr/lib/tmpfiles.d/port49.conf
+        file_info: {mode: 0644, owner: root, group: root}
       # What the systemd README sends the operator to: its text, the example configs to copy
       # into /etc/port49, the etcd, snapshot and export units, and the store blocks.
       - src: deploy/systemd/README.md
         dst: /usr/share/doc/port49-server/README.systemd.md
-      - src: deploy/systemd/config/
+        file_info: {mode: 0644, owner: root, group: root}
+      # Globs, not trees: file_info on a tree entry reaches its directories too (0644 would leave them
+      # without the execute bit), and a glob sets the files and leaves the directories 0755.
+      - src: deploy/systemd/config/*
         dst: /usr/share/doc/port49-server/examples/config/
-        type: tree
-      - src: deploy/systemd/examples/
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: deploy/systemd/examples/*
         dst: /usr/share/doc/port49-server/examples/systemd/
-        type: tree
-      - src: deploy/examples/stores/
-        dst: /usr/share/doc/port49-server/examples/stores/
-        type: tree
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: deploy/examples/stores/README.md
+        dst: /usr/share/doc/port49-server/examples/stores/README.md
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: deploy/examples/stores/multi-region/*
+        dst: /usr/share/doc/port49-server/examples/stores/multi-region/
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: deploy/examples/stores/single-site/*
+        dst: /usr/share/doc/port49-server/examples/stores/single-site/
+        file_info: {mode: 0644, owner: root, group: root}
     # Every binary is 0755, owned by root, with no setuid, setgid or file capability: port49d
     # binds 49 through the unit's AmbientCapabilities. packages_test.go checks it.
     scripts:
@@ -127,24 +141,27 @@ nfpms:
         dst: /etc/port49/config.yaml
         type: config|noreplace
         file_info: {mode: 0644, owner: root, group: root}
-      # The collection without its tests/ directory.
+      # The collection without its tests/ directory. Globs, not trees: a tree entry's file_info reaches its
+      # directories too (0644 would leave them without the execute bit).
       - src: clients/ansible/ansible_collections/port49/client/galaxy.yml
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/galaxy.yml
+        file_info: {mode: 0644, owner: root, group: root}
       - src: clients/ansible/ansible_collections/port49/client/README.md
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/README.md
-      - src: clients/ansible/ansible_collections/port49/client/meta/
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: clients/ansible/ansible_collections/port49/client/meta/*
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/meta/
-        type: tree
-      - src: clients/ansible/ansible_collections/port49/client/plugins/
-        dst: /usr/share/ansible/collections/ansible_collections/port49/client/plugins/
-        type: tree
+        file_info: {mode: 0644, owner: root, group: root}
+      - src: clients/ansible/ansible_collections/port49/client/plugins/lookup/*.py
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/plugins/lookup/
+        file_info: {mode: 0644, owner: root, group: root}
       # The library is pure Python, so the .deb installs it at Debian's version-independent path.
       # An .rpm has no such path (site-packages is per Python minor version): its library comes
       # from `pip install port49`, and packaging/README.md says so.
-      - src: clients/python/src/port49/
+      - src: clients/python/src/port49/*.py
         dst: /usr/lib/python3/dist-packages/port49/
-        type: tree
         packager: deb
+        file_info: {mode: 0644, owner: root, group: root}
 
 # A draft until release.yml has attested the artifacts and publishes it.
 release:

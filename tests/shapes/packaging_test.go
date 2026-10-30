@@ -21,6 +21,12 @@ type nfpm struct {
 		Src  string `yaml:"src"`
 		Dst  string `yaml:"dst"`
 		Type string `yaml:"type"`
+
+		FileInfo struct {
+			Mode  int    `yaml:"mode"`
+			Owner string `yaml:"owner"`
+			Group string `yaml:"group"`
+		} `yaml:"file_info"`
 	} `yaml:"contents"`
 	Scripts map[string]string `yaml:"scripts"`
 }
@@ -48,8 +54,17 @@ func TestTheGoreleaserPackagesNameRealFiles(t *testing.T) {
 	for id, n := range pk {
 		dst := map[string]bool{}
 		for _, c := range n.Contents {
-			if _, err := os.Stat(filepath.Join("..", "..", c.Src)); err != nil {
+			// a glob names at least one file
+			if m, err := filepath.Glob(filepath.Join("..", "..", c.Src)); err != nil || len(m) == 0 {
 				t.Errorf("%s: %s does not exist", id, c.Src)
+			}
+			// modes and owners are set here, not taken from the builder's umask; a tree entry's mode would
+			// reach its directories (0644 without the execute bit), so no entry is a tree
+			if c.Type == "tree" {
+				t.Errorf("%s: %s is a tree entry: use globs, whose file_info reaches only files", id, c.Src)
+			}
+			if m := c.FileInfo.Mode; c.Type != "dir" && m != 0o644 || c.FileInfo.Owner != "root" || c.FileInfo.Group != "root" {
+				t.Errorf("%s: %s has file_info %+v, want mode 0644 owner root group root", id, c.Src, c.FileInfo)
 			}
 			if dst[c.Dst] {
 				t.Errorf("%s: %s is installed twice", id, c.Dst)
@@ -72,7 +87,8 @@ func TestTheGoreleaserPackagesNameRealFiles(t *testing.T) {
 		have[c.Dst] = true
 	}
 	for _, want := range []string{"/usr/share/doc/port49-server/README.systemd.md", "/usr/share/doc/port49-server/examples/config/",
-		"/usr/share/doc/port49-server/examples/systemd/", "/usr/share/doc/port49-server/examples/stores/"} {
+		"/usr/share/doc/port49-server/examples/systemd/", "/usr/share/doc/port49-server/examples/stores/README.md",
+		"/usr/share/doc/port49-server/examples/stores/multi-region/", "/usr/share/doc/port49-server/examples/stores/single-site/"} {
 		if !have[want] {
 			t.Errorf("the server package does not install %s", want)
 		}

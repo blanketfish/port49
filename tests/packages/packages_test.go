@@ -95,6 +95,23 @@ func noSpecialBits(t *testing.T, files map[string]entry) {
 	}
 }
 
+// rootOwnedNotWritable: every entry is root/root and none is writable by its group or others. The modes
+// come from .goreleaser.yaml, not from the builder's umask (a checkout under umask 002 has 0664 files).
+func rootOwnedNotWritable(t *testing.T, files map[string]entry) {
+	t.Helper()
+	for p, e := range files {
+		if len(e.mode) == 10 && e.mode[0] != 'l' && (e.mode[5] == 'w' || e.mode[8] == 'w') {
+			t.Errorf("%s is writable by its group or others (%s)", p, e.mode)
+		}
+		if e.mode[0] == 'd' && e.mode != "drwxr-xr-x" {
+			t.Errorf("directory %s is %s, want drwxr-xr-x", p, e.mode)
+		}
+		if e.owner != "root/root" {
+			t.Errorf("%s is owned by %s, want root/root", p, e.owner)
+		}
+	}
+}
+
 var serverBins = []string{"port49d", "port49-broker", "port49-inventory", "port49"}
 
 func TestServerPackageContents(t *testing.T) {
@@ -114,6 +131,24 @@ func TestServerPackageContents(t *testing.T) {
 		}
 	}
 	noSpecialBits(t, files)
+	rootOwnedNotWritable(t, files)
+	// Every file of the three example trees is in the package: a new subdirectory must not be missed by
+	// the globs in .goreleaser.yaml.
+	for src, dst := range map[string]string{"deploy/systemd/config": "examples/config", "deploy/systemd/examples": "examples/systemd", "deploy/examples/stores": "examples/stores"} {
+		err := filepath.WalkDir(filepath.Join("..", "..", filepath.FromSlash(src)), func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, _ := filepath.Rel(filepath.Join("..", "..", filepath.FromSlash(src)), p)
+			if _, ok := files["/usr/share/doc/port49-server/"+dst+"/"+filepath.ToSlash(rel)]; !ok {
+				t.Errorf("%s/%s is not in the package", src, rel)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	// the maintainer scripts are ours: the postinst makes users and directories and starts
 	// nothing, the prerm stops the units on removal only
 	ctl := t.TempDir()
@@ -161,6 +196,7 @@ func TestClientPackageContents(t *testing.T) {
 		}
 	}
 	noSpecialBits(t, files)
+	rootOwnedNotWritable(t, files)
 	dir := t.TempDir()
 	run(t, "dpkg-deb", "-e", deb, dir)
 	conf, err := os.ReadFile(filepath.Join(dir, "conffiles"))
