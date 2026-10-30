@@ -593,5 +593,5 @@ lab-l82: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 # pulled by that build) and fails, never skips, when dist/ holds no package. Whatever the result, the
 # container and the network are removed afterwards, by their fixed names.
 systemd-smoke: smoke-keyhost packages
-	rc=0; go test -tags systemd ./tests/systemd/ -count=1 -v -timeout 30m || rc=$$?; \
+	rc=0; go test -tags systemd ./tests/systemd/ -run '^TestSystemdSmoke$$' -count=1 -v -timeout 30m || rc=$$?; \
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
