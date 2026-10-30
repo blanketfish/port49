@@ -323,3 +323,13 @@ func TestStoreRolesReadsTheBrokersOwnCertificate(t *testing.T) {
 		}
 	}
 }
+
+// The chart's root init adds DAC_READ_SEARCH, which Pod Security baseline refuses (tests/helm's
+// TestTheReadmeNamesThePodSecurityLevelTheCapabilitiesNeed): a stack that labels its namespace
+// baseline never gets a pod.
+func TestTheStackLabelsItsNamespaceWithTheLevelTheChartNeeds(t *testing.T) {
+	src := read(t, "tests", "kind", "stack.go")
+	if !strings.Contains(src, "pod-security.kubernetes.io/enforce=privileged") || strings.Contains(src, "enforce=baseline") {
+		t.Error("stack.go does not enforce the privileged Pod Security level on the namespace")
+	}
+}

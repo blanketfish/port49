@@ -8,7 +8,7 @@ image:
   tag: ""            # empty: the chart's appVersion
   pullPolicy: IfNotPresent
 # The root initContainers that make each data directory 0700 (alpine:3.22, as the Dockerfile's
-# setup target). They run as root, so the namespace needs Pod Security "baseline".
+# setup target). They run as root and add DAC_READ_SEARCH, which Pod Security baseline refuses, so the namespace must enforce "privileged".
 initImage: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
 
 port49d:

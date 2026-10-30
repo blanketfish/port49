@@ -330,7 +330,7 @@ volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
 `)
 	s.c.Kubectl("create", "namespace", ns)
-	s.c.Kubectl("label", "namespace", ns, "pod-security.kubernetes.io/enforce=baseline", "--overwrite")
+	s.c.Kubectl("label", "namespace", ns, "pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 	if o.Before != nil {
 		o.Before(s.c, s.subnet, s.gateway)
 	}
