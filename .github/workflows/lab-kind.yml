@@ -1,0 +1,45 @@
+# The lab entries that need a kind cluster, run on a GitHub-hosted runner (plan 12b, Tasks 13, 14 and
+# 16). A matrix cell is one `make lab-<cell>`: l82 here; Tasks 14 and 16 add l83 and l85.
+#
+# Kind's nodes are privileged containers, so the key-host guard refuses on a machine that holds a TPM or
+# a security key (tests/shapes/shapetest/keyhost.go). A hosted runner is ephemeral and holds nobody's key,
+# so only the job's env overrides it. The label keeps a measurement from running on every push: the job
+# runs only on a pull request that carries `lab-kind`, never on a push.
+#
+# The harness writes its evidence to bin/lab-out/<cell> and the artifact uploads it, always: a failed run
+# is evidence too. The artifact will be public with the repository, so the harness writes only stat
+# lines, delays, PASS or FAIL and versions, and the job log goes through tests/qual/secret-filter.sh.
+# tests/qual allows this one upload (the results directory, bin/lab-out/) and no other.
+name: lab-kind
+on:
+  pull_request:
+    types: [labeled, synchronize]
+permissions: {contents: read}
+jobs:
+  lab:
+    # Adding some other label to a labelled pull request does not start a run.
+    if: contains(github.event.pull_request.labels.*.name, 'lab-kind') && (github.event.action == 'synchronize' || github.event.label.name == 'lab-kind')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PORT49_SMOKE_ON_KEY_HOST: "1"
+    permissions: {contents: read}
+    # bash with pipefail: the filter's pipe below must not hide make's exit status
+    defaults: {run: {shell: bash}}
+    strategy:
+      fail-fast: false
+      matrix:
+        cell: [l82]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with: {go-version-file: go.mod}
+      - run: make lab-${{ matrix.cell }} 2>&1 | bash tests/qual/secret-filter.sh
+      - if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: lab-${{ matrix.cell }}
+          path: bin/lab-out/${{ matrix.cell }}
+          retention-days: 30
+          if-no-files-found: warn
