@@ -206,6 +206,21 @@ func TestTheTestWorkflowShape(t *testing.T) {
 			t.Errorf("test.yml lacks %q", want)
 		}
 	}
+	// the release requirements are resolved on the Python the release workflow uses, on every pull request
+	rr := w.Jobs["release-requirements"]
+	const hashInstall = "pip install --dry-run --require-hashes -r packaging/requirements-release.txt"
+	var py, ran bool
+	for _, st := range rr.Steps {
+		if strings.HasPrefix(st.Uses, "actions/setup-python@") && st.With["python-version"] == releasePython(t) {
+			py = true
+		}
+		if st.Run == hashInstall {
+			ran = true
+		}
+	}
+	if !py || !ran {
+		t.Errorf("test.yml's release-requirements job must set up Python %s (the release workflow's) and run %q (python %v, run %v)", releasePython(t), hashInstall, py, ran)
+	}
 	for id, j := range w.Jobs {
 		// go test's -timeout is 30m: a job that is cancelled first leaves no goroutine dump
 		if j.TimeoutMinutes < 40 {
@@ -260,4 +275,34 @@ func TestTheWorkflowRulesCatchEachMistake(t *testing.T) {
 			}
 		})
 	}
+}
+
+// releasePython is the python-version the release workflow's build jobs use; they all use one.
+func releasePython(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w workflow
+	if err := yaml.Unmarshal(raw, &w); err != nil {
+		t.Fatal(err)
+	}
+	var v string
+	for id, j := range w.Jobs {
+		for _, st := range j.Steps {
+			if !strings.HasPrefix(st.Uses, "actions/setup-python@") {
+				continue
+			}
+			pv, _ := st.With["python-version"].(string)
+			if v != "" && pv != v {
+				t.Fatalf("release.yml job %s uses python %q, another uses %q", id, pv, v)
+			}
+			v = pv
+		}
+	}
+	if v == "" {
+		t.Fatal("release.yml sets up no Python")
+	}
+	return v
 }
