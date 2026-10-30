@@ -186,3 +186,9 @@ PVC a restrictive access mode. Restore enrollments with `port49 directory import
 
 `examples/values-multi-region.yaml` gives the session store its own etcd per region with a 500 ms call
 timeout; port49d starts without waiting for it.
+
+## The smoke tests
+
+`make kind-smoke` and `make kind-smoke-red` run the chart on a kind cluster, whose nodes are privileged
+containers. The smokes run in CI (their workflow lands with plan 12b Task 13). Locally they refuse to start on a host with a TPM or a security key (`/dev/tpm0`, `/dev/tpmrm0`, a Yubico device on the USB bus); the
+refusal is one line that names the device it found.

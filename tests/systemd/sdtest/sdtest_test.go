@@ -546,6 +546,11 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 	if !strings.Contains(read("Makefile"), "NOT an\n# isolation boundary") && !strings.Contains(mk, "isolation boundary") {
 		t.Error("the Makefile comment does not say the container is not an isolation boundary")
 	}
+	for _, r := range [][]string{{"deploy", "systemd", "README.md"}, {"deploy", "helm", "port49", "README.md"}} {
+		if txt := read(r...); !strings.Contains(txt, "run in CI") || !strings.Contains(txt, "refuse to start on a host with a TPM or a security key") {
+			t.Errorf("%s does not say the smokes run in CI and refuse locally on a host with a TPM or security key", filepath.Join(r...))
+		}
+	}
 	if strings.Contains(mk, "the host's TPM\n# and security key stay out of it") {
 		t.Error("the Makefile still claims the flags keep the host's TPM and key out")
 	}

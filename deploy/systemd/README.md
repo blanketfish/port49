@@ -354,3 +354,11 @@ try starts.
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `journalctl -u port49-broker -b` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |
+
+## The smoke test
+
+`make systemd-smoke` installs the package under systemd in a container and drives it. The smokes run in CI
+(`.github/workflows/systemd.yml`). Locally they refuse to start on a host with a TPM or a security key
+(`/dev/tpm0`, `/dev/tpmrm0`, a Yubico device on the USB bus), because the container holds
+`CAP_SYS_ADMIN` with no AppArmor profile and is not an isolation boundary; the refusal is one line that
+names the device it found.
