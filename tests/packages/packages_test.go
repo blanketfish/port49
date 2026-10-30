@@ -88,11 +88,25 @@ func want(t *testing.T, files map[string]entry, path, mode string) {
 // noSpecialBits fails each file with a setuid or setgid bit.
 func noSpecialBits(t *testing.T, files map[string]entry) {
 	t.Helper()
+	for _, m := range specialBitProblems(files) {
+		t.Error(m)
+	}
+}
+
+// specialBitProblems lists the entries with a setuid or setgid bit, and the ones whose mode is malformed
+// (a short mode string must fail with a message, not panic on an index).
+func specialBitProblems(files map[string]entry) []string {
+	var out []string
 	for p, e := range files {
-		if len(e.mode) == 10 && (e.mode[3] == 's' || e.mode[3] == 'S' || e.mode[6] == 's' || e.mode[6] == 'S') {
-			t.Errorf("%s has a setuid or setgid bit (%s)", p, e.mode)
+		if len(e.mode) != 10 {
+			out = append(out, fmt.Sprintf("%s has a malformed mode %q", p, e.mode))
+			continue
+		}
+		if e.mode[3] == 's' || e.mode[3] == 'S' || e.mode[6] == 's' || e.mode[6] == 'S' {
+			out = append(out, fmt.Sprintf("%s has a setuid or setgid bit (%s)", p, e.mode))
 		}
 	}
+	return out
 }
 
 // extractDir is `dpkg-deb -x` into a temp dir whose cleanup first gives the owner rwx on everything, so
@@ -133,16 +147,38 @@ func extractDir(t *testing.T, deb string) string {
 // come from .goreleaser.yaml, not from the builder's umask (a checkout under umask 002 has 0664 files).
 func rootOwnedNotWritable(t *testing.T, files map[string]entry) {
 	t.Helper()
+	for _, m := range modeProblems(files) {
+		t.Error(m)
+	}
+}
+
+func modeProblems(files map[string]entry) []string {
+	var out []string
 	for p, e := range files {
-		if len(e.mode) == 10 && e.mode[0] != 'l' && (e.mode[5] == 'w' || e.mode[8] == 'w') {
-			t.Errorf("%s is writable by its group or others (%s)", p, e.mode)
+		if len(e.mode) != 10 {
+			out = append(out, fmt.Sprintf("%s has a malformed mode %q", p, e.mode))
+			continue
+		}
+		if e.mode[0] != 'l' && (e.mode[5] == 'w' || e.mode[8] == 'w') {
+			out = append(out, fmt.Sprintf("%s is writable by its group or others (%s)", p, e.mode))
 		}
 		if e.mode[0] == 'd' && e.mode != "drwxr-xr-x" {
-			t.Errorf("directory %s is %s, want drwxr-xr-x", p, e.mode)
+			out = append(out, fmt.Sprintf("directory %s is %s, want drwxr-xr-x", p, e.mode))
 		}
 		if e.owner != "root/root" {
-			t.Errorf("%s is owned by %s, want root/root", p, e.owner)
+			out = append(out, fmt.Sprintf("%s is owned by %s, want root/root", p, e.owner))
 		}
+	}
+	return out
+}
+
+func TestModeChecksReportAMalformedEntryInsteadOfPanicking(t *testing.T) {
+	bad := map[string]entry{"/x": {"-rw", "root/root"}, "/y": {"", "root/root"}, "/ok": {"-rw-r--r--", "root/root"}, "/w": {"-rw-rw-r--", "root/root"}}
+	if got := modeProblems(bad); len(got) != 3 {
+		t.Errorf("modeProblems = %v, want the two malformed entries and the group-writable one", got)
+	}
+	if got := specialBitProblems(bad); len(got) != 2 {
+		t.Errorf("specialBitProblems = %v, want the two malformed entries", got)
 	}
 }
 
@@ -230,6 +266,32 @@ func TestClientPackageContents(t *testing.T) {
 	}
 	noSpecialBits(t, files)
 	rootOwnedNotWritable(t, files)
+	// Nothing falls out: every file of the collection (but its tests) and of the Python library is in the
+	// package, so a new subdirectory or a non-.py file the globs in .goreleaser.yaml miss fails here.
+	inPackage := func(src, dst string, skipTests bool) {
+		root := filepath.Join("..", "..", filepath.FromSlash(src))
+		err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(root, p)
+			if d.IsDir() {
+				if d.Name() == "__pycache__" || skipTests && rel == "tests" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if _, ok := files[dst+"/"+filepath.ToSlash(rel)]; !ok {
+				t.Errorf("%s/%s is not in the package", src, rel)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	inPackage("clients/ansible/ansible_collections/port49/client", "/usr/share/ansible/collections/ansible_collections/port49/client", true)
+	inPackage("clients/python/src/port49", "/usr/lib/python3/dist-packages/port49", false)
 	dir := t.TempDir()
 	run(t, "dpkg-deb", "-e", deb, dir)
 	conf, err := os.ReadFile(filepath.Join(dir, "conffiles"))
