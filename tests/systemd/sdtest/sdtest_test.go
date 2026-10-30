@@ -768,3 +768,28 @@ func TestRefusalSummaryIsAClosedAlphabet(t *testing.T) {
 		t.Error("the empty summary is not said")
 	}
 }
+
+// ExecReload is `kill -HUP $MAINPID`: the reload cell waits for the broker to be active with a main
+// process and ready before it reloads, and a failed reload names the unit's state, not only the exit.
+func TestTheReloadCellWaitsForTheBrokerAndNamesItsState(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(kindtest.Root(), "tests", "systemd", "cells_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	i := strings.Index(src, "func reloadCell(")
+	if i < 0 {
+		t.Fatal("no reloadCell")
+	}
+	body := src[i:]
+	wait := strings.Index(body, `"the broker to be active with a main process"`)
+	reload := strings.Index(body, `"systemctl", "reload", "port49-broker"`)
+	if wait < 0 || reload < 0 || wait > reload {
+		t.Errorf("reloadCell reloads (at %d) before it waits for the broker to be active (at %d)", reload, wait)
+	}
+	for _, want := range []string{`s["MainPID"] != "0"`, `shapetest.Ready(t, "127.0.0.1:9050")`, `"ActiveState", "SubState", "MainPID", "ExecMainStatus", "NRestarts"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("reloadCell lacks %s", want)
+		}
+	}
+}

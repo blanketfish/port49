@@ -22,6 +22,13 @@ import (
 func reloadCell(t *testing.T, u stack) {
 	t.Helper()
 	b := u.b
+	// ExecReload is `kill -HUP $MAINPID`: with the broker stopped or restarting there is no MAINPID and
+	// the reload fails. An earlier cell may have left it restarting, so wait for it to be up and ready.
+	shapetest.WaitFor(t, "the broker to be active with a main process", 2*time.Minute, func() bool {
+		s := b.show("port49-broker", "ActiveState", "MainPID")
+		return s["ActiveState"] == "active" && s["MainPID"] != "" && s["MainPID"] != "0"
+	})
+	shapetest.Ready(t, "127.0.0.1:9050")
 	orig := readHost(t, filepath.Join(u.brokerDir, shapetest.RootsName))
 	started := b.show("port49-broker", "ExecMainStartTimestamp")["ExecMainStartTimestamp"]
 	lastReRead := func(since int64) (n, was int, ok bool) {
@@ -35,7 +42,11 @@ func reloadCell(t *testing.T, u stack) {
 	reload := func(what string, want func(n, was int) bool) (int, int) {
 		t.Helper()
 		since := b.epoch()
-		b.sh("systemctl reload port49-broker")
+		if out, err := b.exec("", "systemctl", "reload", "port49-broker"); err != nil {
+			st := b.show("port49-broker", "ActiveState", "SubState", "MainPID", "ExecMainStatus", "NRestarts")
+			t.Fatalf("systemctl reload port49-broker: %v\n%s\nActiveState=%s SubState=%s MainPID=%s ExecMainStatus=%s NRestarts=%s",
+				err, filter(out), st["ActiveState"], st["SubState"], st["MainPID"], st["ExecMainStatus"], st["NRestarts"])
+		}
 		var n, was int
 		shapetest.WaitFor(t, what, 30*time.Second, func() bool {
 			var ok bool
