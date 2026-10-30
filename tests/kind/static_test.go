@@ -66,8 +66,10 @@ func TestMakefilePinsKindAndKubectlBySHA256(t *testing.T) {
 
 // A Secret is made from a file, never a literal; a failure never prints one.
 func TestSmokeMakesSecretsFromFilesOnly(t *testing.T) {
-	if strings.Contains(read(t, "tests", "kind", "smoke_test.go"), "--from-literal") {
-		t.Error("smoke_test.go names --from-literal")
+	for _, f := range []string{"smoke_test.go", "stack.go"} {
+		if strings.Contains(read(t, "tests", "kind", f), "--from-literal") {
+			t.Errorf("%s names --from-literal", f)
+		}
 	}
 }
 
@@ -147,5 +149,43 @@ func TestFSGroupCellChecksTheVolumeAndTheWalk(t *testing.T) {
 	}
 	if !strings.Contains(smoke, "kindtest.PermitMint(") || strings.Contains(smoke, "strings.Contains(logs, principal)") {
 		t.Error("the workload cell does not match the permit mint record")
+	}
+}
+
+// L82's target pins the operator's chart by sha256 as the others pin their tools, builds the setup
+// image the test loads, and deletes its cluster after go test whatever the result. The test file
+// makes Secrets from files only and never prints one: it reads a Secret only for its key names.
+func TestL82TargetPinsTheChartAndDeletesTheCluster(t *testing.T) {
+	mk := read(t, "Makefile")
+	if !regexp.MustCompile(`(?m)^ESO_CHART_SHA256 = [0-9a-f]{64}$`).MatchString(mk) {
+		t.Error("ESO_CHART_SHA256 is not a 64 hex digit pin")
+	}
+	chart := recipe(t, "bin/external-secrets-$(ESO_VERSION).tgz")
+	if !strings.Contains(chart, `echo "$(ESO_CHART_SHA256)  bin/eso.dl" | sha256sum -c -`) {
+		t.Errorf("the chart is not checked against its pin before it is moved into place:\n%s", chart)
+	}
+	r := recipe(t, "lab-l82")
+	goTest := strings.Index(r, "go test -tags lab")
+	del := strings.Index(r, "delete cluster --name port49l82")
+	if goTest < 0 || del < goTest || !strings.Contains(r, "|| rc=$$?") || !strings.Contains(r, "exit $$rc") {
+		t.Errorf("lab-l82 does not delete the cluster after go test and keep its exit status:\n%s", r)
+	}
+	if !strings.Contains(r, "docker build --target setup -t port49-setup:dev .") {
+		t.Error("lab-l82 does not build the setup image the stack loads")
+	}
+	if !strings.Contains(r, "-run '^TestL82$$'") {
+		t.Error("lab-l82 does not run its one test by an anchored name")
+	}
+	src := read(t, "tests", "lab", "l82_test.go")
+	for _, bad := range []string{"--from-literal", "-o yaml", "-o json", "jsonpath={.data", "-o jsonpath={.data"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("l82_test.go contains %q: a Secret is made from a file and read only for its key names", bad)
+		}
+	}
+	if !strings.Contains(src, `go-template={{range $k, $v := .data}}{{$k}} {{end}}`) {
+		t.Error("l82_test.go does not read the Secret's key names through the template that prints names only")
+	}
+	if strings.Contains(src, "labOccupyForRun") || strings.Contains(src, "labGuardAt") {
+		t.Error("l82_test.go takes the lab lock: there is no shared lab host in CI, and the key-host guard alone refuses on a developer machine")
 	}
 }

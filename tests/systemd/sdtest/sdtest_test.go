@@ -525,7 +525,7 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 		return string(b)
 	}
 	mk := read("Makefile")
-	for _, target := range []string{"systemd-smoke", "kind-smoke", "kind-smoke-red", "lab-l84-systemd"} {
+	for _, target := range []string{"systemd-smoke", "kind-smoke", "kind-smoke-red", "lab-l84-systemd", "lab-l82"} {
 		first := strings.Fields(strings.SplitN(strings.TrimPrefix(strings.SplitN(mk[strings.Index(mk, "\n"+target+":")+1:], "\n", 2)[0], target+":"), "##", 2)[0])
 		if len(first) == 0 || first[0] != "smoke-keyhost" {
 			t.Errorf("%s does not run smoke-keyhost before anything else (prerequisites %v)", target, first)
@@ -537,6 +537,7 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 	for _, c := range []struct{ file, after string }{
 		{"tests/systemd/smoke_test.go", "func newBox(t *testing.T) box {\n\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)"},
 		{"tests/kind/smoke_test.go", "func TestKindSmoke(t *testing.T) {\n\tshapetest.RefuseOnKeyHost(t)"},
+		{"tests/kind/stack.go", "func BringUp(t *testing.T, name string) *Stack {\n\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)"},
 		{"tests/kind/kindtest/kindtest.go", "\tt.Helper()\n\tshapetest.RefuseOnKeyHost(t)\n\tkind := Bin("},
 	} {
 		if !strings.Contains(read(strings.Split(c.file, "/")...), c.after) {

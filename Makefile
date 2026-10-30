@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -557,6 +557,32 @@ kind-smoke-red: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
 	  go test -tags kind ./tests/kind/ -run TestKindSmoke -count=1 -v -timeout 40m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
+
+# Lab entry L82 (plan 12b, Task 13): Secret volumes and the External Secrets Operator on kind. It runs
+# in CI only (.github/workflows/lab-kind.yml): kind's nodes are privileged containers, so smoke-keyhost
+# refuses on a host with a TPM or a security key. The operator's chart is pinned by sha256 like helm.
+# The harness writes its results to $(LAB_OUT)/l82, which the workflow uploads as an artifact; the
+# results note tests/lab/results/L82-kind.md is written from that artifact. The cluster is deleted
+# afterwards whatever the result, as kind-smoke does.
+ESO_VERSION ?= 2.12.0
+ESO_APP_VERSION ?= v2.12.0
+ESO_CHART_SHA256 = 4b584136b7311c0af8c8719d377cc5b1a7ef12c2de18f1fdb30614eab75bdeb3
+LAB_OUT ?= $(CURDIR)/bin/lab-out
+
+bin/external-secrets-$(ESO_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/eso.dl https://github.com/external-secrets/external-secrets/releases/download/helm-chart-$(ESO_VERSION)/external-secrets-$(ESO_VERSION).tgz
+	echo "$(ESO_CHART_SHA256)  bin/eso.dl" | sha256sum -c -
+	mv bin/eso.dl bin/external-secrets-$(ESO_VERSION).tgz
+
+lab-l82: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/external-secrets-$(ESO_VERSION).tgz
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l82
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) ESO_CHART=$(CURDIR)/bin/external-secrets-$(ESO_VERSION).tgz \
+	  ESO_CHART_VERSION=$(ESO_VERSION) ESO_APP_VERSION=$(ESO_APP_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l82 \
+	  go test -tags lab ./tests/lab/ -run '^TestL82$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l82; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
