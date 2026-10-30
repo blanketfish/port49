@@ -41,6 +41,7 @@ spec:
       {{- include "port49.placement" $c | nindent 6 }}
       initContainers:
         - {{- include "port49.dataInit" (dict "root" . "dir" "/var/spool/port49d/data" "mount" "/var/spool/port49d") | nindent 10 }}
+        - {{- include "port49.dataInitOwner" (dict "root" . "dir" "/var/spool/port49d/data" "mount" "/var/spool/port49d") | nindent 10 }}
       containers:
         - name: port49d
           image: {{ include "port49.image" . }}

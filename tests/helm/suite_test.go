@@ -339,22 +339,49 @@ func checkPVCRootAndRepair(t *testing.T, r renderer) {
 			t.Errorf("%s: pod security context %v, want fsGroup 65532 with OnRootMismatch, never Always", name, at(p, "securityContext"))
 		}
 		init := at(p, "initContainers", 0)
+		owner := at(p, "initContainers", 1)
+		if str(at(init, "name")) != "data-dir" || str(at(owner, "name")) != "data-dir-owner" || len(list(at(p, "initContainers"))) != 2 {
+			t.Fatalf("%s: init containers %v, want data-dir (root, inodes only) then data-dir-owner (65532, the descent)", name, at(p, "initContainers"))
+		}
 		cmd := str(at(init, "command", 2))
 		for _, want := range []string{
 			"chown 0:65532 " + mount + " && chmod 3770 " + mount,
 			"install -d -m 0700 -o 65532 -g 65532 " + dir,
-			"chown -R 65532:65532 " + dir,
-			"chmod -R go-rwx " + dir,
-			"chmod -R g-s " + dir,
+			"chown 65532:65532 " + dir,
 			"chmod 0700 " + dir,
+			"chmod g-s " + dir,
 		} {
 			if !strings.Contains(cmd, want) {
-				t.Errorf("%s: the data-dir init command lacks %q:\n%s", name, want, cmd)
+				t.Errorf("%s: the root data-dir init command lacks %q:\n%s", name, want, cmd)
 			}
 		}
-		caps := fmt.Sprint(at(init, "securityContext", "capabilities", "add"))
-		if !strings.Contains(caps, "FSETID") || !strings.Contains(caps, "CHOWN") {
-			t.Errorf("%s: the data-dir init container's capabilities are %s, want CHOWN and FSETID among them", name, caps)
+		if strings.Contains(cmd, " -R ") || strings.Contains(cmd, "find ") {
+			t.Errorf("%s: the root init descends into the data directory (it holds no DAC_READ_SEARCH, the owner init does that):\n%s", name, cmd)
+		}
+		ocmd := str(at(owner, "command", 2))
+		for _, want := range []string{
+			"chmod -R go-rwx " + dir,
+			"chmod -R g-s " + dir,
+			"find " + dir + " ! -user 65532",
+			"chown -R 65532:65532 " + dir, // the one command the failure message tells the operator to run
+			"exit 1",
+		} {
+			if !strings.Contains(ocmd, want) {
+				t.Errorf("%s: the owner init command lacks %q:\n%s", name, want, ocmd)
+			}
+		}
+		if strings.Contains(ocmd, "chown 0:") || strings.Contains(ocmd, "chmod 3770") {
+			t.Errorf("%s: the owner init touches the volume root:\n%s", name, ocmd)
+		}
+		caps := strs(at(init, "securityContext", "capabilities", "add"))
+		if strings.Join(caps, ",") != "CHOWN,FOWNER,FSETID" {
+			t.Errorf("%s: the root init adds %v, want exactly CHOWN, FOWNER, FSETID (Pod Security baseline's list has no DAC_READ_SEARCH)", name, caps)
+		}
+		osc := at(owner, "securityContext")
+		if str(at(osc, "runAsUser")) != "65532" || str(at(osc, "runAsGroup")) != "65532" || at(osc, "runAsNonRoot") != true ||
+			len(strs(at(osc, "capabilities", "add"))) != 0 || strings.Join(strs(at(osc, "capabilities", "drop")), ",") != "ALL" ||
+			at(osc, "allowPrivilegeEscalation") != false || at(osc, "readOnlyRootFilesystem") != true {
+			t.Errorf("%s: the owner init's securityContext is %v, want 65532:65532, non-root, drop ALL, no escalation, read-only root", name, osc)
 		}
 		// What the root init sets must be a root the kubelet skips and the fence excuses.
 		m := regexp.MustCompile(`chown ([0-9]+):([0-9]+) \S+ && chmod ([0-7]{4}) `).FindStringSubmatch(cmd)
@@ -411,9 +438,9 @@ func strs(v any) []string {
 }
 
 // checkContainerSecurity holds the exact hardening of every container the chart renders (Task 10
-// review m-2, m-3, m-4): the root init container has the four capabilities its commands need and
-// nothing else (DAC_READ_SEARCH, not DAC_OVERRIDE: it searches a 0700 directory it does not own and
-// never writes through a mode), is not privileged, cannot escalate, drops ALL, has the runtime
+// review m-2, m-3, m-4): the root init container has the three capabilities its commands need and
+// nothing else (CHOWN, FOWNER, FSETID: all in Pod Security baseline's list; it never descends, and
+// neither DAC_READ_SEARCH nor DAC_OVERRIDE is held), is not privileged, cannot escalate, drops ALL, has the runtime
 // default seccomp profile and a read-only root filesystem; the main containers add nothing and are
 // non-root with a read-only root filesystem. `extra` values render the enrollments CronJob too.
 func checkContainerSecurity(t *testing.T, r renderer) {
@@ -439,7 +466,7 @@ func checkContainerSecurity(t *testing.T, r renderer) {
 	if len(pods) != 3 {
 		t.Fatalf("%d pod specs rendered, want both StatefulSets and the enrollments CronJob", len(pods))
 	}
-	wantAdd := []string{"CHOWN", "DAC_READ_SEARCH", "FOWNER", "FSETID"}
+	wantAdd := []string{"CHOWN", "FOWNER", "FSETID"}
 	for _, p := range pods {
 		for _, c := range append(list(at(p.spec, "initContainers")), list(at(p.spec, "containers"))...) {
 			name := p.name + "/" + str(at(c, "name"))

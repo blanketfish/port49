@@ -410,6 +410,9 @@ func TestTheKindPostRendererMatchesTheChartsInitCommands(t *testing.T) {
 	if n := strings.Count(string(out), "&& chmod g-w "); n != 2 {
 		t.Errorf("the post-renderer rewrote %d init commands, want both pods'", n)
 	}
+	if strings.Contains(string(out), "go-rwx") {
+		t.Error("an owner init survived the post-renderer: it would repair the walked directory and turn the RED run green")
+	}
 	if strings.Contains(string(out), "chmod 3770") {
 		t.Error("a 3770 root survived the post-renderer")
 	}

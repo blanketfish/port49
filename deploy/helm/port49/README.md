@@ -136,8 +136,8 @@ one-off Jobs, run once per new deployment.
 | Not Ready, running | `curl :9049/readyz` through a port-forward | A store is unreachable; the body says which. |
 | Admin call 503 | broker log | No attestation roots configured. |
 | Brokers disagree on the CA, or one refuses to start on it | the broker's "issuing ca" log line; `copy-issuer.sh` output | Copy from a broker that holds the CA the store records, onto the one that differs: `copy-issuer.sh <ns> <release> --from <ordinal> --to <ordinal>`. It refuses to overwrite a different CA and names both; never `init-issuer` again, and not `forget-issuer`. |
-| Pod `Init:Error` or `Init:CrashLoopBackOff` | `kubectl logs <pod> -c data-dir` (`describe` shows only the exit code) | The root init that sets up the volume failed; its log names the command. Usually a PVC that cannot be chowned (a read-only or network volume that refuses chown), or a namespace policy that drops its capabilities. |
-| No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `baseline` or `restricted`. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700) and adds `DAC_READ_SEARCH`, which neither level allows, so the namespace must enforce the `privileged` Pod Security level (README, Install). |
+| Pod `Init:Error` or `Init:CrashLoopBackOff` | `kubectl logs <pod> -c data-dir` and `-c data-dir-owner` (`describe` shows only the exit code) | `data-dir-owner` naming a path: a file in the data directory belongs to another uid; run the `chown -R 65532:65532 ...` it prints. Otherwise the root init that sets up the volume failed; its log names the command. Usually a PVC that cannot be chowned (a read-only or network volume that refuses chown), or a namespace policy that drops its capabilities. |
+| No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `restricted`. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700), so the namespace must be `baseline` (README, Install). |
 | A backup Job failed | `kubectl logs job/<name> -c stale-check` | A `.new` file is left from a run that did not finish; the log names it. Neither backup image has a shell: remove it from a throwaway alpine pod that mounts the backups PVC (`kubectl run`, `rm /backup/<name>.new`), and the next run proceeds. |
 | `kubectl get externalsecret` shows `SecretSyncedError` | `kubectl describe externalsecret <name>` | ESO cannot reach the store or a remote key. The Secret keeps its last data, so a new key version never appears and port49d names the missing `secret_ref`. |
 
@@ -157,12 +157,15 @@ on the strength of it. `tlsListener.enabled` adds port 300 and requires `tlsList
 The pod sets `net.ipv4.ip_unprivileged_port_start` to 0 so the non-root process can bind 49; clusters
 that forbid that sysctl need a different arrangement (not offered here).
 
-The image is distroless and non-root. The pods themselves are `baseline`-clean, but the root init
-containers are not: they add `CHOWN`, `FOWNER`, `FSETID` and `DAC_READ_SEARCH` (the last descends
-into the 0700 state directory it does not own; `DAC_OVERRIDE`, which `baseline` allows, would be the
-wider capability), and `DAC_READ_SEARCH` is not in `baseline`'s list. So the namespace must
-enforce the `privileged` Pod Security level (or exempt the release's namespace): a namespace
-enforcing `baseline` or `restricted` refuses the StatefulSets' pods at creation, and no pod appears.
+The image is distroless and non-root. The pods meet the Pod Security `baseline` level, and the
+namespace needs no weaker one. The volume setup is two init containers. The first runs as root with
+`CHOWN`, `FOWNER` and `FSETID` only, all in `baseline`'s list: it sets the volume's root and the data
+directory's owner and mode (inodes, never a descent). The second runs as 65532 with every capability
+dropped and does the recursive `chmod` inside the data directory, which it owns. A namespace
+enforcing `restricted` refuses the root init; use `baseline`. If a file inside the data directory is
+owned by another uid (a restore done as root), the second init stops with the path and the one
+command to run, `chown -R 65532:65532 <data directory>`, instead of leaving the fence to refuse it
+later.
 
 `issuerDiscovery.enabled` (default off) binds `system:unauthenticated` to the issuer-discovery role
 for the cluster, which is a cluster-wide change: enable it in one release per cluster, and see

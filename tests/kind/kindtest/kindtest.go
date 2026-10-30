@@ -419,23 +419,34 @@ func (s Stat) Want(mode string, uid, gid int) error {
 // state_dir check; kindtest_test.go pins the format against that source).
 var StateDirRefusal = regexp.MustCompile(`config: broker\.state_dir /var/lib/port49-broker/state is writable by its group or others \(mode 0[0-7](?:[2367][0-7]|[0-7][2367])\)`)
 
-// OldRootRE is the 3770 init command's text, which OldRoot rewrites to the first design's.
-var oldRootRE = regexp.MustCompile(`chown 0:65532 ([^\s"]+) && chmod 3770 [^\s"]+ && (install -d -m 0700 -o 65532 -g 65532 [^\s"]+) && chown -R 65532:65532 [^\s"]+ && chmod -R go-rwx [^\s"]+ && chmod -R g-s [^\s"]+ && chmod 0700 [^\s"]+`)
+// oldRootRE is the 3770 root init command's text, which OldRoot rewrites to the first design's;
+// ownerInitRE is the owner init's, which the first design did not have.
+var oldRootRE = regexp.MustCompile(`chown 0:65532 ([^\s"]+) && chmod 3770 [^\s"]+ && (install -d -m 0700 -o 65532 -g 65532 [^\s"]+) && chown 65532:65532 [^\s"]+ && chmod 0700 [^\s"]+ && chmod g-s [^\s"]+`)
+var ownerInitRE = regexp.MustCompile(`(?s)bad=\$\(find [^\s"]+ ! -user 65532.*?chmod -R g-s [^\s"']+`)
 
 // OldRoot is helm's post-renderer for the RED run, test-only and never shipped in the chart: it
 // rewrites each data-dir init command to the first design (5e88550c), the root made 2755 by
-// `chmod g-w`, which the kubelet's OnRootMismatch walks at every later mount. It fails when it
-// finds no command to rewrite, so a chart that changed its init text breaks the cell loudly rather
-// than leaving it a green run of the new design under the old one's name.
+// `chmod g-w`, which the kubelet's OnRootMismatch walks at every later mount, and each owner init
+// to a no-op (the first design repaired nothing below the directory; the owner init would make the
+// walked directory 0700 again and turn the RED run green). It fails when it finds no command to
+// rewrite, or a different number of each, so a chart that changed its init text breaks the cell
+// loudly rather than leaving it a green run of the new design under the old one's name.
 func OldRoot(rendered []byte) ([]byte, error) {
-	n := 0
-	out := oldRootRE.ReplaceAllFunc(rendered, func(m []byte) []byte {
+	n, m := 0, 0
+	out := oldRootRE.ReplaceAllFunc(rendered, func(b []byte) []byte {
 		n++
-		sub := oldRootRE.FindSubmatch(m)
+		sub := oldRootRE.FindSubmatch(b)
 		return []byte(string(sub[2]) + " && chmod g-w " + string(sub[1]))
+	})
+	out = ownerInitRE.ReplaceAllFunc(out, func([]byte) []byte {
+		m++
+		return []byte("true")
 	})
 	if n == 0 {
 		return nil, errors.New("kindtest: no data-dir init command to rewrite: the chart's init text changed")
+	}
+	if n != m {
+		return nil, fmt.Errorf("kindtest: %d data-dir init commands but %d owner init commands: the chart's init text changed", n, m)
 	}
 	return out, nil
 }

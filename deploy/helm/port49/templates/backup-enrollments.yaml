@@ -39,7 +39,7 @@ spec:
                 privileged: false
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
-                capabilities: {drop: [ALL], add: [CHOWN, FOWNER, FSETID, DAC_READ_SEARCH]}
+                capabilities: {drop: [ALL], add: [CHOWN, FOWNER, FSETID]}
                 seccompProfile: {type: RuntimeDefault}
               volumeMounts:
                 - {name: state, mountPath: /var/lib/port49-broker}

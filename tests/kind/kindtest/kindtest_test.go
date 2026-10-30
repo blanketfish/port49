@@ -51,10 +51,14 @@ func TestParseStat(t *testing.T) {
 	}
 }
 
-const newInit = `command: [sh, -c, "chown 0:65532 /var/lib/port49-broker && chmod 3770 /var/lib/port49-broker && install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chown -R 65532:65532 /var/lib/port49-broker/state && chmod -R go-rwx /var/lib/port49-broker/state && chmod -R g-s /var/lib/port49-broker/state && chmod 0700 /var/lib/port49-broker/state"]`
+const newInit = `command: [sh, -c, "chown 0:65532 /var/lib/port49-broker && chmod 3770 /var/lib/port49-broker && install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chown 65532:65532 /var/lib/port49-broker/state && chmod 0700 /var/lib/port49-broker/state && chmod g-s /var/lib/port49-broker/state"]`
+
+const newOwnerInit = `command: [sh, -c, "bad=$(find /var/lib/port49-broker/state ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then echo \"data-dir-owner: $bad is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 /var/lib/port49-broker/state\" >&2; exit 1; fi; chmod -R go-rwx /var/lib/port49-broker/state && chmod -R g-s /var/lib/port49-broker/state"]`
 
 func TestOldRootRewritesToTheFirstDesign(t *testing.T) {
-	out, err := OldRoot([]byte("a: 1\n" + newInit + "\nb: 2\n"))
+	// The first design had no repair below the directory, so the owner init becomes a no-op too:
+	// left in, it would make the walked directory 0700 again and the RED run would pass.
+	out, err := OldRoot([]byte("a: 1\n" + newInit + "\n" + newOwnerInit + "\nb: 2\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,15 +66,23 @@ func TestOldRootRewritesToTheFirstDesign(t *testing.T) {
 	if !strings.Contains(string(out), want) || strings.Contains(string(out), "3770") || !strings.Contains(string(out), "a: 1") {
 		t.Fatalf("rewritten text:\n%s", out)
 	}
+	if strings.Contains(string(out), "go-rwx") || !strings.Contains(string(out), `command: [sh, -c, "true"]`) {
+		t.Fatalf("the owner init survived the rewrite:\n%s", out)
+	}
 	// Both pods' commands are rewritten.
-	two := newInit + "\n" + strings.ReplaceAll(newInit, "/var/lib/port49-broker", "/var/spool/port49d")
+	swap := func(x string) string { return strings.ReplaceAll(x, "/var/lib/port49-broker", "/var/spool/port49d") }
+	two := newInit + "\n" + newOwnerInit + "\n" + swap(newInit) + "\n" + swap(newOwnerInit)
 	out, err = OldRoot([]byte(two))
-	if err != nil || strings.Count(string(out), "chmod g-w") != 2 {
+	if err != nil || strings.Count(string(out), "chmod g-w") != 2 || strings.Count(string(out), `"true"`) != 2 {
 		t.Fatalf("%v:\n%s", err, out)
 	}
 	// Nothing to rewrite is an error: a changed chart must break the cell, not make it green.
 	if _, err := OldRoot([]byte("kind: StatefulSet\n")); err == nil {
 		t.Error("a manifest with no init command was accepted")
+	}
+	// A root init with no owner init beside it means the chart changed under the rewrite.
+	if _, err := OldRoot([]byte(newInit)); err == nil {
+		t.Error("a manifest with a root init and no owner init was accepted")
 	}
 }
 

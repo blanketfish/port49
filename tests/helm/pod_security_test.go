@@ -18,11 +18,11 @@ var baselineCaps = map[string]bool{
 	"SYS_CHROOT": true,
 }
 
-// The root init containers add DAC_READ_SEARCH (it descends into the 0700 state directory it does not
-// own; DAC_OVERRIDE, which baseline allows, would be the wider capability). It is not in baseline's
-// list, so the chart's pods are not baseline-clean, and the README must say which level the namespace
-// needs rather than claim one the pods fail.
-func TestTheReadmeNamesThePodSecurityLevelTheCapabilitiesNeed(t *testing.T) {
+// The chart's pods must be admitted by a namespace enforcing Pod Security baseline: no template adds a
+// capability outside baseline's list (the root init holds CHOWN, FOWNER and FSETID; the descent into
+// the data directory is a second init that runs as its owner with none). The README says so and names
+// the three, and neither it nor values.yaml may tell an operator to loosen the namespace.
+func TestTheChartsCapabilitiesFitPodSecurityBaseline(t *testing.T) {
 	var outside []string
 	files, _ := filepath.Glob(filepath.Join("..", "..", "deploy", "helm", "port49", "templates", "*"))
 	add := regexp.MustCompile(`add: \[([^\]]*)\]`)
@@ -40,28 +40,25 @@ func TestTheReadmeNamesThePodSecurityLevelTheCapabilitiesNeed(t *testing.T) {
 		}
 	}
 	sort.Strings(outside)
-	readme, err := os.ReadFile(filepath.Join("..", "..", "deploy", "helm", "port49", "README.md"))
-	if err != nil {
-		t.Fatal(err)
+	if len(outside) != 0 {
+		t.Errorf("the chart adds %v, which Pod Security baseline refuses: no pod would be created", outside)
 	}
-	values, err := os.ReadFile(filepath.Join("..", "..", "deploy", "helm", "port49", "values.yaml"))
-	if err != nil {
-		t.Fatal(err)
+	flat := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "helm", "port49", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(string(b)), " ")
 	}
-	if len(outside) == 0 {
-		return // the pods meet baseline: the docs may say so
-	}
-	flat := func(b []byte) string { return strings.Join(strings.Fields(string(b)), " ") }
-	for _, doc := range []struct{ name, text string }{{"README.md", flat(readme)}, {"values.yaml", flat(values)}} {
-		if strings.Contains(doc.text, `Pod Security "baseline"`) || strings.Contains(doc.text, "# setup target). They run as root, so the namespace needs Pod Security \"baseline\"") || strings.Contains(doc.text, "meet the Pod Security `baseline` level") ||
-			strings.Contains(doc.text, "must be `baseline`") {
-			t.Errorf("%s claims the baseline level, but the chart adds %v, which baseline refuses", doc.name, outside)
+	readme, values := flat("README.md"), flat("values.yaml")
+	for _, c := range []string{"`CHOWN`", "`FOWNER`", "`FSETID`", "`baseline`", "`restricted`"} {
+		if !strings.Contains(readme, c) {
+			t.Errorf("README.md does not name %s", c)
 		}
 	}
-	if !strings.Contains(flat(readme), "enforce the `privileged` Pod Security level") {
-		t.Errorf("README.md does not say the namespace must enforce the `privileged` Pod Security level (the chart adds %v)", outside)
-	}
-	if !strings.Contains(string(readme), "DAC_READ_SEARCH") {
-		t.Error("README.md does not name the capability that baseline refuses")
+	for name, text := range map[string]string{"README.md": readme, "values.yaml": values} {
+		if strings.Contains(text, "enforce \"privileged\"") || strings.Contains(text, "`privileged` Pod Security level") {
+			t.Errorf("%s tells the operator to loosen the namespace to privileged", name)
+		}
 	}
 }

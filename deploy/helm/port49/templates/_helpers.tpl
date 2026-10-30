@@ -56,26 +56,32 @@ seccompProfile:
 {{- end }}
 
 {{/*
-A data directory's initContainer: root, making a 0700 subdirectory owned by 65532 (the fence
-refuses a group-writable one, and the volume's root may be group-writable). Called with
-(dict "root" . "dir" "/var/lib/port49-broker/state").
+A data directory's two initContainers, in this order: data-dir (root, the inodes) and data-dir-owner
+(65532, the descent). Each is called with (dict "root" . "dir" "/var/lib/port49-broker/state"
+"mount" "/var/lib/port49-broker").
 */}}
 {{- /*
 Why the root is made 3770 and the directory repaired (fsgroup-analysis.md, kubelet v1.33.1
 pkg/volume/volume_linux.go:192-233). With fsGroup and OnRootMismatch the kubelet skips its recursive
 walk only while the volume root has gid = fsGroup, perms including 0770, and setgid. A root left
 2755 (group write removed) is a mismatch at every later mount: the walk then makes the data
-directory 2770 and its files 0660, and the fence refuses the directory. So this container, as root
-before the process starts: sets the root to root:65532 3770 (setgid for the kubelet's test, sticky
-so the fence excuses a group-writable ancestor, fence_linux.go:403-405), makes the directory with an
-explicit chmod (BusyBox install -d leaves an existing one alone), and repairs the tree below it to
-owner-only whatever a walk did. CAP_FSETID keeps the setgid bit when chmod runs as root outside the
-directory's group. UNVERIFIED against a real kubelet until the kind smoke's two-generation cell.
+directory 2770 and its files 0660, and the fence refuses the directory. So the root init, before the
+process starts: sets the root to root:65532 3770 (setgid for the kubelet's test, sticky so the fence
+excuses a group-writable ancestor, fence_linux.go:403-405) and makes the data directory with an
+explicit chmod (BusyBox install -d leaves an existing one alone). It touches inodes only (the root,
+the directory), never descends, so it needs CHOWN, FOWNER and FSETID and nothing else: all three are
+in Pod Security baseline's list, DAC_READ_SEARCH (what a descent into a 0700 directory it does not
+own would need) is not, and the chart must run in a baseline namespace. The tree below the directory
+is repaired by the second init, as 65532 with no capability: it owns those files, so it needs none.
+If a file there belongs to another uid (a restore done as root), it cannot chown it; it stops and
+names the path and the one command that fixes it, instead of leaving the fence to crash-loop later.
+CAP_FSETID keeps the setgid bit when chmod runs as root outside the directory's group. UNVERIFIED
+against a real kubelet until the kind smoke's two-generation cell.
 */ -}}
 {{- define "port49.dataInit" -}}
 name: data-dir
 image: {{ .root.Values.initImage }}
-command: [sh, -c, {{ printf "chown 0:65532 %s && chmod 3770 %s && install -d -m 0700 -o 65532 -g 65532 %s && chown -R 65532:65532 %s && chmod -R go-rwx %s && chmod -R g-s %s && chmod 0700 %s" .mount .mount .dir .dir .dir .dir .dir | quote }}]
+command: [sh, -c, {{ printf "chown 0:65532 %s && chmod 3770 %s && install -d -m 0700 -o 65532 -g 65532 %s && chown 65532:65532 %s && chmod 0700 %s && chmod g-s %s" .mount .mount .dir .dir .dir .dir | quote }}]
 securityContext:
   runAsNonRoot: false
   runAsUser: 0
@@ -86,13 +92,22 @@ securityContext:
   readOnlyRootFilesystem: true
   capabilities:
     drop: [ALL]
-    # CHOWN: chown 0:65532 and chown -R. FOWNER: chmod on files 65532 owns. FSETID: keeps setgid on
-    # the root's chmod. DAC_READ_SEARCH: descend into state/, 0700 and not root's. DAC_OVERRIDE is
-    # not needed: root owns the mount root, so creating state/ in it is the owner's write. UNVERIFIED
-    # until the kind smoke's two-generation cell passes with this set.
-    add: [CHOWN, FOWNER, FSETID, DAC_READ_SEARCH]
+    # CHOWN: chown 0:65532 and chown 65532:65532. FOWNER: chmod on the directory once it is 65532's.
+    # FSETID: keeps setgid on the root's chmod. No DAC_READ_SEARCH and no DAC_OVERRIDE: root owns the
+    # mount root, so creating the directory in it is the owner's write, and nothing here descends.
+    add: [CHOWN, FOWNER, FSETID]
   seccompProfile:
     type: RuntimeDefault
+volumeMounts:
+  - {name: data, mountPath: {{ .mount }}}
+{{- end }}
+
+{{- define "port49.dataInitOwner" -}}
+name: data-dir-owner
+image: {{ .root.Values.initImage }}
+command: [sh, -c, {{ printf "bad=$(find %s ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then echo \"data-dir-owner: $bad is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 %s\" >&2; exit 1; fi; chmod -R go-rwx %s && chmod -R g-s %s" .dir .dir .dir .dir | quote }}]
+securityContext:
+  {{- include "port49.containerSecurity" .root | nindent 2 }}
 volumeMounts:
   - {name: data, mountPath: {{ .mount }}}
 {{- end }}
