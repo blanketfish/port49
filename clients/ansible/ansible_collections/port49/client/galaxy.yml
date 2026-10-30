@@ -3,7 +3,7 @@ name: client
 version: 0.1.0
 readme: README.md
 authors:
-  - port49 contributors
+  - port49 maintainers <port49@blanketfish.com>
 description: Device tokens from port49 for Ansible, through the port49 CLI and its Python library.
 license:
   - Apache-2.0
