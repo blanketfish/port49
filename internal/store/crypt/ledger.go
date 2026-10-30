@@ -105,6 +105,7 @@ type Ledger struct {
 // changes and of every rescan (plan 7f, Ruling 5).
 type evicter interface {
 	evictKey(k store.ContextKey)
+	evictOlder(k store.ContextKey, rev uint64)
 	clearAll()
 }
 
@@ -124,6 +125,18 @@ func (l *Ledger) changed(k store.ContextKey) {
 	l.evMu.Unlock()
 	if e != nil {
 		e.evictKey(k)
+	}
+}
+
+// changedAt tells the cache a write at revision rev changed k: it evicts the entry unless the entry
+// is already at rev or later, which is the echo of a write the entry holds (design §12: the cache
+// serves through a store hang). A delete is told through changed, which evicts whatever there is.
+func (l *Ledger) changedAt(k store.ContextKey, rev uint64) {
+	l.evMu.Lock()
+	e := l.ev
+	l.evMu.Unlock()
+	if e != nil {
+		e.evictOlder(k, rev)
 	}
 }
 

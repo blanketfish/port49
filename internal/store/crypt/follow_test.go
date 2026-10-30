@@ -1374,6 +1374,7 @@ func (e evicterFunc) evictKey(k store.ContextKey) {
 		e.evict(k)
 	}
 }
+func (e evicterFunc) evictOlder(k store.ContextKey, _ uint64) { e.evictKey(k) }
 func (e evicterFunc) clearAll() {
 	if e.clear != nil {
 		e.clear()

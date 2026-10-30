@@ -97,6 +97,21 @@ func (c *cache) evictKey(k store.ContextKey) {
 	c.mu.Unlock()
 }
 
+// evictOlder is evictKey for a change at rev: an entry already at rev or later holds that change
+// (knownAt admitted it at the ledger's revision, which moved before this call), so it stays and the
+// generation does not move. With no entry, or an older one, it is evictKey.
+func (c *cache) evictOlder(k store.ContextKey, rev uint64) {
+	c.mu.Lock()
+	if e, ok := c.m[k]; ok && e.c.Rev >= rev {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.m, k)
+	c.gen++
+	c.gauge()
+	c.mu.Unlock()
+}
+
 func (c *cache) clearAll() {
 	c.mu.Lock()
 	clear(c.m)
