@@ -200,9 +200,22 @@ func (r *l85Run) before(cl *kindtest.Cluster, subnet, gateway string) {
 
 	// FRR: on the device network first, then the kind network. It forwards, and hashes equal paths by
 	// the connection's ports.
-	if _, err := l85Docker(t, "", "run", "-d", "--name", l85FRR, "--network", l85DevNet, "--ip", l85FRRDev,
-		"--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW", "--cap-add", "SYS_ADMIN",
+	// The image's daemons file has bgpd=no: ours goes in before the container starts (docker cp, no
+	// host bind). Capabilities: NET_ADMIN and SYS_ADMIN, which zebra needs to program the kernel's
+	// routes; measured with a plain docker run, bgpd is ready with these two and no NET_RAW.
+	daemons := filepath.Join(t.TempDir(), "daemons")
+	if err := os.WriteFile(daemons, []byte(l85.FRRDaemons()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l85Docker(t, "", "create", "--name", l85FRR, "--network", l85DevNet, "--ip", l85FRRDev,
+		"--cap-add", "NET_ADMIN", "--cap-add", "SYS_ADMIN",
 		"--sysctl", "net.ipv4.ip_forward=1", "--sysctl", "net.ipv4.fib_multipath_hash_policy=1", l85FRRImage); err != nil {
+		t.Fatalf("creating FRR: %v", err)
+	}
+	if _, err := l85Docker(t, "", "cp", daemons, l85FRR+":/etc/frr/daemons"); err != nil {
+		t.Fatalf("giving FRR its daemons file: %v", err)
+	}
+	if _, err := l85Docker(t, "", "start", l85FRR); err != nil {
 		t.Fatalf("starting FRR: %v", err)
 	}
 	if _, err := l85Docker(t, "", "network", "connect", "kind", l85FRR); err != nil {

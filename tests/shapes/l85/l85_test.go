@@ -172,3 +172,25 @@ func TestResultsHoldVersionsAndEveryCell(t *testing.T) {
 		}
 	}
 }
+
+// The FRR image ships bgpd=no, so a router started from it answers "bgpd is not running" to every BGP
+// command for ever (lab-kind run 41121821392, measured with a plain docker run of the pinned image).
+func TestTheRoutersDaemonsFileStartsBGP(t *testing.T) {
+	got := FRRDaemons()
+	on := map[string]bool{}
+	for _, ln := range strings.Split(got, "\n") {
+		if k, v, ok := strings.Cut(ln, "="); ok && !strings.HasSuffix(k, "_options") {
+			on[k] = v == "yes"
+		}
+	}
+	for _, d := range []string{"zebra", "bgpd", "staticd", "vtysh_enable"} {
+		if !on[d] {
+			t.Errorf("%s is not yes in:\n%s", d, got)
+		}
+	}
+	for _, d := range []string{"ospfd", "ospf6d", "ripd", "ripngd", "isisd", "pimd", "ldpd", "nhrpd", "eigrpd", "babeld", "sharpd", "pbrd", "bfdd", "fabricd", "vrrpd", "pathd"} {
+		if on[d] {
+			t.Errorf("%s is on; only what the lab needs runs", d)
+		}
+	}
+}

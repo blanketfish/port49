@@ -191,6 +191,14 @@ func ParseSession(out string) (SessionStats, error) {
 	return s, nil
 }
 
+// FRRDaemons is the router's /etc/frr/daemons: zebra to install routes, bgpd to peer with MetalLB's
+// speakers, staticd and vtysh. The FRR image ships bgpd=no, and without this file every BGP command
+// answers "bgpd is not running" for ever.
+func FRRDaemons() string {
+	return "bgpd=yes\nzebra=yes\nstaticd=yes\nvtysh_enable=yes\n" +
+		"zebra_options=\"  -A 127.0.0.1 -s 90000000\"\nbgpd_options=\"   -A 127.0.0.1\"\nstaticd_options=\"-A 127.0.0.1\"\n"
+}
+
 // FRRConfig is the vtysh script for the router: eBGP to every node, ECMP over equal paths.
 func FRRConfig(localAS, peerAS int, nodes []string) string {
 	var b strings.Builder
