@@ -361,6 +361,9 @@ func TestInventoryDiffMarksEachReloadStep(t *testing.T) {
 
 func TestInventoryKeygenWritesAPairOnceAndNamesIt(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // LoadEd25519 reads under the secret-file rule, which refuses a group-writable directory
+		t.Fatal(err)
+	}
 	var out, errOut bytes.Buffer
 	if code := run([]string{"inventory", "keygen", "--dir", dir}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())

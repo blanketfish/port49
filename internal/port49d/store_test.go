@@ -30,7 +30,7 @@ import (
 // and writes it and its key, the key at mode.
 func writeIdentity(t *testing.T, ca *testpki.CA, cn string, nb, na time.Time, mode os.FileMode) config.EtcdIdentity {
 	t.Helper()
-	dir := t.TempDir()
+	dir := safeDir(t)
 	c, err := ca.Issue(testpki.Leaf{CommonName: cn, Client: true, NotBefore: nb, NotAfter: na})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestAStoreIdentityIsCheckedWhereItIsRead(t *testing.T) {
 		t.Fatalf("an expired certificate: %v", err)
 	}
 	loose := writeIdentity(t, ca, "port49-daemon", now.Add(-time.Hour), now.Add(time.Hour), 0o644)
-	if _, _, err := identityAt("stores.directory.etcd.daemon", loose, ca.Pool(), now); !errors.As(err, &fault) || !strings.Contains(err.Error(), "chmod 600") {
+	if _, _, err := identityAt("stores.directory.etcd.daemon", loose, ca.Pool(), now); !errors.As(err, &fault) || !strings.Contains(err.Error(), "world-readable") {
 		t.Fatalf("a key others can read: %v", err)
 	}
 	garbled := writeIdentity(t, ca, "port49-daemon", now.Add(-time.Hour), now.Add(time.Hour), 0o600)

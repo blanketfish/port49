@@ -99,14 +99,14 @@ type certified interface {
 	Certificate() (*x509.Certificate, error)
 }
 
-// LoadPair is keyfile.LoadX509KeyPair for a key that may be a reference: a
+// LoadPair is keyfile.LoadOwnX509KeyPair for a key that may be a reference: a
 // path goes to keyfile unchanged; a reference is opened, and certPath ""
 // takes the token's certificate for a pkcs11 key. The certificate's public
 // key must be the key's.
 func LoadPair(certPath, keyRef string, pin []byte) (tls.Certificate, error) {
 	if !hwkey.IsRef(keyRef) {
 		clear(pin)
-		return keyfile.LoadX509KeyPair(certPath, keyRef)
+		return keyfile.LoadOwnX509KeyPair(certPath, keyRef)
 	}
 	key, err := Open(keyRef, pin)
 	if err != nil {

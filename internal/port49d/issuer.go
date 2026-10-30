@@ -31,7 +31,7 @@ func issuerFiles(dir string) issuer.Files {
 			if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 				return nil, nil
 			}
-			return keyfile.ReadSecret(path)
+			return keyfile.ReadOwn(path)
 		},
 	}
 }

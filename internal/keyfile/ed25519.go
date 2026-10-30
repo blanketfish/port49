@@ -8,9 +8,9 @@ import (
 
 // LoadEd25519 reads the inventory service's signing key (spec §13, decision
 // 30): one PKCS#8 "PRIVATE KEY" block holding an ed25519 key, read with
-// readPrivate's checks. No error quotes the file.
+// ReadSecret's rule. No error quotes the file.
 func LoadEd25519(path string) (ed25519.PrivateKey, error) {
-	raw, err := readPrivate(path)
+	raw, err := ReadSecret(path)
 	if err != nil {
 		return nil, err
 	}

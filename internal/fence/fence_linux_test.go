@@ -1026,3 +1026,55 @@ func TestAnAncestorWhoseOwnerCannotBeReadIsRefusedInPlainText(t *testing.T) {
 		t.Fatalf("got %v, want %q", err, want)
 	}
 }
+
+// Group-read on a secret file is allowed only to a group this process is in: the file's gid must be
+// the process's gid or one of its supplementary groups (fsGroup is one on Kubernetes; the service
+// user's own group is the primary one under systemd). Without that, root:ssl-cert 0640 lets every
+// member of ssl-cert read the broker's key. A file with no group bit says nothing about its gid.
+func TestASecretsGroupReadIsForOurGroupsOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "k")
+	if err := os.WriteFile(file, []byte("secret!"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func(fs.FileInfo) (uint32, bool), g func() ([]int, error), e func() int) {
+		FileGroup, Getgroups, Getegid = f, g, e
+	}(FileGroup, Getgroups, Getegid)
+	Getegid = func() int { return 1000 }
+	Getgroups = func() ([]int, error) { return []int{2000, 65532}, nil }
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+		gid  uint32
+		ok   bool
+	}{
+		{"our primary gid", 0o440, 1000, true},
+		{"a supplementary gid (fsGroup)", 0o440, 65532, true},
+		{"a foreign gid, group-readable", 0o440, 4242, false},
+		{"a foreign gid, 0640", 0o640, 4242, false},
+		{"a foreign gid, no group bit", 0o400, 4242, true},
+	} {
+		FileGroup = func(fi fs.FileInfo) (uint32, bool) { return tc.gid, true }
+		if err := os.Chmod(file, tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ReadSecret(file, dir, 1<<20)
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "gid 4242")) {
+			t.Errorf("%s: want a refusal naming gid 4242, got %v", tc.name, err)
+		}
+	}
+	// A group lookup that fails closes the door.
+	FileGroup = func(fi fs.FileInfo) (uint32, bool) { return 0, false }
+	if err := os.Chmod(file, 0o440); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSecret(file, dir, 1<<20); err == nil {
+		t.Error("a file whose group cannot be read was accepted")
+	}
+}

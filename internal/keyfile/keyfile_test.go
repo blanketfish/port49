@@ -21,25 +21,25 @@ func TestAPrivateKeyMustBeItsOwnersAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	cert, key := filepath.Join(dir, testpki.LabClientCert), filepath.Join(dir, testpki.LabClientKey)
-	if _, err := LoadX509KeyPair(cert, key); err != nil {
+	if _, err := LoadOwnX509KeyPair(cert, key); err != nil {
 		t.Fatalf("a 0600 key: %v", err)
 	}
 	link := filepath.Join(dir, "link.pem")
 	if err := os.Symlink(key, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadX509KeyPair(cert, link); err == nil || !strings.Contains(err.Error(), "symlink") {
+	if _, err := LoadOwnX509KeyPair(cert, link); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("a key through a symlink: %v", err)
 	}
 	// A missing key says so, and does not blame a symlink that is not there.
-	if _, err := LoadX509KeyPair(cert, filepath.Join(dir, "absent.pem")); !errors.Is(err, os.ErrNotExist) ||
+	if _, err := LoadOwnX509KeyPair(cert, filepath.Join(dir, "absent.pem")); !errors.Is(err, os.ErrNotExist) ||
 		strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("a missing key: %v", err)
 	}
 	if err := os.Chmod(key, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+	if _, err := LoadOwnX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chmod 600") {
 		t.Fatalf("a group-readable key: %v", err)
 	}
 }
@@ -51,7 +51,7 @@ func TestAKeyThatIsNotARegularFileIsRefused(t *testing.T) {
 	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadX509KeyPair(filepath.Join(dir, testpki.LabClientCert), dir); err == nil ||
+	if _, err := LoadOwnX509KeyPair(filepath.Join(dir, testpki.LabClientCert), dir); err == nil ||
 		!strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("a directory as the key: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestAKeyThatIsNotARegularFileIsRefused(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := LoadX509KeyPair(filepath.Join(dir, testpki.LabClientCert), fifo)
+		_, err := LoadOwnX509KeyPair(filepath.Join(dir, testpki.LabClientCert), fifo)
 		done <- err
 	}()
 	select {
@@ -89,12 +89,12 @@ func TestAKeyMustBeOwnedByItsUserOrRoot(t *testing.T) {
 
 	geteuid = func() int { return int(me) + 1 }
 	if me != 0 {
-		if _, err := LoadX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chown") {
+		if _, err := LoadOwnX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chown") {
 			t.Fatalf("a key owned by another user: %v", err)
 		}
 		// Root running port49 does not take a key another user owns either.
 		geteuid = func() int { return 0 }
-		if _, err := LoadX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chown") {
+		if _, err := LoadOwnX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chown") {
 			t.Fatalf("root loading a user's key: %v", err)
 		}
 	}
@@ -106,7 +106,7 @@ func TestAKeyMustBeOwnedByItsUserOrRoot(t *testing.T) {
 		t.Skip("no root-owned, group-readable /etc/passwd to probe")
 	}
 	geteuid = func() int { return int(me) + 1 }
-	if _, err := LoadX509KeyPair(cert, "/etc/passwd"); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+	if _, err := LoadOwnX509KeyPair(cert, "/etc/passwd"); err == nil || !strings.Contains(err.Error(), "chmod 600") {
 		t.Fatalf("a root-owned key: %v", err)
 	}
 }
@@ -122,26 +122,25 @@ func TestAnOversizedKeyIsRefused(t *testing.T) {
 	if err := os.WriteFile(big, make([]byte, maxKeySize+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadX509KeyPair(filepath.Join(dir, testpki.LabClientCert), big); err == nil ||
+	if _, err := LoadOwnX509KeyPair(filepath.Join(dir, testpki.LabClientCert), big); err == nil ||
 		!strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("an oversized key: %v", err)
 	}
 }
 
-// ReadSecret is readPrivate's rule for a secret that is not a key pair: the
-// directory's keytab (plan 7g, Ruling 8).
-func TestReadSecretRefusesAGroupReadableFile(t *testing.T) {
+// ReadOwn is the owner-only rule for a file that is not a key pair: a TPM blob.
+func TestReadOwnRefusesAGroupReadableFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "svc.keytab")
 	if err := os.WriteFile(path, []byte("keytab"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := ReadSecret(path); err != nil || string(b) != "keytab" {
+	if b, err := ReadOwn(path); err != nil || string(b) != "keytab" {
 		t.Fatalf("a 0600 file: %q %v", b, err)
 	}
 	if err := os.Chmod(path, 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadSecret(path); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+	if _, err := ReadOwn(path); err == nil || !strings.Contains(err.Error(), "chmod 600") {
 		t.Fatalf("a group-readable file: %v", err)
 	}
 }

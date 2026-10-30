@@ -19,7 +19,11 @@ import (
 
 func writeKey(t *testing.T, body []byte, mode os.FileMode) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "signing.key")
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // the secret-file rule refuses a group-writable directory
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "signing.key")
 	if err := os.WriteFile(p, body, mode); err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +56,12 @@ func TestAnEd25519KeyRoundTrips(t *testing.T) {
 	}
 }
 
-// The signing key is read as every private key is: owner-only.
-func TestAGroupReadableSigningKeyIsRefused(t *testing.T) {
+// The signing key is operator-provisioned, so it is read under the secret-file rule: a
+// world-readable one is refused.
+func TestAWorldReadableSigningKeyIsRefused(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	privPEM, _, _ := edkey.EncodeEd25519(priv)
-	if _, err := LoadEd25519(writeKey(t, privPEM, 0o640)); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+	if _, err := LoadEd25519(writeKey(t, privPEM, 0o644)); err == nil || !strings.Contains(err.Error(), "world-readable") {
 		t.Fatalf("got %v", err)
 	}
 }

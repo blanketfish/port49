@@ -211,13 +211,13 @@ func TestAServiceWithNoBundleIsNotReady(t *testing.T) {
 }
 
 func TestASigningKeyOthersCanReadRefusesTheStart(t *testing.T) {
-	f := newFixture(t, 0o640)
+	f := newFixture(t, 0o644)
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
 	err := run(context.Background(), f.cfg, make(chan os.Signal))
-	if err == nil || !strings.Contains(err.Error(), "signing_key_file") || !strings.Contains(err.Error(), "chmod 600") {
+	if err == nil || !strings.Contains(err.Error(), "signing_key_file") || !strings.Contains(err.Error(), "world-readable") {
 		t.Fatalf("got %v", err)
 	}
 }
