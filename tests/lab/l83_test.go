@@ -100,10 +100,10 @@ func l83Env(t *testing.T) *l83.Env {
 
 // l83Tag is an image reference's tag, "not recorded" if the lookup failed.
 func l83Tag(img string, err error) string {
-	if err != nil || !strings.Contains(img, ":") {
+	if err != nil {
 		return ""
 	}
-	return strings.SplitN(img[strings.LastIndex(img, ":")+1:], "@", 2)[0]
+	return shapetest.ImageTag(img)
 }
 
 func l83Helm(t *testing.T, cl *kindtest.Cluster, release, chart, ns, values string) {

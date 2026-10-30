@@ -116,3 +116,20 @@ func TestFilteredDropsASecretAndKeepsTheRest(t *testing.T) {
 		t.Fatalf("the dropped line is not accounted for: %q", got)
 	}
 }
+
+func TestImageTagIsTheTagNotTheDigest(t *testing.T) {
+	d := "sha256:" + strings.Repeat("ab", 32)
+	for ref, want := range map[string]string{
+		"ghcr.io/x/eso:v0.20.4":      "v0.20.4",
+		"ghcr.io/x/eso:v0.20.4@" + d: "v0.20.4 (" + d + ")",
+		"ghcr.io/x/eso@" + d:         d,
+		"localhost:5000/x/eso:v1":    "v1",
+		"localhost:5000/x/eso":       "",
+		"eso":                        "",
+		"localhost:5000/x/eso@" + d:  d,
+	} {
+		if got := ImageTag(ref); got != want {
+			t.Errorf("ImageTag(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}

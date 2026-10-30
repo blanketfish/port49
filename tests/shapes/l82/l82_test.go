@@ -259,3 +259,13 @@ func jsonRoundTrip(t *testing.T, m map[string]any) map[string]any {
 	}
 	return decodeES(t, b)
 }
+
+func TestADigestPinnedImageTagPassesTheLeakGuardAsTheDigestForm(t *testing.T) {
+	d := "sha256:" + strings.Repeat("0123456789abcdef", 4)
+	if r := Leak("v0.20.4 (" + d + ")"); r != "" {
+		t.Errorf("a tag with its digest is refused: %s", r)
+	}
+	if r := Leak(strings.TrimPrefix(d, "sha256:")); r == "" {
+		t.Error("a bare 64-hex run must still be refused (the guard is unchanged)")
+	}
+}

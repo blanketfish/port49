@@ -315,7 +315,7 @@ func l82KeysFromESO(t *testing.T, v2 string, image *string) func(*kindtest.Clust
 		}
 		if img, err := cl.KubectlTry("", "-n", "external-secrets", "get", "deploy", "external-secrets", "-o",
 			"jsonpath={.spec.template.spec.containers[0].image}"); err == nil {
-			*image = strings.SplitN(img[strings.LastIndex(img, ":")+1:], "@", 2)[0]
+			*image = shapetest.ImageTag(img)
 		}
 		store := l82Manifest(t, map[string]any{"apiVersion": "external-secrets.io/v1", "kind": "SecretStore",
 			"metadata": map[string]any{"name": l82Store, "namespace": ns},
