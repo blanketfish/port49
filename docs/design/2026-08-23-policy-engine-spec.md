@@ -8288,7 +8288,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   a name two groups share matches no one, said and counted. `groups_base_dn` defaults to
   `base_dn`. Ambiguity fails closed. Tasks 9 and 11.
 - **8. Binding is one of three mechanisms, always over TLS.** `external` (the broker's own
-  client certificate), `gssapi` (a keytab read through `keyfile.ReadSecret`, no SASL security
+  client certificate), `gssapi` (a keytab read under the secret-file rule, decision 54 ruling 16, no SASL security
   layer, pure Go: OR-2; the AP-REQ asks `mutual-required`, as MIT's client does when it asks
   for mutual authentication, since a Windows DC answers an AP-REQ without it with 49,
   `tests/lab/results/L44-windows_ad.md`) and `simple` (the password from the environment by name, said at start
@@ -9239,7 +9239,7 @@ certificate while the certificate is valid.
   client drives after plan 9b; retiring it is carried to the pre-beta review. A directory-password
   sign-in takes no ID token (decision 47).
 - **14. The issuing CA.**
-  - **Custody.** `issuing-ca.pem` and `issuing-ca.key` (PKCS #8, 0600, `keyfile`'s owner-only rule)
+  - **Custody.** `issuing-ca.pem` and `issuing-ca.key` (PKCS #8, 0600, `keyfile.ReadOwn`'s owner-only rule: decision 54 ruling 16)
     in the broker's state directory (`broker.state_dir`, or the directory of
     `broker.revocations_file`). The broker signs through a `crypto.Signer`, so a KMS or an HSM is
     a later swap of its source.
@@ -9512,13 +9512,13 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - **1. One signer.** Every backend returns a `hwkey.Key`: `crypto.Signer` plus `State() State`,
   `Unlock(pin []byte) error` and `Close() error`. It is `agent.Config.Cert.PrivateKey`;
   `api.SignRefresh`, the TLS handshake and the per-login proof take it as a `crypto.Signer`. The
-  file key stays `keyfile`'s, wrapped in nothing.
+  file key is read with `keyfile.ReadOwn`'s rule (decision 54 ruling 16), wrapped in nothing.
 - **2. Key references.** `key:` (`--key`) is a path, or a reference: `pkcs11:` in RFC 7512's form
   (path attributes `token`, `manufacturer`, `serial`, `model`, `object`, `type`, `id`, `slot-id`;
   query attributes `module-path` and `pin-source`), `tpm:file=PATH` (a TSS2 key file) or
   `tpm:handle=0x81xxxxxx` (a persistent handle), `secure-enclave:label=NAME` (ruling 6:
   experimental, opt-in by name). `pin-value` is refused: a PIN does not live in a config file. `pin-source=file:///path` is
-  read through `keyfile.ReadSecret` (owner-only). A `pkcs11:` key with no `cert:` takes the
+  read through `keyfile.ReadOwn` (owner-only). A `pkcs11:` key with no `cert:` takes the
   certificate object with the key's `CKA_ID`, so a fleet's system file names `key:
   "pkcs11:id=%01?module-path=…"` once and no user writes anything. A reference that matches objects
   on two tokens is refused, naming both, never resolved to the first. The scheme is
@@ -11331,6 +11331,26 @@ shapes; Kubernetes is native and never required.
   | `/v1/logout` (back-channel logout) | unchanged: the provider's signed act, not an admin call; no right, no touch |
   | `forget-issuer`, `init-issuer`, `rotate-issuer`, `init-revocations`, `store-roles` | unchanged local subcommands: they run with the brokers stopped or before any admin exists, and were never socket operations |
   | `port49-broker revoke --offline [--lift]` | the break-glass, unchanged, plus `--list`; and a new `port49d revoke --offline` for a port49d with its broker in process |
+- **16. A key the operator provisions is read under the secret-file rule; a key port49 writes keeps the
+  owner-only rule** (rev-12b-sec, 2026-10-30, after the kind smoke). A Kubernetes Secret volume arrives as
+  `name -> ..data/name` behind two links, `root:<fsGroup>` mode 0440, even for `defaultMode: 0400`
+  (the kubelet adds group read under `fsGroup`; `tests/lab/results/configmap-mounts.md`, rows
+  `cm-d400f` and `sec-c`), so an owner-only, no-link rule can never accept a mounted key. The
+  broker's TLS server key, the etcd client keys, `tls_listener.key_file`, the directory's keytab and
+  bind key, and the inventory service's signing and TLS keys are read through `fence.ReadSecret`
+  (rulings 1, 11 and 12 of decision 53), `within` being the key's own directory: a link is followed
+  only while it stays inside that directory, every directory holding a link is held to the fence's
+  rule, the file is owned by the user or root, not writable by anyone else and not world-readable.
+  Group-read is allowed only when the file's group is the process's gid or one of its supplementary
+  groups (`fsGroup` is one on Kubernetes; the service user's own group is the primary one under
+  systemd), so a group the process is not in, like Debian's `ssl-cert`, cannot read the key too;
+  this applies to every `file:` secret. A read whose target vanishes between the resolve and the open
+  (the atomic writer removed the old generation) resolves once more, and a certificate and key
+  that tls refuses as a mismatch across a swap are read again once. A file port49 writes itself, or
+  the operator holds for itself, keeps ssh's rule (`keyfile.ReadOwn`): no link, owner-only, owned by
+  the user or root. That is the issuing CA key (ruling 14 of decision 43: a 0440 issuing CA key is
+  never accepted), a TPM key blob, and the CLI's own client key and PIN file. `subPath` is no remedy:
+  it still gives 0440 under `fsGroup`, and it loses the kubelet's in-place update (ruling 2).
 - **Open.** The `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
   overridden by Ryan (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waits on L82–L84,
   ruling 12 on L85, and ruling 9's Services claim on L39 (b).
