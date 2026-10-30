@@ -15,11 +15,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
-)
 
-// ansibleCore is the ansible-core the client package's collection is tried under, as the python
-// workflow's real-ansible job pins it.
-const ansibleCore = "2.21.4"
+	"github.com/rhwendt/port49/tests/shapes/shapetest"
+)
 
 type entry struct{ mode, owner string }
 
@@ -308,9 +306,16 @@ func TestClientPackageContents(t *testing.T) {
 
 // The client package installs on a bare Debian, its library imports under the system python3, and
 // ansible-core finds the collection on its default path. Needs Docker and the network.
+// The client package is installed in a Debian container, pinned by digest (shapetest.DebianTrixieSlim, which
+// the systemd smoke's Dockerfile shares). ansible-core comes from packaging/requirements-release.txt,
+// mounted read-only, through pip's --require-hashes: no bare version pin.
 func TestTheClientPackageImportsAndFindsTheCollection(t *testing.T) {
 	deb := dist(t, "port49_*_amd64.deb")
 	abs, err := filepath.Abs(deb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := filepath.Abs(filepath.Join("..", "..", "packaging", "requirements-release.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,10 +324,11 @@ apt-get update -qq
 apt-get install -y -qq python3 python3-venv >/dev/null
 apt-get install -y -qq /pkg/%s >/dev/null
 python3 -c 'import port49'
-python3 -m venv /v && /v/bin/pip install -q ansible-core==%s
+python3 -m venv /v && /v/bin/pip install -q --require-hashes -r /req/requirements-release.txt
 /v/bin/ansible-doc -t lookup port49.client.token >/dev/null
-`, filepath.Base(abs), ansibleCore)
-	run(t, "docker", "run", "--rm", "-v", filepath.Dir(abs)+":/pkg:ro", "debian:trixie-slim", "sh", "-c", script)
+`, filepath.Base(abs))
+	run(t, "docker", "run", "--rm", "-v", filepath.Dir(abs)+":/pkg:ro", "-v", req+":/req/requirements-release.txt:ro",
+		shapetest.DebianTrixieSlim, "sh", "-c", script)
 }
 
 func names(files map[string]entry, skip func(string) bool) []string {

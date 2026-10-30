@@ -207,7 +207,7 @@ func TestTheTestWorkflowShape(t *testing.T) {
 		}
 	}
 	// the packages are built and checked on every pull request, rpm installed first, in that order
-	const packagesTests = "go test -tags packages ./tests/packages/ -count=1 -v -skip TestTheClientPackageImportsAndFindsTheCollection"
+	const packagesTests = "go test -tags packages ./tests/packages/ -count=1 -v"
 	var order []string
 	for _, st := range w.Jobs["packages"].Steps {
 		switch st.Run {

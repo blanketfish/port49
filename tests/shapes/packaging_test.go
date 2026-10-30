@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rhwendt/port49/tests/shapes/shapetest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -210,5 +211,29 @@ func TestThePreremoveStopsOnRemovalOnly(t *testing.T) {
 	}
 	if !strings.Contains(out, "stop and disable port49d and port49-broker yourself") {
 		t.Errorf("a unit that will not stop is not said: %q", out)
+	}
+}
+
+// The client package's import test (tests/packages, run in CI) pins its inputs: the Debian image by the
+// digest shapetest.DebianTrixieSlim, which the systemd smoke's Dockerfile must share, and ansible-core
+// from the hashed requirements file through pip's --require-hashes, never a bare version pin.
+func TestTheClientImportTestPinsItsInputs(t *testing.T) {
+	if !strings.Contains(shapetest.DebianTrixieSlim, "@sha256:") || len(shapetest.DebianTrixieSlim) < len("debian:trixie-slim@sha256:")+64 {
+		t.Errorf("shapetest.DebianTrixieSlim %q is not pinned by a full sha256 digest", shapetest.DebianTrixieSlim)
+	}
+	if !strings.Contains(read(t, "tests/systemd/Dockerfile"), "\nFROM "+shapetest.DebianTrixieSlim+"\n") {
+		t.Error("tests/systemd/Dockerfile's FROM line is not shapetest.DebianTrixieSlim: bump the constant, not the Dockerfile")
+	}
+	src := read(t, "tests/packages/packages_test.go")
+	for _, want := range []string{"shapetest.DebianTrixieSlim", "pip install -q --require-hashes -r /req/requirements-release.txt",
+		`req+":/req/requirements-release.txt:ro"`} {
+		if !strings.Contains(src, want) {
+			t.Errorf("the client import test lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"debian:trixie-slim", "ansible-core==", "ansibleCore"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("the client import test names %q: pin through the shared constant and the hashed requirements", bad)
+		}
 	}
 }
