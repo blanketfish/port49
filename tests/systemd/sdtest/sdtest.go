@@ -276,3 +276,10 @@ func ReRead(journal string) [][2]int {
 	}
 	return res
 }
+
+// PutScript is the shell the smoke's box.put runs: $1 is the path, $2 the owner, $3 the mode, and
+// the body is on stdin. It makes the parent directory first (0755, before the umask is set), because
+// the image does not have every directory a unit's file belongs in, then writes by a rename in that
+// directory so a reader never sees a half-written file.
+const PutScript = `set -eu; d=$(dirname "$1"); install -d -m 0755 "$d"; umask 077; t=$(mktemp "$d/.put.XXXXXX")
+trap 'rm -f "$t"' EXIT; cat > "$t"; chown "$2" "$t"; chmod "$3" "$t"; mv "$t" "$1"`

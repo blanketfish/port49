@@ -2,6 +2,8 @@ package sdtest
 
 import (
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -666,3 +668,45 @@ func TestTheKeyHostEscapeIsOnlyOnHostedRunners(t *testing.T) {
 }
 
 var kindKeyHost = "PORT49_SMOKE_ON_" + "KEY_HOST"
+
+// The tests/systemd package holds the smoke and L84's cell test, which needs its own environment and
+// fails INVALID without it. Each target runs its one test by an anchored name.
+func TestEachSystemdTargetRunsOneAnchoredTest(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(kindtest.Root(), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := string(b)
+	for target, name := range map[string]string{"systemd-smoke": "TestSystemdSmoke", "lab-l84-systemd": "TestL84Credentials"} {
+		r := recipe(t, mk, target)
+		if want := "-run '^" + name + "$$'"; !strings.Contains(r, want) {
+			t.Errorf("%s does not run %s: want %s in\n%s", target, name, want, r)
+		}
+	}
+}
+
+// put writes through a temp file beside its target, so the target's directory must exist: the
+// image has no /etc/sysusers.d. The script makes it, 0755, before the mktemp.
+func TestPutScriptCreatesTheParentDirectory(t *testing.T) {
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "sysusers.d", "deep", "etcd.conf")
+	cmd := exec.Command("sh", "-c", PutScript, "sh", target, u.Uid, "0640")
+	cmd.Stdin = strings.NewReader("u etcd - -\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the script failed with no parent directory: %v\n%s", err, out)
+	}
+	if b, err := os.ReadFile(target); err != nil || string(b) != "u etcd - -\n" {
+		t.Errorf("the file holds %q, %v", b, err)
+	}
+	for p, want := range map[string]os.FileMode{target: 0o640, filepath.Dir(target): 0o755} {
+		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != want {
+			t.Errorf("%s is %v, %v, want %v", filepath.Base(p), fi, err, want)
+		}
+	}
+	if ents, _ := os.ReadDir(filepath.Dir(target)); len(ents) != 1 {
+		t.Errorf("the directory holds %d entries, want only the file (no temp left behind)", len(ents))
+	}
+}

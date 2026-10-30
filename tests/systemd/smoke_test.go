@@ -81,8 +81,7 @@ func firstLine(s string) string { return strings.SplitN(strings.TrimSpace(s), "\
 // never sees a half-written file. body travels on stdin and is never in an argument or a log.
 func (b box) put(path, owner, mode, body string) {
 	b.t.Helper()
-	out, err := b.exec(body, "sh", "-c", `set -eu; umask 077; d=$(dirname "$1"); t=$(mktemp "$d/.put.XXXXXX")
-trap 'rm -f "$t"' EXIT; cat > "$t"; chown "$2" "$t"; chmod "$3" "$t"; mv "$t" "$1"`, "sh", path, owner, mode)
+	out, err := b.exec(body, "sh", "-c", sdtest.PutScript, "sh", path, owner, mode)
 	if err != nil {
 		b.t.Fatalf("writing %s in the container: %v\n%s", path, err, filter(out))
 	}
