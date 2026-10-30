@@ -419,6 +419,11 @@ config:
     broker:
       certificate_status: {disabled: true}
       identity:
+        humans:
+          - {type: x509, trust_anchor_file: /etc/port49/broker/ca.crt}
+          - {type: oidc, issuer: https://idp.smoke.example, client_id: port49-cli, principal_claim: email,
+             principal_domains: [example.com]}
+        issuance: {}
         machines:
           - {type: k8s, cluster: kind, issuer: https://kubernetes.default.svc.cluster.local,
              jwks: https://kubernetes.default.svc.cluster.local/openid/v1/jwks,

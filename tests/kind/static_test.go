@@ -332,3 +332,15 @@ func TestTheStackEnforcesBaselineOnItsNamespace(t *testing.T) {
 		t.Error("stack.go does not enforce the baseline Pod Security level on the namespace")
 	}
 }
+
+// The smoke runs copy-issuer.sh, whose init-issuer refuses a broker with no broker.identity.issuance
+// (run 41137349855): the stack's values must turn it on, with the human OIDC verifier it needs and the
+// x509 anchor a list in config.broker would otherwise replace.
+func TestTheStackTurnsOnIssuance(t *testing.T) {
+	src := read(t, "tests", "kind", "stack.go")
+	for _, want := range []string{"issuance: {}", "type: oidc", "type: x509, trust_anchor_file: /etc/port49/broker/ca.crt"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("tests/kind/stack.go's broker values lack %q", want)
+		}
+	}
+}

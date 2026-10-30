@@ -93,6 +93,12 @@ upgrade; port49 reads old ids until nothing is sealed under them (see the operat
 
 ## The issuing CA
 
+This section applies when issuance is on: a person signs in at your identity provider and the broker
+issues a short-lived certificate. It is off by default, because it needs your provider: install with
+`-f examples/values-issuance.yaml` (the provider, client and domain replaced) so that
+`broker.identity.issuance` is set; `init-issuer` refuses a broker without it. A broker that takes
+certificates and tokens only has no issuing CA and skips this section.
+
 Every broker must hold the same issuing CA, or it refuses to start against the store's record of it.
 After the first install run, once:
 

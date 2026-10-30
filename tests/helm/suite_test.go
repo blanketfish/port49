@@ -767,6 +767,30 @@ func checkMultiRegion(t *testing.T, r renderer) {
 	}
 }
 
+// copy-issuer.sh runs init-issuer, which refuses a broker with no broker.identity.issuance (kind run
+// 41137349855). Issuance needs a human OIDC verifier, so the chart cannot turn it on by default; the
+// README's issuing CA section sends the operator to examples/values-issuance.yaml first, and that
+// example must render a broker config that loads with issuance on and its x509 anchor kept.
+func checkIssuanceExample(t *testing.T, r renderer) {
+	raw := read(t, "deploy/helm/port49/examples/values-issuance.yaml")
+	_, b := newTree(t).load(render(t, r, raw))
+	if b.Broker == nil || b.Broker.Identity == nil || b.Broker.Identity.Issuance == nil {
+		t.Fatal("examples/values-issuance.yaml renders a broker with no broker.identity.issuance")
+	}
+	if b.Broker.Identity.X509AnchorFile == "" {
+		t.Error("examples/values-issuance.yaml dropped the x509 human anchor the chart renders")
+	}
+	readme := read(t, "deploy/helm/port49/README.md")
+	section := readme[strings.Index(readme, "## The issuing CA"):]
+	if end := strings.Index(section[3:], "\n## "); end >= 0 {
+		section = section[:end+3]
+	}
+	ex, cp := strings.Index(section, "examples/values-issuance.yaml"), strings.Index(section, "copy-issuer.sh")
+	if ex < 0 || cp < 0 || ex > cp {
+		t.Error("the README's issuing CA section must name examples/values-issuance.yaml before it names copy-issuer.sh")
+	}
+}
+
 // checks is every check on the rendered chart, in the plan's order.
 var checks = []struct {
 	name string
@@ -785,5 +809,6 @@ var checks = []struct {
 	{"TestTheHPAScalesOnConnections", checkHPA},
 	{"TestEveryEtcdMemberIsListed", checkEtcdMembers},
 	{"TestTheMultiRegionExampleRenders", checkMultiRegion},
+	{"TestTheIssuanceExampleTurnsOnIssuance", checkIssuanceExample},
 	{"TestRenderedConfigsLoad", checkConfigsLoad},
 }

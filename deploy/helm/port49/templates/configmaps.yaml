@@ -42,13 +42,17 @@ broker:
   policy_file: /etc/port49/config/policy.yaml
   # a 0700 subdirectory the initContainer makes (the volume's root is not private enough)
   state_dir: /var/lib/port49-broker/state
-  {{- if .Values.broker.attestationRootsConfigMap }}
-  # the two forms are refused together: identity replaces client_ca_file
+  {{- $own := index .Values.config.broker "broker" | default dict }}
+  {{- if or .Values.broker.attestationRootsConfigMap (index $own "identity") }}
+  # the two forms are refused together: identity replaces client_ca_file. An identity of your own in
+  # config.broker.broker (examples/values-issuance.yaml) takes this form too, and its lists replace these.
   identity:
     humans:
       - {type: x509, trust_anchor_file: /etc/port49/broker/ca.crt}
+    {{- if .Values.broker.attestationRootsConfigMap }}
     per_login_mfa:
       hardware_key_touch: {attestation_roots_file: /etc/port49/attestation/attestation-roots.pem}
+    {{- end }}
   {{- else }}
   client_ca_file: /etc/port49/broker/ca.crt
   {{- end }}

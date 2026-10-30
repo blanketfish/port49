@@ -1,0 +1,21 @@
+# Turns on certificate issuance (spec §13 decision 43): a person signs in at your identity provider and the
+# broker exchanges that for a short-lived certificate. Install with `-f examples/values-issuance.yaml`,
+# replacing the issuer, client and domain with yours. It must come before copy-issuer.sh (README, "The
+# issuing CA"): init-issuer refuses a broker with no broker.identity.issuance.
+#
+# A list in `config.broker` replaces the chart's, so the x509 anchor the chart renders for humans is
+# written out again here. Without a human OIDC (or directory_password) verifier the broker refuses
+# issuance at load; the provider may be down when the broker starts, and its keys are kept in state_dir.
+config:
+  broker:
+    broker:
+      identity:
+        humans:
+          - {type: x509, trust_anchor_file: /etc/port49/broker/ca.crt}
+          - type: oidc
+            issuer: https://sso.example.com/realms/corp
+            client_id: port49-cli
+            principal_claim: email
+            principal_domains: [example.com]
+            scopes: [email]
+        issuance: {}
