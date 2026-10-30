@@ -95,6 +95,40 @@ func noSpecialBits(t *testing.T, files map[string]entry) {
 	}
 }
 
+// extractDir is `dpkg-deb -x` into a temp dir whose cleanup first gives the owner rwx on everything, so
+// a package with a directory lacking the execute bit cannot leave the temp dir behind in /tmp. The
+// cleanup is registered before the extraction. A directory the owner cannot traverse fails the test.
+func extractDir(t *testing.T, deb string) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() {
+		filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if d != nil && d.IsDir() {
+				os.Chmod(p, 0o700)
+			}
+			return nil
+		})
+		filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if d != nil && d.Type() != os.ModeSymlink {
+				if fi, e := d.Info(); e == nil {
+					os.Chmod(p, fi.Mode().Perm()|0o700)
+				}
+			}
+			return nil
+		})
+	})
+	run(t, "dpkg-deb", "-x", deb, dir)
+	filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if d != nil && d.IsDir() {
+			if fi, e := d.Info(); e == nil && fi.Mode().Perm()&0o500 != 0o500 {
+				t.Errorf("extracted directory %s is %v: the owner cannot traverse it", p, fi.Mode().Perm())
+			}
+		}
+		return nil
+	})
+	return dir
+}
+
 // rootOwnedNotWritable: every entry is root/root and none is writable by its group or others. The modes
 // come from .goreleaser.yaml, not from the builder's umask (a checkout under umask 002 has 0664 files).
 func rootOwnedNotWritable(t *testing.T, files map[string]entry) {
@@ -170,8 +204,7 @@ func TestServerPackageContents(t *testing.T) {
 		t.Errorf("Conflicts is %q, want port49", got)
 	}
 	// static: no program interpreter in any of the four
-	dir := t.TempDir()
-	run(t, "dpkg-deb", "-x", deb, dir)
+	dir := extractDir(t, deb)
 	for _, b := range serverBins {
 		if out := run(t, "readelf", "-l", filepath.Join(dir, "usr", "bin", b)); strings.Contains(out, "INTERP") {
 			t.Errorf("%s has a program interpreter: it is not static", b)
@@ -256,6 +289,45 @@ func TestTheRPMsMatch(t *testing.T) {
 		r := names(rpmFiles(t, dist(t, c.rpm)), none)
 		if strings.Join(d, "\n") != strings.Join(r, "\n") {
 			t.Errorf("%s and %s differ:\ndeb: %v\nrpm: %v", c.deb, c.rpm, d, r)
+		}
+	}
+}
+
+// The rpms follow the same mode rules as the debs (directories 0755, files 0644, binaries 0755, root/root,
+// nothing group- or other-writable), own the doc directories so removing the package leaves none, and
+// carry the same scripts and maintainer.
+func TestTheRPMsAreRootOwnedAndTheScriptsAreOurs(t *testing.T) {
+	srv := dist(t, "port49-server_*_amd64.rpm")
+	files := rpmFiles(t, srv)
+	noSpecialBits(t, files)
+	rootOwnedNotWritable(t, files)
+	for p, e := range files {
+		switch {
+		case e.mode[0] == 'd':
+		case strings.HasPrefix(p, "/usr/bin/"):
+			want(t, files, p, "-rwxr-xr-x")
+		default:
+			want(t, files, p, "-rw-r--r--")
+		}
+	}
+	for _, d := range []string{"/usr/share/doc/port49-server", "/usr/share/doc/port49-server/examples", "/usr/share/doc/port49-server/examples/stores/multi-region"} {
+		want(t, files, d, "drwxr-xr-x")
+	}
+	cli := rpmFiles(t, dist(t, "port49_*_amd64.rpm"))
+	rootOwnedNotWritable(t, cli)
+	scripts := run(t, "rpm", "-qp", "--scripts", srv)
+	for _, w := range []string{"systemd-sysusers port49.conf", "systemd-tmpfiles --create port49.conf", "systemctl daemon-reload",
+		"systemctl disable --now port49d.service port49-broker.service", "remove | 0"} {
+		if !strings.Contains(scripts, w) {
+			t.Errorf("the rpm scripts lack %q", w)
+		}
+	}
+	if regexp.MustCompile(`systemctl (enable|start|restart)`).MatchString(scripts) {
+		t.Error("an rpm script enables or starts a unit")
+	}
+	for _, p := range []string{srv, dist(t, "port49_*_amd64.rpm")} {
+		if got := strings.TrimSpace(run(t, "rpm", "-qp", "--qf", "%{PACKAGER}", p)); got != "port49 maintainers <port49@blanketfish.com>" {
+			t.Errorf("%s packager is %q", filepath.Base(p), got)
 		}
 	}
 }

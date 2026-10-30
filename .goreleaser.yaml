@@ -103,6 +103,28 @@ nfpms:
         file_info: {mode: 0644, owner: root, group: root}
       # Globs, not trees: file_info on a tree entry reaches its directories too (0644 would leave them
       # without the execute bit), and a glob sets the files and leaves the directories 0755.
+      # Directories are listed so an rpm owns them (rpm -e leaves none behind); the files below are globs.
+      - dst: /usr/share/doc/port49-server
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
+      - dst: /usr/share/doc/port49-server/examples
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
+      - dst: /usr/share/doc/port49-server/examples/config
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
+      - dst: /usr/share/doc/port49-server/examples/systemd
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
+      - dst: /usr/share/doc/port49-server/examples/stores
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
+      - dst: /usr/share/doc/port49-server/examples/stores/multi-region
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
+      - dst: /usr/share/doc/port49-server/examples/stores/single-site
+        type: dir
+        file_info: {mode: 0755, owner: root, group: root}
       - src: deploy/systemd/config/*
         dst: /usr/share/doc/port49-server/examples/config/
         file_info: {mode: 0644, owner: root, group: root}
