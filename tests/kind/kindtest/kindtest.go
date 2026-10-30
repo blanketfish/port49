@@ -61,7 +61,10 @@ type Cluster struct {
 // made halfway is deleted too and it is always deleted, failed or not. A SIGINT, a SIGTERM or the
 // test's own deadline a grace period away runs the same deletion and the guard's other kill
 // functions (shapetest.Guard), because the testing package runs no t.Cleanup on any of them.
-func Up(t *testing.T, name string) *Cluster {
+func Up(t *testing.T, name string) *Cluster { return UpWith(t, name, "kind.yaml") }
+
+// UpWith is Up with the cluster config tests/kind/<config>.
+func UpWith(t *testing.T, name, config string) *Cluster {
 	t.Helper()
 	shapetest.RefuseOnKeyHost(t)
 	kind := Bin(t, "KIND_BIN")
@@ -76,7 +79,7 @@ func Up(t *testing.T, name string) *Cluster {
 		}
 		c.deleteCluster(t, "")
 	})
-	cfg := filepath.Join(Root(), "tests", "kind", "kind.yaml")
+	cfg := filepath.Join(Root(), "tests", "kind", config)
 	if out, err := exec.Command(kind, "create", "cluster", "--name", name, "--config", cfg,
 		"--kubeconfig", c.Kubeconfig, "--wait", "180s").CombinedOutput(); err != nil {
 		t.Fatalf("kind create cluster: %v\n%s", err, Filter(string(out)))

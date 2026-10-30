@@ -24,3 +24,14 @@ func TestBrokerConfigForRolesNamesTheBrokersOwnSecret(t *testing.T) {
 		t.Error("a config with no client certificate is accepted")
 	}
 }
+
+func TestOptionsDefaultsAreTheSmokesOwn(t *testing.T) {
+	var o Options
+	if o.kindConfig() != "kind.yaml" || o.serviceValues() != "service: {type: NodePort}\n" {
+		t.Errorf("the defaults are %q and %q", o.kindConfig(), o.serviceValues())
+	}
+	o = Options{KindConfig: "kind-l85.yaml", Service: "service:\n  type: LoadBalancer\n"}
+	if o.kindConfig() != "kind-l85.yaml" || !strings.HasPrefix(o.serviceValues(), "service:\n") {
+		t.Errorf("the options' own values are ignored: %q %q", o.kindConfig(), o.serviceValues())
+	}
+}

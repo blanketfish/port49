@@ -308,7 +308,7 @@ func bringUp(t *testing.T, name string, o Options) *smoke {
 	s.brokerDir = brokerDir
 	rootsFile, subject := shapetest.AdminSetup(t, brokerDir)
 
-	s.c = kindtest.Up(t, name)
+	s.c = kindtest.UpWith(t, name, o.kindConfig())
 	// the kind network exists only once kind has made the cluster
 	s.subnet, s.gateway = dockerKindNetwork(t)
 	for _, img := range []string{"port49:dev", "port49-setup:dev"} {
@@ -331,6 +331,9 @@ reclaimPolicy: Delete
 `)
 	s.c.Kubectl("create", "namespace", ns)
 	s.c.Kubectl("label", "namespace", ns, "pod-security.kubernetes.io/enforce=baseline", "--overwrite")
+	if o.Before != nil {
+		o.Before(s.c, s.subnet, s.gateway)
+	}
 
 	// The Secrets, from files only: one etcd identity each, the CA certificate alone, the keys.
 	etcdTLS := map[string]string{"ca.crt": s.pkiFile("etcd/ca.pem")}
@@ -375,7 +378,11 @@ reclaimPolicy: Delete
 	// The policy and the inventory. The device is the host, which the kind network presents as its gateway.
 	cfgDir := t.TempDir()
 	pol := readFile(t, filepath.Join(root, "deploy", "compose", "config", "policy.yaml"))
-	pol = strings.ReplaceAll(pol, "172.30.49.0/24", s.subnet)
+	deviceNet, deviceAddr := s.subnet, s.gateway
+	if o.DeviceAddr != "" {
+		deviceNet, deviceAddr = o.DeviceNet, o.DeviceAddr
+	}
+	pol = strings.ReplaceAll(pol, "172.30.49.0/24", deviceNet)
 	pol = shapetest.AdminPolicy(t, pol, subject+"\n  - {name: svc_backup, identity: [\"system:serviceaccount:"+ns+":oxidized\"], username: svc-backup, token_ttl: 900s}")
 	if o.KeysFrom != nil {
 		// the shipped ESO example names its key files core_v1 and core_v2
@@ -385,7 +392,7 @@ reclaimPolicy: Delete
 	s.policy = filepath.Join(cfgDir, "policy.yaml")
 	writeFile(t, s.policy, pol)
 	writeFile(t, filepath.Join(cfgDir, "inventory.yaml"),
-		"devices:\n  - {name: smoke1, platform: arista_eos, addresses: ["+s.gateway+"]}\n")
+		"devices:\n  - {name: smoke1, platform: arista_eos, addresses: ["+deviceAddr+"]}\n")
 	endpoints := ""
 	for i := 0; i < 3; i++ {
 		endpoints += fmt.Sprintf("    - https://etcd-%d.etcd.%s.svc:2379\n", i, ns)
@@ -406,8 +413,7 @@ etcd:
 `+endpoints+`  caSecret: port49-etcd-ca
   port49d: {existingSecret: port49-etcd-port49d}
   broker: {existingSecret: port49-etcd-broker}
-service: {type: NodePort}
-issuerDiscovery: {enabled: true}
+`+o.serviceValues()+`issuerDiscovery: {enabled: true}
 config:
   broker:
     broker:
@@ -486,6 +492,31 @@ type Options struct {
 	// as in the shipped External Secrets example, and the policy names that. Version 1's bytes are
 	// never printed.
 	KeysFrom func(c *kindtest.Cluster, ns string, v1 []byte)
+	// Before runs once the cluster is up and the namespace exists, before anything is installed in
+	// it, with the kind network's subnet and gateway: a LoadBalancer Service needs its address
+	// provider in place first, or helm's wait never ends.
+	Before func(c *kindtest.Cluster, subnet, gateway string)
+	// KindConfig is the cluster's config under tests/kind; empty is kind.yaml.
+	KindConfig string
+	// Service is the chart values' `service:` block, with its newline; empty is a NodePort Service.
+	Service string
+	// DeviceAddr and DeviceNet make the inventory's one device that address, and the key group
+	// that admits it that network, in place of the kind network's gateway: a device behind a router.
+	DeviceAddr, DeviceNet string
+}
+
+func (o Options) kindConfig() string {
+	if o.KindConfig == "" {
+		return "kind.yaml"
+	}
+	return o.KindConfig
+}
+
+func (o Options) serviceValues() string {
+	if o.Service == "" {
+		return "service: {type: NodePort}\n"
+	}
+	return o.Service
 }
 
 // BringUpWith is BringUp with options.
