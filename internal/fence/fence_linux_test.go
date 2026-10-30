@@ -1041,10 +1041,10 @@ func TestASecretsGroupReadIsForOurGroupsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func(f func(fs.FileInfo) (uint32, bool), g func() ([]int, error), e func() int) {
-		FileGroup, Getgroups, Getegid = f, g, e
-	}(FileGroup, Getgroups, Getegid)
-	Getegid = func() int { return 1000 }
-	Getgroups = func() ([]int, error) { return []int{2000, 65532}, nil }
+		FileGroup, getgroups, getegid = f, g, e
+	}(FileGroup, getgroups, getegid)
+	getegid = func() int { return 1000 }
+	getgroups = func() ([]int, error) { return []int{2000, 65532}, nil }
 	for _, tc := range []struct {
 		name string
 		mode os.FileMode

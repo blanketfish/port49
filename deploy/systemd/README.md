@@ -351,6 +351,7 @@ try starts.
 |---|---|---|---|
 | A secret file missing or unreadable | `config: encryption.current.secret_ref (id "e1") file:/etc/port49/secrets/encryption.key: open ...` naming the file; a key file: `config: keys.k version 1 secret_ref file:...: ...` | `journalctl -u port49d -b` | create it, owned and moded as the table above |
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | `chmod go-w` the directory the line names, or an ancestor of it |
+| A key readable by a group the service is not in | `...is group-readable by gid N, which this process is not in (gid M); members of that group could read the secret too - chgrp it to the service's group ..., or chmod 0600 it` | same | `chgrp port49d` (or `port49-broker`) the file the line names, or `chmod 0600` it; a group such as Debian's `ssl-cert` is refused |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `journalctl -u port49-broker -b` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |

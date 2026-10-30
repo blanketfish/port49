@@ -40,7 +40,7 @@ var FileOwner = func(fi fs.FileInfo) (uint32, bool) {
 	return st.Uid, true
 }
 
-// FileGroup is the gid owning what fi describes, Getegid and Getgroups the process's own: swapped
+// FileGroup is the gid owning what fi describes, getegid and getgroups the process's own: swapped
 // in tests for the same reason as FileOwner.
 var FileGroup = func(fi fs.FileInfo) (uint32, bool) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
@@ -51,8 +51,8 @@ var FileGroup = func(fi fs.FileInfo) (uint32, bool) {
 }
 
 var (
-	Getegid   = os.Getegid
-	Getgroups = os.Getgroups
+	getegid   = os.Getegid
+	getgroups = os.Getgroups
 )
 
 // stRdonly is ST_RDONLY in statfs's flags, which package syscall does not
@@ -508,10 +508,10 @@ func groupIsOurs(what string, fi fs.FileInfo) error {
 	if !ok {
 		return fmt.Errorf("%s: cannot read its group", what)
 	}
-	if int(gid) == Getegid() {
+	if int(gid) == getegid() {
 		return nil
 	}
-	if groups, err := Getgroups(); err == nil {
+	if groups, err := getgroups(); err == nil {
 		for _, g := range groups {
 			if int(gid) == g {
 				return nil
@@ -520,7 +520,7 @@ func groupIsOurs(what string, fi fs.FileInfo) error {
 	}
 	return fmt.Errorf("%s is group-readable by gid %d, which this process is not in (gid %d); members of that group "+
 		"could read the secret too - chgrp it to the service's group (on Kubernetes, fsGroup does), or chmod 0600 it",
-		what, gid, Getegid())
+		what, gid, getegid())
 }
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {

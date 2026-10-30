@@ -48,6 +48,13 @@ update. Files are mode 0440; the pod sets `fsGroup: 65532` with `fsGroupChangePo
 so the unprivileged user can read them and the state directories are not made group-writable at every
 start.
 
+A key is read under the secret-file rule, so two things are refused at the pod's start, each with a line
+naming the file. A key directory that is group- or world-writable (outside a read-only Secret mount, which
+is excused): `chmod 0755` or `0750` it. A group-readable key whose group is not the pod's (fsGroup 65532
+is): a Secret volume's files are, and a file a CSI driver or an injector writes as `root:root` 0440 is not;
+the remedy is the driver's own setting, `filePermission: 0400` for the Secrets Store CSI provider, so the
+group bit is gone, never a looser rule (L83 records which drivers need it).
+
 fsGroup also acts on a PVC's root, and two rules meet there. With `OnRootMismatch` the kubelet walks the
 whole volume at a pod's start unless the root is group 65532, includes 0770 and has setgid (kubelet
 `volume_linux.go`, `requiresPermissionChange`); its walk adds group write to everything it reaches.

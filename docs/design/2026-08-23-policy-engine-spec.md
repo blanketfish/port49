@@ -11038,7 +11038,9 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   (`fence.ReadSecret`): a link is followed only while it resolves inside one directory (the
   reference's own, or ruling 12's `file_dir`), every link's directory and ancestor is held to the
   fence's rule, and the file is owned by port49's user or root, writable by its owner alone, with
-  no world bit; group-read is allowed, which Kubernetes Secret volumes and agents' `perms` give. A
+  no world bit; group-read is allowed for a group the process is in (its gid or a supplementary group;
+  decision 54 ruling 16 narrows this: a group-readable file of any other group is refused), which Kubernetes
+  Secret volumes (fsGroup) and agents' `perms` give. A
   reference that does not parse is refused by its key and never printed, and an `env:` error names
   the key that holds the reference and never the variable: a secret pasted where a name goes parses
   as one (a 40-character hex token starting with a letter does). A reference outside ruling 12's

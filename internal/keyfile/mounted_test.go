@@ -1,6 +1,7 @@
 package keyfile
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -286,6 +287,26 @@ func TestTheFilesPort49WritesAreReadStrictly(t *testing.T) {
 	}
 }
 
+// A key the operator provisions is read under the secret-file rule at every site that loads one: the
+// listener's key_file, once read with config.ReadRegular, which checks no owner, mode or link.
+func TestTheMountedKeysAreReadUnderTheSecretFileRule(t *testing.T) {
+	for _, c := range []struct{ file, want string }{
+		{"../port49d/tlslistener.go", "keyfile.ReadSecret("},
+		{"../port49d/store.go", "keyfile.LoadX509KeyPair("},
+		{"../port49d/main.go", "keyfile.LoadX509KeyPair("},
+		{"../broker/server.go", "keyfile.LoadX509KeyPair("},
+		{"../directory/conn.go", "keyfile.ReadSecret("},
+	} {
+		b, err := os.ReadFile(c.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), c.want) {
+			t.Errorf("%s must call %s", c.file, c.want)
+		}
+	}
+}
+
 // The atomic writer swaps ..data and removes the old generation: a read that raced it finds its
 // target gone once. It re-resolves and reads the new generation.
 func TestAReadThatRacesTheAtomicWriterRetriesOnce(t *testing.T) {
@@ -333,5 +354,29 @@ func TestACertAndKeyReadAcrossASwapComeFromOneGeneration(t *testing.T) {
 	}
 	if string(pair.Certificate[0]) == "" || !swapped {
 		t.Fatal("no pair, or the hook never ran")
+	}
+}
+
+// The atomic writer removes the old generation under a read of the certificate too: it is read again
+// once, as the key is, and a certificate that is truly absent still fails.
+func TestACertReadThatRacesTheAtomicWriterRetriesOnce(t *testing.T) {
+	cert, key := labPair(t)
+	dir := secretVolume(t, map[string][]byte{"tls.crt": cert, "tls.key": key})
+	real := readCert
+	defer func() { readCert = real }()
+	calls := 0
+	readCert = func(p string) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, &fs.PathError{Op: "open", Path: p, Err: fs.ErrNotExist}
+		}
+		return real(p)
+	}
+	if _, err := LoadX509KeyPair(filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")); err != nil || calls != 2 {
+		t.Fatalf("a certificate read across a swap: %v after %d reads", err, calls)
+	}
+	readCert = func(p string) ([]byte, error) { return nil, &fs.PathError{Op: "open", Path: p, Err: fs.ErrNotExist} }
+	if _, err := LoadX509KeyPair(filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("an absent certificate: %v", err)
 	}
 }

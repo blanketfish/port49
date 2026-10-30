@@ -8070,6 +8070,10 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
 - **Where secrets live.** systemd: files under `/etc/port49/`, owner root or the service user, no
   world bit. Compose: files placed once by `setup.sh` and mounted; adding a new `secrets:` entry needs `up -d`. Kubernetes: a Secret mounted whole
   (never `subPath`), `defaultMode 0440`, `fsGroup 65532`; the External Secrets example writes one file per key version.
+- **Key files are read under the secret-file rule.** A key directory that is group- or world-writable is refused (`chmod 0755` or
+  `0750` it; a Secret volume's read-only mount is excused), and a group-readable key must belong to a group the service is in: port49's
+  own, or fsGroup. Debian's `ssl-cert` group is refused. The issuing CA key, a TPM blob and the CLI's own key keep the owner-only rule.
+  Expected remedy if L83's CSI cells show `root:root` files: the provider's `filePermission 0400`.
 - **The rewrite warning.** A held key file rewritten in place is reported at once (`port49_key_secret_files_changed`, a log line per change)
   and the reload is never refused. Add a version by writing a new file; never edit one in place.
 - **`ProtectSystem=true`**, not `strict` or `full`: the fence checks `/etc`'s mode, and a mount namespace that hides it would pass a host the

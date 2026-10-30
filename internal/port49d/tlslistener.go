@@ -27,6 +27,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/devicecert"
+	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
@@ -273,7 +274,12 @@ func (l *tlsListener) read() (tlsFiles, [32]byte, error) {
 		if x.path == "" {
 			continue
 		}
-		b, err := config.ReadRegular(x.path, tlsFileMax)
+		// The key is read under the secret-file rule (decision 54 ruling 16); the certificates are public.
+		read := func() ([]byte, error) { return config.ReadRegular(x.path, tlsFileMax) }
+		if x.into == &f.key {
+			read = func() ([]byte, error) { return keyfile.ReadSecret(x.path) }
+		}
+		b, err := read()
 		if err != nil {
 			return tlsFiles{}, [32]byte{}, fmt.Errorf("tls_listener.%s %s: %w", x.key, x.path, err)
 		}

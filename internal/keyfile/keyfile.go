@@ -35,7 +35,10 @@ func LoadX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
 	var err error
 	for attempt := 0; ; attempt++ {
 		var certPEM, keyPEM []byte
-		if certPEM, err = os.ReadFile(certFile); err != nil {
+		if certPEM, err = readCert(certFile); err != nil {
+			if attempt == 0 && errors.Is(err, fs.ErrNotExist) {
+				continue // the atomic writer removed the old generation under the read
+			}
 			return tls.Certificate{}, err
 		}
 		afterCert()
@@ -48,6 +51,9 @@ func LoadX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
 		}
 	}
 }
+
+// readCert is os.ReadFile, swapped in tests to fail the certificate's read once.
+var readCert = os.ReadFile
 
 // afterCert runs between LoadX509KeyPair's two reads: a test seam for a swap of the volume's
 // generation in between.
