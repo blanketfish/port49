@@ -8099,6 +8099,8 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
 
 - **12c:**
   - an alarm on `port49_key_secret_files_changed > 0` for 10m;
+  - an alarm on `port49_issuing_ca_not_after_timestamp_seconds == 0` while `broker.identity.issuance` is configured: a broker that started
+    without a usable issuing CA (the start never fails over it, so the gauge is the only signal besides the log line `issuing-ca.* is not usable`);
   - L39 (b), with Task 11's login cell as its first evidence;
   - the reference configurations; load;
   - **the Oxidized `secure: true` follow-up** (plan 9d carry): measure Oxidized's host-key options against accept-new, and change
