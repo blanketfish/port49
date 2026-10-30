@@ -106,7 +106,7 @@ volumeMounts:
 {{- define "port49.dataInitOwner" -}}
 name: data-dir-owner
 image: {{ .root.Values.initImage }}
-command: [sh, -c, {{ printf "bad=$(find %s ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then safe=$(printf %%s \"$bad\" | sed 's/[^[:print:]]/?/g'); echo \"data-dir-owner: $safe is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 %s\" >&2; exit 1; fi; chmod -R go-rwx %s && chmod -R g-s %s || { echo \"data-dir-owner: chmod failed inside %s; a directory there may be mode 0000 (find or chmod named it above): chmod u+rwx it, then restart\" >&2; exit 1; }" .dir .dir .dir .dir .dir | quote }}]
+command: [sh, -c, {{ printf "set -o pipefail; { bad=$(find %s ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then echo \"data-dir-owner: $bad is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 %s\"; exit 1; fi; chmod -R go-rwx %s && chmod -R g-s %s || { echo \"data-dir-owner: chmod failed inside %s; a directory there may be mode 0000 (find or chmod named it above): chmod u+rwx it, then restart\"; exit 1; }; } 2>&1 | sed 's/[^[:print:]]/?/g' >&2" .dir .dir .dir .dir .dir | quote }}]
 securityContext:
   {{- include "port49.containerSecurity" .root | nindent 2 }}
 volumeMounts:

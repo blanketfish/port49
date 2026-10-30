@@ -59,9 +59,13 @@ func TestTheChartsCapabilitiesFitPodSecurityBaseline(t *testing.T) {
 	// No doc in the repo may tell an operator to loosen the namespace: the kubectl form, YAML, prose, or
 	// an exemption of the release's namespace.
 	loosen := regexp.MustCompile(`(?i)enforce[=: "']*privileged|exempt[^.\n]{0,40}namespace|namespace[^.\n]{0,40}exempt|` + "`privileged`" + ` Pod Security`)
+	scanned := 0
 	for _, root := range []string{"deploy", "docs", "examples"} {
-		filepath.Walk(filepath.Join("..", "..", root), func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
+		err := filepath.Walk(filepath.Join("..", "..", root), func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
 				return nil
 			}
 			switch filepath.Ext(path) {
@@ -69,6 +73,7 @@ func TestTheChartsCapabilitiesFitPodSecurityBaseline(t *testing.T) {
 			default:
 				return nil
 			}
+			scanned++
 			b, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -78,6 +83,12 @@ func TestTheChartsCapabilitiesFitPodSecurityBaseline(t *testing.T) {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Errorf("walking %s: %v", root, err)
+		}
+	}
+	if scanned == 0 {
+		t.Error("the loosening check scanned no file: its roots moved")
 	}
 }
 

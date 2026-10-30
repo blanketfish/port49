@@ -171,4 +171,15 @@ func TestTheDataDirInitsRunInTheirContainers(t *testing.T) {
 	if out, err := initRun(image, vol, mount, "65532:65532", nil, ownerCmd); err != nil {
 		t.Fatalf("the owner init after the chmod: %v\n%s", err, out)
 	}
+
+	// 7. A directory of the owner's own that it cannot enter, named with an escape sequence: find and
+	// chmod name it on stderr, and that line is reduced to printable characters too.
+	fixture("d=\"$(printf '" + dir + "/x\\033[31m')\"; mkdir \"$d\" && chown 65532:65532 \"$d\" && chmod 000 \"$d\"")
+	out, err = initRun(image, vol, mount, "65532:65532", nil, ownerCmd)
+	if err == nil {
+		t.Errorf("the owner init passed over a directory it cannot enter:\n%s", out)
+	}
+	if strings.ContainsRune(out, 0x1b) || !strings.Contains(out, "Permission denied") {
+		t.Errorf("the tool's own error is missing or carries a raw escape character: %q", out)
+	}
 }
