@@ -51,9 +51,9 @@ func TestParseStat(t *testing.T) {
 	}
 }
 
-const newInit = `command: [sh, -c, "chown 0:65532 /var/lib/port49-broker && chmod 3770 /var/lib/port49-broker && install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chown 65532:65532 /var/lib/port49-broker/state && chmod 0700 /var/lib/port49-broker/state && chmod g-s /var/lib/port49-broker/state"]`
+const newInit = `command: [sh, -c, "chown 0:65532 /var/lib/port49-broker && chmod 3770 /var/lib/port49-broker && { [ ! -L /var/lib/port49-broker/state ] || { echo \"data-dir: /var/lib/port49-broker/state is a symlink; refusing\" >&2; exit 1; }; } && install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chown -h 65532:65532 /var/lib/port49-broker/state && chmod 0700 /var/lib/port49-broker/state && chmod g-s /var/lib/port49-broker/state"]`
 
-const newOwnerInit = `command: [sh, -c, "bad=$(find /var/lib/port49-broker/state ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then echo \"data-dir-owner: $bad is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 /var/lib/port49-broker/state\" >&2; exit 1; fi; chmod -R go-rwx /var/lib/port49-broker/state && chmod -R g-s /var/lib/port49-broker/state"]`
+const newOwnerInit = `command: [sh, -c, "bad=$(find /var/lib/port49-broker/state ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then safe=$(printf %s \"$bad\" | sed 's/[^[:print:]]/?/g'); echo \"data-dir-owner: $safe is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 /var/lib/port49-broker/state\" >&2; exit 1; fi; chmod -R go-rwx /var/lib/port49-broker/state && chmod -R g-s /var/lib/port49-broker/state || { echo \"data-dir-owner: chmod failed inside /var/lib/port49-broker/state; a directory there may be mode 0000 (find or chmod named it above): chmod u+rwx it, then restart\" >&2; exit 1; }"]`
 
 func TestOldRootRewritesToTheFirstDesign(t *testing.T) {
 	// The first design had no repair below the directory, so the owner init becomes a no-op too:

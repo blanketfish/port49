@@ -347,7 +347,8 @@ func checkPVCRootAndRepair(t *testing.T, r renderer) {
 		for _, want := range []string{
 			"chown 0:65532 " + mount + " && chmod 3770 " + mount,
 			"install -d -m 0700 -o 65532 -g 65532 " + dir,
-			"chown 65532:65532 " + dir,
+			"[ ! -L " + dir + " ]", // a planted symlink is refused, not followed
+			"chown -h 65532:65532 " + dir,
 			"chmod 0700 " + dir,
 			"chmod g-s " + dir,
 		} {
@@ -364,6 +365,8 @@ func checkPVCRootAndRepair(t *testing.T, r renderer) {
 			"chmod -R g-s " + dir,
 			"find " + dir + " ! -user 65532",
 			"chown -R 65532:65532 " + dir, // the one command the failure message tells the operator to run
+			"[:print:]",                   // a hostile file name cannot forge a log line
+			"chmod u+rwx it",              // the hint for a directory the owner cannot enter
 			"exit 1",
 		} {
 			if !strings.Contains(ocmd, want) {

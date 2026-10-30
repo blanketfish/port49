@@ -50,15 +50,54 @@ func TestTheChartsCapabilitiesFitPodSecurityBaseline(t *testing.T) {
 		}
 		return strings.Join(strings.Fields(string(b)), " ")
 	}
-	readme, values := flat("README.md"), flat("values.yaml")
+	readme := flat("README.md")
 	for _, c := range []string{"`CHOWN`", "`FOWNER`", "`FSETID`", "`baseline`", "`restricted`"} {
 		if !strings.Contains(readme, c) {
 			t.Errorf("README.md does not name %s", c)
 		}
 	}
-	for name, text := range map[string]string{"README.md": readme, "values.yaml": values} {
-		if strings.Contains(text, "enforce \"privileged\"") || strings.Contains(text, "`privileged` Pod Security level") {
-			t.Errorf("%s tells the operator to loosen the namespace to privileged", name)
+	// No doc in the repo may tell an operator to loosen the namespace: the kubectl form, YAML, prose, or
+	// an exemption of the release's namespace.
+	loosen := regexp.MustCompile(`(?i)enforce[=: "']*privileged|exempt[^.\n]{0,40}namespace|namespace[^.\n]{0,40}exempt|` + "`privileged`" + ` Pod Security`)
+	for _, root := range []string{"deploy", "docs", "examples"} {
+		filepath.Walk(filepath.Join("..", "..", root), func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			switch filepath.Ext(path) {
+			case ".md", ".yaml", ".yml":
+			default:
+				return nil
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m := loosen.Find(b); m != nil {
+				t.Errorf("%s tells the operator to loosen the namespace: %q", path, m)
+			}
+			return nil
+		})
+	}
+}
+
+// The init-script test runs a pulled image as root on whatever host runs make test, a key host
+// included. It gets exactly the capabilities it names, an image pinned by digest, and no device.
+func TestTheInitScriptTestGrantsNoMoreThanItNeeds(t *testing.T) {
+	b, err := os.ReadFile("initscript_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	for _, bad := range []string{
+		`[]string{"` + "ALL" + `"}`, `"--cap-add", "ALL"`, "--priv" + "ileged", "--dev" + "ice", "--pid", "--net", "--ipc", "--uts",
+		`"alpine:`, `alpine:3`, "docker.sock", `"-v", "/`,
+	} {
+		if strings.Contains(src, bad) {
+			t.Errorf("initscript_test.go contains %q", bad)
 		}
+	}
+	if !strings.Contains(src, `"@sha256:"`) {
+		t.Error("initscript_test.go does not require the chart's init image to be pinned by digest")
 	}
 }

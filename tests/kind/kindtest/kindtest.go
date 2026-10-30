@@ -421,8 +421,8 @@ var StateDirRefusal = regexp.MustCompile(`config: broker\.state_dir /var/lib/por
 
 // oldRootRE is the 3770 root init command's text, which OldRoot rewrites to the first design's;
 // ownerInitRE is the owner init's, which the first design did not have.
-var oldRootRE = regexp.MustCompile(`chown 0:65532 ([^\s"]+) && chmod 3770 [^\s"]+ && (install -d -m 0700 -o 65532 -g 65532 [^\s"]+) && chown 65532:65532 [^\s"]+ && chmod 0700 [^\s"]+ && chmod g-s [^\s"]+`)
-var ownerInitRE = regexp.MustCompile(`(?s)bad=\$\(find [^\s"]+ ! -user 65532.*?chmod -R g-s [^\s"']+`)
+var oldRootRE = regexp.MustCompile(`(?s)chown 0:65532 ([^\s"]+) && chmod 3770 [^\s"]+ && \{ \[ ! -L [^\s"]+ \].*?; \} && (install -d -m 0700 -o 65532 -g 65532 [^\s"]+) && chown -h 65532:65532 [^\s"]+ && chmod 0700 [^\s"]+ && chmod g-s [^\s"]+`)
+var ownerInitRE = regexp.MustCompile(`(?s)bad=\$\(find [^\s"]+ ! -user 65532.*?chmod -R g-s [^\s"']+ \|\| \{.*?exit 1; \}`)
 
 // OldRoot is helm's post-renderer for the RED run, test-only and never shipped in the chart: it
 // rewrites each data-dir init command to the first design (5e88550c), the root made 2755 by

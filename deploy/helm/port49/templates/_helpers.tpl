@@ -68,7 +68,8 @@ walk only while the volume root has gid = fsGroup, perms including 0770, and set
 directory 2770 and its files 0660, and the fence refuses the directory. So the root init, before the
 process starts: sets the root to root:65532 3770 (setgid for the kubelet's test, sticky so the fence
 excuses a group-writable ancestor, fence_linux.go:403-405) and makes the data directory with an
-explicit chmod (BusyBox install -d leaves an existing one alone). It touches inodes only (the root,
+explicit chmod (BusyBox install -d leaves an existing one alone); it refuses a data directory that is
+a symlink (65532 may rename its own entry in the sticky root) and uses chown -h. It touches inodes only (the root,
 the directory), never descends, so it needs CHOWN, FOWNER and FSETID and nothing else: all three are
 in Pod Security baseline's list, DAC_READ_SEARCH (what a descent into a 0700 directory it does not
 own would need) is not, and the chart must run in a baseline namespace. The tree below the directory
@@ -81,7 +82,7 @@ against a real kubelet until the kind smoke's two-generation cell.
 {{- define "port49.dataInit" -}}
 name: data-dir
 image: {{ .root.Values.initImage }}
-command: [sh, -c, {{ printf "chown 0:65532 %s && chmod 3770 %s && install -d -m 0700 -o 65532 -g 65532 %s && chown 65532:65532 %s && chmod 0700 %s && chmod g-s %s" .mount .mount .dir .dir .dir .dir | quote }}]
+command: [sh, -c, {{ printf "chown 0:65532 %s && chmod 3770 %s && { [ ! -L %s ] || { echo \"data-dir: %s is a symlink; refusing\" >&2; exit 1; }; } && install -d -m 0700 -o 65532 -g 65532 %s && chown -h 65532:65532 %s && chmod 0700 %s && chmod g-s %s" .mount .mount .dir .dir .dir .dir .dir .dir | quote }}]
 securityContext:
   runAsNonRoot: false
   runAsUser: 0
@@ -105,7 +106,7 @@ volumeMounts:
 {{- define "port49.dataInitOwner" -}}
 name: data-dir-owner
 image: {{ .root.Values.initImage }}
-command: [sh, -c, {{ printf "bad=$(find %s ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then echo \"data-dir-owner: $bad is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 %s\" >&2; exit 1; fi; chmod -R go-rwx %s && chmod -R g-s %s" .dir .dir .dir .dir | quote }}]
+command: [sh, -c, {{ printf "bad=$(find %s ! -user 65532 | head -n 1); if [ -n \"$bad\" ]; then safe=$(printf %%s \"$bad\" | sed 's/[^[:print:]]/?/g'); echo \"data-dir-owner: $safe is not owned by uid 65532 (a restore done as root?), so the fence would refuse it. As root on the volume run: chown -R 65532:65532 %s\" >&2; exit 1; fi; chmod -R go-rwx %s && chmod -R g-s %s || { echo \"data-dir-owner: chmod failed inside %s; a directory there may be mode 0000 (find or chmod named it above): chmod u+rwx it, then restart\" >&2; exit 1; }" .dir .dir .dir .dir .dir | quote }}]
 securityContext:
   {{- include "port49.containerSecurity" .root | nindent 2 }}
 volumeMounts:
