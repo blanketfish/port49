@@ -192,3 +192,24 @@ func TestL82TargetPinsTheChartAndDeletesTheCluster(t *testing.T) {
 		t.Error("l82_test.go takes the lab lock: there is no shared lab host in CI, and the key-host guard alone refuses on a developer machine")
 	}
 }
+
+// On a fresh runner the docker network named kind does not exist until kind creates the cluster:
+// bringUp reads it only after kindtest.Up, and nothing uses the subnet or gateway before that.
+func TestBringUpReadsTheKindNetworkAfterTheClusterIsUp(t *testing.T) {
+	src := read(t, "tests", "kind", "stack.go")
+	i := strings.Index(src, "func bringUp(")
+	if i < 0 {
+		t.Fatal("no bringUp")
+	}
+	body := src[i:]
+	up := strings.Index(body, "kindtest.Up(")
+	net := strings.Index(body, "dockerKindNetwork(t)")
+	if up < 0 || net < 0 || net < up {
+		t.Errorf("bringUp reads the kind network (at %d) before kindtest.Up (at %d)", net, up)
+	}
+	for _, field := range []string{"s.subnet", "s.gateway"} {
+		if f := strings.Index(body, field); f >= 0 && f < up {
+			t.Errorf("bringUp uses %s before kindtest.Up", field)
+		}
+	}
+}

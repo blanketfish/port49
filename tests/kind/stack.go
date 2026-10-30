@@ -280,7 +280,6 @@ func bringUp(t *testing.T, name string, o Options) *smoke {
 	t.Helper()
 	root := kindtest.Root()
 	s := &smoke{t: t, root: root, chart: filepath.Join(root, "deploy", "helm", "port49"), helm: "helm"}
-	s.subnet, s.gateway = dockerKindNetwork(t)
 	s.pki = t.TempDir()
 	if err := testpki.WriteKind(s.pki, ns, 3, "alice@example.com", time.Now()); err != nil {
 		t.Fatal(err)
@@ -290,6 +289,8 @@ func bringUp(t *testing.T, name string, o Options) *smoke {
 	rootsFile, subject := shapetest.AdminSetup(t, brokerDir)
 
 	s.c = kindtest.Up(t, name)
+	// the kind network exists only once kind has made the cluster
+	s.subnet, s.gateway = dockerKindNetwork(t)
 	for _, img := range []string{"port49:dev", "port49-setup:dev"} {
 		if out, err := exec.Command(kindtest.Bin(t, "KIND_BIN"), "load", "docker-image", img, "--name", s.c.Name).CombinedOutput(); err != nil {
 			t.Fatalf("kind load %s: %v\n%s", img, err, kindtest.Filter(string(out)))
