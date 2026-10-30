@@ -235,7 +235,10 @@ func Probe(sts []byte, c Config, name, image string, withV2 bool) ([]byte, error
 			podSpec["volumes"] = []any{v}
 		}
 	}
-	meta := obj{"name": name, "labels": obj{"l83": "probe"}}
+	// terminationGracePeriodSeconds 0: the probe's sleep is PID 1 and ignores SIGTERM, so a deleted
+	// probe would sit Terminating for the default 30 s (lab run 41142675001).
+	podSpec["terminationGracePeriodSeconds"] = 0
+	meta := obj{"name": name, "labels": obj{"l83": "probe", ConfigLabel: c.ID}}
 	ann := obj{}
 	for k, v := range dig(tp, "metadata", "annotations").(obj) {
 		if strings.HasPrefix(k, "vault.hashicorp.com/") {
@@ -246,6 +249,44 @@ func Probe(sts []byte, c Config, name, image string, withV2 bool) ([]byte, error
 		meta["annotations"] = ann
 	}
 	return json.Marshal(obj{"apiVersion": "v1", "kind": "Pod", "metadata": meta, "spec": podSpec})
+}
+
+// ConfigLabel is the probe pod's label naming the configuration it was made for.
+const ConfigLabel = "l83-config"
+
+// ProbeName is the probe pod's name for c: one per configuration, so a probe still terminating from
+// the last configuration is never the pod the next one's apply lands on.
+func ProbeName(c Config) string { return "l83-probe-" + strings.ToLower(c.ID) }
+
+// ProbeCurrent checks `uid|deletionTimestamp|label` read from the probe pod after it was Ready: it
+// must not be terminating and must carry c's label, or its stat rows are another configuration's.
+func ProbeCurrent(read string, c Config) error {
+	f := strings.Split(strings.TrimSpace(read), "|")
+	switch {
+	case len(f) != 3 || f[0] == "":
+		return fmt.Errorf("the probe pod could not be identified: %q", read)
+	case f[1] != "":
+		return fmt.Errorf("the probe pod %s is terminating (deleted at %s)", f[0], f[1])
+	case f[2] != c.ID:
+		return fmt.Errorf("the probe pod %s was made for configuration %q, not %q", f[0], f[2], c.ID)
+	}
+	return nil
+}
+
+// PodIdent is what (c) records of port49d's pod before and after the configuration changes.
+type PodIdent struct {
+	UID       string
+	Restarts  int
+	StartedAt string
+}
+
+// Change tells a pod replaced (its uid changed: the injector's template change is a rollout) from a
+// container restarted (the same pod, a new restart count or start time: a crash).
+func Change(before, after PodIdent) (replaced, restarted bool) {
+	if before.UID != after.UID {
+		return true, false
+	}
+	return false, before.Restarts != after.Restarts || before.StartedAt != after.StartedAt
 }
 
 // SecretProviderClass is the CSI variant's class, in namespace ns, naming the versions in force.
@@ -300,12 +341,13 @@ func JudgeStart(ready bool, restarts int) string {
 type Rotation struct {
 	InForce   bool          // a login keyed with version 2 passed
 	Delay     time.Duration // from the configuration's gaining version 2 to that login
-	Restarted bool          // the container restarted, or its start time or the pod changed
+	Restarted bool          // the container restarted or its start time changed in the same pod
+	Replaced  bool          // the pod was replaced (a new uid): a rollout, apart from a crash
 }
 
-// JudgeRotation is (c): in force within Within, with no restart.
+// JudgeRotation is (c): in force within Within, with no restart and no pod replaced.
 func JudgeRotation(r Rotation) string {
-	if r.InForce && !r.Restarted && r.Delay <= Within {
+	if r.InForce && !r.Restarted && !r.Replaced && r.Delay <= Within {
 		return l82.Pass
 	}
 	return l82.Fail

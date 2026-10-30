@@ -207,6 +207,12 @@ func TestTheProbeSharesTheTemplate(t *testing.T) {
 		if p["metadata"].(obj)["name"] != "l83-probe" {
 			t.Errorf("%s: name", c.ID)
 		}
+		if p["metadata"].(obj)["labels"].(obj)[ConfigLabel] != c.ID {
+			t.Errorf("%s: the probe does not carry its configuration's label", c.ID)
+		}
+		if spec["terminationGracePeriodSeconds"] != float64(0) {
+			t.Errorf("%s: a deleted probe would sit Terminating for the default grace period", c.ID)
+		}
 		a, _ := p["metadata"].(obj)["annotations"].(obj)
 		if _, ok := a["checksum/config"]; ok {
 			t.Errorf("%s: the probe carries the config checksum", c.ID)
@@ -385,5 +391,45 @@ func TestPutCommandReadsTheValueFromStdin(t *testing.T) {
 	}
 	if strings.Contains(c, "core-v1") || strings.Contains(c, "value=") && !strings.HasSuffix(c, "value=-") {
 		t.Errorf("the command carries a value on its command line: %q", c)
+	}
+}
+
+func TestAPodReplacedIsNotAContainerRestartAndFailsRotation(t *testing.T) {
+	a := PodIdent{UID: "u1", Restarts: 0, StartedAt: "t1"}
+	if r, c := Change(a, PodIdent{UID: "u2", StartedAt: "t2"}); !r || c {
+		t.Errorf("a new uid: replaced %v restarted %v, want true false", r, c)
+	}
+	if r, c := Change(a, PodIdent{UID: "u1", Restarts: 1, StartedAt: "t1"}); r || !c {
+		t.Errorf("a restart count: replaced %v restarted %v, want false true", r, c)
+	}
+	if r, c := Change(a, a); r || c {
+		t.Errorf("no change read as replaced %v restarted %v", r, c)
+	}
+	if got := JudgeRotation(Rotation{InForce: true, Delay: time.Second, Replaced: true}); got != l82.Fail {
+		t.Errorf("a replaced pod judged %q, want FAIL", got)
+	}
+}
+
+func TestEachConfigurationHasItsOwnProbeAndItIsCheckedBeforeItsRowsAreRead(t *testing.T) {
+	seen := map[string]bool{}
+	for _, c := range Configs {
+		n := ProbeName(c)
+		if seen[n] {
+			t.Errorf("configuration %s shares probe name %s", c.ID, n)
+		}
+		seen[n] = true
+	}
+	a1, a2 := Configs[0], Configs[1]
+	if err := ProbeCurrent("uid-1||"+a2.ID, a2); err != nil {
+		t.Errorf("a live probe of its own configuration: %v", err)
+	}
+	if err := ProbeCurrent("uid-1|2026-10-30T23:00:00Z|"+a1.ID, a1); err == nil {
+		t.Error("a terminating probe was accepted")
+	}
+	if err := ProbeCurrent("uid-1||"+a1.ID, a2); err == nil {
+		t.Error("another configuration's probe was accepted")
+	}
+	if err := ProbeCurrent("", a1); err == nil {
+		t.Error("an unreadable probe was accepted")
 	}
 }

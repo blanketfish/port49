@@ -256,20 +256,23 @@ func l83Start(t *testing.T, stack *kindstack.Stack, sts, base []byte, cfg l83.Co
 // l83Probe runs stat as port49d's user in a pod configured as port49d's is.
 func l83Probe(t *testing.T, stack *kindstack.Stack, sts []byte, cfg l83.Config, cell *l82.Cell) {
 	cl, ns := stack.Cluster(), stack.Namespace()
-	pod, err := l83.Probe(sts, cfg, "l83-probe", l82Alpine, false)
+	name := l83.ProbeName(cfg)
+	pod, err := l83.Probe(sts, cfg, name, l82Alpine, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		cl.KubectlTry("", "-n", ns, "delete", "pod", "l83-probe", "--ignore-not-found", "--wait=false")
+		cl.KubectlTry("", "-n", ns, "delete", "pod", name, "--ignore-not-found", "--wait=false")
 	})
+	// Never apply onto a pod still on its way out: wait for the name to be free.
+	cl.KubectlTry("", "-n", ns, "delete", "pod", name, "--ignore-not-found", "--wait=true", "--timeout=2m")
 	if _, err := cl.KubectlTry(string(pod), "-n", ns, "apply", "-f", "-"); err != nil {
 		t.Fatalf("applying the probe pod: %v", err)
 	}
 	var p kindtest.Pod
 	deadline := time.Now().Add(2 * time.Minute)
 	for time.Now().Before(deadline) {
-		if p, err = cl.Pod(ns, "l83-probe"); err == nil && p.Ready {
+		if p, err = cl.Pod(ns, name); err == nil && p.Ready {
 			break
 		}
 		time.Sleep(3 * time.Second)
@@ -280,11 +283,18 @@ func l83Probe(t *testing.T, stack *kindstack.Stack, sts []byte, cfg l83.Config, 
 			w = p.Waiting
 		}
 		l82Row(cell, "the probe pod", "not Ready in 2m0s, waiting: "+w)
-		cl.KubectlTry("", "-n", ns, "delete", "pod", "l83-probe", "--ignore-not-found", "--wait=false")
+		cl.KubectlTry("", "-n", ns, "delete", "pod", name, "--ignore-not-found", "--wait=false")
+		return
+	}
+	idOut, _ := cl.KubectlTry("", "-n", ns, "get", "pod", name, "-o",
+		"jsonpath={.metadata.uid}|{.metadata.deletionTimestamp}|{.metadata.labels."+l83.ConfigLabel+"}")
+	if err := l83.ProbeCurrent(idOut, cfg); err != nil {
+		l82Row(cell, "the probe pod", "not this configuration's, so its rows are not recorded: "+err.Error())
+		cell.Verdict = l82.Fail
 		return
 	}
 	inPod := func(container, script string) (string, error) {
-		return cl.KubectlTry("", "-n", ns, "exec", "l83-probe", "-c", container, "--", "sh", "-c", script)
+		return cl.KubectlTry("", "-n", ns, "exec", name, "-c", container, "--", "sh", "-c", script)
 	}
 	if out, err := inPod("probe", `echo $(id -u):$(id -g)`); err == nil {
 		l82Row(cell, "the probe's uid:gid, port49d's", strings.TrimSpace(out))
@@ -316,7 +326,7 @@ func l83Probe(t *testing.T, stack *kindstack.Stack, sts []byte, cfg l83.Config, 
 	}
 	read, err := inPod("probe", `head -c 1 `+l83.KeyDir+`/core_v1 >/dev/null 2>&1 && echo yes || echo no`)
 	l82Row(cell, "the probe, as port49d's user, reads core_v1", map[bool]string{true: strings.TrimSpace(read), false: "not read"}[err == nil])
-	cl.KubectlTry("", "-n", ns, "delete", "pod", "l83-probe", "--ignore-not-found", "--wait=false")
+	cl.KubectlTry("", "-n", ns, "delete", "pod", name, "--ignore-not-found", "--wait=false")
 }
 
 // Cell (c): the policy names version 2 while its file is absent; version 2 is written at Vault; the
@@ -341,10 +351,10 @@ func l83Rotation(t *testing.T, stack *kindstack.Stack, sts []byte, cfg l83.Confi
 		st, err := dev.TryLogin("alice", tok)
 		return err == nil && st == wire.AuthenStatusPass
 	})
-	ident := func() string {
+	ident := func() l83.PodIdent {
 		uid, _ := cl.KubectlTry("", "-n", ns, "get", "pod", "t-port49d-0", "-o", "jsonpath={.metadata.uid}")
 		p, _ := cl.Pod(ns, "t-port49d-0")
-		return fmt.Sprintf("%s %d %s", strings.TrimSpace(uid), p.Restarts, p.StartedAt)
+		return l83.PodIdent{UID: strings.TrimSpace(uid), Restarts: p.Restarts, StartedAt: p.StartedAt}
 	}
 	before := ident()
 
@@ -365,12 +375,13 @@ func l83Rotation(t *testing.T, stack *kindstack.Stack, sts []byte, cfg l83.Confi
 		}
 		time.Sleep(3 * time.Second)
 	}
-	res.Restarted = ident() != before
+	res.Replaced, res.Restarted = l83.Change(before, ident())
 	if res.InForce {
 		l82Row(cell, "delay from the configuration gaining version 2 to a login keyed with it", res.Delay.Round(time.Second).String())
 	} else {
 		l82Row(cell, "a login keyed with version 2", fmt.Sprintf("never passed in %s", (l83.Within+60*time.Second).Round(time.Second)))
 	}
-	l82Row(cell, "port49d's pod replaced, its container restarted or its start time changed", fmt.Sprint(res.Restarted))
+	l82Row(cell, "port49d's pod replaced (a new uid: a rollout, as the injector's template change is)", fmt.Sprint(res.Replaced))
+	l82Row(cell, "port49d's container restarted or its start time changed, in the same pod", fmt.Sprint(res.Restarted))
 	cell.Verdict = l83.JudgeRotation(res)
 }
