@@ -344,3 +344,19 @@ func TestTheStackTurnsOnIssuance(t *testing.T) {
 		}
 	}
 }
+
+// The restart cell's command is asked at 15, and only a permitted session authorization raises the
+// held level from the login's 1 (spec 5.3); the cell makes one before the pods are deleted
+// (run 41142675052: privilege_exceeded, held_privilege 1).
+func TestTheRestartCellRaisesTheHeldLevelBeforeTheRestart(t *testing.T) {
+	src := read(t, "tests", "kind", "smoke_test.go")
+	i := strings.Index(src, "func (s *smoke) cellRestart")
+	if i < 0 {
+		t.Fatal("no cellRestart")
+	}
+	body := src[i:]
+	auth, del := strings.Index(body, `dev.Permits("alice")`), strings.Index(body, `"delete", "pod"`)
+	if auth < 0 || del < 0 || auth > del {
+		t.Errorf("cellRestart must make the session authorization (Permits with no words) before it deletes the pods (%d, %d)", auth, del)
+	}
+}

@@ -252,11 +252,34 @@ func PodCommands(ns string, pods []string) [][]string {
 	return out
 }
 
+// ContainerLogCommands are the kubectl arguments that print the tail of each named container's log
+// of pod. `logs --all-containers` prints nothing for a pod whose later containers never started (a
+// Job pod that ended in Init:Error), so the container that failed has its log asked for by name.
+func ContainerLogCommands(ns, pod string, containers []string) [][]string {
+	var out [][]string
+	for _, name := range containers {
+		out = append(out, []string{"-n", ns, "logs", "-c", name, "--tail=60", pod})
+	}
+	return out
+}
+
+// containerLogs asks for the logs of every init container and container of pod, by name.
+func (c *Cluster) containerLogs(ns, pod string) [][]string {
+	names, err := c.KubectlTry("", "-n", ns, "get", "pod", pod, "-o",
+		"jsonpath={.spec.initContainers[*].name} {.spec.containers[*].name}")
+	if err != nil {
+		return nil
+	}
+	return ContainerLogCommands(ns, pod, strings.Fields(names))
+}
+
 // PodReport is the pod's description (container state, exit code, reason) and its logs, through
 // the secret filter, for a failure message. It never reads a Secret.
 func (c *Cluster) PodReport(ns, name string) string {
 	var b strings.Builder
-	for _, args := range PodCommands(ns, []string{name}) {
+	cmds := PodCommands(ns, []string{name})
+	cmds = append(cmds, c.containerLogs(ns, name)...)
+	for _, args := range cmds {
 		out, _ := c.KubectlTry("", args...)
 		fmt.Fprintf(&b, "== %s\n%s\n", strings.Join(args[2:], " "), out)
 	}
@@ -280,7 +303,13 @@ func (c *Cluster) Dump(t *testing.T) {
 		}
 		// every pod, labelled or not: a one-off pod (store-roles, a probe) has no label to select by
 		names, _ := c.KubectlTry("", "-n", ns, "get", "pods", "-o", "name")
-		for _, args := range PodCommands(ns, strings.Fields(names)) {
+		var cmds [][]string
+		for _, n := range strings.Fields(names) {
+			n = strings.TrimPrefix(n, "pod/")
+			cmds = append(cmds, PodCommands(ns, []string{n})...)
+			cmds = append(cmds, c.containerLogs(ns, n)...)
+		}
+		for _, args := range cmds {
 			out, _ := c.KubectlTry("", args...)
 			fmt.Fprintf(&b, "== %s\n%s\n", ns+" "+strings.Join(args[2:], " "), out)
 		}

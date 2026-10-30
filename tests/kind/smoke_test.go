@@ -84,12 +84,17 @@ func (s *smoke) cellRestart(t *testing.T) {
 	if st := dev.Login("alice", s.mint(brokerAddr)()); st != wire.AuthenStatusPass {
 		t.Fatalf("login before the restart: %d", st)
 	}
+	// The session authorization raises the held level to 15 (spec 5.3: the login START carries 1);
+	// without it the command at 15 is denied privilege_exceeded with or without a restart.
+	if !dev.Permits("alice") {
+		t.Fatal("the session's authorization before the restart was refused")
+	}
 	s.c.Kubectl("-n", ns, "delete", "pod", "t-port49d-0", "t-broker-0")
 	s.c.WaitReady(ns, "t-port49d-0", 4*time.Minute)
 	s.c.WaitReady(ns, "t-broker-0", 4*time.Minute)
 	dev = s.device("t-port49d-0") // looked up again
 	if !dev.Permits("alice", "show", "version") {
-		t.Fatal("the session's next command after the restart was refused")
+		t.Fatal("the session's next command after the restart was refused: its context, and the level the session authorization raised, did not survive in etcd")
 	}
 	if logs := s.c.Kubectl("-n", ns, "logs", "t-broker-0"); kindtest.StateDirRefusal.MatchString(logs) {
 		t.Fatal("the restarted broker refused its state_dir")

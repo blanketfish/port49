@@ -231,6 +231,23 @@ func TestPodCommandsCoverEveryPodWithoutReadingSecrets(t *testing.T) {
 	}
 }
 
+func TestContainerLogCommandsNameEachContainerWithoutReadingSecrets(t *testing.T) {
+	got := ContainerLogCommands("port49", "job-pod", []string{"stale-check", "export", "finish"})
+	if len(got) != 3 || strings.Join(got[1], " ") != "-n port49 logs -c export --tail=60 job-pod" {
+		t.Fatalf("got %v", got)
+	}
+	for _, c := range got {
+		for _, a := range c {
+			if a == "secret" || a == "secrets" {
+				t.Errorf("%v reads a Secret", c)
+			}
+		}
+	}
+	if got := ContainerLogCommands("x", "p", nil); len(got) != 0 {
+		t.Errorf("no containers, commands %v", got)
+	}
+}
+
 func TestNamespaceCommandsShowLabelsEventsAndWorkloadsWithoutSecrets(t *testing.T) {
 	var all []string
 	for _, c := range NamespaceCommands("port49") {
