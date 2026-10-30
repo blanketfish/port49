@@ -19,7 +19,8 @@ Type=simple
 User=port49-broker
 Group=port49-broker
 ExecStart=/usr/bin/port49-broker --config /etc/port49/port49-broker.yaml
-ExecReload=/bin/kill -HUP $MAINPID
+ExecReload=/bin/sh -c 'kill -HUP "$MAINPID"'
+# kill is the shell's builtin: /bin/kill is procps's, which a minimal host does not have
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=65536

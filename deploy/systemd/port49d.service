@@ -24,7 +24,8 @@ Type=simple
 User=port49d
 Group=port49d
 ExecStart=/usr/bin/port49d --config /etc/port49/port49d.yaml
-ExecReload=/bin/kill -HUP $MAINPID
+ExecReload=/bin/sh -c 'kill -HUP "$MAINPID"'
+# kill is the shell's builtin: /bin/kill is procps's, which a minimal host does not have
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=65536

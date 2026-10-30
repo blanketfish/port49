@@ -69,7 +69,7 @@ func TestTheUnitsCarryTheirLimits(t *testing.T) {
 		{"Service", "LimitNOFILE", "65536", "65536"},
 		{"Service", "User", "port49d", "port49-broker"},
 		{"Service", "Group", "port49d", "port49-broker"},
-		{"Service", "ExecReload", "/bin/kill -HUP $MAINPID", "/bin/kill -HUP $MAINPID"},
+		{"Service", "ExecReload", `/bin/sh -c 'kill -HUP "$MAINPID"'`, `/bin/sh -c 'kill -HUP "$MAINPID"'`},
 		{"Service", "UMask", "0077", "0077"},
 		{"Service", "AmbientCapabilities", "CAP_NET_BIND_SERVICE", absent},
 		{"Service", "RuntimeDirectory", absent, absent},
@@ -254,6 +254,33 @@ func TestEveryReadmeStatesTheKeyOrder(t *testing.T) {
 			if !strings.Contains(doc, want) {
 				t.Errorf("%s does not say %q", rel, want)
 			}
+		}
+	}
+}
+
+// The shipped units run only what the package or an Essential package provides: /bin/kill is
+// procps's, which debian:trixie-slim and a minimal host do not have, so a reload by it failed on a
+// running broker. A reload is the shell's builtin kill.
+func TestTheUnitsNameNoBinaryTheHostMayLack(t *testing.T) {
+	allowed := map[string]bool{"/usr/bin/port49d": true, "/usr/bin/port49-broker": true, "/bin/sh": true}
+	for _, name := range []string{"port49d", "port49-broker"} {
+		b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "systemd", name+".service"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, ln := range strings.Split(string(b), "\n") {
+			if !strings.HasPrefix(ln, "Exec") {
+				continue
+			}
+			n++
+			v := strings.TrimLeft(strings.SplitN(ln, "=", 2)[1], "-@:+!")
+			if bin := strings.Fields(v)[0]; !allowed[bin] {
+				t.Errorf("%s: %q runs %s, which a minimal host may not have", name, ln, bin)
+			}
+		}
+		if n < 2 {
+			t.Errorf("%s: %d Exec lines", name, n)
 		}
 	}
 }
