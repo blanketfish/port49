@@ -338,6 +338,18 @@ func AdminPolicy(t *testing.T, policyYAML, subject string) string {
 	return strings.Replace(policyYAML, "\ngrants:", "\n"+subject+"\ngrants:", 1)
 }
 
+// WithGrantedSubject adds a subject named name with the given identity, and a grant of role over scope
+// to it, to a policy that holds its subjects as the block before `grants:`: the admin cells revoke and
+// mint as a principal the shipped policy does not name. The compose smoke's policy already holds both.
+func WithGrantedSubject(policyYAML, name, identity, scope, role string) (string, error) {
+	if strings.Count(policyYAML, "\ngrants:\n") != 1 {
+		return "", fmt.Errorf("shapetest: the policy has no single `grants:` line to add %s before", name)
+	}
+	subject := `  - {name: ` + name + `, identity: ["` + identity + `"], username: ` + name + `, token_ttl: 15m}`
+	grant := `  - {subject: ` + name + `, scope: ` + scope + `, roles: [` + role + `]}`
+	return strings.Replace(policyYAML, "\ngrants:\n", "\n"+subject+"\ngrants:\n"+grant+"\n", 1), nil
+}
+
 // AdminNeedsTouch: the operator's POST /v1/tokens/revoke naming principal is
 // answered 401 admin_touch_required with a challenge (the revocation is not
 // made: nothing was signed), and a mint by principal still succeeds after.

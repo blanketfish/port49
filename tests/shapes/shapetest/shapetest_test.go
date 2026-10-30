@@ -79,3 +79,24 @@ func TestAdminRender(t *testing.T) {
 		t.Error("a policy with no grants: line was rendered")
 	}
 }
+
+// A shipped policy names one subject; the admin cells revoke and mint as a second, so the smoke adds
+// that subject and its grant from this one helper rather than hand-copying the lines.
+func TestWithGrantedSubject(t *testing.T) {
+	base := "scopes: [{name: all_devices, match: {}}]\nsubjects:\n  - {name: alice, identity: [\"user:alice@example.com\"], username: alice}\ngrants:\n  - {subject: alice, scope: all_devices, roles: [network_admin]}\nkey_groups: []\n"
+	got, err := WithGrantedSubject(base, "bob", "user:bob@example.com", "all_devices", "network_admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"  - {name: bob, identity: [\"user:bob@example.com\"], username: bob, token_ttl: 15m}\ngrants:\n",
+		"grants:\n  - {subject: bob, scope: all_devices, roles: [network_admin]}\n  - {subject: alice",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the policy lacks %q:\n%s", want, got)
+		}
+	}
+	if _, err := WithGrantedSubject("subjects: []\n", "bob", "user:bob@example.com", "s", "r"); err == nil {
+		t.Error("a policy with no grants: block was accepted")
+	}
+}

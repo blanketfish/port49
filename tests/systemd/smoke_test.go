@@ -340,6 +340,7 @@ func bringUp(t *testing.T) stack {
 	broker = shapetest.AdminBroker(t, broker, rootsRef)
 	policy := must(sdtest.Policy(readHost(t, filepath.Join(shipped, "policy.yaml")), subnet))
 	policy = shapetest.AdminPolicy(t, policy, subject)
+	policy = must(shapetest.WithGrantedSubject(policy, "bob", bob, "all_devices", "network_admin"))
 	b.put("/etc/port49/port49d.yaml", "root:root", "0644", daemon)
 	b.put("/etc/port49/port49-broker.yaml", "root:root", "0644", broker)
 	b.put("/etc/port49/policy.yaml", "root:root", "0644", policy)

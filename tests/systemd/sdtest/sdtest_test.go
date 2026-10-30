@@ -1,6 +1,7 @@
 package sdtest
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -10,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/rhwendt/port49/internal/fence"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/tests/kind/kindtest"
+	"github.com/rhwendt/port49/tests/shapes/shapetest"
 	"gopkg.in/yaml.v3"
 )
 
@@ -791,5 +794,29 @@ func TestTheReloadCellWaitsForTheBrokerAndNamesItsState(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("reloadCell lacks %s", want)
 		}
+	}
+}
+
+// The smoke's policy (the shipped one, rewritten, with the operator and bob added) is a policy port49d
+// loads, and it grants bob: the admin cell mints as bob after an unproved revoke.
+func TestTheSmokesPolicyGrantsBob(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "systemd", "config", "policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Policy(string(body), "172.30.49.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = shapetest.WithGrantedSubject(p, "bob", "user:bob@example.com", "all_devices", "network_admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol, err := policy.Parse([]byte(p), policy.Env{})
+	if err != nil {
+		t.Fatalf("the smoke's policy does not load: %v", err)
+	}
+	if !strings.Contains(fmt.Sprintf("%+v", pol), "bob@example.com") {
+		t.Error("the loaded policy does not name bob")
 	}
 }
