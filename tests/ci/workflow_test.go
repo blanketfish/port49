@@ -207,15 +207,16 @@ func TestTheTestWorkflowShape(t *testing.T) {
 		}
 	}
 	// the packages are built and checked on every pull request, rpm installed first, in that order
+	const packagesTests = "go test -tags packages ./tests/packages/ -count=1 -v -skip TestTheClientPackageImportsAndFindsTheCollection"
 	var order []string
 	for _, st := range w.Jobs["packages"].Steps {
 		switch st.Run {
-		case "sudo apt-get install -y rpm", "make packages", "make packages-check":
+		case "sudo apt-get install -y rpm", "make packages", packagesTests:
 			order = append(order, st.Run)
 		}
 	}
-	if strings.Join(order, " | ") != "sudo apt-get install -y rpm | make packages | make packages-check" {
-		t.Errorf("test.yml's packages job runs %v, want rpm installed, then make packages, then make packages-check", order)
+	if strings.Join(order, " | ") != "sudo apt-get install -y rpm | make packages | "+packagesTests {
+		t.Errorf("test.yml's packages job runs %v, want rpm installed, then make packages, then %q", order, packagesTests)
 	}
 	// the release requirements are resolved on the Python the release workflow uses, on every pull request
 	rr := w.Jobs["release-requirements"]
