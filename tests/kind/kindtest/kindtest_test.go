@@ -187,3 +187,29 @@ func TestUpDeletesAStaleClusterFirstAndAgainAtTheEnd(t *testing.T) {
 		t.Errorf("kind was called as %q, want delete, create, delete", lines)
 	}
 }
+
+func TestPodCommandsCoverEveryPodWithoutReadingSecrets(t *testing.T) {
+	got := PodCommands("port49", []string{"pod/store-roles", "t-broker-0"})
+	want := [][]string{
+		{"-n", "port49", "describe", "pod", "store-roles"},
+		{"-n", "port49", "logs", "--all-containers", "--prefix", "--tail=60", "store-roles"},
+		{"-n", "port49", "describe", "pod", "t-broker-0"},
+		{"-n", "port49", "logs", "--all-containers", "--prefix", "--tail=60", "t-broker-0"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for i := range want {
+		if strings.Join(got[i], " ") != strings.Join(want[i], " ") {
+			t.Errorf("command %d = %v, want %v", i, got[i], want[i])
+		}
+		for _, a := range got[i] {
+			if a == "secret" || a == "secrets" {
+				t.Errorf("command %d reads a Secret", i)
+			}
+		}
+	}
+	if got := PodCommands("x", nil); len(got) != 0 {
+		t.Errorf("no pods, commands %v", got)
+	}
+}

@@ -222,6 +222,30 @@ func DumpNamespaces(all []string) []string {
 	return out
 }
 
+// PodCommands are the kubectl arguments that describe each named pod ("pod/x" or "x") and print the
+// tail of its containers' logs.
+func PodCommands(ns string, pods []string) [][]string {
+	var out [][]string
+	for _, p := range pods {
+		p = strings.TrimPrefix(p, "pod/")
+		out = append(out,
+			[]string{"-n", ns, "describe", "pod", p},
+			[]string{"-n", ns, "logs", "--all-containers", "--prefix", "--tail=60", p})
+	}
+	return out
+}
+
+// PodReport is the pod's description (container state, exit code, reason) and its logs, through
+// the secret filter, for a failure message. It never reads a Secret.
+func (c *Cluster) PodReport(ns, name string) string {
+	var b strings.Builder
+	for _, args := range PodCommands(ns, []string{name}) {
+		out, _ := c.KubectlTry("", args...)
+		fmt.Fprintf(&b, "== %s\n%s\n", strings.Join(args[2:], " "), out)
+	}
+	return Filter(b.String())
+}
+
 // Dump logs, through the secret filter, each namespace's pods, their descriptions and logs. It
 // never reads a Secret, and never the vault namespace.
 func (c *Cluster) Dump(t *testing.T) {
@@ -233,11 +257,11 @@ func (c *Cluster) Dump(t *testing.T) {
 	}
 	var b strings.Builder
 	for _, ns := range DumpNamespaces(strings.Fields(nsOut)) {
-		for _, args := range [][]string{
-			{"-n", ns, "get", "pods", "-o", "wide"},
-			{"-n", ns, "describe", "pods"},
-			{"-n", ns, "logs", "--all-containers", "--prefix", "--tail=60", "-l", "app.kubernetes.io/name"},
-		} {
+		out, _ := c.KubectlTry("", "-n", ns, "get", "pods", "-o", "wide")
+		fmt.Fprintf(&b, "== %s get pods -o wide\n%s\n", ns, out)
+		// every pod, labelled or not: a one-off pod (store-roles, a probe) has no label to select by
+		names, _ := c.KubectlTry("", "-n", ns, "get", "pods", "-o", "name")
+		for _, args := range PodCommands(ns, strings.Fields(names)) {
 			out, _ := c.KubectlTry("", args...)
 			fmt.Fprintf(&b, "== %s\n%s\n", ns+" "+strings.Join(args[2:], " "), out)
 		}
