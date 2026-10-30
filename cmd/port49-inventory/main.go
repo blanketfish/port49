@@ -27,6 +27,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/egress"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
@@ -290,7 +291,7 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	}
 	fmt.Fprintf(stderr, prefix+"API on %s (mutual TLS; %d reader(s), %d syncer(s)), metrics on %s; "+
 		"signing key %s; %d source(s): %s%s\n", ln.Addr(), len(cfg.Readers), len(cfg.Syncers), mln.Addr(),
-		keyfile.Ed25519KeyID(key.Public().(ed25519.PublicKey)), len(sources), strings.Join(names, ", "), webhooks)
+		edkey.Ed25519KeyID(key.Public().(ed25519.PublicKey)), len(sources), strings.Join(names, ", "), webhooks)
 	if onListening != nil {
 		onListening(ln.Addr().String(), mln.Addr().String())
 	}

@@ -15,8 +15,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/keyfile"
 )
 
 // DocumentFormat names the document's shape; Open refuses any other.
@@ -59,8 +59,8 @@ type envelope struct {
 	Signature []byte `json:"signature"`
 }
 
-// KeyIDOf is keyfile.Ed25519KeyID, the name a document gives its key.
-func KeyIDOf(pub ed25519.PublicKey) string { return keyfile.Ed25519KeyID(pub) }
+// KeyIDOf is edkey.Ed25519KeyID, the name a document gives its key.
+func KeyIDOf(pub ed25519.PublicKey) string { return edkey.Ed25519KeyID(pub) }
 
 // Seal is d, signed by key.
 func Seal(d Document, key ed25519.PrivateKey) ([]byte, error) {

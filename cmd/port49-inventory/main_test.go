@@ -31,8 +31,8 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/sot/sottest"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -73,7 +73,7 @@ func newFixture(t *testing.T, keyMode os.FileMode) fixture {
 		t.Fatal(err)
 	}
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	privPEM, _, err := keyfile.EncodeEd25519(priv)
+	privPEM, _, err := edkey.EncodeEd25519(priv)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/edkey"
 )
 
 // loadService is the standing sample (config_test.go) with block appended:
@@ -37,7 +37,7 @@ func loadService(t *testing.T, withFile, withBroker bool, block string) (Config,
 func serviceBlock(t *testing.T) string {
 	t.Helper()
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	_, pubPEM, _ := keyfile.EncodeEd25519(priv)
+	_, pubPEM, _ := edkey.EncodeEd25519(priv)
 	// The fence refuses a directory others could write, and TempDir's mode
 	// follows the umask.
 	dir := t.TempDir()

@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/edkey"
 )
 
 // maxPolicySize and maxInventorySize are port49d's bounds for its two files
@@ -541,7 +541,7 @@ func verifyKeyAt(t *testing.T, dir, name string, perm os.FileMode) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, pubPEM, err := keyfile.EncodeEd25519(priv)
+	_, pubPEM, err := edkey.EncodeEd25519(priv)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/edkey"
 )
 
 // deviceAt is an arista_eos device on TCP at addr, for a document's extra
@@ -128,7 +128,7 @@ func TestACombinedSIGHUPThatRemovesTheSignerAppliesNeither(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, otherPEM, err := keyfile.EncodeEd25519(otherKey)
+	_, otherPEM, err := edkey.EncodeEd25519(otherKey)
 	if err != nil {
 		t.Fatal(err)
 	}

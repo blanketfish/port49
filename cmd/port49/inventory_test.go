@@ -11,6 +11,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -379,11 +380,11 @@ func TestInventoryKeygenWritesAPairOnceAndNamesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub, err := keyfile.ParseEd25519Public(pubPEM, "signing.pub")
+	pub, err := edkey.ParseEd25519Public(pubPEM, "signing.pub")
 	if err != nil || !pub.Equal(priv.Public()) {
 		t.Fatalf("signing.pub: %v", err)
 	}
-	if !strings.Contains(out.String(), keyfile.Ed25519KeyID(pub)) {
+	if !strings.Contains(out.String(), edkey.Ed25519KeyID(pub)) {
 		t.Fatalf("the key id is not printed: %s", out.String())
 	}
 	// Neither output carries the private key (the message is not printed:

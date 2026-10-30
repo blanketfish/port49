@@ -19,8 +19,8 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -320,7 +320,7 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
 		return 1
 	}
-	privPEM, pubPEM, err := keyfile.EncodeEd25519(priv)
+	privPEM, pubPEM, err := edkey.EncodeEd25519(priv)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
 		return 1
@@ -372,7 +372,7 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "port49 inventory keygen: wrote %s (0600: port49-inventory's signing_key_file) and %s "+
 		"(every port49d's inventory.service.verify_key_files); key_id %s\n", filepath.Join(*dir, "signing.key"),
-		filepath.Join(*dir, "signing.pub"), keyfile.Ed25519KeyID(priv.Public().(ed25519.PublicKey)))
+		filepath.Join(*dir, "signing.pub"), edkey.Ed25519KeyID(priv.Public().(ed25519.PublicKey)))
 	return 0
 }
 
@@ -537,7 +537,7 @@ func inventoryExport(args []string, stdout, stderr io.Writer) int {
 		raw, err := os.ReadFile(p)
 		var k ed25519.PublicKey
 		if err == nil {
-			k, err = keyfile.ParseEd25519Public(raw, p)
+			k, err = edkey.ParseEd25519Public(raw, p)
 		}
 		if err != nil {
 			fmt.Fprintln(stderr, "port49 inventory export: --verify-key:", err)

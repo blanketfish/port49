@@ -23,6 +23,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
@@ -140,7 +141,7 @@ func writeServiceFiles(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	privPEM, pubPEM, err := keyfile.EncodeEd25519(priv)
+	privPEM, pubPEM, err := edkey.EncodeEd25519(priv)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -448,7 +448,7 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 // directory only its owner can write.
 func keyPath(t *testing.T, key ed25519.PrivateKey) string {
 	t.Helper()
-	_, pubPEM, err := keyfile.EncodeEd25519(key)
+	_, pubPEM, err := edkey.EncodeEd25519(key)
 	if err != nil {
 		t.Fatal(err)
 	}
