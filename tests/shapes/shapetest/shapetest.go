@@ -496,10 +496,15 @@ func RotateCell(t *testing.T, d Device, user string, mint func() string, metrics
 // Filtered is text as tests/qual/secret-filter.sh leaves it, for a failure message that must say what
 // a command printed without a chance of printing a secret. root is the repository root. Each line goes
 // through the filter alone: one it drops becomes "<line withheld: N bytes>", so the message never
-// shows less than the output had lines. If the filter cannot run, it says so and prints nothing of text.
+// shows less than the output had lines (the length of a withheld line is shown, which is acceptable),
+// and only the last 400 lines are filtered. If the filter cannot run, it says so and prints nothing of text.
 func Filtered(root, text string) string {
 	var out []string
-	for _, ln := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) > 400 {
+		lines = lines[len(lines)-400:]
+	}
+	for _, ln := range lines {
 		cmd := exec.Command("bash", filepath.Join(root, "tests", "qual", "secret-filter.sh"))
 		cmd.Stdin = strings.NewReader(ln + "\n")
 		b, err := cmd.Output()

@@ -68,7 +68,7 @@ walk only while the volume root has gid = fsGroup, perms including 0770, and set
 directory 2770 and its files 0660, and the fence refuses the directory. So the root init, before the
 process starts: sets the root to root:65532 3770 (setgid for the kubelet's test, sticky so the fence
 excuses a group-writable ancestor, fence_linux.go:403-405) and makes the data directory with an
-explicit chmod (BusyBox install -d leaves an existing one alone); it refuses a data directory that is
+explicit chmod (BusyBox install -d -m 0700 does repair an existing directory's mode, measured in the pinned alpine; the chmod makes that explicit, and chmod g-s drops the setgid the walk adds); it refuses a data directory that is
 a symlink (65532 may rename its own entry in the sticky root) and uses chown -h. It touches inodes only (the root,
 the directory), never descends, so it needs CHOWN, FOWNER and FSETID and nothing else: all three are
 in Pod Security baseline's list, DAC_READ_SEARCH (what a descent into a 0700 directory it does not

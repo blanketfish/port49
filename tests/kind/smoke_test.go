@@ -499,6 +499,10 @@ func (s *smoke) cellFSGroupRed() {
 		s.c.WaitReady(ns, brokerPod, 4*time.Minute)
 		log, _ = s.c.KubectlTry("", "-n", ns, "logs", brokerPod)
 		if kindtest.IssuerWalked.MatchString(log) && !kindtest.IssuerIssuing.MatchString(log) {
+			// The reason, not only the line: the key is 0660, as the walk leaves it.
+			if err := s.statOn("data-"+brokerPod, "/v/state/issuing-ca.key")[0].Want("660", 65532, 65532); err != nil {
+				t.Fatalf("the broker refused the key, but not for the walk's mode: %v", err)
+			}
 			t.Logf("RED as expected: the 2755 root's walk leaves issuing-ca.key unusable (generation %d after the copy)", gen)
 			return
 		}

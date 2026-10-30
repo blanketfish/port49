@@ -98,7 +98,9 @@ This section applies when issuance is on: a person signs in at your identity pro
 issues a short-lived certificate. It is off by default, because it needs your provider: install with
 `-f examples/values-issuance.yaml` (the provider, client and domain replaced) so that
 `broker.identity.issuance` is set; `init-issuer` refuses a broker without it. A broker that takes
-certificates and tokens only has no issuing CA and skips this section.
+certificates and tokens only has no issuing CA and skips this section. The values replace the chart's
+`humans` list: keep the `x509` entry in it if people still sign in with client certificates, or the
+broker stops accepting them (its start line names the verifiers it loaded).
 
 Every broker must hold the same issuing CA, or it refuses to start against the store's record of it.
 After the first install run, once:
