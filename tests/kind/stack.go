@@ -193,20 +193,30 @@ func (s *smoke) applyExample(rel string, repl map[string]string) {
 // examples/etcd/etcd-init-job.yaml.
 func (s *smoke) applyRoles() {
 	s.t.Helper()
+	// Both components' configs name /etc/port49/etcd/tls.crt, because each pod mounts its own Secret
+	// there. store-roles reads both certificates' CNs, so its pod mounts the broker's Secret apart
+	// and reads a copy of the broker's config that names it.
+	brokerCfg := s.c.Kubectl("-n", ns, "get", "configmap", "t-broker", "-o", `jsonpath={.data.port49-broker\.yaml}`)
+	forRoles, err := brokerConfigForRoles(brokerCfg)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.c.Kubectl("-n", ns, "create", "configmap", "store-roles-broker", "--from-file=port49-broker.yaml="+s.writeTemp("store-roles-broker.yaml", forRoles, 0o600))
 	pod := `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"store-roles"},"spec":{"restartPolicy":"Never",
 "securityContext":{"runAsUser":65532,"runAsGroup":65532,"fsGroup":65532},
 "containers":[{"name":"x","image":"port49:dev","imagePullPolicy":"Never","command":["/usr/local/bin/port49d"],
 "args":["store-roles","--config","/etc/port49/config/port49d.yaml","--broker-config","/etc/port49/broker-config/port49-broker.yaml"],
-"volumeMounts":[{"name":"d","mountPath":"/etc/port49/config"},{"name":"b","mountPath":"/etc/port49/broker-config"},
+"volumeMounts":[{"name":"d","mountPath":"/etc/port49/config"},{"name":"b","mountPath":"/etc/port49/broker-config"},{"name":"eb","mountPath":"/etc/port49/etcd-broker"},
 {"name":"enc","mountPath":"/etc/port49/secrets"},{"name":"ca","mountPath":"/etc/port49/etcd-ca"},
 {"name":"ep","mountPath":"/etc/port49/etcd"},{"name":"tls","mountPath":"/etc/port49/broker"},{"name":"att","mountPath":"/etc/port49/attestation"},
 {"name":"keys","mountPath":"/run/port49/keys"}]}],
-"volumes":[{"name":"d","configMap":{"name":"t-port49d"}},{"name":"b","configMap":{"name":"t-broker"}},
+"volumes":[{"name":"d","configMap":{"name":"t-port49d"}},{"name":"b","configMap":{"name":"store-roles-broker"}},{"name":"eb","secret":{"secretName":"port49-etcd-broker","defaultMode":288}},
 {"name":"enc","secret":{"secretName":"port49-encryption","defaultMode":288}},{"name":"ca","secret":{"secretName":"port49-etcd-ca","defaultMode":288}},
 {"name":"ep","secret":{"secretName":"port49-etcd-port49d","defaultMode":288}},{"name":"tls","secret":{"secretName":"port49-broker-tls","defaultMode":288}},
 {"name":"att","configMap":{"name":"port49-attestation"}},{"name":"keys","secret":{"secretName":"port49-device-keys","defaultMode":288}}]}}`
 	s.t.Cleanup(func() {
 		s.c.KubectlTry("", "-n", ns, "delete", "pod", "store-roles", "--ignore-not-found", "--wait=false")
+		s.c.KubectlTry("", "-n", ns, "delete", "configmap", "store-roles-broker", "--ignore-not-found")
 	})
 	if _, err := s.c.KubectlTry(pod, "-n", ns, "apply", "-f", "-"); err != nil {
 		s.t.Fatal(err)
@@ -217,10 +227,20 @@ func (s *smoke) applyRoles() {
 	})
 	roles := s.c.Kubectl("-n", ns, "logs", "store-roles")
 	if p, _ := s.c.Pod(ns, "store-roles"); p.Phase != "Succeeded" || !strings.Contains(roles, "etcdctl") {
-		s.t.Fatalf("store-roles did not produce etcdctl commands (phase %s)", p.Phase)
+		s.t.Fatalf("store-roles did not produce etcdctl commands (phase %s)\n%s", p.Phase, s.c.PodReport(ns, "store-roles"))
 	}
 	s.c.Kubectl("-n", ns, "create", "configmap", "port49-etcd-roles", "--from-file=roles.sh="+s.writeTemp("roles.sh", roles, 0o600))
 	s.applyExample("examples/etcd/etcd-init-job.yaml", nil)
+}
+
+// brokerConfigForRoles is the broker's config with its etcd client files named in the directory
+// where store-roles' pod mounts the broker's own Secret.
+func brokerConfigForRoles(cfg string) (string, error) {
+	const from, to = "/etc/port49/etcd/", "/etc/port49/etcd-broker/"
+	if !strings.Contains(cfg, from+"tls.crt") {
+		return "", fmt.Errorf("the broker's config names no client certificate under %s", from)
+	}
+	return strings.ReplaceAll(cfg, from, to), nil
 }
 
 // target is where a device reaches the port49d pod: its node's container address and the NodePort,

@@ -271,3 +271,14 @@ func TestBringUpReadsTheKindNetworkAfterTheClusterIsUp(t *testing.T) {
 		}
 	}
 }
+
+// store-roles refuses two components with one CN, and both rendered configs name the same client
+// certificate path: the bring-up's pod must read the broker's config with its own Secret's path.
+func TestStoreRolesReadsTheBrokersOwnCertificate(t *testing.T) {
+	src := read(t, "tests", "kind", "stack.go")
+	for _, want := range []string{`{"name":"eb","mountPath":"/etc/port49/etcd-broker"}`, `"secretName":"port49-etcd-broker"`, `"name":"store-roles-broker"`, "s.c.PodReport(ns, \"store-roles\")"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("stack.go lacks %s", want)
+		}
+	}
+}

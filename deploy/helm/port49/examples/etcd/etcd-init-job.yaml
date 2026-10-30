@@ -6,6 +6,11 @@
 #   port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml > roles.sh
 #   kubectl -n port49-etcd create configmap port49-etcd-roles --from-file=roles.sh
 #
+# Both configs name /etc/port49/etcd/tls.crt, because each pod mounts its own Secret there, and
+# store-roles refuses two components with one certificate CN. Run it with the broker's config
+# naming the broker's own certificate (its etcd cert_file and key_file in another directory, where
+# you have put port49-etcd-broker's tls.crt and tls.key).
+#
 # Secret `port49-etcd-root` holds etcd's root client certificate (ca.crt tls.crt tls.key). UNVERIFIED
 # until Task 11's kind smoke runs it: the etcd image has no shell, so this Job runs alpine and
 # installs etcdctl from the distribution (needs egress to the package mirror: replace it with an
