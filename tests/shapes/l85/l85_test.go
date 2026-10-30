@@ -216,3 +216,22 @@ func TestAStuckRouterReportsItsLogAndItsDaemonsFile(t *testing.T) {
 		t.Errorf("an empty log and file are said to be empty: %q", got)
 	}
 }
+
+func TestAStoppedSessionWithNoEndIsStillOpenNotUnreadable(t *testing.T) {
+	s, err := ParseStoppedSession("ok 0\nok 1\nok 2\n", true)
+	if err != nil || s != (SessionStats{Logins: 3, End: OpenEnd}) {
+		t.Errorf("%+v %v", s, err)
+	}
+	if s, err := ParseStoppedSession("", true); err != nil || s.End != OpenEnd || s.Logins != 0 {
+		t.Errorf("%+v %v", s, err)
+	}
+	if s, err := ParseStoppedSession("ok 0\nend 5 closed\n", true); err != nil || s.End != "closed" {
+		t.Errorf("an ended session read as %+v %v", s, err)
+	}
+	if _, err := ParseStoppedSession("ok 0\n", false); err == nil {
+		t.Error("no end line, no cancel, was accepted")
+	}
+	if _, err := ParseStoppedSession("ok 0\nweird\n", true); err == nil {
+		t.Error("garbage was accepted")
+	}
+}

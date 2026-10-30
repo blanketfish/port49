@@ -313,8 +313,8 @@ func (r *l85Run) client(container string, args ...string) (string, error) {
 }
 
 // background starts the client and returns a function that stops it and returns what it printed. A
-// last line cut off by the stop is dropped.
-func (r *l85Run) background(container string, args ...string) func() string {
+// last line cut off by the stop is dropped; the second result says the harness had to cancel it.
+func (r *l85Run) background(container string, args ...string) func() (string, bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", container, "/l85client"}, args...)...)
 	cmd.Stdin = strings.NewReader(r.creds())
@@ -327,10 +327,12 @@ func (r *l85Run) background(container string, args ...string) func() string {
 	}
 	done := make(chan struct{})
 	go func() { cmd.Wait(); close(done) }()
-	return func() string {
+	return func() (string, bool) {
+		cancelled := false
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
+			cancelled = true
 			cancel()
 			<-done
 		}
@@ -338,9 +340,9 @@ func (r *l85Run) background(container string, args ...string) func() string {
 		defer mu.Unlock()
 		s := out.String()
 		if i := strings.LastIndex(s, "\n"); i >= 0 {
-			return s[:i+1]
+			return s[:i+1], cancelled
 		}
-		return ""
+		return "", cancelled
 	}
 }
 
@@ -444,7 +446,7 @@ func (r *l85Run) cellC(t *testing.T, cell *l82.Cell) {
 		t.Fatalf("t-port49d-0 has no node: %v", err)
 	}
 	addr := l85VIP + ":49"
-	var stops []func() string
+	var stops []func() (string, bool)
 	for i := 0; i < 4; i++ {
 		stops = append(stops, r.background(l85Client, "session", "-addr", addr, "-for", "75s"))
 	}
@@ -475,7 +477,8 @@ func (r *l85Run) cellC(t *testing.T, cell *l82.Cell) {
 
 	ended := map[string]int{}
 	for _, stop := range stops {
-		s, err := l85.ParseSession(stop())
+		out, cancelled := stop()
+		s, err := l85.ParseStoppedSession(out, cancelled)
 		if err != nil {
 			l82Row(cell, "a single-connection session", "output not understood")
 			continue
@@ -490,7 +493,8 @@ func (r *l85Run) cellC(t *testing.T, cell *l82.Cell) {
 	for _, k := range keys {
 		l82Row(cell, "single-connection sessions (4 started) that ended", fmt.Sprintf("%d: %s", ended[k], k))
 	}
-	if ls, err := l85.ParseLoop(loop()); err == nil {
+	loopOut, _ := loop()
+	if ls, err := l85.ParseLoop(loopOut); err == nil {
 		l82Row(cell, "per-transaction logins in the same window", fmt.Sprintf("%d: %d passed first, %d on the retry, %d failed past it", ls.Seconds, ls.PassFirst, ls.PassOnRetry, ls.FailedPastRetry))
 	}
 	cell.Verdict = l85.JudgeWithdrawal(w)
@@ -510,7 +514,8 @@ func (r *l85Run) cellD(t *testing.T, cell *l82.Cell) {
 	r.settle(t, 3*time.Minute)
 	time.Sleep(10 * time.Second)
 	took := time.Since(t0)
-	ls, err := l85.ParseLoop(stop())
+	stopOut, _ := stop()
+	ls, err := l85.ParseLoop(stopOut)
 	if err != nil {
 		t.Fatalf("the device client's output: %v", err)
 	}

@@ -191,6 +191,31 @@ func ParseSession(out string) (SessionStats, error) {
 	return s, nil
 }
 
+// OpenEnd is the End of a session still running when the harness stopped it.
+const OpenEnd = "still open"
+
+// ParseStoppedSession is ParseSession for a session the harness may have cancelled: output with no
+// end line, cancelled by the harness, is a session that never ended on its own, still open after its
+// logins. That is the good outcome on the pod that survives, not output to refuse (lab run
+// 41142675001). Without a cancel the missing end line is still an error.
+func ParseStoppedSession(out string, cancelled bool) (SessionStats, error) {
+	if s, err := ParseSession(out); err == nil || !cancelled {
+		return s, err
+	}
+	var s SessionStats
+	for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
+		if ln == "" {
+			continue
+		}
+		if m := sessRe.FindStringSubmatch(ln); m == nil || m[2] == "" {
+			return s, fmt.Errorf("l85: the cancelled session's output is outside its vocabulary")
+		}
+		s.Logins++
+	}
+	s.End = OpenEnd
+	return s, nil
+}
+
 // FRRDaemons is the router's /etc/frr/daemons: zebra to install routes, bgpd to peer with MetalLB's
 // speakers, staticd and vtysh. The FRR image ships bgpd=no, and without this file every BGP command
 // answers "bgpd is not running" for ever.
