@@ -358,6 +358,10 @@ reclaimPolicy: Delete
 			t.Fatalf("KeysFrom returned and the Secret port49-device-keys does not exist: %v", err)
 		}
 	}
+	// The directory the password sign-in needs: no LDAP server answers (the smoke signs in with
+	// certificates), so the bind password is a placeholder file; the enrollment export needs the
+	// verifier configured, not the directory reachable.
+	s.secretFrom("port49-directory", map[string]string{"bind-password": s.writeTemp("bind-password", "not-a-real-password\n", 0o600)})
 	s.secretFrom("port49-encryption", map[string]string{"encryption.key": s.pkiFile("secrets/port49d-encryption.key")})
 	s.secretFrom("port49-broker-tls", map[string]string{"tls.crt": filepath.Join(brokerDir, testpki.LabServerCert),
 		"tls.key": filepath.Join(brokerDir, testpki.LabServerKey), "ca.crt": filepath.Join(brokerDir, testpki.LabCA)})
@@ -404,6 +408,7 @@ keys: {existingSecret: port49-device-keys}
 encryption: {id: c1, existingSecret: port49-encryption}
 broker:
   tls: {existingSecret: port49-broker-tls}
+  directory: {keytabSecret: port49-directory}
   attestationRootsConfigMap: port49-attestation
   state: {storageClassName: `+scName+`}
 port49d:
@@ -418,11 +423,19 @@ config:
   broker:
     broker:
       certificate_status: {disabled: true}
+      directory:
+        servers: [{uri: "ldaps://ldap.smoke.example:636"}]
+        ca_file: /etc/port49/broker/ca.crt
+        base_dn: dc=smoke,dc=example
+        bind: {mechanism: simple, bind_dn: "cn=port49,dc=smoke,dc=example", password_secret_ref: "file:/etc/port49/directory/bind-password"}
+        certificate_mapping: {kind: issuer_serial}
+        nested_groups: direct
       identity:
         humans:
           - {type: x509, trust_anchor_file: /etc/port49/broker/ca.crt}
           - {type: oidc, issuer: https://idp.smoke.example, client_id: port49-cli, principal_claim: email,
              principal_domains: [example.com]}
+          - {type: directory_password, second_factor: totp, principal_domains: [pw.example]}
         issuance: {}
         machines:
           - {type: k8s, cluster: kind, issuer: https://kubernetes.default.svc.cluster.local,

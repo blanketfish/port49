@@ -360,3 +360,20 @@ func TestTheRestartCellRaisesTheHeldLevelBeforeTheRestart(t *testing.T) {
 		t.Errorf("cellRestart must make the session authorization (Permits with no words) before it deletes the pods (%d, %d)", auth, del)
 	}
 }
+
+// The backups cell exports the enrollments, which exist only with a directory_password verifier, its
+// directory and the bind password's file, and only once init-enrollments made the store (run
+// 41142675052: the export's first run failed). tests/helm pins that these values load.
+func TestTheStackHoldsAnEnrollmentStoreToExport(t *testing.T) {
+	stack := read(t, "tests", "kind", "stack.go")
+	for _, want := range []string{"type: directory_password", "keytabSecret: port49-directory", "password_secret_ref:", `"port49-directory"`} {
+		if !strings.Contains(stack, want) {
+			t.Errorf("tests/kind/stack.go lacks %q", want)
+		}
+	}
+	cell := read(t, "tests", "kind", "smoke_test.go")
+	i := strings.Index(cell, "func (s *smoke) cellBackups")
+	if init, bk := strings.Index(cell[i:], `"init-enrollments"`), strings.Index(cell[i:], "s.backup(b.cron"); i < 0 || init < 0 || init > bk {
+		t.Error("cellBackups must run init-enrollments before the first export")
+	}
+}

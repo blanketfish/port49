@@ -281,6 +281,10 @@ spec:
   storageClassName: ` + scName + `
   resources: {requests: {storage: 1Gi}}
 `)
+	// The enrollment store exists only once init-enrollments has made it; the export of a store that
+	// was never made is refused ("lost"), which the CronJob would show as a failed first run.
+	s.c.Kubectl("-n", ns, "exec", "t-broker-0", "-c", "port49-broker", "--", "/usr/local/bin/port49-broker",
+		"init-enrollments", "--config", "/etc/port49/config/port49-broker.yaml")
 	chart := s.chart
 	s.c.Apply(s.example(filepath.Join(chart, "examples", "backup-cronjob.yaml")))
 	// The enrollments export is the chart's own CronJob (backup.enrollments), from the same volumes template.
