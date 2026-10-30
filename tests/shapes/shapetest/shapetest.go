@@ -494,14 +494,23 @@ func RotateCell(t *testing.T, d Device, user string, mint func() string, metrics
 }
 
 // Filtered is text as tests/qual/secret-filter.sh leaves it, for a failure message that must say what
-// a command printed without a chance of printing a secret. root is the repository root. If the filter
-// cannot run, it says so and prints nothing of text.
+// a command printed without a chance of printing a secret. root is the repository root. Each line goes
+// through the filter alone: one it drops becomes "<line withheld: N bytes>", so the message never
+// shows less than the output had lines. If the filter cannot run, it says so and prints nothing of text.
 func Filtered(root, text string) string {
-	cmd := exec.Command("bash", filepath.Join(root, "tests", "qual", "secret-filter.sh"))
-	cmd.Stdin = strings.NewReader(text)
-	out, err := cmd.Output()
-	if err != nil {
-		return "(output withheld: the secret filter did not run)"
+	var out []string
+	for _, ln := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		cmd := exec.Command("bash", filepath.Join(root, "tests", "qual", "secret-filter.sh"))
+		cmd.Stdin = strings.NewReader(ln + "\n")
+		b, err := cmd.Output()
+		switch {
+		case err != nil:
+			return "(output withheld: the secret filter did not run)"
+		case strings.TrimSpace(string(b)) == "" && strings.TrimSpace(ln) != "":
+			out = append(out, fmt.Sprintf("<line withheld: %d bytes>", len(ln)))
+		default:
+			out = append(out, strings.TrimRight(string(b), "\n"))
+		}
 	}
-	return string(out)
+	return strings.Join(out, "\n") + "\n"
 }

@@ -147,3 +147,28 @@ func TestAnOfflineRevokeAsAnotherUserSaysTheOwnerNotTheKeyFile(t *testing.T) {
 		}
 	}
 }
+
+// The owner check does not wait for the whole config to load: a config LoadBroker refuses (here an
+// unknown key, as a file or secret another user owns would make it fail) still gets the owner hint
+// from a non-owner, since the line to run it as the owner is the answer whatever else is wrong
+// (systemd smoke on e733e298).
+func TestAnOfflineRevokeAsAnotherUserSaysTheOwnerWhateverElseIsWrongWithTheConfig(t *testing.T) {
+	for _, extra := range [][]string{nil, {"--lift"}} {
+		f := splitFleet(t)
+		asAnotherUser(t, f)
+		body, err := os.ReadFile(f.broker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f.broker, append(body, "a_key_no_one_knows: 1\n"...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var rout, rerr bytes.Buffer
+		args := append([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"}, extra...)
+		code := offlineRevoke(args, &rout, &rerr)
+		say := rerr.String()
+		if code != 1 || !strings.Contains(say, "run it as the user that owns") || !strings.Contains(say, "do not chown the directory") {
+			t.Fatalf("%v: exit %d, want 1 with the owner hint:\n%s", extra, code, say)
+		}
+	}
+}

@@ -31,6 +31,8 @@ import (
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
 	"github.com/rhwendt/port49/internal/store/placement"
+
+	"gopkg.in/yaml.v3"
 )
 
 // offlineSay begins each line of port49-broker revoke --offline.
@@ -109,8 +111,8 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	// knowable here; an I/O failure of the copy is not, and keeps its write-anyway rule (final review
 	// 7e-2 I-2). --list writes nothing, so any user may run it and it keeps to the store alone.
 	if !f.list {
-		if cfg, err := config.LoadBroker(*cfgPath); err == nil {
-			if err := ownStateDir(cfg.Broker.StateDir); err != nil {
+		if dir, ok := offlineStateDirOf(*cfgPath); ok {
+			if err := ownStateDir(dir); err != nil {
 				var wo *wrongOwnerError
 				if errors.As(err, &wo) {
 					what := "revoked"
@@ -243,6 +245,27 @@ var offlineOwnerName = func(uid uint32) string {
 		return u.Username
 	}
 	return ""
+}
+
+// offlineStateDirOf is broker.state_dir as the config file names it, read without the checks
+// config.LoadBroker makes: the owner check must not wait for a whole config to load, since a config
+// that fails for another reason (a file or a key the owner holds, as root cannot read it) would
+// otherwise hide the one line that tells root to run the command as the owner. ok is false when the
+// file does not read or names no directory; the load then says what is wrong.
+func offlineStateDirOf(cfgPath string) (string, bool) {
+	raw, err := config.ReadRegular(cfgPath, config.MaxConfigSize)
+	if err != nil {
+		return "", false
+	}
+	var c struct {
+		Broker struct {
+			StateDir string `yaml:"state_dir"`
+		} `yaml:"broker"`
+	}
+	if yaml.Unmarshal(raw, &c) != nil || !filepath.IsAbs(c.Broker.StateDir) {
+		return "", false
+	}
+	return c.Broker.StateDir, true
 }
 
 // offlineOwnerHint is the refusal of a state path another user owns, in the

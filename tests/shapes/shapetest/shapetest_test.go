@@ -107,8 +107,12 @@ func TestFilteredDropsASecretAndKeepsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := Filtered(root, "nothing was revoked: run it as the owner\npassword = hunter2\n")
-	if !strings.Contains(got, "nothing was revoked") || strings.Contains(got, "hunter2") {
+	got := Filtered(root, "nothing was revoked: run it as the owner\npassword = hunter2\nlast line\n")
+	if !strings.Contains(got, "nothing was revoked") || strings.Contains(got, "hunter2") || !strings.Contains(got, "last line") {
 		t.Fatalf("got %q", got)
+	}
+	// A line the filter drops is said to be withheld, with its length: a failure never shows nothing.
+	if !strings.Contains(got, "<line withheld: 18 bytes>") {
+		t.Fatalf("the dropped line is not accounted for: %q", got)
 	}
 }
