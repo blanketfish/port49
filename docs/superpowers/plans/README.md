@@ -350,6 +350,7 @@ It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-
 spec, two code, two CI, seven artifact-and-smoke, four lab, one docs; decision 54, rulings 1–14, written by its Task 1). It builds
 the systemd, container and Kubernetes shapes as peers, each with a CI smoke test, plus the tag-only release (packages, image,
 chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite warning, and lab rows L82–L85.
+**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: TODO(L82), TODO(L83), TODO(L85), TODO(L86).
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7583,7 +7584,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
   - **Spec:** decision 54 (its Task 1); §10, and §12's "A key secret rewritten in place"; design §13.
   - **Lab:** opens L82 (Secret volumes and External Secrets on kind), L83 (Vault Agent and the CSI driver), L84
     (`LoadCredential=` and Compose `secrets:`) and L85 (MetalLB anycast), and runs each. L39 (b) and (c) stay 12c's.
-  - Status: **written 2026-10-27**, revised the same day after its pre-flight (C1, I1–I14 and M1–M15 applied; the `.rpm` Python library (pip-only) ruled by the lead, Ryan may override; the release environments' tag restrictions are open for Ryan); amended 2026-10-27 for Ryan's ruling that every admin operation goes over the broker API with a security key press, the admin sockets removed and no socket flag on any command (Tasks 3a–3h, lab row L86); twenty-five tasks.
+  - Status: **written 2026-10-27**, revised the same day after its pre-flight (C1, I1–I14 and M1–M15 applied; the `.rpm` Python library (pip-only) ruled by the lead, Ryan may override; the release environments' tag restrictions are open for Ryan); amended 2026-10-27 for Ryan's ruling that every admin operation goes over the broker API with a security key press, the admin sockets removed and no socket flag on any command (Tasks 3a–3h, lab row L86); twenty-five tasks; **executed** (Plan 12b — As built, below).
 - **12c — Reference configurations, alarms and lab rows.**
   - **Builds:**
     - the per-platform reference AAA configurations (L73's TLS ones included);
@@ -7593,6 +7594,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
     - the Junos `idle-timeout` per role (pending a ruling);
     - load validation at the §5 rate and the items sized from it.
   - Inventory themes C, D and F. Written after 12b merges.
+  - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, and whatever L83, L84 or L85 left FAIL. TODO(L83) TODO(L85)
 
 Carried here from plan 1's review:
 
@@ -7980,6 +7982,133 @@ These are the notes the pull request body carries. Each is true of the code as b
   `port49_connections_max`, sustained.
 - **Plan 13.** The `secret_ref` reference page with `key_secret_refs`; key rotation as policy edits, and the 30 s retry while a file is
   rendered; the issuer record's three refusals at 3am; the shedding lines.
+
+### Plan 12b — As built
+
+Executed 2026-10-27 to 2026-10-30 on `feature/12b-deployment-release` (draft PR #36). Twenty-five tasks: one spec, two code, the admin-over-API
+amendment (3a–3h), two CI, seven artifact-and-smoke, four lab, one docs. Every task was reviewed (Opus for security, CI and release tasks, Sonnet
+for mechanical ones) and every finding closed before the next task began. **Not yet recorded here, pending the CI runs: the lab states of L82, L83,
+L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted until its results note and spec §15 row exist.
+
+#### Commits per task
+
+- **Task 1, spec** (decision 54; the rewrite warning; rows L82–L85): `8fb1e43c`, minors `21d4566d`.
+- **Task 2, the in-place rewrite warning:** `ab34d61d`; review fix `a6106161` (the said-state is keyed on reference and version, so a
+  rewritten-then-removed file is still reported).
+- **Task 3, flake hit 8:** `d850e7fe` (waits on the witness follower's hook, not a sleep); minors `c644dc8d`.
+- **Task 3a, spec for admin calls over the API:** `fa557c3a`, `90de133d`, `d50022bb`.
+- **Task 3b, the admin proof:** `89bc8b7d`; review `b1dfbce2`, `19bf4b98` (every gated form needs a touch; a record's `why` is a fixed word).
+- **Task 3c, the admin endpoints and rights:** `fb43dffe`, `11b39814`; fixes `2f79b326`, `fce1b3dd`, `e399400a`, `5c1d511d`, `d1eacb7d`.
+- **Task 3d, the agent and the CLI:** `a94cb5d5`, `a6a1432d`, `c58c17f5`, `3a0251dd` (`port49 revoke --sid`), `db810105`, `050391fd`, `caf26b00`.
+- **Task 3e, the sockets removed:** `bb167345`, `a2ee8a14`; fixes `534c8530`, `a2b2547e`, `c5c57174`, `67952016`.
+- **Task 3f, `keys-diagnose` from a capture:** `0bdf1236`; fixes `568fbc2a`, `3a3964c8`, `0ba75b17`, `ecd0fdf5`, `0b305179`.
+- **Task 3h, no socket flag:** `d97c52c6`, `af334af3`; test flakes found on the way `fa995a02`, `cf8289c5`.
+- **Task 3g, the L86 harness and runbook** (written for Ryan's run; no hardware touched by an agent): `8da1cb18`, `2e455159`, `93311ef0`,
+  `dc561615`, `76afa2b7`, `4059e2c7`, `cddd60ba`.
+- **Task 4, CI:** `f65f6b25`, `1cef7d3c`.
+- **Task 5, the image:** `d8500531`, `9536ab7f`, `7dde9a5a`.
+- **Task 6, compose:** `4a142e9e`, `b03815bb`, `95e78e59`, `ed7bbfaf`, `3b37c6e6`, `80b8cf31`, `b0d189b6`, `ab5b58c6`.
+- **Task 7, systemd:** `747ea754`; fixes `37cacc46`, `3635aafc`, `2327579b`, `e2cd286f`, `e2eea048`, `e6ab6d1b`, `8c429236`, `67744964`, `f57e9496`.
+- **Task 8, packages:** `4dae81ed`, `50f7da3e`, `c55a133e`, `c80f0910`, `d7817e36`, `98dcfb83`.
+- **Task 9, the systemd smoke:** `21910f24`, `2b043296`, `602ead90`, `418cb82b`, `c5454929`, `7c7fb811`, `55b822fd`.
+- **Task 10, the chart:** `27594859`, `743b03cd`, `e94d36bb`, `e855d2cd`, `c3c04251`, `92c24d8e`, `a9d1acde`, `2a6eb7c8`, `b8efc92d`,
+  `aad1208b`, `a037d8ed`, `1b0a31c5`; the data-dir init split `7a297200`.
+- **Task 11, the kind smoke:** `31f28c39`, `2dfbc8dd`, `f0615a3b`, `04b963db`.
+- **Task 12, the release workflow:** `70ccc381`, `c680f3c0`, `e2f3c92f`, `6c3f128e`, `add6a936`; requirements `ffe0150f`.
+- **Task 13, L82 harness:** `bd8a7cc6`, `bd861121`, `e1de5e08`, `706e9f16`, `0d23c118`.
+- **Task 14, L83 harness:** `7ca3f75f`, `cc9a30cd`.
+- **Task 15, L84:** `d6544a36`, `f53663e5`.
+- **Task 16, L85 harness:** `92a08df5`, `915c7e8b`, `354eafab`.
+- **CI-found fixes after the PR opened:** the systemd smoke ran an L84 lab test unanchored (`23e8c1f2`) and its `put` made no parent directory
+  (`add3edb7`); the kind smoke read the kind network before the cluster existed (`b6237982`); the fence's wording for a group-writable `/etc`
+  (`b8476520`); the feed's echo evicted a cache entry already at that revision (`ad518234`); the cluster key set tests raced a save
+  (`2a3df2c3`); the one-off `store-roles` pod saw the same certificate for both components (`ff90afef`, `ac85a274`); `ExecReload` used
+  `/bin/kill`, absent from `debian:trixie-slim` (`c8847d06`, `22995eb8`); the chart's root init added `DAC_READ_SEARCH`, which Pod Security
+  `baseline` refuses, so no pod was created (`714e8c64` documented `privileged`; the lead refused that weakening; `7a297200` split the init).
+
+#### What changed in review
+
+- **The admin sockets were removed** (Ryan, 2026-10-27): every admin-level operation goes over the broker API with a security key press bound to
+  the request; no command has a socket flag; break-glass is `port49-broker revoke --offline` as the file's owner with the brokers stopped.
+  A root-run offline revoke wrote root-owned files a non-root daemon could not open, so the offline forms refuse any uid but the owner and the
+  message names `sudo -u`.
+- **The chart's PVC root.** Dropping the group-write bit (`5e88550c`) makes the kubelet's `OnRootMismatch` walk every later mount, which makes
+  `state/` group-writable and the fence refuse it. The root is `root:65532 3770` (setgid so the kubelet skips, sticky so the fence excuses it),
+  the data directory is repaired at every start, and a test carries the kubelet's rule from `volume_linux.go`. **PSA:** the repair first needed
+  `DAC_READ_SEARCH`, outside `baseline`'s list; it is now two init containers (root: `CHOWN`, `FOWNER`, `FSETID`, inodes only; 65532: no
+  capability, the recursive `chmod`, a loud stop naming the `chown -R 65532:65532` command on a foreign-owned file).
+- **CI-found, none visible to local tests:** package modes took the builder's umask (explicit directory entries, `file_info` modes); the rpm
+  owned no directories; the feed echo evicted a cache entry and a hung store answered `store_unavailable`; `/bin/kill`; the store-roles
+  certificates; `put` without a parent directory; the unanchored smoke.
+- **Keys:** the sealing key stays raw 32 bytes (a base64 cut to 24 characters was refused as a weakening); the key recipes never overwrite
+  (rotation with the same recipe would have destroyed the old key) and never use a fixed `/tmp` name.
+- **Release:** every publisher waits on a job proving the tag is on `main`; goreleaser, image and chart run in a `release` environment with a
+  reviewer; only three jobs hold `id-token`.
+- **Smokes** run with named capabilities, never `--privileged`, and refuse on a host with a TPM or a Yubico key unless the hosted-runner job sets
+  `PORT49_SMOKE_ON_KEY_HOST=1`; a static test forbids the override anywhere else.
+- **Test flakes classified:** a product bug (the feed echo), a test bug (`floorIn`'s substring match), a helper that did not wait for a save.
+
+#### Carried forward
+
+- **TODO(L82):** Secret volumes and External Secrets on kind. Harness written; state to be filled from the `lab-l82` artifact.
+- **TODO(L83):** Vault Agent and the Secrets Store CSI driver. Harness written; state to be filled from the `lab-l83` artifact. The injector
+  variant needs `automountServiceAccountToken: true`; the chart's default stays `false` and the caveat belongs in the L83 note only.
+- **TODO(L85):** MetalLB anycast. Harness written. The chart's `externalTrafficPolicy: Local` anycast option is added only if all four cells
+  PASS; otherwise commit `docs: record lab register entry L85 (MetalLB anycast not offered)`.
+- **TODO(L86):** an admin call's touch on a real YubiKey. Harness and runbook written; Ryan's run is on the SER8 (planned 2026-10-31).
+- **L84** is partial: Compose `secrets:` measured (long and short syntax PASS; a new secret needs `up -d`); `LoadCredential=` runs in CI.
+- The detached JWKS fetch may save after `Run` returns (`identity.go:155`). Benign: the file is public, written atomically and owner-only. For the
+  pre-beta review.
+- Parked for plan 13: every binary prints its version; a `healthcheck` subcommand (the image has no shell).
+- Regression lab run: cells re-driven through the API (l67, l69, l74, l75, revoke, api_revoke, split) still need one run before merge.
+- `requirements-release.txt` and the `.rpm` Python library (pip-only, the lead's ruling) stay as ruled. Ryan's one-time release setup is open (below).
+
+#### Operator notes (for the pull request body)
+
+- **Three shapes, peers.** systemd (`make packages`, `make systemd-smoke`), container/compose (`make image`, `make compose-smoke`), Kubernetes
+  (`deploy/helm/port49`, `make helm-test`, `make kind-smoke`). The smokes refuse on a host with a TPM or a Yubico key; they run in CI.
+- **Where secrets live.** systemd: files under `/etc/port49/`, owner root or the service user, no
+  world bit. Compose: files placed once by `setup.sh` and mounted; adding a new `secrets:` entry needs `up -d`. Kubernetes: a Secret mounted whole
+  (never `subPath`), `defaultMode 0440`, `fsGroup 65532`; the External Secrets example writes one file per key version.
+- **The rewrite warning.** A held key file rewritten in place is reported at once (`port49_key_secret_files_changed`, a log line per change)
+  and the reload is never refused. Add a version by writing a new file; never edit one in place.
+- **`ProtectSystem=true`**, not `strict` or `full`: the fence checks `/etc`'s mode, and a mount namespace that hides it would pass a host the
+  fence would refuse.
+- **Two users:** `port49d` and `port49-broker`, made by `sysusers.d`; directories by `tmpfiles.d`. The units set `StartLimitIntervalSec=0`
+  (a boot with etcd down must not end in a dead unit) and `LimitNOFILE=65536`; `ExecReload` is `sh -c 'kill -HUP "$MAINPID"'`.
+- **Admin calls go over the broker API with a key press.** Rights: `revoke_others`, and the admin-level rights each route names. One agent
+  per user. Break-glass per shape: `sudo -u port49-broker port49-broker revoke --offline` (systemd; as root it refuses and names that line), `docker compose run --rm --no-deps port49-broker revoke --offline` (compose), `scripts/revoke-offline.sh` (Kubernetes: scales the brokers to 0, runs it on the PVC). **3am order:** another admin first, then offline.
+- **Packages:** `port49-server` and `port49` conflict; binaries are 0755 root-owned with no setuid, setgid or file capability; directories 0755;
+  the client's `/etc/port49/config.yaml` is a `noreplace` conffile; the `.rpm` leaves the Python library to `pip install port49`.
+- **`copy-issuer.sh <ns> <release> --from <n> --to <m>`** copies the issuing CA between brokers; it refuses to overwrite a different CA and
+  names both fingerprints. Never run `init-issuer` twice.
+- **Release artifacts** (tag `vX.Y.Z` on `main` only): packages and a multi-arch image (GHCR), the chart, PyPI `port49`, Galaxy `port49`,
+  with provenance. **One version:** the tag equals `pyproject.toml`, `galaxy.yml` and `Chart.yaml`'s `version` and `appVersion`
+  (`versioncheck` on every PR and at the tag).
+- **CI jobs:** `test` (vet, rest, port49d in three shards, race, root, versions, release requirements, packages), `systemd`, `compose`, `kind`,
+  `hwkeys`, `python`, `qual`, `leaks`, `lab-free`, and the label-gated `lab-kind` (`l82`, `l83`, `l85`).
+- **The chart runs in a `baseline` namespace.** The kind smoke labels its namespace `enforce=baseline`.
+- **Unmeasured:** the kind smoke's two-generation fsGroup cell against a real kubelet until its CI run; TODO(L82), TODO(L83), TODO(L85),
+  TODO(L86).
+
+#### Hand-offs
+
+- **12c:**
+  - an alarm on `port49_key_secret_files_changed > 0` for 10m;
+  - L39 (b), with Task 11's login cell as its first evidence;
+  - the reference configurations; load;
+  - **the Oxidized `secure: true` follow-up** (plan 9d carry): measure Oxidized's host-key options against accept-new, and change
+    `examples/oxidized` or say why not;
+  - **a Velero example** for the chart's PVCs, with a measurement behind it (pre-flight M10);
+  - whatever L83, L84 or L85 left FAIL that a later platform change might reopen. TODO(L83) TODO(L85)
+- **Plan 13:** install pages from each README, the "When it will not start" tables, and the `encryption:` rotation runbook; `--version` and
+  `healthcheck`.
+- **Ryan:**
+  - ruled: admin over the API with a key press (2026-10-27); smokes CI-only (2026-10-30); maintainer `port49 maintainers
+    <port49@blanketfish.com>`; the `.rpm` library is pip-only (the lead's ruling, Ryan may override);
+  - still open: the one-time release setup (PyPI trusted publisher, the `galaxy` and `release` environments, tag restrictions, the `v*` tag
+    ruleset, public GHCR at go-public); no automated admin call (offboarding goes through the identity provider's back-channel logout);
+    the L86 run.
 
 ## Plan 13 — User and admin documentation
 
