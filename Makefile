@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -456,6 +456,19 @@ packages: bin/goreleaser-$(GORELEASER_VERSION)
 # Never run locally; make packages is the local build.
 release-packages: bin/goreleaser-$(GORELEASER_VERSION)
 	bin/goreleaser-$(GORELEASER_VERSION) release --clean
+
+# packaging/requirements-release.txt, from the .in beside it, with hashes (plan 12b, Task 12). pip-tools
+# runs from a throwaway venv under bin/ at an exact version; the .txt is never hand-edited. Its header
+# records the Python that compiled it (3.14 here; the release workflow installs with 3.12). The pins of
+# build and ansible-core carry no marker that differs between the two; a bump that adds a marker-gated
+# dependency must be compiled with the workflow's Python.
+PIP_TOOLS_VERSION ?= 7.5.0
+requirements-release:
+	python3 -m venv bin/piptools-venv
+	bin/piptools-venv/bin/pip install --disable-pip-version-check pip-tools==$(PIP_TOOLS_VERSION)
+	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-release.txt packaging/requirements-release.in
+
 
 # The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the
 # one get.helm.sh's .sha256sum and the GitHub release both give). UNVERIFIED: this target has not
