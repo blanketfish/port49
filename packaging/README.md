@@ -4,8 +4,8 @@
 `make packages` builds them into `dist/` from a sha256-pinned GoReleaser; it publishes nothing.
 `make packages-check` then runs `tests/packages`, which fails (never skips) when `dist/` is empty.
 
-Status: the configuration and the tests are written; GoReleaser has not been run against them,
-so every file here that feeds `dist/` is unverified until the first `make packages`.
+Status: `make packages` has built the snapshot and `make packages-check` passes on the debs and rpms
+(2026-10-30). The release workflow itself, signing and publishing have not run.
 
 ## Two packages
 

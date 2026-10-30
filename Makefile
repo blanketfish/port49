@@ -432,8 +432,9 @@ bin/gitleaks-$(GITLEAKS_VERSION):
 	mv bin/gitleaks bin/gitleaks-$(GITLEAKS_VERSION)
 	rm bin/gitleaks.tar.gz
 
-# Release packages (plan 12b, Task 8). GoReleaser is pinned by sha256 like gitleaks. UNVERIFIED:
-# this target and the pinned digest have not been run; the first `make packages` is the check.
+# Release packages (plan 12b, Task 8). GoReleaser is pinned by sha256 like gitleaks. Run on
+# 2026-10-30: the digest checked and `make packages` built the snapshot, and `make packages-check` passes
+# on the debs and rpms (the client-package import test, which installs with pip, was not run).
 # `make packages` builds dist/ locally and publishes and signs nothing (--snapshot
 # --skip=publish,sign): signing belongs to the release workflow.
 # `make packages-check` then runs tests/packages, which fails, never skips, when dist/ is empty.
@@ -471,8 +472,8 @@ requirements-release:
 
 
 # The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the
-# one get.helm.sh's .sha256sum and the GitHub release both give). UNVERIFIED: this target has not
-# been run; the first `make helm-test` is the check. tests/helm's helm-tagged files fail, never
+# one get.helm.sh's .sha256sum and the GitHub release both give). Run on
+# 2026-10-30: the digest checked and the helm-tagged tests pass against helm 3.22.0. tests/helm's helm-tagged files fail, never
 # skip, when bin/helm-$(HELM_VERSION) is absent; `make test` never builds them.
 HELM_VERSION ?= 3.22.0
 HELM_SHA256_LINUX_AMD64 = 1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
