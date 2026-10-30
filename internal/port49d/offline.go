@@ -102,6 +102,27 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	cfgPath, principal, issuer, serial, lift := &f.cfgPath, &f.principal, &f.issuer, &f.serial, &f.lift
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// A user who does not own broker.state_dir is refused before anything is opened or written: the
+	// etcd client key is the owner's too, so opening it first would tell root to chown a key, the
+	// opposite of the hint; and the copy this ends by writing is refused anyway, so a revoke that stands
+	// in the store while the command says it could not finish is half a revoke at 3am. Only the owner is
+	// knowable here; an I/O failure of the copy is not, and keeps its write-anyway rule (final review
+	// 7e-2 I-2). --list writes nothing, so any user may run it and it keeps to the store alone.
+	if !f.list {
+		if cfg, err := config.LoadBroker(*cfgPath); err == nil {
+			if err := ownStateDir(cfg.Broker.StateDir); err != nil {
+				var wo *wrongOwnerError
+				if errors.As(err, &wo) {
+					what := "revoked"
+					if *lift {
+						what = "lifted"
+					}
+					fmt.Fprintf(out, "%snothing was %s: %v\n", offlineSay, what, offlineOwnerHint(wo))
+					return 1
+				}
+			}
+		}
+	}
 	run, err := offlineBroker(ctx, *cfgPath, log, out)
 	if err != nil {
 		fmt.Fprintf(out, "%s%v; nothing was revoked; with no broker host, write the mark as etcd's root under rv/, "+
@@ -112,21 +133,6 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	brk := run.brk
 	if f.list {
 		return offlineList(ctx, brk.Store, offlineSay, out)
-	}
-	// A user who does not own broker.state_dir is refused before anything is written: the copy it
-	// would end by writing is refused anyway, and a revoke that stands in the store while the
-	// command says it could not finish is half a revoke at 3am. Only the owner is knowable here;
-	// an I/O failure of the copy is not, and keeps its write-anyway rule (final review 7e-2 I-2).
-	if err := ownStateDir(run.stateDir); err != nil {
-		var wo *wrongOwnerError
-		if errors.As(err, &wo) {
-			what := "revoked"
-			if *lift {
-				what = "lifted"
-			}
-			fmt.Fprintf(out, "%snothing was %s: %v\n", offlineSay, what, offlineOwnerHint(wo))
-			return 1
-		}
 	}
 	// Who ran it, as the API's origin names its caller (spec §5.7).
 	req := broker.RevokeRequest{Principal: *principal, Issuer: *issuer, Serial: *serial,

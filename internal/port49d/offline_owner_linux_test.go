@@ -122,3 +122,28 @@ func TestAWrongOwnerIsReportedBeforeABadMode(t *testing.T) {
 		t.Fatalf("a directory another user owns, with a bad mode, was reported as %v, want a wrong owner", err)
 	}
 }
+
+// A user who does not own broker.state_dir gets the owner hint and nothing else, even when the etcd
+// client key is port49-broker's too: root at 3am must not be told to chown the key before it is told to
+// run as the owner (the key is the owner's, so the key refusal only follows from the same mistake).
+func TestAnOfflineRevokeAsAnotherUserSaysTheOwnerNotTheKeyFile(t *testing.T) {
+	for _, extra := range [][]string{nil, {"--lift"}} {
+		f := splitFleet(t)
+		asAnotherUser(t, f)
+		other := fence.FileOwner
+		fence.FileOwner = func(fi fs.FileInfo) (uint32, bool) {
+			if strings.HasSuffix(fi.Name(), "-key.pem") {
+				return uint32(os.Geteuid()) + 1, true
+			}
+			return other(fi)
+		}
+		var rout, rerr bytes.Buffer
+		args := append([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"}, extra...)
+		code := offlineRevoke(args, &rout, &rerr)
+		say := rerr.String()
+		if code != 1 || !strings.Contains(say, "run it as the user that owns") || strings.Contains(say, "chown it") ||
+			strings.Contains(say, "-key.pem") {
+			t.Fatalf("%v: exit %d, want 1 with the owner hint and no key-file refusal:\n%s", extra, code, say)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package shapetest
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -98,5 +99,16 @@ func TestWithGrantedSubject(t *testing.T) {
 	}
 	if _, err := WithGrantedSubject("subjects: []\n", "bob", "user:bob@example.com", "s", "r"); err == nil {
 		t.Error("a policy with no grants: block was accepted")
+	}
+}
+
+func TestFilteredDropsASecretAndKeepsTheRest(t *testing.T) {
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Filtered(root, "nothing was revoked: run it as the owner\npassword = hunter2\n")
+	if !strings.Contains(got, "nothing was revoked") || strings.Contains(got, "hunter2") {
+		t.Fatalf("got %q", got)
 	}
 }

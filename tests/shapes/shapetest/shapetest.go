@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -490,4 +491,17 @@ func RotateCell(t *testing.T, d Device, user string, mint func() string, metrics
 	if g := Gauge(t, metricsAddr, "port49_key_secret_files_changed"); g != 0 {
 		t.Fatalf("port49_key_secret_files_changed is %v after the rotation, want 0: a new version is a new file", g)
 	}
+}
+
+// Filtered is text as tests/qual/secret-filter.sh leaves it, for a failure message that must say what
+// a command printed without a chance of printing a secret. root is the repository root. If the filter
+// cannot run, it says so and prints nothing of text.
+func Filtered(root, text string) string {
+	cmd := exec.Command("bash", filepath.Join(root, "tests", "qual", "secret-filter.sh"))
+	cmd.Stdin = strings.NewReader(text)
+	out, err := cmd.Output()
+	if err != nil {
+		return "(output withheld: the secret filter did not run)"
+	}
+	return string(out)
 }

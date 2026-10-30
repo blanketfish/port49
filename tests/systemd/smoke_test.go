@@ -512,7 +512,8 @@ func TestSystemdSmoke(t *testing.T) {
 				"do not chown the directory",
 			} {
 				if err == nil || !strings.Contains(out, want) {
-					t.Fatalf("`port49-broker revoke --offline` as root must refuse with %q (err %v)", want, err)
+					t.Fatalf("`port49-broker revoke --offline` as root must refuse with %q (err %v), and printed:\n%s",
+						want, err, shapetest.Filtered(u.root, out))
 				}
 			}
 			if listed := b.sh("sudo -u port49-broker port49-broker revoke --offline --list"); strings.Contains(listed, bob) {
