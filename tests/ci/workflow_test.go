@@ -206,6 +206,17 @@ func TestTheTestWorkflowShape(t *testing.T) {
 			t.Errorf("test.yml lacks %q", want)
 		}
 	}
+	// the packages are built and checked on every pull request, rpm installed first, in that order
+	var order []string
+	for _, st := range w.Jobs["packages"].Steps {
+		switch st.Run {
+		case "sudo apt-get install -y rpm", "make packages", "make packages-check":
+			order = append(order, st.Run)
+		}
+	}
+	if strings.Join(order, " | ") != "sudo apt-get install -y rpm | make packages | make packages-check" {
+		t.Errorf("test.yml's packages job runs %v, want rpm installed, then make packages, then make packages-check", order)
+	}
 	// the release requirements are resolved on the Python the release workflow uses, on every pull request
 	rr := w.Jobs["release-requirements"]
 	const hashInstall = "pip install --dry-run --require-hashes -r packaging/requirements-release.txt"
