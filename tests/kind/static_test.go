@@ -251,6 +251,47 @@ func TestL83TargetPinsTheChartsAndDeletesTheCluster(t *testing.T) {
 	}
 }
 
+// L85's target pins the chart by sha256, runs its one test by an anchored name and removes the
+// cluster, the two containers and the network it makes, by their fixed names, after go test. Its
+// test file pins FRR by digest, never reads a Secret and never prints the device's key or a token.
+func TestL85TargetPinsTheChartAndCleansUp(t *testing.T) {
+	mk := read(t, "Makefile")
+	if !regexp.MustCompile(`(?m)^METALLB_CHART_SHA256 = [0-9a-f]{64}$`).MatchString(mk) {
+		t.Error("METALLB_CHART_SHA256 is not a 64 hex digit pin")
+	}
+	if r := recipe(t, "bin/metallb-$(METALLB_VERSION).tgz"); !strings.Contains(r, `echo "$(METALLB_CHART_SHA256)  bin/metallb.dl" | sha256sum -c -`) {
+		t.Errorf("the chart is not checked against its pin before it is moved into place:\n%s", r)
+	}
+	r := recipe(t, "lab-l85")
+	goTest := strings.Index(r, "go test -tags lab")
+	for _, after := range []string{"delete cluster --name port49l85", "docker rm -f port49l85-frr port49l85-client", "docker network rm port49l85dev"} {
+		if i := strings.Index(r, after); goTest < 0 || i < goTest {
+			t.Errorf("lab-l85 does not run %q after go test:\n%s", after, r)
+		}
+	}
+	if !strings.Contains(r, "|| rc=$$?") || !strings.Contains(r, "exit $$rc") || !strings.Contains(r, "-run '^TestL85$$'") ||
+		!strings.Contains(r, "docker build --target setup -t port49-setup:dev .") || !strings.Contains(r, "bin/metallb-$(METALLB_VERSION).tgz") {
+		t.Errorf("lab-l85 keeps no exit status, is not anchored, builds no setup image or lacks the chart:\n%s", r)
+	}
+	src := read(t, "tests", "lab", "l85_test.go")
+	if !regexp.MustCompile(`quay\.io/frrouting/frr:[0-9.]+@sha256:[0-9a-f]{64}`).MatchString(src) {
+		t.Error("l85_test.go does not pin FRR's image by digest")
+	}
+	for _, bad := range []string{"--from-literal", `"get", "secret"`, "get secret", "-o yaml", "labOccupyForRun", "labGuardAt", "docker inspect", "--privileged"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("l85_test.go contains %q", bad)
+		}
+	}
+	for i, ln := range strings.Split(src, "\n") {
+		if regexp.MustCompile(`(Logf|Errorf|Fatalf|Printf|Println|Sprintf)\(.*\b(r\.key|r\.creds\(\)|r\.mint\(\))`).MatchString(ln) {
+			t.Errorf("l85_test.go:%d prints the key or a token: %s", i+1, ln)
+		}
+	}
+	if !strings.Contains(src, "shapetest.RefuseOnKeyHost(t)") {
+		t.Error("l85_test.go does not refuse on a key host before it makes a container")
+	}
+}
+
 // On a fresh runner the docker network named kind does not exist until kind creates the cluster:
 // bringUp reads it only after kindtest.Up, and nothing uses the subnet or gateway before that.
 func TestBringUpReadsTheKindNetworkAfterTheClusterIsUp(t *testing.T) {
@@ -260,7 +301,7 @@ func TestBringUpReadsTheKindNetworkAfterTheClusterIsUp(t *testing.T) {
 		t.Fatal("no bringUp")
 	}
 	body := src[i:]
-	up := strings.Index(body, "kindtest.Up(")
+	up := strings.Index(body, "kindtest.UpWith(")
 	net := strings.Index(body, "dockerKindNetwork(t)")
 	if up < 0 || net < 0 || net < up {
 		t.Errorf("bringUp reads the kind network (at %d) before kindtest.Up (at %d)", net, up)

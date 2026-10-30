@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -614,6 +614,29 @@ lab-l83: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  VAULT_CHART_VERSION=$(VAULT_VERSION) CSI_CHART_VERSION=$(CSI_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l83 \
 	  go test -tags lab ./tests/lab/ -run '^TestL83$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l83; exit $$rc
+
+# Lab entry L85 (plan 12b, Task 16): MetalLB in BGP mode as an anycast address for port49d, on kind
+# with an FRR router, in CI only like L82. The chart is pinned by sha256 and FRR's image by digest
+# (tests/lab/l85_test.go). The test makes a docker network and two containers by fixed names, which
+# are removed afterwards whatever the result, as is the cluster.
+METALLB_VERSION ?= 0.16.1
+METALLB_CHART_SHA256 = fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc
+
+bin/metallb-$(METALLB_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/metallb.dl https://github.com/metallb/metallb/releases/download/metallb-chart-$(METALLB_VERSION)/metallb-$(METALLB_VERSION).tgz
+	echo "$(METALLB_CHART_SHA256)  bin/metallb.dl" | sha256sum -c -
+	mv bin/metallb.dl bin/metallb-$(METALLB_VERSION).tgz
+
+lab-l85: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/metallb-$(METALLB_VERSION).tgz
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l85
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) METALLB_CHART=$(CURDIR)/bin/metallb-$(METALLB_VERSION).tgz \
+	  METALLB_CHART_VERSION=$(METALLB_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l85 \
+	  go test -tags lab ./tests/lab/ -run '^TestL85$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l85; \
+	  docker rm -f port49l85-frr port49l85-client >/dev/null 2>&1; docker network rm port49l85dev >/dev/null 2>&1; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
