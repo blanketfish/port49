@@ -14,6 +14,12 @@ initImage: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f
 port49d:
   replicas: 2
   resources: {}
+  # How long a terminating pod keeps serving before port49d closes its listeners (a preStop sleep), so
+  # the route to it is withdrawn first (L85 measured 6.6 s for MetalLB BGP; kube-proxy and cloud load
+  # balancers take about as long). Needs Kubernetes 1.30 or later; 0 turns it off. The grace period
+  # must be at least this plus 30, the longest drain.
+  preStopSeconds: 15
+  terminationGracePeriodSeconds: 60
   # The accounting spool: one PVC per replica. A scale-down retains it (README).
   spool: {size: 1Gi, storageClassName: ""}
 

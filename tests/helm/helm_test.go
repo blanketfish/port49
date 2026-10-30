@@ -87,3 +87,14 @@ func TestTheSchemaRefusesWhatTheChartCannotRun(t *testing.T) {
 		t.Errorf("no values at all: helm template succeeded\n%s", out)
 	}
 }
+
+func TestAGracePeriodShorterThanThePreStopAndTheDrainIsRefused(t *testing.T) {
+	vals := baseValues(t, "port49d: {preStopSeconds: 40, terminationGracePeriodSeconds: 60}\n")
+	_, out, err := helmTemplate(t, vals...)
+	if err == nil || !strings.Contains(out, "terminationGracePeriodSeconds 60 must be at least port49d.preStopSeconds 40 plus 30") {
+		t.Errorf("a grace period that cannot hold the sleep and the drain was rendered: %v\n%s", err, out)
+	}
+	if _, out, err := helmTemplate(t, baseValues(t, "port49d: {preStopSeconds: 30, terminationGracePeriodSeconds: 60}\n")...); err != nil {
+		t.Errorf("the boundary (30 + 30) is refused: %v\n%s", err, out)
+	}
+}

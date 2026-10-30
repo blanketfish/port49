@@ -26,7 +26,14 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-port49d
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 60
+      # The preStop sleep runs first, then port49d's own drain (up to 25 s: 5 s of listener
+      # shutdown and 20 s for the accounting spool), all inside this period.
+      {{- $pre := int .Values.port49d.preStopSeconds }}
+      {{- $grace := int .Values.port49d.terminationGracePeriodSeconds }}
+      {{- if lt $grace (add $pre 30) }}
+      {{- fail (printf "port49d.terminationGracePeriodSeconds %d must be at least port49d.preStopSeconds %d plus 30 (port49d's drain takes up to 25 s)" $grace $pre) }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ $grace }}
       securityContext:
         runAsUser: 65532
         runAsGroup: 65532
@@ -54,6 +61,15 @@ spec:
             {{- end }}
             - {name: metrics, containerPort: 9049}
           {{- include "port49.probes" . | nindent 10 }}
+          {{- if gt $pre 0 }}
+          # Keep serving while the route to this pod is withdrawn: the endpoint stops being ready at the
+          # pod's deletion, and a load balancer or router (MetalLB's BGP, 6.6 s measured in L85) takes
+          # seconds to follow. The image has no shell, so this is the kubelet's own sleep action
+          # (Kubernetes 1.30 or later; set port49d.preStopSeconds to 0 on an older cluster).
+          lifecycle:
+            preStop:
+              sleep: {seconds: {{ $pre }}}
+          {{- end }}
           securityContext:
             {{- include "port49.containerSecurity" . | nindent 12 }}
           {{- with .Values.port49d.resources }}

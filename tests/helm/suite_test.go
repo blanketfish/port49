@@ -830,6 +830,38 @@ config:
 	}
 }
 
+// port49d keeps serving through the route's withdrawal: a preStop sleep, in every Service mode, and a
+// grace period above it plus the drain (L85 d: a login failed past its retry because the listener
+// closed at SIGTERM, seconds before MetalLB withdrew the route). The image has no shell, so the hook is
+// the kubelet's own sleep action.
+func checkPreStop(t *testing.T, r renderer) {
+	for name, extra := range map[string]string{
+		"default":   "",
+		"clusterip": "service: {type: ClusterIP}\n",
+		"nodeport":  "service: {type: NodePort}\n",
+		"lb-local":  "service: {type: LoadBalancer, externalTrafficPolicy: Local}\n",
+	} {
+		p := pod(one(t, render(t, r, extra), "StatefulSet", "t-port49d"))
+		if got := str(at(p, "containers", 0, "lifecycle", "preStop", "sleep", "seconds")); got != "15" {
+			t.Errorf("%s: preStop sleep seconds %q, want 15", name, got)
+		}
+		if got := str(at(p, "terminationGracePeriodSeconds")); got != "60" {
+			t.Errorf("%s: terminationGracePeriodSeconds %q, want 60", name, got)
+		}
+		if exec := at(p, "containers", 0, "lifecycle", "preStop", "exec"); exec != nil {
+			t.Errorf("%s: the preStop hook execs a command in an image with no shell: %v", name, exec)
+		}
+	}
+	p := pod(one(t, render(t, r, "port49d: {preStopSeconds: 20, terminationGracePeriodSeconds: 90}\n"), "StatefulSet", "t-port49d"))
+	if str(at(p, "containers", 0, "lifecycle", "preStop", "sleep", "seconds")) != "20" || str(at(p, "terminationGracePeriodSeconds")) != "90" {
+		t.Errorf("both values are configurable: got %v", at(p, "containers", 0, "lifecycle"))
+	}
+	p = pod(one(t, render(t, r, "port49d: {preStopSeconds: 0}\n"), "StatefulSet", "t-port49d"))
+	if at(p, "containers", 0, "lifecycle") != nil {
+		t.Errorf("preStopSeconds 0 still renders a lifecycle: %v", at(p, "containers", 0, "lifecycle"))
+	}
+}
+
 // checks is every check on the rendered chart, in the plan's order.
 var checks = []struct {
 	name string
@@ -849,6 +881,7 @@ var checks = []struct {
 	{"TestEveryEtcdMemberIsListed", checkEtcdMembers},
 	{"TestTheMultiRegionExampleRenders", checkMultiRegion},
 	{"TestTheIssuanceExampleTurnsOnIssuance", checkIssuanceExample},
+	{"TestPort49dKeepsServingWhileTheRouteIsWithdrawn", checkPreStop},
 	{"TestTheDirectoryPasswordStackLoads", checkDirectoryPasswordStack},
 	{"TestRenderedConfigsLoad", checkConfigsLoad},
 }

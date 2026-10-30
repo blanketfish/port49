@@ -146,6 +146,8 @@ func goRender(t *testing.T, valuesFiles ...string) []doc {
 			}
 			return v, nil
 		},
+		"add":  func(a, b int) int { return a + b },
+		"fail": func(msg string) (string, error) { return "", fmt.Errorf("%s", msg) },
 		"list": func(v ...any) []any { return v },
 		"dict": func(kv ...any) map[string]any {
 			m := map[string]any{}

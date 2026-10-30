@@ -173,6 +173,17 @@ on the strength of it. `tlsListener.enabled` adds port 300 and requires `tlsList
 The pod sets `net.ipv4.ip_unprivileged_port_start` to 0 so the non-root process can bind 49; clusters
 that forbid that sysctl need a different arrangement (not offered here).
 
+A terminating port49d pod keeps serving for `port49d.preStopSeconds` (default 15) before it closes its
+listeners, so the route to it is withdrawn first. Without the wait, a login that a router or load
+balancer still sent to the pod was refused: with MetalLB over BGP the route took 6.6 s to leave the
+router (L85 c, measured on kind), and the first rolling-restart run lost one login of 42 past its
+retry (L85 d). It applies to every `service.type`, because the endpoint leaves the Service at the
+pod's deletion in all of them. The image has no shell, so the wait is the kubelet's own `sleep`
+action, which needs Kubernetes 1.30 or later; on an older cluster set `port49d.preStopSeconds: 0`.
+`port49d.terminationGracePeriodSeconds` (default 60) must be at least the sleep plus 30, port49d's
+longest drain; the chart refuses a smaller value. Whether 15 s closes the L85 d loss is measured in
+the next lab run, not asserted here.
+
 The image is distroless and non-root. The pods meet the Pod Security `baseline` level, and the
 namespace needs no weaker one. The volume setup is two init containers. The first runs as root with
 `CHOWN`, `FOWNER` and `FSETID` only, all in `baseline`'s list: it sets the volume's root and the data
