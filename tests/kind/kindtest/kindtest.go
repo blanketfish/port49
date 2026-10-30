@@ -225,6 +225,20 @@ func DumpNamespaces(all []string) []string {
 	return out
 }
 
+// NamespaceCommands are the kubectl arguments that show why a namespace has the pods it has: its
+// labels (a Pod Security level), its events, its workloads and volume claims, and each StatefulSet and
+// Job described. None reads a Secret.
+func NamespaceCommands(ns string) [][]string {
+	return [][]string{
+		{"get", "namespace", ns, "--show-labels"},
+		{"-n", ns, "get", "pods", "-o", "wide"},
+		{"-n", ns, "get", "events", "--sort-by=.lastTimestamp"},
+		{"-n", ns, "get", "statefulset,job,pvc", "-o", "wide"},
+		{"-n", ns, "describe", "statefulset"},
+		{"-n", ns, "describe", "job"},
+	}
+}
+
 // PodCommands are the kubectl arguments that describe each named pod ("pod/x" or "x") and print the
 // tail of its containers' logs.
 func PodCommands(ns string, pods []string) [][]string {
@@ -260,8 +274,10 @@ func (c *Cluster) Dump(t *testing.T) {
 	}
 	var b strings.Builder
 	for _, ns := range DumpNamespaces(strings.Fields(nsOut)) {
-		out, _ := c.KubectlTry("", "-n", ns, "get", "pods", "-o", "wide")
-		fmt.Fprintf(&b, "== %s get pods -o wide\n%s\n", ns, out)
+		for _, args := range NamespaceCommands(ns) {
+			out, _ := c.KubectlTry("", args...)
+			fmt.Fprintf(&b, "== %s\n%s\n", strings.Join(args, " "), out)
+		}
 		// every pod, labelled or not: a one-off pod (store-roles, a probe) has no label to select by
 		names, _ := c.KubectlTry("", "-n", ns, "get", "pods", "-o", "name")
 		for _, args := range PodCommands(ns, strings.Fields(names)) {

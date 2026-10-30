@@ -213,3 +213,22 @@ func TestPodCommandsCoverEveryPodWithoutReadingSecrets(t *testing.T) {
 		t.Errorf("no pods, commands %v", got)
 	}
 }
+
+func TestNamespaceCommandsShowLabelsEventsAndWorkloadsWithoutSecrets(t *testing.T) {
+	var all []string
+	for _, c := range NamespaceCommands("port49") {
+		all = append(all, strings.Join(c, " "))
+		for _, a := range c {
+			if a == "secret" || a == "secrets" || strings.Contains(a, "secret,") || strings.Contains(a, ",secret") {
+				t.Errorf("%v reads a Secret", c)
+			}
+		}
+	}
+	text := strings.Join(all, "\n")
+	for _, want := range []string{"get namespace port49 --show-labels", "-n port49 get events --sort-by=.lastTimestamp",
+		"-n port49 get statefulset,job,pvc -o wide", "-n port49 describe statefulset", "-n port49 describe job"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the namespace commands lack %q:\n%s", want, text)
+		}
+	}
+}
