@@ -528,7 +528,7 @@ func TestSmokesRefuseOnAKeyHost(t *testing.T) {
 		return string(b)
 	}
 	mk := read("Makefile")
-	for _, target := range []string{"systemd-smoke", "kind-smoke", "kind-smoke-red", "lab-l84-systemd", "lab-l82"} {
+	for _, target := range []string{"systemd-smoke", "kind-smoke", "kind-smoke-red", "lab-l84-systemd", "lab-l82", "lab-l83"} {
 		first := strings.Fields(strings.SplitN(strings.TrimPrefix(strings.SplitN(mk[strings.Index(mk, "\n"+target+":")+1:], "\n", 2)[0], target+":"), "##", 2)[0])
 		if len(first) == 0 || first[0] != "smoke-keyhost" {
 			t.Errorf("%s does not run smoke-keyhost before anything else (prerequisites %v)", target, first)

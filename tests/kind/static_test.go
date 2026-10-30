@@ -193,6 +193,64 @@ func TestL82TargetPinsTheChartAndDeletesTheCluster(t *testing.T) {
 	}
 }
 
+// L83's target pins both charts by sha256, builds the setup image, runs its one test by an anchored
+// name and deletes its cluster after go test. Its test file never reads a Secret, makes Secrets from
+// files only, and hands Vault's root token to nothing but a Secret made from a file and the vault
+// pod's own environment variable.
+func TestL83TargetPinsTheChartsAndDeletesTheCluster(t *testing.T) {
+	mk := read(t, "Makefile")
+	for _, v := range []string{"VAULT_CHART_SHA256", "CSI_CHART_SHA256"} {
+		if !regexp.MustCompile(`(?m)^` + v + ` = [0-9a-f]{64}$`).MatchString(mk) {
+			t.Errorf("%s is not a 64 hex digit pin", v)
+		}
+	}
+	for _, c := range []struct{ target, dl, sum string }{
+		{"bin/vault-$(VAULT_VERSION).tgz", "bin/vault.dl", "$(VAULT_CHART_SHA256)"},
+		{"bin/secrets-store-csi-driver-$(CSI_VERSION).tgz", "bin/csi.dl", "$(CSI_CHART_SHA256)"},
+	} {
+		if r := recipe(t, c.target); !strings.Contains(r, `echo "`+c.sum+`  `+c.dl+`" | sha256sum -c -`) {
+			t.Errorf("%s is not checked against its pin before it is moved into place:\n%s", c.target, r)
+		}
+	}
+	r := recipe(t, "lab-l83")
+	goTest := strings.Index(r, "go test -tags lab")
+	del := strings.Index(r, "delete cluster --name port49l83")
+	if goTest < 0 || del < goTest || !strings.Contains(r, "|| rc=$$?") || !strings.Contains(r, "exit $$rc") {
+		t.Errorf("lab-l83 does not delete the cluster after go test and keep its exit status:\n%s", r)
+	}
+	if !strings.Contains(r, "docker build --target setup -t port49-setup:dev .") || !strings.Contains(r, "-run '^TestL83$$'") {
+		t.Error("lab-l83 does not build the setup image, or does not run its one test by an anchored name")
+	}
+	for _, need := range []string{"bin/vault-$(VAULT_VERSION).tgz", "bin/secrets-store-csi-driver-$(CSI_VERSION).tgz"} {
+		if !strings.Contains(r, need) && !strings.Contains(mk[strings.Index(mk, "\nlab-l83:"):], need) {
+			t.Errorf("lab-l83 does not depend on %s", need)
+		}
+	}
+	src := read(t, "tests", "lab", "l83_test.go")
+	for _, bad := range []string{"--from-literal", "-o yaml", "devRootToken: root", `"get", "secret"`, "get secret", "jsonpath={.data"} {
+		if strings.Contains(src, bad) {
+			t.Errorf("l83_test.go contains %q: a Secret is made from a file and never read, and the root token is random", bad)
+		}
+	}
+	for _, want := range []string{`"--from-file=token="+`, `-dev-root-token-id="$L83_ROOT"`, `secretName: vault-root, secretKey: token`} {
+		if !strings.Contains(src, want) {
+			t.Errorf("l83_test.go lacks %q: the root token is a Secret made from a file, read by the vault pod's own variable", want)
+		}
+	}
+	// the token is made once, from the random helper, and is the only thing the file passes through
+	// `write`; nothing prints or logs it
+	if strings.Count(src, "root") > 0 {
+		for i, ln := range strings.Split(src, "\n") {
+			if strings.Contains(ln, "root") && regexp.MustCompile(`(?i)(Logf|Errorf|Fatalf|Printf|Println|Sprintf)\(.*\broot\b`).MatchString(ln) {
+				t.Errorf("l83_test.go:%d prints the root token: %s", i+1, ln)
+			}
+		}
+	}
+	if strings.Contains(src, "labOccupyForRun") || strings.Contains(src, "labGuardAt") {
+		t.Error("l83_test.go takes the lab lock: there is no shared lab host in CI")
+	}
+}
+
 // On a fresh runner the docker network named kind does not exist until kind creates the cluster:
 // bringUp reads it only after kindtest.Up, and nothing uses the subnet or gateway before that.
 func TestBringUpReadsTheKindNetworkAfterTheClusterIsUp(t *testing.T) {

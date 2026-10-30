@@ -122,8 +122,10 @@ func kindWorkflowProblems(lab, kind []byte, mk string) []string {
 			add("lab-kind.yml job %s: fail-fast is not false, so one cell's failure would cancel the others' evidence", id)
 		}
 		cells := j.Strategy.Matrix.Cell
-		if len(cells) == 0 || !contains(cells, "l82") {
-			add("lab-kind.yml job %s: matrix cells %v lack l82", id, cells)
+		for _, want := range []string{"l82", "l83"} {
+			if !contains(cells, want) {
+				add("lab-kind.yml job %s: matrix cells %v lack %s", id, cells, want)
+			}
 		}
 		var runs, uploads int
 		for _, st := range j.Steps {
@@ -242,7 +244,8 @@ func TestTheKindWorkflowRulesCatchEachMistake(t *testing.T) {
 		{"a self-hosted runner", "lab", "runs-on: ubuntu-24.04", "runs-on: self-hosted", "runs-on"},
 		{"a short timeout", "lab", "timeout-minutes: 60", "timeout-minutes: 40", "timeout-minutes"},
 		{"fail-fast", "lab", "fail-fast: false", "fail-fast: true", "fail-fast"},
-		{"no l82 in the matrix", "lab", "cell: [l82]", "cell: [l83]", "lack l82"},
+		{"no l82 in the matrix", "lab", "cell: [l82, l83]", "cell: [l83]", "lack l82"},
+		{"no l83 in the matrix", "lab", "cell: [l82, l83]", "cell: [l82]", "lack l83"},
 		{"an upload that skips a failed run", "lab", "      - if: always()\n        uses: actions/upload-artifact", "      - uses: actions/upload-artifact", "always()"},
 		{"short retention", "lab", "retention-days: 30", "retention-days: 1", "retention-days"},
 		{"an upload from the wrong directory", "lab", "path: bin/lab-out/${{ matrix.cell }}", "path: bin", "artifact is"},

@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -583,6 +583,37 @@ lab-l82: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  ESO_CHART_VERSION=$(ESO_VERSION) ESO_APP_VERSION=$(ESO_APP_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l82 \
 	  go test -tags lab ./tests/lab/ -run '^TestL82$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l82; exit $$rc
+
+# Lab entry L83 (plan 12b, Task 14): Vault Agent's injector and the Secrets Store CSI driver on kind,
+# in CI only like L82. Both charts are pinned by sha256: the vault chart brings the injector and the
+# Vault CSI provider, and the driver is its own chart. Vault's root token is made by the test at run
+# time and is never in this file, an argument, a log or the artifact.
+VAULT_VERSION ?= 0.34.1
+VAULT_CHART_SHA256 = df4c37fac32496892ff1e1d6fd7954d3a402cc7b1b2b4c2226af11b8a57564c4
+CSI_VERSION ?= 1.6.1
+CSI_CHART_SHA256 = d312041d5334a1e5b0b9fe602a5cdcc1bfe028e0e9a4a8b3a14a24236497e1b6
+
+bin/vault-$(VAULT_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/vault.dl https://helm.releases.hashicorp.com/vault-$(VAULT_VERSION).tgz
+	echo "$(VAULT_CHART_SHA256)  bin/vault.dl" | sha256sum -c -
+	mv bin/vault.dl bin/vault-$(VAULT_VERSION).tgz
+
+bin/secrets-store-csi-driver-$(CSI_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/csi.dl https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts/secrets-store-csi-driver-$(CSI_VERSION).tgz
+	echo "$(CSI_CHART_SHA256)  bin/csi.dl" | sha256sum -c -
+	mv bin/csi.dl bin/secrets-store-csi-driver-$(CSI_VERSION).tgz
+
+lab-l83: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/vault-$(VAULT_VERSION).tgz bin/secrets-store-csi-driver-$(CSI_VERSION).tgz
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l83
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VAULT_CHART=$(CURDIR)/bin/vault-$(VAULT_VERSION).tgz \
+	  CSI_CHART=$(CURDIR)/bin/secrets-store-csi-driver-$(CSI_VERSION).tgz \
+	  VAULT_CHART_VERSION=$(VAULT_VERSION) CSI_CHART_VERSION=$(CSI_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l83 \
+	  go test -tags lab ./tests/lab/ -run '^TestL83$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l83; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
