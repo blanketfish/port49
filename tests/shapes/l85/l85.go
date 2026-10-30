@@ -199,6 +199,25 @@ func FRRDaemons() string {
 		"zebra_options=\"  -A 127.0.0.1 -s 90000000\"\nbgpd_options=\"   -A 127.0.0.1\"\nstaticd_options=\"-A 127.0.0.1\"\n"
 }
 
+// FRRStuck is what the harness prints when the router's vtysh never answers: the last lines of the
+// container's log and the daemons file it ran on, each said to be empty when it is. The caller filters
+// the text through the secret filter first.
+func FRRStuck(log, daemons string) string {
+	const tail = 40
+	lines := strings.Split(strings.TrimRight(log, "\n"), "\n")
+	if len(lines) > tail {
+		lines = lines[len(lines)-tail:]
+	}
+	log = strings.Join(lines, "\n")
+	if strings.TrimSpace(log) == "" {
+		log = "(empty)"
+	}
+	if strings.TrimSpace(daemons) == "" {
+		daemons = "(empty)"
+	}
+	return fmt.Sprintf("FRR's container log, last %d lines:\n%s\nFRR's daemons file:\n%s", tail, log, daemons)
+}
+
 // FRRConfig is the vtysh script for the router: eBGP to every node, ECMP over equal paths.
 func FRRConfig(localAS, peerAS int, nodes []string) string {
 	var b strings.Builder

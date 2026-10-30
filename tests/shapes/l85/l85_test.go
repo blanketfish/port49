@@ -2,6 +2,7 @@ package l85
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +193,26 @@ func TestTheRoutersDaemonsFileStartsBGP(t *testing.T) {
 		if on[d] {
 			t.Errorf("%s is on; only what the lab needs runs", d)
 		}
+	}
+}
+
+// A router that never answers prints what it logged and the daemons file it ran on, the last lines of
+// the log only, so the failure says why and stays short.
+func TestAStuckRouterReportsItsLogAndItsDaemonsFile(t *testing.T) {
+	var log []string
+	for i := 0; i < 100; i++ {
+		log = append(log, fmt.Sprintf("watchfrr line %d", i))
+	}
+	got := FRRStuck(strings.Join(log, "\n"), "bgpd=no\nzebra=yes\n")
+	for _, want := range []string{"container log", "watchfrr line 99", "daemons file", "bgpd=no"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "watchfrr line 10\n") || strings.Contains(got, "watchfrr line 0\n") {
+		t.Errorf("the whole log is printed, not its tail:\n%s", got)
+	}
+	if got := FRRStuck("", ""); !strings.Contains(got, "empty") {
+		t.Errorf("an empty log and file are said to be empty: %q", got)
 	}
 }

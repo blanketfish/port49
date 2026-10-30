@@ -258,10 +258,7 @@ func (r *l85Run) before(cl *kindtest.Cluster, subnet, gateway string) {
 	}
 	sort.Strings(ips)
 	// FRR may still be starting its daemons
-	shapetest.WaitFor(t, "FRR's vtysh", 2*time.Minute, func() bool {
-		_, err := l85Docker(t, "", "exec", l85FRR, "vtysh", "-c", "show bgp summary")
-		return err == nil
-	})
+	l85WaitForFRR(t, 2*time.Minute)
 	if out, err := l85Docker(t, l85.FRRConfig(l85FRRAS, l85MetalLBAS, ips), "exec", "-i", l85FRR, "vtysh"); err != nil {
 		t.Fatalf("configuring FRR: %v\n%s", err, out)
 	}
@@ -281,6 +278,24 @@ func (r *l85Run) before(cl *kindtest.Cluster, subnet, gateway string) {
 			return err == nil
 		})
 	}
+}
+
+// l85WaitForFRR waits for the router's bgpd to answer. On a timeout it fails with the container's log
+// and the daemons file it ran on, through the secret filter, so a router that never comes up says why.
+func l85WaitForFRR(t *testing.T, within time.Duration) {
+	t.Helper()
+	for deadline := time.Now().Add(within); ; time.Sleep(time.Second) {
+		if _, err := l85Docker(t, "", "exec", l85FRR, "vtysh", "-c", "show bgp summary"); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	// docker logs replays the container's stderr on its own stderr, so both streams are read.
+	logs, _ := exec.Command("docker", "logs", "--tail", "200", l85FRR).CombinedOutput()
+	daemons, _ := l85Docker(t, "", "exec", l85FRR, "cat", "/etc/frr/daemons")
+	t.Fatalf("FRR's vtysh did not answer within %v\n%s", within, kindtest.Filter(l85.FRRStuck(string(logs), daemons)))
 }
 
 // client runs the device client in container with the key and a fresh token on stdin.
