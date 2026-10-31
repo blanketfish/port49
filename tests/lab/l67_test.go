@@ -975,10 +975,9 @@ func (x *l67X) startBroker(t *testing.T, opts l67BrokerOpts) {
 	if x.broker != nil {
 		return
 	}
-	x.broker = newL67Broker(t, x.owner, x.dir, opts)
-	if out, code := x.broker.initEnrollments(t); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d, output kept in %s", code, l67Kept("init-enrollments", out))
-	}
+	// init-enrollments first, as an install does: a running broker that found the store missing follows
+	// an offline init only at its next recheck.
+	x.broker = newL67BrokerWith(t, x.owner, x.dir, opts, func(b *l67Broker) { b.mustInitEnrollments(t) })
 	a := x.broker.api(t)
 	x.people = map[string]*l67Person{}
 	for _, n := range []string{"carol", "dave"} {
@@ -1171,12 +1170,12 @@ func (x *l67X) cellG(t *testing.T) {
 	if ans.Status != http.StatusServiceUnavailable || ans.Error != "enrollment_store_lost" || statErr == nil {
 		t.Fatalf("INVALID: before init-enrollments: %d %s, enrollments.json exists %v", ans.Status, ans.Error, statErr == nil)
 	}
-	if out, code := b.initEnrollments(t); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d, output kept in %s", code, l67Kept("init-enrollments", out))
-	}
+	b.mustInitEnrollments(t)
 	if _, err := os.Stat(filepath.Join(b.dir, "enrollments.json")); err != nil {
 		x.fail("g (memory): init-enrollments left no enrollments.json: %v", err)
 	}
+	followed := l67WaitStoreFollowed(t, a, x.wrong(), 90*time.Second)
+	x.row("g. memory, offline init", "the running broker took the new store %s after init-enrollments (its recheck is every 30s)", followed.Round(time.Second))
 	cli := newL67CLI(t, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA))
 	x.endToEnd(t, "memory", cli, l67Device, func() { gate.stop() }, func(string) { b.leakCheck(t, x) })
 }
@@ -1385,6 +1384,9 @@ func (x *l67X) composeHalf(t *testing.T) {
 	}
 	x.row("g. etcd, mint gate", "opened %.0fs after the broker restart (this wait: %.0fs, for the broker's policy: mints open: line)",
 		time.Since(restartedAt).Seconds(), opened.Seconds())
+	// An offline init-enrollments reaches a broker already running at its next recheck (30 s).
+	followed := l67WaitStoreFollowed(t, a, x.wrong(), 90*time.Second)
+	x.row("g. etcd, offline init", "the running broker took the new store %s after init-enrollments (its recheck is every 30s)", followed.Round(time.Second))
 	cli := newL67CLI(t, sliceBrokerURL, brokerCA)
 	x.endToEnd(t, "etcd", cli, l.p.node, func() {
 		if out, err := c.run("stop", "openldap"); err != nil {
@@ -1704,7 +1706,18 @@ func l67Bins(t *testing.T) (port49d, port49 string) {
 // to the directory's test, not to the cell that happened to start it.
 func newL67Broker(t, owner *testing.T, x *labDir, o l67BrokerOpts) *l67Broker {
 	t.Helper()
-	port49d, port49 := l67Bins(t)
+	return newL67BrokerWith(t, owner, x, o, nil)
+}
+
+// l67BinsOf finds the binaries; a unit test builds its own.
+var l67BinsOf = l67Bins
+
+// newL67BrokerWith is newL67Broker with beforeStart run after the files and the CA exist and before the
+// broker starts: the install order for init-enrollments, which a running broker follows only at its
+// next recheck (30 s), not at once.
+func newL67BrokerWith(t, owner *testing.T, x *labDir, o l67BrokerOpts, beforeStart func(*l67Broker)) *l67Broker {
+	t.Helper()
+	port49d, port49 := l67BinsOf(t)
 	dir, err := os.MkdirTemp("", "p49l67")
 	if err != nil {
 		t.Fatal(err)
@@ -1730,6 +1743,9 @@ func newL67Broker(t, owner *testing.T, x *labDir, o l67BrokerOpts) *l67Broker {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("INVALID: port49d %s: %v, output kept in %s", args[0], err, l67Kept(args[0], string(out)))
 		}
+	}
+	if beforeStart != nil {
+		beforeStart(b)
 	}
 	b.start(t)
 	owner.Cleanup(b.stop)
@@ -1828,6 +1844,30 @@ func (b *l67Broker) port49(t *testing.T, args ...string) (string, int) {
 
 // initEnrollments is `port49d init-enrollments` on the broker's config: the
 // local command that creates its sealed enrollment store once.
+func (b *l67Broker) mustInitEnrollments(t *testing.T) {
+	t.Helper()
+	if out, code := b.initEnrollments(t); code != 0 {
+		t.Fatalf("INVALID: init-enrollments: exit %d, output kept in %s", code, l67Kept("init-enrollments", out))
+	}
+}
+
+// l67WaitStoreFollowed polls until the running broker no longer answers enrollment_store_lost for
+// a name the directory does not hold (the store is read before the name is looked up), and returns how long
+// that took. The broker looks again every 30 s while the store is lost; limit is past that.
+func l67WaitStoreFollowed(t *testing.T, a *l67API, wrong string, limit time.Duration) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for {
+		if ans := a.signIn("l67-nobody", wrong, ""); ans.Error != "enrollment_store_lost" {
+			return time.Since(start)
+		}
+		if time.Since(start) > limit {
+			t.Fatalf("INVALID: the broker still answered enrollment_store_lost %s after init-enrollments", limit)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
 func (b *l67Broker) initEnrollments(t *testing.T) (string, int) {
 	t.Helper()
 	cmd := exec.Command(b.bin, "init-enrollments", "--config", b.cfg)

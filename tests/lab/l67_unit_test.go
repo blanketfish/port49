@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -622,5 +623,46 @@ func TestL67KeptWritesThePrivateFileAndQuotesOnlyItsPath(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != raw {
 		t.Errorf("the file does not hold the text")
+	}
+}
+
+// l67UnitBins builds port49d for a test that runs a broker, and points the harness at it.
+func l67UnitBins(t *testing.T) {
+	t.Helper()
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "port49d")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/port49d")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building port49d: %v: %s", err, tailOf(string(out), 400))
+	}
+	prev := l67BinsOf
+	l67BinsOf = func(*testing.T) (string, string) { return bin, "" }
+	t.Cleanup(func() { l67BinsOf = prev })
+}
+
+// A running broker that found its enrollment store missing follows an offline init-enrollments only at
+// its next recheck (30 s). L67 therefore runs init-enrollments before the broker starts; started first,
+// the broker answers enrollment_store_lost to the first sign-ins of every cell.
+func TestL67AnOfflineInitReachesABrokerStartedAfterItNotOneAlreadyRunning(t *testing.T) {
+	t.Setenv("PORT49_LAB_KEY", labKeyDefault)
+	t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
+	l67UnitBins(t)
+	x := l67TestDir(t, platOpenLDAP)
+	answer := func(b *l67Broker) string {
+		return b.api(t).signIn("l67-nobody", "a-wrong-value", "").Error
+	}
+	running := newL67Broker(t, t, x, l67BrokerOpts{})
+	running.mustInitEnrollments(t)
+	if got := answer(running); got != "enrollment_store_lost" {
+		t.Errorf("a broker already running answered %q right after the offline init, want enrollment_store_lost (it rechecks every 30s)", got)
+	}
+	first := newL67BrokerWith(t, t, x, l67BrokerOpts{}, func(b *l67Broker) { b.mustInitEnrollments(t) })
+	if got := answer(first); got == "enrollment_store_lost" {
+		t.Errorf("a broker started after init-enrollments still answered %q", got)
 	}
 }

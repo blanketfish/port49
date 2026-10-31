@@ -150,6 +150,15 @@ type composeStack struct {
 
 // run runs docker compose on the stack's files and records what it ran in
 // compose.log.
+// states is each service's state and exit code, one line each: structured fields only, never a log.
+func (c *composeStack) states() string {
+	out, err := c.run("ps", "-a", "--format", "{{.Service}} {{.State}} {{.ExitCode}}")
+	if err != nil {
+		return "(not read: " + oneLineMax(err.Error(), 100) + ")"
+	}
+	return out
+}
+
 func (c *composeStack) run(args ...string) (string, error) { return c.runIn("", args...) }
 
 // runIn is run with stdin fed to the command.
@@ -489,7 +498,8 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 		deadline := time.Now().Add(3 * time.Minute)
 		for !httpOK("http://" + addr + "/readyz") {
 			if time.Now().After(deadline) {
-				t.Fatalf("%s/readyz not 200 in 3m\ncompose.log (tail):\n%s", addr, c.tail(40))
+				t.Fatalf("%s/readyz not 200 in 3m\nservices (name state exit code, restarts):\n%s\ncompose.log (tail):\n%s", addr,
+					c.states(), c.tail(40))
 			}
 			time.Sleep(time.Second)
 		}
