@@ -371,36 +371,124 @@ func TestACutReadOfAWatchedPinIsSaid(t *testing.T) {
 	}
 }
 
-// Each outage says it again: a directory that answered between two cuts ends the first episode, so the
-// second cut's first read of the same principal is said too (the line is once per principal per
-// episode, not once per process).
-func TestEachCutSaysTheCachedPinAgain(t *testing.T) {
+// The cached-pin line is at most once per principal per 10 minutes: a second cut within the window is
+// silent, and a cut that starts 10 minutes or more after the last line says it again.
+func TestACutTenMinutesAfterTheLastLineSaysTheCachedPinAgain(t *testing.T) {
 	ctx := context.Background()
 	reach := true
 	a, _, _, _, _ := twoRegions(&reach)
+	at := t0
+	a.(*placed).c.Now = func() time.Time { return at }
 	var said []string
 	a.(*placed).c.Say = func(f string, args ...any) { said = append(said, fmt.Sprintf(f, args...)) }
 	if err := a.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	read := func(up bool) {
+	read := func(up bool, after time.Duration) {
 		t.Helper()
+		at = at.Add(after)
 		reach = up
 		if got, err := a.GetMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" {
 			t.Fatalf("read (up %v): %+v %v", up, got, err)
 		}
 	}
-	read(true)
-	read(false)
-	read(false)
+	read(true, 0)
+	read(false, 0)
+	read(false, time.Second)
 	if len(said) != 1 {
 		t.Fatalf("the first cut said %q, want one line", said)
 	}
-	read(true)
-	read(false)
-	read(false)
+	read(true, time.Minute)
+	read(false, time.Minute) // 2 minutes after the line
+	if len(said) != 1 {
+		t.Fatalf("a second cut inside the window said %d lines in all: %q", len(said), said)
+	}
+	read(true, time.Minute)
+	read(false, 10*time.Minute) // past the window
 	if len(said) != 2 {
-		t.Fatalf("after the heal the second cut said %d lines in all, want 2: %q", len(said), said)
+		t.Fatalf("a cut past the window said %d lines in all, want 2: %q", len(said), said)
+	}
+}
+
+// failingMembers is a directory whose pin reads do not answer while its health check passes.
+type failingMembers struct{ Members }
+
+func (failingMembers) GetMembership(context.Context, string) (store.Membership, error) {
+	return store.Membership{}, fmt.Errorf("%w: no answer", store.ErrUnavailable)
+}
+
+// Health up and reads failing is the worst case for the line: every authorization read serves the
+// session's copy, and the line is still once per principal, not once per read.
+func TestReadsThatFailWithTheHealthCheckUpSayTheCachedPinOnce(t *testing.T) {
+	ctx := context.Background()
+	sa, dir := memory.New(clock), memory.New(clock)
+	seed := Wrap(Config{Session: sa, Directory: dir, Members: dir, Marks: store.NewMarks(),
+		CallTimeout: time.Second, BulkTimeout: time.Second})
+	if err := seed.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var said []string
+	a := Wrap(Config{Session: sa, Directory: dir, Members: failingMembers{dir}, Marks: store.NewMarks(),
+		Reachable: func() bool { return true }, CallTimeout: time.Second, BulkTimeout: time.Second,
+		Say: func(f string, args ...any) { said = append(said, fmt.Sprintf(f, args...)) }})
+	for i := 0; i < 5; i++ {
+		if got, err := a.GetMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" {
+			t.Fatalf("read %d: %+v %v", i, got, err)
+		}
+	}
+	if len(said) != 1 {
+		t.Fatalf("5 failing reads said %d lines, want 1: %q", len(said), said)
+	}
+}
+
+// More principals than the old table held, each read twice inside the window: one line each. A table
+// that clears itself when full lifts the window for everyone.
+func TestManyPrincipalsAreEachToldOnceInTheWindow(t *testing.T) {
+	ctx := context.Background()
+	sa, dir := memory.New(clock), memory.New(clock)
+	seed := Wrap(Config{Session: sa, Directory: dir, Members: dir, Marks: store.NewMarks(),
+		CallTimeout: time.Second, BulkTimeout: time.Second})
+	const n = 1100
+	for i := 0; i < n; i++ {
+		m := member("uuid:1", t0)
+		m.Principal = fmt.Sprintf("user:p%d@example.com", i)
+		if err := seed.PutMembership(ctx, m, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	said := 0
+	a := Wrap(Config{Session: sa, Directory: dir, Members: failingMembers{dir}, Marks: store.NewMarks(),
+		Reachable: func() bool { return true }, CallTimeout: time.Second, BulkTimeout: time.Second,
+		Say: func(string, ...any) { said++ }})
+	for round := 0; round < 2; round++ {
+		for i := 0; i < n; i++ {
+			if _, err := a.GetMembership(ctx, fmt.Sprintf("user:p%d@example.com", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if said != n {
+		t.Fatalf("%d principals read twice said %d lines, want %d", n, said, n)
+	}
+}
+
+// A full table prunes what is past the window and evicts its oldest, never clearing whole.
+func TestTheCachedPinTableEvictsTheOldestWhenFull(t *testing.T) {
+	at := t0
+	p := Wrap(Config{Session: memory.New(clock), Say: func(string, ...any) {}, Now: func() time.Time { return at }}).(*placed)
+	for i := 0; i < sayCachedCap; i++ {
+		at = at.Add(time.Millisecond)
+		p.sayCached(fmt.Sprintf("p%d", i))
+	}
+	p.sayCached("one-more")
+	if len(p.said) != sayCachedCap {
+		t.Fatalf("the table holds %d, want %d", len(p.said), sayCachedCap)
+	}
+	if _, ok := p.said["p0"]; ok {
+		t.Fatal("the oldest entry was not the one evicted")
+	}
+	if _, ok := p.said["p1"]; !ok {
+		t.Fatal("an entry inside the window was dropped")
 	}
 }
 

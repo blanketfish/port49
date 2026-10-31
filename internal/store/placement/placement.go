@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -69,10 +68,12 @@ type Config struct {
 	// membership read then serves the session store's copy at once rather
 	// than wait CallTimeout. Nil always tries.
 	Reachable func() bool
-	// Say is told once per principal per cut (at most once per 10 minutes) that a cached pin was
+	// Say is told at most once per principal per 10 minutes that a cached pin was
 	// served, and each pin put back from this region's record; nil says
 	// nothing.
 	Say func(format string, args ...any)
+	// Now is the clock the cached-pin line's window runs on; nil is time.Now.
+	Now func() time.Time
 
 	// Logouts is the process's copy of the directory's logout records, and
 	// LogoutDir where a logout is written (R26). With both nil, logouts stay
@@ -88,8 +89,7 @@ type placed struct {
 	c Config
 
 	mu    sync.Mutex
-	said  map[string]saidAt
-	up    atomic.Uint64 // counts reads that found the directory answering: it ends a cut's episode
+	said  map[string]time.Time
 	pins  map[string]pinEntry
 	gens  map[string]uint64
 	epoch uint64
@@ -103,7 +103,7 @@ func Wrap(c Config) store.Store {
 	if c.BulkTimeout <= 0 {
 		c.BulkTimeout = 30 * time.Second
 	}
-	return &placed{Store: c.Session, c: c, said: map[string]saidAt{}, pins: map[string]pinEntry{},
+	return &placed{Store: c.Session, c: c, said: map[string]time.Time{}, pins: map[string]pinEntry{},
 		gens: map[string]uint64{}}
 }
 
@@ -227,19 +227,7 @@ func (p *placed) expired() error {
 	return nil
 }
 
-func (p *placed) reachable() bool {
-	if p.c.Reachable == nil || p.c.Reachable() {
-		p.up.Add(1)
-		return true
-	}
-	return false
-}
-
-// saidAt is when a cached pin was said and in which episode: the count of answering reads then.
-type saidAt struct {
-	at  time.Time
-	seq uint64
-}
+func (p *placed) reachable() bool { return p.c.Reachable == nil || p.c.Reachable() }
 
 // pinState is what the directory says of a principal's pin.
 type pinState int
@@ -630,23 +618,52 @@ func (p *placed) DeleteMembership(ctx context.Context, principal string) (store.
 	return held, derr
 }
 
-// sayCached says, once per principal per cut (an answering read between two cuts ends the episode) and
-// at most once per 10 minutes, that a cut directory's cached pin was served (R13: a region keeps serving a pinned member, and
-// says so).
+// Cached-pin lines are said at most once per principal per sayCachedEvery, and the table that
+// remembers them holds at most sayCachedCap principals.
+const (
+	sayCachedEvery = 10 * time.Minute
+	sayCachedCap   = 65536
+)
+
+func (p *placed) now() time.Time {
+	if p.c.Now != nil {
+		return p.c.Now()
+	}
+	return time.Now()
+}
+
+// sayCached says, at most once per principal per 10 minutes, that a cut directory's cached pin was
+// served (R13: a region keeps serving a pinned member, and says so). A cut that starts 10 minutes or
+// more after the last line says it again. A full table drops the entries older than the window, then
+// its oldest one: it is never cleared whole, which would lift the window for every principal at once.
 func (p *placed) sayCached(principal string) {
 	if p.c.Say == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	seq := p.up.Load()
-	if t, ok := p.said[principal]; ok && t.seq == seq && time.Since(t.at) < 10*time.Minute {
+	now := p.now()
+	if t, ok := p.said[principal]; ok && now.Sub(t) < sayCachedEvery {
 		return
 	}
-	if len(p.said) > 1024 {
-		clear(p.said)
+	if _, ok := p.said[principal]; !ok && len(p.said) >= sayCachedCap {
+		for k, t := range p.said {
+			if now.Sub(t) >= sayCachedEvery {
+				delete(p.said, k)
+			}
+		}
+		if len(p.said) >= sayCachedCap {
+			var oldest string
+			var at time.Time
+			for k, t := range p.said {
+				if oldest == "" || t.Before(at) {
+					oldest, at = k, t
+				}
+			}
+			delete(p.said, oldest)
+		}
 	}
-	p.said[principal] = saidAt{at: time.Now(), seq: seq}
+	p.said[principal] = now
 	p.c.Say("directory store: not answering: serving %s's cached directory membership (its pin as this region "+
 		"last read it); a forget made elsewhere reaches this region when the directory answers",
 		printsafe.Line(principal, 300))
