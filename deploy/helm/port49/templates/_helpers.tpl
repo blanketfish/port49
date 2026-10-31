@@ -76,8 +76,8 @@ own would need) is not, and the chart must run in a baseline namespace. The tree
 is repaired by the second init, as 65532 with no capability: it owns those files, so it needs none.
 If a file there belongs to another uid (a restore done as root), it cannot chown it; it stops and
 names the path and the one command that fixes it, instead of leaving the fence to crash-loop later.
-CAP_FSETID keeps the setgid bit when chmod runs as root outside the directory's group. UNVERIFIED
-against a real kubelet until the kind smoke's two-generation cell.
+CAP_FSETID keeps the setgid bit when chmod runs as root outside the directory's group. Checked against
+a real kubelet by the kind smoke's two-generation cell.
 */ -}}
 {{- define "port49.dataInit" -}}
 name: data-dir

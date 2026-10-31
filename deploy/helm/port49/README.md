@@ -3,9 +3,9 @@
 Runs port49d (TACACS+) and port49-broker as two StatefulSets, a PVC per replica. Kubernetes is one
 supported shape among peers (systemd, containers); nothing in port49 requires it.
 
-Status: the chart's render checks pass on a Go stand-in renderer. `helm lint`, `helm template` and the
-schema refusals are unverified until helm runs (`make helm-test`), and the chart has not been installed
-on a cluster (Task 11's kind smoke).
+Status: the chart's render checks run on a Go stand-in renderer (`make test`) and on real helm 3.22.0
+(`make helm-test`, a CI job), and the kind smoke installs it on a cluster with port49's own etcd (green in CI,
+run 41155086403).
 
 ## Install
 
@@ -26,8 +26,8 @@ helm install port49 deploy/helm/port49 -n port49 \
 
 The schema refuses an install with fewer than three etcd members, a repeated or non-https member, or
 an empty Secret name. List every member: a client given one URL has no failover. port49 does not
-create or run etcd for you; `examples/etcd/` is a three-member example, and its init Job is
-unverified until Task 11's smoke.
+create or run etcd for you; `examples/etcd/` is a three-member example, and the kind smoke runs it with
+its init Job.
 
 Two server groups (for example a lab and production) are two releases in two namespaces with their
 own Secrets and their own etcd; they share nothing.
@@ -35,8 +35,8 @@ own Secrets and their own etcd; they share nothing.
 ## The four requirements
 
 1. `etcd.endpoints`: every member, at least three.
-2. `keys.existingSecret`: mounted whole at `/run/port49/keys`, in port49d's pod only. The volume mode
-   is provisional on L82.
+2. `keys.existingSecret`: mounted whole at `/run/port49/keys`, in port49d's pod only, mode 0440 under
+   `fsGroup` (measured on kind: L82).
 3. `encryption.existingSecret` and `encryption.id`: mounted in both pods.
 4. `policy` and `inventory`, via `--set-file`. Without a policy port49d refuses to start.
 
@@ -52,20 +52,21 @@ A key is read under the secret-file rule, so two things are refused at the pod's
 naming the file. A key directory that is group- or world-writable (outside a read-only Secret mount, which
 is excused): `chmod 0755` or `0750` it. A group-readable key whose group is not the pod's (fsGroup 65532
 is): a Secret volume's files are, and a file an injector or a CSI driver writes as `root:root` 0440 is not.
-Never a looser rule. Two mechanisms were measured on kind (L83, run 41142675001, first run; the re-run
-follows the harness fixes):
+Never a looser rule. Two mechanisms were measured on kind (L83, run 41155086403):
 
 - **The Secrets Store CSI driver is not supported for device keys.** Its files are `0:0 0644` (the world
   bit: refused) and, with the provider's `filePermission: 0440`, `0:0 0440` (port49d, uid 65532, cannot read
   them). The driver chart (secrets-store-csi-driver 1.6.1) sets no `fsGroupPolicy` and the provider has no
   owner or group option, so `fsGroup` is not applied to the volume and no setting makes the file readable by
   65532 without a world bit. `filePermission: 0400` does not help: a `root:root` 0400 file is unreadable too.
-- **The Vault Agent injector needs `vault.hashicorp.com/agent-run-as-same-user: "true"`.** By default the agent
-  is uid 100 and owns the rendered file (`100:65532 0440`); port49d refuses a key whose owner is neither itself
-  nor root, because whoever owns a file can rewrite it. With the annotation the file is port49d's own and
-  port49d starts. Adding a key version is a pod rollout, not a reload: the injector reads its annotations only
-  when a pod is admitted, and each file is its own annotation. Devices use another replica during a rollout, one
-  pod at a time. For rotation with no restart use External Secrets (L82).
+- **The Vault Agent injector is offered for the encryption key only, never for device keys.** By default the
+  agent is uid 100 and owns the rendered file (`100:65532 0440`); port49d refuses a key whose owner is neither
+  itself nor root, because whoever owns a file can rewrite it. With
+  `vault.hashicorp.com/agent-run-as-same-user: "true"` the file is port49d's own and port49d starts. But adding
+  a version is a pod rollout, not a reload: the injector reads its annotations only when a pod is admitted, and
+  each file is its own annotation. A device key must reach a running process with no restart (spec decision 54
+  ruling 2), and the injector failed that cell (L83 c), so device keys come from External Secrets or a Secret
+  volume (L82). The encryption key changes rarely and a rollout is acceptable for it.
 
 fsGroup also acts on a PVC's root, and two rules meet there. With `OnRootMismatch` the kubelet walks the
 whole volume at a pod's start unless the root is group 65532, includes 0770 and has setgid (kubelet
@@ -80,7 +81,7 @@ cluster that forbids root init containers needs a volume root provisioned 3770 r
 If `data-dir` fails the pod sits in `Init:` and `kubectl describe pod` says why; nothing starts
 half-fenced.
 
-Unverified against a real kubelet until Task 11's kind smoke. Its two-generation cell must use a
+The kind smoke checks this against a real kubelet (green in CI): its two-generation cell uses a
 volume type the kubelet applies fsGroup to (a `local` volume or csi-hostpath, never kind's default
 hostPath class, which never applies it): install, delete the pod, and check the broker starts again,
 the root is `3770 root:65532` and `state/issuing-ca.key` is still 0600. Run first with the old 2755
@@ -90,7 +91,7 @@ issues nothing; it does not crash-loop), which proves the cell detects it.
 `examples/external-secret.yaml` syncs the device keys from Vault with External Secrets: one Secret key
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
 remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. The Vault Agent
-injector and the Secrets Store CSI driver are covered above (Secrets and rotation).
+injector (encryption key only) and the Secrets Store CSI driver (not supported) are covered above.
 
 **Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
 key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
@@ -101,8 +102,26 @@ cluster-wide `ClusterSecretStore` without `conditions` can be used from every na
 can create an ExternalSecret anywhere could read the device keys through your Vault role.
 `examples/external-secret-clusterstore.yaml` shows the option, with the namespace named.
 
-To rotate the encryption key, add the new key to the Secret, set `encryption.id` to a new id, and
-upgrade; port49 reads old ids until nothing is sealed under them (see the operator guide).
+### Rotating the `encryption:` key
+
+One key everywhere, from one Secret, in three steps. The Secret holds each key as its own file, and the
+chart's `encryption.key` and `encryption.previous.key` name them (`encryption.key` by default).
+
+1. Add the new key to the Secret as a new file, `encryption-e2` (32 bytes, made as at install:
+   `--from-file`, never a literal), keeping the old `encryption.key`. Then upgrade with the new key as
+   `previous` while the old one stays current:
+   `--set encryption.previous.id=e2 --set encryption.previous.key=encryption-e2`.
+   Every pod now opens what either key sealed.
+2. Swap: `--set encryption.id=e2 --set encryption.key=encryption-e2 --set encryption.previous.id=c1
+   --set encryption.previous.key=encryption.key`. New records are sealed under `e2`.
+3. Remove `encryption.previous` and the old file only after the scheduled directory pass (every
+   `refresh_interval`) has re-sealed the second-factor records under `e2`. A record that opens under neither
+   key is never "not enrolled": that sign-in is `503 store_unavailable`, and the broker's line names
+   `port49 directory reset-second-factor`.
+
+A pod whose keys lack the id the directory store currently holds refuses to start, naming the store and the
+id. Never reuse an id; the chart refuses a `previous` with no file, the same id, or the same file as the
+current key.
 
 ## The issuing CA
 
@@ -160,12 +179,14 @@ one-off Jobs, run once per new deployment.
 | You see | Look at | Cause and action |
 |---|---|---|
 | Pod `CrashLoopBackOff` | `kubectl logs --previous <pod>` | The config or a Secret is wrong; the log names the field or reference, never its value. |
-| Pod `Pending` | `kubectl describe pod <pod>` | A named Secret or PVC is missing. |
+| Pod `ContainerCreating` for minutes | `kubectl describe pod <pod>` (the Events) | A named Secret or ConfigMap is missing: a kubelet event, never a port49 line. |
+| Pod `Pending` | `kubectl describe pod <pod>` | A named PVC is missing or unbound, or nothing can be scheduled. |
+| port49d refuses to start naming etcd and a version | `kubectl logs --previous <pod>` | A member is below the floor (spec decision 54 ruling 13); upgrade etcd. Every member is listed and checked. |
 | Not Ready, running | `curl :9049/readyz` through a port-forward | A store is unreachable; the body says which. |
 | Admin call 503 | broker log | No attestation roots configured. |
 | Brokers disagree on the CA, or one refuses to start on it | the broker's "issuing ca" log line; `copy-issuer.sh` output | Copy from a broker that holds the CA the store records, onto the one that differs: `copy-issuer.sh <ns> <release> --from <ordinal> --to <ordinal>`. It refuses to overwrite a different CA and names both; never `init-issuer` again, and not `forget-issuer`. |
 | Pod `Init:Error` or `Init:CrashLoopBackOff` | `kubectl logs <pod> -c data-dir` and `-c data-dir-owner` (`describe` shows only the exit code) | `data-dir-owner` naming a path: a file in the data directory belongs to another uid; run the `chown -R 65532:65532 ...` it prints. `data-dir-owner` saying a directory may be mode 0000: `chmod u+rwx` it (as root on the volume), then restart. `data-dir` saying the data directory is a symlink: someone replaced it; inspect and remove the link. Otherwise the root init that sets up the volume failed; its log names the command. Usually a PVC that cannot be chowned (a read-only or network volume that refuses chown), or a namespace policy that drops its capabilities. |
-| No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `restricted`. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700), so the namespace must be `baseline` (README, Install). |
+| No pod is ever created; the StatefulSet's events say `violates PodSecurity` | `kubectl -n <ns> describe statefulset <name>` | The namespace enforces `restricted`. The data-dir init runs as root (it makes the volume's root 3770 and the data directory 0700), so the namespace must be `baseline`: `kubectl label --overwrite ns <ns> pod-security.kubernetes.io/enforce=baseline`. |
 | A backup Job failed | `kubectl logs job/<name> -c stale-check` | A `.new` file is left from a run that did not finish; the log names it. Neither backup image has a shell: remove it from a throwaway alpine pod that mounts the backups PVC (`kubectl run`, `rm /backup/<name>.new`), and the next run proceeds. |
 | `kubectl get externalsecret` shows `SecretSyncedError` | `kubectl describe externalsecret <name>` | ESO cannot reach the store or a remote key. The Secret keeps its last data, so a new key version never appears and port49d names the missing `secret_ref`. |
 
@@ -226,7 +247,7 @@ for the cluster, which is a cluster-wide change: enable it in one release per cl
 
 ## Backups
 
-Two CronJobs, one pattern (UNVERIFIED until the kind smoke): `examples/backup-cronjob.yaml` (the etcd
+Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke; the enrollments job's run is unmeasured): `examples/backup-cronjob.yaml` (the etcd
 snapshot, which needs etcd's root certificate and is yours to adapt) and the chart's own, off by default:
 `--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<your PVC>` (the sealed
 enrollment store, `port49-broker export-enrollments --out FILE`; it mounts what the broker does, from
@@ -252,5 +273,5 @@ timeout; port49d starts without waiting for it.
 ## The smoke tests
 
 `make kind-smoke` and `make kind-smoke-red` run the chart on a kind cluster, whose nodes are privileged
-containers. The smokes run in CI (their workflow lands with plan 12b Task 13). Locally they refuse to start on a host with a TPM or a security key (`/dev/tpm0`, `/dev/tpmrm0`, a Yubico device on the USB bus); the
+containers. The smokes run in CI (`.github/workflows/kind.yml`). Locally they refuse to start on a host with a TPM or a security key (`/dev/tpm0`, `/dev/tpmrm0`, a Yubico device on the USB bus); the
 refusal is one line that names the device it found.
