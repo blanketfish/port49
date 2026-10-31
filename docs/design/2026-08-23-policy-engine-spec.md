@@ -11361,8 +11361,8 @@ shapes; Kubernetes is native and never required.
   refused), at the start and at every reload, because a file others can replace adds a trusted root, a
   client CA, a forged CRL issuer or a fake etcd or directory. A refused reload keeps what is in force and
   says so once; a refused start names the directory. `internal/config/trustfiles_test.go` reads the config
-  structs and fails on any `*_file` field that names a CA, anchor, roots, bundle, issuer or intermediates and
-  is not in its table, so a new field cannot skip the fence:
+  structs and fails on any `*_file` field it has not classified (trust, policy, secret, or other with a
+  reason), whatever its name, so a new field cannot skip the fence. The trust files:
 
   | Field | Reader |
   |---|---|

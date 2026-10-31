@@ -7,39 +7,86 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// trustFileReaders is, for every config field that names a file granting trust (a CA, an anchor, roots, a
-// bundle, a CRL issuer, intermediates), the source file whose reader of it goes through the fence: fence.Read
-// (the policy-file rule: no link out of its directory, nothing group- or world-writable, owned by root or us,
-// regular, bounded) or a secret rule. A writer to that directory would otherwise add a root, a client CA or
-// a forged CRL issuer (spec §13 decision 54 ruling 16). A new field of this kind must be added here with its
-// reader, or the test fails: it cannot skip the fence by being new.
-var trustFileReaders = map[string]struct{ file, call string }{
-	"BrokerConfig.ClientCAFile":            {"internal/broker/server.go", "fence.Read("},
-	"identityVerifierYAML.TrustAnchorFile": {"internal/broker/server.go", "fence.Read("},
-	"identityVerifierYAML.CAFile":          {"internal/port49d/permfa.go", "fence.Read("},
-	"BrokerConfig.TLSCABundleFile":         {"internal/port49d/cabundle.go", "fence.Read("},
-	"CertificateStatusCRL.IssuerFile":      {"internal/port49d/certstatus.go", "fence.Read("},
-	"directoryYAML.CAFile":                 {"internal/directory/conn.go", "fence.Read("},
-	"EtcdConfig.CAFile":                    {"internal/port49d/store.go", "fence.Read("},
-	"InventoryServiceConfig.CAFile":        {"internal/inventory/client.go", "fence.Read("},
-	"TLSListenerConfig.ClientCAFile":       {"internal/port49d/tlslistener.go", "fence.Read("},
-	"TLSListenerConfig.IntermediatesFile":  {"internal/port49d/tlslistener.go", "fence.Read("},
-	"perLoginMFAYAML.AttestationRootsFile": {"internal/port49d/permfa.go", "fence.Read("},
-	"sourceYAML.CAFile":                    {"internal/sot/client.go", "fence.Read("},
-	"fileConfig.ClientCAFile":              {"internal/broker/server.go", "fence.Read("},
+// Every config field that names a file is classified here, so a new one cannot skip the fence by being
+// named something the test did not expect (a keyword list would pass `cacert_file`). A field is one of:
+//
+//   - trust: it names what the process trusts (a CA, an anchor, roots, a bundle, a CRL issuer). Read through
+//     fence.Read (the policy-file rule: no link out of its directory, nothing group- or world-writable, owned
+//     by root or us, regular, bounded), because a writer to its directory would add a root (spec §13
+//     decision 54 ruling 16).
+//   - policy: policy, inventory and verification keys; also fence.Read / fence.ReadVerifyKeys.
+//   - secret: a private key, keytab or signing key; read under keyfile.ReadSecret / LoadX509KeyPair /
+//     LoadEd25519 (the secret-file rule) or ReadOwn.
+//   - other: with the reason it needs no fence.
+//
+// trust, policy and secret name the source file that reads it and the call that must still appear there.
+type fileClass struct {
+	class, file, call, reason string
 }
 
-var trustTag = regexp.MustCompile(`(^|_)(ca|anchor|roots|bundle|issuer|intermediates|crls?)(_|$)`)
+func trust(file string) fileClass { return fileClass{class: "trust", file: file, call: "fence.Read("} }
+func policy(file, call string) fileClass {
+	return fileClass{class: "policy", file: file, call: call}
+}
+func secret(file, call string) fileClass {
+	return fileClass{class: "secret", file: file, call: call}
+}
+func other(reason string) fileClass { return fileClass{class: "other", reason: reason} }
 
-func TestEveryTrustFileFieldIsReadThroughTheFence(t *testing.T) {
+const publicCert = "a public certificate: replacing it can break TLS, not add trust"
+
+var fileFields = map[string]fileClass{
+	// trust
+	"BrokerConfig.ClientCAFile":            trust("internal/broker/server.go"),
+	"fileConfig.ClientCAFile":              trust("internal/broker/server.go"),
+	"identityVerifierYAML.TrustAnchorFile": trust("internal/broker/server.go"),
+	"identityVerifierYAML.CAFile":          trust("internal/port49d/permfa.go"),
+	"perLoginMFAYAML.AttestationRootsFile": trust("internal/port49d/permfa.go"),
+	"BrokerConfig.TLSCABundleFile":         trust("internal/port49d/cabundle.go"),
+	"CertificateStatusCRL.IssuerFile":      trust("internal/port49d/certstatus.go"),
+	"directoryYAML.CAFile":                 trust("internal/directory/conn.go"),
+	"EtcdConfig.CAFile":                    trust("internal/port49d/store.go"),
+	"InventoryServiceConfig.CAFile":        trust("internal/inventory/client.go"),
+	"sourceYAML.CAFile":                    trust("internal/sot/client.go"),
+	"TLSListenerConfig.ClientCAFile":       trust("internal/port49d/tlslistener.go"),
+	"TLSListenerConfig.IntermediatesFile":  trust("internal/port49d/tlslistener.go"),
+	// policy
+	"BrokerConfig.PolicyFile":               policy("internal/port49d/policyfile.go", "fence.Read("),
+	"fileConfig.PolicyFile":                 policy("internal/inventory/sync.go", "fence.Read("),
+	"fileConfig.InventoryFile":              policy("internal/port49d/policyfile.go", "fence.Read("),
+	"fileConfig.VerifyKeyFiles":             policy("cmd/port49-inventory/main.go", "fence.ReadVerifyKeys("),
+	"InventoryServiceConfig.VerifyKeyFiles": policy("internal/config/config.go", "fence.ReadVerifyKeys("),
+	// secret
+	"bindYAML.KeytabFile":               secret("internal/directory/conn.go", "keyfile.ReadSecret("),
+	"bindYAML.TLSKeyFile":               secret("internal/directory/conn.go", "keyfile.LoadX509KeyPair("),
+	"BrokerConfig.TLSKeyFile":           secret("internal/port49d/main.go", "keyfile.LoadX509KeyPair("),
+	"EtcdIdentity.KeyFile":              secret("internal/port49d/store.go", "keyfile.LoadX509KeyPair("),
+	"fileConfig.TLSKeyFile":             secret("internal/broker/server.go", "keyfile.LoadX509KeyPair("),
+	"fileConfig.WebhookTLSKeyFile":      secret("cmd/port49-inventory/main.go", "keyfile.LoadX509KeyPair("),
+	"fileConfig.SigningKeyFile":         secret("cmd/port49-inventory/main.go", "keyfile.LoadEd25519("),
+	"InventoryServiceConfig.TLSKeyFile": secret("internal/inventory/client.go", "keyfile.LoadX509KeyPair("),
+	"TLSListenerConfig.KeyFile":         secret("internal/port49d/tlslistener.go", "keyfile.ReadSecret("),
+	// other
+	"bindYAML.TLSCertFile":               other(publicCert),
+	"BrokerConfig.TLSCertFile":           other(publicCert),
+	"EtcdIdentity.CertFile":              other(publicCert),
+	"fileConfig.TLSCertFile":             other(publicCert),
+	"fileConfig.WebhookTLSCertFile":      other(publicCert),
+	"InventoryServiceConfig.TLSCertFile": other(publicCert),
+	"TLSListenerConfig.CertFile":         other(publicCert),
+	"BrokerConfig.RevocationsFile":       other("port49d's own state file, written by port49d under its own flock and owner check, not an operator input"),
+	"LabConfig.FaultFile":                other("lab-only fault injection, refused outside a lab build"),
+	"LabConfig.SeedTokenFile":            other("lab-only seed tokens, refused outside a lab build"),
+}
+
+func TestEveryFileFieldIsClassified(t *testing.T) {
 	root := filepath.Join("..", "..")
-	found := map[string]bool{}
+	found := map[string]string{}
 	for _, dir := range []string{"internal/config", "internal/inventory"} {
 		fset := token.NewFileSet()
 		pkgs, err := parser.ParseDir(fset, filepath.Join(root, dir), func(fi os.FileInfo) bool {
@@ -70,8 +117,8 @@ func TestEveryTrustFileFieldIsReadThroughTheFence(t *testing.T) {
 									continue
 								}
 								tag := strings.Split(reflect.StructTag(strings.Trim(fl.Tag.Value, "`")).Get("yaml"), ",")[0]
-								if (strings.HasSuffix(tag, "_file") || strings.HasSuffix(tag, "_files")) && trustTag.MatchString(tag) {
-									found[ts.Name.Name+"."+fl.Names[0].Name] = true
+								if strings.HasSuffix(tag, "_file") || strings.HasSuffix(tag, "_files") {
+									found[ts.Name.Name+"."+fl.Names[0].Name] = tag
 								}
 							}
 							return true
@@ -81,8 +128,8 @@ func TestEveryTrustFileFieldIsReadThroughTheFence(t *testing.T) {
 			}
 		}
 	}
-	if len(found) < 10 {
-		t.Fatalf("found %d trust-file fields, want many more: the scan is broken", len(found))
+	if len(found) < 30 {
+		t.Fatalf("found %d file fields, want about 40: the scan is broken", len(found))
 	}
 	var fields []string
 	for k := range found {
@@ -90,25 +137,31 @@ func TestEveryTrustFileFieldIsReadThroughTheFence(t *testing.T) {
 	}
 	sort.Strings(fields)
 	for _, k := range fields {
-		r, ok := trustFileReaders[k]
+		c, ok := fileFields[k]
 		if !ok {
-			t.Errorf("%s names a file that grants trust and is not in trustFileReaders: read it through fence.Read "+
-				"(or a ReadSecret/ReadOwn path) and add its reader here", k)
+			t.Errorf("%s (%s) is a file field with no classification: read it through fence.Read (a trust or policy "+
+				"file) or keyfile (a secret), or say why it needs neither, and add it to fileFields", k, found[k])
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, r.file))
+		switch c.class {
+		case "other":
+			if c.reason == "" {
+				t.Errorf("%s is classified other with no reason", k)
+			}
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(root, c.file))
 		if err != nil {
 			t.Errorf("%s: %v", k, err)
 			continue
 		}
-		if !strings.Contains(string(b), r.call) {
-			t.Errorf("%s is read in %s, which no longer calls %s", k, r.file, r.call)
+		if !strings.Contains(string(b), c.call) {
+			t.Errorf("%s (%s) is read in %s, which no longer calls %s", k, c.class, c.file, c.call)
 		}
 	}
-	// A table entry for a field that is gone is stale.
-	for k := range trustFileReaders {
-		if !found[k] {
-			t.Errorf("%s is in trustFileReaders and not in the config structs: remove it", k)
+	for k := range fileFields {
+		if _, ok := found[k]; !ok {
+			t.Errorf("%s is in fileFields and not in the config structs: remove it", k)
 		}
 	}
 }
