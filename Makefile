@@ -469,6 +469,8 @@ requirements-release:
 	bin/piptools-venv/bin/pip install --disable-pip-version-check pip-tools==$(PIP_TOOLS_VERSION)
 	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
 		-o packaging/requirements-release.txt packaging/requirements-release.in
+	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-ci.txt packaging/requirements-ci.in
 
 
 # The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the
