@@ -45,7 +45,16 @@
       "required": ["existingSecret"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "existingSecret": {"type": "string", "minLength": 1}
+        "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "existingSecret": {"type": "string", "minLength": 1},
+        "previous": {
+          "type": "object",
+          "properties": {
+            "id": {"type": "string"},
+            "key": {"type": "string", "pattern": "^[A-Za-z0-9._-]*$"}
+          },
+          "additionalProperties": false
+        }
       }
     },
     "etcd": {

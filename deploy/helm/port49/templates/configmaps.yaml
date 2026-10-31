@@ -3,13 +3,28 @@ Each component's config, built from the values and merged with config.port49d / 
 (maps merge; the values win). Paths are the pod's: every Secret and ConfigMap is a whole-volume
 mount, and every secret_ref is a file: reference.
 */}}
+{{/*
+The sealing keys. `current` is encryption.key in the Secret; during a rotation `previous` is the old key's
+file in the same Secret (spec decision 54 ruling 13). Both components get the same.
+*/}}
+{{- define "port49.encryption" -}}
+{{- $e := .Values.encryption -}}
+encryption:
+  current: {id: {{ $e.id | quote }}, secret_ref: file:/etc/port49/secrets/{{ $e.key }}}
+{{- if $e.previous.id }}
+{{- if not $e.previous.key }}{{ fail "encryption.previous.id needs encryption.previous.key, the old key's file in the Secret" }}{{ end }}
+{{- if eq $e.previous.id $e.id }}{{ fail "encryption.previous.id is the same as encryption.id: a rotation uses a new id (never reuse one)" }}{{ end }}
+{{- if eq $e.previous.key $e.key }}{{ fail "encryption.previous.key is the same file as encryption.key: the new key goes in a new file of the Secret" }}{{ end }}
+  previous: {id: {{ $e.previous.id | quote }}, secret_ref: file:/etc/port49/secrets/{{ $e.previous.key }}}
+{{- end }}
+{{- end }}
+
 {{- define "port49.port49dConfig" -}}
 listen: ":49"
 metrics_listen: ":9049"
 inventory_file: /etc/port49/config/inventory.yaml
 policy: {file: /etc/port49/config/policy.yaml, watch_interval: 5s}
-encryption:
-  current: {id: {{ .Values.encryption.id | quote }}, secret_ref: file:/etc/port49/secrets/encryption.key}
+{{ include "port49.encryption" . }}
 key_secret_refs: {file_dir: /run/port49/keys}
 accounting:
   spool_path: /var/spool/port49d/data/acct.jsonl
@@ -33,8 +48,7 @@ stores:
 {{- define "port49.brokerConfig" -}}
 metrics_listen: ":9050"
 inventory_file: /etc/port49/config/inventory.yaml
-encryption:
-  current: {id: {{ .Values.encryption.id | quote }}, secret_ref: file:/etc/port49/secrets/encryption.key}
+{{ include "port49.encryption" . }}
 broker:
   listen: ":8443"
   tls_cert_file: /etc/port49/broker/tls.crt

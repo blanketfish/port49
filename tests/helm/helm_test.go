@@ -122,3 +122,13 @@ func TestAnycastRefusalsOnRealHelm(t *testing.T) {
 		t.Errorf("the measured configuration was refused: %v\n%s", err, out)
 	}
 }
+
+func TestAHalfDescribedPreviousEncryptionKeyIsRefusedAtRenderOnRealHelm(t *testing.T) {
+	_, out, err := helmTemplate(t, baseValues(t, "encryption:\n  previous: {id: c0}\n")...)
+	if err == nil || !strings.Contains(out, "encryption.previous") {
+		t.Errorf("a previous key with no file was rendered: %v\n%s", err, out)
+	}
+	if _, out, err := helmTemplate(t, baseValues(t, rotateOn)...); err != nil {
+		t.Errorf("a rotation was refused: %v\n%s", err, out)
+	}
+}

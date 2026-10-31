@@ -823,6 +823,29 @@ func checkPreStop(t *testing.T, r renderer) {
 	}
 }
 
+// rotateOn is step 2 of the README's encryption rotation: the new key is current and the old one previous,
+// each its own file in the one Secret.
+const rotateOn = "encryption:\n  id: e2\n  key: encryption-e2\n  previous: {id: c1, key: encryption.key}\n"
+
+// checkEncryptionRotation: the chart can say `encryption.previous` (spec decision 54 ruling 13), in both
+// components, and says nothing of it by default.
+func checkEncryptionRotation(t *testing.T, r renderer) {
+	for _, c := range []string{"port49d", "broker"} {
+		enc := at(cfg(t, render(t, r, ""), c), "encryption")
+		if str(at(enc, "current", "secret_ref")) != "file:/etc/port49/secrets/encryption.key" || at(enc, "previous") != nil {
+			t.Errorf("%s: by default encryption is %v, want the one current key and no previous", c, enc)
+		}
+		enc = at(cfg(t, render(t, r, rotateOn), c), "encryption")
+		if str(at(enc, "current", "id")) != "e2" || str(at(enc, "current", "secret_ref")) != "file:/etc/port49/secrets/encryption-e2" ||
+			str(at(enc, "previous", "id")) != "c1" || str(at(enc, "previous", "secret_ref")) != "file:/etc/port49/secrets/encryption.key" {
+			t.Errorf("%s: during a rotation encryption is %v", c, enc)
+		}
+	}
+	tr := newTree(t)
+	tr.write("/etc/port49/secrets/encryption-e2", "not-a-real-key-v2-not-a-real-key", 0o440)
+	tr.load(render(t, r, rotateOn)) // both configs load with a previous key
+}
+
 // anycastOn is the shipped anycast option (spec §15 L85, measured with the 15 s preStop).
 const anycastOn = "service:\n  anycast: {enabled: true, address: 10.85.85.1}\n"
 
@@ -885,5 +908,6 @@ var checks = []struct {
 	{"TestTheIssuanceExampleTurnsOnIssuance", checkIssuanceExample},
 	{"TestPort49dKeepsServingWhileTheRouteIsWithdrawn", checkPreStop},
 	{"TestAnycastIsOptInAndAsMeasured", checkAnycast},
+	{"TestEncryptionRotationNeedsThePreviousKey", checkEncryptionRotation},
 	{"TestRenderedConfigsLoad", checkConfigsLoad},
 }

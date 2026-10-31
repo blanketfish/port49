@@ -46,7 +46,10 @@ keys: {existingSecret: ""}
 # The sealing key (encryption.key), the same 32 bytes in both pods. Required.
 encryption:
   id: c1
+  key: encryption.key       # the current key's file in the Secret
   existingSecret: ""
+  # Set during a rotation only (README, Rotating the encryption key): the old key's id and its file in the same Secret.
+  previous: {id: "", key: ""}
 
 # port49's own etcd, never the control plane's. List every member's URL (never a Service or
 # VIP): port49d prints each one's version at its start and refuses one below the floor.
