@@ -150,6 +150,7 @@ func start(t *testing.T, f fixture, out *syncBuffer, hup chan os.Signal) (string
 	case a := <-addrs:
 		return a[0], a[1], done
 	case err := <-done:
+		done <- err // the cleanup above waits on done: a run that already ended must not hang it
 		t.Fatalf("run: %v; stderr %s", err, out)
 	case <-time.After(10 * time.Second):
 		t.Fatalf("not listening: %s", out)
@@ -847,5 +848,44 @@ func TestTheStartSaysHowEachSourceIsFetched(t *testing.T) {
 			strings.Contains(out.String(), "lab_file") {
 			t.Errorf("HTTPS_PROXY set %v: %q", env != "", out.String())
 		}
+	}
+}
+
+// A client_ca_file in a directory others can write is refused at the start, fast and by name: run returns
+// the fence's error, it does not wait or retry. (Without this the fixture's own cleanup, which waits on a
+// run that already returned, is what made a refused start look like a hang.)
+func TestARefusedClientCAFileEndsTheStartWithAnError(t *testing.T) {
+	f := newFixture(t, 0o600)
+	ca, err := os.ReadFile(filepath.Join(f.pki, testpki.InvCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := t.TempDir()
+	if err := os.Chmod(bad, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, "ca.pem"), ca, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := "client_ca_file: " + f.pki + "/" + testpki.InvCA
+	if !strings.Contains(string(raw), old) {
+		t.Fatal("the fixture's client_ca_file line is not what the test replaces")
+	}
+	if err := os.WriteFile(f.cfg, []byte(strings.Replace(string(raw), old, "client_ca_file: "+bad+"/ca.pem", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- run(context.Background(), f.cfg, make(chan os.Signal)) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "client_ca_file") || !strings.Contains(err.Error(), "writable") {
+			t.Fatalf("want a refusal naming client_ca_file and the writable directory, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return: a refused CA file must end the start")
 	}
 }
