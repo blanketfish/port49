@@ -104,9 +104,21 @@ type certified interface {
 // takes the token's certificate for a pkcs11 key. The certificate's public
 // key must be the key's.
 func LoadPair(certPath, keyRef string, pin []byte) (tls.Certificate, error) {
+	return loadPair(certPath, keyRef, pin, keyfile.LoadOwnX509KeyPair)
+}
+
+// LoadMountedPair is LoadPair for a key its operator mounts (a workload's, from a Kubernetes Secret
+// volume or a secrets agent): a path is read under the secret-file rule within its own directory
+// (keyfile.LoadX509KeyPair, decision 54 ruling 16) rather than the owner-only rule of a user's own
+// key. A reference is opened as LoadPair opens it.
+func LoadMountedPair(certPath, keyRef string, pin []byte) (tls.Certificate, error) {
+	return loadPair(certPath, keyRef, pin, keyfile.LoadX509KeyPair)
+}
+
+func loadPair(certPath, keyRef string, pin []byte, loadFile func(cert, key string) (tls.Certificate, error)) (tls.Certificate, error) {
 	if !hwkey.IsRef(keyRef) {
 		clear(pin)
-		return keyfile.LoadOwnX509KeyPair(certPath, keyRef)
+		return loadFile(certPath, keyRef)
 	}
 	key, err := Open(keyRef, pin)
 	if err != nil {

@@ -277,13 +277,14 @@ func TestTheFilesPort49WritesAreReadStrictly(t *testing.T) {
 		{"../port49d/issuer.go", "keyfile.ReadOwn(", "keyfile.ReadSecret("},
 		{"../hwkey/tpm/tpm.go", "keyfile.ReadOwn(", "keyfile.ReadSecret("},
 		{"../clientkey/open_dlopen.go", "keyfile.ReadOwn(", "keyfile.ReadSecret("},
-		{"../clientkey/clientkey.go", "keyfile.LoadOwnX509KeyPair(", "keyfile.LoadX509KeyPair("},
+		{"../clientkey/clientkey.go", "keyfile.LoadOwnX509KeyPair)", ""},
+		{"../../cmd/port49/main.go", "clientkey.LoadPair(", "clientkey.LoadMountedPair("},
 	} {
 		b, err := os.ReadFile(c.file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(b), c.want) || strings.Contains(string(b), c.not) {
+		if !strings.Contains(string(b), c.want) || (c.not != "" && strings.Contains(string(b), c.not)) {
 			t.Errorf("%s must call %s and not %s", c.file, c.want, c.not)
 		}
 	}
@@ -297,6 +298,8 @@ func TestTheMountedKeysAreReadUnderTheSecretFileRule(t *testing.T) {
 		{"../port49d/store.go", "keyfile.LoadX509KeyPair("},
 		{"../port49d/main.go", "keyfile.LoadX509KeyPair("},
 		{"../broker/server.go", "keyfile.LoadX509KeyPair("},
+		{"../clientkey/clientkey.go", "keyfile.LoadX509KeyPair)"},
+		{"../workload/client.go", "clientkey.LoadMountedPair("},
 		{"../directory/conn.go", "keyfile.ReadSecret("},
 	} {
 		b, err := os.ReadFile(c.file)

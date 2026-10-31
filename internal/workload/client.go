@@ -220,14 +220,14 @@ func (e *TemporaryError) Unwrap() error { return ErrTemporary }
 // a quarter of its validity left is said through warn (decision 40 ruling 9).
 //
 // keyFile is a path, or a key reference (pkcs11:, tpm:), opened through
-// clientkey.LoadPair. A workload has no terminal and no agent to ask for a
+// clientkey.LoadMountedPair (a path under the secret-file rule, within its own directory). A workload has no terminal and no agent to ask for a
 // PIN: it comes from the reference's pin-source alone, and a key that wants
 // one without it is refused, naming pin-source.
 func LoadCertificate(certFile, keyFile string, now time.Time, warn func(string, ...any)) (tls.Certificate, error) {
 	var cert tls.Certificate
 	var err error
 	for i := range 3 {
-		if cert, err = clientkey.LoadPair(certFile, keyFile, nil); err == nil ||
+		if cert, err = clientkey.LoadMountedPair(certFile, keyFile, nil); err == nil ||
 			!strings.Contains(err.Error(), "private key does not match public key") {
 			break
 		}

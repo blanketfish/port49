@@ -11351,7 +11351,12 @@ shapes; Kubernetes is native and never required.
   that tls refuses as a mismatch across a swap are read again once. A file port49 writes itself, or
   the operator holds for itself, keeps ssh's rule (`keyfile.ReadOwn`): no link, owner-only, owned by
   the user or root. That is the issuing CA key (ruling 14 of decision 43: a 0440 issuing CA key is
-  never accepted), a TPM key blob, and the CLI's own client key and PIN file. `subPath` is no remedy:
+  never accepted), a TPM key blob, and the CLI's own client key and PIN file. A workload's client key
+  (`port49 workload`, `workload.LoadCertificate`) is mounted by its operator, like a broker's, so a path
+  is read under the secret-file rule within its own directory (`clientkey.LoadMountedPair`); only a
+  user's own key (`clientkey.LoadPair`) keeps the owner-only rule. A certificate file named by
+  `attestation_roots_file` or an OIDC verifier's `ca_file` is read through the policy-file fence
+  (`fence.Read`), at the start and at a SIGHUP, since a file others can replace adds a trusted root. `subPath` is no remedy:
   it still gives 0440 under `fsGroup`, and it loses the kubelet's in-place update (ruling 2).
 - **Open.** The `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
   overridden by Ryan (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waits on L82–L84,
