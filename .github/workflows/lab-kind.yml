@@ -1,5 +1,5 @@
 # The lab entries that need a kind cluster, run on a GitHub-hosted runner (plan 12b, Tasks 13, 14 and
-# 16). A matrix cell is one `make lab-<cell>`: l82 here; Tasks 14 and 16 add l83 and l85.
+# 16). A matrix cell is one `make lab-<cell>`: l82, l83 and l85.
 #
 # Kind's nodes are privileged containers, so the key-host guard refuses on a machine that holds a TPM or
 # a security key (tests/shapes/shapetest/keyhost.go). A hosted runner is ephemeral and holds nobody's key,

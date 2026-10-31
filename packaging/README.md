@@ -7,6 +7,18 @@
 Status: `make packages` has built the snapshot and `make packages-check` passes on the debs and rpms
 (2026-10-30). The release workflow itself, signing and publishing have not run.
 
+## The first tag
+
+Before the first tag (the release workflow has never run) do these once. They need the PyPI trusted publisher
+and the `galaxy` and `release` environments set up. After the first tag publishes:
+
+- Re-run the workflow's `galaxy` job once. The second publish of the same version must succeed, not fail: the
+  job passes only if Galaxy's "already exists" refusal matches the workflow's pattern, whose message text
+  after `HTTP Code: 400` was read from ansible-core's source and not yet seen from the real server. If the
+  re-run fails with that line, fix the pattern in `.github/workflows/release.yml` to the line it printed.
+- Pull the chart and the image by digest and check their attestations: `gh attestation verify
+  oci://ghcr.io/rhwendt/charts/port49:<version> --repo rhwendt/port49`.
+
 ## Two packages
 
 | Package | Holds | Conflicts with |

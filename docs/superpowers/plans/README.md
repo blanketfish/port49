@@ -350,7 +350,7 @@ It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-
 spec, two code, two CI, seven artifact-and-smoke, four lab, one docs; decision 54, rulings 1–14, written by its Task 1). It builds
 the systemd, container and Kubernetes shapes as peers, each with a CI smoke test, plus the tag-only release (packages, image,
 chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite warning, and lab rows L82–L85.
-**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: L82, L83 and L85 closed 2026-10-31 (kind run 41155086403; see Carried forward), TODO(L86).
+**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: L82, L83 and L85 closed 2026-10-31 (kind run 41155086403; see Carried forward), L84 partial (Compose measured, systemd and the Docker cells open), TODO(L86).
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7594,7 +7594,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
     - the Junos `idle-timeout` per role (pending a ruling);
     - load validation at the §5 rate and the items sized from it.
   - Inventory themes C, D and F. Written after 12b merges.
-  - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, and whatever L83, L84 or L85 left FAIL (L83: the injector as a reload and the CSI driver).
+  - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, L84 (a) and the systemd (c) cells, and whatever L83 or L85 left FAIL (L83: the injector as a reload and the CSI driver).
 
 Carried here from plan 1's review:
 
@@ -7989,7 +7989,7 @@ These are the notes the pull request body carries. Each is true of the code as b
 
 Executed 2026-10-27 to 2026-10-30 on `feature/12b-deployment-release` (draft PR #36). Twenty-five tasks: one spec, two code, the admin-over-API
 amendment (3a–3h), two CI, seven artifact-and-smoke, four lab, one docs. Every task was reviewed (Opus for security, CI and release tasks, Sonnet
-for mechanical ones) and every finding closed before the next task began. **Lab states: L82, L83 and L85 are closed (kind run 41155086403, 2026-10-31); L86 is still the `TODO(L86)` marker below,
+for mechanical ones) and every finding closed before the next task began. **Lab states: L82, L83 and L85 are closed (kind run 41155086403, 2026-10-31); L84 is partial (Compose `secrets:` measured; `LoadCredential=` and the systemd cells not run); L86 is still the `TODO(L86)` marker below,
 and no result is asserted for it until its results note and spec §15 row exist.**
 
 #### Commits per task
@@ -8062,9 +8062,10 @@ and no result is asserted for it until its results note and spec §15 row exist.
 - **L85 closed** (`tests/lab/results/L85-kind.md`): all four cells PASS on cell (c) as redefined (timed from the listener closing, with no login
   failing past one retry); the note states all three runs. The chart gained `service.anycast` (MetalLB BGP, `Local`, `preStopSeconds` >= 15).
 - **TODO(L86):** an admin call's touch on a real YubiKey. Harness and runbook written; Ryan's run is on the SER8 (planned 2026-10-31).
-- **L84** is partial: Compose `secrets:` measured (long and short syntax PASS; a new secret needs `up -d`); `LoadCredential=` runs in CI.
+- **L84** is partial: Compose `secrets:` measured (long and short syntax PASS; a new secret needs `up -d`); `LoadCredential=` is not measured: the systemd cells are written and have not run (they need a hosted runner with systemd; `tests/lab/results/L84-systemd-docker.md` holds the Compose half).
 - The detached JWKS fetch may save after `Run` returns (`identity.go:155`). Benign: the file is public, written atomically and owner-only. For the
   pre-beta review.
+- Plan 13 hand-off: the pip-tools bootstrap (`make requirements-release` installs pip-tools into `bin/piptools-venv` unhashed; the pin is exact but not hash-checked).
 - Parked for plan 13: every binary prints its version; a `healthcheck` subcommand (the image has no shell).
 - Regression lab run: cells re-driven through the API (l67, l69, l74, l75, revoke, api_revoke, split) still need one run before merge.
 - `requirements-release.txt` and the `.rpm` Python library (pip-only, the lead's ruling) stay as ruled. Ryan's one-time release setup is open (below).
@@ -8116,13 +8117,14 @@ and no result is asserted for it until its results note and spec §15 row exist.
   - the reference configurations; load;
   - **the Oxidized `secure: true` follow-up** (plan 9d carry): measure Oxidized's host-key options against accept-new, and change
     `examples/oxidized` or say why not;
+  - **an alert on `port49_admin_touch_total{outcome="refused"}`** and the `admin_touch_refused` decision (spec §5.7): a refused admin proof is a stolen token or a broken key;
   - **a Velero example** for the chart's PVCs, with a measurement behind it (pre-flight M10);
-  - whatever L83, L84 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
+  - L84 (a) and the systemd (c) cells, run in CI or on a systemd host, to close the row; whatever L83 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
 - **Plan 13:** install pages from each README, the "When it will not start" tables, and the `encryption:` rotation runbook; `--version` and
   `healthcheck`.
   - **Versioning (Ryan 2026-10-30): SemVer.** `v0.1.0` is the beta, and 0.x may break config with loud notes. `1.0.0` is the compatibility promise. Bumps come from Conventional Commits, and there is one version across every artifact. Tags are manual and carry no pre-release suffix unless it is mapped to PEP 440. The release docs state this.
 - **Ryan:**
-  - ruled: admin over the API with a key press (2026-10-27); smokes CI-only (2026-10-30); maintainer `port49 maintainers
+  - ruled: admin over the API with a key press (2026-10-27); L85 cell (c) redefined as timed from the listener closing, with no login failing past one retry (spec §15, the lead's ruling, Ryan may override); smokes CI-only (2026-10-30); maintainer `port49 maintainers
     <port49@blanketfish.com>`; the `.rpm` library is pip-only (the lead's ruling, Ryan may override);
   - still open: the one-time release setup (PyPI trusted publisher, the `galaxy` and `release` environments, tag restrictions, the `v*` tag
     ruleset, public GHCR at go-public); no automated admin call (offboarding goes through the identity provider's back-channel logout);
