@@ -115,3 +115,18 @@ func TestNoAdminSocketRemains(t *testing.T) {
 		}
 	}
 }
+
+// The architecture document describes the API-plus-touch model, not a socket an operator is told to use
+// (spec §5.1.6, §12). Its prose is read like the configs are.
+func TestTheDesignDocumentNamesNoAdminSocket(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/design/2026-08-21-port49-design.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, l := range strings.Split(string(raw), "\n") {
+		low := strings.ToLower(l)
+		if strings.Contains(low, "admin_socket") || strings.Contains(low, "admin socket") {
+			t.Errorf("design.md:%d names an admin socket", i+1)
+		}
+	}
+}
