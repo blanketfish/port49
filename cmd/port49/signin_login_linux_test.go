@@ -127,7 +127,7 @@ func (d *dirLab) operator(t *testing.T, args ...string) (code int, out, errb str
 	return 0, text + "\n", ""
 }
 
-// initEnrollments is `port49 directory init-enrollments`, which must succeed.
+// initEnrollments is `port49-broker init-enrollments`, which must succeed.
 func (d *dirLab) initEnrollments(t *testing.T) {
 	t.Helper()
 	if code, out, errb := d.operator(t, "init-enrollments"); code != 0 ||
@@ -806,7 +806,7 @@ func TestALostEnrollmentStoreAtThreeAM(t *testing.T) {
 	}
 }
 
-// D7, I15: a new install. Before `port49 directory init-enrollments` a
+// D7, I15: a new install. Before `port49-broker init-enrollments` a
 // login is refused, saying the store is missing or unreadable and that an
 // operator creates or restores it, the broker's log saying which: the broker
 // cannot tell a new install from a store lost after rollout, so the person's
@@ -824,7 +824,7 @@ func TestAFreshInstallNeedsInitEnrollments(t *testing.T) {
 		t.Fatalf("before init: code %d stdout %q stderr %q", r.code, r.out, r.err)
 	}
 	noAgent(t, sock)
-	if !strings.Contains(d.lines.String(), "On a new install run `port49 directory init-enrollments` once") {
+	if !strings.Contains(d.lines.String(), "On a new install run `port49-broker init-enrollments` once") {
 		t.Fatalf("the broker's line does not name init-enrollments: %q", d.lines.String())
 	}
 	if _, err := os.Stat(d.enrollPath); err == nil {

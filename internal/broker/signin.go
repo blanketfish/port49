@@ -961,7 +961,7 @@ func (b *Broker) markEnrollmentStore(why string) {
 	b.enrollMu.Unlock()
 	if say {
 		b.say("sign-in: the enrollment store is lost (%s): password sign-in is refused until an operator acts. On a "+
-			"new install run `port49 directory init-enrollments` once; if this broker has enrolled people, restore "+
+			"new install run `port49-broker init-enrollments` once; if this broker has enrolled people, restore "+
 			"the store (`port49 directory import`, or the etcd snapshot) or run `port49 directory "+
 			"reset-second-factor --all`", why)
 	}

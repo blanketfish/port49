@@ -688,7 +688,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 // verifier (internal/port49d/signin.go): the verifier, the directory, an
 // issuing CA, certificates trusted only if the broker issued them, the
 // enrollment store as a sealed file in a private directory under test keys
-// (never created: `port49 directory init-enrollments` is the one creator),
+// (never created: `port49-broker init-enrollments` is the one creator),
 // and nothing else: the operator's commands call the broker directly (operator).
 func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 	t.Helper()

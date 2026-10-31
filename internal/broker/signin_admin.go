@@ -49,7 +49,7 @@ func userPrincipal(principal string) (string, error) {
 // lostRemedy is what an operator does about an enrollment store that is lost,
 // the words every refusal of an operator op on one ends with.
 const lostRemedy = "restore it (`port49 directory import`, or the etcd snapshot), or replace it with `port49 " +
-	"directory reset-second-factor --all`; on a new install run `port49 directory init-enrollments`"
+	"directory reset-second-factor --all`; on a new install run `port49-broker init-enrollments`"
 
 // ResealSecondFactors is the scheduled pass that seals every record and the
 // mark that opened under the previous encryption key afresh under the current
@@ -406,7 +406,7 @@ func enrollWindowNote(b *Broker, now time.Time) string {
 		"anyone else"
 }
 
-// ExportEnrollments is `port49 directory export`: every record and the mark,
+// ExportEnrollments is `port49-broker export-enrollments`: every record and the mark,
 // sealed whole under the broker's key (D13). It holds no secret or entry id
 // in the clear.
 func (b *Broker) ExportEnrollments(ctx context.Context) ([]byte, error) {
