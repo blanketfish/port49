@@ -59,6 +59,7 @@ var releaseJobPerms = map[string]map[string]string{
 	"pypi":         {"id-token": "write"},
 	"build-galaxy": {"contents": "read"},
 	"galaxy":       {},
+	"publish":      {"contents": "write"},
 }
 
 // jobPermsOK is whether p is what job id of workflow name may hold.

@@ -185,9 +185,13 @@ nfpms:
         packager: deb
         file_info: {mode: 0644, owner: root, group: root}
 
-# A draft until release.yml has attested the artifacts and publishes it.
+# A draft until release.yml's last job, which waits for every publisher, publishes it.
 release:
   draft: true
+  # A re-run after a later job failed replaces the first run's draft and its assets.
+  replace_existing_draft: true
+  replace_existing_artifacts: true
+  prerelease: auto
   github:
     owner: rhwendt
     name: port49

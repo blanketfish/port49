@@ -44,6 +44,9 @@ import (
 // stdin, and a Secret is only ever read for its key names. A failure's dump goes through the secret
 // filter and never reads a Secret or the vault namespace.
 func TestL82(t *testing.T) {
+	if os.Getenv("PORT49_LAB_L82") != "1" {
+		t.Skip("PORT49_LAB_L82=1 runs L82 (make lab-l82); `make lab` does not")
+	}
 	out := os.Getenv("PORT49_LAB_OUT")
 	if out == "" {
 		out = t.TempDir()

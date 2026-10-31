@@ -5,9 +5,11 @@
 #
 # Every job holds only what it needs; only goreleaser, image and pypi hold id-token: write
 # (the first two for provenance attestations, pypi for trusted publishing), and
-# tests/ci/workflows_test.go holds that to this file. A re-run after a later job failed is safe:
-# the GitHub release is replaced by GoReleaser's own rules, the registries take the same digest,
-# PyPI is skip-existing, and Galaxy's "already exists" is success.
+# tests/ci/workflows_test.go holds that to this file. The release stays a draft until the last job,
+# which waits for every publisher, so a user never sees a release whose image, chart or Python
+# package is missing. A re-run after a later job failed is safe: .goreleaser.yaml sets
+# replace_existing_draft and replace_existing_artifacts, so the draft and its assets are replaced,
+# the registries take the same digest, PyPI is skip-existing, and Galaxy's "already exists" is success.
 name: release
 on:
   push: {tags: ['v*']}
@@ -54,10 +56,6 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/SHA256SUMS
-      - run: gh release edit "$GITHUB_REF_NAME" --draft=false
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
 
   image:
     # After goreleaser: a failed draft or attestation stops the pushes.
@@ -187,3 +185,16 @@ jobs:
           ANSIBLE_GALAXY_SERVER_LIST: public
           ANSIBLE_GALAXY_SERVER_PUBLIC_URL: https://galaxy.ansible.com/
           ANSIBLE_GALAXY_SERVER_PUBLIC_TOKEN: ${{ secrets.GALAXY_API_KEY }}
+
+  # The one place the release stops being a draft: after the packages, image, chart, PyPI and Galaxy
+  # have all published. It builds and fetches nothing.
+  publish:
+    needs: [check, goreleaser, image, chart, pypi, galaxy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {contents: write}
+    steps:
+      - run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}

@@ -256,7 +256,7 @@ lab-l80:
 # A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
 # Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
 lab-l84:
-	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
+	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
 
 lab-l84-systemd: smoke-keyhost packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
@@ -487,6 +487,10 @@ bin/helm-$(HELM_VERSION):
 	mv bin/helm bin/helm-$(HELM_VERSION)
 	rm bin/helm.tar.gz
 
+# bin/helm is the pinned binary under the name release.yml's chart job calls.
+bin/helm: bin/helm-$(HELM_VERSION)
+	cp bin/helm-$(HELM_VERSION) bin/helm
+
 helm-test: bin/helm-$(HELM_VERSION)
 	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
 
@@ -581,7 +585,7 @@ lab-l82: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) ESO_CHART=$(CURDIR)/bin/external-secrets-$(ESO_VERSION).tgz \
 	  ESO_CHART_VERSION=$(ESO_VERSION) ESO_APP_VERSION=$(ESO_APP_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l82 \
-	  go test -tags lab ./tests/lab/ -run '^TestL82$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  PORT49_LAB_L82=1 go test -tags lab ./tests/lab/ -run '^TestL82$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l82; exit $$rc
 
 # Lab entry L83 (plan 12b, Task 14): Vault Agent's injector and the Secrets Store CSI driver on kind,
@@ -612,7 +616,7 @@ lab-l83: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VAULT_CHART=$(CURDIR)/bin/vault-$(VAULT_VERSION).tgz \
 	  CSI_CHART=$(CURDIR)/bin/secrets-store-csi-driver-$(CSI_VERSION).tgz \
 	  VAULT_CHART_VERSION=$(VAULT_VERSION) CSI_CHART_VERSION=$(CSI_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l83 \
-	  go test -tags lab ./tests/lab/ -run '^TestL83$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  PORT49_LAB_L83=1 go test -tags lab ./tests/lab/ -run '^TestL83$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l83; exit $$rc
 
 # Lab entry L85 (plan 12b, Task 16): MetalLB in BGP mode as an anycast address for port49d, on kind
@@ -634,7 +638,7 @@ lab-l85: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) METALLB_CHART=$(CURDIR)/bin/metallb-$(METALLB_VERSION).tgz \
 	  METALLB_CHART_VERSION=$(METALLB_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l85 \
-	  go test -tags lab ./tests/lab/ -run '^TestL85$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  PORT49_LAB_L85=1 go test -tags lab ./tests/lab/ -run '^TestL85$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l85; \
 	  docker rm -f port49l85-frr port49l85-client >/dev/null 2>&1; docker network rm port49l85dev >/dev/null 2>&1; exit $$rc
 

@@ -42,6 +42,9 @@ import (
 // command that needs it runs inside that pod. It is never an argument, never logged and never in
 // the results, and a failure's dump (which never reads Secrets) skips the vault namespace.
 func TestL83(t *testing.T) {
+	if os.Getenv("PORT49_LAB_L83") != "1" {
+		t.Skip("PORT49_LAB_L83=1 runs L83 (make lab-l83); `make lab` does not")
+	}
 	out := os.Getenv("PORT49_LAB_OUT")
 	if out == "" {
 		out = t.TempDir()

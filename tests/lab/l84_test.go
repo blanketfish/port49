@@ -30,6 +30,9 @@ import (
 // 0700 temp directories, never printed; the compose project is port49l84, taken down with its
 // volumes on every exit.
 func TestL84(t *testing.T) {
+	if os.Getenv("PORT49_LAB_L84") != "1" {
+		t.Skip("PORT49_LAB_L84=1 runs L84 (make lab-l84); `make lab` does not")
+	}
 	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -259,7 +260,7 @@ func TestGoReleaserIsThePinnedBinary(t *testing.T) {
 		}
 	}
 	f, _ := release(t)
-	// a draft release, then the attestation over the real artifacts, then the publish
+	// a draft release, then the attestation over the real artifacts; the undraft is the publish job's
 	var order []string
 	for _, s := range f.Jobs["goreleaser"].Steps {
 		switch {
@@ -270,17 +271,14 @@ func TestGoReleaserIsThePinnedBinary(t *testing.T) {
 			}
 		case strings.HasPrefix(s.Uses, "actions/attest-build-provenance@"):
 			order = append(order, "attest")
-		case strings.TrimSpace(s.Run) == `gh release edit "$GITHUB_REF_NAME" --draft=false`:
-			order = append(order, "publish")
-			if s.Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" || s.Env["GH_REPO"] != "${{ github.repository }}" {
-				t.Error("the publish step lacks GH_TOKEN or GH_REPO in env")
-			}
+		case strings.Contains(s.Run, "--draft=false"):
+			t.Error("the goreleaser job undrafts the release before the image, chart, PyPI and Galaxy have published")
 		case s.Run != "":
 			t.Errorf("the goreleaser job runs %q", s.Run)
 		}
 	}
-	if strings.Join(order, ",") != "release,attest,publish" {
-		t.Errorf("the goreleaser job's order is %v, want release, attest, publish", order)
+	if strings.Join(order, ",") != "release,attest" {
+		t.Errorf("the goreleaser job's order is %v, want release, attest", order)
 	}
 	gr, _ := os.ReadFile("../../.goreleaser.yaml")
 	if !regexp.MustCompile(`(?m)^release:\n  draft: true$`).Match(gr) {
@@ -462,5 +460,162 @@ func TestTheGalaxyPublishStepPassesOnlyOnSuccessOrAnExistingVersion(t *testing.T
 		if (err == nil) != c.pass {
 			t.Errorf("%s: step passed=%v, want %v", c.name, err == nil, c.pass)
 		}
+	}
+}
+
+// Every `make X` a workflow runs is a target the Makefile defines: release.yml once ran `make bin/helm`,
+// which did not exist, and only a tag would have shown it. A target that carries a make variable is
+// not checked here, and neither is a `make lab-...` in a comment.
+func TestEveryMakeTargetAWorkflowRunsExists(t *testing.T) {
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defined := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^([A-Za-z0-9_./-]+):`).FindAllStringSubmatch(string(mk), -1) {
+		defined[m[1]] = true
+	}
+	for _, m := range regexp.MustCompile(`(?m)^\.PHONY:(.*)$`).FindAllStringSubmatch(string(mk), -1) {
+		for _, w := range strings.Fields(m[1]) {
+			defined[w] = true
+		}
+	}
+	ran := 0
+	for name := range allWorkflows(t) {
+		f, _ := load(t, "../../.github/workflows/"+name)
+		for jn, j := range f.Jobs {
+			for _, s := range j.Steps {
+				for _, line := range strings.Split(s.Run, "\n") {
+					line = regexp.MustCompile(`\$\{\{[^}]*\}\}`).ReplaceAllString(line, "$$X")
+					line = regexp.MustCompile(`\d?>&?\d*`).ReplaceAllString(line, " ")
+					for _, m := range regexp.MustCompile(`(?:^|[\s;&|(])make\s+((?:[A-Za-z0-9_./$=-]+\s*)+)`).FindAllStringSubmatch(line, -1) {
+						for _, target := range strings.Fields(m[1]) {
+							if strings.ContainsAny(target, "=$") {
+								continue
+							}
+							ran++
+							if !defined[target] {
+								t.Errorf("%s job %s runs `make %s`, which the Makefile does not define", name, jn, target)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if ran < 10 {
+		t.Errorf("found %d make targets in the workflows, want many more", ran)
+	}
+}
+
+// The release leaves draft last: a draft is the one thing a user can see, and a re-run after a failed
+// publisher must find it still a draft. The final job waits for every publisher and holds the one write.
+func TestTheReleaseLeavesDraftOnlyAfterEveryPublisher(t *testing.T) {
+	f, _ := release(t)
+	j, ok := f.Jobs["publish"]
+	if !ok {
+		t.Fatal("release.yml has no publish job")
+	}
+	var needs []string
+	if n, ok := j.Needs.([]any); ok {
+		for _, x := range n {
+			needs = append(needs, x.(string))
+		}
+	}
+	sort.Strings(needs)
+	if got, want := strings.Join(needs, ","), "chart,check,galaxy,goreleaser,image,pypi"; got != want {
+		t.Errorf("publish needs %s, want %s", got, want)
+	}
+	if len(j.Permissions) != 1 || j.Permissions["contents"] != "write" {
+		t.Errorf("publish permissions are %v, want exactly contents: write", j.Permissions)
+	}
+	var edits int
+	for _, s := range j.Steps {
+		if strings.TrimSpace(s.Run) == `gh release edit "$GITHUB_REF_NAME" --draft=false` {
+			edits++
+			if s.Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" || s.Env["GH_REPO"] != "${{ github.repository }}" {
+				t.Error("the undraft step lacks GH_TOKEN or GH_REPO in env")
+			}
+		} else if s.Run != "" || s.Uses != "" {
+			t.Errorf("publish runs more than the undraft: %q %q", s.Run, s.Uses)
+		}
+	}
+	if edits != 1 {
+		t.Errorf("publish undrafts %d times, want 1", edits)
+	}
+	for id, other := range f.Jobs {
+		if id == "publish" {
+			continue
+		}
+		for _, s := range other.Steps {
+			if strings.Contains(s.Run, "--draft=false") {
+				t.Errorf("job %s undrafts the release", id)
+			}
+		}
+	}
+}
+
+// A re-run after a later job failed must not trip over the first run's draft or its assets.
+func TestGoReleaserReplacesItsOwnDraftOnARerun(t *testing.T) {
+	gr, err := os.ReadFile("../../.goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Release map[string]any `yaml:"release"`
+	}
+	if err := yaml.Unmarshal(gr, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]any{"draft": true, "replace_existing_draft": true, "replace_existing_artifacts": true, "prerelease": "auto"} {
+		if cfg.Release[k] != want {
+			t.Errorf("release.%s is %v, want %v", k, cfg.Release[k], want)
+		}
+	}
+	_, text := release(t)
+	if !strings.Contains(text, "replace_existing") || strings.Contains(text, "GoReleaser's own rules") {
+		t.Error("release.yml's re-run comment still says the release is replaced by GoReleaser's own rules, not by the settings that do it")
+	}
+}
+
+// `make lab` runs every test under tests/lab, and the kind and compose labs (L82 to L85) belong to CI
+// and to their own targets: a harness that boots clusters must not start on the lab machine because a
+// platform run walked past it. Each skips unless its variable is 1, as TestL69 does, and only its own
+// make target sets it.
+func TestTheCIOnlyLabsAreOptIn(t *testing.T) {
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"82", "83", "84", "85"} {
+		v := "PORT49_LAB_L" + n
+		src, err := os.ReadFile("../../tests/lab/l" + n + "_test.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fn := regexp.MustCompile(`(?s)func TestL` + n + `\(t \*testing\.T\) \{\n\tif os\.Getenv\("` + v + `"\) != "1" \{\n\t\tt\.Skip\(`)
+		if !fn.Match(src) {
+			t.Errorf("TestL%s does not skip first unless %s=1", n, v)
+		}
+		set := regexp.MustCompile(`(?m)^lab-l` + n + `:.*\n(?:\t.*\n)*?[^\n]*` + v + `=1[^\n]*-run '\^TestL` + n + `\$\$'`)
+		if !set.Match(mk) {
+			t.Errorf("make lab-l%s does not set %s=1 on the go test that runs TestL%s", n, v, n)
+		}
+	}
+}
+
+// The chart's helm-tagged checks run on real helm in CI; `make test` never builds them.
+func TestTheHelmTestRunsInCI(t *testing.T) {
+	f, _ := load(t, "../../.github/workflows/test.yml")
+	j, ok := f.Jobs["helm"]
+	if !ok {
+		t.Fatal("test.yml has no helm job")
+	}
+	found := false
+	for _, s := range j.Steps {
+		found = found || strings.TrimSpace(s.Run) == "make helm-test"
+	}
+	if !found {
+		t.Error("the helm job does not run make helm-test")
 	}
 }

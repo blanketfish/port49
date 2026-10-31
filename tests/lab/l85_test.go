@@ -62,6 +62,9 @@ const (
 // results are an artifact that will be public. The device's key is the stack's and the login token
 // is minted for the run; both travel on stdin and are never printed.
 func TestL85(t *testing.T) {
+	if os.Getenv("PORT49_LAB_L85") != "1" {
+		t.Skip("PORT49_LAB_L85=1 runs L85 (make lab-l85); `make lab` does not")
+	}
 	shapetest.RefuseOnKeyHost(t)
 	out := os.Getenv("PORT49_LAB_OUT")
 	if out == "" {
