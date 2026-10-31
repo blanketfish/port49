@@ -433,7 +433,7 @@ func (r RevokeReport) response() api.RevokeResponse {
 	for _, ref := range r.Unreached {
 		out.Unreached = append(out.Unreached, api.SessionRef{Device: ref.NAS, Username: ref.Username})
 	}
-	if out.Standing {
+	if out.Standing && r.Attempted {
 		saved := r.Saved
 		out.Saved = &saved
 	}

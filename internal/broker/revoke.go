@@ -81,10 +81,13 @@ type RevokeReport struct {
 	Unreached   []store.ContextRef
 	TokenKeys   int
 	Connections int
-	Saved       bool
-	SaveErr     error
-	Err         error
-	Unnamed     bool
+	// Saved is whether broker.revocations_file was written; Attempted is whether
+	// there was a file to write (Broker.Persist set), so a broker that keeps none
+	// reports no Saved at all.
+	Saved, Attempted bool
+	SaveErr          error
+	Err              error
+	Unnamed          bool
 	// decimal is set when the serial was typed in decimal digits alone,
 	// which is read as hex: openssl prints a small serial in decimal (M1).
 	decimal bool
@@ -266,6 +269,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
+	rep.Attempted = b.Persist != nil
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	n, refs, rerr := b.ReachMark(ctx, rep.Mark)
 	rep.TokenKeys, rep.Contexts = n, refs
@@ -426,6 +430,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 		b.Conns.Revoked(cur, false)
 	}
 	rep := RevokeReport{Request: req, By: cur.Kind, Mark: cur}
+	rep.Attempted = b.Persist != nil
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	b.recordRevocation(b.Now(), rep, decision.VerdictPermit, decision.RevocationLifted, "lifted")
 	return rep, nil
@@ -525,8 +530,8 @@ func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict strin
 	if rep.Key != (store.TokenKey{}) {
 		body.Device, body.Username = rep.Key.NAS, rep.Key.Username
 	}
-	if rep.By == ByPrincipal || rep.By == ByCert {
-		saved := rep.Saved // a standing mark's file; self and key write none
+	if (rep.By == ByPrincipal || rep.By == ByCert) && rep.Attempted {
+		saved := rep.Saved // a standing mark's file; self and key write none, and a broker without one has none
 		body.Saved = &saved
 	}
 	for _, ref := range rep.Unreached {

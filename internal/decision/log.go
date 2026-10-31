@@ -489,7 +489,8 @@ type Revocation struct {
 	Connections int          `json:"connections,omitempty"`
 	Unreached   []ContextRef `json:"unreached,omitempty"`
 	// Saved is whether broker.revocations_file was written: a standing
-	// mark's alone, absent for a self or key revocation, which writes none.
+	// mark's alone, absent for a self or key revocation, which writes none,
+	// and for a broker that keeps no revocations_file.
 	Saved *bool  `json:"saved,omitempty"`
 	Error string `json:"error,omitempty"`
 }

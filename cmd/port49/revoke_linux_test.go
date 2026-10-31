@@ -207,3 +207,28 @@ func TestHexSerial(t *testing.T) {
 		}
 	}
 }
+
+// The exit status follows the broker's answer: no saved and no incomplete is a revocation that worked
+// (a standalone broker keeps no revocations_file, so it says nothing of saving), saved:false and an
+// incomplete are exit 3.
+func TestRevokeExitFollowsSavedAndIncomplete(t *testing.T) {
+	yes, no := true, false
+	var answer api.RevokeResponse
+	newAdminStub(t, func(agent.AdminRequest) (int, any) { return 200, answer })
+	for _, c := range []struct {
+		name string
+		resp api.RevokeResponse
+		want int
+	}{
+		{"no saved", api.RevokeResponse{By: "principal", Standing: true, Text: "revoked it"}, 0},
+		{"saved", api.RevokeResponse{By: "principal", Standing: true, Saved: &yes, Text: "revoked it"}, 0},
+		{"not saved", api.RevokeResponse{By: "principal", Standing: true, Saved: &no, Text: "revoked it"}, 3},
+		{"incomplete", api.RevokeResponse{By: "principal", Standing: true, Incomplete: "a step", Text: "revoked it"}, 3},
+	} {
+		answer = c.resp
+		var out, errb bytes.Buffer
+		if code := run([]string{"revoke", "--principal", "user:carol@example.com", "--yes"}, &out, &errb); code != c.want {
+			t.Errorf("%s: exit %d, want %d: %q %q", c.name, code, c.want, out.String(), errb.String())
+		}
+	}
+}

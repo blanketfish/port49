@@ -702,7 +702,7 @@ func TestARevocationBehindAHungWriteIsReportedUnsaved(t *testing.T) {
 
 	release := hangWrites(t, 50*time.Millisecond)
 	rep, err := brk.Revoke(ctx, broker.RevokeRequest{Principal: "user:alice@example.com", Origin: "test"})
-	if err != nil || rep.Err != nil || rep.Saved || rep.SaveErr == nil || !errors.Is(rep.SaveErr, context.DeadlineExceeded) {
+	if err != nil || rep.Err != nil || rep.Saved || !rep.Attempted || rep.SaveErr == nil || !errors.Is(rep.SaveErr, context.DeadlineExceeded) {
 		t.Fatalf("%+v %v", rep, err)
 	}
 	if _, err := st.GetRevocation(ctx, store.RevocationPrincipal, "user:alice@example.com"); err != nil {
@@ -879,5 +879,28 @@ func TestACallWhoseWriteAnswersAsItGivesUp(t *testing.T) {
 		if err := persist(ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// port49d's embedded broker with a broker.revocations_file reports saved:true once the file is
+// written, and a revocation reports it present (the standalone broker has no file and reports none).
+func TestARevocationWithARevocationsFileReportsSaved(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	st := memory.New(time.Now)
+	m := newMetrics()
+	minter := token.NewMinter(st, decision.NewJSONLines(io.Discard), rand.Reader, token.TagKey([]byte("revoke-test-key")),
+		time.Now, 8)
+	_, brk, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, minter,
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brk.Sessions = session.New(st, time.Now, time.Hour, time.Hour)
+	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), nil, nil, m)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rep, err := brk.Revoke(ctx, broker.RevokeRequest{Principal: "user:alice@example.com", Origin: "test"})
+	if err != nil || rep.Err != nil || rep.SaveErr != nil || !rep.Saved || !rep.Attempted {
+		t.Fatalf("%+v %v", rep, err)
 	}
 }

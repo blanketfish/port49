@@ -1360,3 +1360,44 @@ func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
 		t.Fatalf("a failed lift was recorded: %v", recs)
 	}
 }
+
+// A broker that keeps no broker.revocations_file (a standalone port49-broker, whose marks live in
+// the directory store) has nothing to save: its answer and its record carry no saved at all. A
+// saved:false there made `port49 revoke` exit 3 on a revocation that had worked.
+func TestARevocationWithNoFileToWriteReportsNoSaved(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Persist = nil
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil || rep.Partial() || rep.Attempted {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := rep.response(); !got.Standing || got.Saved != nil {
+		t.Fatalf("the wire form of a revocation with no file: standing %v, saved %v", got.Standing, got.Saved)
+	}
+	body := eventsOf(f.records(t), "revoke")[0]["revocation"].(map[string]any)
+	if _, ok := body["saved"]; ok {
+		t.Fatalf("the record carries saved: %v", body)
+	}
+	lifted, err := f.b.Lift(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil || lifted.Attempted || lifted.response().Saved != nil {
+		t.Fatalf("a lift with no file: %+v %v", lifted, err)
+	}
+}
+
+// With a file to write, saved is reported either way.
+func TestARevocationWithAFileReportsSaved(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Persist = func(context.Context) error { return nil }
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil || !rep.Attempted || rep.response().Saved == nil || !*rep.response().Saved {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if body := eventsOf(f.records(t), "revoke")[0]["revocation"].(map[string]any); body["saved"] != true {
+		t.Fatalf("record: %v", body)
+	}
+	f.b.Persist = func(context.Context) error { return errors.New("no space left on device") }
+	rep, _ = f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if s := rep.response().Saved; s == nil || *s {
+		t.Fatalf("a failed write must say saved:false: %v", s)
+	}
+}

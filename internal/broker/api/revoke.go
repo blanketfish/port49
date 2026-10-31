@@ -48,7 +48,7 @@ type SessionRef struct {
 // subject the revoked principal, or the key's owner, resolves to, so a
 // misspelt colleague is seen at once; empty for self, or when no subject
 // names the principal. Saved is a standing mark's alone: whether
-// broker.revocations_file was written. Incomplete is set when a step did
+// broker.revocations_file was written; absent when the broker keeps no such file. Incomplete is set when a step did
 // not finish; running the same request again repeats every step. Text is
 // what port49 revoke prints.
 type RevokeResponse struct {

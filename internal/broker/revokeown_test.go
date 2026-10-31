@@ -225,7 +225,8 @@ func TestSelfAndKeyRevocationsAreRecorded(t *testing.T) {
 			t.Fatalf("%s: %v", by, recs[i])
 		}
 	}
-	if rv := recs[2]["revocation"].(map[string]any); rv["by"] != "principal" || rv["saved"] != false {
+	// This broker keeps no revocations_file, so a standing mark's record has no saved.
+	if rv := recs[2]["revocation"].(map[string]any); rv["by"] != "principal" || rv["saved"] != nil {
 		t.Fatalf("a standing mark's record: %v", recs[2])
 	}
 	if recs[0]["principal"] != alicePrincipal || recs[0]["revocation"].(map[string]any)["origin"] != "api "+alicePrincipal {

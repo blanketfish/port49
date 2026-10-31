@@ -151,7 +151,7 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 		t.Fatalf("bob's key revocation: %+v", key)
 	}
 	mark := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`))
-	if mark.By != "principal" || !mark.Standing || mark.Saved == nil || mark.Subject != "netops" ||
+	if mark.By != "principal" || !mark.Standing || mark.Saved != nil || mark.Subject != "netops" ||
 		!strings.Contains(mark.Text, "lift it with `port49 revoke --lift` and the same principal or certificate") {
 		t.Fatalf("bob's revocation of alice: %+v", mark)
 	}

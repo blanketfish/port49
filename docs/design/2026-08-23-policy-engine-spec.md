@@ -2607,7 +2607,7 @@ live contexts were marked; `token_keys` how many
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
 that never asks about a command, or on a device the inventory gives no platform, so an incident
 responder knows which sessions to close on the device (§5.6, "Where these controls do not
-reach"); `saved` whether `broker.revocations_file` was written, present only for a standing mark; and `error` the first step that
+reach"); `saved` whether `broker.revocations_file` was written, present only for a standing mark, and only when the broker keeps a `broker.revocations_file` (a standalone `port49-broker` keeps none, so a clean revoke there carries no `saved` and exits 0); and `error` the first step that
 did not finish, while the mark stands. A count of zero is absent. A `mint deny
 credential_revoked` names whose credential it was as `trust_domain_unresolved` does: `principal`,
 and `auth.fingerprint`. A mint that the check after its writes refuses has already recorded a
