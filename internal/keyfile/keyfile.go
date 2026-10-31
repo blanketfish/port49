@@ -52,8 +52,43 @@ func LoadX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
 	}
 }
 
-// readCert is os.ReadFile, swapped in tests to fail the certificate's read once.
-var readCert = os.ReadFile
+// readCert reads the certificate of LoadX509KeyPair, following a link as the key's rule does; it is
+// swapped in tests to fail the read once.
+var readCert = func(path string) ([]byte, error) { return readCertFile(path, true) }
+
+// readCertFile reads a certificate, which is public: no owner or mode rule, but a regular file of at
+// most 1 MiB, opened non-blocking so a named pipe is refused where os.ReadFile would wait on it for
+// good, with no message (port49d's inventory client loads its pair on every connection). A link is
+// followed only if follow is set, as the rule for the file's key allows.
+func readCertFile(path string, follow bool) ([]byte, error) {
+	flags := os.O_RDONLY | syscall.O_NONBLOCK
+	if !follow {
+		flags |= syscall.O_NOFOLLOW
+	}
+	f, err := os.OpenFile(path, flags, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("keyfile: certificate %s: %w (a symlink is refused: name the certificate file itself)", path, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("keyfile: certificate %s is not a regular file", path)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxKeySize+1))
+	if err != nil {
+		return nil, fmt.Errorf("keyfile: certificate %s: %w", path, err)
+	}
+	if len(b) > maxKeySize {
+		return nil, fmt.Errorf("keyfile: certificate %s is larger than %d bytes; it is not a certificate", path, maxKeySize)
+	}
+	return b, nil
+}
 
 // afterCert runs between LoadX509KeyPair's two reads: a test seam for a swap of the volume's
 // generation in between.
@@ -62,7 +97,7 @@ var afterCert = func() {}
 // LoadOwnX509KeyPair is LoadX509KeyPair for a pair port49 or its operator holds for itself (the
 // CLI's own client key): the key is read with ReadOwn's rule.
 func LoadOwnX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
-	certPEM, err := os.ReadFile(certFile)
+	certPEM, err := readCertFile(certFile, false)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
