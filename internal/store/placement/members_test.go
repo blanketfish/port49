@@ -371,6 +371,39 @@ func TestACutReadOfAWatchedPinIsSaid(t *testing.T) {
 	}
 }
 
+// Each outage says it again: a directory that answered between two cuts ends the first episode, so the
+// second cut's first read of the same principal is said too (the line is once per principal per
+// episode, not once per process).
+func TestEachCutSaysTheCachedPinAgain(t *testing.T) {
+	ctx := context.Background()
+	reach := true
+	a, _, _, _, _ := twoRegions(&reach)
+	var said []string
+	a.(*placed).c.Say = func(f string, args ...any) { said = append(said, fmt.Sprintf(f, args...)) }
+	if err := a.PutMembership(ctx, member("uuid:1", t0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	read := func(up bool) {
+		t.Helper()
+		reach = up
+		if got, err := a.GetMembership(ctx, alice); err != nil || got.EntryID != "uuid:1" {
+			t.Fatalf("read (up %v): %+v %v", up, got, err)
+		}
+	}
+	read(true)
+	read(false)
+	read(false)
+	if len(said) != 1 {
+		t.Fatalf("the first cut said %q, want one line", said)
+	}
+	read(true)
+	read(false)
+	read(false)
+	if len(said) != 2 {
+		t.Fatalf("after the heal the second cut said %d lines in all, want 2: %q", len(said), said)
+	}
+}
+
 // C1 (review of 8a): a read with the directory cut, the pin not cached and
 // no record here is unavailable. ErrNotFound would read as "unpinned", and a
 // bind that follows could take the principal.
