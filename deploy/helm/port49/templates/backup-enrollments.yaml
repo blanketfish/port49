@@ -1,5 +1,16 @@
 {{- if .Values.backup.enrollments.enabled }}
 {{- $c := dict "root" . "component" "broker" -}}
+{{- /* The export reads the sealed enrollment store of a directory_password verifier; without one the
+   command exits 1 ("holds no second factors") and the CronJob would fail every night. */ -}}
+{{- $own := index .Values.config.broker "broker" | default dict -}}
+{{- $id := index $own "identity" | default dict -}}
+{{- $password := false -}}
+{{- range (index $id "humans" | default list) -}}
+{{- if eq (index . "type") "directory_password" -}}{{- $password = true -}}{{- end -}}
+{{- end -}}
+{{- if not $password -}}
+{{- fail "backup.enrollments.enabled is true, but config.broker.broker.identity.humans has no directory_password verifier, so there is no enrollment store to export: add the verifier (and broker.directory), or set backup.enrollments.enabled to false" -}}
+{{- end -}}
 # The sealed enrollment store (`port49-broker export-enrollments --out`), daily, into the PVC named
 # backup.enrollments.claimName: a stale-check that fails loudly, an export into `enrollments.new`, then a
 # finish step that does umask 077, renames to a dated name and prunes after 14 days. The pod mounts

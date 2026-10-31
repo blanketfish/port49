@@ -447,7 +447,7 @@ func strs(v any) []string {
 // default seccomp profile and a read-only root filesystem; the main containers add nothing and are
 // non-root with a read-only root filesystem. `extra` values render the enrollments CronJob too.
 func checkContainerSecurity(t *testing.T, r renderer) {
-	docs := render(t, r, "backup: {enrollments: {enabled: true, claimName: port49-backups}}\n")
+	docs := render(t, r, enrollmentsOn)
 	var pods []struct {
 		name string
 		spec any
@@ -791,45 +791,6 @@ func checkIssuanceExample(t *testing.T, r renderer) {
 	}
 }
 
-// The kind smoke's broker backs up its enrollments, which needs a directory_password verifier, the
-// directory it checks a password at, and the bind password's file from broker.directory.keytabSecret
-// (run 41142675052: export-enrollments exited 1, "no directory_password verifier"). This mirrors the
-// values tests/kind/stack.go writes; the stack's own test pins the same keys.
-func checkDirectoryPasswordStack(t *testing.T, r renderer) {
-	raw := `broker:
-  directory: {keytabSecret: port49-directory}
-config:
-  broker:
-    broker:
-      directory:
-        servers: [{uri: "ldaps://ldap.smoke.example:636"}]
-        ca_file: /etc/port49/broker/ca.crt
-        base_dn: dc=smoke,dc=example
-        bind: {mechanism: simple, bind_dn: "cn=port49,dc=smoke,dc=example", password_secret_ref: "file:/etc/port49/directory/bind-password"}
-        certificate_mapping: {kind: issuer_serial}
-        nested_groups: direct
-      identity:
-        humans:
-          - {type: x509, trust_anchor_file: /etc/port49/broker/ca.crt}
-          - {type: oidc, issuer: https://idp.smoke.example, client_id: port49-cli, principal_claim: email, principal_domains: [example.com]}
-          - {type: directory_password, second_factor: totp, principal_domains: [pw.example]}
-        issuance: {}
-`
-	tr := newTree(t)
-	tr.write("/etc/port49/directory/bind-password", "not-a-real-password\n", 0o440)
-	if err := os.Chmod(filepath.Join(tr.dir, "/etc/port49/directory"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	docs := render(t, r, raw)
-	_, b := tr.load(docs)
-	if b.Broker == nil || b.Broker.Identity == nil || b.Broker.Identity.PasswordSignIn == nil || b.Broker.Directory == nil {
-		t.Fatal("the stack's values render a broker with no directory_password verifier or no directory")
-	}
-	if sts := fmt.Sprint(one(t, docs, "StatefulSet", "t-broker")); !strings.Contains(sts, "port49-directory") || !strings.Contains(sts, "/etc/port49/directory") {
-		t.Error("the broker pod does not mount broker.directory.keytabSecret at /etc/port49/directory")
-	}
-}
-
 // port49d keeps serving through the route's withdrawal: a preStop sleep, in every Service mode, and a
 // grace period above it plus the drain (L85 d: a login failed past its retry because the listener
 // closed at SIGTERM, seconds before MetalLB withdrew the route). The image has no shell, so the hook is
@@ -862,6 +823,12 @@ func checkPreStop(t *testing.T, r renderer) {
 	}
 }
 
+// enrollmentsOn turns the enrollments CronJob on; the chart refuses it without the directory_password
+// verifier whose store it exports, so the values carry one (it renders; loading it needs a directory).
+const enrollmentsOn = "backup: {enrollments: {enabled: true, claimName: port49-backups}}\n" +
+	"config:\n  broker:\n    broker:\n      identity:\n        humans:\n" +
+	"          - {type: directory_password, second_factor: totp, principal_domains: [pw.example]}\n"
+
 // checks is every check on the rendered chart, in the plan's order.
 var checks = []struct {
 	name string
@@ -882,6 +849,5 @@ var checks = []struct {
 	{"TestTheMultiRegionExampleRenders", checkMultiRegion},
 	{"TestTheIssuanceExampleTurnsOnIssuance", checkIssuanceExample},
 	{"TestPort49dKeepsServingWhileTheRouteIsWithdrawn", checkPreStop},
-	{"TestTheDirectoryPasswordStackLoads", checkDirectoryPasswordStack},
 	{"TestRenderedConfigsLoad", checkConfigsLoad},
 }

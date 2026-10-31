@@ -75,6 +75,16 @@ func indentText(n int, s string) string {
 // goRender renders the chart with each values file merged over values.yaml, in order.
 func goRender(t *testing.T, valuesFiles ...string) []doc {
 	t.Helper()
+	docs, err := goRenderErr(t, valuesFiles...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return docs
+}
+
+// goRenderErr is goRender that returns a template's own failure (a chart `fail`) instead of ending the test.
+func goRenderErr(t *testing.T, valuesFiles ...string) ([]doc, error) {
+	t.Helper()
 	read := func(p string) map[string]any {
 		b, err := os.ReadFile(p)
 		if err != nil {
@@ -179,9 +189,9 @@ func goRender(t *testing.T, valuesFiles ...string) []doc {
 		}
 		var b bytes.Buffer
 		if err := root.ExecuteTemplate(&b, "port49/templates/"+base, data); err != nil {
-			t.Fatalf("rendering %s: %v", base, err)
+			return nil, fmt.Errorf("rendering %s: %v", base, err)
 		}
 		docs = append(docs, decodeDocs(t, base, b.Bytes())...)
 	}
-	return docs
+	return docs, nil
 }

@@ -298,7 +298,7 @@ func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 	const alpine = "alpine:3.22@sha256:"
 	// The snapshot is an example; the enrollments CronJob is the chart's own (backup.enrollments).
 	var rendered doc
-	for _, d := range render(t, goRender, "backup: {enrollments: {enabled: true, claimName: port49-backups}}\n") {
+	for _, d := range render(t, goRender, enrollmentsOn) {
 		if kindOf(d) == "CronJob" {
 			rendered = d
 		}
@@ -415,5 +415,18 @@ func TestTheKindPostRendererMatchesTheChartsInitCommands(t *testing.T) {
 	}
 	if strings.Contains(string(out), "chmod 3770") {
 		t.Error("a 3770 root survived the post-renderer")
+	}
+}
+
+func TestTheEnrollmentsBackupWithoutAPasswordVerifierIsRefusedAtRenderOnTheGoRender(t *testing.T) {
+	_, err := goRenderErr(t, baseValues(t, "backup: {enrollments: {enabled: true, claimName: backups}}\n")...)
+	if err == nil || !strings.Contains(err.Error(), "no directory_password verifier") {
+		t.Errorf("a CronJob that fails every night was rendered: %v", err)
+	}
+	if _, err := goRenderErr(t, baseValues(t, enrollmentsOn)...); err != nil {
+		t.Errorf("a configured verifier was refused: %v", err)
+	}
+	if _, err := goRenderErr(t, baseValues(t, "")...); err != nil {
+		t.Errorf("the default (no enrollments backup) was refused: %v", err)
 	}
 }

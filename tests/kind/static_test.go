@@ -361,19 +361,18 @@ func TestTheRestartCellRaisesTheHeldLevelBeforeTheRestart(t *testing.T) {
 	}
 }
 
-// The backups cell exports the enrollments, which exist only with a directory_password verifier, its
-// directory and the bind password's file, and only once init-enrollments made the store (run
-// 41142675052: the export's first run failed). tests/helm pins that these values load.
-func TestTheStackHoldsAnEnrollmentStoreToExport(t *testing.T) {
+// A broker with broker.directory refuses a policy whose subjects declare a username (the directory
+// supplies human usernames), and the stack's policy declares them: with a directory both brokers exit
+// at policy load (run 41147074053). So the stack configures no directory and no directory_password
+// verifier, and the backups cell does not run the enrollments export.
+func TestTheStackConfiguresNoDirectory(t *testing.T) {
 	stack := read(t, "tests", "kind", "stack.go")
-	for _, want := range []string{"type: directory_password", "keytabSecret: port49-directory", "password_secret_ref:", `"port49-directory"`} {
-		if !strings.Contains(stack, want) {
-			t.Errorf("tests/kind/stack.go lacks %q", want)
+	for _, bad := range []string{"directory_password", "keytabSecret", "password_secret_ref", "      directory:"} {
+		if strings.Contains(stack, bad) {
+			t.Errorf("tests/kind/stack.go configures a directory (%q): the stack's policy declares usernames, which a directory refuses", bad)
 		}
 	}
-	cell := read(t, "tests", "kind", "smoke_test.go")
-	i := strings.Index(cell, "func (s *smoke) cellBackups")
-	if init, bk := strings.Index(cell[i:], `"init-enrollments"`), strings.Index(cell[i:], "s.backup(b.cron"); i < 0 || init < 0 || init > bk {
-		t.Error("cellBackups must run init-enrollments before the first export")
+	if strings.Contains(read(t, "tests", "kind", "smoke_test.go"), `-enrollments-export", "enrollments-`) {
+		t.Error("the backups cell runs the enrollments export, which needs a directory_password verifier")
 	}
 }

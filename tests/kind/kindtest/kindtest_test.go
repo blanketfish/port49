@@ -306,3 +306,13 @@ func TestTheIssuerLinesMatchWhatTheBrokerSays(t *testing.T) {
 		t.Fatalf("a walked CA key's lines: %q", joined)
 	}
 }
+
+func TestFilterKeepsALineThatCitesASpecSectionAndStillDropsOtherNonASCII(t *testing.T) {
+	got := Filter("port49-broker: the directory supplies human usernames (spec §2; decision 38)\nbad \xff\xfe line\n")
+	if !strings.Contains(got, "(spec section 2; decision 38)") {
+		t.Errorf("the refusal line was dropped or mangled: %q", got)
+	}
+	if strings.Contains(got, "bad") {
+		t.Errorf("a line with raw bytes was kept: %q", got)
+	}
+}

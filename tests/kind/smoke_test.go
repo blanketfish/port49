@@ -281,17 +281,14 @@ spec:
   storageClassName: ` + scName + `
   resources: {requests: {storage: 1Gi}}
 `)
-	// The enrollment store exists only once init-enrollments has made it; the export of a store that
-	// was never made is refused ("lost"), which the CronJob would show as a failed first run.
-	s.c.Kubectl("-n", ns, "exec", "t-broker-0", "-c", "port49-broker", "--", "/usr/local/bin/port49-broker",
-		"init-enrollments", "--config", "/etc/port49/config/port49-broker.yaml")
 	chart := s.chart
 	s.c.Apply(s.example(filepath.Join(chart, "examples", "backup-cronjob.yaml")))
-	// The enrollments export is the chart's own CronJob (backup.enrollments), from the same volumes template.
-	s.install("--set", "backup.enrollments.enabled=true", "--set", "backup.enrollments.claimName=port49-backups")
+	// The chart's enrollments export (backup.enrollments) is not run here: it exports the sealed enrollment
+	// store of a directory_password verifier, which needs a directory, and a directory supplies the human
+	// usernames the stack's policy declares (policy load refuses both). No LDAP server is in this stack, so
+	// the CronJob's pattern is checked by tests/helm and its run waits for a lab with one (12c).
 	for _, b := range []struct{ cron, glob, stale string }{
 		{"port49-etcd-snapshot", "etcd-snapshot-*.db", "etcd-snapshot.new"},
-		{release + "-enrollments-export", "enrollments-*.json", "enrollments.new"},
 	} {
 		if got := s.backup(b.cron, b.cron+"-run1"); got != "succeeded" {
 			t.Fatalf("%s: the first run %s", b.cron, got)

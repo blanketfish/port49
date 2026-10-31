@@ -206,7 +206,10 @@ func Redact(args []string) string {
 // Filter is tests/qual/secret-filter.sh on s: every failure dump goes through it.
 func Filter(s string) string {
 	cmd := exec.Command("bash", filepath.Join(Root(), "tests", "qual", "secret-filter.sh"))
-	cmd.Stdin = strings.NewReader(s)
+	// The filter drops any line holding a byte outside printable ASCII, and port49's refusals cite the spec
+	// as "spec §2": the one refusal that explained the kind brokers' exit was dropped whole (run
+	// 41147074053). The section sign is spelled out first; every other non-ASCII byte still drops its line.
+	cmd.Stdin = strings.NewReader(strings.ReplaceAll(s, "§", "section "))
 	out, err := cmd.Output()
 	if err != nil {
 		return "<the secret filter failed: nothing printed>"

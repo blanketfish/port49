@@ -98,3 +98,15 @@ func TestAGracePeriodShorterThanThePreStopAndTheDrainIsRefused(t *testing.T) {
 		t.Errorf("the boundary (30 + 30) is refused: %v\n%s", err, out)
 	}
 }
+
+func TestTheEnrollmentsBackupWithoutAPasswordVerifierIsRefusedAtRender(t *testing.T) {
+	_, out, err := helmTemplate(t, baseValues(t, "backup: {enrollments: {enabled: true, claimName: backups}}\n")...)
+	if err == nil || !strings.Contains(out, "no directory_password verifier") {
+		t.Errorf("a CronJob that fails every night was rendered: %v\n%s", err, out)
+	}
+	with := "backup: {enrollments: {enabled: true, claimName: backups}}\nconfig:\n  broker:\n    broker:\n      identity:\n        humans:\n" +
+		"          - {type: directory_password, second_factor: totp, principal_domains: [pw.example]}\n"
+	if _, out, err := helmTemplate(t, baseValues(t, with)...); err != nil {
+		t.Errorf("a configured verifier was refused: %v\n%s", err, out)
+	}
+}
