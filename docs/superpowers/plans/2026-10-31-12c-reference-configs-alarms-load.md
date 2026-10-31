@@ -21,7 +21,7 @@
 - Go 1.26: the standard library, `gopkg.in/yaml.v3` and `github.com/prometheus/client_golang`, all in go.mod. No new module.
 - Prometheus `promtool` v3.5.0, pinned by sha256 in the Makefile as `bin/promtool-$(PROMTOOL_VERSION)`.
 - etcd v3.6.15 (`PORT49_LAB_ETCD_BIN=/mnt/images/etcd-v3.6.15`).
-- kind v0.29.0, Helm 3.22.0 and kubectl 1.33.1, as 12b pinned them. Velero and MinIO are pinned the same way in Task 15.
+- kind v0.29.0, Helm 3.22.0 and kubectl 1.33.1, as 12b pinned them. Velero and the lab's S3-compatible store are pinned the same way in Task 15.
 - containerlab images per `tests/lab/README.md`. Default selectors: vEOS, C8000V 17.13.01a, N9Kv 10.4(2)F, vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15. Opt-in selectors: `vjunos26`, `iosxe1718`, `nxos106`, `ceos436`, `xrd261` and `srlinux`.
 
 **Spec:**
@@ -55,14 +55,25 @@ Each has a recommendation. The plan is written to the recommendation; where Ryan
    - **Recommended:** each class gets the least ceiling among the sessions the policy lands in it on that platform's devices. Each session's ceiling is the least across its own roles, with `session.max_session_age_default` for a role that names none (`SessionAge.Of`).
      - A class whose every session is `never` gets no `idle-timeout` line.
      - A class no session lands in keeps the default.
-     - `devices check-config` holds the device to the same values.
-   - **Why:** on a session-only device this timer is the only thing that ends a session (decision 21). A shared class set from the default lets a 1h role idle for 12h, and taking the least across the class is decision 33's "the option that denies more".
+     - `devices check-config` passes a device whose class `idle-timeout` is at or below the rendered value, and reports only a longer one (or a missing one). A class age that lengthens later, because a grant expired or a scope stopped selecting a device, does not flag the fleet: the device's shorter timer is the safer one.
+   - **What Ryan gets under the default delivery.** The built-in Junos adapter delivers `user_permissions` over the bitless `remote` template (decision 22). So every Junos session lands in `p49-remote`, and "per class" becomes one fleet-wide minimum: the least ceiling of any role granted on any Junos device. One 15m role makes every Junos session idle out at 15m. Only a policy whose `platforms: juniper_junos:` block sets `bit_delivery: local_user_name` gets distinct per-level classes.
+   - **Why:** on a session-only device this timer is the only thing that ends a session (decision 21). A shared class set from the default lets a 1h role idle for 12h, and taking the least across the class is decision 33's "the option that denies more". The cost is that a short role shortens everyone's idle timer on Junos, which `platform export` says in its header.
    - **Alternative:** keep the default for every class, and have `explain` say so. Task 2 then shrinks to the `never` case alone.
 2. **The restore guard's ERROR on IOS XE** (a 7f follow-up, still unassigned; it is a §12 failure-matrix row).
-   - After an etcd restore, port49d refuses token logins until a runner's purge. Its refusal is an `ERROR`, which IOS XE treats as final. Junos under the reference `tacplus`-only order does the same (ruling 2). SR Linux may too (L87). On those devices break-glass is refused until the brokers start and purge.
-   - **Recommended:** keep the ERROR. Alarm on `port49_redemption_restore_guarded` (Task 5), and put the warning in the 3am table of `deploy/failure-matrix.md` (Task 9).
-   - **Why:** closing the listener for the guard would hand every open session's commands to local authorization for the whole purge, which is a wider exposure than a break-glass delay that ends when the brokers start.
+   - After an etcd restore, port49d refuses token logins until a runner's purge. Its refusal is an `ERROR`, which IOS XE treats as final. Junos under a `tacplus`-only order does the same (Decision 3). SR Linux may too (L87). On those devices break-glass is refused until the brokers start and purge.
+   - If the brokers cannot start (12a's crash-loop "behind a promotion", for example), that wait has no end. The way out is an operator action: **stop port49d**. Each device then finds the connection refused and falls to its local method (spec §5.7 `store_unavailable`; L4, L35).
+   - **Recommended:** keep the ERROR. Page on `port49_redemption_restore_guarded == 1` for 10m (Task 5). Put a row in the 3am table of `deploy/failure-matrix.md` (Task 9) that names the escape, "stop port49d", so the lockout is bounded by an operator action.
+   - **Why:** closing the listener for the guard would hand every open session's commands to local authorization for the whole purge. That is measured: L41 saw them run under local authorization on EOS, NX-OS and both Junos images, and refused on IOS XE. It is a wider exposure than a break-glass delay that the brokers' start or one operator command ends.
    - **Alternative:** close the listener while guarded, as go-dark does. That is a code change for a later plan, not this one.
+3. **Junos's reference `authentication-order`** (moved here from the plan's rulings; the lab has run `[ tacplus password ]` since plan 1).
+   - **Recommended: `authentication-order tacplus` alone.**
+     - With `password` listed, a port49 FAIL falls through to the local password (L4, both Junos images, `tests/lab/results/L4-juniper_*.md`), so a person port49 denies gets in with a local account. That voids spec §5.6's security argument and design §12's "the reference configuration is what disables fall-through on FAIL".
+     - With `tacplus` alone, an ERROR is final (`L4-error-juniper_*.md`) until go-dark closes the listener (≤ 5.5 s at the defaults, L41). After that the server is unreachable, and break-glass logs in under either order (L4, L17).
+     - **Its cost:** break-glass waits up to 5.5 s while port49 is up with its store failing, and is locked out under the restore guard until port49d is stopped (Decision 2).
+   - **Alternative: `[ tacplus password ]`**, as the lab runs today.
+     - Break-glass logs in at once on an ERROR (L73 cell i, 2.2 s), with no wait for go-dark and none under the restore guard.
+     - **Its cost:** any port49 deny of a name that also has a local account falls through to that account. port49's deny is then not final on Junos, and the reference would need a rule that no Junos device holds a local account sharing a port49 username. That rule is device toil, and nothing port49 can check.
+   - **Why the recommendation:** a deny that is not final is a security hole on every login. The ERROR window is bounded by go-dark, and by an operator command under the guard.
 
 ## Rulings this plan is written under
 
@@ -74,11 +85,10 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
    - On **Junos**, `tests/lab/results/L73-juniper_vjunos-router.md` cell (i) ran `authentication-order [ tacplus password ]`, which falls through on ERROR, and on FAIL too (L4). `L4-error-juniper_*.md` ran `tacplus` alone, where ERROR is final.
    - On **NX-OS**, `L73-cisco_nxos.md` cell (i) recorded the break-glass *login* (`aaa authentication login default group port49 local`) landing in 5.2 s. `L4-error-cisco_nxos.md` and design §12 record that the commands that follow are refused by port49's authorization `FAIL store_unavailable`.
    - Both readings stand. Task 1 adds one sentence to design §12 saying so, citing all four notes. L88's cell (c) measures login and a command under the reference method list on every platform.
-2. **Junos's reference order is `authentication-order tacplus`.**
-   - With `password` listed, a port49 FAIL falls through to the local password (L4), which voids spec §5.6's security argument.
-   - With `tacplus` alone, an ERROR is final until go-dark closes the listener (≤ 5.5 s at the defaults, L41). After that the server is unreachable, and break-glass logs in under either order (L4, L17).
-   - The reference ships `tacplus` alone, and its README carries the 5.5 s window.
-3. **SR Linux ships `exit-on-reject true`.** Without it, a port49 deny falls through to `local` (L76 cell d, measured 1.2 s), which voids §5.6's argument. L87 measures what an ERROR does under it. Its result decides the 3am line (the break-glass account waits for go-dark, or it does not), not whether the setting ships. The reference keeps `priv-lvl-authorization true` and `services [ cli ]` on every mapped role (L76).
+2. **Junos's reference order** is Decision for Ryan 3. The plan is written to its recommendation, `tacplus` alone, and its README carries the 5.5 s window. If Ryan rules `[ tacplus password ]`, Task 10's `TestNoReferenceFallsThroughOnAReject` drops its Junos case. The Junos README section then states the fall-through and the no-shared-local-account rule, and L88 cell (a) is recorded as the measured FAIL it will be.
+3. **SR Linux ships `exit-on-reject true`.** Without it, a port49 deny falls through to `local` (L76 cell d, measured 1.2 s), which voids §5.6's argument. L87 measures what an ERROR does under it, and its cell (a) decides the 3am line (the break-glass account waits for go-dark, or it does not).
+   - This holds only if L87 (b) passes: break-glass logs in once port49d is dark. If (b) FAILs, break-glass would be locked out for the whole store outage, and the plan STOPS for the lead before the SR Linux reference ships. That keeps the roadmap's "the reference config waits on the measurement" (L76 carry).
+   - The reference keeps `priv-lvl-authorization true` and `services [ cli ]` on every mapped role (L76).
 4. **The `key_ref` label never names one device** (plan 1 carry; design §15: "device identity does not belong in metric labels").
    - A `key_ref` that admits exactly one device in the snapshot in force (a tier-1 pin, or a key group of one) is a device identity, so it is reported under `key_ref="single_device"` with `version="any"`:
      - `port49_key_validations_total` counts that device's trials there;
@@ -86,6 +96,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
      - `port49_key_retirement_seconds{key_ref="single_device",version="any"}` is the least time to retirement among those versions still presented by a device.
    - Which device is on which version is `port49 keys status`'s answer, from the log, as design §15 says per-device questions are.
    - A `key_ref` held by two or more devices keeps its own label.
+   - `single_device` matches `admission.KeyRefShape`, so a real key set could take that name and merge into the bucket. It is reserved: a policy or inventory naming `single_device` as a `key_ref` is refused at load (pre-beta, no shim).
 5. **The chart offers no host networking.** Pod Security `baseline`, which the chart's namespace runs at (decision 54), refuses `hostNetwork`. L39 (c) is still measured, on a lab-only `privileged` namespace. Its result goes in the note and the chart README, and the chart keeps `externalTrafficPolicy: Local`.
 6. **One alert file for every shape.** `deploy/alerts/port49.rules.yaml` is canonical. The chart's `files/port49.rules.yaml` is a byte-identical copy, rendered as a `PrometheusRule` only when `prometheusRule.enabled` (default false, since it needs the operator's CRD).
    - Alert names and label keys are snake_case.
@@ -97,7 +108,8 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
    - **Accounting group commit** (plan 1 carry) is built by Task 8 if Task 7's spool capacity is less than twice the sustained accounting rate at target. Otherwise Task 8 records the numbers and the `Offer` path stays as it is.
    - **`limits.max_connections`'s sizing** (12a) stands if the target run's peak `port49_connections` is under a quarter of the cap sized from `LimitNOFILE=65536` (12b's units). Otherwise the units' `LimitNOFILE=` rises.
    - **The chart's `autoscaling.averageConnections`** becomes half the peak `port49_connections` per replica measured at target, rounded to the nearest 50.
-   - **`stores.session.etcd.call_timeout` (500 ms), `bulk_timeout` (30 s) and `packet_deadline` (2 s)** stand if the store call p99 at target is under a fifth of `call_timeout`. **`stores.directory.etcd.call_timeout`'s guidance** is at least four times the measured cross-region round trip, written in `deploy/examples/stores/multi-region/README.md`.
+   - **`stores.session.etcd.call_timeout` (500 ms), `stores.session.etcd.bulk_timeout` (30 s) and `stores.session.packet_deadline` (2 s)** stand if the store call p99 at target is under a fifth of `call_timeout`. Otherwise STOP for the lead.
+   - **`stores.directory.etcd.call_timeout`'s guidance** is at least four times the measured cross-region round trip, written in `deploy/examples/stores/multi-region/README.md`.
 8. **A key version retired under an open connection, per platform** (2026-10-26 addition).
    - L29 measured the device's side of the reset a reload sends on vEOS, the N9Kv, the C8000V and vJunos-router. 12a made a retiring reload send that same reset with no strike, so for those four L29 is the answer, and the reference README cites it.
    - L88 cell (g) measures it on the platforms L29 did not cover: XRd, SR Linux, and the RFC 9887 listener on each TLS image.
@@ -105,15 +117,21 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
    - `examples/oxidized/config` sets `secure: true` and tells the operator to populate `known_hosts` once per device, which is toil at fleet scale.
    - L90 measures two things: whether Oxidized can do accept-new itself (cell d), and whether it reads an entry OpenSSH's accept-new wrote under the address it dials (cell c).
    - If (d) passes, the example uses that setting.
-   - Else, if (c) passes, `port49-oxidized-run` pre-populates each node absent from `known_hosts` with `ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes <address> exit`. The host key is saved at key exchange, before authentication, so no credential is sent.
+   - Else, if (c) passes, `port49-oxidized-run` pre-populates each node absent from `known_hosts` with `ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes <address> exit`.
+     - The host key is saved at key exchange, before authentication.
+     - The flags stop every method that would sign or send. `BatchMode` alone stops only prompts: publickey would still offer the agent's or `~/.ssh/id_*` keys, and send a signature if one were accepted.
    - Else the README says why neither works, and the per-device step stays as a measured limitation of Oxidized.
    - `secure: false` is never offered.
 10. **Velero** is named in the chart README only if L89 passes. The example uses file-system backup (the node agent), because kind has no snapshot-capable CSI driver. CSI snapshots stay unmeasured and unnamed.
-11. **The failure matrix runs on the compose stack with mock devices.** A §12 row the stack cannot reach is not re-measured. The matrix cites its closed lab rows instead:
+    - **The backup holds the issuing CA's private key** (`state/issuing-ca.key`), the broker's state and the accounting spool. The example and the L89 note say so.
+    - The example sets Velero's repository password from a Secret, never the well-known default, and its README requires bucket encryption and access limited to the backup's own credentials.
+11. **The failure matrix runs on the compose stack with mock devices.** A §12 row the stack cannot reach is not re-measured. Every design §12 row gets evidence (design §14: "every row of the failure matrix"): a subtest of Task 9, an existing named test, or a closed lab row. Among the lab rows cited:
     - directory unavailable: L42, L43, L67;
     - identity provider: L45, L46;
     - a cut region: L74;
     - device fall-through: L4, L28, L29, L35, L41.
+
+    `TestEveryMatrixRowHasEvidence` holds every row to it.
 12. **L84 closes in CI.** The systemd cells (`make lab-l84-systemd`) run on a GitHub-hosted runner in a new label-gated `lab-hosted` workflow. Then `make lab-l84 A_CELLS=` merges them with the Compose half on the same runner.
 13. **The enrollments export CronJob** (12b hand-off) runs in a kind test with an OpenLDAP container and a username-free policy (`tests/kind/enrollments_test.go`, `make kind-enrollments`). It is a test of port49's own artifact, not a lab row.
 
@@ -160,7 +178,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
 4. **A load number that only passes because the run was short or closed-loop.** A closed loop slows its own arrivals when port49 slows, and hides the queue. *Pinned:*
    - Task 6's `TestRateModeIsOpenLoop` asserts plays start on schedule while earlier plays are still stalled;
    - Task 7's run is 10 minutes at 170 logins/s, and `TestLoad` refuses a run shorter than that.
-5. **A Junos class that idles longer than a role allows**, or a `never` that renders as `idle-timeout 0`. *Pinned:* Task 2's `TestAClassTakesTheLeastCeilingLandingInIt` and `TestANeverClassWritesNoIdleTimeout`, and the check-config twin `TestCheckConfigHoldsTheSameClassAges`.
+5. **A Junos class that idles longer than a role allows**, or a `never` that renders as `idle-timeout 0`, or a fleet of devices flagged when a grant expires. *Pinned:* Task 2's `TestAClassTakesTheLeastCeilingLandingInIt`, `TestTheDefaultDeliveryLandsEverySessionInRemote`, `TestANeverClassWritesNoIdleTimeout`, `TestCheckConfigHoldsTheSameClassAges` and `TestAnExpiredGrantDoesNotFlagTheFleet`.
 
 ---
 
@@ -170,24 +188,24 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
 |---|---|---|
 | `docs/design/2026-08-23-policy-engine-spec.md`, `docs/design/2026-08-21-port49-design.md` | decision 55; rows L87–L90; L39's cells; design §12's reconciliation sentence | 1 |
 | `internal/platform/classes.go`, `internal/policy/classages.go`, `cmd/port49/platform.go`, `cmd/port49/devices.go` | the class `idle-timeout` per class | 2 |
-| `internal/policy/diff.go`, `cmd/port49/policy.go` | `policy diff` reports a changed session ceiling | 3 |
-| `internal/daemon/metrics/metrics.go`, `internal/daemon/server/conn.go`, `internal/port49d/main.go`, `internal/port49d/reload.go` | the `key_ref` label bounded | 4 |
-| `deploy/alerts/`, `deploy/helm/port49/files/port49.rules.yaml`, `deploy/helm/port49/templates/prometheusrule.yaml`, `tests/alerts/`, `Makefile`, `.github/workflows/test.yml` | alert rules and their checks | 5 |
-| `internal/devicemock/fleet.go`, `tests/lab/load.go`, `tests/lab/load_test.go`, `tests/lab/load_unit_test.go`, `internal/policy/fleet_bench_test.go` | the load harness | 6 |
+| `internal/policy/diff.go`, `internal/policy/resolve.go`, `cmd/port49/policy.go` | `policy diff` reports a changed session ceiling | 3 |
+| `internal/daemon/metrics/metrics.go`, `internal/daemon/server/conn.go`, `internal/port49d/main.go`, `internal/port49d/reload.go`, `internal/admission/`, `internal/keyset/keyset.go` | the `key_ref` label bounded; `single_device` reserved | 4 |
+| `deploy/alerts/`, `deploy/helm/port49/files/port49.rules.yaml`, `deploy/helm/port49/templates/prometheusrule.yaml`, `tests/alerts/`, `internal/daemon/metrics/metrics.go`, `internal/port49d/issuer.go`, `Makefile`, `.github/workflows/test.yml` | alert rules and their checks; `port49_issuing_ca_configured` | 5 |
+| `internal/devicemock/fleet.go`, `tests/lab/load_harness_test.go`, `tests/lab/load_test.go`, `tests/lab/load_unit_test.go`, `internal/policy/fleet_bench_test.go` | the load harness | 6 |
 | `tests/lab/results/load-<host>.md`, the defaults ruling 7 names | the load run and its sizing | 7 |
 | `internal/daemon/acct/spool.go` | group commit, gated on Task 7 | 8 |
-| `tests/compose/failmatrix_test.go`, `deploy/failure-matrix.md`, `Makefile`, `.github/workflows/compose.yml` | the failure matrix | 9 |
+| `tests/compose/failmatrix_test.go`, `tests/compose/matrix_evidence_test.go`, `deploy/failure-matrix.md`, `Makefile`, `.github/workflows/compose.yml` | the failure matrix | 9 |
 | `deploy/device-aaa/`, `tests/deviceaaa/` | the reference configurations | 10 |
-| `tests/lab/l87_test.go`, `tests/lab/results/L87-nokia_srlinux.md` | lab row L87 | 11 |
-| `tests/lab/l88.go`, `tests/lab/l88_test.go`, `tests/lab/l88_unit_test.go`, `tests/lab/results/L88-*.md` | lab row L88 | 12 |
+| `tests/lab/l87_test.go`, `tests/lab/l87_unit_test.go`, `tests/lab/results/L87-nokia_srlinux.md` | lab row L87 | 11 |
+| `tests/lab/l88_harness_test.go`, `tests/lab/l88_test.go`, `tests/lab/l88_unit_test.go`, `tests/lab/results/L88-*.md` | lab row L88 | 12 |
 | `tests/lab/l39_test.go`, `tests/shapes/l39/`, `.github/workflows/lab-kind.yml`, `tests/lab/results/L39-kind.md` | lab row L39 (b), (c) | 13 |
-| `.github/workflows/lab-hosted.yml`, `tests/lab/results/L84-systemd-docker.md` | lab row L84's systemd cells | 14 |
+| `.github/workflows/lab-hosted.yml`, `tests/ci/workflows_test.go`, `tests/lab/results/L84-systemd-docker.md` | lab row L84's systemd cells | 14 |
 | `tests/lab/l89_test.go`, `tests/shapes/l89/`, `deploy/helm/port49/examples/velero/`, `tests/lab/results/L89-kind.md` | lab row L89 | 15 |
 | `tests/lab/l49_test.go`, `examples/oxidized/`, `tests/lab/results/L90-oxidized-arista_eos.md` | lab row L90 | 16 |
-| `tests/kind/enrollments_test.go`, `Makefile`, `.github/workflows/kind.yml` | the enrollments CronJob run | 17 |
+| `tests/kind/enrollments_test.go`, `tests/ci/kind_workflows_test.go`, `Makefile`, `.github/workflows/kind.yml` | the enrollments CronJob run | 17 |
 | `docs/superpowers/plans/README.md` | As built, operator notes, hand-offs | 18 |
 
-Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12, because L87 decides SR Linux's 3am line. Then 13–17 in any order, and 18 last.
+Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmarks `ClassAges`), then 7, 8, 9, 10. Next 11 must land before 12, because L87 decides SR Linux's 3am line. Then 13–17 in any order, and 18 last.
 
 ---
 
@@ -201,13 +219,19 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
 - [ ] **Step 1: Write decision 55, "Reference device configuration, alarms, load and the failure matrix (plan 12c)".**
 
-  - Rulings 1–13 as this plan states them, one paragraph each. Rulings 14 and 15 are Decisions for Ryan 1 (the class `idle-timeout`) and 2 (the restore guard's ERROR), as Ryan rules them. Until he does, each is written with the recommendation and marked provisional.
+  - Rulings 1 and 3–13 as this plan states them, one paragraph each. Ruling 2 and rulings 14 and 15 are Decisions for Ryan 3 (Junos's order), 1 (the class `idle-timeout`) and 2 (the restore guard's ERROR), as Ryan rules them. Until he does, each is written with the recommendation and marked provisional.
   - Its "Open" line names rows L87–L90 and L39, provisional until they close.
-  - Decision 21 gains one sentence: "As built (plan 12c): the export renders each class's `idle-timeout` from the least ceiling among the sessions the policy lands in it (decision 55 ruling 14)."
+  - Decision 21 gains one sentence: "As built (plan 12c): the export renders each class's `idle-timeout` from the least ceiling among the sessions the policy lands in it, and writes none for a class whose every session is `never`; under `user_permissions` delivery every session lands in `p49-remote`, so that is one fleet-wide minimum (decision 55 ruling 14)."
+  - The three passages that say every class carries `session.max_session_age_default`, "at least one", are rewritten to ruling 14's rule, the `never` case included:
+    - §5.6, around spec line 2097 ("`port49 platform export --classes` prints each class … with `idle-timeout` set to `session.max_session_age_default`");
+    - §8, around line 4549 ("carries `idle-timeout` from `session.max_session_age_default`");
+    - §12's `check-config` text, around line 6313, which also says a class `idle-timeout` at or below the rendered value passes.
+
+    Grep the spec for `max_session_age_default` to find any other passage, excluding the never-read files.
 
 - [ ] **Step 2: In design §12, after "…against that, not against "ERROR falls through".", add the reconciliation sentence.**
 
-  > Two readings that look like a disagreement are not one: over TLS (`tests/lab/results/L73-juniper_vjunos-router.md`, cell i) Junos ran `authentication-order [ tacplus password ]`, which falls through on an ERROR and on a FAIL (L4), while `L4-error-juniper_*.md` ran `tacplus` alone, where an ERROR is final; and NX-OS's break-glass *login* landed under ERROR in 5.2 s (`L73-cisco_nxos.md`, cell i) while its commands are then refused by port49's authorization `FAIL store_unavailable` (`L4-error-cisco_nxos.md`). The reference configuration (decision 55) uses `tacplus` alone on Junos, and L88 measures login and a command under it on every platform.
+  > Two readings that look like a disagreement are not one: over TLS (`tests/lab/results/L73-juniper_vjunos-router.md`, cell i) Junos ran `authentication-order [ tacplus password ]`, which falls through on an ERROR and on a FAIL (L4), while `L4-error-juniper_*.md` ran `tacplus` alone, where an ERROR is final; and NX-OS's break-glass *login* landed under ERROR in 5.2 s (`L73-cisco_nxos.md`, cell i) while its commands are then refused by port49's authorization `FAIL store_unavailable` (`L4-error-cisco_nxos.md`). The reference configuration's Junos order is decision 55 ruling 2, and L88 measures login and a command under each reference on every platform.
 
 - [ ] **Step 3: Give L39's (b) and (c) their cells, in the claim column, after "(c) Kubernetes with host networking.".**
 
@@ -218,9 +242,9 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   | ID | Claim to measure | What rests on it | Platforms |
   |---|---|---|---|
   | **L87** | SR Linux with `exit-on-reject true` when port49 is up and answers ERROR (`store_unavailable`, the lab fault switch), and once port49d has closed its listener on etcd (go-dark). (a) The break-glass account (local only) logs in, or not, and how fast, with authentication answered ERROR; and a port49 user's token login. (b) The same with port49d dark: break-glass logs in, and its time. (c) An ERROR to the session authorization of a login port49 authenticated: whether the login completes, and the roles it gets. | Decision 55 ruling 3: the reference configuration's 3am line for SR Linux (break-glass waits for go-dark, or it does not) | SR Linux 26.7.2 (`ghcr.io/nokia/srlinux:26.7.2-519`) |
-  | **L88** | Each platform under port49's reference AAA configuration (`deploy/device-aaa/`), loaded as shipped. (a) A user port49 denies who has a local account with the same password: PASS iff refused, with no fall-through. (b) port49d stopped: PASS iff break-glass logs in within the platform's L13 timeout + 5 s (recorded). (c) port49 answering ERROR: break-glass login and one command, recorded. (d) port49d dark (listener closed by its health checks, on etcd): PASS iff break-glass logs in and runs a command. (e) A token login, one permitted and one denied command: PASS iff the permit runs, the deny is refused, and accounting START and STOP arrive. (f) The first server refusing (reset at Accept), the second answering: PASS iff a token login succeeds through the second (time recorded). (g) A reload retiring the open connection's key version, single-connection on: what the in-flight and the next command do (observation; L29's question for the platforms L29 did not measure). (h) For each TLS image, (a)–(g) over RFC 9887 under the TLS reference. (i) Junos only: the largest `idle-timeout` the commit accepts, by bisection. | Design §12 "port49 MUST ship tested reference AAA configuration per platform"; design §14's device fallback assertion; decision 55 rulings 1, 2, 3, 8 and 14 | vEOS 4.31.2F, cEOS 4.36.3M (TLS), C8000V 17.13.01a and 17.18.02 (TLS), N9Kv 10.4(2)F and 10.6(2)F (TLS), vJunos-router 23.4R2-S2.1 and 26.2R1.7 (TLS), vSRX 21.4R3.15, XRd 26.1.1 (both), SR Linux 26.7.2 |
-  | **L89** | Velero file-system backup (node agent) of a chart release's PVCs, on kind with MinIO. (a) Back up both StatefulSets, delete the namespace, and restore: the owner, group and mode of `state/`, `issuing-ca.key` and the spool directory. PASS iff both StatefulSets become ready with no fence refusal and the broker prints the CA fingerprint it printed before. (b) After the restore, a mint and a login. PASS iff both succeed. | Whether the chart README may name Velero (decision 55 ruling 10; 12b pre-flight M10) | kind; Velero, node agent and MinIO versions recorded |
-  | **L90** | Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `secure: true` with no `known_hosts` entry: what Oxidized does. (b) `secure: true` with a changed key: PASS iff refused. (c) `secure: true` after `ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes <address> exit` wrote the entry: PASS iff the backup runs. (d) Any Oxidized input or `vars` setting that maps to net-ssh's `verify_host_key: :accept_new`: PASS iff an unknown key is saved and a changed key refused. | `examples/oxidized` (decision 55 ruling 9; plan 9d carry) | Oxidized (version recorded), vEOS 4.31.2F |
+  | **L88** | Each platform under port49's reference AAA configuration (`deploy/device-aaa/`), loaded as shipped. (a) A user port49 denies who has a local account with the same password: PASS iff refused, with no fall-through. (b) port49d stopped (connections refused): PASS iff break-glass logs in within 10 s (recorded). The bound is fixed, because a refused connection is not L13's reply timeout; L4 and L41 measured 0.3 s to 5.2 s. (c) port49 answering ERROR: break-glass login and one command, recorded. (d) port49d dark (listener closed by its health checks, on etcd): PASS iff break-glass logs in and runs a command. (e) A token login, one permitted and one denied command: PASS iff the permit runs, the deny is refused, and accounting START and STOP arrive. (f) The first server refusing (reset at Accept), the second answering: PASS iff a token login succeeds through the second (time recorded). (g) A reload retiring the open connection's key version, single-connection on: what the in-flight and the next command do (observation; L29's question for the platforms L29 did not measure). (h) For each TLS image, (a)–(g) over RFC 9887 under the TLS reference. (i) Junos only: the largest `idle-timeout` the commit accepts, by bisection. | Design §12 "port49 MUST ship tested reference AAA configuration per platform"; design §14's device fallback assertion; decision 55 rulings 1, 2, 3, 8 and 14 | vEOS 4.31.2F, cEOS 4.36.3M (TLS), C8000V 17.13.01a and 17.18.02 (TLS), N9Kv 10.4(2)F and 10.6(2)F (TLS), vJunos-router 23.4R2-S2.1 and 26.2R1.7 (TLS), vSRX 21.4R3.15, XRd 26.1.1 (both), SR Linux 26.7.2 |
+  | **L89** | Velero file-system backup (node agent) of a chart release's PVCs, on kind with an S3-compatible store in the cluster. The backup holds `issuing-ca.key`; the repository password is set from a Secret. (a) Back up both StatefulSets, delete the namespace, and restore: the owner, group and mode of `state/`, `issuing-ca.key` and the spool directory. PASS iff both StatefulSets become ready with no fence refusal and the broker prints the CA fingerprint it printed before. (b) After the restore, a mint and a login. PASS iff both succeed. | Whether the chart README may name Velero (decision 55 ruling 10; 12b pre-flight M10) | kind; Velero, node agent and object-store versions recorded |
+  | **L90** | Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `secure: true` with no `known_hosts` entry: what Oxidized does. (b) `secure: true` with a changed key: PASS iff refused. (c) `secure: true` after ruling 9's `ssh … accept-new … PreferredAuthentications=none … exit` line wrote the entry: PASS iff the backup runs. (d) Any Oxidized input or `vars` setting that maps to net-ssh's `verify_host_key: :accept_new`: PASS iff an unknown key is saved and a changed key refused. | `examples/oxidized` (decision 55 ruling 9; plan 9d carry) | Oxidized (version recorded), vEOS 4.31.2F |
 
 - [ ] **Step 5: Check and commit.**
 
@@ -239,7 +263,9 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 **Files:**
 - Modify: `internal/platform/classes.go` (`ReferenceClasses`, `templates`, `template.lines`, `TemplateDrift`)
 - Create: `internal/policy/classages.go`
-- Modify: `cmd/port49/platform.go` (`exportClasses`), `cmd/port49/devices.go` (`templateCheck`)
+- Modify:
+  - `cmd/port49/platform.go`: `exportClasses`, the `--config` flag help (:149), and the comments and header at :526 and :568;
+  - `cmd/port49/devices.go`: `templateCheck`, `checkRun` (:134), and the help and usage text that says "default" (:66, :178, :303).
 - Test: `internal/platform/classes_test.go`, `internal/policy/classages_test.go`, `cmd/port49/platform_test.go`, `cmd/port49/devices_test.go`
 
 **Interfaces:**
@@ -258,27 +284,37 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
 - [ ] **Step 1: Write the failing tests.**
 
-  - `internal/policy/classages_test.go`. The policy has two Junos devices, role `ops` (`max_session_age: 1h`, level `operator`), role `view` (unset, level `readonly`) and role `forever` (`never`, level `admin`), each granted to its own subject.
+  - `internal/policy/classages_test.go`, under a `local_user_name` policy:
+    - **The fixture:** a `platforms: juniper_junos:` block setting `bit_delivery: local_user_name` and `local_user_names` for `operator`, `readonly` and `admin` (`p49-operator`, `p49-readonly`, `p49-admin`); two Junos devices; role `ops` (`max_session_age: 1h`, level `operator`), role `view` (unset, level `readonly`) and role `forever` (`never`, level `admin`), each granted to its own subject. The default passed is `12*time.Hour`.
     - `TestAClassTakesTheLeastCeilingLandingInIt`: `ClassAges("juniper_junos", 12*time.Hour, now)` gives `ByClass["p49-operator"] == time.Hour` and `ByClass["p49-readonly"] == 12*time.Hour`.
     - `TestANeverClassWritesNoIdleTimeout`: `ByClass["p49-admin"] == 0`, and `ReferenceClasses` writes no `idle-timeout` line for `p49-admin`.
     - `TestASharedClassTakesTheLeast`: a second subject lands in `p49-operator` under a role with `max_session_age: 30m`, and the class becomes `30m`.
-    - `TestAClassNoSessionLandsInKeepsTheDefault`: `p49-remote` is absent from `ByClass`, and its line reads `idle-timeout 720`.
+    - `TestAClassNoSessionLandsInKeepsTheDefault`: `p49-remote` is absent from `ByClass`, and with the 12h default its line reads `idle-timeout 720`.
+  - `TestTheDefaultDeliveryLandsEverySessionInRemote`: the same roles under the built-in adapter (`user_permissions`, no `platforms:` block). `ByClass` holds `p49-remote` alone, at `time.Hour`: one fleet-wide minimum (Decision 1).
+  - `TestASessionOffAProjectedPlatformIsSkipped`: a resolution with a nil `Projection` (a device on a non-projected platform) is skipped, not dereferenced.
   - `internal/platform/classes_test.go`: the existing tests move to `ClassAges{Default: d}`, unchanged in what they assert.
-  - `cmd/port49/devices_test.go`, `TestCheckConfigHoldsTheSameClassAges`: a capture carrying the export's lines passes `check-config`. The same capture with `p49-operator idle-timeout 720` reports `set system login class p49-operator idle-timeout 60` missing.
+  - `cmd/port49/devices_test.go`:
+    - `TestCheckConfigHoldsTheSameClassAges`: a capture carrying the export's lines passes `check-config`. The same capture with `p49-operator idle-timeout 720` reports `set system login class p49-operator idle-timeout 60` missing.
+    - `TestCheckConfigPassesAShorterIdleTimeout`: `p49-operator idle-timeout 30` against a rendered `60` passes.
+    - `TestAnExpiredGrantDoesNotFlagTheFleet`: a capture exported while a `30m` grant was live, checked after the grant's `expires` with the class now `60`, passes.
+    - `TestCheckConfigComputesClassAgesOnce`: a `--batch` run over 50 captures calls `ClassAges` once per platform. Count through a test hook on `checkRun`.
   - `cmd/port49/platform_test.go`, `TestExportSaysEachClassAge`: the header line names each class and its age, for example `p49-operator 1h0m0s (least ceiling landing in it)`, and `never` for a never class.
 
 - [ ] **Step 2: Run the tests and see them fail.**
 
-  Run `go test ./internal/platform/ ./internal/policy/ ./cmd/port49/ -run 'ClassAge|NeverClass|SharedClass|NoSessionLands|CheckConfigHolds|ExportSays' -count=1`. Expected: FAIL to compile (`ClassAges` undefined).
+  Run `go test ./internal/platform/ ./internal/policy/ ./cmd/port49/ -run 'ClassAge|NeverClass|SharedClass|NoSessionLands|DefaultDelivery|OffAProjected|CheckConfig|ExpiredGrant|ExportSays' -count=1`. Expected: FAIL to compile (`ClassAges` undefined).
 
 - [ ] **Step 3: Implement.**
 
   - `ClassAges`: for each subject in `p.subs` and each device of `platformName` in `p.Devices()`, `resolve` it, skipping `ErrNoGrants`. Any other error is returned, naming the subject and the device.
-  - The class is `res.Projection.Template`, or `platform.RemoteClass` when that is empty.
+  - Skip a resolution whose `Projection` is nil. Otherwise the class is `res.Projection.Template`, or `platform.RemoteClass` when that is empty.
   - The age is `res.SessionAge.Of(def)`. Per class keep the least positive age. A class becomes 0 only when every session in it is 0.
   - `template.lines` writes `idle-timeout` only when the age is non-zero, in whole minutes rounded down and at least one, as today.
-  - `exportClasses` and `templateCheck` both call `p.ClassAges(platformName, age, time.Now())` with `config.MaxSessionAge(raw)` as `def`. Without `--policy` (the built-in set) they pass `ClassAges{Default: age}`.
-  - The header sentence names each class's age in place of the single default.
+  - `TemplateDrift` passes a device class `idle-timeout` at or below the rendered minutes. It reports the reference line missing only when the device's value is larger, or absent while the reference has one. A `never` class passes any value.
+  - `exportClasses` calls `p.ClassAges(platformName, age, time.Now())` with `config.MaxSessionAge(raw)` as `def`. Without `--policy` (the built-in set) it passes `ClassAges{Default: age}`.
+  - `checkRun` computes `ClassAges` once per platform per run and caches it, and `templateCheck` takes the cached value.
+  - The header sentence names each class's age in place of the single default. Under `user_permissions` delivery it adds: "every Junos session lands in p49-remote, so this is the least ceiling of any role on any Junos device".
+  - The help and usage strings at the lines in Files say the class ages come from the policy's roles, with the default for a role that names none.
 
 - [ ] **Step 4: Run the tests and see them pass.**
 
@@ -299,7 +335,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 ### Task 3: `policy diff` reports a changed session ceiling
 
 **Files:**
-- Modify: `internal/policy/diff.go` (`Diff`, `side`, `(*Policy).side`, `comparison.group`), `cmd/port49/policy.go` (the diff printer)
+- Modify: `internal/policy/diff.go` (`Diff`, `side`, `(*Policy).side`, `comparison.group`), `internal/policy/resolve.go` (`SessionAge.String`), `cmd/port49/policy.go` (the diff printer)
 - Test: `internal/policy/diff_test.go`, `cmd/port49/policy_test.go`
 
 **Interfaces:**
@@ -311,6 +347,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
   - `TestADiffReportsAShortenedCeiling`: role `ops` goes from `max_session_age: 8h` to `1h`. One change `{Old:"8h0m0s", New:"1h0m0s", Lengthened:false}` for the subject, on its devices.
   - `TestADiffReportsALengthenedCeiling`: from `1h` to `never`. `Lengthened` is true.
+  - `TestRemovingACeilingMayLengthenIt`: from `1h` to no `max_session_age` (the default). `New` is `default`, and `Lengthened` is true. The printer says `(may lengthen: to session.max_session_age_default)`.
   - `TestAnUnchangedCeilingIsNotReported`: a deny added and nothing else. `SessionCeilings` is empty.
   - `TestACeilingChangeIsNotAGate`: `Unacknowledged()` is unchanged by a ceiling change. Spec §12's gate is privilege, access and regex, and a ceiling is none of them.
   - `cmd/port49/policy_test.go`, `TestDiffPrintsTheCeilingLine`: the output carries `session ceiling: <subject> on <n> devices: 8h0m0s -> 1h0m0s`. A lengthening adds `(lengthened: live sessions keep the shorter ceiling until they refresh, decision 33)`.
@@ -323,7 +360,11 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
   - `side` gains `age SessionAge`, set in `(*Policy).side` from the resolution. The diff loads no port49d.yaml, so it compares the roles' own values and never a default.
   - Add `func (a SessionAge) String() string` in `internal/policy/resolve.go`. It returns `never`, a duration's `String()`, `default` (every role names none), or `<duration> or the default, whichever is less`. `Old` and `New` are that string.
-  - `Lengthened` is true when `New` is `never` and `Old` is not, or when both have a `Least` and the new one is larger.
+  - `Lengthened` is true in any of these cases. The diff cannot know the default, so a move toward it counts as a possible lengthening:
+    - `New` is `never` and `Old` is not;
+    - both have a `Least`, and the new one is larger;
+    - `New` is `default`;
+    - `New` is "or the default" with a larger or absent `Least`.
   - The group key includes `age.String()`. `group` appends a `SessionCeilingChange` when `was.age != is.age`, deduplicated through `c.once("ceiling", …)`.
 
 - [ ] **Step 4: Run the tests and see them pass.** Then run `make test && make vet`.
@@ -331,7 +372,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 - [ ] **Step 5: Commit.**
 
   ```bash
-  git add internal/policy/diff.go internal/policy/diff_test.go cmd/port49/policy.go cmd/port49/policy_test.go
+  git add internal/policy/diff.go internal/policy/resolve.go internal/policy/diff_test.go cmd/port49/policy.go cmd/port49/policy_test.go
   git commit -m "feat: policy diff reports a changed session ceiling"
   ```
 
@@ -340,8 +381,12 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 ### Task 4: The `key_ref` label never names one device (ruling 4)
 
 **Files:**
-- Modify: `internal/daemon/metrics/metrics.go` (`keyCollector`, `KeySample`, new label helpers), `internal/daemon/server/conn.go` (the four `KeyValidations.WithLabelValues` calls, lines ~508–555), `internal/port49d/main.go` (`WatchKeys`, ~line 1292), `internal/port49d/reload.go` (`swap`)
-- Test: `internal/daemon/metrics/metrics_test.go`, `internal/port49d/keymetrics_test.go`
+- Modify:
+  - `internal/daemon/metrics/metrics.go` (`keyCollector`, `KeySample`, new label helpers);
+  - `internal/daemon/server/conn.go` (the four `KeyValidations.WithLabelValues` calls, lines ~508–555);
+  - `internal/port49d/main.go` (`WatchKeys`, ~line 1292), `internal/port49d/reload.go` (`swap`);
+  - `internal/admission/admission.go` (the reserved name) and `internal/keyset/keyset.go` (the refusal at the shape check, ~line 140), plus the inventory `key_ref` pin's shape check, wherever `admission.KeyRefShape` is matched.
+- Test: `internal/daemon/metrics/metrics_test.go`, `internal/port49d/keymetrics_test.go`, `internal/keyset/keyset_test.go`, `internal/admission/admission_test.go`
 
 **Interfaces:**
 - Consumes:
@@ -352,18 +397,22 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   - `const SingleDeviceKeyRef = "single_device"` and `const AnyVersion = "any"`;
   - `func (m *Metrics) SetSingleDeviceKeyRefs(refs map[string]bool)`, stored atomically;
   - `func (m *Metrics) KeyLabels(ref string, version int) (keyRef, ver string)`;
-  - `func singleDeviceKeyRefs(p *policy.Policy) map[string]bool` in `internal/port49d`.
+  - `func singleDeviceKeyRefs(keyRefs []string) map[string]bool` in `internal/port49d`. It takes one admitted device's `key_ref` per entry and returns the refs held exactly once. It has two callers:
+    - with a policy, the `Admitted(d.Name).KeyRef` of each of `p.Devices()`;
+    - without one, the `KeyRef` of each device in the admission index `config.Load` built.
+  - `const ReservedKeyRef = "single_device"` in `internal/admission`. A `key_ref` equal to it is refused at load, naming its line, never echoing a secret.
 
 - [ ] **Step 1: Write the failing tests.**
 
-  - `TestASingleDeviceKeyRefIsNotALabel` (metrics). `SetSingleDeviceKeyRefs({"r1-pin": true})`. Then `KeyLabels("r1-pin", 3)` is `("single_device", "any")`, and the key collector's output has no series labelled `r1-pin`.
+  - `TestASingleDeviceKeyRefIsNotALabel` (metrics). `SetSingleDeviceKeyRefs({"r1_pin": true})`. Then `KeyLabels("r1_pin", 3)` is `("single_device", "any")`, and the key collector's output has no series labelled `r1_pin`.
+  - `TestTheReservedKeyRefIsRefused` (keyset and admission): a policy `keys:` entry named `single_device`, and an inventory pin to it, are each refused at load.
   - `TestTwoDevicesKeepTheirKeyRef`: `KeyLabels("core", 2)` is `("core", "2")`.
   - `TestTheSingleDeviceRetirementIsTheLeastPresented`. Samples: pin A v1 with retire in 10 days and 1 device; pin B v1 with retire in 1 day and 0 devices; pin C v2 with no retire and 1 device. The result is `port49_key_version_devices{key_ref="single_device",version="any"} == 1` and `port49_key_retirement_seconds{…} ≈ 10 days`. B is not presented, so it does not count.
   - `internal/port49d/keymetrics_test.go`, `TestAPinnedDeviceIsReportedAsSingleDevice`: a policy pinning one device to its own key and two devices to `core`. After start, a login from the pinned device raises `port49_key_validations_total{key_ref="single_device",version="any",outcome="validated"}`, and no exposition line contains the pin's name. Check that before printing.
 
 - [ ] **Step 2: Run them and see them fail.**
 
-  `go test ./internal/daemon/metrics/ ./internal/port49d/ -run 'SingleDevice|TwoDevicesKeep|LeastPresented|PinnedDevice' -count=1`. Expected: FAIL to compile.
+  `go test ./internal/daemon/metrics/ ./internal/port49d/ ./internal/keyset/ ./internal/admission/ -run 'SingleDevice|TwoDevicesKeep|LeastPresented|PinnedDevice|ReservedKeyRef' -count=1`. Expected: FAIL to compile.
 
 - [ ] **Step 3: Implement.**
 
@@ -371,14 +420,14 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   - `keyCollector.Collect` aggregates the single-device samples into one `devices` series (the sum of devices on versions with a non-zero `RetireAt`). Its `retires` series is the least `RetireAt` among those with `Devices > 0`, and is omitted when there are none.
   - `conn.go` calls `s.d.Metrics.KeyLabels(s.dev.KeyRef, version)` in place of the raw pair.
   - `main.go` sets the set at start from the policy in force. `reloader.swap` sets it after each swap.
-  - Without a policy (an inventory key group only), use the admission index's devices the same way.
+  - Without a policy (an inventory key group only), `main.go` passes the admission index's devices to `singleDeviceKeyRefs`.
 
 - [ ] **Step 4: Run the tests and see them pass.** Then `make test && make vet`.
 
 - [ ] **Step 5: Commit.**
 
   ```bash
-  git add internal/daemon/metrics/metrics.go internal/daemon/metrics/metrics_test.go internal/daemon/server/conn.go internal/port49d/main.go internal/port49d/reload.go internal/port49d/keymetrics_test.go
+  git add internal/daemon/metrics/metrics.go internal/daemon/metrics/metrics_test.go internal/daemon/server/conn.go internal/port49d/main.go internal/port49d/reload.go internal/port49d/keymetrics_test.go internal/admission internal/keyset
   git commit -m "fix: a key_ref held by one device is reported as single_device, never as a label naming it"
   ```
 
@@ -395,6 +444,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   - `deploy/helm/port49/templates/prometheusrule.yaml`;
   - `tests/alerts/alerts_test.go`, `tests/alerts/registered.go`.
 - Modify:
+  - `internal/daemon/metrics/metrics.go` (a new gauge `port49_issuing_ca_configured`, beside `IssuingCANotAfter` at ~:780) and `openIssuerFrom` in `internal/port49d/issuer.go` (where `IssuingCANotAfter` is set; it runs only when issuance is configured, so it sets the new gauge to 1 before the CA check), with tests in `internal/daemon/metrics/metrics_test.go` and `internal/port49d/issuer_test.go`;
   - `deploy/helm/port49/values.yaml` and `values.schema.json` (`prometheusRule: {enabled: false, labels: {}}`);
   - `tests/helm/static_test.go`;
   - `Makefile` (`PROMTOOL_VERSION ?= 3.5.0`, its sha256 from the release's `sha256sums.txt`, `bin/promtool-$(PROMTOOL_VERSION)`, `alerts-check`);
@@ -405,7 +455,8 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   - `metrics.New(prometheus.Registerer) *Metrics` (`internal/daemon/metrics`);
   - `inventory.NewMetrics(prometheus.Registerer) *Metrics` (`internal/inventory/metrics.go`).
 - Produces:
-  - `func RegisteredNames() ([]string, error)` in `tests/alerts`. It runs both constructors against a recording `prometheus.Registerer` that collects every `Desc`'s fully-qualified name from `Describe`, so a vector with no child still counts.
+  - `func RegisteredNames() ([]string, error)` in `tests/alerts`. It runs both constructors against a recording `prometheus.Registerer` that calls each collector's `Describe`, so a vector with no child still counts. `prometheus.Desc` exports no name, so it parses `fqName: "<name>"` out of `Desc.String()`, and a test pins that parse against one known metric.
+  - `IssuingCAConfigured prometheus.Gauge`, registered as `port49_issuing_ca_configured`: 1 on a broker whose `broker.identity.issuance` is set, 0 otherwise. Help text: "1 when this broker is configured to issue certificates; alert on port49_issuing_ca_not_after_timestamp_seconds == 0 where this is 1."
 
 - [ ] **Step 1: Walk both documents for every MUST-alarm statement.**
 
@@ -414,7 +465,8 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   - The table must hold at least these:
     - the global cap: `increase(port49_connections_shed_total{reason="global_cap"}[5m]) > 0` (page), and `port49_connections / port49_connections_max > 0.8` for 10m (ticket) (12a hand-off);
     - `port49_key_secret_files_changed > 0` for 10m (ticket; 12b);
-    - `port49_issuing_ca_not_after_timestamp_seconds{port49_issuance="enabled"} == 0` for 5m (page), and `… - time() < 90 * 86400` (ticket) (12b; the metric's help text). A broker without issuance also reads 0, so the rule selects on a target label. The README tells the operator to set `port49_issuance: enabled` on the scrape targets of brokers that set `broker.identity.issuance`, and the chart's `PrometheusRule` notes it beside the rule;
+    - `port49_issuing_ca_not_after_timestamp_seconds == 0 and on(instance) port49_issuing_ca_configured == 1` for 5m (page), and `port49_issuing_ca_not_after_timestamp_seconds - time() < 90 * 86400 and on(instance) port49_issuing_ca_configured == 1` (ticket) (12b; the metric's help text). The broker exports whether issuance is configured, so the page needs no hand-set scrape label;
+    - `port49_redemption_restore_guarded == 1` for 10m (page; Decision 2), whose summary names the escape: stop port49d;
     - `increase(port49_admin_touch_total{outcome="refused"}[10m]) > 0` (page; 12b);
     - `port49_policy_fail_closed_compositions > 0` (ticket; 11b);
     - the stores (11a): `port49_store_directory_reachable == 0` for 1m; `time() - port49_store_directory_confirmed_timestamp_seconds > 60`; `port49_store_logouts_pending > 0` for 5m; `port49_store_feed_up{feed="marks"} == 0`;
@@ -432,7 +484,9 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
   - `TestEveryAlertNamesARegisteredMetric`: every `port49_[a-z0-9_]+` token in every `expr` is in `RegisteredNames()`, after stripping `_bucket`, `_sum` and `_count`. Only the `etcd` group's `etcd_` names are exempt.
   - `TestEveryAlertIsSnakeCaseAndHasASeverity`: `alert` names match `^port49_[a-z0-9_]+$` or `^etcd_[a-z0-9_]+$`. `labels.severity` is `page` or `ticket`. `annotations.summary` is non-empty and holds no `{{ $labels.` reference to a device label.
-  - `TestNoAlertAggregatesByADeviceLabel`: no `by (…)`, `without (…)` or matcher names `device`, `nas`, `name`, `address`, `source`, `principal`, `subject` or `username`.
+  - `TestNoAlertAggregatesByADeviceLabel`: no `by (…)`, `without (…)` or matcher names `device`, `nas`, `name`, `address`, `principal`, `subject` or `username`. `source` is allowed: on the inventory metrics it is the connector, a bounded set.
+  - `TestRegisteredNamesParsesDescString`: `RegisteredNames()` contains `port49_connections_shed_total`, a vector with no child at construction.
+  - `internal/daemon/metrics/metrics_test.go` and `internal/port49d/issuer_test.go`, `TestIssuingCAConfiguredFollowsTheConfig`: a broker started with issuance reads 1, and one without reads 0. Write these first and see them fail.
   - `TestEveryReadmeRowHasARuleAndEveryRuleARow`: the two name sets are equal.
   - `TestTheChartCarriesTheSameRules`: `deploy/helm/port49/files/port49.rules.yaml` is byte-equal to `deploy/alerts/port49.rules.yaml`.
   - `tests/helm/static_test.go`, `TestPrometheusRuleIsOffByDefault`: no `PrometheusRule` renders by default. With `prometheusRule.enabled: true` one renders, holding the file's groups.
@@ -453,7 +507,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 - [ ] **Step 6: Commit.**
 
   ```bash
-  git add deploy/alerts deploy/helm/port49/files deploy/helm/port49/templates/prometheusrule.yaml deploy/helm/port49/values.yaml deploy/helm/port49/values.schema.json tests/alerts tests/helm/static_test.go Makefile .github/workflows/test.yml
+  git add deploy/alerts deploy/helm/port49/files deploy/helm/port49/templates/prometheusrule.yaml deploy/helm/port49/values.yaml deploy/helm/port49/values.schema.json tests/alerts tests/helm/static_test.go internal/daemon/metrics internal/port49d/issuer.go internal/port49d/issuer_test.go Makefile .github/workflows/test.yml
   git commit -m "feat: alert rules for every stated alarm, each on a registered metric, checked by promtool"
   ```
 
@@ -463,7 +517,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
 **Files:**
 - Modify: `internal/devicemock/fleet.go` (`Fleet`, `FleetResult`, `Run`)
-- Create: `tests/lab/load.go` (`//go:build lab`), `tests/lab/load_test.go` (`//go:build lab`), `tests/lab/load_unit_test.go` (`//go:build lab`), `internal/policy/fleet_bench_test.go`
+- Create: `tests/lab/load_harness_test.go`, `tests/lab/load_test.go` and `tests/lab/load_unit_test.go` (each `//go:build lab`; all `_test.go`, because they use `*testing.T` helpers and `newRealEtcd`, which live in test files), and `internal/policy/fleet_bench_test.go`
 - Modify: `Makefile` (`lab-load`)
 - Test: `internal/devicemock/fleet_test.go`
 
@@ -492,12 +546,12 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
     - `TestLoadRefusesAShortRun`: `validateLoadCell(loadCell{Rate:170, Duration: 5*time.Minute})` is an error.
     - `TestLoadNoteHoldsNoToken`: `loadNote` of cells whose `Observed` was built from a run whose logins carried `not-a-real-token` contains neither the token nor `credential`. Check before printing.
     - `TestTheLoadPolicyHas500PrincipalsAnd10000Devices`: the generated inventory has 10 000 devices on `127.0.1.1`…, and the policy has 50 machine principals, each with a batch grant, plus 450 human subjects.
-  - `internal/policy/fleet_bench_test.go`: `BenchmarkResolveFleet` (500 subjects × 10 000 devices), `BenchmarkCompareFleet` (one role edit), `BenchmarkInventoryOnlyRefresh` (the 6a carry) and `BenchmarkContainsAtFleet` (the plan 4 carry, `engine.Contains`/`MayMeet`). Each reports ns/op and allocs.
+  - `internal/policy/fleet_bench_test.go`: `BenchmarkResolveFleet` (500 subjects × 10 000 devices), `BenchmarkClassAgesFleet` (Task 2's `ClassAges` at the same size, which `check-config` runs once per platform), `BenchmarkCompareFleet` (one role edit), `BenchmarkInventoryOnlyRefresh` (the 6a carry) and `BenchmarkContainsAtFleet` (the plan 4 carry, `engine.Contains`/`MayMeet`). Each reports ns/op and allocs.
 
 - [ ] **Step 2: Run them and see them fail.**
 
   - Run `go test ./internal/devicemock/ -run 'RateMode|StepLatencies' -count=1`.
-  - Run `make lab-unit`, which now includes `TestLoad*` from `load_unit_test.go`.
+  - Run `make lab-unit`. Its list (`LAB_UNIT_TESTS`) is grepped from `tests/lab/*_unit_test.go`, so it picks up `TestLoad*` with no Makefile edit.
   - Expected: FAIL to compile.
 
 - [ ] **Step 3: Implement `Fleet` rate mode and step timings, and the harness.**
@@ -515,16 +569,17 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
     - peak `port49_connections`, `port49_accounting_spool_depth`, and the store call p99 from `port49_store_call_seconds`;
     - CPU and RSS of each process;
     - the host's CPU model, cores, RAM, disk and kernel.
-  - `make lab-load` runs `go test -tags lab ./tests/lab/ -run '^TestLoad$' -count=1 -v -timeout 150m` with `PORT49_LAB_LOAD=1` and `PORT49_LAB_ETCD_BIN` passed through.
+  - `PORT49_LAB_LOAD_CELLS` (comma-separated cell IDs; empty runs all) selects cells. `TestLoadCellSelection` (unit) pins its parse, and that an unknown ID is refused.
+  - `make lab-load` runs `go test -tags lab ./tests/lab/ -run '^TestLoad$' -count=1 -v -timeout 150m` with `PORT49_LAB_LOAD=1`, and passes `PORT49_LAB_ETCD_BIN` and `PORT49_LAB_LOAD_CELLS` through.
 
 - [ ] **Step 4: Run the unit tests and see them pass.**
 
-  - Run the Step 2 commands, `go test ./internal/policy/ -run '^$' -bench 'Fleet|InventoryOnly|ContainsAt' -benchtime 3x`, and `make test && make vet`. Expected: PASS.
+  - Run the Step 2 commands, `go test ./internal/policy/ -run '^$' -bench 'Fleet|InventoryOnly|ContainsAt|ClassAges' -benchtime 3x`, and `make test && make vet`. Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
   ```bash
-  git add internal/devicemock/fleet.go internal/devicemock/fleet_test.go internal/policy/fleet_bench_test.go tests/lab/load.go tests/lab/load_test.go tests/lab/load_unit_test.go Makefile
+  git add internal/devicemock/fleet.go internal/devicemock/fleet_test.go internal/policy/fleet_bench_test.go tests/lab/load_harness_test.go tests/lab/load_test.go tests/lab/load_unit_test.go Makefile
   git commit -m "test: an open-loop load harness at the design 5 rate, on etcd, with step latencies"
   ```
 
@@ -542,7 +597,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
 
 - [ ] **Step 1: Run the load.**
 
-  Run `make lab-load` under the lab lock, with the watchdog, on the lab host. Run `make lab-unit` first. Expected: every cell gives a PASS or a FAIL.
+  Run `make lab-load` under the lab lock, with the watchdog, on the lab host. Run `make lab-unit` before and after. Expected: every cell gives a PASS or a FAIL.
 
 - [ ] **Step 2: Write `tests/lab/results/load-<host>.md`.**
 
@@ -553,7 +608,7 @@ Order: 1, then 2–6 in any order, then 7, 8, 9, 10. Next 11 must land before 12
   - Tickets: off stays, or STOP for the lead.
   - Group commit: Task 8 builds it, or records "not needed at <capacity>/s against <rate>/s".
   - `LimitNOFILE=`.
-  - `averageConnections`: change the value test-first in `tests/helm/static_test.go` (`TestHPAAverageConnections`).
+  - `averageConnections`: change the value test-first. Create `TestHPAAverageConnections` in `tests/helm/static_test.go`, asserting the new default, and see it fail first.
   - The timeouts.
   - Any benchmark that puts a reload's settle past `max(30s, 2 × policy.watch_interval + 5s)` at fleet size: STOP for the lead.
 
@@ -598,7 +653,8 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 
 - [ ] **Step 4: Run the tests and the load cell again.**
 
-  - Run the Step 2 command, `make test && make vet`, and `make lab-load` cell (c) alone (`PORT49_LAB_LOAD_CELLS=c`).
+  - Run the Step 2 command and `make test && make vet`.
+  - Run `make lab-load PORT49_LAB_LOAD_CELLS=c` (cell (c) alone) under the lab lock, with the watchdog, and `make lab-unit` before and after.
   - Add the new capacity to the note.
 
 - [ ] **Step 5: Commit.**
@@ -613,8 +669,10 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 ### Task 9: The failure matrix (ruling 11; Decision for Ryan 2)
 
 **Files:**
-- Create: `tests/compose/failmatrix_test.go` (`//go:build compose`), `deploy/failure-matrix.md`
-- Modify: `Makefile` (`failure-matrix`), `.github/workflows/compose.yml` (a `failmatrix` job)
+- Create: `tests/compose/failmatrix_test.go` (`//go:build compose && failmatrix`), `tests/compose/matrix_evidence_test.go` (`//go:build compose`), `deploy/failure-matrix.md`
+- Modify: `Makefile` (`failure-matrix`; and `vet`, which gains `go vet -tags compose,failmatrix ./tests/compose/...`), `.github/workflows/compose.yml` (a `failmatrix` job)
+
+The matrix has its own build tag, so `make compose-smoke` (`go test -tags compose ./tests/compose/`, 20m, no `-run`) never builds or runs it.
 
 **Interfaces:**
 - Consumes:
@@ -641,25 +699,48 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
     - a mint fails with a connection error;
     - after the start, a mint passes.
   - `port49d_stopped`: the device's connection is refused at once (the device falls to local; L4, L35 measured that side).
+  - `store_absent_at_start`: stop the three members, then restart port49d. Nothing listens and `/readyz` answers 503. Start the members, and port49d listens and a login passes.
+  - `port49d_restarted`: restart port49d with the store up. A token minted before the restart still redeems (split deployment, decision 36 ruling 7), and an open session's next command is answered from the same `ctx_id`.
+  - `partition`: `docker compose pause port49d`, so the device meets silence, not a refusal. A dial times out with no reset. That is what a device→daemon partition looks like; the device side is L4's silent-server cells.
   - `retired_key`: a policy edit retires the device's key version while the device still uses it. The next login is reset with no reply, and the log has an `unvalidated` record with no strike for an open connection (12a) and a strike for a new one (L28).
   - `policy_refused`: `chmod g+w` the policy's directory. `port49_policy_file_refused == 1`, and logins still pass on the policy in force. Restore the mode.
-  - `restore_guarded`: restore etcd from a snapshot taken earlier in the test, as `TestStoreSnapshotRestore` does. `port49_redemption_restore_guarded == 1`, a token login is refused, and it clears once the broker's purge runs.
+  - `restore_guarded`. `TestStoreSnapshotRestore` is lab-tagged on a bare etcd binary, so on compose the steps are spelled out:
+    1. Take a snapshot: `docker compose exec etcd-1 etcdctl snapshot save /tmp/snap.db`, with the stack's root client certificate as `etcd-init.sh` uses it. Copy it out with `docker compose cp`.
+    2. Log in and mint once, so the store moves past the snapshot.
+    3. Stop the three members, leaving port49d and the brokers running.
+    4. For each member, run a one-shot container of the stack's etcd image on that member's volume: `etcdutl snapshot restore --bump-revision 1000000 --mark-compacted`, with that member's `--name`, `--initial-cluster` and `--initial-advertise-peer-urls` as `compose.yaml` sets them, into a fresh data directory that replaces the old one.
+    5. Start the three members.
+    6. Assert `port49_redemption_restore_guarded == 1` on port49d, and that a token login is refused.
+    7. The brokers' `state_dir` witness (`witness.json`) sees the restore, and the runner's purge then runs. Assert the gauge returns to 0 within `hold_ttl` × 2 and a fresh login passes.
+    8. Assert the 3am escape: with the guard still at 1 (repeat steps 1–5 with the brokers stopped), `docker compose stop port49d` leaves the device's connection refused at once.
   - Every subtest's failure dump goes through `shapetest.Filtered`.
 
 - [ ] **Step 2: Write `deploy/failure-matrix.md`.**
 
-  - One row per design §12 row: the device-side outcome, what an operator sees (the line, the metric, the alert from Task 5), the fix, and the evidence (this test's subtest or the lab row, per ruling 11).
-  - A 3am table leads it, with the IOS XE and Junos (`tacplus` alone) ERROR warnings, SR Linux's per L87 (filled in Task 11), and the restore guard's (Decision 2).
+  - One row per design §12 row, every row: the device-side outcome, what an operator sees (the line, the metric, the alert from Task 5), the fix, and the evidence.
+  - Evidence is one of: this test's subtest; an existing test named by package and function (found by grep, excluding the never-read files); or a closed lab row. These rows take an existing test or a lab row:
+    - directory unavailable; identity provider unreachable;
+    - enrollment store lost; inventory service unavailable;
+    - revocations file missing or refused; certificate status unavailable;
+    - policy refresh incomplete; operator credential lost;
+    - one region unavailable (L74).
+  - A row with no evidence of any kind is a gap. STOP for the lead; it is not filled with prose.
+  - A 3am table leads the file. It carries:
+    - the IOS XE ERROR warning, and Junos's per Decision 3;
+    - SR Linux's per L87 (filled in Task 11);
+    - the restore guard (Decision 2): "token logins and, on IOS XE, break-glass are refused until the brokers purge; if the brokers cannot start, stop port49d: devices then find the connection refused and fall to their local method", and its page.
+  - `tests/compose/matrix_evidence_test.go`, `TestEveryMatrixRowHasEvidence`: it parses design §12's table's first column, and asserts each row appears in `deploy/failure-matrix.md` with a non-empty evidence cell that names a subtest, a `Test…` function or an `L<N>`. Write it first and see it fail.
 
 - [ ] **Step 3: Run it.**
 
-  - Run `make failure-matrix` (`go test -tags compose ./tests/compose/ -run '^TestFailureMatrix$' -count=1 -v -timeout 40m`), CI only: it refuses on a key host (`shapetest.RefuseOnKeyHost`).
+  - Run `go test -tags compose ./tests/compose/ -run '^TestEveryMatrixRowHasEvidence$' -count=1` locally.
+  - Run `make failure-matrix` (`go test -tags compose,failmatrix ./tests/compose/ -run '^TestFailureMatrix$' -count=1 -v -timeout 40m`), CI only: it refuses on a key host (`shapetest.RefuseOnKeyHost`).
   - Push the branch and read the `failmatrix` job with `gh run watch`. Expected: PASS.
 
 - [ ] **Step 4: Commit.**
 
   ```bash
-  git add tests/compose/failmatrix_test.go deploy/failure-matrix.md Makefile .github/workflows/compose.yml
+  git add tests/compose/failmatrix_test.go tests/compose/matrix_evidence_test.go deploy/failure-matrix.md Makefile .github/workflows/compose.yml
   git commit -m "test: the design 12 failure matrix on the compose stack, and its operator table"
   ```
 
@@ -680,8 +761,12 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 
 **Interfaces:**
 - Produces:
-  - `type Values struct { Servers []string; Port int; Source string; BreakGlass string; TLSPort int; ServerName string; CertID string }`;
-  - `func Placeholders() []string`, the closed set `<PORT49_1>`, `<PORT49_2>`, `<KEY>`, `<SOURCE_INTERFACE>`, `<BREAKGLASS_USER>`, `<TLS_PORT>`, `<SERVER_NAME>`, `<CERT_ID>`;
+  - `type Values struct { Servers []string; Port int; SourceInterface string; SourceAddress string; MgmtVRF string; BreakGlass string; TLSPort int; ServerName string; CertID string }`;
+  - `func Placeholders() []string`, the closed set `<PORT49_1>`, `<PORT49_2>`, `<KEY>`, `<SOURCE_INTERFACE>`, `<SOURCE_ADDRESS>`, `<MGMT_VRF>`, `<BREAKGLASS_USER>`, `<TLS_PORT>`, `<SERVER_NAME>`, `<CERT_ID>`. Which platform pins its source how:
+    - EOS, IOS XE, NX-OS and XR name an interface: `<SOURCE_INTERFACE>`;
+    - Junos sets `tacplus-server <PORT49_n> source-address <SOURCE_ADDRESS>`;
+    - SR Linux sets a source address in its network-instance: `<SOURCE_ADDRESS>`, `<MGMT_VRF>`;
+    - every platform whose TACACS+ runs in a management VRF or routing-instance names it with `<MGMT_VRF>` (`management`, `mgmt_junos`, `Mgmt-intf` and the like differ per site).
   - `func Render(platform, transport string, v Values, key string) ([]string, error)`. It reads `deploy/device-aaa/<platform>[-tls].<ext>` from the repo root, substitutes, and refuses a leftover `<…>`. `key` is substituted last and never returned in an error.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -690,13 +775,13 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
   - `TestOnlyClosedPlaceholders`: every `<[A-Z0-9_]+>` in every file is in `Placeholders()`.
   - `TestNoReferenceCarriesAKey`: no file holds a literal key, password or `$aes1$`, `$9$` or `7 ` secret form. The key appears only as `<KEY>`.
   - `TestNoReferenceFallsThroughOnAReject`. Each of these is a failure:
-    - Junos with `password` in `authentication-order` (ruling 2);
+    - Junos with `password` in `authentication-order` (ruling 2; Decision 3);
     - SR Linux without `exit-on-reject true` (ruling 3);
     - any Cisco or Arista method list ending in `none`;
     - NX-OS with `deadtime` set (L4: `deadtime 1` locks token logins out for a minute);
     - IOS XE with `if-authenticated` on command authorization (L4-error: it permits every command on ERROR).
   - `TestEveryReferenceNamesTwoServers`: two server addresses (design §13). For IOS XE TLS they are two distinct addresses, never one shared (L73: two `tacacs server` objects cannot share one).
-  - `TestEveryReferencePinsItsSource`: a source interface line (spec §10: "MUST be pinned in the reference AAA configuration").
+  - `TestEveryReferencePinsItsSource`: each file pins its source as listed in Interfaces, with `<SOURCE_INTERFACE>` or `<SOURCE_ADDRESS>` (spec §10: "MUST be pinned in the reference AAA configuration"). EOS's lab startup config pins none today, so the EOS reference adds `ip tacacs source-interface <SOURCE_INTERFACE>`, and L88 measures the result.
   - `TestTLSReferencesFollowL73`. Each is a test case:
     - Junos sets `tls mutual-authentication certificate-id <CERT_ID>` and its port;
     - NX-OS sets its port and uses an RSA key in its enrolment comment;
@@ -732,7 +817,7 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 ### Task 11: Lab L87: SR Linux on an ERROR
 
 **Files:**
-- Create: `tests/lab/l87_test.go` (`//go:build lab`), `tests/lab/l87_unit_test.go`, `tests/lab/results/L87-nokia_srlinux.md`
+- Create: `tests/lab/l87_test.go` and `tests/lab/l87_unit_test.go` (both `//go:build lab`; `make lab-unit` picks up the unit test by its file name), `tests/lab/results/L87-nokia_srlinux.md`
 - Modify: `Makefile` (`lab-l87`), spec §15 L87, `deploy/device-aaa/README.md`, `deploy/failure-matrix.md`
 
 - [ ] **Step 1: Write `TestL87` and its unit test.**
@@ -742,13 +827,14 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
   - **(b)** It runs port49d on etcd as `l80EtcdDaemonYAML` builds it, pauses the etcd, waits for the listener to close (the `port49_store_health_failures >= close_after` gauge), and then does break-glass.
   - **(c)** It answers ERROR to the session authorization only, after a PASS authentication.
   - `TestL87NoteHoldsNoSecret` (unit): the note renderer drops every credential-bearing field.
-  - `make lab-l87` runs `go test -tags lab ./tests/lab/ -run '^TestL87$' -count=1 -v -timeout 60m` with `PORT49_LAB_PLATFORMS=srlinux`.
+  - `make lab-l87` runs `go test -tags lab ./tests/lab/ -run '^TestL87$' -count=1 -v -timeout 60m` with `PORT49_LAB_PLATFORMS=srlinux`, and passes `PORT49_LAB_ETCD_BIN` through for cell (b). The test refuses as INVALID when it is unset.
 
 - [ ] **Step 2: Run the lab.** Under the lab lock and the watchdog. Run `make lab-unit` before and after.
 
 - [ ] **Step 3: Write the note, close the row, and fill SR Linux's 3am line.**
 
-  - In `deploy/device-aaa/README.md` and `deploy/failure-matrix.md`, the line reads either "break-glass waits for go-dark (≤ 5.5 s)" or "break-glass logs in at once", as (a) measured. `exit-on-reject true` stays either way (ruling 3).
+  - In `deploy/device-aaa/README.md` and `deploy/failure-matrix.md`, the line reads either "break-glass waits for go-dark (≤ 5.5 s)" or "break-glass logs in at once", as (a) measured.
+  - `exit-on-reject true` stays either way only if (b) passes (ruling 3). If (b) FAILs, STOP for the lead before Task 12 runs SR Linux.
   - If SR Linux's own debug is needed to say why, collect it first (`debug` of `aaa_mgr`).
 
 - [ ] **Step 4: Commit.**
@@ -763,7 +849,7 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 ### Task 12: Lab L88: the reference configurations on every platform
 
 **Files:**
-- Create: `tests/lab/l88.go`, `tests/lab/l88_test.go`, `tests/lab/l88_unit_test.go` (all `//go:build lab`), `tests/lab/results/L88-<platform>.md` per image
+- Create: `tests/lab/l88_harness_test.go`, `tests/lab/l88_test.go` and `tests/lab/l88_unit_test.go` (all `//go:build lab`; the harness is a `_test.go` file because `*lab` lives in `harness_test.go`), and `tests/lab/results/L88-<platform>.md` per image
 - Modify:
   - `Makefile` (`lab-l88`);
   - spec §15 L88, and decision 21's "largest value … unmeasured" sentence (from cell i);
@@ -790,7 +876,11 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 - [ ] **Step 2: Write `TestL88`.**
 
   - It loops over the selected platforms with `eachSelected`, applies the reference, runs each cell against its §15 condition, and writes `L88-<platform>.md`.
-  - Cell (a) creates a local account with a known lab password equal to a port49-denied user's, and removes it at the end.
+  - Cell (a) creates a local account with a lab password equal to a port49-denied user's, and removes it at the end. The password stays out of every transcript and note:
+    - it is generated per run;
+    - it is set on the device in the platform's hashed form wherever one exists (Junos `encrypted-password`, EOS `secret sha512`, IOS XE `secret 9`, NX-OS `password 5`, SR Linux's hashed `password`), computed by the harness;
+    - every line the harness records passes through `l73MaskAll` with the password, and the run's own log too;
+    - `TestL88NoteHoldsNoSecret` feeds a known password through a recorded cell and asserts it is absent before printing.
   - `make lab-l88` runs `go test -tags lab ./tests/lab/ -run '^TestL88$' -count=1 -v -timeout 300m`, one `PORT49_LAB_PLATFORMS` selector per run.
 
 - [ ] **Step 3: Run it, one selector at a time.**
@@ -808,7 +898,7 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 - [ ] **Step 5: Commit.**
 
   ```bash
-  git add tests/lab/l88.go tests/lab/l88_test.go tests/lab/l88_unit_test.go tests/lab/results/L88-*.md docs/design deploy/device-aaa internal/platform/classes.go internal/platform/classes_test.go Makefile
+  git add tests/lab/l88_harness_test.go tests/lab/l88_test.go tests/lab/l88_unit_test.go tests/lab/results/L88-*.md docs/design deploy/device-aaa internal/platform/classes.go internal/platform/classes_test.go Makefile
   git commit -m "docs: close lab register entries L88 (the reference AAA configuration on every platform)"
   ```
 
@@ -867,7 +957,7 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 
 **Files:**
 - Create: `.github/workflows/lab-hosted.yml`
-- Modify: `tests/lab/results/L84-systemd-docker.md`, spec §15 L84 and decision 54 ruling 2 and its "Open" line, `deploy/systemd/README.md`
+- Modify: `tests/ci/workflows_test.go`, `tests/lab/results/L84-systemd-docker.md`, spec §15 L84 and decision 54 ruling 2 and its "Open" line, `deploy/systemd/README.md`
 
 - [ ] **Step 1: Write `lab-hosted.yml`.**
 
@@ -894,19 +984,24 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 
 **Files:**
 - Create: `tests/lab/l89_test.go` (`//go:build lab`), `tests/shapes/l89/l89.go`, `tests/shapes/l89/l89_test.go`, `deploy/helm/port49/examples/velero/` (a `Schedule` and the README's restore steps), `tests/lab/results/L89-kind.md`
-- Modify: `Makefile` (`VELERO_VERSION`, `MINIO_IMAGE`, their sha256 pins, `lab-l89`), `.github/workflows/lab-kind.yml` (cell `l89`), spec §15 L89, `deploy/helm/port49/README.md`
+- Modify: `Makefile` (`VELERO_VERSION`, `OBJECT_STORE_IMAGE`, their sha256 or digest pins, `lab-l89`), `.github/workflows/lab-kind.yml` (cell `l89`), spec §15 L89, `deploy/helm/port49/README.md`
 
-- [ ] **Step 1: Write the unit tests:** `TestL89ResultsNeedEveryCell`, `TestL89ResultsHoldNoKeyMaterial`, and `TestTheVeleroExampleBacksUpBothStatefulSets` (render the example and assert both PVC label selectors, with `defaultVolumesToFsBackup: true`).
+- [ ] **Step 1: Write the unit tests.**
+
+  - `TestL89ResultsNeedEveryCell`, `TestL89ResultsHoldNoKeyMaterial`.
+  - `TestTheVeleroExampleBacksUpBothStatefulSets`: render the example and assert both PVC label selectors, with `defaultVolumesToFsBackup: true`.
+  - `TestTheVeleroExampleNamesARepositoryPassword`: the example takes the repository password from a named Secret (`velero-repo-credentials`, key `repository-password`). Its README states three things: the backup holds `issuing-ca.key`, the broker state and the spool; the bucket must be encrypted; and access is limited to the backup's own credentials.
 
 - [ ] **Step 2: Write `TestL89`.**
 
-  - It runs `kindtest.Up`, MinIO in-cluster with generated credentials passed by file, and Velero with the node agent.
+  - It runs `kindtest.Up`, an S3-compatible store in the cluster with generated credentials passed by file, and Velero with the node agent and a generated repository password.
+  - **The object store:** MinIO stopped publishing community images in 2025. Pin either the last published `minio/minio` release by digest, or SeaweedFS's S3 gateway (`chrislusf/seaweedfs`, by digest). Record which in the note. Either is lab-only and never named in the chart.
   - It installs the chart as the kind smoke does, with issuance on, runs `copy-issuer.sh`, logs in once, backs up, deletes the namespace, restores, and runs cells (a) and (b).
-  - The MinIO credentials are generated per run, never printed, and the `velero` namespace is never dumped.
+  - The store credentials and the repository password are generated per run and never printed, and the `velero` namespace is never dumped.
 
 - [ ] **Step 3: Run it in CI** (the `lab-kind` label, cell `l89`).
 
-- [ ] **Step 4: Write the note and close the row.** The README names Velero only if both cells pass, with the example. Otherwise it says what was refused, quoting the fence line.
+- [ ] **Step 4: Write the note and close the row.** The README names Velero only if both cells pass, with the example and its security lines (ruling 10). Otherwise it says what was refused, quoting the fence line.
 
 - [ ] **Step 5: Commit.**
 
@@ -920,17 +1015,17 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 ### Task 16: Lab L90: Oxidized host keys (ruling 9)
 
 **Files:**
-- Modify: `tests/lab/l49_test.go` (a `TestL90` beside the L49 harness), `tests/lab/l48_l49_unit_test.go`, `examples/oxidized/config`, `examples/oxidized/port49-oxidized-run`, `examples/oxidized/run_test.go`, `examples/oxidized/README.md`, spec §15 L90
+- Modify: `tests/lab/l49_test.go` (a `TestL90` beside the L49 harness), `tests/lab/l48_l49_unit_test.go`, `examples/oxidized/config`, `examples/oxidized/port49-oxidized-run`, `examples/oxidized/run_test.go`, `examples/oxidized/README.md`, `Makefile` (`lab-l90`), spec §15 L90
 - Create: `tests/lab/results/L90-oxidized-arista_eos.md`
 
-- [ ] **Step 1: Write `TestL90`** on the L49 Oxidized container and vEOS, with cells (a)–(d) as §15 states. `known_hosts` lives in the run's temp home. Cell (c)'s `ssh` runs with `BatchMode=yes` and sends no credential.
+- [ ] **Step 1: Write `TestL90`** on the L49 Oxidized container and vEOS, with cells (a)–(d) as §15 states. `known_hosts` lives in the run's temp home. Cell (c) runs ruling 9's exact line (`BatchMode=yes`, `PreferredAuthentications=none`, `PubkeyAuthentication=no`, `IdentityAgent=none`, `IdentitiesOnly=yes`), so it sends no credential and no signature. A unit test in `l48_l49_unit_test.go`, `TestL90PrepopulateLineSendsNoCredential`, pins that line.
 
 - [ ] **Step 2: Run it** under the lab lock and the watchdog, with `make lab-unit` around it. The make target is `lab-l90`, `-run '^TestL90$'`.
 
 - [ ] **Step 3: Change the example per ruling 9, test-first in `examples/oxidized/run_test.go`.**
 
   - If (d) passes: `TestTheConfigUsesAcceptNew`.
-  - Else, if (c) passes: `TestTheWrapperPrepopulatesUnknownNodes`. The wrapper runs the `ssh … accept-new … BatchMode=yes … exit` line only for a node absent from `known_hosts`, never for one present, and never with `StrictHostKeyChecking=no`.
+  - Else, if (c) passes: `TestTheWrapperPrepopulatesUnknownNodes`. The wrapper runs ruling 9's line only for a node absent from `known_hosts`, never for one present, and never with `StrictHostKeyChecking=no`. The test asserts every one of the line's flags: `BatchMode=yes`, `PreferredAuthentications=none`, `PubkeyAuthentication=no`, `IdentityAgent=none`, `IdentitiesOnly=yes`.
   - `secure: true` stays. The README's "populate it once per device" line goes, or, if neither cell passes, it states the measured limitation.
 
 - [ ] **Step 4: Commit.**
@@ -946,11 +1041,12 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 
 **Files:**
 - Create: `tests/kind/enrollments_test.go` (`//go:build kind`)
-- Modify: `Makefile` (`kind-enrollments`), `.github/workflows/kind.yml` (a second job), `deploy/helm/port49/README.md` ("unrun" removed)
+- Modify: `Makefile` (`kind-enrollments`), `.github/workflows/kind.yml` (a second job), `tests/ci/kind_workflows_test.go` (extended to the new job), `deploy/helm/port49/README.md` ("unrun" removed)
 
 - [ ] **Step 1: Write `TestEnrollmentsExportRuns`.**
 
-  - It runs `kindtest.Up`, plus the L67 OpenLDAP image (`tests/lab/directory/openldap`) as a pod.
+  - First, extend `tests/ci/kind_workflows_test.go` to cover the new job: a hosted runner, `timeout-minutes: 45`, `permissions: {contents: read}`, pinned actions. See it fail.
+  - It runs `kindtest.Up`. It builds the L67 OpenLDAP image from `tests/lab/directory/openldap/Dockerfile`, loads it with `kind load docker-image`, and runs it as a pod.
   - The broker is configured with a `directory_password` verifier and a username-free policy, and `backup.enrollments.enabled: true` with a test PVC.
   - It runs `port49-broker init-enrollments` as the install step, then `kubectl create job --from=cronjob/<release>-enrollments-export`.
   - It asserts:
@@ -963,7 +1059,7 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 - [ ] **Step 3: Commit.**
 
   ```bash
-  git add tests/kind/enrollments_test.go Makefile .github/workflows/kind.yml deploy/helm/port49/README.md
+  git add tests/kind/enrollments_test.go tests/ci/kind_workflows_test.go Makefile .github/workflows/kind.yml deploy/helm/port49/README.md
   git commit -m "test: the enrollments export CronJob runs against a directory on kind"
   ```
 
