@@ -604,3 +604,23 @@ func TestL67APersonNoCellEnrolledIsAnInvalidNotAPanic(t *testing.T) {
 		t.Fatal("a person nobody enrolled was found")
 	}
 }
+
+// A failure line quotes where the raw text is kept, never the text, and the file is the user's alone.
+func TestL67KeptWritesThePrivateFileAndQuotesOnlyItsPath(t *testing.T) {
+	raw := "a line the log must never carry: " + labKeyDefault
+	path := l67Kept("unit", raw)
+	t.Cleanup(func() { os.Remove(path) })
+	if strings.Contains(path, raw) || strings.Contains(path, labKeyDefault) {
+		t.Fatalf("the quoted path carries the text: %q", path)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", fi.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(path); string(got) != raw {
+		t.Errorf("the file does not hold the text")
+	}
+}

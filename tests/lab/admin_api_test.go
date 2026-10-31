@@ -121,7 +121,7 @@ func startLabAdmin(t *testing.T, piv *testpki.PIV, brokerURL, caFile, certFile, 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if _, err := a.Connect(ctx); err != nil {
-		t.Fatalf("the operator's agent could not log in at %s: %v", brokerURL, err)
+		t.Fatalf("INVALID: the operator's agent could not log in at %s, error kept in %s", brokerURL, l67Kept("agent-login", err.Error()))
 	}
 	// A short path: a Unix socket's has a length limit.
 	dir, err := os.MkdirTemp("", "p49adm")

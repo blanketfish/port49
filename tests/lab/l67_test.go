@@ -918,13 +918,31 @@ func (p *l67Person) code() string {
 	return c
 }
 
+// l67Kept writes raw (a command's output, a daemon's stderr) to a 0600 file under the lab's private
+// directory and returns its path. A failure line quotes that path, never the text: the text can hold
+// what no log may, and the lab log's readers filter it away whole.
+func l67Kept(label, raw string) string {
+	dir, err := labPrivateSub("l67-failures")
+	if err == nil {
+		err = os.MkdirAll(dir, 0o700)
+	}
+	if err != nil {
+		return "(not kept: " + err.Error() + ")"
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", label, time.Now().UnixNano()))
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		return "(not kept: " + err.Error() + ")"
+	}
+	return path
+}
+
 // enroll takes name through the enrollment: the first sign-in with no code
 // answers 202 with the secret, the first code confirms it.
 func (x *l67X) enroll(t *testing.T, a *l67API, name string) *l67Person {
 	t.Helper()
 	ans := a.signIn(name, x.pw, "")
 	if ans.Status != http.StatusAccepted || ans.Enroll == nil {
-		t.Fatalf("INVALID: enrolling %s: %d %s (%s)", name, ans.Status, ans.Error, ans.Detail)
+		t.Fatalf("INVALID: enrolling %s: %d %s", name, ans.Status, ans.Error)
 	}
 	secret, err := l67SecretOf(ans.Enroll.URI)
 	if err != nil {
@@ -934,7 +952,7 @@ func (x *l67X) enroll(t *testing.T, a *l67API, name string) *l67Person {
 	p := &l67Person{name: name, secret: secret, rec: &x.sec}
 	conf := a.confirm(ans.Enroll.Handle, p.code())
 	if conf.Status != http.StatusOK || !conf.Cert {
-		t.Fatalf("INVALID: confirming %s's enrollment: %d %s (%s)", name, conf.Status, conf.Error, conf.Detail)
+		t.Fatalf("INVALID: confirming %s's enrollment: %d %s", name, conf.Status, conf.Error)
 	}
 	return p
 }
@@ -959,7 +977,7 @@ func (x *l67X) startBroker(t *testing.T, opts l67BrokerOpts) {
 	}
 	x.broker = newL67Broker(t, x.owner, x.dir, opts)
 	if out, code := x.broker.initEnrollments(t); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, oneLineMax(out, 300))
+		t.Fatalf("INVALID: init-enrollments: exit %d, output kept in %s", code, l67Kept("init-enrollments", out))
 	}
 	a := x.broker.api(t)
 	x.people = map[string]*l67Person{}
@@ -1114,7 +1132,7 @@ func (x *l67X) cellE(t *testing.T) {
 	ans := a.signIn("carol", x.pw, p.code())
 	x.row("e. control", "right password, right code: %d %s", ans.Status, ans.Error)
 	if ans.Status != http.StatusOK || !ans.Cert {
-		t.Fatalf("INVALID: carol's right sign-in: %d %s (%s)", ans.Status, ans.Error, ans.Detail)
+		t.Fatalf("INVALID: carol's right sign-in: %d %s", ans.Status, ans.Error)
 	}
 	before, err := x.state(t, "carol")
 	if err != nil {
@@ -1154,7 +1172,7 @@ func (x *l67X) cellG(t *testing.T) {
 		t.Fatalf("INVALID: before init-enrollments: %d %s, enrollments.json exists %v", ans.Status, ans.Error, statErr == nil)
 	}
 	if out, code := b.initEnrollments(t); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, oneLineMax(out, 300))
+		t.Fatalf("INVALID: init-enrollments: exit %d, output kept in %s", code, l67Kept("init-enrollments", out))
 	}
 	if _, err := os.Stat(filepath.Join(b.dir, "enrollments.json")); err != nil {
 		x.fail("g (memory): init-enrollments left no enrollments.json: %v", err)
@@ -1710,7 +1728,7 @@ func newL67Broker(t, owner *testing.T, x *labDir, o l67BrokerOpts) *l67Broker {
 		cmd := exec.Command(port49d, args...)
 		cmd.Env = env
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("INVALID: port49d %s: %v: %s", args[0], err, oneLineMax(string(out), 400))
+			t.Fatalf("INVALID: port49d %s: %v, output kept in %s", args[0], err, l67Kept(args[0], string(out)))
 		}
 	}
 	b.start(t)
@@ -1760,11 +1778,11 @@ func (b *l67Broker) start(t *testing.T) {
 		}
 		select {
 		case <-b.done:
-			t.Fatalf("port49d exited during startup; its stderr:\n%s", tailOf(b.said(), 2000))
+			t.Fatalf("INVALID: port49d exited during startup; its stderr is kept in %s", l67Kept("start-exited", b.said()))
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("port49d never said it was listening; its stderr:\n%s", tailOf(b.said(), 2000))
+			t.Fatalf("INVALID: port49d never said it was listening; its stderr is kept in %s", l67Kept("start-silent", b.said()))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -1837,7 +1855,7 @@ func (b *l67Broker) unlock(t *testing.T, name string) {
 			filepath.Join(b.pki, cert), filepath.Join(b.pki, key))
 	}
 	if out, code := b.admin.runCmd("directory", "unlock", "user:"+name+"@corp.example.com"); code != 0 {
-		t.Fatalf("INVALID: directory unlock %s: exit %d: %s", name, code, oneLineMax(out, 300))
+		t.Fatalf("INVALID: directory unlock %s: exit %d, output kept in %s", name, code, l67Kept("unlock", out))
 	}
 }
 
