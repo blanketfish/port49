@@ -941,6 +941,11 @@ func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, e
 	if err != nil {
 		return "", err
 	}
+	// A broker block makes its policy_file port49d's policy, and the device key sets are then that file's
+	// (decision 53 ruling 3): port49d refuses a keys: block of its own beside it.
+	if strings.Contains(out, "\n  policy_file: ") {
+		out = strings.Replace(out, "keys:\n"+l28Anchor, "", 1)
+	}
 	path := filepath.Join(dir, name+".yaml")
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", err
