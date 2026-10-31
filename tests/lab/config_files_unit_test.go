@@ -309,3 +309,49 @@ func mustSub(t *testing.T, name string) string {
 	}
 	return d
 }
+
+// The split's broker config names the slice PKI by a path relative to the checkout; every fenced file it
+// names is read from a private copy, outside the group-writable tree.
+func TestTheSplitBrokerConfigIsStagedOutsideTheTree(t *testing.T) {
+	t.Setenv("PORT49_LAB_KEY", labKeyDefault)
+	t.Setenv("PORT49_KEY_LAB", labKeyDefault)
+	t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
+	r := labTree(t)
+	base, err := os.ReadFile(filepath.Join(r, "tests", "lab", "port49d-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sliceBroker, err := os.ReadFile(filepath.Join(r, "tests", "lab", "slice", "broker.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := filepath.Join(r, adminRolesFile)
+	if err := os.WriteFile(roots, []byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := splitBrokerOpts{Policy: filepath.Join(r, "policy.yaml"), Inventory: filepath.Join(r, "inventory.yaml"),
+		State: filepath.Join(r, "state"), Metrics: ":9050"}
+	raw, err := splitBrokerYAML(string(base), string(sliceBroker), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inTree := 0
+	for _, m := range stagedKeys.FindAllStringSubmatch(raw, -1) {
+		if _, in := underRoot(m[2]); in {
+			inTree++
+		}
+	}
+	if inTree == 0 {
+		t.Fatal("the control: the unstaged split broker config names no file inside the tree, so this proves nothing")
+	}
+	br, err := splitBrokerConfig(string(base), string(sliceBroker), o, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range stagedKeys.FindAllStringSubmatch(br, -1) {
+		if p, in := underRoot(m[2]); in && m[1] != "attestation_roots_file" {
+			t.Errorf("%s %s is still inside the tree (%s)", m[1], m[2], p)
+		}
+	}
+	assertFencedFilesReadable(t, "split broker", br)
+}

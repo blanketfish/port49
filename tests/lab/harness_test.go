@@ -2404,6 +2404,20 @@ type splitBrokerOpts struct {
 	Policy, Inventory, State, Metrics, Store, PKI string
 }
 
+// splitBrokerConfig is splitBrokerYAML with the on-call's admin touch roots, and every fenced file it
+// names inside the checkout (the slice PKI) pointed at a private copy: the checkout's directories are
+// group-writable on a lab host, and the broker reads these behind the fence.
+func splitBrokerConfig(base, sliceBroker string, o splitBrokerOpts, roots string) (string, error) {
+	br, err := splitBrokerYAML(base, sliceBroker, o)
+	if err != nil {
+		return "", err
+	}
+	if br, err = withAdminTouch(br, roots); err != nil {
+		return "", err
+	}
+	return stagePrivateFiles(br)
+}
+
 // swapLine replaces the exact text old in s by new, or says it is not there:
 // a derived config that kept its old line would run the wrong listener.
 func swapLine(s, old, new string) (string, error) {
@@ -2850,12 +2864,9 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 	if err != nil {
 		t.Fatal(err)
 	}
-	br, err := splitBrokerYAML(string(labRaw), string(sliceBroker), splitBrokerOpts{Policy: s.Policy,
-		Inventory: inventory, State: state, Metrics: splitMetricsBroker, Store: brokerStore})
+	br, err := splitBrokerConfig(string(labRaw), string(sliceBroker), splitBrokerOpts{Policy: s.Policy,
+		Inventory: inventory, State: state, Metrics: splitMetricsBroker, Store: brokerStore}, s.roots)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if br, err = withAdminTouch(br, s.roots); err != nil {
 		t.Fatal(err)
 	}
 	s.CfgBroker = write("port49-broker.yaml", br)
