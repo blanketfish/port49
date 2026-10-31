@@ -84,6 +84,12 @@ type labAdmin struct {
 // the hierarchy the broker's attestation roots came from (adminTouchRoots).
 func startLabAdmin(t *testing.T, piv *testpki.PIV, brokerURL, caFile, certFile, keyFile string) *labAdmin {
 	t.Helper()
+	return startLabAdminFor(t, t, piv, brokerURL, caFile, certFile, keyFile)
+}
+
+// startLabAdminFor is startLabAdmin with the agent kept until owner ends, not t.
+func startLabAdminFor(t, owner *testing.T, piv *testpki.PIV, brokerURL, caFile, certFile, keyFile string) *labAdmin {
+	t.Helper()
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		t.Fatalf("the operator's certificate: %v", err)
@@ -123,6 +129,13 @@ func startLabAdmin(t *testing.T, piv *testpki.PIV, brokerURL, caFile, certFile, 
 	if _, err := a.Connect(ctx); err != nil {
 		t.Fatalf("INVALID: the operator's agent could not log in at %s, error kept in %s", brokerURL, l67Kept("agent-login", err.Error()))
 	}
+	return serveLabAgent(t, owner, a)
+}
+
+// serveLabAgent serves a on a private socket until owner ends. owner is the test that outlives the agent's
+// users: an agent a broker keeps for several cells must not end with the cell that started it.
+func serveLabAgent(t, owner *testing.T, a *agent.Agent) *labAdmin {
+	t.Helper()
 	// A short path: a Unix socket's has a length limit.
 	dir, err := os.MkdirTemp("", "p49adm")
 	if err != nil {
@@ -131,11 +144,12 @@ func startLabAdmin(t *testing.T, piv *testpki.PIV, brokerURL, caFile, certFile, 
 	sock := filepath.Join(dir, "agent.sock")
 	ln, err := agent.Listen(sock)
 	if err != nil {
+		os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: a.Handler(), ConnContext: agent.ConnContext}
 	go srv.Serve(ln)
-	t.Cleanup(func() {
+	owner.Cleanup(func() {
 		srv.Close()
 		os.RemoveAll(dir)
 	})

@@ -1673,6 +1673,7 @@ keys:
 
 // l67Broker is bin/port49d running a broker over a directory.
 type l67Broker struct {
+	owner         *testing.T // the test whose end stops the broker and its admin agent
 	x             *labDir
 	dir, pki, cfg string
 	addr, errTo   string
@@ -1726,7 +1727,7 @@ func newL67BrokerWith(t, owner *testing.T, x *labDir, o l67BrokerOpts, beforeSta
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b := &l67Broker{x: x, dir: dir, pki: filepath.Join(dir, "pki"), cfg: filepath.Join(dir, "port49d.yaml"),
+	b := &l67Broker{owner: owner, x: x, dir: dir, pki: filepath.Join(dir, "pki"), cfg: filepath.Join(dir, "port49d.yaml"),
 		errTo: filepath.Join(dir, "port49d.err"), bin: port49d, cli: port49, opts: o}
 	// The unlock is alice's, by certificate: her directory entry's mail is on a
 	// second certificate from the lab CA (l67OncallEmail), which the broker maps
@@ -1824,6 +1825,7 @@ func (b *l67Broker) restart(t *testing.T, o l67BrokerOpts) {
 	b.stop()
 	b.opts = o
 	b.write(t, o)
+	b.admin = nil // the old agent is logged in at the old address
 	b.start(t)
 }
 
@@ -1891,7 +1893,7 @@ func (b *l67Broker) unlock(t *testing.T, name string) {
 	t.Helper()
 	if b.admin == nil {
 		cert, key := testpki.LabClientFiles(l67OncallEmail)
-		b.admin = startLabAdmin(t, b.piv, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA),
+		b.admin = startLabAdminFor(t, b.owner, b.piv, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA),
 			filepath.Join(b.pki, cert), filepath.Join(b.pki, key))
 	}
 	if out, code := b.admin.runCmd("directory", "unlock", "user:"+name+"@corp.example.com"); code != 0 {

@@ -5,6 +5,8 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
@@ -683,4 +686,21 @@ func TestLabAdminFindsTheRepoWithTheRootGlobalEmptyAndSaysWhyItCouldNotRun(t *te
 	if code != -1 || !strings.Contains(out, "port49") {
 		t.Errorf("a command that could not start answered %d %q, want -1 and the reason", code, out)
 	}
+}
+
+// A broker keeps its admin agent for every cell that unlocks. The agent ends with the broker's owner, not
+// with the cell that happened to start it: a cell's end must not leave the next one "no agent is running".
+func TestAnAdminAgentStartedInOneCellStillAnswersInTheNext(t *testing.T) {
+	var admin *labAdmin
+	outer := t
+	t.Run("first cell", func(t *testing.T) {
+		admin = serveLabAgent(t, outer, agent.New(agent.Config{Log: io.Discard}))
+	})
+	t.Run("second cell", func(t *testing.T) {
+		c, err := net.DialTimeout("unix", admin.sock, time.Second)
+		if err != nil {
+			t.Fatalf("the agent started in the first cell is gone in the second: %v", err)
+		}
+		c.Close()
+	})
 }
