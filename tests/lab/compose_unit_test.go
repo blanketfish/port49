@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -147,6 +148,9 @@ func TestDaemonLineQuotesOnlyTheDaemonsOwnFirstLine(t *testing.T) {
 	}
 }
 
+// envRef is a secret reference by environment variable in any key of a config or policy.
+var envRef = regexp.MustCompile(`(?m)^[^#\n]*secret_ref: env:\S+`)
+
 // requireDaemonPolicy is the check port49d and the broker make of the compose policy at start: it
 // parses and declares its keys: block (decision 53 ruling 3), and holds the lab key set the
 // inventory's key group names, read from the file placeComposeSecrets writes.
@@ -159,7 +163,46 @@ func requireDaemonPolicy(t *testing.T, files map[string]string) {
 	if !p.KeysDeclared() {
 		t.Fatalf("the compose policy declares no keys: block, which port49d and the broker refuse at start:\n%s", files["policy.yaml"])
 	}
+	for name, body := range files {
+		if strings.HasSuffix(name, ".yaml") && envRef.MatchString(body) {
+			t.Fatalf("%s still names a secret by environment (%s), which the compose stack passes no environment for",
+				name, envRef.FindString(body))
+		}
+	}
 	if !strings.Contains(files["policy.yaml"], "lab_key:") || !strings.Contains(files["policy.yaml"], "file:"+composeDeviceKeyPath) {
 		t.Fatalf("the compose policy holds no lab_key set read from %s:\n%s", composeDeviceKeyPath, files["policy.yaml"])
+	}
+}
+
+// A bind password or a client secret named by environment is found as a key's would be.
+func TestEnvRefFindsEverySecretRefKey(t *testing.T) {
+	for _, line := range []string{"  current: {id: c1, secret_ref: env:X}", "      password_secret_ref: env:LAB_X",
+		"  client_secret_ref: env:Y"} {
+		if !envRef.MatchString(line) {
+			t.Errorf("%q is not found", line)
+		}
+	}
+	if envRef.MatchString("# secret_ref: env:X\n  current: {secret_ref: file:/a}") {
+		t.Error("a comment or a file ref was found")
+	}
+}
+
+// A daemon's exit is named by a tag from a fixed list, so a line the filter hides (it says "password")
+// still gives the run its cause without quoting the line.
+func TestCrashTagsNameTheCauseFromAFixedList(t *testing.T) {
+	for logs, want := range map[string]string{
+		"port49-broker: crypt: the directory store (x) was last written by a process whose current key is \"c9\", which this configuration does not hold": "directory_key_window",
+		"port49-broker: directory store: reading its key window: boom":                                                                                    "directory_key_window",
+		"port49-broker: session store: reading its cluster id: boom":                                                                                      "two_stores_check",
+		"port49-broker: issuing CA record differs from the one on disk":                                                                                   "issuer_record",
+		"port49-broker: broker listener on :8443: address in use":                                                                                         "listener",
+		"port49d: policy.file /etc/port49/policy.yaml: the policy declares no keys: block":                                                                "policy",
+		"port49-broker: something nobody listed":                                                                                                          "unlisted",
+		"port49-broker: issuance: issuing-ca.pem is missing\nport49-broker: directory store: reading its key window: boom\nchatter":                       "directory_key_window",
+		"library chatter only": "",
+	} {
+		if got := crashTag(logs); got != want {
+			t.Errorf("%q: tag %q, want %q", logs, got, want)
+		}
 	}
 }

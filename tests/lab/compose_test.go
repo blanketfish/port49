@@ -200,6 +200,41 @@ func daemonLine(logs string) string {
 	return ""
 }
 
+// crashTags are the causes a daemon's own error line can be named by, matched by a substring of the
+// line. The tag is all the INVALID line carries of a line it may not quote.
+var crashTags = []struct{ tag, has string }{
+	{"directory_key_window", "key window"},
+	{"directory_key_window", "does not hold"},
+	{"two_stores_check", "cluster id"},
+	{"two_stores_check", "probe lease"},
+	{"issuer_record", "issuing CA"},
+	{"listener", "listener on"},
+	{"metrics_listener", "metrics listener"},
+	{"policy", "policy"},
+	{"config", "config:"},
+	{"directory_open", "directory"},
+}
+
+// crashTag names the cause of the last line of logs that begins with a daemon's own prefix, the one
+// said before the exit, from crashTags: "unlisted" for a line none matches, "" when no line has the prefix.
+func crashTag(logs string) string {
+	line := ""
+	for _, ln := range strings.Split(logs, "\n") {
+		if ln = strings.TrimSpace(ln); strings.HasPrefix(ln, "port49-broker: ") || strings.HasPrefix(ln, "port49d: ") {
+			line = ln
+		}
+	}
+	if line == "" {
+		return ""
+	}
+	for _, c := range crashTags {
+		if strings.Contains(line, c.has) {
+			return c.tag
+		}
+	}
+	return "unlisted"
+}
+
 // crashes keeps the last 50 log lines of each daemon in a private file and quotes the file's path with
 // the daemon's first own line; the rest of the log is never quoted.
 func (c *composeStack) crashes() string {
@@ -213,6 +248,9 @@ func (c *composeStack) crashes() string {
 		part := svc + ": log kept in " + l67Kept("compose-"+svc, out)
 		if first := daemonLine(out); first != "" {
 			part += ", first line: " + first
+		}
+		if tag := crashTag(out); tag != "" {
+			part += ", cause: " + tag
 		}
 		parts = append(parts, part)
 	}
