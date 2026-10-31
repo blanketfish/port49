@@ -156,10 +156,12 @@ subjects:
   - {name: bob, identity: ["user:bob@corp.example.com"], token_ttl: 900s,
      api: [unlock_sign_in, reset_second_factor, forget_principals]}
   - {name: dave, identity: ["user:dave@corp.example.com"], token_ttl: 900s}
+  - {name: alice, identity: ["user:alice@corp.example.com"], token_ttl: 900s}
 grants:
   - {subject: carol, scope: all, roles: [admin]}
   - {subject: bob, scope: all, roles: [admin]}
   - {subject: dave, scope: all, roles: [admin]}
+  - {subject: alice, scope: all, roles: [admin]}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: k}
 keys:
@@ -530,7 +532,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 		return &c
 	}
-	carolCert, bobCert, daveCert := certOf("carol"), certOf("bob"), certOf("dave")
+	carolCert, bobCert, daveCert, aliceCert := certOf("carol"), certOf("bob"), certOf("dave"), certOf("alice")
 	iss := oidctest.NewIssuer(t)
 	issCA := filepath.Join(w.dir, "l75-issuer-ca.pem")
 	if err := os.WriteFile(issCA, iss.CertPEM(), 0o600); err != nil {
@@ -831,7 +833,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	// (f) membership's pin across brokers (R13).
 	w.guard()
 	d1 := w.dirMembers[1]
-	pinKey := "/port49/v1/mb/user:carol@corp.example.com" // esc() is url.PathEscape, which keeps : and @
+	pinKey := "/port49/v1/mb/user:dave@corp.example.com" // esc() is url.PathEscape, which keeps : and @
 	pinRevOf := func(key string) int64 {
 		js, err := d1.ctl(w.dirEndpoints(), "get", key, "-w", "json")
 		if err != nil {
@@ -848,33 +850,34 @@ func l75(t *testing.T, w *regionWorld) []string {
 		return r.Kvs[0].ModRevision
 	}
 	pinRev := func() int64 { return pinRevOf(pinKey) }
-	// The first bind is dave's: no earlier cell used him at any broker, so b3 has no pin for him (bob and
-	// carol made the earlier cells' admin calls through b3 and are pinned there already).
-	davePinKey := "/port49/v1/mb/user:dave@corp.example.com"
-	carolC, daveC := l75Client(w.pki, carolCert), l75Client(w.pki, daveCert)
-	m1, _ := l75Mint(w, carolC, bs[2].addr(), "")
+	// Cell f uses principals no earlier cell used: the first bind is alice's, so b3 has no pin for her, and
+	// the cached pin is dave's, whom no earlier cut told a cached-membership line about (the line is at most
+	// once per principal per 10 minutes). Bob and carol made the earlier cells' admin calls through b3.
+	alicePinKey := "/port49/v1/mb/user:alice@corp.example.com"
+	daveC, aliceC := l75Client(w.pki, daveCert), l75Client(w.pki, aliceCert)
+	m1, _ := l75Mint(w, daveC, bs[2].addr(), "")
 	rev1 := pinRev()
-	// b3 mints for carol while the directory answers: its session store holds
-	// her membership with the pin as it stands (the cached pin the cut serves).
-	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
-		t.Fatalf("INVALID: carol's mint at b3 before the forget: %d %s", st, e)
+	// b3 mints for dave while the directory answers: its session store holds
+	// his membership with the pin as it stands (the cached pin the cut serves).
+	if st, e := l75Mint(w, daveC, bs[3].addr(), ""); st != http.StatusOK {
+		t.Fatalf("INVALID: dave's mint at b3 before the forget: %d %s", st, e)
 	}
-	_, fcode, _ := asAdmin(bs[1], "bob", "forget", "user:carol@corp.example.com")
+	_, fcode, _ := asAdmin(bs[1], "bob", "forget", "user:dave@corp.example.com")
 	// b2's next mint pins her again once its pins feed has delivered the forget:
 	// mint until the pin's revision moves, or give up after 30s.
 	m2, rev2 := 0, rev1
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
-		m2, _ = l75Mint(w, carolC, bs[2].addr(), "")
+		m2, _ = l75Mint(w, daveC, bs[2].addr(), "")
 		if rev2 = pinRev(); rev2 > rev1 {
 			break
 		}
 	}
 	// And b3 reads the new pin the same way, before the cut.
-	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
-		t.Fatalf("INVALID: carol's mint at b3 after the re-pin: %d %s", st, e)
+	if st, e := l75Mint(w, daveC, bs[3].addr(), ""); st != http.StatusOK {
+		t.Fatalf("INVALID: dave's mint at b3 after the re-pin: %d %s", st, e)
 	}
-	if r := pinRevOf(davePinKey); r != 0 {
-		t.Fatalf("INVALID: dave is already pinned in the directory (revision %d), so cell f's first bind is not one", r)
+	if r := pinRevOf(alicePinKey); r != 0 {
+		t.Fatalf("INVALID: alice is already pinned in the directory (revision %d), so cell f's first bind is not one", r)
 	}
 	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
@@ -882,14 +885,14 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	// store status pings live and says "cut" up to one freshness check before
 	// the copy knows: until then the forget waits out the call timeout and
-	// carol's pin is served from the watch with no cached-membership line.
+	// dave's pin is served from the watch with no cached-membership line.
 	if err := l75NotAnswering(bs[3].proc, 30*time.Second); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	_, f3, ft3 := asAdmin(bs[3], "bob", "forget", "user:carol@corp.example.com")
-	m3, _ := l75Mint(w, carolC, bs[3].addr(), "")
-	cached := strings.Contains(bs[3].proc.said(), "serving user:carol@corp.example.com's cached directory membership")
-	mb, mbErr := l75Mint(w, daveC, bs[3].addr(), "")
+	_, f3, ft3 := asAdmin(bs[3], "bob", "forget", "user:dave@corp.example.com")
+	m3, _ := l75Mint(w, daveC, bs[3].addr(), "")
+	cached := strings.Contains(bs[3].proc.said(), "serving user:dave@corp.example.com's cached directory membership")
+	mb, mbErr := l75Mint(w, aliceC, bs[3].addr(), "")
 	if !bs[3].hang(w, false) {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
 	}
@@ -898,13 +901,13 @@ func l75(t *testing.T, w *regionWorld) []string {
 	if err := l75AnsweringAgain(bs[3].proc, 30*time.Second); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	// The control for dave's refusal: after the heal he is a member b3 mints for.
-	mbAfter, _ := l75Mint(w, daveC, bs[3].addr(), "")
+	// The control for alice's refusal: after the heal he is a member b3 mints for.
+	mbAfter, _ := l75Mint(w, aliceC, bs[3].addr(), "")
 	row("f", "membership's pin: written once in the directory; a forget at broker 1 re-pins at broker 2's next "+
 		"mint; with broker 3 cut, a forget there refused, a pinned member served from the cached pin and said, "+
 		"a first bind refused (and served after the heal)",
 		fmt.Sprintf("mint at b2 %d, pin revision %d; forget at b1 exit %d; next mint at b2 %d, pin revision %d; cut: "+
-			"forget at b3 exit %d in %v; carol's mint at b3 %d (said %v); dave's first mint at b3 %d %s; dave's mint at b3 after the heal %d",
+			"forget at b3 exit %d in %v; dave's mint at b3 %d (said %v); alice's first mint at b3 %d %s; alice's mint at b3 after the heal %d",
 			m1, rev1, fcode, m2, rev2, f3, ft3.Round(time.Millisecond), m3, cached, mb, mbErr, mbAfter),
 		m1 == http.StatusOK && rev1 > 0 && fcode == 0 && m2 == http.StatusOK && rev2 > rev1 && f3 != 0 &&
 			m3 == http.StatusOK && cached && mb != http.StatusOK && mbAfter == http.StatusOK)
