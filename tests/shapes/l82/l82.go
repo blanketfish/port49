@@ -198,9 +198,47 @@ func Results(env Env, cells []Cell) (string, error) {
 	b.WriteString("The register row closes only when every cell has a PASS or a FAIL; a FAIL is a measured answer.\n")
 	out := b.String()
 	if why := Leak(out); why != "" {
-		return "", fmt.Errorf("l82: the results hold %s: nothing is written", why)
+		return "", fmt.Errorf("l82: the results hold %s, %s: nothing is written", why, LeakWhere(env, cells))
 	}
 	return out, nil
+}
+
+// LeakWhere names the field that trips Leak, never its text: an environment field by name, or a cell's
+// row by its id, its number and its case (the case only when it is clean itself) and whether the case or
+// the observation holds it, with the length of the first offending run. "somewhere in the framing" when
+// no single field does.
+func LeakWhere(env Env, cells []Cell) string {
+	for _, f := range []struct{ name, v string }{{"Date", env.Date}, {"Runner", env.Runner}, {"Run", env.Run}, {"Docker", env.Docker},
+		{"Kernel", env.Kernel}, {"Kind", env.Kind}, {"NodeImage", env.NodeImage}, {"Kubectl", env.Kubectl}, {"Helm", env.Helm},
+		{"ESOChart", env.ESOChart}, {"ESOApp", env.ESOApp}} {
+		if why := Leak(f.v); why != "" {
+			return "in the environment field " + f.name + runLen(f.v)
+		}
+	}
+	for _, c := range cells {
+		for i, r := range c.Rows {
+			if Leak(r.Case) != "" {
+				return fmt.Sprintf("in cell %s row %d, the case%s", c.ID, i+1, runLen(r.Case))
+			}
+			if Leak(r.Observation) != "" {
+				return fmt.Sprintf("in cell %s row %d (%s), the observation%s", c.ID, i+1, strconv.Quote(r.Case), runLen(r.Observation))
+			}
+		}
+	}
+	return "somewhere in the framing text"
+}
+
+// runLen is " (its longest run is N characters)" for the longest key-character run in s, or "" when the
+// text trips Leak by a word alone (Leak has named the word).
+func runLen(s string) string {
+	best := 0
+	for _, m := range longRun.FindAllString(digest.ReplaceAllString(s, "sha256:<digest>"), -1) {
+		best = max(best, len(m))
+	}
+	if best == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (its longest run is %d characters)", best)
 }
 
 func verdict(cells []Cell, id string) string {

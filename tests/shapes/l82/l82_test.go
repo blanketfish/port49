@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,5 +269,40 @@ func TestADigestPinnedImageTagPassesTheLeakGuardAsTheDigestForm(t *testing.T) {
 	}
 	if r := Leak(strings.TrimPrefix(d, "sha256:")); r == "" {
 		t.Error("a bare 64-hex run must still be refused (the guard is unchanged)")
+	}
+}
+
+func TestTheGuardNamesTheFieldNotTheValue(t *testing.T) {
+	long := strings.Repeat("a", 30)
+	_, err := Results(Env{}, []Cell{{ID: "d", Rows: []Row{{Case: "fine", Observation: "ok"}, {Case: long, Observation: "ok"}}}})
+	if err == nil || !strings.Contains(err.Error(), "cell d row 2, the case") || strings.Contains(err.Error(), long) {
+		t.Errorf("the case: %v", err)
+	}
+	_, err = Results(Env{}, []Cell{{ID: "b", Rows: []Row{{Case: "fine", Observation: long}}}})
+	if err == nil || !strings.Contains(err.Error(), `cell b row 1 ("fine"), the observation`) || strings.Contains(err.Error(), long) {
+		t.Errorf("the observation: %v", err)
+	}
+	_, err = Results(Env{Run: long}, nil)
+	if err == nil || !strings.Contains(err.Error(), "environment field Run") || strings.Contains(err.Error(), long) {
+		t.Errorf("the environment: %v", err)
+	}
+}
+
+// Every case the harness writes is read by the guard: a metric name is 24 or more key characters
+// (lab run 41151306253, cell d's last row), so a case names it in words.
+func TestEveryCaseTheHarnessWritesPassesTheGuard(t *testing.T) {
+	src, err := os.ReadFile("../../lab/l82_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := regexp.MustCompile(`l82Row\(\w+, ("[^"\n]*"),`).FindAllStringSubmatch(string(src), -1)
+	if len(cases) < 8 {
+		t.Fatalf("found %d literal cases, want the harness's 10 or so", len(cases))
+	}
+	for _, m := range cases {
+		c, _ := strconv.Unquote(m[1])
+		if why := Leak(c); why != "" {
+			t.Errorf("the case %q is refused by the guard: %s", c, why)
+		}
 	}
 }

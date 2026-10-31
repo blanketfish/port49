@@ -418,5 +418,5 @@ func l82CellD(t *testing.T, stack *kindstack.Stack, v2, image string, cell *l82.
 	cell.Verdict = l82.JudgeESO(res)
 	// Informational, after the verdict: a new version is a new file, so no held file's bytes changed.
 	metrics := stack.Forward("pod/t-port49d-0", 9049)
-	l82Row(cell, "port49_key_secret_files_changed", fmt.Sprint(shapetest.Gauge(t, metrics, "port49_key_secret_files_changed")))
+	l82Row(cell, "the gauge of key Secret files rewritten in place (key secret files changed)", fmt.Sprint(shapetest.Gauge(t, metrics, "port49_key_secret_files_changed")))
 }
