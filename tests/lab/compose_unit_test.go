@@ -197,6 +197,7 @@ func TestCrashTagsNameTheCauseFromAFixedList(t *testing.T) {
 		"port49-broker: issuing CA record differs from the one on disk":                                                                                   "issuer_record",
 		"port49-broker: broker listener on :8443: address in use":                                                                                         "listener",
 		"port49d: policy.file /etc/port49/policy.yaml: the policy declares no keys: block":                                                                "policy",
+		"port49-broker: opening lab.seed_token_file /tmp/x (a symlink): open /tmp/x: read-only file system":                                               "lab_seed_file",
 		"port49-broker: something nobody listed":                                                                                                          "unlisted",
 		"port49-broker: issuance: issuing-ca.pem is missing\nport49-broker: directory store: reading its key window: boom\nchatter":                       "directory_key_window",
 		"library chatter only": "",
@@ -204,5 +205,33 @@ func TestCrashTagsNameTheCauseFromAFixedList(t *testing.T) {
 		if got := crashTag(logs); got != want {
 			t.Errorf("%q: tag %q, want %q", logs, got, want)
 		}
+	}
+}
+
+// The broker container's root is read-only (deploy/compose), and its lab seeds are written to
+// lab.seed_token_file at start: the directory that file is in must be a tmpfs in the lab overlay, or
+// the broker exits at start with a line the filter hides (it says "token").
+func TestComposeLabOverlayLetsTheBrokerWriteItsSeedFile(t *testing.T) {
+	read := func(name string) string {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	files, err := composeLabFiles(read("port49d-lab.yaml"), read(filepath.Join("slice", "broker.yaml")),
+		read(filepath.Join("slice", "policy.yaml")), read("inventory-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^  seed_token_file: (\S+)$`).FindStringSubmatch(files["port49-broker.yaml"])
+	if m == nil {
+		return // no seeds, no file to write
+	}
+	overlay := read(filepath.Join("compose", "lab.yaml"))
+	i := strings.Index(overlay, "  port49-broker:")
+	if i < 0 || !strings.Contains(overlay[i:], "tmpfs: ["+filepath.Dir(m[1])+"]") {
+		t.Errorf("the lab overlay's port49-broker has no tmpfs for %s, where the read-only container writes %s",
+			filepath.Dir(m[1]), m[1])
 	}
 }

@@ -10,3 +10,5 @@ services:
     ports: !override
       - "127.0.0.1:8449:8443"
       - "127.0.0.1:9050:9050"
+    # The container's root is read-only; the lab's seeds are written to lab.seed_token_file in /tmp.
+    tmpfs: [/tmp]

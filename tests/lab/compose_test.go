@@ -203,6 +203,7 @@ func daemonLine(logs string) string {
 // crashTags are the causes a daemon's own error line can be named by, matched by a substring of the
 // line. The tag is all the INVALID line carries of a line it may not quote.
 var crashTags = []struct{ tag, has string }{
+	{"lab_seed_file", "seed_token_file"},
 	{"directory_key_window", "key window"},
 	{"directory_key_window", "does not hold"},
 	{"two_stores_check", "cluster id"},
