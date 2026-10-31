@@ -8105,6 +8105,8 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
 
 - **12c:**
   - an alarm on `port49_key_secret_files_changed > 0` for 10m;
+  - **the enrollments export CronJob's run:** the kind smoke cannot run it. It needs an LDAP server and a username-free policy
+    (a directory refuses a policy that declares human usernames); run it in 12c's LDAP lab (`backup.enrollments`, chart README);
   - an alarm on `port49_issuing_ca_not_after_timestamp_seconds == 0` while `broker.identity.issuance` is configured: a broker that started
     without a usable issuing CA (the start never fails over it, so the gauge is the only signal besides the log line `issuing-ca.* is not usable`);
   - L39 (b), with Task 11's login cell as its first evidence;
