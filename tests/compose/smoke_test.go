@@ -96,7 +96,7 @@ func newStack(t *testing.T) stack {
 	t.Cleanup(func() {
 		if t.Failed() {
 			out, _ := s.try("logs", "--no-color")
-			t.Logf("docker compose logs:\n%s", out)
+			t.Logf("docker compose logs:\n%s", shapetest.Filtered(root, out))
 		}
 		s.try("down", "-v", "--remove-orphans")
 	})

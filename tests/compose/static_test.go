@@ -239,3 +239,20 @@ func TestTheRotationRecipeRefusesAnEmptyKeyID(t *testing.T) {
 		t.Fatalf("an empty key id: err %v, output %q, want a refusal naming KEY_ID", err, out)
 	}
 }
+
+// A failed smoke prints the stack's logs to the CI log, which the public can read: through the secret
+// filter, as the kind and systemd smokes do, never raw.
+func TestTheSmokePrintsTheComposeLogsThroughTheSecretFilter(t *testing.T) {
+	src, err := os.ReadFile("smoke_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range regexp.MustCompile(`t\.Logf\("docker compose logs:\\n%s", ([^)]*)\)`).FindAllStringSubmatch(string(src), -1) {
+		if !strings.Contains(m[1], "shapetest.Filtered(") {
+			t.Errorf("smoke_test.go logs the compose output as %s, not through shapetest.Filtered", m[1])
+		}
+	}
+	if !regexp.MustCompile(`docker compose logs`).Match(src) {
+		t.Error("the smoke no longer prints the compose logs; update this check")
+	}
+}

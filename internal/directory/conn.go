@@ -42,8 +42,10 @@ func (c *Credentials) Format(f fmt.State, _ rune) { fmt.Fprint(f, c.String()) }
 func (c *Credentials) Who() string                { return c.who }
 
 // LoadCredentials reads the bind's secret once, at start. A keytab is read
-// through keyfile.ReadSecret: owned by port49's user or root, no group or
-// other bit, no link.
+// through keyfile.ReadSecret (spec §13 decision 54 ruling 16): owned by
+// port49's user or root, writable by its owner alone, no world bit, group-read
+// only for a group the process is in; a link is followed only inside the
+// file's own directory.
 func LoadCredentials(b Bind, resolve func(ref string) ([]byte, error)) (*Credentials, error) {
 	c := &Credentials{mech: b.Mechanism}
 	switch b.Mechanism {

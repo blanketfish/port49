@@ -54,7 +54,10 @@ case "$cmd" in
         # the source side of a copy: a real tar of placeholder files named by the arguments
         all="$*"; names=${all##*"tar c -C /s/state "}
         mkdir -p "$FAKE_DIR/src"
-        for n in $names; do echo "placeholder-$n" > "$FAKE_DIR/src/$n"; done
+        for n in $names; do
+          rm -f "$FAKE_DIR/src/$n"
+          if [ "$n" = "$FAKE_SRC_LINK" ]; then echo victim > "$FAKE_DIR/victim"; ln -s "$FAKE_DIR/victim" "$FAKE_DIR/src/$n"; else echo "placeholder-$n" > "$FAKE_DIR/src/$n"; fi
+        done
         tar c -C "$FAKE_DIR/src" $names ;;
       *.copy-issuer*)
         # the destination side: its script, run here against a local /d with chown stubbed and
@@ -360,6 +363,27 @@ func TestCopyIssuerDestinationRefusesToReplaceAFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.dir, "d", "state", "issuing-ca.pem")); err == nil {
 		t.Error("the certificate was moved in beside a key that was refused")
+	}
+	if len(r.calls("rollout")) != 0 {
+		t.Error("the brokers were restarted after a refused copy")
+	}
+}
+
+// The destination script runs as root over what the source's tar sent: a link in the stream is
+// refused before anything is chowned, chmodded or moved, so root never follows it to another file.
+func TestCopyIssuerDestinationRefusesALinkInTheStream(t *testing.T) {
+	r := runScript(t, "copy-issuer.sh", []string{"FAKE_CA_0=" + sumA, "FAKE_SRC_LINK=issuing-ca.key"}, "ns", "t", "--from", "0")
+	if r.exitCode == 0 {
+		t.Fatalf("a copy with a symbolic link in the stream succeeded:\n%s", r.out)
+	}
+	if !strings.Contains(r.out, "is a symbolic link: not copied") {
+		t.Errorf("the refusal is not said:\n%s", r.out)
+	}
+	st := filepath.Join(r.dir, "d", "state")
+	for _, n := range []string{"issuing-ca.key", "issuing-ca.pem"} {
+		if _, err := os.Lstat(filepath.Join(st, n)); err == nil {
+			t.Errorf("%s was placed beside a refused link", n)
+		}
 	}
 	if len(r.calls("rollout")) != 0 {
 		t.Error("the brokers were restarted after a refused copy")
