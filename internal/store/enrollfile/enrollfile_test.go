@@ -3,6 +3,7 @@ package enrollfile
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -575,5 +576,86 @@ func TestALateFileThatCannotBeReadIsSaidAndRetriedAtTheNextLook(t *testing.T) {
 	}
 	if m, err := running.GetEnrollmentMark(ctx); err != nil || !m.CreatedAt.Equal(t0) {
 		t.Fatalf("after the fix: %v, %v", m, err)
+	}
+}
+
+func sum(t *testing.T, path string) [32]byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(raw)
+}
+
+// unreadableCopies are the files setAside left beside path.
+func unreadableCopies(t *testing.T, path string) []string {
+	t.Helper()
+	m, err := filepath.Glob(path + ".unreadable-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// A real store sealed under a key this broker lacks appears at the path after the handle opened with no
+// file. The handle has not looked yet when the write comes, as when an unlock arrives inside the first
+// recheck interval. A write must judge the path first: it is refused, or the file is set aside whole,
+// never renamed over.
+func TestAWriteNeverDestroysALateFileItHasNotJudged(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		write   func(f *File) error
+		refused bool // the file stays at the path; else exactly one byte-identical copy is kept beside it
+	}{
+		{"reset --all", func(f *File) error {
+			return f.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0})
+		}, false},
+		{"unlock", func(f *File) error { return f.PutUnlock(ctx, alice, t0) }, true},
+		{"enrolling", func(f *File) error { return f.SwapSecondFactor(ctx, factor(alice, "uuid:1"), 0) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := dirFor(t)
+			path := filepath.Join(dir, "enrollments.json")
+			running := openAt(t, path, keys())
+			written(t, path, v0Only()) // sealed under a key the running handle does not hold
+			before := sum(t, path)
+			err := tc.write(running)
+			if tc.refused {
+				if !errors.Is(err, store.ErrEnrollmentStoreLost) {
+					t.Fatalf("the write was not refused as lost: %v", err)
+				}
+				if sum(t, path) != before {
+					t.Fatal("the file at the path changed")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cs := unreadableCopies(t, path)
+			if len(cs) != 1 || sum(t, cs[0]) != before {
+				t.Fatalf("want exactly one byte-identical .unreadable copy, got %v", cs)
+			}
+		})
+	}
+}
+
+// A link that appears late is not followed and never costs the real file it points at.
+func TestAWriteAfterALateLinkLeavesTheFileItPointsAt(t *testing.T) {
+	ctx := context.Background()
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	real := filepath.Join(dir, "real.json")
+	running := openAt(t, path, keys())
+	written(t, real, keys())
+	before := sum(t, real)
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0})
+	if sum(t, real) != before {
+		t.Fatal("the file the link pointed at changed")
 	}
 }

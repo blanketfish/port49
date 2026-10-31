@@ -50,6 +50,7 @@ type File struct {
 	mu      sync.Mutex
 	lost    string // why the file did not open; "" when it did, or none is there
 	present bool   // a file is at path: one opened, one that did not, or one written
+	late    bool   // lost was set by a look after Open, at a file that appeared later: the next look retries it
 	mark    *store.EnrollmentMark
 	records map[string]store.SecondFactor
 	unlocks map[string]time.Time
@@ -107,17 +108,22 @@ func (f *File) read() error {
 	return nil
 }
 
-// pickUpLate reads the file again when this handle opened with none there and has written none: the
-// store is created by another process (init-enrollments runs beside a running broker), and a handle
-// that read the path once would otherwise never see it. A file it finds and cannot take (a link, an
-// unreadable or foreign one, one sealed under another key) is an error that says why and is not
-// remembered, so the next look reads the path again and the operator's fix needs no restart. Under f.mu.
+// pickUpLate reads the path again while this handle holds no file and has written none, or holds one it
+// refused when it appeared late: the store is created by another process (init-enrollments runs beside a
+// running broker), and a handle that read the path once would otherwise never see it. A file it finds and
+// cannot take (a link, an unreadable or foreign one, one sealed under another key) puts the handle in the
+// lost state, exactly as one refused at Open, so no write lands over it without the set-aside; late marks
+// it for the next look, which reads the path again, so the operator's fix needs no restart. Every write
+// calls it first, so a write never lands on a path it has not judged. Under f.mu.
 func (f *File) pickUpLate() error {
-	if f.present || f.lost != "" || f.mark != nil || len(f.records) > 0 {
+	if !f.late && (f.present || f.lost != "" || f.mark != nil || len(f.records) > 0) {
 		return nil
 	}
 	raw, err := fence.ReadNoLink(f.path, maxFile, "enrollments file")
 	if errors.Is(err, fs.ErrNotExist) {
+		if f.late { // the refused file is gone: the handle holds none again
+			f.lost, f.late, f.present = "", false, false
+		}
 		return nil
 	}
 	why := ""
@@ -126,11 +132,12 @@ func (f *File) pickUpLate() error {
 	} else {
 		var body store.EnrollmentBody
 		if body, why = f.open(raw); why == "" {
-			f.present = true
+			f.present, f.lost, f.late = true, "", false
 			f.load(body)
 			return nil
 		}
 	}
+	f.present, f.lost, f.late = true, why, true
 	return fmt.Errorf("%w: %s: %s; this broker looks again at its next recheck, with no restart", store.ErrEnrollmentStoreLost,
 		f.path, why)
 }
@@ -228,6 +235,7 @@ func (f *File) write(b store.EnrollmentBody) error {
 func (f *File) GetSecondFactor(_ context.Context, principal string) (store.SecondFactor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return store.SecondFactor{}, err
 	}
@@ -246,6 +254,7 @@ func (f *File) SwapSecondFactor(_ context.Context, sf store.SecondFactor, rev ui
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return err
 	}
@@ -269,6 +278,7 @@ func (f *File) SwapSecondFactor(_ context.Context, sf store.SecondFactor, rev ui
 func (f *File) SecondFactorPrincipals(_ context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return nil, err
 	}
@@ -304,6 +314,7 @@ func (f *File) SwapEnrollmentMark(_ context.Context, m store.EnrollmentMark, rev
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return err
 	}
@@ -335,6 +346,7 @@ func (f *File) CreateEnrollmentMark(_ context.Context, m store.EnrollmentMark) e
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if f.present || f.lost != "" || f.mark != nil || len(f.records) > 0 {
 		return store.ErrConflict
 	}
@@ -363,6 +375,7 @@ func (f *File) PutEnrollmentMark(_ context.Context, m store.EnrollmentMark) erro
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	records := f.records
 	if f.lost != "" {
 		if err := f.setAside(); err != nil {
@@ -374,7 +387,7 @@ func (f *File) PutEnrollmentMark(_ context.Context, m store.EnrollmentMark) erro
 		return fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
 	m = f.revised(m)
-	f.mark, f.records, f.lost, f.present = &m, records, "", true
+	f.mark, f.records, f.lost, f.present, f.late = &m, records, "", true, false
 	return nil
 }
 
@@ -404,6 +417,7 @@ func (f *File) setAside() error {
 func (f *File) Export(_ context.Context) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return nil, err
 	}
@@ -428,6 +442,7 @@ func (f *File) Import(_ context.Context, raw []byte, replace bool) (int, time.Ti
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if f.lost == "" && !replace {
 		for _, r := range f.records {
 			if store.EnrolledAfter(store.RecordOf(r), b.ExportedAt) {
@@ -453,7 +468,7 @@ func (f *File) Import(_ context.Context, raw []byte, replace bool) (int, time.Ti
 		return 0, time.Time{}, fmt.Errorf("enrollfile: writing %s: %w", f.path, err)
 	}
 	mark = f.revised(mark)
-	f.seq, f.records, f.mark, f.lost, f.present = seq, next, &mark, "", true
+	f.seq, f.records, f.mark, f.lost, f.present, f.late = seq, next, &mark, "", true, false
 	return len(next), b.ExportedAt, nil
 }
 
@@ -497,6 +512,7 @@ func createExclusive(dir, base string, raw []byte) error {
 func (f *File) GetUnlock(_ context.Context, principal string) (time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return time.Time{}, err
 	}
@@ -518,6 +534,7 @@ func (f *File) PutUnlock(_ context.Context, principal string, at time.Time) erro
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	_ = f.pickUpLate() // a refusal is the lost state the checks below judge
 	if err := f.lostErr(); err != nil {
 		return err
 	}
