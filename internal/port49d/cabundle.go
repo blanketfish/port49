@@ -5,10 +5,9 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/fence"
 )
 
 // loadCABundle is broker.tls_ca_bundle_file's CAs, PEM, which GET
@@ -35,12 +34,7 @@ func loadCABundle(path string, cert tls.Certificate, say func(string, ...any)) (
 }
 
 func readCABundle(path string) ([]*x509.Certificate, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, api.MaxCABundleBytes+1))
+	raw, err := fence.Read(path, api.MaxCABundleBytes+1, "tls_ca_bundle_file")
 	if err != nil {
 		return nil, err
 	}

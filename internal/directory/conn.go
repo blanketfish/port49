@@ -22,6 +22,7 @@ import (
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/types"
 
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
@@ -127,7 +128,7 @@ func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	pem, err := os.ReadFile(cfg.CAFile)
+	pem, err := fence.Read(cfg.CAFile, fence.TrustFileMax, "directory ca_file")
 	if err != nil {
 		return nil, fmt.Errorf("broker.directory.ca_file: %w", err)
 	}

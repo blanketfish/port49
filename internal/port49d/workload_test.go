@@ -131,12 +131,12 @@ func TestAnUnreadableAnchorNamesItsKey(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone.pem")
 	cfg.Broker.WorkloadCAFile = missing
 	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(),
-		"broker.identity.machines[].trust_anchor_file "+missing+": open "+missing) {
+		"broker.identity.machines[].trust_anchor_file "+missing+": lstat "+missing) {
 		t.Fatalf("workload anchor: %v", err)
 	}
 	cfg.Broker.WorkloadCAFile = ""
 	cfg.Broker.ClientCAFile = missing
-	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), "client_ca_file: open "+missing) {
+	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), "client_ca_file: lstat "+missing) {
 		t.Fatalf("human anchor: %v", err)
 	}
 }

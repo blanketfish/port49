@@ -5,15 +5,12 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"fmt"
-	"io"
-	"os"
 	"slices"
-	"syscall"
 
 	"github.com/rhwendt/port49/internal/certstatus"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -69,24 +66,9 @@ func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certifi
 // file. It is opened non-blocking, so a named pipe in its place is refused
 // rather than hanging the start. An error never repeats the file's bytes.
 func readIssuerFile(path string) (*x509.Certificate, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	raw, err := fence.Read(path, issuerFileMax, "crls issuer_file")
 	if err != nil {
 		return nil, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	raw, err := io.ReadAll(io.LimitReader(f, issuerFileMax+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > issuerFileMax {
-		return nil, fmt.Errorf("larger than %d KiB; it holds one certificate", issuerFileMax>>10)
 	}
 	var blocks []*pem.Block
 	for rest := raw; ; {

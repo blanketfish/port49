@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
@@ -258,7 +258,7 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 // client_ca_file and each trust_anchor_file must hold (design §19 step 3;
 // plan 8 for the workload anchor).
 func ReadAnchor(path string) (*x509.Certificate, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := fence.Read(path, fence.TrustFileMax, "trust anchor")
 	if err != nil {
 		return nil, err
 	}
