@@ -587,3 +587,20 @@ func TestL67NoteSaysHowOpenLDAPWasConfigured(t *testing.T) {
 		t.Errorf("the Samba note names OpenLDAP's ssf")
 	}
 }
+
+// A cell that needs a person an INVALID or skipped cell should have enrolled says so, instead of
+// dereferencing nil and killing the binary with every later cell unreported.
+func TestL67APersonNoCellEnrolledIsAnInvalidNotAPanic(t *testing.T) {
+	x := &l67X{}
+	if p, err := x.person("carol"); p != nil || err == nil ||
+		!strings.Contains(err.Error(), "carol was not enrolled (an earlier cell did not complete)") {
+		t.Fatalf("a person nobody enrolled: %v %v", p, err)
+	}
+	x.people = map[string]*l67Person{"carol": {name: "carol"}}
+	if p, err := x.person("carol"); err != nil || p == nil || p.name != "carol" {
+		t.Fatalf("an enrolled person: %v %v", p, err)
+	}
+	if _, err := x.person("dave"); err == nil {
+		t.Fatal("a person nobody enrolled was found")
+	}
+}

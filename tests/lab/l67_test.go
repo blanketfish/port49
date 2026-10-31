@@ -969,6 +969,16 @@ func (x *l67X) startBroker(t *testing.T, opts l67BrokerOpts) {
 	}
 }
 
+// person is name's authenticator, or the error that says the cell which enrolls them did not complete: a
+// cell that ended INVALID or was skipped leaves nobody enrolled, and the cells after it fail INVALID
+// rather than crash the whole binary.
+func (x *l67X) person(name string) (*l67Person, error) {
+	if p := x.people[name]; p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("%s was not enrolled (an earlier cell did not complete)", name)
+}
+
 // wrongSignIn is one sign-in for name with a wrong password and the right code
 // (a throttled one is refused before the code is read, so it takes no step). It
 // returns the answer, when the request was sent and when the answer came.
@@ -976,7 +986,11 @@ func (x *l67X) wrongSignIn(t *testing.T, a *l67API, name string, takesStep bool)
 	t.Helper()
 	code := "000000"
 	if takesStep {
-		code = x.people[name].code()
+		p, err := x.person(name)
+		if err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+		code = p.code()
 	}
 	sent = time.Now()
 	ans = a.signIn(name, x.wrong(), code)
@@ -1091,7 +1105,10 @@ func (x *l67X) cellD(t *testing.T) {
 func (x *l67X) cellE(t *testing.T) {
 	x.startBroker(t, l67BrokerOpts{Window: l67Window})
 	a := x.broker.api(t)
-	p := x.people["carol"]
+	p, err := x.person("carol")
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	x.broker.unlock(t, "carol")
 	// The control: the right password and the right code sign in.
 	ans := a.signIn("carol", x.pw, p.code())
