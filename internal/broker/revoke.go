@@ -246,7 +246,9 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		// A copy already sent may land when the store answers again, held
 		// or not, and over a lift made meanwhile (L79 k): its mark is said
 		// as this process's own then (MarkChanged; post-11b, C2).
-		b.Marks.NoteFailedWrite(mark)
+		if !errors.Is(err, store.ErrNotSent) { // a write never sent cannot land late, and is not said to have
+			b.Marks.NoteFailedWrite(mark)
+		}
 		// Once the store holds it after all (another process's revocation,
 		// or this write committed with its reply lost), the marks feed
 		// brings it to this listener (Marks.Unrecorded; review I1); when

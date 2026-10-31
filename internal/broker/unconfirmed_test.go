@@ -203,3 +203,26 @@ func TestTheUnconfirmedAnswerSaysCheckBeforeTryingAgain(t *testing.T) {
 		t.Errorf("the answer must say to check --list before any retry, and why: %s", s)
 	}
 }
+
+// A write never sent cannot land late: when another writer's mark of the same key arrives, this broker
+// must not log that its own write landed (Marks.FailedWrite). An unconfirmed write still can.
+func TestANeverSentWriteIsNotRememberedAsFailed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		wrap func(store.Store) store.Store
+		want bool
+	}{
+		{"never sent", func(s store.Store) store.Store { return putRevocationNotSent{s} }, false},
+		{"unconfirmed", func(s store.Store) store.Store { return putRevocationUnavailable{s} }, true},
+	} {
+		f := newFixture(t, 8)
+		f.b.Marks = store.NewMarks()
+		f.b.Store = c.wrap(f.st)
+		if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil {
+			t.Fatalf("%s: the revoke succeeded", c.name)
+		}
+		if got := f.b.Marks.FailedWrite(store.RevocationPrincipal, alice, f.b.Now()); got != c.want {
+			t.Errorf("%s: FailedWrite %v, want %v", c.name, got, c.want)
+		}
+	}
+}
