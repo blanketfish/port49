@@ -67,6 +67,12 @@ service:
   # (spec §15 L39 b, c).
   externalTrafficPolicy: Local
   annotations: {}
+  # An anycast address advertised by MetalLB in BGP mode (spec §15 L85, measured on kind with an FRR
+  # peer). It adds MetalLB's address annotation and nothing else: MetalLB, its address pool and the
+  # BGP peers are yours. Needs type LoadBalancer, the Local policy and port49d.preStopSeconds >= 15.
+  anycast:
+    enabled: false
+    address: ""
 brokerService:
   type: ClusterIP
   annotations: {}

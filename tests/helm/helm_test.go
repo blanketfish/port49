@@ -110,3 +110,15 @@ func TestTheEnrollmentsBackupWithoutAPasswordVerifierIsRefusedAtRender(t *testin
 		t.Errorf("a configured verifier was refused: %v\n%s", err, out)
 	}
 }
+
+func TestAnycastRefusalsOnRealHelm(t *testing.T) {
+	for _, c := range anycastRefusals {
+		_, out, err := helmTemplate(t, baseValues(t, c.values)...)
+		if err == nil || !strings.Contains(out, c.want) {
+			t.Errorf("%s: want a refusal naming %q: %v\n%s", c.name, c.want, err, out)
+		}
+	}
+	if _, out, err := helmTemplate(t, baseValues(t, anycastOn)...); err != nil {
+		t.Errorf("the measured configuration was refused: %v\n%s", err, out)
+	}
+}

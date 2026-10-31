@@ -1,3 +1,11 @@
+{{- if .Values.service.anycast.enabled }}
+{{- /* Anycast is what lab L85 measured: MetalLB in BGP mode, the local traffic policy, and a preStop long enough
+       for the route to be withdrawn before the listener closes (spec section 15 L85). Refuse what it did not measure. */ -}}
+{{- if not .Values.service.anycast.address }}{{ fail "service.anycast.enabled needs service.anycast.address (the address MetalLB advertises)" }}{{ end }}
+{{- if ne .Values.service.type "LoadBalancer" }}{{ fail "service.anycast.enabled needs service.type LoadBalancer" }}{{ end }}
+{{- if ne .Values.service.externalTrafficPolicy "Local" }}{{ fail "service.anycast.enabled needs service.externalTrafficPolicy Local, so that the device's source address survives and only nodes with a ready pod advertise" }}{{ end }}
+{{- if lt (int .Values.port49d.preStopSeconds) 15 }}{{ fail "service.anycast.enabled needs port49d.preStopSeconds of at least 15, the wait L85 measured: a shorter one closes the listener before the route is withdrawn" }}{{ end }}
+{{- end }}
 # TACACS+: the devices' address. Local keeps their source address where the platform supports it
 # (unmeasured on Kubernetes: spec §15 L39 b, c).
 apiVersion: v1
@@ -6,9 +14,14 @@ metadata:
   name: {{ .Release.Name }}-port49d
   labels:
     {{- include "port49.labels" (dict "root" . "component" "port49d") | nindent 4 }}
-  {{- with .Values.service.annotations }}
+  {{- if or .Values.service.annotations .Values.service.anycast.enabled }}
   annotations:
+    {{- with .Values.service.annotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if .Values.service.anycast.enabled }}
+    metallb.universe.tf/loadBalancerIPs: {{ .Values.service.anycast.address | quote }}
+    {{- end }}
   {{- end }}
 spec:
   type: {{ .Values.service.type }}

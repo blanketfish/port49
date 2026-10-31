@@ -430,3 +430,18 @@ func TestTheEnrollmentsBackupWithoutAPasswordVerifierIsRefusedAtRenderOnTheGoRen
 		t.Errorf("the default (no enrollments backup) was refused: %v", err)
 	}
 }
+
+func TestAnycastRefusalsOnTheGoRender(t *testing.T) {
+	for _, c := range anycastRefusals {
+		_, err := goRenderErr(t, baseValues(t, c.values)...)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want a refusal naming %q, got %v", c.name, c.want, err)
+		}
+	}
+	if _, err := goRenderErr(t, baseValues(t, anycastOn)...); err != nil {
+		t.Errorf("the measured configuration was refused: %v", err)
+	}
+	if _, err := goRenderErr(t, baseValues(t, anycastOn+"port49d: {preStopSeconds: 15}\n")...); err != nil {
+		t.Errorf("the boundary (15) was refused: %v", err)
+	}
+}

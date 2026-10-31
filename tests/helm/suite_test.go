@@ -823,6 +823,41 @@ func checkPreStop(t *testing.T, r renderer) {
 	}
 }
 
+// anycastOn is the shipped anycast option (spec §15 L85, measured with the 15 s preStop).
+const anycastOn = "service:\n  anycast: {enabled: true, address: 10.85.85.1}\n"
+
+// anycastRefusals is what the chart refuses with anycast on, each with the words of its message.
+var anycastRefusals = []struct{ name, values, want string }{
+	{"no address", "service:\n  anycast: {enabled: true}\n", "service.anycast.address"},
+	{"not a LoadBalancer", anycastOn + "  type: ClusterIP\n", "service.type LoadBalancer"},
+	{"the Cluster policy", anycastOn + "  externalTrafficPolicy: Cluster\n", "externalTrafficPolicy Local"},
+	{"no preStop", anycastOn + "port49d: {preStopSeconds: 0}\n", "port49d.preStopSeconds of at least 15"},
+	{"a short preStop", anycastOn + "port49d: {preStopSeconds: 5}\n", "port49d.preStopSeconds of at least 15"},
+}
+
+// checkAnycast: off by default; on, the Service asks MetalLB for the address with the local policy
+// (L85 a, b: the device's own source address, and only the nodes with a ready pod advertise).
+func checkAnycast(t *testing.T, r renderer) {
+	svc := one(t, render(t, r, ""), "Service", "t-port49d")
+	if at(svc, "metadata", "annotations", "metallb.universe.tf/loadBalancerIPs") != nil {
+		t.Errorf("anycast is off by default but the Service asks MetalLB for an address: %v", at(svc, "metadata", "annotations"))
+	}
+	svc = one(t, render(t, r, anycastOn), "Service", "t-port49d")
+	if got := str(at(svc, "metadata", "annotations", "metallb.universe.tf/loadBalancerIPs")); got != "10.85.85.1" {
+		t.Errorf("the MetalLB address annotation is %q, want 10.85.85.1", got)
+	}
+	if str(at(svc, "spec", "type")) != "LoadBalancer" || str(at(svc, "spec", "externalTrafficPolicy")) != "Local" {
+		t.Errorf("anycast Service is %v / %v, want LoadBalancer / Local", at(svc, "spec", "type"), at(svc, "spec", "externalTrafficPolicy"))
+	}
+	if at(svc, "spec", "loadBalancerIP") != nil {
+		t.Errorf("spec.loadBalancerIP is deprecated and was not what L85 measured: %v", at(svc, "spec", "loadBalancerIP"))
+	}
+	own := one(t, render(t, r, "service:\n  annotations: {example.com/x: kept}\n"+"  anycast: {enabled: true, address: 10.85.85.1}\n"), "Service", "t-port49d")
+	if str(at(own, "metadata", "annotations", "example.com/x")) != "kept" || str(at(own, "metadata", "annotations", "metallb.universe.tf/loadBalancerIPs")) != "10.85.85.1" {
+		t.Errorf("the operator's annotations and the address must both survive: %v", at(own, "metadata", "annotations"))
+	}
+}
+
 // enrollmentsOn turns the enrollments CronJob on; the chart refuses it without the directory_password
 // verifier whose store it exports, so the values carry one (it renders; loading it needs a directory).
 const enrollmentsOn = "backup: {enrollments: {enabled: true, claimName: port49-backups}}\n" +
@@ -849,5 +884,6 @@ var checks = []struct {
 	{"TestTheMultiRegionExampleRenders", checkMultiRegion},
 	{"TestTheIssuanceExampleTurnsOnIssuance", checkIssuanceExample},
 	{"TestPort49dKeepsServingWhileTheRouteIsWithdrawn", checkPreStop},
+	{"TestAnycastIsOptInAndAsMeasured", checkAnycast},
 	{"TestRenderedConfigsLoad", checkConfigsLoad},
 }

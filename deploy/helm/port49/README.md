@@ -188,13 +188,27 @@ that forbid that sysctl need a different arrangement (not offered here).
 A terminating port49d pod keeps serving for `port49d.preStopSeconds` (default 15) before it closes its
 listeners, so the route to it is withdrawn first. Without the wait, a login that a router or load
 balancer still sent to the pod was refused: with MetalLB over BGP the route took 6.6 s to leave the
-router (L85 c, measured on kind), and the first rolling-restart run lost one login of 42 past its
-retry (L85 d). It applies to every `service.type`, because the endpoint leaves the Service at the
+router after the listener closed (L85 c, measured on kind), and the rolling-restart run without the
+wait lost one login of 42 past its retry (L85 d). It applies to every `service.type`, because the endpoint leaves the Service at the
 pod's deletion in all of them. The image has no shell, so the wait is the kubelet's own `sleep`
 action, which needs Kubernetes 1.30 or later; on an older cluster set `port49d.preStopSeconds: 0`.
 `port49d.terminationGracePeriodSeconds` (default 60) must be at least the sleep plus 30, port49d's
-longest drain; the chart refuses a smaller value. Whether 15 s closes the L85 d loss is measured in
-the next lab run, not asserted here.
+longest drain; the chart refuses a smaller value. With the 15 s wait the rolling restart lost no login
+(55 of 55 first time, L85 d, run 41155086403).
+
+### Anycast with MetalLB
+
+`service.anycast.enabled: true` with `service.anycast.address` adds MetalLB's
+`metallb.universe.tf/loadBalancerIPs` annotation to the TACACS+ Service. Nothing else changes, and
+MetalLB, its address pool and its BGP peers stay yours. Lab L85 measured this on kind with MetalLB 0.16.1
+and an FRR 10.5.3 peer, and the chart refuses what it did not measure: `service.type` must be
+`LoadBalancer`, `externalTrafficPolicy` must be `Local`, and `port49d.preStopSeconds` must be at least 15.
+Measured: the device's own source address reaches port49d; exactly the nodes running a ready pod advertise
+the address; after a pod's listener closes its route left FRR 6.6 s later, with 33 of 33 per-transaction
+logins passing; a rolling restart lost no login. Single-connection sessions are not drained by this: two
+of four were still open when the window ended, so under anycast prefer per-transaction sessions
+(design section 13). tests/lab/results/L85-kind.md has the runs, including the two that led to the
+`preStop` wait.
 
 The image is distroless and non-root. The pods meet the Pod Security `baseline` level, and the
 namespace needs no weaker one. The volume setup is two init containers. The first runs as root with
