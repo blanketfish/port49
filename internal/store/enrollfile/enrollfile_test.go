@@ -667,3 +667,28 @@ func TestAWriteAfterALateLinkLeavesTheFileItPointsAt(t *testing.T) {
 		t.Fatal("the file the link pointed at changed")
 	}
 }
+
+// A refused late file the operator then removes leaves the handle holding none: the next look says there
+// is no store, not the old refusal reason.
+func TestARefusedLateFileThatIsRemovedLeavesNoStaleReason(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(dirFor(t), "enrollments.json")
+	running := openAt(t, path, keys())
+	written(t, path, v0Only()) // sealed under a key the running handle does not hold
+	if _, err := running.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrEnrollmentStoreLost) {
+		t.Fatalf("the late file was not refused as lost: %v", err)
+	}
+	if running.Lost() == "" {
+		t.Fatal("the refusal left no reason")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, err := running.GetEnrollmentMark(ctx)
+	if errors.Is(err, store.ErrEnrollmentStoreLost) || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the file was removed the look answered %v, want no store", err)
+	}
+	if why := running.Lost(); why != "" {
+		t.Fatalf("a stale reason is still held: %q", why)
+	}
+}
