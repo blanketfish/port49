@@ -156,10 +156,11 @@ func (a *labAdmin) run(args ...string) (string, int) {
 func (a *labAdmin) runCmd(full ...string) (string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), full...)
+	repo := labRepo()
+	cmd := exec.CommandContext(ctx, filepath.Join(repo, "bin", "port49"), full...)
 	// From the repository root, so a --cert path relative to it is what the
 	// note quotes, not this machine's checkout.
-	cmd.Dir = root
+	cmd.Dir = repo
 	cmd.Env = a.env
 	out, err := cmd.CombinedOutput()
 	code := 0
@@ -167,9 +168,22 @@ func (a *labAdmin) runCmd(full ...string) (string, int) {
 	if errors.As(err, &ee) {
 		code = ee.ExitCode()
 	} else if err != nil {
-		code = -1
+		// The command never ran: say why, as initEnrollments does.
+		return strings.TrimSpace(string(out) + " " + err.Error()), -1
 	}
 	return strings.TrimSpace(string(out)), code
+}
+
+// labRepo is the repository root: the global the tests that need it fill in, or the checkout this test
+// binary runs in, so a test that did not set it still finds bin/.
+func labRepo() string {
+	if root != "" {
+		return root
+	}
+	if d, err := repoRoot(); err == nil {
+		return d
+	}
+	return "."
 }
 
 // cli is run with the answer reduced to whether the command exited 0, as

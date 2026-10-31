@@ -666,3 +666,21 @@ func TestL67AnOfflineInitReachesABrokerStartedAfterItNotOneAlreadyRunning(t *tes
 		t.Errorf("a broker started after init-enrollments still answered %q", got)
 	}
 }
+
+// The admin commands do not depend on another test having filled in the root global: with it empty
+// they still run in the checkout, and a command that never started says why.
+func TestLabAdminFindsTheRepoWithTheRootGlobalEmptyAndSaysWhyItCouldNotRun(t *testing.T) {
+	prev := root
+	t.Cleanup(func() { root = prev })
+	root = ""
+	if d := labRepo(); d == "" || d == "." {
+		t.Fatalf("labRepo with root empty is %q", d)
+	} else if _, err := os.Stat(filepath.Join(d, "go.mod")); err != nil {
+		t.Fatalf("labRepo %q is not the repository: %v", d, err)
+	}
+	root = t.TempDir() // no bin/port49 under it
+	out, code := (&labAdmin{env: os.Environ()}).runCmd("directory", "unlock", "user:x@example.com")
+	if code != -1 || !strings.Contains(out, "port49") {
+		t.Errorf("a command that could not start answered %d %q, want -1 and the reason", code, out)
+	}
+}
