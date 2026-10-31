@@ -11355,9 +11355,29 @@ shapes; Kubernetes is native and never required.
   never accepted), a TPM key blob, and the CLI's own client key and PIN file. A workload's client key
   (`port49 workload`, `workload.LoadCertificate`) is mounted by its operator, like a broker's, so a path
   is read under the secret-file rule within its own directory (`clientkey.LoadMountedPair`); only a
-  user's own key (`clientkey.LoadPair`) keeps the owner-only rule. A certificate file named by
-  `attestation_roots_file` or an OIDC verifier's `ca_file` is read through the policy-file fence
-  (`fence.Read`), at the start and at a SIGHUP, since a file others can replace adds a trusted root. `subPath` is no remedy:
+  user's own key (`clientkey.LoadPair`) keeps the owner-only rule. A file that names what port49
+  trusts is read through the policy-file fence (`fence.Read`: no link out of its directory, no group- or
+  world-writable file or directory, owned by root or the user, a regular file, at most 1 MiB, a named pipe
+  refused), at the start and at every reload, because a file others can replace adds a trusted root, a
+  client CA, a forged CRL issuer or a fake etcd or directory. A refused reload keeps what is in force and
+  says so once; a refused start names the directory. `internal/config/trustfiles_test.go` reads the config
+  structs and fails on any `*_file` field that names a CA, anchor, roots, bundle, issuer or intermediates and
+  is not in its table, so a new field cannot skip the fence:
+
+  | Field | Reader |
+  |---|---|
+  | `broker.client_ca_file`, `identity.humans[].trust_anchor_file`, `identity.machines[].trust_anchor_file`, the inventory service's `client_ca_file` | `broker.ReadAnchor` |
+  | `identity` OIDC and Kubernetes verifiers' `ca_file` | `readLimited` (`fence.Read`) |
+  | `attestation_roots_file` | `loadPerLoginMFA`, `reloadAttestationRoots` |
+  | `stores.*.etcd.ca_file` | `caCerts` |
+  | `broker.directory.ca_file` | `directory.tlsConfig`, at each dial |
+  | `inventory.service.ca_file`, a source's `ca_file` | `inventory.readCA`, `sot.readCA` |
+  | `tls_listener.client_ca_file`, `intermediates_file` | `tlsListener.read` |
+  | `certificate_status.crls[].issuer_file` | `readIssuerFile` |
+  | `broker.tls_ca_bundle_file` | `readCABundle` |
+
+  A mounted CA is `root:<fsGroup>` 0440 behind `..data` links the chart's ConfigMaps and Secrets give, which
+  the fence admits (a read-only mount of a root-owned source, a link that stays inside its own volume). `subPath` is no remedy:
   it still gives 0440 under `fsGroup`, and it loses the kubelet's in-place update (ruling 2).
 - **Open.** The `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
   overridden by Ryan (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waits on L84
