@@ -133,8 +133,8 @@ func TestALiftWhoseLeaseFailsLiftsNothing(t *testing.T) {
 	s.tokLeases = newLeases(dead, s.now, 5*time.Minute)
 	lctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	if err := s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0}); !errors.Is(err, store.ErrUnavailable) {
-		t.Fatalf("a lift whose lease failed: %v", err)
+	if err := s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0}); !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
+		t.Fatalf("a lift whose lease failed (nothing was sent): %v", err)
 	}
 	if _, err := s.GetRevocation(ctx, r.Kind, r.Key); err != nil {
 		t.Fatalf("the mark does not stand after a failed lift: %v", err)
