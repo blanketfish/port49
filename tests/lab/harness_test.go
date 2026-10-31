@@ -2778,7 +2778,10 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 	}
 	// The private directory: the policy and the inventory port49d and the
 	// broker read behind the fence (privateCopy), and the broker's state.
-	dir := filepath.Join(root, "tests", "lab", "logs", "split-"+l.p.name)
+	dir, err := labPrivateSub("split-" + l.p.name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

@@ -130,6 +130,21 @@ broker:
 		o.x.userFilter, o.x.groupFilter, o.x.usernameAttr, issuance, filepath.Join(o.dir, adminRolesFile)) + stores
 }
 
+// l75ShareIssuer copies b1's issuing CA and its key into another broker's state dir, both 0600 as the
+// systemd README installs them, inside that broker's own private state dir.
+func l75ShareIssuer(from, to string) error {
+	for _, name := range []string{"issuing-ca.pem", "issuing-ca.key"} {
+		b, err := os.ReadFile(filepath.Join(from, name))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(to, name), b, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func l75Policy() string {
 	return `scopes:
   - {name: all, match: {}}
@@ -581,10 +596,16 @@ func l75(t *testing.T, w *regionWorld) []string {
 		s := bs[i].sess
 		applyRoles(t, string(out), map[string]func(args ...string) (string, error){
 			"session": func(args ...string) (string, error) { return s.ctl("https://"+s.client, args...) }})
-		cmd := exec.Command(w.broker, "init-issuer", "--config", bs[i].cfg)
-		cmd.Env = cmdEnv
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("INVALID: port49-broker init-issuer for b%d: %v: %s", i, err, w.leakless(oneLineMax(string(out), 400)))
+		// One issuing CA for every broker, as the README has an operator do it: made on b1, then copied
+		// into the others' state dirs. Each making its own is a fleet the store's same-CA check refuses.
+		if i == 1 {
+			cmd := exec.Command(w.broker, "init-issuer", "--config", bs[i].cfg)
+			cmd.Env = cmdEnv
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("INVALID: port49-broker init-issuer for b%d: %v: %s", i, err, w.leakless(oneLineMax(string(out), 400)))
+			}
+		} else if err := l75ShareIssuer(filepath.Join(w.dir, "b1-state"), filepath.Join(w.dir, fmt.Sprintf("b%d-state", i))); err != nil {
+			t.Fatalf("INVALID: b%d's issuing CA: %v", i, err)
 		}
 		bs[i].start(w)
 		t.Cleanup(bs[i].proc.stop)

@@ -192,9 +192,13 @@ func newL73Env(t *testing.T, l *lab, d l73Dialect) *l73Env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l73Dir, err := labPrivateSub("l73-" + l.p.name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	e := &l73Env{t: t, l: l, d: d, opener: l73Opener(l.p.name), pki: pki, files: map[string]string{},
 		evidence: map[string][]byte{},
-		dir:      filepath.Join(root, "tests", "lab", "logs", "l73-"+l.p.name),
+		dir:      l73Dir,
 		evDir:    filepath.Join(root, "tests", "lab", "evidence", "L73-"+l.p.name),
 		capDir:   filepath.Join(root, "tests", "lab", "captures", "L73-"+l.p.name)}
 	for _, dir := range []string{e.dir, e.capDir} {

@@ -258,3 +258,54 @@ func TestTheDirectoryCAIsStagedOutsideTheTree(t *testing.T) {
 		t.Fatalf("the staged copy is refused: %v", err)
 	}
 }
+
+// L75's brokers share one issuing CA, copied from b1 into each other state dir with the key kept 0600.
+func TestL75ShareIssuerCopiesTheCAAndKeyPrivately(t *testing.T) {
+	from, to := t.TempDir(), t.TempDir()
+	for _, n := range []string{"issuing-ca.pem", "issuing-ca.key"} {
+		if err := os.WriteFile(filepath.Join(from, n), []byte("fake "+n), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l75ShareIssuer(from, to); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"issuing-ca.pem", "issuing-ca.key"} {
+		got, err := os.ReadFile(filepath.Join(to, n))
+		fi, serr := os.Stat(filepath.Join(to, n))
+		if err != nil || serr != nil || string(got) != "fake "+n || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %q %v %v", n, got, err, serr)
+		}
+	}
+	if err := l75ShareIssuer(t.TempDir(), to); err == nil {
+		t.Error("a missing source CA was copied without error")
+	}
+}
+
+// The cells' working directories for daemon inputs (the policy, the inventory, the revocations file) are
+// outside the checkout, private to this user, and pass the fence the daemons read them behind: the
+// checkout's own directories are group-writable on a lab host.
+func TestCellDirsForDaemonInputsAreOutsideTheTree(t *testing.T) {
+	dir := privateDir(t, "unit-cell-check")
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	for name, d := range map[string]string{"privateDir": dir, "split": mustSub(t, "split-unit"), "l73": mustSub(t, "l73-unit")} {
+		if rel, err := filepath.Rel(root, d); err == nil && !strings.HasPrefix(rel, "..") {
+			t.Errorf("%s is inside the checkout: %s", name, d)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte("scopes: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fence.Read(filepath.Join(dir, "policy.yaml"), fence.TrustFileMax, "policy"); err != nil {
+		t.Errorf("a cell's policy file does not pass the fence: %v", err)
+	}
+}
+
+func mustSub(t *testing.T, name string) string {
+	t.Helper()
+	d, err := labPrivateSub(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
