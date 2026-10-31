@@ -133,8 +133,12 @@ for t in ${tos[@]+"${tos[@]}"}; do
 install -d -o 65532 -g 65532 -m 0700 "$d"
 rm -rf "$s"; install -d -m 0700 "$s"
 tar x -C "$s"
-# this runs as root: a link in the stream is refused before anything follows it
-for f in "$s"/*; do [ ! -L "$f" ] || { echo "${f##*/} is a symbolic link: not copied" >&2; exit 1; }; done
+# this runs as root: a link in the stream is refused before anything follows it, and so is anything
+# that is not a regular file (a directory named like a key arrives with whatever links it holds)
+for f in "$s"/*; do
+  [ ! -L "$f" ] || { echo "${f##*/} is a symbolic link: not copied" >&2; exit 1; }
+  [ -f "$f" ] || { echo "${f##*/} is not a regular file: not copied" >&2; exit 1; }
+done
 for f in "$s"/*; do [ ! -e "$d/${f##*/}" ] || { echo "$d/${f##*/} exists: not replaced" >&2; exit 1; }; done
 chown -h 65532:65532 "$s"/*
 [ ! -e "$s/issuing-ca.key" ] || chmod 0600 "$s/issuing-ca.key"

@@ -56,7 +56,7 @@ case "$cmd" in
         mkdir -p "$FAKE_DIR/src"
         for n in $names; do
           rm -f "$FAKE_DIR/src/$n"
-          if [ "$n" = "$FAKE_SRC_LINK" ]; then echo victim > "$FAKE_DIR/victim"; ln -s "$FAKE_DIR/victim" "$FAKE_DIR/src/$n"; else echo "placeholder-$n" > "$FAKE_DIR/src/$n"; fi
+          if [ "$n" = "$FAKE_SRC_LINK" ]; then echo victim > "$FAKE_DIR/victim"; ln -s "$FAKE_DIR/victim" "$FAKE_DIR/src/$n"; elif [ "$n" = "$FAKE_SRC_DIR" ]; then mkdir -p "$FAKE_DIR/src/$n/sub"; ln -s /nonexistent "$FAKE_DIR/src/$n/sub/l"; else echo "placeholder-$n" > "$FAKE_DIR/src/$n"; fi
         done
         tar c -C "$FAKE_DIR/src" $names ;;
       *.copy-issuer*)
@@ -390,6 +390,24 @@ func TestCopyIssuerDestinationRefusesALinkInTheStream(t *testing.T) {
 	}
 }
 
+// A directory named like a key arrives recursively, nested links included: any entry that is not a regular
+// file is refused, not only a top-level link.
+func TestCopyIssuerDestinationRefusesADirectoryInTheStream(t *testing.T) {
+	r := runScript(t, "copy-issuer.sh", []string{"FAKE_CA_0=" + sumA, "FAKE_SRC_DIR=issuing-ca.key"}, "ns", "t", "--from", "0")
+	if r.exitCode == 0 {
+		t.Fatalf("a copy with a directory in the stream succeeded:\n%s", r.out)
+	}
+	if !strings.Contains(r.out, "is not a regular file: not copied") {
+		t.Errorf("the refusal is not said:\n%s", r.out)
+	}
+	st := filepath.Join(r.dir, "d", "state")
+	for _, n := range []string{"issuing-ca.key", "issuing-ca.pem"} {
+		if _, err := os.Lstat(filepath.Join(st, n)); err == nil {
+			t.Errorf("%s was placed beside a refused directory", n)
+		}
+	}
+}
+
 // And the same script when nothing is in the way: the files land, the key 0600, the staging gone.
 func TestCopyIssuerDestinationPlacesTheStagedFiles(t *testing.T) {
 	r := runScript(t, "copy-issuer.sh", []string{"FAKE_CA_0=" + sumA}, "ns", "t", "--from", "0")
@@ -624,6 +642,25 @@ func TestRevokeOfflineWantsDashDashAndFlags(t *testing.T) {
 		}
 		if len(r.calls("scale")) != 0 {
 			t.Errorf("%v: scaled the brokers on a usage error", args)
+		}
+	}
+}
+
+// The one-shot shell pods run as root with three capabilities: they carry the rest of the chart's
+// hardening, a read-only root and the runtime's seccomp profile.
+func TestTheOneShotShellPodsAreHardened(t *testing.T) {
+	r := runScript(t, "copy-issuer.sh", []string{"FAKE_CA_0=" + sumA}, "ns", "t", "--from", "0")
+	if len(r.applied) == 0 {
+		t.Fatal("no pod was applied")
+	}
+	for i, p := range r.applied {
+		c := p["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+		sc, _ := c["securityContext"].(map[string]any)
+		if sc["readOnlyRootFilesystem"] != true {
+			t.Errorf("pod %d: the root filesystem is writable", i)
+		}
+		if sp, _ := sc["seccompProfile"].(map[string]any); sp["type"] != "RuntimeDefault" {
+			t.Errorf("pod %d: no RuntimeDefault seccomp profile", i)
 		}
 	}
 }

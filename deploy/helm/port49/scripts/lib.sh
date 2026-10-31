@@ -84,7 +84,7 @@ shell_pod() { # ordinal name mountpath readonly
  "spec":{"restartPolicy":"Never","activeDeadlineSeconds":300,${nodefrag}"automountServiceAccountToken":false,
   "volumes":[{"name":"v","persistentVolumeClaim":{"claimName":"data-$sts-$ord","readOnly":$ro}}],
   "containers":[{"name":"sh","image":"$image","command":["sleep","300"],
-    "securityContext":{"runAsUser":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","FOWNER","DAC_OVERRIDE"]}},
+    "securityContext":{"runAsUser":0,"allowPrivilegeEscalation":false,"readOnlyRootFilesystem":true,"seccompProfile":{"type":"RuntimeDefault"},"capabilities":{"drop":["ALL"],"add":["CHOWN","FOWNER","DAC_OVERRIDE"]}},
     "volumeMounts":[{"name":"v","mountPath":"$mnt","readOnly":$ro}]}]}}
 JSON
   K wait --for=condition=Ready "pod/$name" --timeout=180s >/dev/null
