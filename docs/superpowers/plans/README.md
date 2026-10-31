@@ -7962,8 +7962,10 @@ These are the notes the pull request body carries. Each is true of the code as b
       and `fsGroup` set to port49d's group.
     - Secrets Store CSI driver: the same whole-volume mount. The driver's default file mode is documented as 0644
       (unmeasured); a mode with a world bit is refused, so set the provider's file permission and `fsGroup`, and
-      measure what each provider writes before the shape documents it (a 12b or 12c lab row).
-    - Vault Agent: the template's `perms = "0440"` (or `"0400"`), and the agent running as root or as port49d's user.
+      measure what each provider writes before the shape documents it (a 12b or 12c lab row). Measured (L83, 2026-10-30):
+      the Vault provider writes `root:root` and the driver chart applies no `fsGroup`, so the driver is not supported for device keys.
+    - Vault Agent: the template's `perms = "0440"` (or `"0400"`), and the agent running as port49d's user
+      (`agent-run-as-same-user: "true"`, required: measured L83, 2026-10-30; a new version is a pod rollout).
       The injector's default uid is documented as 100, which `fence.ReadSecret` would refuse (owner root or
       port49d's user): measure in the shape's smoke before the shape documents it. Render into `file_dir`.
     - Docker and systemd credentials: Docker's `secrets:` long syntax with `mode: 0440` and the gid (the default is
@@ -8073,7 +8075,11 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
 - **Key files are read under the secret-file rule.** A key directory that is group- or world-writable is refused (`chmod 0755` or
   `0750` it; a Secret volume's read-only mount is excused), and a group-readable key must belong to a group the service is in: port49's
   own, or fsGroup. Debian's `ssl-cert` group is refused. The issuing CA key, a TPM blob and the CLI's own key keep the owner-only rule.
-  Expected remedy if L83's CSI cells show `root:root` files: the provider's `filePermission 0400`.
+  L83's first run (41142675001) refused that remedy: the Secrets Store CSI driver writes `root:root` (0644, or 0440 with
+  `filePermission`), its pinned chart (1.6.1) applies no `fsGroup`, and `root:root` 0400 is unreadable by 65532, so the driver
+  is not supported for device keys. The Vault Agent injector works only with `agent-run-as-same-user: "true"` (the default uid
+  100 owns the file and the owner rule refuses it, as designed), and a new key version is a pod rollout, not a reload. The
+  chart README says both; the L83 results note follows the re-run.
 - **The rewrite warning.** A held key file rewritten in place is reported at once (`port49_key_secret_files_changed`, a log line per change)
   and the reload is never refused. Add a version by writing a new file; never edit one in place.
 - **`ProtectSystem=true`**, not `strict` or `full`: the fence checks `/etc`'s mode, and a mount namespace that hides it would pass a host the

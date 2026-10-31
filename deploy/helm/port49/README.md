@@ -51,9 +51,21 @@ start.
 A key is read under the secret-file rule, so two things are refused at the pod's start, each with a line
 naming the file. A key directory that is group- or world-writable (outside a read-only Secret mount, which
 is excused): `chmod 0755` or `0750` it. A group-readable key whose group is not the pod's (fsGroup 65532
-is): a Secret volume's files are, and a file a CSI driver or an injector writes as `root:root` 0440 is not;
-the remedy is the driver's own setting, `filePermission: 0400` for the Secrets Store CSI provider, so the
-group bit is gone, never a looser rule (L83 records which drivers need it).
+is): a Secret volume's files are, and a file an injector or a CSI driver writes as `root:root` 0440 is not.
+Never a looser rule. Two mechanisms were measured on kind (L83, run 41142675001, first run; the re-run
+follows the harness fixes):
+
+- **The Secrets Store CSI driver is not supported for device keys.** Its files are `0:0 0644` (the world
+  bit: refused) and, with the provider's `filePermission: 0440`, `0:0 0440` (port49d, uid 65532, cannot read
+  them). The driver chart (secrets-store-csi-driver 1.6.1) sets no `fsGroupPolicy` and the provider has no
+  owner or group option, so `fsGroup` is not applied to the volume and no setting makes the file readable by
+  65532 without a world bit. `filePermission: 0400` does not help: a `root:root` 0400 file is unreadable too.
+- **The Vault Agent injector needs `vault.hashicorp.com/agent-run-as-same-user: "true"`.** By default the agent
+  is uid 100 and owns the rendered file (`100:65532 0440`); port49d refuses a key whose owner is neither itself
+  nor root, because whoever owns a file can rewrite it. With the annotation the file is port49d's own and
+  port49d starts. Adding a key version is a pod rollout, not a reload: the injector reads its annotations only
+  when a pod is admitted, and each file is its own annotation. Devices use another replica during a rollout, one
+  pod at a time. For rotation with no restart use External Secrets (L82).
 
 fsGroup also acts on a PVC's root, and two rules meet there. With `OnRootMismatch` the kubelet walks the
 whole volume at a pod's start unless the root is group 65532, includes 0770 and has setgid (kubelet
@@ -77,8 +89,8 @@ issues nothing; it does not crash-loop), which proves the cell detects it.
 
 `examples/external-secret.yaml` syncs the device keys from Vault with External Secrets: one Secret key
 per key version (`core_v1`, `core_v2`), each from its own remote key. Adding a version is adding a
-remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. Vault Agent
-and the Secrets Store CSI driver are unmeasured here (L83) and not documented as supported.
+remote key and an entry; nothing is overwritten, so a rollback is still a file on disk. The Vault Agent
+injector and the Secrets Store CSI driver are covered above (Secrets and rotation).
 
 **Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
 key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
