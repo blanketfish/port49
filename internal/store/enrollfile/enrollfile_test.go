@@ -523,3 +523,22 @@ func TestAHandleOpenedBeforeTheFileExistedFindsItWhenAnotherProcessCreatesIt(t *
 		t.Errorf("a second create: %v, want ErrConflict", err)
 	}
 }
+
+// A handle that has written, or held a file, never adopts a different file that appears later: it
+// wrote its own, and the one that appears is not the one it holds.
+func TestAHandleThatWroteNeverAdoptsAFileThatAppearsLater(t *testing.T) {
+	ctx := context.Background()
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	h := openAt(t, path, keys())
+	if err := h.PutUnlock(ctx, alice, t0); err != nil { // writes a file that holds no mark
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	written(t, path, keys()) // another process's store, with a mark
+	if _, err := h.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a handle that wrote adopted the file that appeared: %v", err)
+	}
+}
