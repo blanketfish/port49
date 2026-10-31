@@ -150,13 +150,25 @@ type composeStack struct {
 
 // run runs docker compose on the stack's files and records what it ran in
 // compose.log.
-// states is each service's state and exit code, one line each: structured fields only, never a log.
+// states is each service's state and exit code on one line, service=state/exit: structured fields only,
+// never a log, so the line that reports a failure can carry them.
 func (c *composeStack) states() string {
-	out, err := c.run("ps", "-a", "--format", "{{.Service}} {{.State}} {{.ExitCode}}")
+	out, err := c.run("ps", "-a", "--format", "{{.Service}}={{.State}}/{{.ExitCode}}")
 	if err != nil {
 		return "(not read: " + oneLineMax(err.Error(), 100) + ")"
 	}
-	return out
+	return composeStates(out)
+}
+
+// composeStates keeps the service=state/exit words of ps's output, one line.
+func composeStates(out string) string {
+	var words []string
+	for _, w := range strings.Fields(out) {
+		if i := strings.IndexByte(w, '='); i > 0 && strings.Contains(w, "/") && !strings.ContainsAny(w, "\"'") {
+			words = append(words, w)
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 func (c *composeStack) run(args ...string) (string, error) { return c.runIn("", args...) }
@@ -498,7 +510,7 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 		deadline := time.Now().Add(3 * time.Minute)
 		for !httpOK("http://" + addr + "/readyz") {
 			if time.Now().After(deadline) {
-				t.Fatalf("%s/readyz not 200 in 3m\nservices (name state exit code, restarts):\n%s\ncompose.log (tail):\n%s", addr,
+				t.Fatalf("INVALID: %s/readyz not 200 in 3m; services (service=state/exit code): %s\ncompose.log (tail):\n%s", addr,
 					c.states(), c.tail(40))
 			}
 			time.Sleep(time.Second)

@@ -81,3 +81,12 @@ func TestProxyModeReadsTheProcessList(t *testing.T) {
 		t.Fatal(proxyModeOf(on), proxyModeOf("1 /sbin/init\n"))
 	}
 }
+
+// The readiness failure carries each service's state and exit code in one structured line, and
+// nothing else of ps's output.
+func TestComposeStatesKeepsOnlyServiceStateAndExitCode(t *testing.T) {
+	got := composeStates("time=x level=warn msg=\"a warning\"\nport49-broker=exited/1\nport49d=running/0\netcd-1=running/0\n")
+	if want := "port49-broker=exited/1 port49d=running/0 etcd-1=running/0"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
