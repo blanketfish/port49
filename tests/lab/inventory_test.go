@@ -276,7 +276,10 @@ func labInventoryText(t *testing.T) string {
 // usual desktop umask (privatePolicy).
 func privateDir(t *testing.T, name string) string {
 	t.Helper()
-	dir := filepath.Join(root, "tests", "lab", "logs", name)
+	dir, err := labPrivateSub(name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}

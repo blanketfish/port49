@@ -3,6 +3,7 @@ package enrollfile
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
@@ -499,3 +500,195 @@ func TestTheFileHoldsEveryEnrollmentProperty(t *testing.T) {
 }
 
 func kp(k crypt.Key) *crypt.Key { return &k }
+
+// A process that opened the path while no file was there is a running broker; init-enrollments, run
+// by another process, then creates the file. The running one must find it at its next look, or an
+// offline init takes effect only at a restart.
+func TestAHandleOpenedBeforeTheFileExistedFindsItWhenAnotherProcessCreatesIt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(dirFor(t), "enrollments.json")
+	running := openAt(t, path, keys())
+	if _, err := running.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("before the init: %v, want ErrNotFound", err)
+	}
+	other := openAt(t, path, keys())
+	if err := other.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := running.GetEnrollmentMark(ctx)
+	if err != nil || !m.CreatedAt.Equal(t0) {
+		t.Fatalf("after another process created the file: %v, %v", m, err)
+	}
+	// And it then holds what the file holds: a create from this handle is refused.
+	if err := running.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("a second create: %v, want ErrConflict", err)
+	}
+}
+
+// A handle that has written, or held a file, never adopts a different file that appears later: it
+// wrote its own, and the one that appears is not the one it holds.
+func TestAHandleThatWroteNeverAdoptsAFileThatAppearsLater(t *testing.T) {
+	ctx := context.Background()
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	h := openAt(t, path, keys())
+	if err := h.PutUnlock(ctx, alice, t0); err != nil { // writes a file that holds no mark
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	written(t, path, keys()) // another process's store, with a mark
+	if _, err := h.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a handle that wrote adopted the file that appeared: %v", err)
+	}
+}
+
+// A late file the fence refuses (a link at the path), one that does not decode, and one sealed under
+// a key this broker lacks are each said, as lost with their reason, and none is remembered: the next
+// look reads the path again, so the operator's fix takes effect with no restart.
+func TestALateFileThatCannotBeReadIsSaidAndRetriedAtTheNextLook(t *testing.T) {
+	ctx := context.Background()
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	running := openAt(t, path, keys())
+	good := filepath.Join(dir, "good.json")
+	written(t, good, keys())
+	lost := func(want string) {
+		t.Helper()
+		_, err := running.GetEnrollmentMark(ctx)
+		if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.Contains(err.Error(), want) ||
+			!strings.Contains(err.Error(), "looks again") {
+			t.Fatalf("got %v, want lost naming %q and saying it looks again", err, want)
+		}
+	}
+	if err := os.Symlink(good, path); err != nil {
+		t.Fatal(err)
+	}
+	lost("symbolic link")
+	os.Remove(path)
+	if err := os.WriteFile(path, []byte("not an enrollments file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lost("not an enrollments file this port49 reads")
+	if err := os.Rename(good, path); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := running.GetEnrollmentMark(ctx); err != nil || !m.CreatedAt.Equal(t0) {
+		t.Fatalf("after the fix: %v, %v", m, err)
+	}
+}
+
+func sum(t *testing.T, path string) [32]byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(raw)
+}
+
+// unreadableCopies are the files setAside left beside path.
+func unreadableCopies(t *testing.T, path string) []string {
+	t.Helper()
+	m, err := filepath.Glob(path + ".unreadable-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// A real store sealed under a key this broker lacks appears at the path after the handle opened with no
+// file. The handle has not looked yet when the write comes, as when an unlock arrives inside the first
+// recheck interval. A write must judge the path first: it is refused, or the file is set aside whole,
+// never renamed over.
+func TestAWriteNeverDestroysALateFileItHasNotJudged(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		write   func(f *File) error
+		refused bool // the file stays at the path; else exactly one byte-identical copy is kept beside it
+	}{
+		{"reset --all", func(f *File) error {
+			return f.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0})
+		}, false},
+		{"import", func(f *File) error {
+			raw, err := json.Marshal(store.EnrollmentBody{CreatedAt: t0, ExportedAt: t0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = f.Import(ctx, raw, true)
+			return err
+		}, false},
+		{"unlock", func(f *File) error { return f.PutUnlock(ctx, alice, t0) }, true},
+		{"enrolling", func(f *File) error { return f.SwapSecondFactor(ctx, factor(alice, "uuid:1"), 0) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := dirFor(t)
+			path := filepath.Join(dir, "enrollments.json")
+			running := openAt(t, path, keys())
+			written(t, path, v0Only()) // sealed under a key the running handle does not hold
+			before := sum(t, path)
+			err := tc.write(running)
+			if tc.refused {
+				if !errors.Is(err, store.ErrEnrollmentStoreLost) {
+					t.Fatalf("the write was not refused as lost: %v", err)
+				}
+				if sum(t, path) != before {
+					t.Fatal("the file at the path changed")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			cs := unreadableCopies(t, path)
+			if len(cs) != 1 || sum(t, cs[0]) != before {
+				t.Fatalf("want exactly one byte-identical .unreadable copy, got %v", cs)
+			}
+		})
+	}
+}
+
+// A link that appears late is not followed and never costs the real file it points at.
+func TestAWriteAfterALateLinkLeavesTheFileItPointsAt(t *testing.T) {
+	ctx := context.Background()
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	real := filepath.Join(dir, "real.json")
+	running := openAt(t, path, keys())
+	written(t, real, keys())
+	before := sum(t, real)
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	_ = running.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0})
+	if sum(t, real) != before {
+		t.Fatal("the file the link pointed at changed")
+	}
+}
+
+// A refused late file the operator then removes leaves the handle holding none: the next look says there
+// is no store, not the old refusal reason.
+func TestARefusedLateFileThatIsRemovedLeavesNoStaleReason(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(dirFor(t), "enrollments.json")
+	running := openAt(t, path, keys())
+	written(t, path, v0Only()) // sealed under a key the running handle does not hold
+	if _, err := running.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrEnrollmentStoreLost) {
+		t.Fatalf("the late file was not refused as lost: %v", err)
+	}
+	if running.Lost() == "" {
+		t.Fatal("the refusal left no reason")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, err := running.GetEnrollmentMark(ctx)
+	if errors.Is(err, store.ErrEnrollmentStoreLost) || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the file was removed the look answered %v, want no store", err)
+	}
+	if why := running.Lost(); why != "" {
+		t.Fatalf("a stale reason is still held: %q", why)
+	}
+}

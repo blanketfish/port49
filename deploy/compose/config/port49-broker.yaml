@@ -3,8 +3,7 @@
 metrics_listen: ":9050"
 inventory_file: /etc/port49/inventory.yaml
 encryption:
-  current: {id: c1, secret_ref: env:PORT49_ENC_KEY}
-admin_socket: /run/port49/port49-broker.sock
+  current: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}
 broker:
   listen: ":8443"
   tls_cert_file: /etc/port49/broker/broker.pem

@@ -28,7 +28,7 @@ func (o *oidcLab) loginOn(t *testing.T, sock string, extra ...string) (code int,
 	t.Helper()
 	t.Setenv(runCLIEnv, "1")
 	var so, se bytes.Buffer
-	code = run(append([]string{"login"}, o.flags(sock, extra...)...), &so, &se)
+	code = run(append([]string{"login"}, o.flags(t, sock, extra...)...), &so, &se)
 	return code, so.String(), se.String()
 }
 

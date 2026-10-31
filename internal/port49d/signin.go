@@ -98,10 +98,37 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 	if b.Directory != nil {
 		b.SignInDirectory = b.Directory
 	}
+	b.EnrollmentFile = cfg.Broker.Directory.EnrollmentStore.File
+	open, where := enrollmentOpener(cfg, keys, m, shared, out)
+	late := &lateEnrollments{open: open, now: time.Now}
+	wg.Add(1)
+	go func() { defer wg.Done(); <-ctx.Done(); late.close() }()
+	b.Enrollments = late
+
+	cctx, cancel := context.WithTimeout(ctx, enrollmentStartWait)
+	defer cancel()
+	if err := b.CheckEnrollmentStore(cctx); err != nil {
+		say("sign-in: the enrollment store did not answer at start (%v): password sign-in answers "+
+			"store_unavailable until it does; this process looks again every %s", printsafeErr(err), broker.EnrollmentRecheckEvery)
+	}
+	wg.Add(1)
+	go func() { defer wg.Done(); recheckEnrollmentStore(ctx, b, broker.EnrollmentRecheckEvery) }()
+	say("broker: directory-password sign-in on (second factor totp; principal domains %s; enrollments in %s; %s; "+
+		"limits %d per principal, %s, per %s)", strings.Join(p.PrincipalDomains, ", "), where, enrollWindow(p),
+		p.FailuresPerPrincipal, perSource(p), durText(p.Window))
+	go func() { wg.Wait(); close(done) }()
+	return done
+}
+
+// enrollmentOpener is how the enrollment store is opened: by its shape, never
+// created. A sealed file on the memory backend, or the directory store's
+// handle on etcd (shared, read at each open), and where that is for the start
+// line. A config whose shape cannot be opened answers store.ErrEnrollmentStoreLost.
+func enrollmentOpener(cfg config.Config, keys crypt.Keys, m *metrics.Metrics, shared func() store.Enrollments,
+	out io.Writer) (open func() (store.Enrollments, error), where string) {
+	proc := procOf(cfg)
 	es := cfg.Broker.Directory.EnrollmentStore
-	b.EnrollmentFile = es.File
-	where := es.File
-	var open func() (store.Enrollments, error)
+	where = es.File
 	switch {
 	case es.Backend != config.BackendEtcd:
 		open = func() (store.Enrollments, error) { return openEnrollmentFile(es.File, keys, m.CryptOpenFailures) }
@@ -127,29 +154,8 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 			return nil, fmt.Errorf("%w: no enrollment store is configured for this process", store.ErrEnrollmentStoreLost)
 		}
 	}
-	late := &lateEnrollments{open: open, now: time.Now}
-	wg.Add(1)
-	go func() { defer wg.Done(); <-ctx.Done(); late.close() }()
-	b.Enrollments = late
-
-	cctx, cancel := context.WithTimeout(ctx, enrollmentStartWait)
-	defer cancel()
-	if err := b.CheckEnrollmentStore(cctx); err != nil {
-		say("sign-in: the enrollment store did not answer at start (%v): password sign-in answers "+
-			"store_unavailable until it does; this process looks again every %s", printsafeErr(err), enrollmentRecheckEvery)
-	}
-	wg.Add(1)
-	go func() { defer wg.Done(); recheckEnrollmentStore(ctx, b, enrollmentRecheckEvery) }()
-	say("broker: directory-password sign-in on (second factor totp; principal domains %s; enrollments in %s; %s; "+
-		"limits %d per principal, %s, per %s)", strings.Join(p.PrincipalDomains, ", "), where, enrollWindow(p),
-		p.FailuresPerPrincipal, perSource(p), durText(p.Window))
-	go func() { wg.Wait(); close(done) }()
-	return done
+	return open, where
 }
-
-// enrollmentRecheckEvery is how often a process that finds its enrollment
-// store lost looks again; a variable so a test can shorten it.
-var enrollmentRecheckEvery = 30 * time.Second
 
 // recheckEnrollmentStore leaves the lost state without a restart (D7): while
 // the store is lost, or has not yet answered at all (the gauge is absent until

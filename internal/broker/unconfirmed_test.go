@@ -1,0 +1,228 @@
+package broker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/internal/store"
+)
+
+// A revocation whose write the store did not answer may still land, even over a lift made meanwhile
+// (L79 k). The broker says so with its own code, never "nothing was revoked", which an operator at a
+// regional cut would believe; a write the store refused wrote nothing and keeps saying so.
+func TestAnUnrecordedRevocationIsUnconfirmedNotNothingRevoked(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Store = putRevocationUnavailable{f.b.Store}
+	code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+	a := decodeAdminAnswer(t, raw)
+	if code != 503 || a.Error != "revocation_unconfirmed" {
+		t.Fatalf("%d %s", code, raw)
+	}
+	for _, want := range []string{"may not have been recorded", "even over a lift made meanwhile", "port49 revoke --list"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the answer lacks %q: %s", want, raw)
+		}
+	}
+	for _, bad := range []string{"nothing was revoked", "nothing was done", "no quorum", "socket"} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("the answer says %q: %s", bad, raw)
+		}
+	}
+}
+
+func TestARefusedRevocationStillSaysNothingWasRevoked(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Store = putRevocationRefused{f.b.Store}
+	code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+	if code != 503 || decodeAdminAnswer(t, raw).Error != "store_unavailable" || !strings.Contains(string(raw), "nothing was revoked") {
+		t.Fatalf("%d %s", code, raw)
+	}
+}
+
+type putRevocationRefused struct{ store.Store }
+
+func (putRevocationRefused) PutRevocation(context.Context, store.Revocation) error {
+	return fmt.Errorf("%w: a mark with no principal", store.ErrRefused)
+}
+
+// A lift the store did not answer may have gone through: the mark may or may not be gone.
+func TestAnUnconfirmedLiftIsNotNothingLifted(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: bobKey, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = deleteRevocationFails{f.b.Store, fmt.Errorf("%w: no quorum", store.ErrUnavailable)}
+	code, raw := f.adminCall(t, f.alice, f.alice.conn, liftPath, bobBody)
+	if code != 503 || decodeAdminAnswer(t, raw).Error != "revocation_unconfirmed" {
+		t.Fatalf("%d %s", code, raw)
+	}
+	for _, want := range []string{"may not have been recorded", "port49 revoke --list"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the answer lacks %q: %s", want, raw)
+		}
+	}
+	for _, bad := range []string{"nothing was lifted", "nothing was done", "no quorum", "and stands"} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("the answer says %q: %s", bad, raw)
+		}
+	}
+}
+
+func TestTheUnconfirmedErrorsAreTyped(t *testing.T) {
+	f := newFixture(t, 8)
+	st := f.b.Store
+	f.b.Store = putRevocationUnavailable{st}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); !errors.Is(err, ErrUnrecorded) {
+		t.Fatalf("an unanswered write: %v", err)
+	}
+	f.b.Store = putRevocationRefused{st}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil || errors.Is(err, ErrUnrecorded) {
+		t.Fatalf("a refused write: %v", err)
+	}
+	f.b.Store = st
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = deleteRevocationFails{st, fmt.Errorf("%w: no quorum", store.ErrUnavailable)}
+	if _, err := f.b.Lift(context.Background(), RevokeRequest{Principal: alice}); !errors.Is(err, ErrLiftUnrecorded) {
+		t.Fatalf("an unanswered delete: %v", err)
+	}
+}
+
+// getRevocationFails fails the read of one key only: the caller's own authentication reads others.
+type getRevocationFails struct {
+	store.Store
+	key string
+	err error
+}
+
+func (s getRevocationFails) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	if key != s.key {
+		return s.Store.GetRevocation(ctx, kind, key)
+	}
+	return store.Revocation{}, s.err
+}
+
+type putRevocationNotSent struct{ store.Store }
+
+func (putRevocationNotSent) PutRevocation(context.Context, store.Revocation) error {
+	return fmt.Errorf("%w: the pool's circuit is open (%w)", store.ErrUnavailable, store.ErrNotSent)
+}
+
+// A lift that cannot have reached the store, or that the store refused (a missing role never heals), is
+// the definite answer: it could not be lifted, and the mark stands. Only a delete the store may have
+// received and left unanswered is "may or may not be gone". The store's own words stay in the log.
+func TestALiftThatWasRefusedOrNeverSentStands(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		wrap func(store.Store) store.Store
+		leak string
+	}{
+		{"delete refused", func(s store.Store) store.Store {
+			return deleteRevocationFails{s, fmt.Errorf("%w: role lacks delete on /p49/rev", store.ErrRefused)}
+		}, "role lacks delete"},
+		{"delete not sent", func(s store.Store) store.Store {
+			return deleteRevocationFails{s, fmt.Errorf("%w: circuit open (%w)", store.ErrUnavailable, store.ErrNotSent)}
+		}, "circuit open"},
+		{"read fails", func(s store.Store) store.Store {
+			return getRevocationFails{s, bobKey, fmt.Errorf("%w: no quorum on /p49/rev", store.ErrUnavailable)}
+		}, "no quorum"},
+	} {
+		f := newMFAFixture(t, withAllAdminRights())
+		if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: bobKey, Origin: "test"}); err != nil {
+			t.Fatal(err)
+		}
+		f.b.Store = c.wrap(f.b.Store)
+		code, raw := f.adminCall(t, f.alice, f.alice.conn, liftPath, bobBody)
+		if code != 503 || decodeAdminAnswer(t, raw).Error != "store_unavailable" ||
+			!strings.Contains(string(raw), "could not be lifted, and stands") {
+			t.Errorf("%s: %d %s", c.name, code, raw)
+		}
+		for _, bad := range []string{"may or may not", "may not have been recorded", c.leak, "reading the revocation"} {
+			if strings.Contains(string(raw), bad) {
+				t.Errorf("%s: the answer says %q: %s", c.name, bad, raw)
+			}
+		}
+	}
+}
+
+// A write the guard failed before anything was sent cannot land later, but this broker still denies what
+// it names (revoke fails closed): the mark stays, the answer is store_unavailable and never says nothing
+// was revoked. A write the store refused wrote nothing, and its pending mark goes.
+func TestARevocationThatWasNeverSentKeepsDenyingHere(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Marks = store.NewMarks()
+	f.b.Store = putRevocationNotSent{f.b.Store}
+	code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+	if code != 503 || decodeAdminAnswer(t, raw).Error != "store_unavailable" {
+		t.Fatalf("%d %s", code, raw)
+	}
+	for _, want := range []string{"not recorded in the store", "will not land later", "denies what it names", "port49 revoke --list"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the answer lacks %q: %s", want, raw)
+		}
+	}
+	for _, bad := range []string{"nothing was revoked", "nothing was done", "circuit"} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("the answer says %q: %s", bad, raw)
+		}
+	}
+	if !f.b.Marks.Holds(store.RevocationPrincipal, bobKey) {
+		t.Fatal("a revocation never sent dropped this broker's own deny")
+	}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); errors.Is(err, ErrUnrecorded) || !errors.Is(err, ErrNotRecorded) {
+		t.Fatalf("a write never sent: %v", err)
+	}
+}
+
+func TestARefusedRevocationDropsItsPendingMark(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Marks = store.NewMarks()
+	f.b.Store = putRevocationRefused{f.b.Store}
+	f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+	if f.b.Marks.Holds(store.RevocationPrincipal, bobKey) {
+		t.Fatal("a refused revocation left a mark here")
+	}
+}
+
+// At 3am the operator checks what stands before trying again (a second try can stack another mark), and
+// is not pointed at asking someone else to revoke their own principal.
+func TestTheUnconfirmedAnswerSaysCheckBeforeTryingAgain(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Store = putRevocationUnavailable{f.b.Store}
+	_, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+	s := string(raw)
+	if strings.Contains(s, "ask an operator holding") {
+		t.Errorf("the answer points a self-revoker at another operator: %s", s)
+	}
+	list, again := strings.Index(s, "port49 revoke --list"), strings.Index(s, "try again")
+	if list < 0 || (again >= 0 && again < list) || !strings.Contains(s, "landed") {
+		t.Errorf("the answer must say to check --list before any retry, and why: %s", s)
+	}
+}
+
+// A write never sent cannot land late: when another writer's mark of the same key arrives, this broker
+// must not log that its own write landed (Marks.FailedWrite). An unconfirmed write still can.
+func TestANeverSentWriteIsNotRememberedAsFailed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		wrap func(store.Store) store.Store
+		want bool
+	}{
+		{"never sent", func(s store.Store) store.Store { return putRevocationNotSent{s} }, false},
+		{"unconfirmed", func(s store.Store) store.Store { return putRevocationUnavailable{s} }, true},
+	} {
+		f := newFixture(t, 8)
+		f.b.Marks = store.NewMarks()
+		f.b.Store = c.wrap(f.st)
+		if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil {
+			t.Fatalf("%s: the revoke succeeded", c.name)
+		}
+		if got := f.b.Marks.FailedWrite(store.RevocationPrincipal, alice, f.b.Now()); got != c.want {
+			t.Errorf("%s: FailedWrite %v, want %v", c.name, got, c.want)
+		}
+	}
+}

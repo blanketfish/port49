@@ -819,13 +819,13 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 	ctx := context.Background()
 	s := newStore()
 	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: now,
-		Origin: "admin_socket uid 0"}
+		Origin: "offline uid 0"}
 	cert := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "3f9a01"),
-		At: now.Add(time.Second), Origin: "admin_socket uid 0"}
+		At: now.Add(time.Second), Origin: "offline uid 0"}
 	// bob sorts after alice within the principal kind, and is put first, so
 	// the list's order within a kind is the store's, not the order of puts.
 	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: now,
-		Origin: "admin_socket uid 0"}
+		Origin: "offline uid 0"}
 	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("no mark yet: %v", err)
 	}
@@ -835,7 +835,7 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		}
 	}
 	again := alice
-	again.At, again.Origin = now.Add(time.Hour), "admin_socket uid 1000"
+	again.At, again.Origin = now.Add(time.Hour), "offline uid 1000"
 	if err := s.PutRevocation(ctx, again); err != nil {
 		t.Fatal(err)
 	}
@@ -865,13 +865,13 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		list[2].Key != bob.Key {
 		t.Fatalf("list: %+v %v", list, err)
 	}
-	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a lifted mark stands: %v", err)
 	}
-	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "admin_socket uid 0"}); err != nil {
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now, Origin: "offline uid 0"}); err != nil {
 		t.Fatalf("lifting a mark twice: %v", err)
 	}
 	if got, err := s.GetRevocation(ctx, cert.Kind, cert.Key); err != nil || !got.At.Equal(cert.At) {

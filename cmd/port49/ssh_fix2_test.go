@@ -108,17 +108,17 @@ func TestAskpassSurvivesPort49BeingDeletedMidSession(t *testing.T) {
 		r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 		// An ssh that removes port49 before it connects, then is the real one.
 		wrap := filepath.Join(t.TempDir(), "ssh")
-		script := "#!/bin/sh\nif [ \"$1\" = -V ]; then exec " + r.flags[3] + " -V; fi\nrm -f " + copyBin +
-			"\nexec " + r.flags[3] + " \"$@\"\n"
+		script := "#!/bin/sh\nif [ \"$1\" = -V ]; then exec " + r.flags[1] + " -V; fi\nrm -f " + copyBin +
+			"\nexec " + r.flags[1] + " \"$@\"\n"
 		if err := os.WriteFile(wrap, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		r.flags[3] = wrap
+		r.flags[1] = wrap
 		if err := os.WriteFile(copyBin, b, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.Command(copyBin, append(append([]string{"ssh"}, r.flags...), "leaf1", "--", "show", "version")...)
-		cmd.Env = append(os.Environ(), runCLIEnv+"=1")
+		cmd.Env = append(os.Environ(), runCLIEnv+"=1", "PORT49_TEST_AGENT_SOCKET="+r.sock)
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb
 		if err := cmd.Run(); err != nil || out.String() != "ran: show version\n" ||

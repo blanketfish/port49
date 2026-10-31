@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -19,6 +18,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
@@ -1011,7 +1011,7 @@ func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig
 
 // caCerts is the CA file's certificates, and a pool of them.
 func caCerts(path string) (*x509.CertPool, []*x509.Certificate, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := fence.Read(path, fence.TrustFileMax, "etcd ca_file")
 	if err != nil {
 		return nil, nil, err
 	}

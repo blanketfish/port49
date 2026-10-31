@@ -56,9 +56,11 @@ func newOIDCLab(t *testing.T, issue bool) *oidcLab {
 	return o
 }
 
-func (o *oidcLab) flags(socket string, extra ...string) []string {
+func (o *oidcLab) flags(t *testing.T, socket string, extra ...string) []string {
+	t.Helper()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", socket)
 	return append([]string{"--oidc", "--broker", o.url, "--broker-ca", filepath.Join(o.dir, testpki.LabCA),
-		"--oidc-ca", o.idpCA, "--socket", socket}, extra...)
+		"--oidc-ca", o.idpCA}, extra...)
 }
 
 // issuedPaths is where the login keeps this broker's certificate and key.
@@ -176,7 +178,7 @@ func TestLoginOIDCIssuesACertificateAndMints(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "port49: signed in at "+o.iss.URL+" as user:alice@example.com; your "+
 			"certificate from "+o.url+" is valid until ") ||
 		!strings.Contains(out.String(), "port49: logged in to "+o.url) ||
@@ -203,7 +205,8 @@ func TestLoginOIDCIssuesACertificateAndMints(t *testing.T) {
 		t.Fatalf("the issued directory is not marked: %q %v", raw, err)
 	}
 	var tok, terr bytes.Buffer
-	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"token", "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
 	}
 	if os.Getuid() != 0 {
@@ -249,7 +252,8 @@ func TestTheSystemFileAloneIsAFirstLogin(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"login"}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "port49: signed in at "+o.iss.URL+" as user:alice@example.com") ||
 		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
@@ -273,30 +277,31 @@ func TestALoginOverAHeldCertificateSignsInNoMore(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 {
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 {
 		t.Fatalf("login: %d %q", code, errb.String())
 	}
 	o.step(11 * time.Second) // past the connection's refresh pacing
 	out.Reset()
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.HasPrefix(out.String(), "port49: already logged in to "+o.url+" as user:alice@example.com; refreshing\n") ||
 		!strings.Contains(out.String(), "extended to") {
 		t.Fatalf("with the agent running: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	stopAgentAt(sock)
 	out.Reset()
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.HasPrefix(out.String(), "port49: using your certificate for user:alice@example.com (signed in at "+o.iss.URL) ||
 		!strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
 		t.Fatalf("a new agent: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	o.step(11 * time.Second)
 	out.Reset()
-	if code := run([]string{"refresh", "--socket", sock}, &out, &errb); code != 0 || !strings.Contains(out.String(), "extended to") {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"refresh"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "extended to") {
 		t.Fatalf("refresh: code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	errb.Reset()
-	if code := run(append([]string{"login"}, o.flags(sock, "--sign-in")...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock, "--sign-in")...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "stop that agent first") {
 		t.Fatalf("--sign-in with the agent running: code %d stderr %q", code, errb.String())
 	}
@@ -316,7 +321,7 @@ func TestALateCertificateSignsInAgain(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "port49: signed in at ") || len(o.as.Authorizations()) != 1 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -334,14 +339,15 @@ func TestAProviderOutageUsesAHeldCertificate(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), "did not answer") || !strings.Contains(errb.String(), "needs no identity provider") ||
 		!strings.Contains(errb.String(), "until your identity provider answers") ||
 		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	var tok, terr bytes.Buffer
-	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"token", "leaf1"}, &tok, &terr); code != 0 {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
 	}
 }
@@ -353,7 +359,7 @@ func TestAProviderOutageWithNoCertificateSaysSo(t *testing.T) {
 	o.iss.Close()
 	sock := privateSocket(t)
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "did not answer") || !strings.Contains(errb.String(), "cannot sign you in until it answers") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
@@ -372,7 +378,7 @@ func TestARevokedHeldCertificateIsRemoved(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 {
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 {
 		t.Fatalf("login: %d %q", code, errb.String())
 	}
 	stopAgentAt(sock)
@@ -381,7 +387,7 @@ func TestARevokedHeldCertificateIsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	errb.Reset()
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "the broker refused your certificate") ||
 		!strings.Contains(errb.String(), "back-channel logout") || !strings.Contains(errb.String(), "it is removed") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
@@ -433,13 +439,13 @@ func TestABrokerThatRefusesAHeldCertificateSaysToSignIn(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 {
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 {
 		t.Fatalf("login: %d %q", code, errb.String())
 	}
 	stopAgentAt(sock)
 	o.step(13 * time.Hour)
 	errb.Reset()
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "`port49 login --sign-in` signs you in again") || len(o.as.Authorizations()) != 1 {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
@@ -463,7 +469,7 @@ func TestLoginOIDCWithAPastedAddress(t *testing.T) {
 		readPaste = saved[2].(func() (string, error))
 	})
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), "open this address in a browser") ||
 		!strings.Contains(errb.String(), "paste it here (it is not shown)") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
@@ -481,7 +487,7 @@ func TestLoginOIDCWithNoWayBackSaysSoAtOnce(t *testing.T) {
 	t.Cleanup(func() { openBrowser, stdinIsTerminal = saved, savedTerm })
 	var out, errb bytes.Buffer
 	start := time.Now()
-	if code := run(append([]string{"login"}, o.flags(privateSocket(t))...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, privateSocket(t))...), &out, &errb); code != 1 ||
 		time.Since(start) > 10*time.Second || !strings.Contains(errb.String(), "ssh -t") ||
 		!strings.Contains(errb.String(), "--redirect-port") || strings.Contains(errb.String(), "https://") {
 		t.Fatalf("code %d after %s, stderr %q", code, time.Since(start), errb.String())
@@ -494,7 +500,7 @@ func TestADiscoveryRefusalIsNotAnOutage(t *testing.T) {
 	o := newOIDCLab(t, true)
 	o.iss.Discovery(func(d map[string]any) { d["code_challenge_methods_supported"] = []string{"plain"} })
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(privateSocket(t))...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, privateSocket(t))...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "S256") || strings.Contains(errb.String(), "until it answers") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
@@ -505,7 +511,7 @@ func TestABrokerThatIssuesNothingIsSaid(t *testing.T) {
 	o := newOIDCLab(t, false)
 	driveBrowser(t, o.iss)
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(privateSocket(t))...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, privateSocket(t))...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "issues no certificates") || len(o.as.Authorizations()) != 0 {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
@@ -527,7 +533,7 @@ func (o *oidcLab) login(t *testing.T) (code int, out, errb string) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var so, se bytes.Buffer
-	code = run(append([]string{"login"}, o.flags(sock)...), &so, &se)
+	code = run(append([]string{"login"}, o.flags(t, sock)...), &so, &se)
 	return code, so.String(), se.String()
 }
 
@@ -655,7 +661,7 @@ func TestAnIssuanceOutageUsesAHeldCertificate(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), "tell its operator") || len(o.as.Authorizations()) != 0 ||
 		!strings.Contains(errb.String(), "using your certificate for ") ||
 		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
@@ -674,7 +680,7 @@ func TestAStaleSignInUsesAHeldCertificate(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), "sign_in_not_fresh") ||
 		!strings.Contains(errb.String(), "using your certificate for ") ||
 		!strings.Contains(out.String(), "port49: logged in to "+o.url) {
@@ -694,7 +700,7 @@ func TestARevokedSignInDoesNotFallBackToAHeldCertificate(t *testing.T) {
 	}
 	sock := privateSocket(t)
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 1 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "credential_revoked") || strings.Contains(errb.String(), "using your certificate") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -725,7 +731,7 @@ func TestAHeldCertificateWithAnotherKeyIsNotUsed(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), "your held certificate is not used") || len(o.as.Authorizations()) != 1 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -741,12 +747,12 @@ func TestALateCertificateUnderARunningAgentSaysWhenItEnds(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 {
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 {
 		t.Fatalf("first login: %d %q", code, errb.String())
 	}
 	o.step(11 * time.Second)
 	out.Reset()
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "port49: your certificate ends at ") ||
 		!strings.Contains(out.String(), "stop the agent and run `port49 login`") {
 		t.Fatalf("second login: code %d stdout %q stderr %q", code, out.String(), errb.String())

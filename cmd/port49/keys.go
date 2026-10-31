@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/keyset"
 	"github.com/rhwendt/port49/internal/keystatus"
 )
@@ -17,7 +16,7 @@ import (
 var keysNow = time.Now
 
 // keysCmd is `port49 keys` (spec §12): status and show read files and the
-// log offline; diagnose asks port49d.
+// log offline; diagnose is port49d's (refused here).
 func keysCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
@@ -169,28 +168,11 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// keysDiagnose is `port49 keys diagnose` (spec §10, §12): port49d tries every
-// key it holds on the device's last unvalidated packet and names what matched.
+// keysDiagnose is `port49 keys diagnose`, which is gone (spec §12): it asked
+// port49d's admin socket, and the sockets are removed. The same diagnosis runs
+// offline from a capture, on the host that holds port49d's keys.
 func keysDiagnose(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("port49 keys diagnose", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	socket := fs.String("socket", "/run/port49/port49d.sock", "port49d's admin_socket")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if fs.NArg() != 1 {
-		fmt.Fprint(stderr, usage)
-		return 2
-	}
-	resp, err := askAdmin(*socket, admin.Request{Op: "keys_diagnose", Device: fs.Arg(0)}, 10*time.Second)
-	if err != nil {
-		fmt.Fprintln(stderr, "port49 keys diagnose:", err)
-		return 1
-	}
-	if resp.Error != "" {
-		fmt.Fprintln(stderr, "port49 keys diagnose:", resp.Error)
-		return 1
-	}
-	fmt.Fprintln(stdout, resp.Text)
-	return 0
+	fmt.Fprintln(stderr, "port49 keys diagnose was removed with the admin socket: run port49d keys-diagnose "+
+		"--device DEVICE --capture FILE on the host that holds the keys")
+	return 2
 }

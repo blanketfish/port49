@@ -76,7 +76,7 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 			"keys for its human issuer(s) %s (stale past jwks_max_age, or the provider's keys cannot be fetched); the "+
 			"provider may not retry, so the logouts refused meanwhile are in its own log (Keycloak: KC-SERVICES0057 "+
 			"\"Logout ... failed\"); once its keys are back, end those people's sessions by hand with `port49 revoke "+
-			"--principal <principal>` on %s's admin socket", strings.Join(issuers, ", "), b.proc())
+			"--principal <principal>`", strings.Join(issuers, ", "))
 		retry("unavailable", "the broker cannot use the identity provider's keys right now")
 		return
 	case err != nil:
@@ -211,7 +211,7 @@ func (b *Broker) logoutByHandWith(lt oidc.LogoutToken, rep RevokeReport, step fu
 	}
 	out := lead + strings.Join(each, "; and ")
 	if sidOnly {
-		out = fmt.Sprintf(`POST /v1/tokens/revoke {"sid": %q, "issuer": %q} (needs revoke_others), or %s`, lt.Sid, lt.Issuer, out)
+		out = fmt.Sprintf(`port49 revoke --sid %s --sid-issuer %s (needs revoke_others and a press of your security key), or %s`, shellQuote(lt.Sid), shellQuote(lt.Issuer), out)
 	}
 	return out
 }
@@ -226,30 +226,23 @@ func (b *Broker) logoutByHandWith(lt oidc.LogoutToken, rep RevokeReport, step fu
 // can still be presented.
 func (b *Broker) logoutUnapplied(principal string, lift time.Time) string {
 	at := lift.UTC().Format(time.RFC3339)
-	if b.AdminSocket == "" {
-		return b.proc() + " has no admin_socket configured, so end " + principal + "'s contexts: remove " + principal +
-			"'s grants from broker.policy_file (live within two watch intervals), and restore them only after " + at +
-			", when no ID token or issued certificate the logout would have refused can still mint; or configure " +
-			"admin_socket and revoke there"
-	}
-	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
-	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` on " + where +
-		", and lift it with `port49 revoke --principal " + principal + " --lift` there only after " + at +
+	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` (api: revoke_others), " +
+		"and lift it with `port49 revoke --lift --principal " + principal + "` (api: lift_revocations) only after " + at +
 		": no logout record refuses the session's held ID token or issued certificate until then; last check that " +
-		"`port49 revoke --list` there shows no mark for " + principal + b.revokeIssuedSooner(principal, where)
+		"`port49 revoke --list` shows no mark for " + principal + b.revokeIssuedSooner(principal)
 }
 
 // revokeIssuedSooner is logoutUnapplied's shorter path on a broker that
 // issues (decision 43 ruling 16), "" on one that does not.
-func (b *Broker) revokeIssuedSooner(principal, where string) string {
+func (b *Broker) revokeIssuedSooner(principal string) string {
 	if b.Issuer == nil {
 		return ""
 	}
 	t := b.Identity.Timing
 	sooner := b.Now().Add(t.MaxTokenAge + 2*t.ClockSkew).UTC().Format(time.RFC3339)
 	return "; or, sooner: revoke every certificate issued to " + principal + " before the logout, by every " +
-		"broker on this store, each with `port49 revoke --cert-issuer DN --cert-serial HEX` on " + where +
-		", the DN and serial from each broker's decision-log issue records for " + principal + ", and lift the " +
+		"broker on this store, each with `port49 revoke --cert-issuer DN --cert-serial HEX`, " +
+		"the DN and serial from each broker's decision-log issue records for " + principal + ", and lift the " +
 		"principal's mark after " + sooner + " instead, when no ID token from before the logout can still be " +
 		"presented; if any broker's issue records cannot be read, wait out the first time"
 }
@@ -446,13 +439,9 @@ func (b *Broker) ReachLogout(ctx context.Context, l store.Logout) (RevokeReport,
 }
 
 // revokeHow is how an operator ends one person's sessions at once, as every
-// recovery line says it: the revoke command on the admin socket.
+// recovery line says it: the revoke command, through the operator's agent.
 func (b *Broker) revokeHow() string {
-	if b.AdminSocket == "" {
-		return b.proc() + " has no admin_socket configured: configure one and run `port49 revoke --principal " +
-			"<principal>` there"
-	}
-	return "run `port49 revoke --principal <principal>` on " + b.proc() + "'s admin socket (" + b.AdminSocket + ")"
+	return "run `port49 revoke --principal <principal>` (api: revoke_others, and a press of your security key)"
 }
 
 // logoutText is Logout's line (What the operator sees).
@@ -476,4 +465,10 @@ func (r RevokeReport) logoutText(cutoff time.Time, ownerTTL time.Duration, revok
 	return fmt.Sprintf("logout: %s ended every session of sub %s: no principal is on record for it (no mint in the "+
 		"last %s); tokens it issued before %s are refused from now on; to end a person's sessions at once, %s",
 		r.OIDCIssuer, printsafe.Line(r.Sub, 80), ownerTTL, cutoff.UTC().Format(time.RFC3339), revokeHow)
+}
+
+// shellQuote is s as one POSIX shell word: single quotes, which keep $ and
+// backtick literal, with each ' written '\” (Go's %q would leave them live).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

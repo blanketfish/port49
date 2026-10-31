@@ -4,7 +4,7 @@
 # README.md beside this file first.
 #
 # Inputs (environment, each with a default):
-#   PORT49_COMPOSE_LOCAL   the PKI and the env files (default ./local; a trial
+#   PORT49_COMPOSE_LOCAL   the PKI and the secret files (default ./local; a trial
 #                          writes it with `go run ./tests/compose/cmd/compose-pki`)
 #   PORT49_COMPOSE_CONFIG  the four YAML files (default ./config)
 #   PORT49_COMPOSE_SUBNET  the stack's network (default 172.30.49.0/24)
@@ -14,7 +14,7 @@
 name: port49
 
 x-etcd: &etcd
-  image: gcr.io/etcd-development/etcd:v3.6.15
+  image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
   user: "65532:65532"
   restart: unless-stopped
   networks: [port49]
@@ -55,6 +55,7 @@ services:
       - ${PORT49_COMPOSE_CONFIG:-./config}:/src/config:ro
       - ${PORT49_COMPOSE_LOCAL:-./local}:/src/local:ro
       - port49d-etc:/vol/port49d-etc
+      - port49d-keys:/vol/port49d-keys
       - broker-etc:/vol/broker-etc
       - etcd-pki:/vol/etcd-pki
       - etcd-root:/vol/etcd-root
@@ -104,8 +105,12 @@ services:
     build: {context: ../.., target: port49}
     entrypoint: [/usr/local/bin/port49-broker]
     restart: unless-stopped
+    # the chart's hardening (deploy/helm/port49/templates/_helpers.tpl): neither process writes outside its
+    # volumes, and port49d binds 49 by the sysctl, so no capability is needed
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
     networks: [port49]
-    env_file: [{path: "${PORT49_COMPOSE_LOCAL:-./local}/port49-broker.env"}]
     ports:
       - ${PORT49_BROKER_PUBLISH:-127.0.0.1:8443}:8443
       - 127.0.0.1:9050:9050
@@ -124,11 +129,15 @@ services:
     # on the one tag, and `never` keeps `up` from trying to pull it
     pull_policy: never
     restart: unless-stopped
+    # the chart's hardening (deploy/helm/port49/templates/_helpers.tpl): neither process writes outside its
+    # volumes, and port49d binds 49 by the sysctl, so no capability is needed
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
     networks: [port49]
     # Non-root binds 49: Docker sets this in each container's network
     # namespace already; it is stated so a runtime that does not is caught.
     sysctls: {net.ipv4.ip_unprivileged_port_start: 0}
-    env_file: [{path: "${PORT49_COMPOSE_LOCAL:-./local}/port49d.env"}]
     ports:
       # port49d must see the device's true source address (design §13);
       # what a published port does to it is policy engine spec §15 L39 (a).
@@ -136,6 +145,9 @@ services:
       - 127.0.0.1:9049:9049
     volumes:
       - port49d-etc:/etc/port49:ro
+      # the device keys, one file per version (root:65532, 0440); a new
+      # version is a new file here and a line in the policy, with no restart
+      - port49d-keys:/run/port49/keys:ro
       # the accounting spool: on an ephemeral layer a record acknowledged to
       # a device is lost at a recreate
       - port49d-spool:/var/spool/port49d
@@ -149,6 +161,7 @@ networks:
 
 volumes:
   port49d-etc: {}
+  port49d-keys: {}
   broker-etc: {}
   etcd-pki: {}
   etcd-root: {}

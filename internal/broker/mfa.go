@@ -53,9 +53,41 @@ type MFAVerifiers struct {
 	ACRValues string
 }
 
+// perLoginMFA is the verifiers in force now. The roots are swapped whole at a SIGHUP, so
+// a reader takes the pointer once and uses it; nothing it points to is ever written.
+func (b *Broker) perLoginMFA() *MFAVerifiers {
+	b.mfaMu.RLock()
+	defer b.mfaMu.RUnlock()
+	return b.PerLoginMFA
+}
+
+// AttestationRoots is the roots in force now, nil for none.
+func (b *Broker) AttestationRoots() *pivattest.Anchors {
+	if m := b.perLoginMFA(); m != nil {
+		return m.Anchors
+	}
+	return nil
+}
+
+// SetAttestationRoots puts a (nil for none) in force as the roots a touch is verified
+// against, keeping AMR and ACRValues, while the broker serves: port49d and port49-broker
+// call it at SIGHUP with the file re-read (spec §5.1.6: "add the root or intermediate to
+// attestation_roots_file, then reload").
+func (b *Broker) SetAttestationRoots(a *pivattest.Anchors) {
+	b.mfaMu.Lock()
+	defer b.mfaMu.Unlock()
+	next := MFAVerifiers{}
+	if b.PerLoginMFA != nil {
+		next = *b.PerLoginMFA
+	}
+	next.Anchors = a
+	b.PerLoginMFA = &next
+}
+
 // mfaTouch reports whether this broker verifies a hardware_key_touch.
 func (b *Broker) mfaTouch() bool {
-	return b.PerLoginMFA != nil && b.PerLoginMFA.Anchors != nil && b.PerLoginMFA.Anchors.Roots != nil
+	v := b.perLoginMFA()
+	return v != nil && v.Anchors != nil && v.Anchors.Roots != nil
 }
 
 // mfaIdP reports whether this broker verifies an idp_mfa.
@@ -65,8 +97,8 @@ func (b *Broker) mfaIdP() bool {
 
 // mfaAMR is the amr values an idp_mfa proof may carry (RFC 8176).
 func (b *Broker) mfaAMR() []string {
-	if b.PerLoginMFA != nil && len(b.PerLoginMFA.AMR) > 0 {
-		return b.PerLoginMFA.AMR
+	if v := b.perLoginMFA(); v != nil && len(v.AMR) > 0 {
+		return v.AMR
 	}
 	return []string{"mfa"}
 }
@@ -148,8 +180,8 @@ func (b *Broker) mfaConfig() *api.MFAConfig {
 		return nil
 	}
 	c := &api.MFAConfig{Methods: methodNames(methods)}
-	if b.PerLoginMFA != nil {
-		c.ACRValues = b.PerLoginMFA.ACRValues
+	if v := b.perLoginMFA(); v != nil {
+		c.ACRValues = v.ACRValues
 	}
 	return c
 }
@@ -701,46 +733,67 @@ func parseTouch(req api.MFAProofRequest) (*touchProof, string) {
 
 var touchPolicyNames = map[byte]string{pivattest.TouchNever: "never", pivattest.TouchCached: "cached", pivattest.TouchAlways: "always"}
 
-// verifyTouch judges a touch proof against the held connection (decision 45
-// ruling 12), "" when it holds: both slot attestations chain, through the one
-// device certificate, to the operator's roots; the touch key's policy is
-// always-touch; the session slot's key is this connection's client key; and
-// the touch key signed this challenge over this connection's exporter value.
-// The roots are the operator's alone: no request certificate is added to
-// them.
+// verifyTouch judges a per-login touch proof against the held connection
+// (decision 45 ruling 12), "" when it holds: the touch key signed this
+// challenge over this connection's exporter value (verifyTouchMessage).
 func (b *Broker) verifyTouch(r *http.Request, p *touchProof, ch []byte, now time.Time) string {
+	cause, _ := b.verifyTouchMessage(r, p, api.MFAExporterLabel, func(ekm []byte) []byte {
+		return api.MFAMessage(ch, ekm)
+	}, now)
+	return cause
+}
+
+// verifyTouchMessage judges a touch proof over msg(ekm), ekm being the held
+// connection's exporter value under label, "" when it holds: both slot
+// attestations chain, through the one device certificate, to the operator's
+// roots; the touch key's policy is always-touch; the session slot's key is
+// this connection's client key; and the touch key signed msg(ekm). The roots
+// are the operator's alone: no request certificate is added to them. A
+// per-login proof and an admin proof differ in label and message, and in
+// nothing else. A refusal returns its cause, which may quote what the caller
+// sent and belongs in the API answer alone, and why, one fixed word (§5.7's
+// admin_touch set) that is safe in a record.
+func (b *Broker) verifyTouchMessage(r *http.Request, p *touchProof, label string, msg func(ekm []byte) []byte,
+	now time.Time) (cause, why string) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return "a touch proves on a held connection that presented the session key's certificate"
+		return "a touch proves on a held connection that presented the session key's certificate", "no_client_certificate"
 	}
-	ekm, err := r.TLS.ExportKeyingMaterial(api.MFAExporterLabel, nil, 32)
+	ekm, err := r.TLS.ExportKeyingMaterial(label, nil, 32)
 	if err != nil {
-		return "this connection cannot export keying material"
+		return "this connection cannot export keying material", "no_exporter"
 	}
-	anchors := *b.PerLoginMFA.Anchors
+	v := b.perLoginMFA()
+	if v == nil || v.Anchors == nil {
+		// swapped away between the gate and here
+		return "no attestation roots are configured", "touch_slot_chain"
+	}
+	anchors := *v.Anchors
 	ta, err := pivattest.Verify(anchors, p.device, p.touch, now)
 	if err != nil {
-		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300)
+		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "touch_slot_chain"
 	}
 	sa, err := pivattest.Verify(anchors, p.device, p.sessnl, now)
 	if err != nil {
-		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300)
+		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "session_slot_chain"
 	}
 	// Both slots verified against the one device certificate in the proof,
 	// so what can differ is the serial each slot certificate names.
 	if ta.Serial != sa.Serial {
-		return "the touch key and the session key are not attested by the same device"
+		return "the touch key and the session key are not attested by the same device", "device_mismatch"
 	}
 	if ta.TouchPolicy != pivattest.TouchAlways {
 		return fmt.Sprintf("the touch key's attestation must carry touch policy always (it says %s)",
-			touchPolicyNames[ta.TouchPolicy])
+			touchPolicyNames[ta.TouchPolicy]), "touch_policy"
 	}
 	eq, ok := sa.Key.(interface{ Equal(crypto.PublicKey) bool })
 	if !ok || !eq.Equal(r.TLS.PeerCertificates[0].PublicKey) {
-		return "the session slot's key is not this connection's client key: a touch proves from the token that holds it"
+		return "the session slot's key is not this connection's client key: a touch proves from the token that " +
+			"holds it", "session_key"
 	}
 	alg, ok := api.RefreshAlgorithm(ta.Key)
-	if !ok || p.touch.CheckSignature(alg, api.MFAMessage(ch, ekm), p.sig) != nil {
-		return "the signature is not the touch key's over this challenge and this connection's exporter value"
+	if !ok || p.touch.CheckSignature(alg, msg(ekm), p.sig) != nil {
+		return "the signature is not the touch key's over this challenge and this connection's exporter value",
+			"bad_signature"
 	}
-	return ""
+	return "", ""
 }

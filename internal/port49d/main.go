@@ -45,7 +45,6 @@ import (
 	"github.com/rhwendt/port49/internal/certstatus"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/daemon/limits"
@@ -75,6 +74,15 @@ func Main(args []string) int {
 	if len(args) > 0 && args[0] == "init-revocations" {
 		return initRevocationsCmd(args[1:], os.Stdout, os.Stderr)
 	}
+	if len(args) > 0 && args[0] == "revoke" {
+		return offlineRevokeDaemon(args[1:], os.Stdout, os.Stderr)
+	}
+	if len(args) > 0 && (args[0] == "init-enrollments" || args[0] == "export-enrollments") {
+		return enrollmentsCmd("port49d", args[0], args[1:], os.Stdout, os.Stderr)
+	}
+	if len(args) > 0 && args[0] == "keys-diagnose" {
+		return keysDiagnoseCmd(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && args[0] == "store-roles" {
 		return storeRolesCmd(args[1:], os.Stdout, os.Stderr)
 	}
@@ -94,7 +102,9 @@ func Main(args []string) int {
 	// otherwise start the daemon (pre-flight M20).
 	if fs.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], "+
-			"port49d init-revocations|init-issuer|rotate-issuer [--config FILE], or port49d store-roles [--config FILE] (a subcommand comes first)")
+			"port49d init-revocations|init-issuer|rotate-issuer|init-enrollments|export-enrollments [--config FILE], "+
+			"port49d keys-diagnose --device NAME --capture FILE|-, "+
+			"port49d revoke --offline …, or port49d store-roles [--config FILE] (a subcommand comes first)")
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -417,6 +427,12 @@ func buildBrokerAnchorWith(cfg config.Config, inventoryFrom string, st store.Sto
 	// now, never refused (decision 45 ruling 18); each swap says it again.
 	if line := b.MFAUnavailable(pol, now); line != "" {
 		fmt.Fprintf(stderr, "%s: broker: %s\n", proc, line)
+	}
+	// Where a subject holds an admin-level right and no attestation roots are
+	// loaded, every admin call is refused: said once here, and at each swap
+	// (spec §12; decision 54 ruling 15).
+	if line := b.AdminTouchLine(pol); line != "" {
+		fmt.Fprintf(stderr, "%s: %s\n", proc, line)
 	}
 	var anchor *x509.CertPool
 	if anchorCert != nil {
@@ -874,12 +890,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// rd is /readyz: 200 while the TACACS+ listener serves, and 503 with
 	// why before it opens and from the start of shutdown.
 	rd := newReadiness()
+	// status is GET /store/status, given the stores once they are open.
+	status := &statusHandler{}
 	metricsErr := make(chan error, 1)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 		mux.Handle("/readyz", rd)
+		mux.Handle("GET /store/status", status)
 		metricsErr <- http.Serve(mln, mux)
 	}()
 	fmt.Fprintf(stderr, "port49d: metrics on %s\n", mln.Addr())
@@ -982,6 +1001,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		return err
 	}
+	status.set(newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh))
 	defer sts.close()
 	if sts.health != nil {
 		sts.health.state = hs
@@ -1128,13 +1148,39 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// cannot drift apart (Task 9 review M6).
 		// The in-process broker is on the memory store alone (plan 7e,
 		// Ruling 1), so an error is a file that does not load.
+		// The file is this process's alone for its whole life: an offline
+		// revoke holds the same lock while it writes, so it is never read half
+		// through and never overwritten from a load older than its mark.
+		unlock, lerr := lockRevocationsWait(cfg.Broker.RevocationsFile, revocationsLockWait)
+		switch {
+		case errors.Is(lerr, errRevocationsLocked):
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("broker.revocations_file %s is locked: an offline revoke or lift (port49d revoke --offline) "+
+				"or another port49d holds it; wait for it to finish, or stop that port49d", cfg.Broker.RevocationsFile)
+		case lerr != nil:
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, lerr)
+		}
+		// A detached pass may still be writing when this run ends: the lock is
+		// given up only after it is done, and no pass starts after, so an
+		// offline revoke never races one.
+		drainPersist := func(time.Duration) bool { return true }
+		defer func() {
+			if !drainPersist(persistDrainWait) {
+				fmt.Fprintln(stderr, "port49d: a write of broker.revocations_file has not returned; the lock is released anyway")
+			}
+			unlock()
+		}()
 		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
 		if err != nil {
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
-		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, marks, authMarks, m)
+		persist, d := persisterDrain(brk.Store, cfg.Broker.RevocationsFile, marks, authMarks, m)
+		brk.Persist, drainPersist = persist, d
 		brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
@@ -1403,48 +1449,11 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		brk.Wire(bl)
 		brk.Conns = bl
 	}
-	// The admin socket binds before anything says "listening", as the broker
-	// does, and a failure lets go of every listener already bound (pre-flight
-	// M6). Only with it configured is any packet held: off, nothing is.
-	if cfg.AdminSocket != "" {
-		held := &keyring.Held{}
-		deps.Held = held
-		aln, err := admin.Listen(cfg.AdminSocket)
-		if err != nil {
-			if bln != nil {
-				bln.Close()
-			}
-			closeListeners()
-			mln.Close()
-			stopSpool()
-			<-spoolDone
-			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
+	if brk != nil {
+		if daemonBrokerHook != nil {
+			daemonBrokerHook(brk)
 		}
-		srv := &admin.Server{Held: held, Keys: allKeys, Now: time.Now, Assigned: assignedKeyRef(cfg, live),
-			StoreStatus: newStoreStatus(cfg, sts.dir, sts.etcd, sts.fresh).answer}
-		if brk != nil {
-			// The socket's deadline covers the wait and the run; one bound
-			// for both, so they cannot drift apart.
-			brk.RevokeTimeout = admin.OpTimeout
-			brk.AdminSocket = cfg.AdminSocket
-			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk, nil), adminRevocations(brk.Store), adminForget(brk)
-			serveSignInOps(srv, brk)
-		} else if sts.persistent {
-			// Beside port49-broker on etcd (plan 7e, Ruling 13).
-			srv.RevokeElsewhere = "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"
-		}
-		go srv.Serve(ctx, aln)
-		ops := "port49 keys diagnose, port49 revoke"
-		if brk != nil && brk.PasswordSignIn != nil {
-			ops += ", port49 directory reset-second-factor, unlock, init-enrollments, export, import"
-		}
-		fmt.Fprintf(stderr, "port49d: admin socket on %s (%s)\n", cfg.AdminSocket, ops)
-	}
-	if brk != nil && cfg.AdminSocket == "" {
-		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+
-			"under api: revoke_others) is made, but none can be lifted, nor a certificate revoked, short of stopping "+
-			"port49d and editing broker.revocations_file; set admin_socket. To cut someone off meanwhile, remove "+
-			"their grants from broker.policy_file")
+		brk.RevokeTimeout = revokeRunTimeout
 	}
 
 	// The bound address, not the configured one: `:49` says nothing about
@@ -1555,18 +1564,27 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// contexts: port49d reads the policy in force at each packet (plan 7e).
 		var pass func(context.Context, []broker.Prior) (broker.RefreshReport, error)
 		var mfaUnavailable func(*policy.Policy, time.Time) string
+		var adminTouch func(*policy.Policy) string
 		if brk != nil {
-			pass, mfaUnavailable = brk.Refresh, brk.MFAUnavailable
+			pass, mfaUnavailable, adminTouch = brk.Refresh, brk.MFAUnavailable, brk.AdminTouchLine
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
 		r.keys = dk
 		r.generic = newGenericRecorder(log, procOf(cfg))
 		r.generic.record(live.Load(), time.Now())
 		hookTLSReload(r, tl, cfg, live)
-		r.mfaUnavailable = mfaUnavailable
+		if brk != nil && cfg.Broker != nil && cfg.Broker.Identity != nil {
+			id := cfg.Broker.Identity
+			r.addHUP(func() {
+				reloadAttestationRoots(id.PerLoginMFA, brk, live.Load, func(format string, args ...any) {
+					fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
+				})
+			})
+		}
+		r.mfaUnavailable, r.adminTouch = mfaUnavailable, adminTouch
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)
-		r.seen, r.held = seen, deps.Held
+		r.seen = seen
 		var fetchDone <-chan struct{}
 		if cfg.InventoryService != nil {
 			// The fetcher asks the service every poll_interval from here on;
@@ -1699,29 +1717,6 @@ func (r *readiness) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	http.Error(w, why, http.StatusServiceUnavailable)
-}
-
-// assignedKeyRef is the key_ref a device is assigned now, for keys diagnose:
-// the policy in force's with a broker, and without one the admission index
-// config.Load built, by the device's first address. Empty is a name port49d
-// does not admit.
-func assignedKeyRef(cfg config.Config, live *policy.Live) func(string) string {
-	return func(name string) string {
-		if live != nil {
-			r, _ := live.Load().Admitted(name)
-			return r.KeyRef
-		}
-		if cfg.Admission == nil {
-			return ""
-		}
-		for _, d := range cfg.Inventory.Devices {
-			if d.Name == name && len(d.Addresses) > 0 {
-				r, _ := cfg.Admission.Lookup(d.Addresses[0])
-				return r.KeyRef
-			}
-		}
-		return ""
-	}
 }
 
 // labHandlerStore is the store the request handlers see: st itself unless the

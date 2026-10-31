@@ -1,0 +1,27 @@
+# The systemd shape's smoke: the package installed under systemd in a container (plan 12b, Task 9).
+# make systemd-smoke builds the package with the pinned GoReleaser, then runs tests/systemd.
+name: systemd
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # A GitHub-hosted runner is ephemeral and its vTPM, if it has one, is nobody's key: the key-host guard
+    # (tests/shapes/shapetest/keyhost.go) would refuse on it. Only ubuntu-* jobs may set this.
+    env:
+      PORT49_SMOKE_ON_KEY_HOST: "1"
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with: {go-version-file: go.mod}
+      - run: make systemd-smoke
+      # A cancelled or timed-out job skips the target's own cleanup: remove the container and network by name.
+      - if: always()
+        run: |
+          docker rm -f port49systemd || true
+          docker network rm port49systemd || true

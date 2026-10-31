@@ -120,6 +120,41 @@ func TestAFeedChangeEvictsTheKey(t *testing.T) {
 	}
 }
 
+// Design §12: the cache serves through a store hang. The feed echoes this process's own write at
+// revision R, and an entry read after that write is already at R: the echo must not evict it, or a
+// session whose last read came just before the echo is denied store_unavailable on a hang. A change
+// above the entry's revision evicts it.
+func TestTheEchoOfAWriteAtTheEntrysRevisionDoesNotEvictIt(t *testing.T) {
+	b, c, l, _, _ := cacheRig(t)
+	get(t, c) // cached at revision 7
+	l.changedAt(ka, 7)
+	get(t, c)
+	if b.count() != 1 {
+		t.Fatalf("reads %d: the echo of the write the entry already holds evicted it", b.count())
+	}
+	l.changedAt(ka, 6)
+	get(t, c)
+	if b.count() != 1 {
+		t.Fatalf("reads %d: an older change evicted the entry", b.count())
+	}
+	l.changedAt(ka, 8)
+	get(t, c)
+	if b.count() != 2 {
+		t.Fatalf("reads %d: a change above the entry's revision did not evict it", b.count())
+	}
+}
+
+// With no entry the change still moves the generation, so a read in flight is not cached over it.
+func TestAChangeAtAnAbsentEntryStillVoidsAReadInFlight(t *testing.T) {
+	b, c, l, _, _ := cacheRig(t)
+	b.hook = func() { l.changedAt(ka, 7); b.hook = nil }
+	get(t, c) // the change lands during the read
+	get(t, c)
+	if b.count() != 2 {
+		t.Fatalf("reads %d: a read in flight was cached over a change", b.count())
+	}
+}
+
 func TestARescanClearsTheCache(t *testing.T) {
 	b, c, l, _, _ := cacheRig(t)
 	get(t, c)

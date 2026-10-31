@@ -55,7 +55,7 @@ func TestALiftsRecordIsBesideTheMarksOnALease(t *testing.T) {
 	if err := s.PutRevocation(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{At: t0, Origin: "admin_socket uid 0"}); err != nil {
+	if err := s.DeleteRevocation(ctx, r.Kind, r.Key, store.Lift{At: t0, Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	key := s.k.lift(r.Kind, r.Key)
@@ -133,14 +133,42 @@ func TestALiftWhoseLeaseFailsLiftsNothing(t *testing.T) {
 	s.tokLeases = newLeases(dead, s.now, 5*time.Minute)
 	lctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	if err := s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0}); !errors.Is(err, store.ErrUnavailable) {
-		t.Fatalf("a lift whose lease failed: %v", err)
+	if err := s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0}); !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
+		t.Fatalf("a lift whose lease failed (nothing was sent): %v", err)
 	}
 	if _, err := s.GetRevocation(ctx, r.Kind, r.Key); err != nil {
 		t.Fatalf("the mark does not stand after a failed lift: %v", err)
 	}
 	if _, err := s.GetLift(ctx, r.Kind, r.Key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a failed lift left a record: %v", err)
+	}
+}
+
+// A lift whose own read of the mark fails sent nothing: ErrNotSent, so the broker says the mark stands
+// instead of "may or may not be gone" (L79 j).
+func TestALiftWhoseReadFailsWasNotSent(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	r := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: t0}
+	if err := s.PutRevocation(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	dead, err := clientv3.New(clientv3.Config{Endpoints: []string{"127.0.0.1:1"}, DialTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dead.Close() })
+	ok := s.tok
+	s.tok = dead
+	lctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	err = s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0})
+	s.tok = ok
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
+		t.Fatalf("a lift whose read failed (nothing was sent): %v", err)
+	}
+	if _, err := s.GetRevocation(ctx, r.Kind, r.Key); err != nil {
+		t.Fatalf("the mark does not stand: %v", err)
 	}
 }
 
@@ -154,7 +182,7 @@ func TestALiftAnsweredByItsOwnCopyIsStillOwn(t *testing.T) {
 	if err := b.PutRevocation(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	by := store.Lift{At: t0.Add(time.Second), Origin: "admin_socket uid 0"}
+	by := store.Lift{At: t0.Add(time.Second), Origin: "offline uid 0"}
 	// Between a's read and its transaction, the same lift commits (b stands
 	// in for a's first copy, whose reply was lost): a's transaction finds
 	// the mark gone and by's own record.

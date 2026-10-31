@@ -349,13 +349,13 @@ hashes are unchanged.
 The SER8's real-TPM key, offered to host2's TPM. As `rwendt`:
 
 ```
-o h2 login --key "tpm:file=/home/p49lab/.port49/issued/$B.$M.tpmkey" --cert /home/p49lab/.port49/issued/$B.$M.pem --socket /tmp/l62-foreign.sock
+PORT49_TEST_AGENT_SOCKET=/tmp/l62-foreign.sock o h2 login --key "tpm:file=/home/p49lab/.port49/issued/$B.$M.tpmkey" --cert /home/p49lab/.port49/issued/$B.$M.pem
 ```
 
 host2's swtpm key, offered to the SER8's real TPM. As `p49lab`:
 
 ```
-o $P login --key "tpm:file=$I/$B.$M2.tpmkey" --cert $I/$B.$M2.pem --socket /tmp/l62-foreign.sock
+PORT49_TEST_AGENT_SOCKET=/tmp/l62-foreign.sock o $P login --key "tpm:file=$I/$B.$M2.tpmkey" --cert $I/$B.$M2.pem
 o sha256sum $I/$B.*
 ```
 

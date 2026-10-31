@@ -13,7 +13,7 @@ grants:
   - {subject: bob, scope: all_devices, roles: [network_admin]}
 key_groups: [{match: {cidr: 172.30.49.0/24}, key_ref: k}]
 # The device key sets live here, beside the key groups that assign them
-# (decision 53 ruling 3). The secret is read from port49d's environment.
+# (decision 53 ruling 3). The secret is a file in the port49d-keys volume.
 keys:
   k:
-    current: {version: 1, secret_ref: env:PORT49_KEY_TACACS}
+    current: {version: 1, secret_ref: file:/run/port49/keys/tacacs_v1}

@@ -348,7 +348,7 @@ func (r *qualRun) tlsBlock(t *testing.T, n int) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	dir := safeDir(t)
 	files := map[string][]byte{"device-ca.pem": ca.PEM(), "srv.crt": certPEM, "srv.key": keyPEM}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {

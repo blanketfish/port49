@@ -23,9 +23,9 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -58,7 +58,7 @@ func startService(t *testing.T) *testService {
 		t.Fatal(err)
 	}
 	_, key, _ := ed25519.GenerateKey(rand.Reader)
-	_, pubPEM, err := keyfile.EncodeEd25519(key)
+	_, pubPEM, err := edkey.EncodeEd25519(key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestInventoryExportVerifiesBeforeItWrites(t *testing.T) {
 	svc := startService(t)
 	svc.sync(t)
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
-	_, otherPEM, _ := keyfile.EncodeEd25519(other)
+	_, otherPEM, _ := edkey.EncodeEd25519(other)
 	otherPub := filepath.Join(t.TempDir(), "other.pub")
 	if err := os.WriteFile(otherPub, otherPEM, 0o644); err != nil {
 		t.Fatal(err)

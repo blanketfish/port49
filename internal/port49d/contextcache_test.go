@@ -212,8 +212,17 @@ func TestAHungStoreServesTheCacheUntilTheListenersClose(t *testing.T) {
 	if !dev.permits("alice", "show", "version") {
 		t.Fatal("the first command was refused")
 	}
-	time.Sleep(1200 * time.Millisecond) // past the ttl
+	// The feed echoes the session-start write after the first read on a slow machine. An entry that
+	// has served a hit is at the write's revision or later, so the echo no longer evicts it: wait
+	// for that hit (re-issuing the command) before sleeping past the ttl.
 	metrics := daemonMetrics(t, &out)
+	for deadline := time.Now().Add(10 * time.Second); metricAt(t, metrics, `port49_context_cache_lookups_total{outcome="hit"}`) < 1; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the context cache never served a hit after the first command")
+		}
+		dev.permits("alice", "show", "version")
+	}
+	time.Sleep(1200 * time.Millisecond) // past the ttl
 	f.proxy.Hang(true)
 	if !dev.permits("alice", "show", "version") {
 		t.Fatalf("a cached session's command was refused on a hung store; log %s", log.String())

@@ -230,6 +230,11 @@ type Server struct {
 func Start(t testing.TB, o Options) *Server {
 	t.Helper()
 	s := &Server{Dir: t.TempDir()}
+	// The client key files ClientFiles writes here are read under the secret-file rule, which refuses
+	// a directory others can write: a umask of 002 would make the temp directory so.
+	if err := os.Chmod(s.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// A token of its own, so each member is a cluster of its own with its own
 	// id (plan 11a, R28): by default every solo member would share one.
 	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify,

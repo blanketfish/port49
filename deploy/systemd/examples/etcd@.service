@@ -1,0 +1,18 @@
+# An etcd member, for your etcd hosts (not port49 hosts). Instance name = the member's
+# config: `systemctl enable --now etcd@etcd-1` reads /etc/etcd/etcd-1.yaml. Install etcd
+# 3.6.15 or later at /usr/local/bin/etcd; port49d refuses an etcd below its floor.
+[Unit]
+Description=etcd member %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=etcd
+ExecStart=/usr/local/bin/etcd --config-file /etc/etcd/%i.yaml
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

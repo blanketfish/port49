@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/normal"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 // The operator's side of the directory-password sign-in (plan 9e, decision
@@ -38,22 +39,17 @@ func (b *Broker) signInOps() error {
 // email, lower-cased as Forget lowers it. Only a person signs in with a
 // password.
 func userPrincipal(principal string) (string, error) {
-	if !strings.HasPrefix(strings.ToLower(principal), "user:") {
-		return "", fmt.Errorf("broker: %q is not a user: principal; only a person signs in with a directory password",
-			printsafe.Line(principal, 200))
-	}
-	normal, err := normalPrincipal(principal)
+	n, err := normal.User(principal)
 	if err != nil {
-		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: user: and an email",
-			printsafe.Line(principal, 300))
+		return "", fmt.Errorf("broker: %w", err)
 	}
-	return normal, nil
+	return n, nil
 }
 
 // lostRemedy is what an operator does about an enrollment store that is lost,
 // the words every refusal of an operator op on one ends with.
 const lostRemedy = "restore it (`port49 directory import`, or the etcd snapshot), or replace it with `port49 " +
-	"directory reset-second-factor --all`; on a new install run `port49 directory init-enrollments`"
+	"directory reset-second-factor --all`; on a new install run `port49-broker init-enrollments`"
 
 // ResealSecondFactors is the scheduled pass that seals every record and the
 // mark that opened under the previous encryption key afresh under the current
@@ -395,9 +391,16 @@ func (b *Broker) InitEnrollments(ctx context.Context, origin string) (string, er
 	b.say("sign-in: %s created the enrollment store", origin)
 	if err := b.CheckEnrollmentStore(ctx); err != nil {
 		return "created the enrollment store; the broker could not read it back yet (" +
-			printsafe.Line(err.Error(), 200) + "), and the next scheduled pass looks again", nil
+			printsafe.Line(err.Error(), 200) + "), and the next scheduled pass looks again" + runningNote(), nil
 	}
-	return "created the enrollment store; password sign-in is on" + enrollWindowNote(b, now), nil
+	return "created the enrollment store; password sign-in is on" + enrollWindowNote(b, now) + runningNote(), nil
+}
+
+// runningNote is what init-enrollments tells the operator about a broker already running: it is another
+// process, and it finds the new store at its next recheck.
+func runningNote() string {
+	return "; a broker already running picks the store up within " + EnrollmentRecheckEvery.String() +
+		", and until then its sign-ins answer enrollment_store_lost"
 }
 
 // enrollWindowNote says who can enroll in the new store at now: the rollout
@@ -410,7 +413,7 @@ func enrollWindowNote(b *Broker, now time.Time) string {
 		"anyone else"
 }
 
-// ExportEnrollments is `port49 directory export`: every record and the mark,
+// ExportEnrollments is `port49-broker export-enrollments`: every record and the mark,
 // sealed whole under the broker's key (D13). It holds no secret or entry id
 // in the clear.
 func (b *Broker) ExportEnrollments(ctx context.Context) ([]byte, error) {
@@ -447,6 +450,11 @@ func (b *Broker) ImportEnrollments(ctx context.Context, sealed []byte, replace b
 	case errors.Is(err, store.ErrConflict):
 		return "", errors.New("broker: the store holds a second factor enrolled or reset after this export was " +
 			"taken, and importing it would undo that: run it with --replace to replace the store anyway")
+	case errors.Is(err, crypt.ErrUnknownKey):
+		// The store's text quotes the key id the export names, which is the
+		// export's own and not yet checked: never echoed.
+		return "", errors.New("broker: the export is sealed under a key this broker does not hold: set " +
+			"encryption.previous to the key it was exported under, then import it again")
 	case err != nil:
 		// The text is the store's own about the export, never its content.
 		return "", fmt.Errorf("broker: the import failed, so nothing changed: %s", printsafe.Line(err.Error(), 300))

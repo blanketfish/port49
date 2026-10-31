@@ -20,9 +20,9 @@ import (
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/edkey"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
 )
 
 const groupedPolicy = minimalPolicy + "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n"
@@ -136,12 +136,12 @@ func TestADocumentThatDoesNotVerifyAppliesOnceItsKeyIsAdded(t *testing.T) {
 		!strings.Contains(rig.out.String(), "add its public key to inventory.service.verify_key_files and send SIGHUP") {
 		t.Fatalf("the refusal: %s", rig.out.String())
 	}
-	_, pubPEM, _ := keyfile.EncodeEd25519(newKey)
+	_, pubPEM, _ := edkey.EncodeEd25519(newKey)
 	// safeDir: a verify key is read behind the write fence.
 	newFile := filepath.Join(safeDir(t), "new.pub")
 	oldFile := filepath.Join(safeDir(t), "old.pub")
 	os.WriteFile(newFile, pubPEM, 0o644)
-	_, oldPEM, _ := keyfile.EncodeEd25519(rig.key)
+	_, oldPEM, _ := edkey.EncodeEd25519(rig.key)
 	os.WriteFile(oldFile, oldPEM, 0o644)
 	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
 	os.WriteFile(rig.r.cfgPath, []byte(fmt.Sprintf(`inventory:
@@ -172,7 +172,7 @@ func TestATamperedDocumentIsCalledOutNotExplainedAsARotation(t *testing.T) {
 // the keys in force.
 func TestASIGHUPReReadOfAnUnfencedVerifyKeyKeepsTheKeysInForce(t *testing.T) {
 	rig := newServiceRig(t, groupedPolicy)
-	_, pubPEM, _ := keyfile.EncodeEd25519(rig.key)
+	_, pubPEM, _ := edkey.EncodeEd25519(rig.key)
 	dir := t.TempDir()
 	loose := filepath.Join(dir, "loose.pub")
 	os.WriteFile(loose, pubPEM, 0o664)
@@ -277,7 +277,7 @@ func TestASIGHUPThatRemovesTheSignerDoesNotApplyTheDocumentHeld(t *testing.T) {
 	rig.receive(rig.doc(t, 2, groupedPolicy, 5)) // over the bound, held
 	before := rig.b.Policy.Load().Bundle
 	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
-	_, otherPEM, _ := keyfile.EncodeEd25519(otherKey)
+	_, otherPEM, _ := edkey.EncodeEd25519(otherKey)
 	keyFile := filepath.Join(safeDir(t), "other.pub")
 	os.WriteFile(keyFile, otherPEM, 0o644)
 	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")

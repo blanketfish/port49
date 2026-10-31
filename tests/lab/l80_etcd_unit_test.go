@@ -49,8 +49,7 @@ func TestL80EtcdConfigsLoadInTheirRoles(t *testing.T) {
 		"\n      daemon: {cert_file: " + cert + ", key_file: " + key + "}\n      hold_ttl: 20s\n"
 	brokerStore := "\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://127.0.0.1:2379]\n      ca_file: " + ca +
 		"\n      broker: {cert_file: " + cert + ", key_file: " + key + "}\n      hold_ttl: 20s\n"
-	admin := filepath.Join(dir, "a.sock")
-	daemon, policy, err := l80EtcdDaemonYAML(qual, admin, daemonStore)
+	daemon, policy, err := l80EtcdDaemonYAML(qual, daemonStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +67,8 @@ func TestL80EtcdConfigsLoadInTheirRoles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the daemon's config does not load: %v\n%s", err, daemon)
 	}
-	if cfg.Broker != nil || cfg.Policy == nil || cfg.Policy.File != pol || cfg.AdminSocket != admin || cfg.TLSListener == nil {
-		t.Errorf("daemon: broker %v, policy %v, admin %q, tls %v", cfg.Broker, cfg.Policy, cfg.AdminSocket, cfg.TLSListener)
+	if cfg.Broker != nil || cfg.Policy == nil || cfg.Policy.File != pol || cfg.TLSListener == nil {
+		t.Errorf("daemon: broker %v, policy %v, tls %v", cfg.Broker, cfg.Policy, cfg.TLSListener)
 	}
 	if cfg.Lab == nil || len(cfg.Lab.SeedTokens) != 0 {
 		t.Errorf("the daemon's lab block holds seeds or none: %+v", cfg.Lab)
@@ -79,7 +78,7 @@ func TestL80EtcdConfigsLoadInTheirRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	broker, err := splitBrokerYAML(read("port49d-lab.yaml"), read("slice", "broker.yaml"), splitBrokerOpts{Policy: policy, Inventory: inv,
-		State: state, Metrics: splitMetricsBroker, Admin: filepath.Join(dir, "broker.sock"), Store: brokerStore, PKI: pki})
+		State: state, Metrics: splitMetricsBroker, Store: brokerStore, PKI: pki})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +102,7 @@ func TestL80EtcdDaemonYAMLRefusesWhatItCannotDerive(t *testing.T) {
 		"already has stores": "broker:\n  policy_file: p\nstores: {}\n",
 		"two brokers":        "broker:\n  policy_file: p\nbroker:\n  policy_file: q\n",
 	} {
-		if _, _, err := l80EtcdDaemonYAML(in, "/a", "\nstores: {}\n"); err == nil {
+		if _, _, err := l80EtcdDaemonYAML(in, "\nstores: {}\n"); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}

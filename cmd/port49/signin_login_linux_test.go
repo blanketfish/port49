@@ -36,7 +36,7 @@ import (
 // The directory sign-in's 3am cases, end to end: the real port49 CLI against
 // the lab broker (a real broker behind its own Listener, as port49d serves
 // it), the directory a fake, the enrollment store a sealed file, and the
-// operator's commands the real `port49 directory ...` over an admin socket.
+// operator's commands the real `port49 directory ...` over the broker API.
 // The passwords and keys are fixed fakes, and the codes are computed from
 // them; a failure names the case and never the value.
 
@@ -99,15 +99,35 @@ func (d *dirLab) served(method, path string) int {
 	return n
 }
 
-// operator is `port49 directory <args[0]> --socket <the lab's> <args[1:]>`.
+// operator is what the broker's operator does on the broker host or through
+// an agent with a touch key (spec §5.1.6): the broker's own operation, called
+// directly. The CLI's half is admin_test.go's and directory_linux_test.go's.
 func (d *dirLab) operator(t *testing.T, args ...string) (code int, out, errb string) {
 	t.Helper()
-	var so, se bytes.Buffer
-	code = run(append([]string{"directory", args[0], "--socket", d.adminSock}, args[1:]...), &so, &se)
-	return code, so.String(), se.String()
+	ctx := context.Background()
+	var text string
+	var err error
+	switch args[0] {
+	case "init-enrollments":
+		text, err = d.b.InitEnrollments(ctx, "test")
+	case "unlock":
+		text, err = d.b.UnlockSignIn(ctx, args[1], "test")
+	case "reset-second-factor":
+		if args[1] == "--all" {
+			text, err = d.b.ResetSecondFactor(ctx, "", true, "test")
+		} else {
+			text, err = d.b.ResetSecondFactor(ctx, args[1], false, "test")
+		}
+	default:
+		t.Fatalf("operator: %v", args)
+	}
+	if err != nil {
+		return 1, "", err.Error()
+	}
+	return 0, text + "\n", ""
 }
 
-// initEnrollments is `port49 directory init-enrollments`, which must succeed.
+// initEnrollments is `port49-broker init-enrollments`, which must succeed.
 func (d *dirLab) initEnrollments(t *testing.T) {
 	t.Helper()
 	if code, out, errb := d.operator(t, "init-enrollments"); code != 0 ||
@@ -293,9 +313,10 @@ func scrubEnrollment(s string) string {
 }
 
 // dirFlags is `port49 login --directory` for the lab.
-func (d *dirLab) dirFlags(sock string, extra ...string) []string {
-	return append([]string{"login", "--directory", "--broker", d.url, "--broker-ca", filepath.Join(d.dir, testpki.LabCA),
-		"--socket", sock}, extra...)
+func (d *dirLab) dirFlags(t *testing.T, sock string, extra ...string) []string {
+	t.Helper()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	return append([]string{"login", "--directory", "--broker", d.url, "--broker-ca", filepath.Join(d.dir, testpki.LabCA)}, extra...)
 }
 
 // login runs `port49 login --directory` on sock, the person typing what
@@ -306,7 +327,7 @@ func (d *dirLab) login(t *testing.T, sock string, answer prompter, extra ...stri
 	t.Setenv(runCLIEnv, "1")
 	var so, se bytes.Buffer
 	asked := driveLogin(t, labDirName, so.String, answer)
-	code := run(d.dirFlags(sock, extra...), &so, &se)
+	code := run(d.dirFlags(t, sock, extra...), &so, &se)
 	return loginResult{code: code, out: scrubEnrollment(so.String()), err: se.String(), screen: so.String(), asked: *asked}
 }
 
@@ -314,7 +335,8 @@ func (d *dirLab) login(t *testing.T, sock string, answer prompter, extra ...stri
 func mints(t *testing.T, sock string) {
 	t.Helper()
 	var tok, terr bytes.Buffer
-	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"token", "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
 	}
 }
@@ -462,7 +484,8 @@ func TestLoginDirectoryEnrollsIssuesAndMints(t *testing.T) {
 		}
 	}
 	var tok, terr bytes.Buffer
-	if code := run([]string{"token", "--socket", sock, "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"token", "leaf1"}, &tok, &terr); code != 0 || strings.TrimSpace(tok.String()) == "" {
 		t.Fatalf("token: code %d stderr %q", code, terr.String())
 	}
 	uri := "otpauth://"
@@ -783,7 +806,7 @@ func TestALostEnrollmentStoreAtThreeAM(t *testing.T) {
 	}
 }
 
-// D7, I15: a new install. Before `port49 directory init-enrollments` a
+// D7, I15: a new install. Before `port49-broker init-enrollments` a
 // login is refused, saying the store is missing or unreadable and that an
 // operator creates or restores it, the broker's log saying which: the broker
 // cannot tell a new install from a store lost after rollout, so the person's
@@ -801,7 +824,7 @@ func TestAFreshInstallNeedsInitEnrollments(t *testing.T) {
 		t.Fatalf("before init: code %d stdout %q stderr %q", r.code, r.out, r.err)
 	}
 	noAgent(t, sock)
-	if !strings.Contains(d.lines.String(), "On a new install run `port49 directory init-enrollments` once") {
+	if !strings.Contains(d.lines.String(), "On a new install run `port49-broker init-enrollments` once") {
 		t.Fatalf("the broker's line does not name init-enrollments: %q", d.lines.String())
 	}
 	if _, err := os.Stat(d.enrollPath); err == nil {

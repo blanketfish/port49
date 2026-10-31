@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
@@ -145,7 +145,10 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 			return withHeldConn(ctx, acceptedAt(c, b.Now), mappedOf(c))
 		},
-		ConnState:         closeIdleWithoutCertificate,
+		ConnState: func(c net.Conn, s http.ConnState) {
+			closeIdleWithoutCertificate(c, s)
+			b.connClosed(c, s)
+		},
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       b.MaxSessionAge,
@@ -255,7 +258,7 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 // client_ca_file and each trust_anchor_file must hold (design §19 step 3;
 // plan 8 for the workload anchor).
 func ReadAnchor(path string) (*x509.Certificate, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := fence.Read(path, fence.TrustFileMax, "trust anchor")
 	if err != nil {
 		return nil, err
 	}

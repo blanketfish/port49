@@ -66,13 +66,13 @@ func openToken(ref string, pin []byte) (hwkey.Key, error) {
 }
 
 // readPINSource reads the PIN from the file a pin-source file:///path names,
-// through keyfile.ReadSecret's checks (owner-only, no symlink).
+// through keyfile.ReadOwn (owner-only, no symlink).
 func readPINSource(src string) ([]byte, error) {
 	pu, err := url.Parse(src)
 	if err != nil || pu.Scheme != "file" || pu.Path == "" {
 		return nil, fmt.Errorf("clientkey: pin-source %q: it is file:///path", src)
 	}
-	raw, err := keyfile.ReadSecret(pu.Path)
+	raw, err := keyfile.ReadOwn(pu.Path)
 	if err != nil {
 		return nil, fmt.Errorf("clientkey: pin-source: %w", err)
 	}

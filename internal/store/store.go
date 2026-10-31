@@ -47,6 +47,12 @@ var ErrUnavailable = errors.New("store: unavailable")
 // (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
 var ErrRefused = errors.New("store: refused this identity")
 
+// ErrNotSent rides beside ErrUnavailable when the guard failed a call before
+// anything went to the store (an open circuit, every slot busy, a deadline
+// already past): the write cannot land later, so a caller may say "nothing
+// was done" where an unanswered call must say "may or may not have been".
+var ErrNotSent = errors.New("nothing was sent")
+
 // ErrPinHeld is a write that would move a principal's pin to another entry:
 // refused, since only a forget frees a principal (Ruling 3). It is no
 // access-control refusal (ErrRefused): the store is fine, and the operator's
@@ -1408,7 +1414,7 @@ type Revocation struct {
 	// At is when the mark took force. A second put of the same key keeps the
 	// first mark whole: the refusal has stood since then.
 	At time.Time
-	// Origin says who asked: "admin_socket uid 0".
+	// Origin says who asked: "offline uid 0".
 	Origin string
 	// LandedAfterLift is set by the store when the mark was created over a
 	// lift of its key that its writer's marks feed had not delivered (spec

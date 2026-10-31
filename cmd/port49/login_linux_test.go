@@ -65,7 +65,7 @@ func TestTheAgentKeepsTheBrokersCABundle(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 {
+	if code := run(append([]string{"login"}, l.flags(t, sock)...), &out, &errb); code != 0 {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	path, err := userconfig.CABundlePath(l.url)
@@ -86,7 +86,7 @@ func TestTheAgentKeepsTheBrokersCABundle(t *testing.T) {
 	if err := os.WriteFile(nextOnly, next.PEM(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	flags := l.flags(sock)
+	flags := l.flags(t, sock)
 	for i := range flags {
 		if flags[i] == "--broker-ca" {
 			flags[i+1] = nextOnly
@@ -111,14 +111,14 @@ func TestLoginStartsAnAgentAndRefreshes(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, l.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "port49: logged in to "+l.url) ||
 		!strings.Contains(out.String(), "\nrefreshed at ") || !strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
 	l.step(11 * time.Second) // past the connection's refresh pacing
 	out.Reset()
-	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, l.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.HasPrefix(out.String(), "port49: already logged in to "+l.url+"; refreshing\nrefreshed at ") ||
 		!strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
 		t.Fatalf("a second login: code %d stdout %q stderr %q", code, out.String(), errb.String())

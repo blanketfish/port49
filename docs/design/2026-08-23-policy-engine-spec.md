@@ -128,13 +128,24 @@ subjects:
     api: [sync, replay]
 ```
 
-| Right | Unlocks |
-|---|---|
-| `revoke_others` | `/v1/tokens/revoke` naming another principal (a standing mark), or a `(device, username)` key whoever holds it; or an OIDC session by `sid` and issuer (§5.1.4; §13 decision 39) |
-| `explain_others` | `/v1/explain` for a principal other than the caller |
-| `sync` | reserved: no broker endpoint triggers a sync; the inventory service authorizes `POST /v1/sync` by its own `syncers` list (§10) |
-| `keys_show` | reserved: nothing renders a device key's secret (§12) |
-| `replay` | reserved: no endpoint reads the decision log |
+| Right | Unlocks | Admin-level |
+|---|---|---|
+| `revoke_others` | `/v1/tokens/revoke` naming another principal (a standing mark), or a `(device, username)` key whoever holds it; or an OIDC session by `sid` and issuer (§5.1.4; §13 decision 39); a revocation by certificate (`{"cert_issuer", "cert_serial"}`); and `GET /v1/revocations` | yes, except the list |
+| `explain_others` | `/v1/explain` for a principal other than the caller | no |
+| `lift_revocations` | `POST /v1/revocations/lift`, by principal or certificate; and `GET /v1/revocations` | yes, except the list |
+| `forget_principals` | `POST /v1/directory/forget` | yes |
+| `reset_second_factor` | `POST /v1/directory/reset-second-factor`, one principal or `all` | yes |
+| `unlock_sign_in` | `POST /v1/directory/unlock` | yes |
+| `import_enrollments` | `POST /v1/directory/import` | yes |
+| `sync` | reserved: no broker endpoint triggers a sync; the inventory service authorizes `POST /v1/sync` by its own `syncers` list (§10) | reserved |
+| `keys_show` | reserved: nothing renders a device key's secret (§12) | reserved |
+| `replay` | reserved: no endpoint reads the decision log | reserved |
+
+**Admin-level calls.** A call is admin-level when it writes, lifts or removes state that belongs to another principal or to the server's trust: a revocation of another principal, a certificate, a `(device, username)` key or an OIDC session; a lift; a directory pin; a second factor or a sign-in lockout; the enrollment store. A call that only reads (`explain_others`, the revocation list) or acts on the caller alone (`mine`) is not, and neither is an install-time initialization that refuses when anything is there (`init-revocations`, `init-enrollments`, `init-issuer`). An admin-level call needs its right and a fresh `hardware_key_touch` proof bound to that one request (§5.1.6). So an admin's certificate, bearer token or agent session, exposed alone, authorizes nothing admin-level.
+
+**Host-local authority.** A host-local command, run as the service's own user (the offline revoke refuses root, so that no one chowns the state directory at 3am) against the process's own files or store credentials, is not an API call. Its authority is the host's, and it needs no touch. Where it writes a decision record (the offline revoke and lift), the record's origin is `offline uid <n>`. This covers `revoke --offline`, `init-issuer`, `rotate-issuer`, `forget-issuer`, `store-roles`, `init-revocations`, `init-enrollments`, `export-enrollments` and `keys-diagnose`, each run with access to the broker or port49d host, and the offline ones with the brokers stopped. A provider-signed back-channel logout (`/v1/logout`) is the provider's act, authenticated by the provider's signature, not an admin call, and needs no right and no touch.
+
+A certificate revocation stays under `revoke_others` rather than a right of its own: it reaches a subset of what a revocation of the certificate's principal reaches, so a separate right would grant nothing `revoke_others` does not. A lift is its own right because it is the one call that weakens.
 
 A reserved right may be declared, and CI reports it and the gate fails on a gain as for any
 other, but it grants nothing until an endpoint it guards exists (§13, decision 34). No right
@@ -998,8 +1009,9 @@ context MUST receive the same encryption-at-rest treatment as tokens** (design d
 That obligation previously covered tokens alone.
 
 **Revocation by principal or by certificate, as built (plan 7a; §13, decision 32).** An operator
-revokes with `port49 revoke` over port49d's admin socket (§12), naming a principal, or one
-certificate by its issuer and serial. A revocation is a **standing mark**, kept in the store and
+revokes with `port49 revoke`, through their agent over the broker API (§5.1.6, §12), naming a
+principal, or one certificate by its issuer and serial. A revocation is a **standing mark**, kept
+in the store and
 in `broker.revocations_file`, so a restart forgets none, and it stands until an operator lifts it
 (`port49 revoke --lift`). A principal's mark refuses every mint by that principal, on any
 connection and with any certificate; a certificate's refuses every mint made with it, but does not
@@ -1059,7 +1071,7 @@ than a quarter of its validity left is said once a day and counted in
 `port49_workload_certificates_renewal_late_total`: its renewal is late, and expiry is refused
 `trust_domain_unresolved` as a person's is.
 
-**Over HTTP, as built (plan 7c; §13, decision 34).** `POST /v1/tokens/revoke` takes one of three
+**Over HTTP, as built (plan 7c; §13, decision 34).** `POST /v1/tokens/revoke` takes one of five
 bodies, and is refused 400 for any other (a principal and a key together, `mine` beside a
 principal, a `sid` beside a principal or a key, an unknown field):
 
@@ -1077,12 +1089,15 @@ principal, a `sid` beside a principal or a key, an unknown field):
   next login on that device re-admits their session too: the response says to close such a
   session on the device, or ask an operator to revoke the principal, before logging in there
   again. A principal equal to the caller's is answered with a first line that says no mark was
-  made, and that locking it takes an operator on the admin socket.
+  made, and that locking it takes an operator, who revokes with a security key press (§5.1.6).
 - **`{"principal": …}` naming another principal**, under `revoke_others`, is the revocation
   above, a standing mark, with origin `api <caller>`; without the right it is refused 403
-  `api_right_missing` and recorded. The response names the target's subject. A lift is made on
-  port49d's admin socket; with no `admin_socket` configured the response says lifting needs
-  port49d stopped, the entry removed from this file, and a start.
+  `api_right_missing` and recorded. The response names the target's subject. A lift is
+  `POST /v1/revocations/lift`, by principal or certificate, under `lift_revocations` and a touch
+  (§5.1.6); with the brokers stopped, `port49-broker revoke --offline --lift` (§12).
+- **`{"cert_issuer": …, "cert_serial": …}`**, under `revoke_others`, is a revocation by
+  certificate: a standing mark on that certificate, origin `api <caller>`. Without the right it is
+  refused 403 `api_right_missing` and recorded.
 - **`{"device": …, "username": …}`**, under `revoke_others`, ends whatever holds that key: every
   unspent token under it, and its live context whoever's it is, with the owner's receipts. It
   leaves no mark, so the owner's next login on that device re-admits any session still open
@@ -1094,13 +1109,14 @@ principal, a `sid` beside a principal or a key, an unknown field):
   one human OIDC verifier is configured. Without the right it is refused 403
   `api_right_missing` and recorded.
 
-A lift and a revocation by certificate are the admin socket's alone. One that cannot take the
+Every revocation but `mine` and a key is admin-level: it needs a touch (§5.1.6). One that cannot
+take the
 revocation slot within 10 s is answered `503 revocation_busy`, nothing revoked. A self or key
 revocation takes no slot, and one caller has one in flight at a time: a caller's second self or
 key revocation, while its first is still running, is answered `503 revocation_busy` at once,
 with `Retry-After`, nothing revoked. Neither busy answer writes a record. The response
 says what was reached, names the contexts on a platform that never asks about a command, and
-repeats the text `port49 revoke` prints. The agent waits on a revocation past these bounds (the
+repeats the text `port49 revoke` prints. A revocation whose store write is not answered may still land when the store does, over a lift made meanwhile (L79 k): it is answered `503 revocation_unconfirmed` (a lift whose delete is not answered too: the mark may or may not be gone), never "nothing was revoked"; the detail says this broker keeps denying what it names, and to check `port49 revoke --list` once the store answers, before trying again (a mark that landed needs nothing; a retry after someone lifted it revokes again). A write the store refused wrote nothing and is still `503 store_unavailable`, nothing revoked. A write the store guard failed before sending (an open circuit, no free slot, a deadline already past) cannot land later, and is `503 store_unavailable` too, but the answer does not say nothing was revoked: it says the revocation is not recorded in the store and this broker keeps denying what it names until a lift here or its restart (revoke fails closed). A lift in that case, or one whose read of the mark failed, is `503 store_unavailable` too, "could not be lifted, and stands", without the store's own words. The agent waits on a revocation past these bounds (the
 slot's 10 s, the run's `RevokeTimeout`, the file's save) and never sends one twice once it began
 writing it: one it sent and got no answer to may be in force, and `port49 revoke` says to check
 `--list` or the decision log before running it again.
@@ -1290,6 +1306,112 @@ not reach the device, and the record says so (`session.unreached`).
 
 **Unavailable** (ruling 18). A requirement no method this broker can verify satisfies is `deny
 per_login_mfa_unavailable` for that device alone.
+
+### 5.1.6 Admin calls
+
+An admin-level call (§2) needs its right and a proof that a person is at the security key, made
+for that one request. This replaces the admin sockets (§13, decision 54 ruling 15).
+
+**The challenge.** An admin-level request carrying no `Port49-Admin-Proof` header is answered
+`401 admin_touch_required` with `{"admin": {"operation", "target", "challenge", "expires_at"}}`:
+32 random bytes, kept 2 minutes in the answering broker's memory, never the store, one per
+connection (a new one replaces the last). The operations are `revoke_principal`,
+`revoke_certificate`, `revoke_key`, `revoke_sid`, `lift`, `forget_principal`,
+`reset_second_factor`, `reset_second_factor_all`, `unlock_sign_in` and `import_enrollments`. The
+target is the principal, the certificate's issuer and serial, the `device/username` key, the `sid`
+and issuer, `all`, or for an import `replace` or `merge` followed by the first 12 hex digits of the
+body's SHA-256, so the prompt shows that a replace wipes the store. The record is keyed by
+`SHA-256(challenge ‖ 0 ‖ exporter ‖ 0 ‖ principal ‖ 0 ‖ fingerprint ‖ 0 ‖ request_sha256)`, so any
+other caller, connection or request misses it.
+
+**The routes.** Every admin write runs in one order: its right (403 `api_right_missing`, recorded,
+no challenge), the request's own validity (400, no challenge), whether this broker can run it at all
+(409 `admin_operation_failed`, no challenge: a forget with no `broker.directory`, a second-factor
+reset, unlock or import with no `directory_password` verifier), the body's bound, the touch, then
+the operation. The right comes first because the route fixes it, so a caller without it is refused
+and recorded whatever it sent, and a stolen token cannot probe a route's validity unseen. The one
+exception is `POST /v1/tokens/revoke`: the form in its body decides which right applies (one's own
+token needs none, another's needs `revoke_others`), so its validity is judged first. So a caller
+without the right never blinks, learns nothing of how the broker is
+configured, and no key press is ever spent on a call that cannot run. The text of a 409 is the
+broker's own, or names a principal the broker has validated; it never quotes the body (an import
+sealed under an unknown key is told to set `encryption.previous`, without the key id the file names). The routes and their rights are §2's table. The certificate's target is its
+issuer, then `serial`, then the serial as the broker compares it (`CN=Example CA serial 1a2b`); an
+import's is `merge` or `replace`, a space, and the 12 hex digits. A proved call answers
+`{"text": …, "partial": …}`: `text` is what the CLI prints, unchanged, and `partial` is set where a
+step did not finish and the call is to be run again (exit 3). An operation that refuses after its
+proof (a forget with no `broker.directory`, an import that would undo a later enrollment) answers
+`409 admin_operation_failed` with the operation's own text; a lift of a mark that is not in force,
+`404 not_revoked`; a revocation or lift behind another, `503 revocation_busy`; one whose store write is not answered, `503 revocation_unconfirmed`. `POST
+/v1/directory/import` takes the sealed export as its body, at most 16 MiB (413 `payload_too_large`
+over it, before any challenge), under a read deadline of its own, 120 s, since the server's 30 s
+bounds a mint and would hold a 16 MiB body to about 4.5 Mbit/s. `?replace=true|false` is the only
+parameter and is bound by the request hash. `GET /v1/revocations` answers `{"marks": […], "text":
+…}`, each mark `{kind: principal|cert, principal | cert_issuer and cert_serial, since, origin,
+landed_after_lift, lift_at, lift_revision}`: the fields `--list` prints, under `revoke_others` or
+`lift_revocations`, with no touch. A refusal for want of the right is recorded under the call's own
+event (`revoke`, `directory_forget`, `second_factor_reset`, `sign_in_unlock`,
+`enrollments_import`) as `deny api_right_missing` with the caller in `origin`.
+
+**The request binding.** `request_sha256 = SHA-256("port49 admin request v1\0" ‖ method ‖ 0 ‖
+path ‖ 0 ‖ body)`, over the exact body bytes, where `path` is `r.URL.RequestURI()` (path and query)
+on both sides, so `?replace=` is bound. The proved retry sends the same method, path and body
+bytes, so a proof made for "revoke bob" verifies against nothing but "revoke bob" on that
+connection.
+
+**The proof.** The touch key signs `"port49 admin v1\0" ‖ challenge ‖ request_sha256 ‖ exporter`,
+where `exporter` is the connection's TLS exporter value under the label `EXPORTER-port49-admin`
+(32 bytes). Its own label and prefix mean a per-login proof (§5.1.5) is never an admin proof, or
+the reverse. The header is base64url JSON `{"challenge", "signature", "attestation": [touch slot,
+f9, session slot]}`. The broker verifies the attestations exactly as decision 45 ruling 12 does,
+against `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file`: the chain to the
+roots, the touch policy `always`, one device serial for both slots, and the session slot's key
+equal to this connection's client key. It takes the challenge record (single use) first, under the
+caller's, connection's and request's own key, then verifies the proof, then runs the operation. So
+a bad proof spends the challenge, and no two judges can verify one challenge.
+
+**No reuse.** A proof covers the one request it was made for, once. There is no `reuse_for` for
+admin calls, so each operation is one touch.
+
+**Order.** The proof is judged before the request takes the revocation slot or touches the store,
+so a touch never holds the slot, and a refused proof changes nothing.
+
+**Who cannot prove.** A caller with no client certificate on the connection (a bearer, a
+workload's fresh connection), or whose session key is not on the attested token, cannot prove. Such
+a request gets no challenge: it is refused `401 admin_touch_refused`, naming why. A broker with no
+attestation roots answers every admin-level call `503 admin_touch_unavailable` and says so at start
+and at every reload.
+
+**Presence, not intent.** A touch proves that a person is at the token. It does not say what they
+meant: the CLI's prompt carries the intent, so the agent builds the prompt from its own request,
+never from the broker's answer. It derives the operation and target from the request it is
+sending, refuses a challenge whose `operation` or `target` differs from them, and computes
+`request_sha256` itself. It holds one touch at a time: a second admin call while one waits on the
+key is refused, `another touch is waiting on your key`.
+
+**The agent.** `port49 revoke` and `port49 directory` send admin calls through the operator's
+agent (`POST /admin` on the agent's socket). The agent sends the request, takes the challenge,
+prints `touch your key to <operation> <target>`, signs over the exporter value read with the wire
+(released for the touch, as decision 45 ruling 14 does), and sends the retry only over the
+connection it signed over (`mfatouch.Post`'s rule, through `PostRequest`). Otherwise it
+says "the connection changed during the touch; run it again", posting nothing. An agent whose
+`touch_key_unusable` is set refuses an admin call before sending anything, naming why, so no
+`admin_touch_refused` fires for an operator whose key cannot touch.
+
+**The 3am view.** The exact lines are the CLI's.
+
+| Condition | What the operator sees | What to do |
+|---|---|---|
+| Session key not on a security key (TPM, Secure Enclave, file) | `port49: admin operations need a security key press, and your session key is in the TPM: a touch proves only from the token that holds it` (the agent's `touch_key_unusable` text); exit 1, nothing sent | log in with a session key on the security key (`key: pkcs11:…`, or `issued_key_store: pkcs11`) |
+| Attestation does not chain (a newer firmware's intermediate missing) | `401 admin_touch_refused: the touch slot's attestation does not verify: …`; exit 1; the alert fires | add the root or intermediate to `attestation_roots_file`, then reload |
+| No touch in time | `hwkey: no touch within 15s; touch the key when it blinks and try again` (decision 45 ruling 14; the timing is provisional on L60, measured 14.4 s on one token); exit 1, nothing done, no alert; the challenge expires unspent | run it again |
+| The connection changed during the touch | `the connection changed during the touch; run it again`; exit 1, nothing posted, no alert | run it again |
+| The identity provider is down | Nothing: the admin's port49 certificate is still valid, `port49 login` reuses it without the provider (decision 43 rulings 12 and 17), and neither the touch nor the call needs the provider | revoke as usual |
+| The admin's certificate has expired and the provider is down | `port49 login --oidc` cannot sign in | another on-call admin with a valid certificate revokes as usual; break-glass (`port49-broker revoke --offline`, or `port49d revoke --offline`, with every broker stopped, which also stops issuance fleet-wide) only when none can |
+| `forget`, `unlock` or `reset-second-factor` wanted with every broker down | no offline form exists | none is needed: while every broker is down nobody signs in, so none of the three can matter until a broker is back, and then the API serves them |
+| A right held through a `group:` subject, with the directory down | the right resolves as the directory cache allows (decisions 38 and 51); past that, `403 api_right_missing` | name at least two on-call admins by `identity:` as well (the shape READMEs say so) |
+| No attestation roots configured | `503 admin_touch_unavailable: no attestation roots are configured (broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file); admin operations need them` | set the file |
+| The store is down | the proof needs no store; the operation answers `503 store_unavailable`, as today | `revoke --offline` when the store is back but the brokers are not; etcd's own `rv/` path otherwise (decision 36) |
 
 ### 5.2 Session authorization (daemon)
 
@@ -2333,6 +2455,7 @@ events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`
 | `explain` | broker | a hypothetical decision `POST /v1/explain` answered, about the caller or, under `explain_others`, another principal: its verdict and reason are the answer given, or `deny api_right_missing`. It authorizes nothing, and replay passes over it |
 | `issue` | broker | whether a person's sign-in is exchanged for a port49-issued certificate: an OIDC sign-in at `POST /v1/certificate` (§13 decision 43 ruling 8), or a directory-password sign-in at `POST /v1/sign-in` or `/v1/sign-in/confirm` (§13 decision 47): `permit certificate_issued`, carrying `certificate: {serial, issuer, fingerprint, not_after}` and `auth.oidc` or `auth.directory_password: {amr, auth_time, entry_sha256}`, or a deny with the refusal's reason. A directory sign-in's record carries `sign_in: {source}`, and on a deny `failed` (`name`, `second_factor`, `second_factor_skew`, `password`, `directory_state`, `enrollment`, `principal_limit`, `source_limit`) with `skew_seconds`, `directory_result` and `directory_data` where they apply. It never carries the name typed, the password, the code or the secret. A broker that cannot issue (`issuance_unavailable`) records nothing |
 | `per_login_mfa` | broker | whether a per-login proof posted to `POST /v1/mfa` is accepted (§5.1.5; §13 decision 45): `permit per_login_mfa_proved` or `deny per_login_mfa_refused`, carrying `per_login_mfa: {method, challenge_sha256}`. A proof the broker cannot judge (`store_unavailable`) records that |
+| `admin_touch` | broker | an admin-level call's proof outcome (§5.1.6; §13 decision 54 ruling 15): `deny admin_touch_required` (a challenge was issued, nothing done), `permit admin_touch_proved` (the operation's own record follows), `deny admin_touch_refused` or `deny admin_touch_unavailable`, carrying `admin: {operation, target, challenge_sha256, why}`, where `why` is on a refusal or an unavailable answer one of a closed set of fixed words and never text from the request: `no_roots`, `bearer`, `no_client_certificate`, `no_exporter`, `malformed_proof`, `unknown_challenge`, `touch_slot_chain`, `session_slot_chain`, `device_mismatch`, `touch_policy`, `session_key`, `bad_signature`. A record never carries the challenge, the signature, the attestations or the exporter value; the cause text is in the API answer alone |
 | `enroll` | broker | whether a person's TOTP second factor is enrolled (`POST /v1/sign-in/confirm`; §13 decision 47 ruling 4): `permit second_factor_enrolled`, carrying `auth.directory_password` and `sign_in: {source}`, or a deny with the sign-in's reasons. Every enrollment is alertable: inside an enrollment window a stolen password enrolls the thief's authenticator |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
@@ -2368,20 +2491,20 @@ source-of-truth edit that moves privilege visible in the log it moved (§10), an
 `port49_inventory_changes_total{kind}` is its alarm.
 
 A seventeenth, `directory_forget`, is a report too: an operator ran `port49 directory forget
-<principal>` on the broker's admin socket, deleting the principal's directory membership and with
+<principal>` over the broker API (§5.1.6), deleting the principal's directory membership and with
 it the entry the principal was pinned to (§13 decision 38) — `{"principal": ..., "forget":
-{"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "admin_socket
-uid N"}}`. `verified_at` is the record's last verification or refusal. The principal's next
+{"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "api
+<principal>"}}`. `verified_at` is the record's last verification or refusal. The principal's next
 verification pins the entry the directory gives it then, so this record is the trail for a
 principal moving to another entry by an operator's hand.
 
 An eighteenth, `second_factor_reset`, is a report too: an operator ran `port49 directory
-reset-second-factor <principal>` on the broker's admin socket (§13 decision 47 ruling 13) —
+reset-second-factor <principal>` over the broker API (§5.1.6; §13 decision 47 ruling 13) —
 `{"principal": ..., "second_factor_reset": {"enrolled_at": ..., "enrolled_from": ..., "reopen_until":
-..., "origin": "admin_socket uid N"}}`. The principal may enroll again until `reopen_until`. With
+..., "origin": "api <principal>"}}`. The principal may enroll again until `reopen_until`. With
 `--all` it names no principal and carries `"all": true`: every entry with no active second factor
 may enroll until `reopen_until`, and a lost enrollment store (decision 47 D7) is replaced, the
-unreadable file kept beside it. `port49 directory init-enrollments` writes one too, naming no
+unreadable file kept beside it. `port49-broker init-enrollments` writes one too, naming no
 principal and carrying `"created": true` and no `reopen_until`: the enrollment store was created
 (D7). Alert on it as on `enroll`, and on `created` at any time but an install. A nineteenth,
 `sign_in_unlock`, is a report: an operator cleared a principal's failed-attempt count (`port49
@@ -2476,12 +2599,15 @@ and `sid` or `sub`, and `principals` when the logout reached more than one princ
 record's `principal` is then the first); `device` and `username` name a `key` revocation's key,
 or a `self` one limited to a key; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
-asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, `api <principal>` over HTTP, `backchannel_logout <issuer>`, or `offline uid <n>` for a revoke written by `port49-broker revoke --offline` with every broker down); `contexts` how many live contexts were marked; `token_keys` how many
+asked (`api <principal>` over HTTP, `backchannel_logout <issuer>`, or `offline uid <n>` for a
+revoke or lift written by `port49-broker revoke --offline` or `port49d revoke --offline` with every
+broker down); `contexts` how many
+live contexts were marked; `token_keys` how many
 `(device, username)` keys had their unspent tokens deleted; `connections` how many held broker
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
 that never asks about a command, or on a device the inventory gives no platform, so an incident
 responder knows which sessions to close on the device (§5.6, "Where these controls do not
-reach"); `saved` whether `broker.revocations_file` was written, present only for a standing mark; and `error` the first step that
+reach"); `saved` whether `broker.revocations_file` was written, present only for a standing mark, and only when the broker keeps a `broker.revocations_file` (a standalone `port49-broker` keeps none, so a clean revoke there carries no `saved` and exits 0); and `error` the first step that
 did not finish, while the mark stands. A count of zero is absent. A `mint deny
 credential_revoked` names whose credential it was as `trust_domain_unresolved` does: `principal`,
 and `auth.fingerprint`. A mint that the check after its writes refuses has already recorded a
@@ -2550,16 +2676,20 @@ refused request named; any other path is recorded `mint`.
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`, or the principal's directory membership has not been verified for that long (§5.1.3); context retained, denies until refreshed (§5.1.1, design document §9) |
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), or an OIDC logout refuses the token's session or subject, or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and a held connection is closed; on `identity`, `explain` and `revoke`, an OIDC logout refuses the caller's token; on `refresh`, the caller's certificate is marked, or an OIDC logout refuses the caller's token, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `issue`, a mark on the principal or an OIDC logout refuses the sign-in's token, so nothing is issued; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
-| `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
+| `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2); also `directory_forget`, `second_factor_reset`, `sign_in_unlock` and `enrollments_import`, for a call under a right the subject lacks (§5.1.6). The API answers 403 `api_right_missing`; nothing is done |
 | `certificate_issued` | `issue`: the broker issued a short-lived client certificate for the key the sign-in's `nonce` names (§13 decision 43 ruling 8) |
 | `per_login_mfa_required` | `mint`: the device's per-login requirement (§5.1.5) applies and no proof covers it; the item carries a challenge, and nothing is minted for it. `refresh`: a context under a requirement no proof covers is not extended and keeps its ceiling |
 | `per_login_mfa_proved` | `per_login_mfa`: a proof posted to `POST /v1/mfa` verified (§13 decision 45 rulings 12 and 13) |
 | `per_login_mfa_refused` | `per_login_mfa`: a proof did not verify: a challenge unknown, spent, expired or another caller's; a touch signature not over this connection's exporter value; an attestation that does not chain to the configured roots, is not always-touch, or is not the session key's token's; an ID token for another principal, not fresh, without an accepted `amr`, not binding the challenge, or spent. The API answers 401 with the cause. An ID token decision 39 itself refuses (its signature, issuer, audience or expiry; an unmapped identity) is recorded under event `per_login_mfa` with decision 39's own reason (`trust_domain_unresolved`, `identity_unmapped`, …), not as this one, and is not counted in `port49_per_login_mfa_total`: an alert on forged tokens at `/v1/mfa` watches those reasons |
 | `per_login_mfa_unavailable` | `mint`, `refresh`: the device's requirement accepts no method this broker can verify now (no `hardware_key_touch.attestation_roots_file` loaded, no human OIDC verifier). That device alone; alertable: a configuration fault, not a person's |
+| `admin_touch_required` | `admin_touch`: an admin-level call carried no proof; a challenge was issued, nothing done |
+| `admin_touch_proved` | `admin_touch`: the proof verified, and the operation's own record follows |
+| `admin_touch_refused` | `admin_touch`: the proof did not verify (an unknown, spent, expired, or another caller's, connection's or request's challenge; a signature not over this exporter and request; an attestation that does not chain, is not always-touch, or is not the session key's token's), or the caller cannot prove (no client certificate). The API answers 401 with the cause. **Alertable on its own**, as `per_login_mfa_refused` is |
+| `admin_touch_unavailable` | `admin_touch`: no attestation roots loaded. The API answers 503. A configuration fault, alertable |
 | `sign_in_refused` | `issue`, `enroll`: a directory-password sign-in whose name maps to no entry under the verifier's filters or outside its `principal_domains`, whose code is wrong, replayed or from a clock too far off, whose password the directory refused, whose entry's state the directory refuses (expired, disabled, locked, must change), or whose second factor is another entry's (§13 decision 47). One reason to the caller on purpose, so the API never says whether the name, the password or the code was wrong; the directory's state is said past the code, or before it only when the directory gives that state to the right password alone (§13 decision 47 ruling 7; a locked account's state is never said from a password alone, L67). The record's `sign_in.failed` says which. The API answers 401. Counted against the source, and against the principal once one is known |
 | `sign_in_throttled` | `issue`, `enroll`: the sign-in's principal or source has had `failures_per_principal` or `failures_per_source` failed attempts in the window; nothing was checked (§13 decision 47 D5). The API answers 429 with `Retry-After`. Alert on a rise: someone is spraying |
 | `enrollment_closed` | `issue`: a person with no second factor, and no enrollment window open for them; the password is not checked (§13 decision 47 D2, ruling 4). It says a name exists and has no second factor, without a bind, which is accepted (ruling 7). An operator's `port49 directory reset-second-factor` opens one. The API answers 403 |
-| `enrollment_store_lost` | `issue`, `enroll`: the broker's enrollment store is lost — it has no creation mark (its file or key is missing, a new install not yet initialised by `port49 directory init-enrollments` included), or its file will not unseal (a lost or rotated seal key, tampering) (§13 decision 47 D7). Password sign-in is refused for everyone, before anything is counted or read; certificates already issued, tokens and IdP sign-in serve. The API answers 503. On a new install the operator runs `port49 directory init-enrollments`; otherwise restores the file or the etcd snapshot (`port49 directory import`), or runs `port49 directory reset-second-factor --all`. Alertable: `port49_directory_enrollment_store_ok` reads 0 |
+| `enrollment_store_lost` | `issue`, `enroll`: the broker's enrollment store is lost — it has no creation mark (its file or key is missing, a new install not yet initialised by `port49-broker init-enrollments` included), or its file will not unseal (a lost or rotated seal key, tampering) (§13 decision 47 D7). Password sign-in is refused for everyone, before anything is counted or read; certificates already issued, tokens and IdP sign-in serve. The API answers 503. On a new install the operator runs `port49-broker init-enrollments`; otherwise restores the file or the etcd snapshot (`port49 directory import`), or runs `port49 directory reset-second-factor --all`. Alertable: `port49_directory_enrollment_store_ok` reads 0 |
 | `second_factor_enrolled` | `enroll`: a person's TOTP second factor was confirmed with its first code (§13 decision 47 ruling 4). A permit; alertable |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | `generic_platform`: the device's platform has no adapter; generic fallback applied. Written by port49d once per device per bundle (§8); never the reason of a decision |
@@ -2586,7 +2716,11 @@ escapes are `session.staleness_ceiling: 0s` with a port49d restart, or stopping 
 break-glass applies (L4). `session_expired` is a further category: expected, and a signal
 that the re-authentication warning is not reaching operators (§5.6).
 `per_login_mfa_refused` MUST be alertable on its own: a run of them is someone trying another
-token or another person's sign-in. `sign_in_throttled`, `enrollment_store_lost` and `second_factor_enrolled` MUST be alertable on
+token or another person's sign-in, and `admin_touch_refused` likewise: someone with a stolen
+certificate or bearer trying an admin call. `port49_admin_touch_total{outcome}` counts them,
+`outcome` one of `required`, `proved`, `refused` and `unavailable`, with no device or principal
+label. `sign_in_throttled`, `enrollment_store_lost` and `second_factor_enrolled` MUST be alertable
+on
 their own: a run of the first is a spray, the second is every password sign-in refused, and the
 third outside a rollout is someone enrolling.
 
@@ -5139,6 +5273,8 @@ keys:
 A secret store such as Vault reaches port49 as a file its agent renders (Vault Agent, External
 Secrets, the Secrets Store CSI driver); port49 reads no store directly (decision 53 ruling 5).
 
+A version's file rewritten in place is not re-read. port49d keeps the bytes it read and warns (§12), so a restart is the only thing that would take the new bytes, and only on the replica restarted.
+
 `current` decides only two things: what `port49 keys show <device>` renders for provisioning,
 and the order candidates are tried in. **Validation accepts any listed version**, so nothing
 needs promoting and there is no moment at which a device must already have been updated:
@@ -5315,13 +5451,20 @@ How many retired versions are kept for diagnosis is configurable, and keeping no
 for a deployment that would rather not hold the material at all — at the cost of this column
 reading `no known key matches` for every straggler.
 
-**Cross-group probing is manual.** `port49 keys diagnose <device>` tests the key material of
-every group port49d holds, retired versions included, on the last packet from that device that
-no key it is assigned validated. That packet is in port49d's memory, one per admitted device,
-kept only while `admin_socket` is configured and never logged, and `keys diagnose` asks for the
-trial over that socket: a Unix socket, mode 0600, that refuses any peer whose uid is not
-port49d's or root's, and serves this one read-only operation (plan 6a, owner decision 2). It
-names a real misconfiguration exactly — a lab device presenting the production key, say, which
+**Cross-group probing is manual.** `port49d keys-diagnose --device <name> --capture <file.pcap>`,
+run as port49d's user on a port49d host (or by `kubectl exec` in a port49d pod), with port49d's
+config and environment. It reads the first TACACS+ packet from that device's address in a classic
+pcap file the operator captured (`--capture -` reads standard input, so on Kubernetes, whose image
+is distroless and has no `tar` for `kubectl cp`: `kubectl exec -i <pod> -- port49d keys-diagnose
+--device D --capture - < f.pcap`), and tries every key the policy names, retired versions
+included. It prints only the group and version that validated, or `no key port49d holds validates
+this packet`. When the packet's header marks it unencrypted (the header's unencrypted flag, which is
+in the 12-byte header and not the body), it also writes one line to stderr: `port49d keys-diagnose:
+the device sent this packet unencrypted, so no key applies`, since a device with no key configured
+for this server would otherwise read as a wrong key. It never prints a packet byte or a key. The
+running port49d no longer keeps an
+unvalidated packet in memory. It names a real misconfiguration exactly — a lab device presenting
+the production key, say, which
 is a finding in its own right regardless of the rotation. It MUST NOT run automatically on
 validation failure: the listener is unauthenticated, and probing every key group on every
 malformed packet is a CPU amplifier available to anyone who can reach port 49.
@@ -6151,6 +6294,8 @@ TACACS+ connection slots (limits.max_connections) are in use; each new connectio
 Accept and the device tries its next server`, and while it lasts, at most once a minute:
 `port49d: still shedding: M connections reset at Accept in the last minute; K of N slots in use`, K being the slots held when it is said.
 
+**A key secret rewritten in place.** At every SIGHUP, after every swap, and every 30 s, port49d reads each held `file:` key reference again (decision 54 ruling 11). For a file whose bytes differ from those it holds it says, per version that names it: `port49d: keys.<ref> version <n>: <path> has changed since port49d read it; port49d keeps the secret it read, and a restart would take the new one on that replica alone; a version's secret never changes (§10): put the new secret in a new file under a new version`. For one it can no longer read: `port49d: keys.<ref> version <n>: <path> can no longer be read (<error>); port49d keeps the secret it read, but a restart will refuse to start until the file is back or the policy no longer names the version`. Each line is said when first seen, then at most every 10 minutes per reference, and at every SIGHUP. `port49_key_secret_files_changed`, a gauge with no label, is the number of key versions whose held file is in either state. Neither refuses a reload. An `env:` reference is never re-read: a variable cannot change in a running process.
+
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
 
@@ -6447,10 +6592,11 @@ material, an unadmitted source, a refused device, and traffic that is not TACACS
 It reads no secret: the policy's `keys:` block gives the key names, versions and dates (decision 53
 ruling 3); a port49d with no policy has no `keys status`. It is the instrument a
 rotation is driven by, and its output belongs in the pull request that retires a version.
-**`port49 keys diagnose <device>`** asks port49d, over `admin_socket`, to try every key it holds
-on the last packet from that device that did not validate, and names the group and version that
-matched; it is manual because the equivalent automatic probe would be a CPU amplifier on an
-unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory <file>
+**`port49d keys-diagnose --device <name> --capture <file.pcap|->`** tries every key the policy
+names on the first TACACS+ packet from that device in a capture, and names the group and version
+that matched; it runs on the host, as port49d's user, and is manual because the equivalent
+automatic probe would be a CPU amplifier on an unauthenticated listener (§10). It is host-local
+authority (§2): no API call and no touch. **`port49 keys show --policy <file> --inventory <file>
 <device>`** resolves which `key_ref` a device matches, by which tier and group, and, from the
 policy's `keys:` block, which version to provision; rendering the secret itself is a
 separately-authorized operation this build does not offer, since a group key is shared across the
@@ -6461,38 +6607,45 @@ port49d.yaml parse error's text, only its line and a fixed category. A secret th
 lowercase hex and 64 characters or fewer passes the shape.
 
 **`port49 revoke (--principal <principal> | --cert <file> | --cert-issuer <dn> --cert-serial
-<hex>) [--lift]`** and **`port49 revoke --list`** ask port49d, over `admin_socket`, to revoke a
-principal or one certificate, to lift a revocation, or to list those in force (§5.1.4). `--list`
-names each mark, since when and its origin; a mark flagged `landed_after_lift` (decision 51, the
-cache) adds `landed after the lift at <T> (revision <R>)`, read from the lift's record, or, once
-that record has expired, `landed after a lift; the lift's record has expired`, or, when it
-cannot be read, `landed after a lift; the lift's record could not be read (<error>)`. A mark a
-runner put back shows `put back from broker.state_dir/marks.json` in its origin. The
-socket answers port49d's user and root alone, the people who can already rewrite the policy. A
-revocation prints what it reached and names each live context on a platform it cannot reach;
-`--cert` reads the issuer and serial from the certificate itself, in the spelling the broker
-compares, which is safer than typing a distinguished name. It exits 0 when the revocation, lift
-or list is done; 1 when it did not take force (refused or unreachable), or when port49d did not
-answer, the revocation then possibly in force (`--list` says); 3 when it took force and did not
-finish or was not saved, the mark standing; and 2 on usage.
+<hex>) [--lift]`** and **`port49 revoke --list`** send the revocation, the lift or the list to the
+broker through the operator's own agent (`POST /v1/tokens/revoke`, `POST /v1/revocations/lift`,
+`GET /v1/revocations`; §5.1.4), under the rights of §2 and the touch of §5.1.6: a revocation needs
+`revoke_others`, a lift `lift_revocations`, and each a security key press; the list needs either
+right and no touch. `--list` names each mark, since when and its origin; a mark flagged
+`landed_after_lift` (decision 51, the cache) adds `landed after the lift at <T> (revision <R>)`,
+read from the lift's record, or, once that record has expired, `landed after a lift; the lift's
+record has expired`, or, when it cannot be read, `landed after a lift; the lift's record could not
+be read (<error>)`. A mark a runner put back shows `put back from broker.state_dir/marks.json` in
+its origin. A revocation prints what it reached and names each live context on a platform it
+cannot reach; `--cert` reads the issuer and serial from the certificate itself, in the spelling
+the broker compares, which is safer than typing a distinguished name. `--list` shows marks only,
+and says on stderr that a self or key revocation, which leaves none, is named in the decision log.
+It exits 0 when the revocation, lift or list is done; 1 when it did not take force (refused:
+`api_right_missing`, `revocation_busy`, a touch not made, declined at the prompt; or no agent), when
+the broker answered `revocation_unconfirmed` (the write may still land: `--list` says), or
+when the broker did not answer, the revocation then possibly in force (`--list`, or for a self or
+key revocation the decision log, says), since the agent waits past the broker's own bounds and
+never sends a revocation twice; 3 when it took force and did not finish or was not saved, the mark
+standing; and 2 on usage, an unknown flag included. `--via-agent` is removed (pre-beta, no
+alias). `--principal` asks `y/N` on a terminal first (`--yes` skips it; off a terminal it does not
+ask), and prints the target's subject from the answer.
 
-**`port49 revoke --mine [--device <name> --username <name>]`** and **`port49 revoke --via-agent
-[--yes] (--principal <principal> | --device <name> --username <name>)`** send the revocation to
-the broker through the operator's own agent (`POST /v1/tokens/revoke`, §5.1.4), under the
-caller's `api:` rights (§2): `--mine` ends the caller's own sessions, or its session on one key,
-and leaves no mark; `--via-agent --principal` revokes another principal as the admin socket
-does, and needs `revoke_others` (naming the caller's own principal is `--mine`, and the answer's
-first line says no mark was made and to ask an operator to use the admin socket);
-`--via-agent --device --username` ends whatever holds that key, and needs `revoke_others` too.
-`--via-agent --principal` asks `y/N` on a terminal first (`--yes` skips it; off a terminal it
-does not ask), and prints the target's subject from the answer. A lift, a certificate and
-`--list` stay the admin socket's; `--list` shows marks only, and says on stderr that a self or
-key revocation, which leaves none, is named in the decision log. It exits as the admin-socket
-form does: 0 done; 1 refused (`api_right_missing`, `revocation_busy`, declined at the prompt, no
-agent), or sent and not answered by the broker or the agent, the revocation then possibly in
-force (`--list`, or for a self or key revocation the decision log, says), since the agent waits
-past the broker's own bounds and never sends a revocation twice; 3 in force but not finished or,
-for a standing mark, not saved; 2 on usage.
+**`port49 revoke --mine [--device <name> --username <name>]`** ends the caller's own sessions, or
+its session on one key, and leaves no mark; it needs no right and no touch. Naming the caller's
+own principal is `--mine`, and the answer's first line says no mark was made and to ask an
+operator to revoke with a security key press. `port49 revoke --device <name> --username <name>`
+ends whatever holds that key, and needs `revoke_others` and a touch.
+
+**No socket is user-facing** (Ryan, 2026-10-27, superseding the pre-flight's A-M4). No command has
+a `--socket` or `--agent-socket` flag: `login`, `token`, `refresh`, `identity`, `ssh`, `explain`,
+`revoke`, `directory`, `store status` and `keys` lose theirs, and the agent's §12 synopses drop
+`[--socket PATH]`. The agent and every client find the agent's socket at its per-user default
+(`$XDG_RUNTIME_DIR/port49/agent.sock`, else `/tmp/port49-<uid>/agent.sock`). The Python library's
+`socket=` argument and the collection's `socket` option go too. Tests override the path with one
+environment variable, named only in `agent.SocketPath()`'s Go comment, the tests and the lab
+runbooks, and never in the spec, so the docs site (plan 13) cannot render it. No README, help text,
+example or operator page names it. One agent per user is intended: a second `port49 login` while
+an agent holds a session is refused, and the remedy is to stop that agent first.
 
 **`port49 identity [--json]`** prints what the broker resolves the agent's principal to (`GET
 /v1/identity`): subject, grants unexpired now, `api:` rights, and until when this connection
@@ -6538,9 +6691,15 @@ at different keyspaces are refused.
   `CheckIdentity` probes a refused read of `meta/judged`.
 - **`port49_broker`.** Read-write on the whole keyspace.
 
-**`port49 store status [--socket PATH]`** asks a process's admin socket (port49d's by default,
-`/run/port49/port49d.sock`; port49-broker answers on its own) what each store is, as that process
-sees it (decision 51):
+**`port49 store status --metrics <addr>`** reads `GET /store/status` on the process's metrics
+listener (plain HTTP, beside `/readyz`) and prints what each store is, as that process sees it
+(decision 51). One status runs at a time per process, and a second request is answered 429. The
+metrics listener has no authentication, so the answer is store health alone, from a fixed
+allowlist: per role, the backend, `<answering>/<listed> members`, reachability, the directory
+cache's age, the names of the feeds down, the count of logouts pending, and a reason from
+`outageCause`'s fixed words. Never a member URL, an etcd error's text, a certificate, a principal,
+a mark or a key. Everything else stays behind the API: the revocation list is `GET
+/v1/revocations` under its right. The same counts are already on `/metrics` as gauges. Output:
 
     directory  etcd    3/3 members  reachable  cache 0.4s
     session    etcd    1/1 members  reachable
@@ -6552,7 +6711,7 @@ cache is the time since the process last confirmed its copy of the directory (a 
 answered while its marks feed ran); `cache none` before the first, and `(snapshot)` after it while
 the process serves from a snapshot it started from (R19). A store that does not answer
 prints `unreachable`, the reason on the next line, and the command exits 3; 0 when both answer, 1
-when the socket does not.
+when the listener does not.
 - **The users.** A user per component, named by the CN of the certificate `stores.session.etcd.daemon`
   (in `--config`; or `stores.directory.etcd.…` when `stores.session` is omitted) and
   `stores.session.etcd.broker` (in `--broker-config`) name, granted its role. A directory of its own
@@ -6577,9 +6736,27 @@ when the socket does not.
 
 The output is run once, by etcd's root user.
 
-`port49-broker --config port49-broker.yaml` is the broker on etcd (plan 7e; decision 36). Its
-one subcommand, `revoke --offline`, revokes and lifts with every broker down. `port49 revoke
---socket <port49-broker's admin_socket>` revokes, lifts and lists on it.
+`port49-broker --config port49-broker.yaml` is the broker on etcd (plan 7e; decision 36).
+`port49-broker revoke --offline` revokes, lifts and (with `--list`) lists with every broker down,
+as the broker's user (host-local, §2); it writes `broker.state_dir/marks.json`, which the broker's user owns, so
+run as root against such a directory it changes nothing and refuses with one line naming `sudo -u <owner>
+port49-broker revoke --offline ...`. `port49d revoke --offline [--config FILE]
+(--principal P | --cert-issuer I --cert-serial S) [--lift] | --list` is the same for a port49d
+with its broker in process, run with port49d stopped; it writes the store or
+`broker.revocations_file`, as the user that owns that file (port49d's user). Run as another uid,
+root included, it changes nothing and refuses with one line naming `sudo -u <owner> port49d revoke
+--offline ...`: a file or `.lock` that root created would leave the non-root port49d unable to start.
+(`port49-broker revoke --offline` writes through etcd and has no such file.) Live revocation goes
+through the API (§5.1.6).
+
+**`admin_socket`**, in port49d.yaml or port49-broker.yaml, is refused at load: `admin_socket was
+removed: admin operations go over the broker API with a security key press (spec §5.1.6); delete
+the key`. The rule "etcd requires admin_socket" is deleted. Where a policy subject holds an
+admin-level right and no `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file`
+is loaded, port49-broker says, at start and at every reload: `port49-broker: no attestation roots
+are configured (broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file): every
+admin operation will be refused until they are`; port49d says the same, as `port49d:`, when its
+broker is in process.
 
 **`port49 refresh`** re-authenticates the session the agent holds and extends every live context the
 policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
@@ -6620,21 +6797,30 @@ decision 47).
 - **The certificate** is 9b's: a key on this host, `certificate_lifetime`, the agent on the
   certificate path. A held certificate is reused as `--oidc` reuses it (decision 43 rulings 12, 17).
 
-**`port49 directory reset-second-factor <principal>|--all [--socket PATH]`** drops the principal's
-TOTP second factor and lets them enroll again for `enrollment.reopen_for` (§13 decision 47 ruling
-13), printing when and from where the dropped one was enrolled. `--all` drops nothing: every entry
-with no active second factor may enroll for `reopen_for`, and a lost enrollment store is replaced
-(D7), its unreadable file kept beside it. **`port49 directory unlock <principal> [--socket
-PATH]`** clears the principal's failed sign-in count. **`port49 directory init-enrollments
-[--socket PATH]`** creates the enrollment store once per install (D7): it writes the creation
-mark, refuses when a store or a mark is already there, and records `second_factor_reset` with
-`"created": true`; port49d never creates the store itself, and until this runs password sign-in is
-refused `enrollment_store_lost`. **`port49 directory export [--socket PATH]`** writes the
-enrollment store, still sealed, to stdout (never a terminal); **`port49 directory import
-[--replace] [--socket PATH] < FILE`** checks the seal and the creation mark and fills the store
-from it, refusing to replace one holding a later enrollment or reset unless given `--replace`
-(D13). All run on the broker's admin socket, as the broker's user or root, need no directory, and
-never print a secret.
+**`port49 directory forget <principal>`**, **`reset-second-factor <principal>|--all`**,
+**`unlock <principal>`** and **`import [--replace] < FILE`** go through the agent to the broker
+API, each under its right (`forget_principals`, `reset_second_factor`, `unlock_sign_in`,
+`import_enrollments`; §2) and a security key press (§5.1.6). `reset-second-factor` drops the
+principal's TOTP second factor and lets them enroll again for `enrollment.reopen_for` (§13
+decision 47 ruling 13), printing when and from where the dropped one was enrolled. `--all` drops
+nothing: every entry with no active second factor may enroll for `reopen_for`, and a lost
+enrollment store is replaced (D7), its unreadable file kept beside it. `unlock` clears the
+principal's failed sign-in count. `import` checks the seal and the creation mark and fills the
+store from the file, refusing to replace one holding a later enrollment or reset unless given
+`--replace` (D13). None prints a secret.
+
+**`port49-broker init-enrollments`** and **`port49d init-enrollments`** (install-time, as the
+broker's or port49d's user) create the enrollment store once per install (D7): they write the
+creation mark, refuse when a store or a mark is already there, and record `second_factor_reset`
+with `"created": true`; port49d never creates the store itself, and until this runs password
+sign-in is refused `enrollment_store_lost`. A broker already running is another process: it finds the
+new store at its next recheck (every 30 s; `broker.EnrollmentRecheckEvery`), and its sign-ins answer
+`enrollment_store_lost` until then, which the command's output says. Run it before the first start, as an install does. **`port49-broker export-enrollments`** and
+**`port49d export-enrollments`** read the sealed store through the process's own store identity
+and write it, still sealed, to stdout, refusing a terminal, or with `--out FILE` to a new file created
+0600 that never replaces an existing one (`O_EXCL`; synced; a failed export leaves no partial file), so a
+scheduled backup needs no shell redirect and writes nothing sealed to a log. Neither is admin-level (§2): one
+creates nothing that exists, and the other reads sealed bytes.
 
 **`port49 devices trust`** was removed by plan 9d (§13 decision 46 ruling 4): port49 keeps no host
 key. It answers one line naming the change and exits 2.
@@ -7306,12 +7492,14 @@ the file is there and does not load, or when the marker is there without the fil
 restored from backup, never re-created). A start still writes the marker beside a file that
 loads with none: that creates no revocations file, and it makes a config-managed file's later
 loss read as a loss rather than as a first install. Writing `{"revocations": []}` by hand stays
-the way to start empty on purpose. Revocation is an admin-socket operation open to port49d's user
-and root, and over HTTP `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34).
+the way to start empty on purpose. Revocation was an admin-socket operation open to port49d's user
+and root, and over HTTP `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34;
+superseded by decision 54 ruling 15: it is the API alone, with a security key press).
 The store's marks are read at mint, not at the handshake, so `port49 login` still touches no
 store; a revoked operator's login is refused at the agent's first request, from the listener's copy. *Amended by decision 36 (plan 7e):*
 on etcd the store keeps the marks, each broker process a copy, and the file is retired; a lift
-is port49-broker's admin socket's, or its offline command's. (§5.1.4, §5.7, §12; design document §11, §12, §17)
+was port49-broker's admin socket's, or its offline command's; now the API's, or the offline
+command's (decision 54 ruling 15). (§5.1.4, §5.7, §12; design document §11, §12, §17)
 
 **33. A session ends where its roles say, warns before, refreshes by a signed nonce, and every
 certificate's revocation status is checked at every use.** *Plan 7b, 2026-10-01, rulings where the
@@ -7378,7 +7566,8 @@ the design was silent, each the option that denies more.*
   own session on one key is `mine` with the key. A lift and a certificate stay on the admin
   socket; an HTTP mark is still made with no `admin_socket` configured (revoking is the safe
   direction), and the response and port49d's start line say lifting it then needs port49d
-  stopped and the file edited.
+  stopped and the file edited. (Superseded by decision 54 ruling 15: a lift and a certificate
+  revocation go over the API, with a security key press.)
 - **Records.** Every `identity`, `explain` and `revoke` call that is authorized or refused for a
   right is one record: the events `identity` and `explain` and the reason `api_right_missing`
   are added; a call refused before its body is read, or as its connection binds, is recorded
@@ -7709,9 +7898,10 @@ review (the owner may override them).*
   7. seals the ledger, the start having read every kept context;
   8. binds TACACS+.
 
-  Live contexts survive a restart (what a device then sees: §15 L35). `store.backend: etcd`
-  requires `admin_socket`, because editing `broker.revocations_file` with port49d stopped no
-  longer lifts a mark the store also holds. A certificate a kept CRL newly names is marked by
+  Live contexts survive a restart (what a device then sees: §15 L35). Editing
+  `broker.revocations_file` with port49d stopped no longer lifts a mark the store also holds;
+  lifting goes over the API (decision 54 ruling 15), which replaced the rule that
+  `store.backend: etcd` requires `admin_socket`. A certificate a kept CRL newly names is marked by
   the certificate-status queue's first drain, which runs once the listeners are open.
 - **Keys.** A record sealed under a key outside the window is said by its key id. A start
   whose store was last sealed under a current key this window lacks warns
@@ -7806,9 +7996,9 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   record, and a stolen broker host holds no device key.
 - **The configuration.** `port49-broker.yaml` is port49d.yaml's schema under the broker's role:
   it requires `broker:` (with `broker.state_dir`, where the persisted CRLs are kept),
-  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, an inventory and
-  `admin_socket`, and takes the key names a policy may assign from the policy's own `keys:` block
-  (decision 53 ruling 3); it refuses `listen`, `keys:`,
+  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, and an inventory
+  (`admin_socket` is refused, decision 54 ruling 15), and takes the key names a policy may assign
+  from the policy's own `keys:` block (decision 53 ruling 3); it refuses `listen`, `keys:`,
   `store.etcd.daemon`, `accounting`, `limits`, the receipt windows, `platforms`, `policy:`,
   `broker.revocations_file`, and any `lab:` key but the seed tokens. port49d.yaml on etcd
   requires `policy: {file, watch_interval}` and refuses `broker:`, `store.etcd.broker` and
@@ -7819,7 +8009,7 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   contexts, purges the unspent tokens only as below, and carries the policy in force into every
   kept context; then it runs the sweep, the re-index, the ledger record's keeper, the context
   half of every refresh pass, and a full context pass whenever another replica asks for one.
-  Every replica serves the API and the admin socket, runs the token half of its own reload's
+  Every replica serves the API, runs the token half of its own reload's
   passes and certificate status, and follows the contexts and the marks. A runner that loses
   the hold stops those duties at once, keeps serving the API, and tries to take the hold again
   every 5s; a broker's readiness is never the store's. Its mints are another matter: each
@@ -7915,7 +8105,8 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   retention reloads nothing, and a lift made meanwhile arrives as a lift.
 - **The sockets.** port49-broker's admin socket answers `port49 revoke` (revoke, lift, list).
   port49d's answers `port49 keys diagnose`, and, with no broker in it, a revocation there is
-  refused naming port49-broker's socket.
+  refused naming port49-broker's socket. (Superseded by decision 54 ruling 15: no admin socket
+  remains.)
 - **Revoking with every broker down.** `port49-broker revoke --offline` revokes and lifts
   through the store on the broker's identity, with no API and no hold, in decision 32's order.
   With no broker host, a mark written as etcd's root under `rv/` is followed by every port49d,
@@ -8057,8 +8248,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   declares is `username_collision`; the declared one stands. A principal is pinned to its entry by
   `objectGUID` or `entryUUID` (else DN), for the life of its membership record, `max(grace, 24h)`
   after its last verification or refusal; another entry claiming it is `identity_unmapped`, and a
-  refusal keeps the pin. The escape is `port49 directory forget <principal>` on the broker's admin
-  socket, which deletes the record and writes a `directory_forget` report (§5.7); it asks the
+  refusal keeps the pin. The escape is `port49 directory forget <principal>`, over the broker API
+  under `forget_principals` and a security key press (decision 54 ruling 15), which deletes the
+  record and writes a `directory_forget` report (§5.7); it asks the
   directory nothing and grants nothing, so it is run only after confirming the new entry is the
   same person. The two attributes must be writable only by directory administrators; the
   uniqueness searches hold when they are not. This is a ruling, not a device claim, and is not
@@ -8099,7 +8291,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   a name two groups share matches no one, said and counted. `groups_base_dn` defaults to
   `base_dn`. Ambiguity fails closed. Tasks 9 and 11.
 - **8. Binding is one of three mechanisms, always over TLS.** `external` (the broker's own
-  client certificate), `gssapi` (a keytab read through `keyfile.ReadSecret`, no SASL security
+  client certificate), `gssapi` (a keytab read under the secret-file rule, decision 54 ruling 16, no SASL security
   layer, pure Go: OR-2; the AP-REQ asks `mutual-required`, as MIT's client does when it asks
   for mutual authentication, since a Windows DC answers an AP-REQ without it with 49,
   `tests/lab/results/L44-windows_ad.md`) and `simple` (the password from the environment by name, said at start
@@ -9050,7 +9242,7 @@ certificate while the certificate is valid.
   client drives after plan 9b; retiring it is carried to the pre-beta review. A directory-password
   sign-in takes no ID token (decision 47).
 - **14. The issuing CA.**
-  - **Custody.** `issuing-ca.pem` and `issuing-ca.key` (PKCS #8, 0600, `keyfile`'s owner-only rule)
+  - **Custody.** `issuing-ca.pem` and `issuing-ca.key` (PKCS #8, 0600, `keyfile.ReadOwn`'s owner-only rule: decision 54 ruling 16)
     in the broker's state directory (`broker.state_dir`, or the directory of
     `broker.revocations_file`). The broker signs through a `crypto.Signer`, so a KMS or an HSM is
     a later swap of its source.
@@ -9323,13 +9515,13 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - **1. One signer.** Every backend returns a `hwkey.Key`: `crypto.Signer` plus `State() State`,
   `Unlock(pin []byte) error` and `Close() error`. It is `agent.Config.Cert.PrivateKey`;
   `api.SignRefresh`, the TLS handshake and the per-login proof take it as a `crypto.Signer`. The
-  file key stays `keyfile`'s, wrapped in nothing.
+  file key is read with `keyfile.ReadOwn`'s rule (decision 54 ruling 16), wrapped in nothing.
 - **2. Key references.** `key:` (`--key`) is a path, or a reference: `pkcs11:` in RFC 7512's form
   (path attributes `token`, `manufacturer`, `serial`, `model`, `object`, `type`, `id`, `slot-id`;
   query attributes `module-path` and `pin-source`), `tpm:file=PATH` (a TSS2 key file) or
   `tpm:handle=0x81xxxxxx` (a persistent handle), `secure-enclave:label=NAME` (ruling 6:
   experimental, opt-in by name). `pin-value` is refused: a PIN does not live in a config file. `pin-source=file:///path` is
-  read through `keyfile.ReadSecret` (owner-only). A `pkcs11:` key with no `cert:` takes the
+  read through `keyfile.ReadOwn` (owner-only). A `pkcs11:` key with no `cert:` takes the
   certificate object with the key's `CKA_ID`, so a fleet's system file names `key:
   "pkcs11:id=%01?module-path=…"` once and no user writes anything. A reference that matches objects
   on two tokens is refused, naming both, never resolved to the first. The scheme is
@@ -9940,9 +10132,10 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   Losing the enrollments must never reopen D2's window for everyone, so a lost store fails closed.
   The store keeps a creation mark (the file's body; the etcd key `meta/enrollments`). **port49d and
   the broker never create the store at start**, as decision 32 and `init-revocations` rule for
-  revocations: `port49 directory init-enrollments`, on the broker's admin socket, is its one
-  creator. It writes the mark, refuses when a store or a mark is already there, and writes one
-  `second_factor_reset` report with `"created": true`. A store with no mark (a missing file or key,
+  revocations: `port49-broker init-enrollments` (or `port49d init-enrollments`), a local subcommand
+  (decision 54 ruling 15), is its one creator. It writes the mark, refuses when a store or a mark is
+  already there, and writes one `second_factor_reset` report with `"created": true`. A store with no
+  mark (a missing file or key,
   a new install not yet initialised included) or a file that will not unseal (a lost or rotated seal
   key, tampering) refuses password sign-in with `enrollment_store_lost`, before anything is counted
   or read. The log carries one error naming what to run, the metric
@@ -9980,7 +10173,7 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   the regional cache).
   *(Superseded by decision 51, R5: `broker.directory.enrollment_store` is removed; the enrollment
   store is the directory store, `stores.directory`.)*
-- **D13. Export and import.** `port49 directory export` writes the enrollments, still sealed, to
+- **D13. Export and import.** `port49-broker export-enrollments` writes the enrollments, still sealed, to
   stdout, so a cron job can pipe it to any backup target. `import` checks the seal and the creation
   mark, refuses to overwrite a newer store unless given `--replace`, and writes one record
   (`enrollments_import`). Neither ever prints a secret.
@@ -10090,8 +10283,9 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   `source_limit`. An unknown name is recorded `deny sign_in_refused` with no principal; two entries
   for one name `deny identity_ambiguous` (alertable, as everywhere). `enroll`: `permit
   second_factor_enrolled` or a deny with the same reasons. The 202 that starts an enrollment records
-  nothing. `second_factor_reset` and `sign_in_unlock` name the principal and `origin: admin_socket
-  uid N`; `second_factor_reset` with `"all": true` (`--all`) or `"created": true`
+  nothing. `second_factor_reset` and `sign_in_unlock` name the principal and `origin: api
+  <principal>` (`init-enrollments`: `offline uid <n>`); `second_factor_reset` with `"all": true`
+  (`--all`) or `"created": true`
   (`init-enrollments`) names none. `enrollments_import` names the records imported and the export's
   time. A lost enrollment store is recorded `issue deny enrollment_store_lost`.
 - **10. The certificate.** A directory sign-in's certificate is 9b's (decision 43 ruling 9) but for
@@ -10112,15 +10306,18 @@ Decisions D1–D13 were ruled by the controller on 2026-10-14; D2, D4, D7, D8, D
   `port49 directory forget`) is refused `failed: second_factor` with the one sentence of ruling 7
   (the caller is told nothing more), and the broker's log says once an hour which entries differ and
   names `port49 directory reset-second-factor <principal>`.
-- **13. Operator commands,** on the broker's admin socket, as `port49 directory forget` is: `port49
+- **13. Operator commands.** The directory operations (`port49 directory forget`, `reset-second-factor`,
+  `unlock` and `import`) go over the broker API with a security key press; `init-enrollments` and
+  `export-enrollments` are local subcommands on the broker host (decision 54 ruling 15, which replaced
+  the admin socket these were on): `port49
   directory reset-second-factor <principal>` makes the record `reopened` for `reopen_for` (the
   secret dropped; an enrollment begun inside the window may later hold a pending secret in the
   reopened record, ruling 4) and prints what it removed (`enrolled_at`, `enrolled_from`); with `--all` it drops
   nothing, lets every entry with no active second factor enroll for `reopen_for`, and replaces a
   lost enrollment store (an unreadable file renamed aside, never deleted). `port49 directory unlock
-  <principal>` clears the principal's attempt count. `port49 directory init-enrollments` creates the
-  enrollment store once per install (D7; refused when a store or a mark is there). `port49
-  directory export` writes the store, still sealed, to stdout; `port49 directory import [--replace]`
+  <principal>` clears the principal's attempt count. `port49-broker init-enrollments` (or `port49d init-enrollments`) creates the
+  enrollment store once per install (D7; refused when a store or a mark is there). `port49-broker
+  export-enrollments` (or `port49d export-enrollments`) writes the store, still sealed, to stdout or with `--out FILE` to a new 0600 file; `port49 directory import [--replace]`
   fills it from an export (D13). None needs the directory, and none prints a secret.
 - **14. `/v1/config`.** It adds `"directory_password"` to `methods` and `sign_in: {second_factor:
   "totp"}`; its `issuance.available` already says when nothing can be issued, so the client says so
@@ -10787,8 +10984,9 @@ reason and cost.
   and nothing of `ds/b/`. `port49d
   store-roles` prints a section per store; the directory's section is run once, against the
   directory cluster, not once per region.
-- **`port49 store status` (R6, R21).** Asks the process's admin socket (`store_status`): per role,
-  the backend, `<answering>/<listed> members`, reachability, and the directory's cache age;
+- **`port49 store status` (R6, R21).** Reads `GET /store/status` on the metrics listener
+  (decision 54 ruling 15): per role, the backend, `<answering>/<listed> members`, reachability, and
+  the directory's cache age;
   "shares the directory store" for a shared session store. Exit 3 when a store does not answer.
 - **Kubernetes verifiers (R24).** Each region's broker lists its own region's clusters.
 - **Removed (R5, R25).** The top-level `store:` key and `broker.directory.enrollment_store`, with no
@@ -10843,7 +11041,9 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   (`fence.ReadSecret`): a link is followed only while it resolves inside one directory (the
   reference's own, or ruling 12's `file_dir`), every link's directory and ancestor is held to the
   fence's rule, and the file is owned by port49's user or root, writable by its owner alone, with
-  no world bit; group-read is allowed, which Kubernetes Secret volumes and agents' `perms` give. A
+  no world bit; group-read is allowed for a group the process is in (its gid or a supplementary group;
+  decision 54 ruling 16 narrows this: a group-readable file of any other group is refused), which Kubernetes
+  Secret volumes (fsGroup) and agents' `perms` give. A
   reference that does not parse is refused by its key and never printed, and an `env:` error names
   the key that holds the reference and never the variable: a secret pasted where a name goes parses
   as one (a 40-character hex token starting with a letter does). A reference outside ruling 12's
@@ -10941,6 +11141,251 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   and is not retried. A port49d.yaml secret, key file or keytab inside the allowance, or a broker
   state directory overlapping `file_dir`, is refused at load, compared with links resolved.
   `port49 policy test` checks the same allowance.
+
+**54. Deployment shapes, release and publishing (plan 12b; Ryan, the team lead and plan 12b's
+pre-flight reviews, 2026-10-26 and 2026-10-27).** systemd, container and Kubernetes are peer
+shapes; Kubernetes is native and never required.
+
+- **1. One artifact, one smoke, one README per shape.** systemd: `deploy/systemd/`, in the
+  `port49-server` package, smoke `make systemd-smoke` (real systemd as PID 1 in a container).
+  Container: `Dockerfile` and `deploy/compose/`, smokes `make compose-smoke` and `make
+  image-check`. Kubernetes: `deploy/helm/port49/`, smoke `make kind-smoke`. A shape whose smoke
+  does not pass in CI is not shipped.
+- **2. Where each shape keeps its secrets** (L82 and L83 closed 2026-10-31; L84 is open, so `LoadCredential=` stays unnamed for a device key).
+  systemd: `key_secret_refs.file_dir: /etc/port49/keys` (`/run` is cleared at reboot and
+  `RuntimeDirectory=` at every stop), the directory `root:port49d 0750` and each key file
+  `root:port49d 0440`; the encryption key is `/etc/port49/secrets/encryption.key`,
+  `port49d:port49d 0400`, and the broker's `/etc/port49/secrets/broker-encryption.key`, owned by
+  port49-broker, both outside `file_dir` (decision 53, re-review N1). Compose: the env files are
+  removed; `setup.sh` writes the device keys into a `port49d-keys` volume mounted read-only at
+  `/run/port49/keys` (directory `root:65532 0750`, files `root:65532 0440`) and each encryption
+  key into the component's configuration volume at `/etc/port49/secrets/encryption.key`, `65532
+  0400`; nothing secret is left in `docker inspect`. Kubernetes (the key volume is measured: L82, run 41155086403): a Secret volume mounted whole at `/run/port49/keys`, never by `subPath`, `defaultMode:
+  0440`, in port49d's pod alone, which sets `fsGroup: 65532` with `fsGroupChangePolicy:
+  OnRootMismatch`; the broker's pod loads no device key and sets no `fsGroup`; the encryption key
+  comes from a second Secret at `/etc/port49/secrets`; each etcd client identity is its own Secret
+  (`etcd.port49d.existingSecret` in port49d alone, `etcd.broker.existingSecret` in the broker
+  alone, `etcd.caSecret`, the CA certificate alone, in both), so no pod holds the other's etcd
+  key. `LoadCredential=`, Compose `secrets:`, the Vault Agent injector and the Secrets Store CSI
+  driver are named for a device key in a README only after L83 or L84 closes with them passing (L83
+  closed with the injector failing the no-restart cell and the CSI driver failing to start, so the
+  injector is named for the encryption key only and the CSI driver not at all); rotation is a
+  reload, never a restart (Ryan, 2026-10-26), and a mechanism that fails the cell "a version added
+  reaches the running process with no restart" may be named for the encryption key only, never for
+  device keys.
+- **3. No read-only hardening of a path the fence reads.** The fence excuses a directory's mode on
+  a read-only mount, so `ProtectSystem=strict` or `full`, or `ReadOnlyPaths=/etc`, would let a
+  group-writable `/etc/port49` on the host pass. The units set `ProtectSystem=true` and never
+  `ReadOnlyPaths=`, `BindReadOnlyPaths=`, `ProtectHome=read-only`, an `:ro`
+  `TemporaryFileSystem=` or `InaccessiblePaths=` over a path port49 reads; they set
+  `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes` and `CapabilityBoundingSet=`
+  `CAP_NET_BIND_SERVICE` for port49d (empty for the broker). A unit test asserts each, and the
+  systemd smoke makes an ancestor, `/etc`, group-writable under the shipped unit and asserts the
+  start is refused: a read-only mount excuses an ancestor's mode, never the holding directory's.
+  The chart's ConfigMap and Secret volumes are read-only but the kubelet writes them, the trusted
+  writer `tests/lab/results/configmap-mounts.md` measured.
+- **4. Two users on a systemd host.** `port49d` and `port49-broker`, each in its own group,
+  created by `sysusers.d`: plan 7e ruling 1 (no process holds both etcd identities)
+  applied to one host.
+- **5. ~~Admin sockets and `port49 revoke` per shape~~** Replaced by ruling 15: no admin socket
+  remains, and revocation goes over the broker API with a security key press.
+- **6. Packages** (the `.rpm` library is ruled pip-only; Ryan may override). `port49-server` ships
+  the static build (`port49d`, `port49-broker`, `port49-inventory`, `port49`) with the units,
+  `sysusers.d` and `tmpfiles.d`; `port49` ships the client build (`-tags hwkey_dlopen`) as
+  `/usr/bin/port49`; the two conflict on that path (decision 45 ruling 22). Every binary is 0755,
+  root-owned, with no setuid or setgid bit and no file capability; port49d binds 49 through the
+  unit's `AmbientCapabilities=CAP_NET_BIND_SERVICE`. The client package ships
+  `/etc/port49/config.yaml` as a root 0644 conffile, a commented template that sets nothing and
+  lists `broker`, `broker_ca`, `broker_crl`, `touch_key`, `key` and `issued_key_store`. The client
+  package installs the Ansible collection at
+  `/usr/share/ansible/collections/ansible_collections/port49/client/` in both formats, and the
+  `.deb` installs the pure-Python library at `/usr/lib/python3/dist-packages/port49/`. The `.rpm`
+  does not install the library: RPM `site-packages` is per Python minor version, which one nfpm
+  package cannot name, so the `.rpm` leaves it to `pip install port49` and the README says so. The
+  client package does not add a user to `tss` (the README says `usermod -aG tss <user>`) and
+  installs no polkit rule for pcscd. macOS ships as an unsigned tarball for darwin/arm64 and
+  darwin/amd64; L63, signing, stays open.
+- **7. Release.** GoReleaser runs on `v*` tags only and makes the archives, packages and
+  `SHA256SUMS`, with build provenance from `actions/attest-build-provenance`. The image is
+  `ghcr.io/rhwendt/port49:<version>` for linux/amd64 and linux/arm64, cross-compiled in the build
+  stage (`--platform=$BUILDPLATFORM`); the chart is `oci://ghcr.io/rhwendt/charts/port49` at the
+  release version. Build is apart from publish: `build-python` and `build-galaxy` build with
+  tools pinned by hash (`packaging/requirements-release.txt`, `--require-hashes`), hold no token
+  and hand the result on through `actions/upload-artifact`; `pypi` and `galaxy` only download and
+  publish. Every checkout in `release.yml` sets `persist-credentials: false` except
+  `goreleaser`'s, and GoReleaser runs from the sha256-pinned `bin/goreleaser-$(GORELEASER_VERSION)`.
+  PyPI uses trusted publishing from the `pypi` environment with `skip-existing: true`; only
+  `pypi`, `goreleaser` and `image` hold `id-token: write`, and no workflow sets it or `write-all`
+  at workflow level. Galaxy uses `ansible-galaxy collection publish` with `secrets.GALAXY_API_KEY`
+  in the `galaxy` environment, and "already exists" for this version on a re-run is success. No
+  workflow uses `pull_request_target`. The tag `vX.Y.Z` equals `clients/python/pyproject.toml`'s
+  `version`, `galaxy.yml`'s `version`, and `Chart.yaml`'s `version` and `appVersion`; `versioncheck`
+  checks that all agree on every pull request and that all equal the tag at the tag.
+- **8. CI.** `make test` stays the whole suite, its timeout raised to 30m. CI splits it into
+  `test-rest` (every package but `internal/port49d`), `test-shard` (`internal/port49d` in three
+  shards cut by `testshard` from `go test -list`) and `test-root` (as root, the tests that skip
+  as a user). A shard that runs nothing fails: `testshard` exits non-zero when `go test -list`
+  fails or lists nothing and on an empty shard, and `testshard -check` asserts the shards' union
+  equals the list. No `t.Parallel`: the tests swap package variables. The `acl` package is
+  installed and `mustpass` requires `TestAnACLGrantingWriteIsRefused` to pass, never skip.
+- **9. Kubernetes shape.** port49d and port49-broker are each a StatefulSet with a PVC per replica
+  for the spool and for `state_dir`; each data directory is a 0700 subdirectory an initContainer
+  makes. The update strategy is `RollingUpdate`; the PodDisruptionBudget is `maxUnavailable: 1`;
+  anti-affinity is preferred and the zone topology spread is `whenUnsatisfiable: ScheduleAnyway`,
+  so a cluster with no zone labels still schedules; `terminationGracePeriodSeconds: 60`. Neither
+  StatefulSet sets `persistentVolumeClaimRetentionPolicy`, so a scale-down leaves a spool PVC with
+  unsent accounting until a scale-up takes it back, and the README says so. Probes are plain HTTP
+  `httpGet` on each process's metrics port, readiness `/readyz` and liveness `/healthz`, needing no
+  client certificate and touching neither TACACS+ nor the broker API; liveness sets
+  `periodSeconds: 10` and `failureThreshold: 6` (60 s), since `/healthz` is unbound for seconds
+  between runs after a store loss and Kubernetes'
+  default 30 s (10 s x 3) would let the kubelet kill port49d mid etcd
+  outage. `issuerDiscovery.enabled` renders the `system:service-account-issuer-discovery`
+  ClusterRoleBinding of `examples/kubernetes/issuer-discovery.yaml`, off by default. The
+  initContainers and `copy-issuer.sh`'s pods run as root, so the namespace needs the `baseline`
+  Pod Security level, not `restricted`. Binding 49 as non-root uses the safe pod sysctl
+  `net.ipv4.ip_unprivileged_port_start=0`. The Services (TACACS+ 49, and the TLS listener's port,
+  default 300, when `tlsListener.enabled`) set `externalTrafficPolicy: Local`; whether that keeps
+  the source is L39 (b), still open and 12c's, and the README says so. An optional HPA on
+  `port49_connections` is off by default, rendered and tested and never exercised (design §13: scale
+  on connections, never CPU). Two server groups are two releases. etcd is not in the chart:
+  `deploy/helm/port49/examples/etcd/` is a reference StatefulSet with an `etcd-init` Job, which
+  the smoke uses. `broker.site` sets `PORT49_SITE`, and `broker.directory.keytabSecret` mounts a
+  keytab.
+- **10. Issuing CA copies.** Kubernetes: `deploy/helm/port49/scripts/copy-issuer.sh` runs
+  `init-issuer` once, in a one-shot pod from the port49 image that mounts broker-0's PVC and
+  config (never `kubectl exec` into broker-0, which may be the one crash-looping), then copies
+  `state/issuing-ca.pem` and `state/issuing-ca.key` to every other broker's PVC, creating `state/`
+  `65532:65532 0700` if missing. Each side is a root debug pod on that PVC's node, since `kubectl
+  cp` cannot work against a distroless broker; the key travels inside one kubectl exec stream
+  (`set -o pipefail`) and is written 0600, owned by 65532. systemd and compose: the READMEs give
+  the `install -m 0600` copy.
+- **11. The in-place rewrite warns and never refuses.** At every SIGHUP, after every swap and
+  every `keyRetryInterval` (30 s), port49d reads each held `file:` key reference again. Changed
+  bytes or an unreadable file is said in §12's words ("A key secret rewritten in place"), at
+  most every 10 minutes per reference and at every SIGHUP; the held bytes stay in force;
+  `port49_key_secret_files_changed`, a gauge with no label, counts the key versions whose held
+  file is in either state.
+- **12. MetalLB anycast is gated on L85.** If L85 measures the source kept under `Local`, the
+  route withdrawn when a pod goes, and a rolling restart under the PDB with no failed login past
+  one retry, the chart gains `service.anycast.enabled` (measured 2026-10-31, run 41155086403; shipped). Otherwise nothing ships, L85 records why and the
+  roadmap carries it. Design §13's note stands: under anycast prefer per-transaction; NX-OS's
+  single-connect offer is a device choice the README names.
+- **13. Store examples are shared.** `deploy/examples/stores/single-site/` and `multi-region/` hold
+  port49d.yaml and port49-broker.yaml fragments at the systemd paths, loaded by a test through
+  `config.Load`/`LoadBroker`; the compose and systemd READMEs point at them. The chart's
+  `examples/values-multi-region.yaml` is the Kubernetes form, rendered by the helm tests. The
+  examples carry backups: an etcd snapshot timer and a `port49-broker export-enrollments` timer, each under
+  `UMask=0077`, and the Kubernetes CronJob form; Velero for the chart's PVCs is carried to 12c,
+  since naming it needs a measurement. Each shape README carries the `encryption:` key rotation
+  runbook (one key everywhere from one secret), written for that shape's secret files, and a
+  "When it will not start" table whose columns are the refusal, the exact line, where to read it
+  and the fix, with rows for a secret file missing or unreadable, the CA differing, etcd below the
+  floor, the fence refusing, and a per-shape tail (systemd: `journalctl -u port49d -b` and
+  fix the cause and the next try starts (the units set `StartLimitIntervalSec=0`, so systemd retries a failing start every ten seconds and never needs `reset-failed`); compose:
+  `docker compose logs port49d`, and `restart: unless-stopped` loops without limit; Kubernetes:
+  `kubectl logs --previous`, `kubectl describe pod` for a missing Secret, which is a
+  `ContainerCreating` event and never a port49 line, and `CrashLoopBackOff`).
+- **14. The etcd floor in every smoke.** Each smoke configures every member's URL, never a Service
+  or VIP, and asserts port49d's start line `etcd …, at or above the floor` names all three.
+- **15. Admin operations go over the broker API, each with a security key press** (Ryan,
+  2026-10-27; replaces ruling 5's sockets). The factor is §5.1.5's `hardware_key_touch` (decision
+  45 ruling 12): an always-touch slot's signature over the connection's TLS exporter, with
+  attestations chaining to the configured roots, from the token that holds the session key. Each
+  admin-level call needs its right and a fresh proof bound to that one request: the challenge
+  carries the operation and the target, and the signature covers `SHA-256` of the exact method,
+  path and body (§5.1.6). There is no reuse window, so it is one touch per operation. An exposed
+  admin certificate, bearer token or agent session alone authorizes nothing admin-level. A call is
+  admin-level when it writes, lifts or removes state belonging to another principal or to the
+  server's trust (§2); reads (`explain_others`, the revocation list), the caller's own (`mine`)
+  and an install-time init that refuses when anything is there are not. A host-local command, run
+  as the service's user or root against the process's own files or store credentials, is admin by
+  host access: not an API call and no touch, and where it writes a record the origin is `offline
+  uid <n>`. The admin socket is removed outright (pre-beta, no deprecation): `admin_socket` in
+  either config file is refused by name, and no operation keeps a socket, since each row below was
+  checked for a reason the API and a touch cannot serve and none has one. The two that cannot reach
+  a running broker have homes that need no socket: the break-glass revoke runs offline with the
+  brokers stopped, and `keys-diagnose` runs offline from a capture. `store status` is a read with
+  no authority, so it goes on the metrics port. Per shape, an operator runs `port49 revoke …` and
+  `port49 directory …` on their own workstation, through their agent; no shape needs `sudo`,
+  `docker exec` or `kubectl exec` for an admin call. The break-glass, with every broker stopped,
+  as the broker's user, never root (the command refuses root, and a state directory chowned to root is the fault it avoids): systemd, `systemctl stop port49-broker` on every broker host, then
+  `port49-broker revoke --offline …`, then start; Compose, `docker compose stop port49-broker`,
+  then `docker compose run --rm --no-deps port49-broker revoke --offline …`, then start;
+  Kubernetes, `deploy/helm/port49/scripts/revoke-offline.sh <namespace> <release> -- <revoke
+  flags>`, which scales the broker StatefulSet to 0, runs the command in a one-shot pod on
+  broker-0's PVC and config, then scales back. The 3am view is §5.1.6's table, and each shape
+  README carries it. The inventory, every operation the two sockets answered and the rest of the
+  admin surface:
+
+  | Operation today | Verdict |
+  |---|---|
+  | `port49 revoke --principal` (socket) and `--via-agent --principal` | API `POST /v1/tokens/revoke`, `revoke_others`, touch |
+  | `port49 revoke --cert` / `--cert-issuer --cert-serial` (socket) | API, same endpoint, new body, `revoke_others`, touch |
+  | `--via-agent --device --username`; `{sid, issuer}` | API as today, `revoke_others`, now with a touch |
+  | `port49 revoke --lift` (socket) | API `POST /v1/revocations/lift`, new right `lift_revocations`, touch |
+  | `port49 revoke --list` (socket) | API `GET /v1/revocations`, `revoke_others` or `lift_revocations`, no touch (read) |
+  | `port49 directory forget` (socket) | API `POST /v1/directory/forget`, new right `forget_principals`, touch |
+  | `port49 directory reset-second-factor <p>` and `--all` (socket) | API `POST /v1/directory/reset-second-factor`, new right `reset_second_factor`, touch |
+  | `port49 directory unlock` (socket) | API `POST /v1/directory/unlock`, new right `unlock_sign_in`, touch |
+  | `port49 directory import [--replace]` (socket) | API `POST /v1/directory/import`, new right `import_enrollments`, touch |
+  | `port49 directory init-enrollments` (socket) | local subcommand `port49-broker init-enrollments` / `port49d init-enrollments`, install-time like `init-revocations` |
+  | `port49 directory export` (socket) | local subcommand `port49-broker export-enrollments` / `port49d export-enrollments`: reads sealed bytes with the process's own store identity, so backups need no admin credential |
+  | `port49 store status` (both sockets) | `GET /store/status` on each process's metrics listener, read-only counts, no right; `port49 store status --metrics ADDR` |
+  | `port49 keys diagnose` (port49d's socket) | local subcommand `port49d keys-diagnose --device D --capture FILE`, offline from a pcap; port49d stops holding an unvalidated packet in memory |
+  | `port49 revoke --mine`; `explain_others` | unchanged, no touch |
+  | `/v1/logout` (back-channel logout) | unchanged: the provider's signed act, not an admin call; no right, no touch |
+  | `forget-issuer`, `init-issuer`, `rotate-issuer`, `init-revocations`, `store-roles` | unchanged local subcommands: they run with the brokers stopped or before any admin exists, and were never socket operations |
+  | `port49-broker revoke --offline [--lift]` | the break-glass, unchanged, plus `--list`; and a new `port49d revoke --offline` for a port49d with its broker in process |
+- **16. A key the operator provisions is read under the secret-file rule; a key port49 writes keeps the
+  owner-only rule** (rev-12b-sec, 2026-10-30, after the kind smoke). A Kubernetes Secret volume arrives as
+  `name -> ..data/name` behind two links, `root:<fsGroup>` mode 0440, even for `defaultMode: 0400`
+  (the kubelet adds group read under `fsGroup`; `tests/lab/results/configmap-mounts.md`, rows
+  `cm-d400f` and `sec-c`), so an owner-only, no-link rule can never accept a mounted key. The
+  broker's TLS server key, the etcd client keys, `tls_listener.key_file`, the directory's keytab and
+  bind key, and the inventory service's signing and TLS keys are read through `fence.ReadSecret`
+  (rulings 1, 11 and 12 of decision 53), `within` being the key's own directory: a link is followed
+  only while it stays inside that directory, every directory holding a link is held to the fence's
+  rule, the file is owned by the user or root, not writable by anyone else and not world-readable.
+  Group-read is allowed only when the file's group is the process's gid or one of its supplementary
+  groups (`fsGroup` is one on Kubernetes; the service user's own group is the primary one under
+  systemd), so a group the process is not in, like Debian's `ssl-cert`, cannot read the key too;
+  this applies to every `file:` secret. A read whose target vanishes between the resolve and the open
+  (the atomic writer removed the old generation) resolves once more, and a certificate and key
+  that tls refuses as a mismatch across a swap are read again once. A file port49 writes itself, or
+  the operator holds for itself, keeps ssh's rule (`keyfile.ReadOwn`): no link, owner-only, owned by
+  the user or root. That is the issuing CA key (ruling 14 of decision 43: a 0440 issuing CA key is
+  never accepted), a TPM key blob, and the CLI's own client key and PIN file. A workload's client key
+  (`port49 workload`, `workload.LoadCertificate`) is mounted by its operator, like a broker's, so a path
+  is read under the secret-file rule within its own directory (`clientkey.LoadMountedPair`); only a
+  user's own key (`clientkey.LoadPair`) keeps the owner-only rule. A file that names what port49
+  trusts is read through the policy-file fence (`fence.Read`: no link out of its directory, no group- or
+  world-writable file or directory, owned by root or the user, a regular file, at most 1 MiB, a named pipe
+  refused), at the start and at every reload, because a file others can replace adds a trusted root, a
+  client CA, a forged CRL issuer or a fake etcd or directory. A refused reload keeps what is in force and
+  says so once; a refused start names the directory. `internal/config/trustfiles_test.go` reads the config
+  structs and fails on any field whose yaml key is `file` or `path` or ends in `_file`, `_files`, `_conf`, `_path` or `_dir` and that it has not classified (trust, policy, secret, or other with a
+  reason), whatever its name, so a new field cannot skip the fence. The trust files:
+
+  | Field | Reader |
+  |---|---|
+  | `broker.client_ca_file`, `identity.humans[].trust_anchor_file`, `identity.machines[].trust_anchor_file`, the inventory service's `client_ca_file` | `broker.ReadAnchor` |
+  | `identity` OIDC and Kubernetes verifiers' `ca_file` | `readLimited` (`fence.Read`) |
+  | `attestation_roots_file` | `loadPerLoginMFA`, `reloadAttestationRoots` |
+  | `stores.*.etcd.ca_file` | `caCerts` |
+  | `broker.directory.ca_file` | `directory.tlsConfig`, at each dial |
+| `broker.directory.bind.krb5_conf` (names the KDCs the broker trusts) | `directory.readKRB5Conf` |
+  | `inventory.service.ca_file`, a source's `ca_file` | `inventory.readCA`, `sot.readCA` |
+  | `tls_listener.client_ca_file`, `intermediates_file` | `tlsListener.read` |
+  | `certificate_status.crls[].issuer_file` | `readIssuerFile` |
+  | `broker.tls_ca_bundle_file` | `readCABundle` |
+
+  A mounted CA is `root:<fsGroup>` 0440 behind `..data` links the chart's ConfigMaps and Secrets give, which
+  the fence admits (a read-only mount of a root-owned source, a link that stays inside its own volume). `subPath` is no remedy:
+  it still gives 0440 under `fsGroup`, and it loses the kubelet's in-place update (ruling 2).
+- **Open.** The `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
+  overridden by Ryan (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waits on L84
+  (L82 and L83 are closed, ruling 12's L85 too), and ruling 9's Services claim on L39 (b).
 
 ---
 
@@ -11717,7 +12162,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L64** | `port49 ssh` under decision 46 against each platform, with OpenSSH's default algorithms: (a) a first contact, the operator's known_hosts holding nothing for the device: whether the login succeeds with one askpass ask, and every line ssh files under the inventory name, before and after the login (its key types: `UpdateHostKeys`, on by default, may file more after authentication); (b) after a reload with the configuration saved, the device seen down and back: whether `port49 ssh` logs in again with no host-key warning, the filed key still the device's; (c) the entry under the name replaced by another key of the same type: ssh refuses before any TACACS+ exchange, the token never presented, exit 255, `port49 ssh` naming `ssh-keygen -R`; (d) the entry replaced by a key of another type only: the same. Also recorded per platform: the method ssh used and the askpass asks (L54's cells, re-run under the new command line). | §13 decision 46 rulings 2, 6 and 7 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L64-arista_eos.md, L64-cisco_nxos.md, L64-cisco_iosxe.md, L64-juniper_vjunos-router.md, L64-juniper_vsrx.md (every cell on every platform; no host key changed at a reload. (d)'s refusal reads as "changed" on EOS, vJunos-router and vSRX, which file Ed25519 and also offer the RSA key put in its place, and as "another type" on NX-OS and IOS-XE, which file RSA and offer no Ed25519; both exit 255 before the token. UpdateHostKeys files further types on a later login with a key already filed (EOS one, vJunos-router three, vSRX one), never on the first contact; the askpass count is ssh's tried methods, the redeem records the ground truth) |
 | **L65** | The Python client (`port49.netmiko.connect`) against each platform: (a) a first contact: Netmiko logs in, and the key Paramiko accepted is filed under the inventory name (hashed under `HashKnownHosts yes`), its type recorded; (b) a second connection verifies against it; (c) the entry replaced by another key of the same type, and (d) by a key of another type only: refused before authentication, no TACACS+ exchange, the token never presented; (e) an entry `port49 ssh` filed (L64 (a)) verifies Python's connection with no line added, and one Python filed verifies `port49 ssh`'s; (f) the device's own key named by an `@revoked` line beside the filed entry, and then, from an empty known_hosts, at first contact: refused before authentication, no TACACS+ exchange, the token never presented, nothing filed. | §13 decision 46 ruling 13 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L65-arista_eos.md, L65-cisco_nxos.md, L65-cisco_iosxe.md, L65-juniper_vjunos-router.md, L65-juniper_vsrx.md (every cell on every platform, netmiko 4.8.0 and paramiko 5.0.0 on Python 3.14.4) |
 | **L66** | The Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli` against each platform: (a) a ten-task play with the lookup in `ansible_password`: how many mints per host; (b) the same play minting once in a `pre_tasks` `set_fact`: how many mints and how many TACACS+ authentications per host, and again with an idle gap longer than `persistent_connect_timeout` (30 s by default) or a `meta: reset_connection` between tasks: whether the next task logs in again with the spent token and how that fails; (c) host keys with `host_key_checking: true` and `host_key_auto_add: true`, for `ssh_type` `libssh` and `paramiko`: a first contact accepted and saved (which file, under which name), and a changed key refused before authentication, no TACACS+ exchange, the token never presented; and, per `ssh_type`, the known_hosts file's comments, `@revoked` and `@cert-authority` lines before and after the run (whether the file is appended to or rewritten without them); (d) a denied device: the task fails naming the reason, and `-vvv` output holds no token, nor does the persistent connection's log (`ANSIBLE_PERSISTENT_LOG_MESSAGES`, `-vvvv`); (e) an address changed in Ansible's inventory for a device reached before, leading to another host: for `libssh` and `paramiko` (and `libssh` with a `HostKeyAlias` in `ansible_libssh_config_file`), and for `ansible.builtin.ssh` with `-o HostKeyAlias={{ inventory_hostname }}`, whether the other host's key is auto-added and whether the token is presented to it; and, for `ansible.builtin.ssh`, two inventory names at one address, whose shared ControlPath (keyed on address, port and user) may let the second name reuse the first's open master: whether its `HostKeyAlias` is ever checked. | §13 decision 46 ruling 15 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-14; tests/lab/results/L66-arista_eos.md, L66-cisco_nxos.md, L66-cisco_iosxe.md, L66-juniper_vjunos-router.md, L66-juniper_vsrx.md. Every platform gave the same reading, because what is measured is the client. (a) With the lookup in `ansible_password`: 10 mints for the first 2 tasks, then `candidate_cap_reached` at the default cap of 8. (b) Minting once: 1 mint and 1 authentication for ten tasks. After an idle gap or `reset_connection`, the next task logged in again with the spent token, answered PASS `receipt_replayed`. (c) `libssh` appended to the file and kept its comments and marker lines, **but with `host_key_auto_add` accepted a changed key and presented the token**. `paramiko` refused a changed key before authentication, refused a file holding `@revoked` or `@cert-authority` lines (`InvalidHostKey`), and rewrote the file without its comments. (d) The deny names its reason, and `-vvv` and `-vvvv` output hold no token, **but `persistent_log_messages` writes the token to its log**. (e) Under `host_key_auto_add`, `libssh` and `paramiko` presented the token to another host at a moved address. `ansible_libssh_config_file`'s `HostKeyAlias` is not honoured. `ansible.builtin.ssh` with the alias refused the moved address. Two names at one address: the second reused the first's master, and its alias was never looked up. Ruling 15 and the collection README now follow these readings; the ruling's guess about Paramiko was wrong (CLAUDE.md rule 4). (e3)–(e3d), the port49 lookup's check before minting, added by plan 9f, measured 2026-10-16 on arista_eos only (client behaviour, as above): a moved address holding another key is refused before the mint; with no entry, the lookup's copy makes both `ssh_type`s refuse the other host without `host_key_auto_add`, while libssh with it still presents the token; tests/lab/results/L66-arista_eos.md |
-| **L67** | A person's simple bind from port49-broker, per directory, over LDAPS and over StartTLS (`start_tls: true`): (a) the right password accepted, a wrong one refused with which result code and, on AD, which `data` code; (b) a DN with an empty password sent by a raw client (not port49): whether the server answers success (an unauthenticated bind, RFC 4513 §5.1.2), and the control: `port49 login --directory` with an empty password sends no bind (capture); (c) with the right password, an expired password, a must-change password, a disabled account and a locked account (AD `pwdLastSet`, `userAccountControl`, a lockout; OpenLDAP's `ppolicy`), the result and data code or `ppolicy` error each gives, and whether a wrong password gives the same; (d) with the directory's lockout at 10 failures in 10 minutes, six wrong sign-ins by port49's defaults: the account's failed count after them (`badPwdCount`; `pwdFailureTime`), and the sixth refused by port49 with no bind on the wire; and nine wrong passwords straddling a window boundary (four before it ends, five after): the account's failed count, and whether it locked; (e) a wrong code: no bind for the person on the wire; (f) whether the broker's own bind reads the entry's creation time (`whenCreated`; `createTimestamp`); (g) end to end, once on the compose stack's broker on etcd and once on port49d on the memory store (the sealed file): before `port49 directory init-enrollments` a sign-in is refused `enrollment_store_lost`; after it `bin/port49 login --directory` enrolls, confirms, gets a certificate and mints for a device of the loopback inventory; with the directory stopped, the held certificate mints and a sign-in says the directory did not answer. | §13 decision 47 rulings 6, 7, D2, D5 | OpenLDAP (slapd 2.5, `ppolicy`), Samba AD (4.17), Windows Server AD (Windows Server 2025, the SER8) | closed — measured 2026-10-15; tests/lab/results/L67-openldap.md, tests/lab/results/L67-samba_ad.md, tests/lab/results/L67-windows_ad.md |
+| **L67** | A person's simple bind from port49-broker, per directory, over LDAPS and over StartTLS (`start_tls: true`): (a) the right password accepted, a wrong one refused with which result code and, on AD, which `data` code; (b) a DN with an empty password sent by a raw client (not port49): whether the server answers success (an unauthenticated bind, RFC 4513 §5.1.2), and the control: `port49 login --directory` with an empty password sends no bind (capture); (c) with the right password, an expired password, a must-change password, a disabled account and a locked account (AD `pwdLastSet`, `userAccountControl`, a lockout; OpenLDAP's `ppolicy`), the result and data code or `ppolicy` error each gives, and whether a wrong password gives the same; (d) with the directory's lockout at 10 failures in 10 minutes, six wrong sign-ins by port49's defaults: the account's failed count after them (`badPwdCount`; `pwdFailureTime`), and the sixth refused by port49 with no bind on the wire; and nine wrong passwords straddling a window boundary (four before it ends, five after): the account's failed count, and whether it locked; (e) a wrong code: no bind for the person on the wire; (f) whether the broker's own bind reads the entry's creation time (`whenCreated`; `createTimestamp`); (g) end to end, once on the compose stack's broker on etcd and once on port49d on the memory store (the sealed file): before `port49-broker init-enrollments` a sign-in is refused `enrollment_store_lost`; after it `bin/port49 login --directory` enrolls, confirms, gets a certificate and mints for a device of the loopback inventory; with the directory stopped, the held certificate mints and a sign-in says the directory did not answer. | §13 decision 47 rulings 6, 7, D2, D5 | OpenLDAP (slapd 2.5, `ppolicy`), Samba AD (4.17), Windows Server AD (Windows Server 2025, the SER8) | closed — measured 2026-10-15; tests/lab/results/L67-openldap.md, tests/lab/results/L67-samba_ad.md, tests/lab/results/L67-windows_ad.md |
 | **L68** | A Junos reply sending view-configuration with the rest of its reach denied (plan 9g; decision 48). Under `user-permissions` over the bitless `p49-remote`, six rows: P, `view view-configuration` and set 1.2.0's render of a readonly granted `show **` less `show security **` and `monitor **` (173 bytes); H, the same bits and a deny of exactly `show security`, view-configuration's other reach and the entry denies (235 bytes); O, `clear view view-configuration` and P's deny, set 1.2.0's render of the operator granted `show **` and `clear **` less the same; V, `view` alone under P's deny; Vc, `view` alone; C, `view view-configuration` and no deny, the control. Whether `show cli authorization` lists each row's bits exactly; whether `show configuration` runs in P, H and O and not in V; whether `show security` and each word of view-configuration's other reach (`monitor`, `request mpls`, `request path-computation-client`, `request security`, `request unified-edge`, `request virtual-chassis`, `load` and `save dhcp-security-snoop`), typed in full and abbreviated, is refused in P, H and O where C takes it; whether `configure`, `edit` or `configure private` enters configuration mode in any row; whether, over the SSH exec channel, `show configuration` runs and `monitor list` and `show security zones` are refused in P, H and O where C takes them; whether `<get-configuration/>` through `xml-mode`, port 830, the port-22 subsystem and the exec channel's NETCONF, and `op url` and its abbreviation, are refused in P, H and O where C reaches them; whether view-configuration's completion over `view` (C against Vc) offers a word its declared reach does not hold. Recorded, not gated: `show log`, `show firewall`, `show policer`, `file list /config`, `file show /config/juniper.conf.gz`, an scp read of `/config/juniper.conf.gz` (P, V, C), and `show configuration`'s `\| save` and pager `s` (L59). Row O gates the operator reply alone (G1-operator). Measured 2026-10-16, both images: G1 and G1-operator pass. Recorded, not gated: `show log` ran in P, H and O (a carve-out), `show firewall` and `show policer` were not refused in P, H or O; `file list /config` and `file show /config/juniper.conf.gz` were refused in P and O and taken in H, whose deny leaves `file` open; an scp read of `/config/juniper.conf.gz` was refused in P, V and C; `show configuration | save` wrote its file in P, H, O and C; pager `s` was not graded (the pager did not appear in P, O and V, where `set cli` is denied; in H, Vc and C it appeared and prompted for a filename, but the harness's following keystrokes were mangled) and stays L59's. On vSRX `request unified-edge` and `req vir` run nowhere (refused in C too). | Decision 48: set 1.3.0's `deny_reach_bits: [view-configuration]` | Junos (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15) | closed — measured 2026-10-16; `tests/lab/results/L68-juniper_vjunos-router.md`, `L68-juniper_vsrx.md`, `L68-netconf-juniper_vjunos-router.md`, `L68-netconf-juniper_vsrx.md`, `L68-netconf-operator-juniper_vjunos-router.md`, `L68-netconf-operator-juniper_vsrx.md`, `L68-projected-juniper_vjunos-router.md`, `L68-projected-juniper_vsrx.md`. Set 1.3.0's rendered replies, through the broker, ran `show configuration` and refused `monitor` on both images, for the readonly and the operator. |
 | **L69** | A Kubernetes cluster's service account tokens as port49's `k8s` verifier meets them (plan 10), on kind: (a) a projected token's claims for `audience: port49-lab`, `expirationSeconds: 600` (`iss`, `aud`, `exp` − `iat`, `nbf`, `sub`, `kubernetes.io` with `namespace`, `serviceaccount`, `pod`, `node`, `jti`; the header's `alg`, `kid` and `typ`); (b) when the kubelet rewrites the file, as a fraction of `expirationSeconds`; (c) the issuer discovery document and `/openid/v1/jwks` read anonymously before and after binding `system:service-account-issuer-discovery` to `system:unauthenticated`, and discovery's `issuer` and `jwks_uri` against the API server's flags; (d) a signing key rotated at the API server, and whether port49 mints with the new key's token without a restart; (e) a token after its pod, then its service account, is deleted: what TokenReview answers and what port49 does; (f) a second cluster's token at a broker that lists only the first, for a namespace only the first lists, and for a namespace both list; (g) a token for another audience, an unbound `kubectl create token`, a Secret-bound and a Node-bound `kubectl create token`, and a legacy Secret token; (h) the default `kube-api-access` token's `aud` and lifetime. | §13 decision 49 rulings 2, 6, 7 and 11; `examples/kubernetes` | kind v0.29.0 (`kindest/node:v1.33.1`) | closed — measured 2026-10-16; tests/lab/results/L69-kind.md. Measured on kind v0.29.0 (`kindest/node:v1.33.1`): (a) a projected token carries `iss`, `aud` `[port49-lab]`, `exp` − `iat` 600s, `nbf`, `sub` `system:serviceaccount:netops:oxidized`, `kubernetes.io` with `namespace`, `serviceaccount`, `pod` and `node`, `jti`, header `alg` RS256 with a `kid` and no `typ`, and no `warnafter`; (b) the kubelet rewrote the file at 0.87 of `expirationSeconds`, inside [0.75, 0.97], so "about 80%" stands; (c) anonymous discovery and JWKS answered 403 before the binding and 200 after, discovery's `issuer` is the flag and its `jwks_uri` the API server's address (not compared), and the broker stayed silent for the matching cluster and for a mirror-style `jwks_uri`; (d) after a signing key rotation the new `kid` minted on the running broker with no restart, first attempt; (e) after the pod and then the service account were deleted TokenReview answered `authenticated=false` while port49 still minted (ruling 11 as written), and `port49 revoke` ended it at once, exit 77 `credential_revoked`; (f) a second cluster's token was refused (exit 77) at a broker listing the first alone, and both minted where both list the namespace, with the overlap named at the start and `cluster` in the record; (g) a wrong-audience, an unbound, a Secret-bound, a Node-bound and a legacy Secret token were each refused `trust_domain_unresolved` with its own reason, exit 77; (h) the default `kube-api-access` token's `aud` is the API server's and its lifetime 31536000s, refused `trust_domain_unresolved`, exit 77. |
 | **L70** | L69's (a), (c) and (d) on managed clusters: whether EKS, GKE and AKS publish issuer discovery and the JWKS anonymously over the internet, the form of their issuer and `kid`, and how they rotate signing keys. | decision 49 ruling 2's anonymous fetch on managed clusters; the docs' managed-cluster section | EKS, GKE, AKS | open |
@@ -11731,6 +12176,13 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L79** | Whether a directory write sent from a region whose link is cut (iptables DROP, so the kernel keeps retransmitting) is delivered after the link heals within the retransmission window: (j) a lift reported "could not be lifted, and stands" that lands later; (k) a revoke reported failed that lands after an operator's lift elsewhere (expected fail-closed: the mark re-created). What `port49 store status` and the decision log say in each case. | §13 decision 51 (11a's final review, dial-fix M4); the operator text of `port49 revoke --lift` | three simulated regions (L74's harness, etcd 3.6.15) | closed — measured 2026-10-21; tests/lab/results/L79-regions.md (etcd 3.6.15, three simulated regions). Re-measured 2026-10-21 on commit 9111f962 (the landed-after-lift flag): in (k) both broker 3 and broker 1 now log "a revocation of the principal made ... before the lift at ... landed after it: a copy sent while its writer was cut off ... it stands everywhere", and `port49 revoke --list` in region 1 shows the entry marked "landed after the lift ... (revision 20)"; in (j) no such line appeared, the mark stayed at revision 17, and "are put back" lines were 0. (j) The lift from region 3 during the cut exited 1 in 513 ms with "the revocation could not be lifted, and stands"; after the heal at 20 s the mark stayed in the directory for the 60 s polled, at the same revision (5), so no lift landed late and the message is true. (k) The revoke from region 3 exited 1 with "the revocation may not have been recorded: a copy already sent can still land when the directory answers again, and then stands everywhere, even over a lift made meanwhile ... this port49-broker denies what it names, until a lift on this port49-broker or its restart"; the lift in region 1 then removed the mark (revision 8), and 250 ms after the heal the mark was back at revision 9 with no "are put back" line in broker 3's log, so the failed revoke was delivered late and fails closed; which process wrote it is not identified. `port49 store status` in region 3 during the cut printed `etcd 1/3 members unreachable` (exit 3) and after the heal `3/3 members reachable`; port49d logged "not answering ... revocations, lifts, enrollments, unlocks and second-factor resets are refused until it answers" and then "answering again". Not measured: a heal later than 20 s, or after the kernel gives up (about 15 minutes). |
 | **L80** | NX-OS 10.6(2)F over per-request TLS (RFC 9887 with no `single-connection`, the device default) with `aaa authorization commands default group port49 local`: whether a command port49's policy denies runs (local fallback) or is refused, graded from the command's first output line and port49's records, and whether any authorization request for it reaches port49. L73 cell a showed the device sent port49 no `authorize_command` for `show version` over per-request TLS, yet the command ran (`tests/lab/results/L73-cisco_nxos.md`, "per-request TLS carries no command authorization", read before port49 offered single-connect, decision 50 ruling 20); nobody had typed a denied command that way. | whether port49's command policy holds on NX-OS 10.6 over TLS in the device's default mode; the NX-OS 10.6(2)F row of `docs/qualified-platforms.md` (command authorization over TLS) and its profile's `tls_server_single_connect_honored` device fact; plan 12's NX-OS TLS reference configuration | NX-OS: Nexus 9300v 10.6(2)F | closed — measured 2026-10-21, re-measured with the fix 2026-10-22; tests/lab/results/L80-cisco_nxos.md (Nexus 9300v 10.6(2)F). **Before the fix** (2026-10-21): over per-request TLS the device asked port49 about some commands only, and `show users`, the command port49 denies, **ran**: its first output line was "NAME LINE TIME IDLE PID COMMENT", and port49 received 0 `authorize_command` records for it (1 for other commands). The 2026-10-22 baseline arm (`tests/lab/evidence/L80-cisco_nxos/baseline/`, the build before the fix) again showed the device asking about some commands only (`terminal length 0` and `show version` unasked in one cell; `terminal length 0`, `configure terminal` and `end` in the other), one connection per request; in its two cells `show users` was asked and denied, so that run did not reproduce a denied command running. Its device debug observed the read failure on a socket the server had closed (`nxos_ssl_read() failed`), then `mark server dead`, then `Fall back method none succeeded` (2 and 3 times in the two cells), on requests the debug labels aaa type 2 (accounting); no such fallback on an authorization request was captured, so how an unasked command ran is unmeasured. **After the fix** (port49 offering single-connect; `tests/lab/evidence/L80-cisco_nxos/fixed/`, and `tls_token_login` in tests/lab/results/QUAL-Nexus-9300v-10.6-2-F-cisco_nxos.md): the device keeps one connection and asks about every command; `show users` is denied by port49; every fixed-arm cell read `ssl_read_failed=0`, `mark_server_dead=0` and `fall_back_none=0`; three concurrent sessions shared one connection (3 denials, none lost); with 35 s between commands (`idle35`) the session reconnected cleanly after port49 closed the idle connection (3 connections, `idle_closed=3`, every `show users` still asked and denied). One counter is unexplained: `tacacs_group_failed` read 3 in seven of the eight fixed-arm cells and 2 in the eighth, with no fallback line beside it (`tests/lab/evidence/L80-cisco_nxos/fixed/*-summary.txt`, the `debug counts:` lines); its cause is unmeasured. **A port49d restart in mid-session** (2026-10-23, the fixed build, the `restart` cells: 20 permitted commands half a second apart, `show users` after every fourth, port49d stopped by SIGINT after the 8th and started 0.26 to 0.51 s later). *On the memory store* (`restart-summary.txt`, verdict `context_lost_on_memory_store`): the device found the close and reconnected by itself (the connection open at the stop ended with port49's FIN at the stop, a new one opened 0.27 s after port49d was listening), with no lost or unasked command, `ssl_read_failed=0`, `mark_server_dead=0` and no fallback line, but every permitted command it typed after the restart (12 of 12) was asked about and denied `context_missing`, because the login context lived in the stopped process; the CLI session stays up and every later command is denied until the operator logs in again. That is harsher than the Junos re-authorization case in the memory-store paragraph below, which a denial does not end. *On etcd* (`restart_etcd-summary.txt`, a single real etcd 3.6.15 member beside `port49-broker`, three runs, each verdict `clean_reconnect`): the contexts were kept, all 21 permitted commands ran and the 5 `show users` were denied by the policy, 0 lost, 0 unasked, 0 denied for `context_missing`, again `ssl_read_failed=0`, `mark_server_dead=0`, no fallback line, and a new connection 0.02 s after port49d was listening; the one command typed at the stop (a `show users`) took 5.26 s to answer, and that wait was not the restart: on the new connection the device's first `nxos_ssl_open` returned -1 and `nxos_ssl_retry_open` succeeded 5.0 s later (`tests/lab/evidence/L80-cisco_nxos/fixed/restart_etcd-debug.txt`), while port49d was already listening, and the cell's first connection shows the same 5 s retry with no restart. So about 5 s is NX-OS 10.6's open retry on a new TLS connection, restart or not; why the first open fails is unmeasured. The restart summaries now print `ssl_open_retry=N`, and the dead, fallback, retry and failed-open counts are over the cell's window with the setup phase's apart (`setup_*`). Whether the close at the restart carried a close_notify is unmeasured under TLS 1.3 (the alert is encrypted in a header-only capture): the device handled the close, however it was signalled, without loss. A restart therefore costs an operator nothing on etcd and a fresh login on the memory store; plan 12's NX-OS TLS reference configuration need not name a second server to survive a restart. |
 | **L81** | An IP address as the TLS server name (decision 50 ruling 10): (a) `openssl s_client -servername <IPv6 literal>` against a listener whose `server_names` lists it in another spelling: accepted. An unlisted one is refused with the alert (best-effort, recorded) and `sni_mismatch`, and the next connection inside the window is reset at Accept, with no strike and no second record. (b) vJunos-router 26.2 with port49's IPv6 address over TLS: whether it sends SNI, and in what form. | `server_names` taking an IP address and matching an address SNI by address (§13 decision 50 ruling 10); whether an IPv6 Junos can be listed in `server_names` at all | (a) reference clients on the lab host; (b) Junos: vJunos-router 26.2 | open — (a) measured 2026-10-22; tests/lab/results/L81-reference.md: a server name `2001:0DB8:0:0::1` matched a `server_names` entry `2001:db8::1` and the handshake completed, and `2001:0DB8:0:0::2` got the `internal error` alert and `sni_mismatch` naming the spelling sent, with the next connection reset at Accept (declined_refused +1, held_refused +0). (a) uses IPv4 loopback transport, so it measures SNI handling only. (b), vJunos-router 26.2 over IPv6, is unmeasured, so the row stays open. The docs make no IPv6-Junos claim until (b) is measured. |
+| **L82** | Kubernetes Secret volumes as port49d's key directory, on kind. (a) The owner, group and mode of the mount's directory, its `..data` link and each key file under `defaultMode: 0440`, `fsGroup: 65532`, `fsGroupChangePolicy: OnRootMismatch`. PASS iff port49d starts with the key (`fence.ReadSecret` accepts). (b) A key added to the Secret reaching a whole-volume mount: the delay. PASS iff the file appears within 180 s. (c) A `subPath` mount of the same Secret after an update. PASS iff the `subPath` file is unchanged after 180 s while the whole mount changed: that confirms "never `subPath`". (d) An External Secrets Operator `ExternalSecret` (`fake` provider), one remote key per version. PASS iff a version added to the ExternalSecret reaches the mounted Secret, and a policy naming it is in force with no container restart (`restartCount` and start time unchanged) within 240 s. | Decision 54 ruling 2's Kubernetes key volume (provisional on this row); the ESO example; 12a's whole-volume hand-off | kind (node image recorded), ESO version recorded | closed — measured 2026-10-31; tests/lab/results/L82-kind.md |
+| **L83** | Secret-store agents rendering port49d's keys, on kind. (a) The Vault Agent injector's rendered file with `perms = "0440"`: owner, group, mode and the agent's uid (documented as 100), with and without `agent-run-as-same-user`. PASS iff port49d starts with the key. (b) The Secrets Store CSI driver with the Vault provider: the files' owner and mode with and without the provider's file-permission setting. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added at the store reaches the running process with no restart. PASS iff a policy naming the new version is in force with no container restart within 300 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether a README may name Vault Agent or the CSI driver (decision 54 ruling 2) | kind; Vault, injector, CSI driver and provider versions recorded | closed — measured 2026-10-31; tests/lab/results/L83-kind.md. (a) FAIL with the default agent user (uid 100 owns the file; port49d crash-loops on the owner rule), PASS with `agent-run-as-same-user: "true"`. (b) FAIL for both CSI configurations (`0:0 0644`, or `0:0 0440` unreadable by 65532; port49d crash-looped in each). (c) FAIL for the injector: a new version replaces the pod. Per ruling 2 the Vault Agent injector is named for the encryption key only (it fails the no-restart cell), with `agent-run-as-same-user: "true"`; device keys use External Secrets or a Secret volume (L82); the Secrets Store CSI driver is not named. |
+| **L84** | Host credential mechanisms against `fence.ReadSecret`. (a) systemd `LoadCredential=`: `$CREDENTIALS_DIRECTORY`'s path, owner and mode, and the files'. PASS iff port49d starts with `key_secret_refs.file_dir` naming it, and again on a second start. (b) Compose file-backed `secrets:`, long syntax `uid: "0"`, `gid: "65532"`, `mode: 0440`, and the short syntax (documented 0444): the mounted file's owner and mode. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added reaches the running process with no restart. PASS iff a policy naming it is in force with `ExecMainStartTimestamp` or `StartedAt` unchanged within 120 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether the systemd and compose READMEs may offer these (decision 54 ruling 2) | systemd 257 (Debian 13); Docker and Compose versions recorded | open — Compose half measured 2026-10-28; tests/lab/results/L84-systemd-docker.md (Docker 29.1.3, Compose 5.5.1, local `port49:dev`). (b) PASS for both syntaxes: port49d starts only with a host file that is `root:65532` 0440; Compose bind-mounts the file as it is and does not apply the long syntax's `uid`, `gid` or `mode`, so `0444` (the short syntax's documented mode) and a file the operator owns are refused. (c) FAIL for both: adding a second `secrets:` entry needs `docker compose up -d`, which recreates port49d (the container id and the start time change), though a version 2 login passes once it is up. The compose README therefore names `secrets:` for the encryption key only. (a) and systemd's (c) are not yet run: they need Task 9's container (`make lab-l84-systemd`), and `LoadCredential=` stays unnamed for a device key until they do. |
+| **L85** | MetalLB in BGP mode as an anycast VIP for port49d, on kind with an FRR peer. (a) The source address port49d sees under `externalTrafficPolicy: Local`. PASS iff it is the device's own address and the device-binding check passes. (b) Which nodes advertise the VIP. PASS iff exactly the nodes running a ready port49d pod. (c) A port49d pod deleted: the withdrawal time, and what an open single-connection session and a per-transaction client see. PASS iff the route is withdrawn within 10 s of the pod's listener closing, and no per-transaction login in the window fails past one retry; the deletion-to-withdrawal delay is an observation. (Redefined 2026-10-31 after two runs. Run 41142675001, no preStop: 6.6 s from deletion, but (d) lost one login in 42. Run 41151306253, preStop 15 s: 21.6 s from deletion, every login passing, and (d) PASS. The pod keeps serving through its preStop, so the deletion is the wrong clock for a route that is meant to outlast it.) (d) A rolling restart under the chart's PDB, with one login a second. PASS iff no login fails past one retry. | Whether the chart offers anycast (decision 54 ruling 12; Plan 12 rulings, B2); design §13's anycast note | kind; MetalLB and FRR versions recorded | closed — measured 2026-10-31; tests/lab/results/L85-kind.md (run 41155086403: all four cells PASS on (c) as redefined; the note states runs 41142675001 and 41151306253 too) |
+| **L86** | An admin call's touch on a real YubiKey, on the SER8 (needs Ryan present). (a) Two admin calls 5 s apart under touch policy `always`: whether the second blinks again. PASS iff each call needs its own touch, and the second fails without one. (b) No touch: the time to failure and the words. PASS iff the CLI prints the timeout line, exits 1, and `port49 revoke --list` shows no mark. (c) An OIDC-issued session key in the token's slot (`issued_key_store: pkcs11`, L60's open issued-key cell): an admin call. PASS iff it succeeds with one touch. (d) The key unplugged with the agent running: an admin call. PASS iff the CLI says to insert the key, nothing is sent, and the broker's log has no `admin_touch_refused`. Cites L60 (partial: the touch policy byte, the attestation chain and serial, a 14.4 s timeout on one token) and L62 (TPM session keys, which this path refuses before sending). | §5.1.6's "one touch per operation" and its 3am table; decision 54 ruling 15 | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | open |
+
+Every cell of L82–L85 carries its own PASS condition, so a row closes when every cell has a PASS or a FAIL. A FAIL is a measured answer, not an open row. A README names a mechanism only where every one of its cells is PASS.
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

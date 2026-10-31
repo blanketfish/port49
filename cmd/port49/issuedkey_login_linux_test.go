@@ -38,7 +38,7 @@ func TestANamedStoreThatCannotBeUsedRefusesBeforeTheSignIn(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	code := run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+	code := run(append([]string{"login", "--config", cfg}, o.flags(t, sock)...), &out, &errb)
 	if code == 0 || !strings.Contains(errb.String(), "issued_key_store is tpm") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -65,7 +65,7 @@ func TestAutoFallsBackToAFileWhenTheTPMCannotMakeAKey(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	if code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb); code != 0 ||
+	if code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb); code != 0 ||
 		!strings.Contains(errb.String(), "the TPM could not make a key") || !strings.Contains(errb.String(), "the key is a file") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -135,7 +135,7 @@ func TestAutoFallsBackToAFileOnlyWhenTheTPMRefuses(t *testing.T) {
 			t.Cleanup(func() { stopAgentAt(sock) })
 			t.Setenv(runCLIEnv, "1")
 			var out, errb bytes.Buffer
-			code := run(append([]string{"login"}, o.flags(sock)...), &out, &errb)
+			code := run(append([]string{"login"}, o.flags(t, sock)...), &out, &errb)
 			certPath, keyPath := o.issuedPaths(t)
 			lines := strings.Count(errb.String(), "the key is a file") + strings.Count(errb.String(), "the key is made in")
 			if c.file {
@@ -173,7 +173,7 @@ func TestANamedTPMStoreNeverFallsBackToAFile(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	code := run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+	code := run(append([]string{"login", "--config", cfg}, o.flags(t, sock)...), &out, &errb)
 	for _, want := range []string{"issued_key_store is tpm", "the TPM could not make a key", tpm.DevicePath, "tss"} {
 		if !strings.Contains(errb.String(), want) {
 			t.Errorf("%q is not in %q", want, errb.String())
@@ -209,7 +209,7 @@ func TestANamedTPMHostWithNoTPMKeySaysSo(t *testing.T) {
 	t.Cleanup(func() { stopAgentAt(sock) })
 	t.Setenv(runCLIEnv, "1")
 	var out, errb bytes.Buffer
-	run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+	run(append([]string{"login", "--config", cfg}, o.flags(t, sock)...), &out, &errb)
 	if !strings.Contains(errb.String(), "no TPM key for this machine yet") ||
 		strings.Contains(errb.String(), "your held certificate is not used") ||
 		strings.Contains(out.String(), "using your certificate") {
@@ -253,7 +253,7 @@ func TestANamedTPMRefusalAdviceFollowsTheCause(t *testing.T) {
 			t.Cleanup(func() { stopAgentAt(sock) })
 			t.Setenv(runCLIEnv, "1")
 			var out, errb bytes.Buffer
-			code := run(append([]string{"login", "--config", cfg}, o.flags(sock)...), &out, &errb)
+			code := run(append([]string{"login", "--config", cfg}, o.flags(t, sock)...), &out, &errb)
 			if code == 0 || len(o.as.Authorizations()) != 0 {
 				t.Fatalf("code %d stderr %q (%d sign-ins)", code, errb.String(), len(o.as.Authorizations()))
 			}

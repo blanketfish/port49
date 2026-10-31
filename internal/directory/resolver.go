@@ -400,8 +400,8 @@ func (r *Resolver) pinned(ctx context.Context, id Identity, attr string) error {
 	// can tell them apart.
 	return fmt.Errorf("%w: %s is pinned to entry %s and is now claimed by %s (%s); a %s value moved "+
 		"between entries never carries a principal with it (Ruling 3); if this is the same person's entry "+
-		"re-created (a rehire, a restore), confirm that and run `port49 directory forget %s` against the "+
-		"broker's admin_socket", ErrUnmapped, printsafe.Line(id.Principal, spiffe.MaxLen), printsafe.Line(m.EntryID, 120),
+		"re-created (a rehire, a restore), confirm that and run `port49 directory forget %s` "+
+		"(it asks for a press of your security key)", ErrUnmapped, printsafe.Line(id.Principal, spiffe.MaxLen), printsafe.Line(m.EntryID, 120),
 		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), attr, printsafe.Line(id.Principal, spiffe.MaxLen))
 }
 
@@ -443,7 +443,7 @@ func (r *Resolver) refuse(ctx context.Context, q lookup, also string, id Identit
 			pin = unreadPin
 			r.sayOnce("unreadpin:"+p, time.Hour, "directory: %s: the pin it was held to could not be read (%v); "+
 				"the principal is held refused to every entry; once the store is healthy, `port49 directory forget %s` "+
-				"against the broker's admin_socket frees it", printsafe.Line(p, spiffe.MaxLen), err, printsafe.Line(p, spiffe.MaxLen))
+				"(it asks for a press of your security key) frees it", printsafe.Line(p, spiffe.MaxLen), err, printsafe.Line(p, spiffe.MaxLen))
 		}
 		if err := r.Store.PutMembership(sctx, store.Membership{Principal: p, EntryID: pin, Refused: true,
 			VerifiedAt: now}, r.TTL()); err != nil {

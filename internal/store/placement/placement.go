@@ -68,10 +68,12 @@ type Config struct {
 	// membership read then serves the session store's copy at once rather
 	// than wait CallTimeout. Nil always tries.
 	Reachable func() bool
-	// Say is told once per principal per 10 minutes that a cached pin was
+	// Say is told at most once per principal per 10 minutes that a cached pin was
 	// served, and each pin put back from this region's record; nil says
 	// nothing.
 	Say func(format string, args ...any)
+	// Now is the clock the cached-pin line's window runs on; nil is time.Now.
+	Now func() time.Time
 
 	// Logouts is the process's copy of the directory's logout records, and
 	// LogoutDir where a logout is written (R26). With both nil, logouts stay
@@ -616,22 +618,52 @@ func (p *placed) DeleteMembership(ctx context.Context, principal string) (store.
 	return held, derr
 }
 
-// sayCached says, once per principal per 10 minutes, that a cut directory's
-// cached pin was served (R13: a region keeps serving a pinned member, and
-// says so).
+// Cached-pin lines are said at most once per principal per sayCachedEvery, and the table that
+// remembers them holds at most sayCachedCap principals.
+const (
+	sayCachedEvery = 10 * time.Minute
+	sayCachedCap   = 65536
+)
+
+func (p *placed) now() time.Time {
+	if p.c.Now != nil {
+		return p.c.Now()
+	}
+	return time.Now()
+}
+
+// sayCached says, at most once per principal per 10 minutes, that a cut directory's cached pin was
+// served (R13: a region keeps serving a pinned member, and says so). A cut that starts 10 minutes or
+// more after the last line says it again. A full table drops the entries older than the window, then
+// its oldest one: it is never cleared whole, which would lift the window for every principal at once.
 func (p *placed) sayCached(principal string) {
 	if p.c.Say == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if t, ok := p.said[principal]; ok && time.Since(t) < 10*time.Minute {
+	now := p.now()
+	if t, ok := p.said[principal]; ok && now.Sub(t) < sayCachedEvery {
 		return
 	}
-	if len(p.said) > 1024 {
-		clear(p.said)
+	if _, ok := p.said[principal]; !ok && len(p.said) >= sayCachedCap {
+		for k, t := range p.said {
+			if now.Sub(t) >= sayCachedEvery {
+				delete(p.said, k)
+			}
+		}
+		if len(p.said) >= sayCachedCap {
+			var oldest string
+			var at time.Time
+			for k, t := range p.said {
+				if oldest == "" || t.Before(at) {
+					oldest, at = k, t
+				}
+			}
+			delete(p.said, oldest)
+		}
 	}
-	p.said[principal] = time.Now()
+	p.said[principal] = now
 	p.c.Say("directory store: not answering: serving %s's cached directory membership (its pin as this region "+
 		"last read it); a forget made elsewhere reaches this region when the directory answers",
 		printsafe.Line(principal, 300))

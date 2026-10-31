@@ -97,6 +97,16 @@ const (
 	PerLoginMFARefused     Reason = "per_login_mfa_refused"
 	PerLoginMFAUnavailable Reason = "per_login_mfa_unavailable"
 
+	// The admin-level call's proof (spec §5.1.6; §5.7; §13 decision 54
+	// ruling 15). AdminTouchRequired: a call carried no proof and was
+	// answered with a challenge. AdminTouchProved and AdminTouchRefused: a
+	// proof verified, or did not (or the caller cannot prove).
+	// AdminTouchUnavailable: no attestation roots are loaded.
+	AdminTouchRequired    Reason = "admin_touch_required"
+	AdminTouchProved      Reason = "admin_touch_proved"
+	AdminTouchRefused     Reason = "admin_touch_refused"
+	AdminTouchUnavailable Reason = "admin_touch_unavailable"
+
 	// The directory-password sign-in (spec §5.7; §13 decision 47).
 	// SignInRefused: the name, password or code was not accepted, one reason
 	// to the caller for the three. SignInThrottled: the principal's or the
@@ -186,6 +196,12 @@ const EventIssue = "issue"
 // per_login_mfa_refused (store_unavailable when the broker could not judge).
 const EventPerLoginMFA = "per_login_mfa"
 
+// EventAdminTouch is an admin-level call's proof outcome (spec §5.1.6; §5.7;
+// §13 decision 54 ruling 15): deny admin_touch_required (a challenge was
+// issued, nothing done), permit admin_touch_proved, or deny
+// admin_touch_refused or admin_touch_unavailable.
+const EventAdminTouch = "admin_touch"
+
 const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"
@@ -203,6 +219,7 @@ var reasons = []Reason{
 	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed, RevocationLifted,
 	APIRightMissing, CertificateIssued,
 	PerLoginMFARequired, PerLoginMFAProved, PerLoginMFARefused, PerLoginMFAUnavailable,
+	AdminTouchRequired, AdminTouchProved, AdminTouchRefused, AdminTouchUnavailable,
 	SignInRefused, SignInThrottled, EnrollmentClosed, EnrollmentStoreLost, SecondFactorEnrolled,
 }
 

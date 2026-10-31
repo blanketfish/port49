@@ -1,0 +1,54 @@
+# port49-broker, the login broker (plan 12b). Installed by the port49-server package at
+# /usr/lib/systemd/system/; enable it yourself: `systemctl enable --now port49-broker`.
+#
+# StateDirectory= makes /var/lib/port49-broker 0700 and owned by port49-broker, which is
+# what broker.state_dir requires. The issuing CA key is kept there, so back this directory
+# up with the host. The deliberate absences are port49d.service's.
+[Unit]
+Description=port49 broker
+Documentation=https://github.com/rhwendt/port49
+After=network-online.target
+Wants=network-online.target
+# No start limit: a store that is down at boot would use five starts in under five minutes
+# (30s start_timeout, then RestartSec), and the unit would stay failed after the store
+# came back. A refused config retries every RestartSec, under journald's rate limit.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=port49-broker
+Group=port49-broker
+ExecStart=/usr/bin/port49-broker --config /etc/port49/port49-broker.yaml
+ExecReload=/bin/sh -c 'kill -HUP "$MAINPID"'
+# kill is the shell's builtin: /bin/kill is procps's, which a minimal host does not have
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=65536
+UMask=0077
+StateDirectory=port49-broker
+StateDirectoryMode=0700
+# The broker binds 8443 and needs no capability at all.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=true
+ProtectHome=yes
+# More hardening, none of it making /etc read-only (see above). Unmeasured under real systemd:
+# the first start on a host is the check, and `systemd-analyze security` scores the result.
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

@@ -240,6 +240,21 @@ func TestReadinessNeverFollowsTheProvider(t *testing.T) {
 	}
 }
 
+// waitKeyFile waits for the key file the fetch of issuer saves in dir. The keys are saved after
+// Fetch returns, by a write to a temporary file and a rename, so the file's presence means the
+// save is done: a test that returns before it races its temporary directory's removal.
+func waitKeyFile(t *testing.T, dir, issuer string) {
+	t.Helper()
+	kept := filepath.Join(dir, oidc.KeyFileName(issuer))
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(kept); err == nil {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("the fetched keys were never saved: %v", err)
+		}
+	}
+}
+
 // The stale-keys line restarts the process that runs the broker: port49d when
 // it is embedded, port49-broker when it is the broker alone (final review F5).
 func TestTheStaleKeysLineNamesTheRunningProcess(t *testing.T) {
@@ -264,6 +279,7 @@ func TestTheStaleKeysLineNamesTheRunningProcess(t *testing.T) {
 		if err := ks.Fetch(context.Background()); err != nil {
 			t.Fatal(err)
 		}
+		waitKeyFile(t, dir, iss.URL)
 		iss.Fail(503)
 		time.Sleep(60 * time.Millisecond)
 		_ = ks.Fetch(context.Background())
@@ -295,16 +311,7 @@ func TestOpenOIDCBuildsAClusterKeySet(t *testing.T) {
 	if err := set.Verifiers[0].Keys.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// The fetched keys are saved after Fetch returns; wait for the file so the
-	// save never races the temporary directory's removal.
-	kept := filepath.Join(dir, oidc.KeyFileName(cfg.Broker.Identity.K8s[0].Issuer))
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(kept); err == nil {
-			break
-		} else if time.Now().After(deadline) {
-			t.Fatalf("the fetched keys were never saved: %v", err)
-		}
-	}
+	waitKeyFile(t, dir, cfg.Broker.Identity.K8s[0].Issuer)
 	set.Verifiers[0].Keys.WaitNotes()
 }
 
@@ -358,6 +365,9 @@ func TestAMigratingClusterKeySetsAreQuietAboutDiscoveryNamingTheOtherIssuer(t *t
 				t.Fatal(err)
 			}
 			v.Keys.WaitNotes()
+		}
+		for _, v := range cfg.Broker.Identity.K8s {
+			waitKeyFile(t, dir, v.Issuer)
 		}
 		mu.Lock()
 		defer mu.Unlock()

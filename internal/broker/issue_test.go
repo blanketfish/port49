@@ -386,7 +386,6 @@ func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
 		t.Fatalf("with the lifetime lowered to 1h the record stands %s, want %s", got, want)
 	}
 	f.b.CertificateLifetime = 0
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	if got := f.b.logoutUnapplied(alicePrincipal, f.b.Now().Add(f.b.logoutRecordTTL())); !strings.Contains(got,
 		"`port49 revoke --cert-issuer DN --cert-serial HEX`") ||
 		!strings.Contains(got, "every certificate issued to "+alicePrincipal+" before the logout, by every broker") ||
@@ -414,7 +413,6 @@ func TestALogoutOutlivesMaxTokenAgeForAnIssuedCertificate(t *testing.T) {
 	gc := g.issued(t, g.aliceSignIn(giss))
 	ca := g.b.Issuer
 	g.b.Issuer = nil
-	g.b.AdminSocket = "/run/port49/admin.sock"
 	if got := g.b.logoutUnapplied(alicePrincipal, g.b.Now()); strings.Contains(got, "--cert-serial") {
 		t.Fatalf("a broker that issues nothing names revoking by serial: %s", got)
 	}

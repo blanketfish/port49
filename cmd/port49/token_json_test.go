@@ -111,7 +111,8 @@ func TestTokenJSONOnADeny(t *testing.T) {
 			Login: "LOGINTOKEN"})
 	}))
 	var out, errb lockedBuffer
-	code := run([]string{"token", "--json", "--socket", sock, "leaf1"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "--json", "leaf1"}, &out, &errb)
 	var f tokenFailure
 	if code != 1 || json.Unmarshal([]byte(out.String()), &f) != nil || f.Reason != "no_grants_matched" ||
 		strings.Count(out.String(), "\n") != 1 || !strings.Contains(errb.String(), "deny no_grants_matched") ||
@@ -216,7 +217,8 @@ func TestATouchProofBrokerFaultIsAgentError(t *testing.T) {
 		}
 	}))
 	var out, errb lockedBuffer
-	code := run([]string{"token", "--json", "--socket", sock, "leaf1"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "--json", "leaf1"}, &out, &errb)
 	var f tokenFailure
 	if code != 1 || json.Unmarshal([]byte(out.String()), &f) != nil || f.Error != "agent_error" || f.PerLoginMFA != nil {
 		t.Fatalf("code %d stdout %q", code, out.String())

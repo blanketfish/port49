@@ -70,8 +70,8 @@ func TestSplitConfigsLoadInTheirRoles(t *testing.T) {
 	}
 
 	for name, n := range map[string]splitNode{
-		"A": {Listen: tacacsAddr, Metrics: metricsAddr, Admin: filepath.Join(dir, "a.sock"), Spool: spoolPath},
-		"B": {Listen: splitSecondAddr + ":49", Metrics: splitMetricsB, Admin: filepath.Join(dir, "b.sock"),
+		"A": {Listen: tacacsAddr, Metrics: metricsAddr, Spool: spoolPath},
+		"B": {Listen: splitSecondAddr + ":49", Metrics: splitMetricsB,
 			Spool: "/tmp/port49-lab-acct-b.jsonl"},
 	} {
 		body, err := splitDaemonYAML(string(baseRaw), n, pol, invPath, daemonStore)
@@ -86,10 +86,10 @@ func TestSplitConfigsLoadInTheirRoles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("port49d %s's config does not load: %v\n%s", name, err, body)
 		}
-		if cfg.Listen != n.Listen || cfg.MetricsListen != n.Metrics || cfg.AdminSocket != n.Admin ||
+		if cfg.Listen != n.Listen || cfg.MetricsListen != n.Metrics ||
 			cfg.Accounting.SpoolPath != n.Spool {
-			t.Errorf("port49d %s: listen %q, metrics %q, admin %q, spool %q; want %+v", name, cfg.Listen,
-				cfg.MetricsListen, cfg.AdminSocket, cfg.Accounting.SpoolPath, n)
+			t.Errorf("port49d %s: listen %q, metrics %q, spool %q; want %+v", name, cfg.Listen,
+				cfg.MetricsListen, cfg.Accounting.SpoolPath, n)
 		}
 		if cfg.Broker != nil || cfg.Policy == nil || cfg.Policy.File != pol {
 			t.Errorf("port49d %s: broker %v, policy %v; want no broker: block and policy.file %s", name, cfg.Broker,
@@ -101,7 +101,7 @@ func TestSplitConfigsLoadInTheirRoles(t *testing.T) {
 	}
 
 	body, err := splitBrokerYAML(string(baseRaw), string(sliceBroker), splitBrokerOpts{Policy: pol, Inventory: invPath,
-		State: state, Metrics: splitMetricsBroker, Admin: filepath.Join(dir, "broker.sock"), Store: brokerStore,
+		State: state, Metrics: splitMetricsBroker, Store: brokerStore,
 		PKI: pki})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestSplitConfigsLoadInTheirRoles(t *testing.T) {
 }
 
 func TestSplitDaemonYAMLRefusesABaseItCannotDerive(t *testing.T) {
-	n := splitNode{Listen: "x:49", Metrics: "m", Admin: "a", Spool: "s"}
+	n := splitNode{Listen: "x:49", Metrics: "m", Spool: "s"}
 	if _, err := splitDaemonYAML("listen: other\n", n, "p", "i", "\nstores: {}\n"); err == nil {
 		t.Fatal("a base with none of the lines to swap was derived from without an error")
 	}

@@ -107,7 +107,7 @@ func TestRevokingAServiceAccountRefusesItsToken(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, clusterPolicy)
 	iss := f.withCluster(t)
 	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: "system:serviceaccount:netops:oxidized",
-		Origin: "admin_socket uid 0"})
+		Origin: "offline uid 0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestALongServiceAccountRevokes(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, clusterPolicy)
 	iss := f.withCluster(t)
 	f.b.Identity.Verifiers[0].Namespaces = []string{ns}
-	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: p, Origin: "admin_socket uid 0"}); err != nil {
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: p, Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	raw := iss.ServiceAccountToken(t, "k1", k8sTestIssuer, "port49", ns, sa, f.b.Now(), nil)

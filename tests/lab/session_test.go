@@ -104,7 +104,7 @@ func (l *lab) sessionConfig() (string, error) {
 func sessionMint(sock, device string) (tok, warn string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "token", "--socket", sock, device)
+	cmd := withAgent(exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "token", device), sock)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, runErr := cmd.Output()
@@ -121,7 +121,7 @@ func sessionMint(sock, device string) (tok, warn string, err error) {
 func refreshCLI(sock string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "refresh", "--socket", sock).CombinedOutput()
+	out, err := withAgent(exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "refresh"), sock).CombinedOutput()
 	return strings.TrimSpace(string(out)), err == nil
 }
 

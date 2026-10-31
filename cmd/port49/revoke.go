@@ -11,47 +11,37 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net"
+	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/admin"
-)
-
-// The client waits past port49d's own hold on the connection
-// (admin.RevokeWait, admin.ListWait), so it is never the side that gives up
-// on a revocation that goes on to finish and loses its report.
-const (
-	revokeWait = admin.RevokeWait + 5*time.Second
-	listWait   = admin.ListWait + 5*time.Second
 )
 
 // maxCertFile bounds the --cert file read: a certificate is a few KiB, and
 // a mistyped path (/dev/zero, a log) must not hang or exhaust the client.
 const maxCertFile = 1 << 20
 
-// revokeCmd is `port49 revoke` (spec §12; plan 7a): it asks port49d, over
-// its admin socket, to revoke or lift a principal or one certificate, or to
-// list the revocations in force.
+// revokeCmd is `port49 revoke` (spec §5.1.4, §5.1.6, §12): it asks the broker,
+// through your agent and under your api: rights, to revoke or lift a principal,
+// a certificate or a key, or to list the revocations in force. Every write but
+// --mine needs a press of your security key, bound to that one request.
 func revokeCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 revoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	socket := fs.String("socket", "/run/port49/port49d.sock", "port49d's admin_socket")
 	principal := fs.String("principal", "", "the principal, as the log names it: user:alice@example.com")
 	certFile := fs.String("cert", "", "a file holding the one certificate (PEM or DER); its issuer and serial are read from it")
 	issuer := fs.String("cert-issuer", "", "the certificate's issuer, as the broker spells it (RFC 2253: CN=…,O=…)")
 	serial := fs.String("cert-serial", "", "the certificate's serial, in hex")
 	lift := fs.Bool("lift", false, "lift the revocation instead")
 	list := fs.Bool("list", false, "list the revocations in force")
-	mine := fs.Bool("mine", false, "end your own sessions and delete your own unspent tokens, through your agent; leaves no mark")
-	viaAgent := fs.Bool("via-agent", false, "send the revocation to the broker through your agent, under your api: rights")
-	device := fs.String("device", "", "with --mine or --via-agent: one device, by its inventory name")
+	mine := fs.Bool("mine", false, "end your own sessions and delete your own unspent tokens; leaves no mark, asks for no touch")
+	device := fs.String("device", "", "one device, by its inventory name, with --username (and --mine for your own session there)")
 	username := fs.String("username", "", "with --device: the device-facing username")
-	agentSocket := fs.String("agent-socket", agent.SocketPath(), "your agent's socket")
-	yes := fs.Bool("yes", false, "with --via-agent --principal: do not ask before revoking")
+	sid := fs.String("sid", "", "end one OIDC session by its sid, as a back-channel logout does; with --sid-issuer")
+	sidIssuer := fs.String("sid-issuer", "", "with --sid: the provider's issuer URL, as the broker's log names it")
+	yes := fs.Bool("yes", false, "with --principal: do not ask before revoking")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -59,176 +49,191 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	if *yes && !(*viaAgent && *principal != "") {
-		fmt.Fprintln(stderr, "port49 revoke: --yes goes with --via-agent --principal, the one form that asks")
+	byCert := *certFile != "" || *issuer != "" || *serial != ""
+	byKey := *device != "" || *username != ""
+	bySid := *sid != "" || *sidIssuer != ""
+	switch {
+	case *yes && (*principal == "" || *lift || *list || *mine):
+		fmt.Fprintln(stderr, "port49 revoke: --yes goes with --principal, the one form that asks")
 		return 2
-	}
-	if *mine || *viaAgent || *device != "" || *username != "" {
-		socketSet := false
-		fs.Visit(func(f *flag.Flag) { socketSet = socketSet || f.Name == "socket" })
-		switch {
-		case socketSet:
-			fmt.Fprintln(stderr, "port49 revoke: --socket is port49d's admin socket; over the agent the socket is "+
-				"--agent-socket")
-			return 2
-		case *list || *lift || *certFile != "" || *issuer != "" || *serial != "":
-			fmt.Fprintln(stderr, "port49 revoke: over the broker a revocation names --mine, --principal, or "+
-				"--device and --username; lifting, listing and certificates are port49d's admin socket's (--socket)")
-			return 2
-		case *mine && *viaAgent, *mine && *principal != "":
-			fmt.Fprintln(stderr, "port49 revoke: --mine names yourself; use --via-agent --principal for another")
-			return 2
-		case (*device == "") != (*username == ""):
-			fmt.Fprintln(stderr, "port49 revoke: --device and --username go together")
-			return 2
-		case !*mine && !*viaAgent:
-			// A key means one thing whatever the caller's rights (pre-flight I2).
-			fmt.Fprintln(stderr, "port49 revoke: --device and --username go with --mine (your own session there) "+
-				"or --via-agent (whoever's, under api: revoke_others)")
-			return 2
-		case !*mine && (*principal == "") == (*device == ""):
-			fmt.Fprintln(stderr, "port49 revoke: --via-agent names --principal, or --device and --username")
-			return 2
-		}
-		if *viaAgent && *principal != "" && !*yes && confirmTTY() && !confirmRevoke(*principal, stderr) {
-			fmt.Fprintln(stderr, "port49 revoke: nothing was revoked")
-			return 1
-		}
-		return revokeOverAgent(*agentSocket, api.RevokeRequest{Mine: *mine, Principal: *principal,
-			Device: *device, Username: *username}, stdout, stderr)
-	}
-	// The flags are checked before the file is read: a usage error is
-	// exit 2 whatever the file holds.
-	if *list {
-		if *principal != "" || *certFile != "" || *issuer != "" || *serial != "" || *lift {
-			fmt.Fprintln(stderr, "port49 revoke: --list takes no principal, certificate or --lift")
-			return 2
-		}
-		return askRevoke(*socket, admin.Request{Op: "revocations"}, listWait, stdout, stderr)
-	}
-	if *certFile != "" && (*issuer != "" || *serial != "") {
+	case bySid && (*sid == "" || *sidIssuer == ""):
+		fmt.Fprintln(stderr, "port49 revoke: a session is named by --sid and --sid-issuer, both")
+		return 2
+	case bySid && (*principal != "" || byCert || byKey || *lift || *mine || *list):
+		fmt.Fprintln(stderr, "port49 revoke: --sid names one session; it takes no principal, certificate, key, "+
+			"--lift, --list or --mine")
+		return 2
+	case *list && (*principal != "" || byCert || byKey || *lift || *mine):
+		fmt.Fprintln(stderr, "port49 revoke: --list takes no principal, certificate, key, --lift or --mine")
+		return 2
+	case *mine && (*principal != "" || byCert || *lift):
+		fmt.Fprintln(stderr, "port49 revoke: --mine names yourself (with --device and --username, your own session "+
+			"there); use --principal, --cert, or --device and --username alone for another")
+		return 2
+	case byKey && (*device == "") != (*username == ""):
+		fmt.Fprintln(stderr, "port49 revoke: --device and --username go together")
+		return 2
+	case *certFile != "" && (*issuer != "" || *serial != ""):
 		fmt.Fprintln(stderr, "port49 revoke: --cert, or --cert-issuer and --cert-serial; not both")
 		return 2
-	}
-	byCert := *certFile != "" || *issuer != "" || *serial != ""
-	switch {
-	case (*principal != "") == byCert:
-		fmt.Fprintln(stderr, "port49 revoke: name a principal (--principal), or a certificate (--cert, or "+
-			"--cert-issuer and --cert-serial); one of the two")
-		return 2
-	case *certFile == "" && byCert && (*issuer == "" || *serial == ""):
+	case byCert && *certFile == "" && (*issuer == "" || *serial == ""):
 		fmt.Fprintln(stderr, "port49 revoke: a certificate is named by --cert-issuer and --cert-serial, both")
 		return 2
+	case byKey && *lift:
+		fmt.Fprintln(stderr, "port49 revoke: --lift names a principal or a certificate; a key (a session) has no mark to lift")
+		return 2
 	}
-	req := admin.Request{Op: "revoke", Principal: *principal, CertIssuer: *issuer, CertSerial: *serial, Lift: *lift}
-	if *certFile != "" {
-		c, err := readCertificate(*certFile)
-		if err != nil {
-			fmt.Fprintln(stderr, "port49 revoke:", err)
-			return 1
+	if *mine {
+		return revokeMine(api.RevokeRequest{Mine: true, Device: *device, Username: *username}, stdout, stderr)
+	}
+	if *list {
+		return revokeList(stdout, stderr)
+	}
+	forms := 0
+	for _, set := range []bool{*principal != "", byCert, byKey, bySid} {
+		if set {
+			forms++
 		}
-		// The serial goes as explicit hex, 0x after any sign: one of digits
-		// alone (sequential CAs issue 10, 11, …) is otherwise taken for a
-		// decimal copied by hand, and the report advises against a correct
-		// revocation (final review I1).
-		req.CertIssuer, req.CertSerial = c.Issuer.String(), hexSerial(c.SerialNumber)
-		// The broker's report names the issuer and serial, not whose
-		// certificate it is; this says, before anything is sent. Quoted as
-		// the broker quotes an issuer: a hostile certificate's names must
-		// not reach the terminal as escape sequences.
-		fmt.Fprintf(stderr, "port49 revoke: %s: subject %q, issuer %q, serial %s\n", *certFile, c.Subject.String(),
-			req.CertIssuer, req.CertSerial)
 	}
-	return askRevoke(*socket, req, revokeWait, stdout, stderr)
-}
-
-// askRevoke sends a revoke or revocations request and prints its answer.
-func askRevoke(socket string, req admin.Request, wait time.Duration, stdout, stderr io.Writer) int {
-	resp, err := askAdmin(socket, req, wait)
-	if err == nil && req.Op == "revoke" && resp.Error == "" && resp.Text == "" {
-		// port49d always says what it did: an answer that names nothing
-		// ({}) is not its report, and the op may have run.
-		err = &unansweredError{errors.New("its answer named no revocation")}
+	if forms != 1 {
+		fmt.Fprintln(stderr, "port49 revoke: name a principal (--principal), a certificate (--cert, or "+
+			"--cert-issuer and --cert-serial), a key (--device and --username), or a session (--sid and --sid-issuer); one of the four. Your own "+
+			"sessions are --mine")
+		return 2
 	}
-	var unanswered *unansweredError
-	if errors.As(err, &unanswered) && req.Op == "revoke" {
-		// The request reached port49d, which marks first: the revocation
-		// may stand. A retry would only queue behind it.
-		what := "revocation"
-		if req.Lift {
-			what = "lift"
+	var rev api.RevokeRequest
+	switch {
+	case bySid:
+		rev = api.RevokeRequest{Sid: *sid, Issuer: *sidIssuer}
+	case byKey:
+		rev = api.RevokeRequest{Device: *device, Username: *username}
+	case byCert:
+		rev = api.RevokeRequest{CertIssuer: *issuer, CertSerial: *serial}
+		if *certFile != "" {
+			c, err := readCertificate(*certFile)
+			if err != nil {
+				fmt.Fprintln(stderr, "port49 revoke:", err)
+				return 1
+			}
+			// The serial goes as explicit hex, 0x after any sign: one of digits
+			// alone (sequential CAs issue 10, 11, …) is otherwise taken for a
+			// decimal copied by hand, and the report advises against a correct
+			// revocation (final review I1).
+			rev.CertIssuer, rev.CertSerial = c.Issuer.String(), hexSerial(c.SerialNumber)
+			// The broker's report names the issuer and serial, not whose
+			// certificate it is; this says, before anything is sent. Quoted as
+			// the broker quotes an issuer: a hostile certificate's names must
+			// not reach the terminal as escape sequences.
+			fmt.Fprintf(stderr, "port49 revoke: %s: subject %q, issuer %q, serial %s\n", *certFile, c.Subject.String(),
+				rev.CertIssuer, rev.CertSerial)
 		}
-		fmt.Fprintf(stderr, "port49 revoke: port49d did not answer (%v); the %s may be in force — check "+
-			"`port49 revoke --list` and port49d's log before retrying\n", unanswered.err, what)
+	default:
+		rev = api.RevokeRequest{Principal: *principal}
+	}
+	if *lift {
+		l := api.LiftRequest{Principal: rev.Principal, CertIssuer: rev.CertIssuer, CertSerial: rev.CertSerial}
+		return revokeAdmin("lift", "/v1/revocations/lift", l, stdout, stderr)
+	}
+	if *principal != "" && !*yes && confirmTTY() && !confirmRevoke(*principal, stderr) {
+		fmt.Fprintln(stderr, "port49 revoke: nothing was revoked")
 		return 1
 	}
+	return revokeAdmin("revocation", "/v1/tokens/revoke", rev, stdout, stderr)
+}
+
+// revokeAdmin makes one revoke or lift call through the agent and prints its
+// answer; what is the word an unanswered call is named by.
+func revokeAdmin(what, path string, in any, stdout, stderr io.Writer) int {
+	body, err := json.Marshal(in)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 revoke:", err)
 		return 1
 	}
-	if resp.Error != "" {
-		fmt.Fprintln(stderr, "port49 revoke:", resp.Error)
+	resp, code := adminCall("port49 revoke", agent.AdminRequest{Method: http.MethodPost, Path: path, Body: body},
+		fmt.Sprintf("the %s may be in force: check `port49 revoke --list` and the broker's decision log (event "+
+			"revoke) before trying again", what), stderr)
+	if code != 0 {
+		return code
+	}
+	if path == "/v1/revocations/lift" {
+		return printAdminResult("port49 revoke", resp, stdout, stderr)
+	}
+	var rep api.RevokeResponse
+	if json.Unmarshal(resp.Body, &rep) != nil || rep.By == "" {
+		fmt.Fprintln(stderr, "port49 revoke: the broker's answer named no revocation; it may be in force: check "+
+			"`port49 revoke --list` and the broker's decision log before trying again")
 		return 1
 	}
-	fmt.Fprintln(stdout, resp.Text)
-	if req.Op == "revocations" {
-		fmt.Fprintln(stderr, "port49 revoke: a self or key revocation (--mine, or --via-agent --device) leaves no "+
-			"mark and is not listed: port49d's decision log names each (event revoke, revocation.by self or key)")
-	}
-	if resp.Partial {
-		// In force, but not finished or not saved: a script must not read
-		// this as done (pre-flight M10).
-		return 3
-	}
-	return 0
-}
-
-// revokeOverAgent sends a revocation to the broker through the agent, under
-// the caller's api: rights (spec §5.1.4, §12). It prints what the broker
-// says it reached and exits as port49 revoke does: 0 done, 1 refused or
-// unreachable, 3 in force but incomplete or, for a standing mark, unsaved.
-func revokeOverAgent(socket string, req api.RevokeRequest, stdout, stderr io.Writer) int {
-	rep, err := agent.NewClient(socket).Revoke(context.Background(), req)
-	var refused *agent.APIError
-	switch {
-	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 revoke: no agent at %s; run 'port49 login'\n", socket)
-		return 1
-	case errors.As(err, &refused) && refused.Code == "api_right_missing" && req.Principal != "":
-		fmt.Fprintln(stderr, "port49 revoke: refused: revoking another principal needs the api: revoke_others "+
-			"right, which your subject does not declare")
-		return 1
-	case errors.As(err, &refused) && refused.Code == "api_right_missing":
-		fmt.Fprintf(stderr, "port49 revoke: refused: ending a (device, username) whoever holds it needs the api: "+
-			"revoke_others right, which your subject does not declare; for your own session there, use --mine "+
-			"--device %s --username %s\n", req.Device, req.Username)
-		return 1
-	case err != nil:
-		// A 503 (revocation_busy among them) carries its code, detail and
-		// retry hint in the APIError's text; ErrAgentTooOld says to log in
-		// again; a RevokedError says why the session ended.
-		fmt.Fprintln(stderr, "port49 revoke:", unprefixed(err))
-		return 1
-	}
-	if rep.By != "self" && rep.Principal != "" {
-		// Whom the broker revoked, by the policy's subject, so a misspelt
-		// colleague is seen at once (pre-flight M11).
-		subject := "no subject in the policy in force names it"
-		if rep.Subject != "" {
-			subject = "subject " + rep.Subject
-		}
-		fmt.Fprintf(stdout, "target: %s (%s)\n", rep.Principal, subject)
-	}
-	fmt.Fprintln(stdout, rep.Text)
+	printRevokeReport(rep, stdout)
 	if rep.Incomplete != "" || (rep.Saved != nil && !*rep.Saved) {
 		return 3
 	}
 	return 0
 }
 
-// confirmIn and confirmTTY are where port49 revoke --via-agent --principal
-// asks before it puts a standing mark on someone from a laptop (pre-flight
-// M11): the terminal, and only when stdin is one. Swapped in tests.
+// revokeList prints the revocations in force: a read under revoke_others or
+// lift_revocations, with no touch.
+func revokeList(stdout, stderr io.Writer) int {
+	resp, code := adminCall("port49 revoke", agent.AdminRequest{Method: http.MethodGet, Path: "/v1/revocations"}, "", stderr)
+	if code != 0 {
+		return code
+	}
+	var list api.RevocationList
+	if json.Unmarshal(resp.Body, &list) != nil {
+		fmt.Fprintln(stderr, "port49 revoke: the broker's answer is not a revocation list; run it again, and look at "+
+			"the broker's log if it does it again")
+		return 1
+	}
+	fmt.Fprintln(stdout, safeText(list.Text))
+	fmt.Fprintln(stderr, "port49 revoke: a self or key revocation (--mine, or --device and --username) leaves no mark "+
+		"and is not listed: the broker's decision log names each (event revoke, revocation.by self or key)")
+	return 0
+}
+
+// revokeMine ends the caller's own sessions through the agent: no mark, no
+// touch (spec §5.1.4). It exits as port49 revoke does: 0 done, 1 refused or
+// unreachable, 3 incomplete.
+func revokeMine(req api.RevokeRequest, stdout, stderr io.Writer) int {
+	rep, err := agent.NewClient(agent.SocketPath()).Revoke(context.Background(), req)
+	var refused *agent.APIError
+	switch {
+	case errors.Is(err, agent.ErrNoAgent):
+		fmt.Fprintln(stderr, "port49 revoke: no agent is running for you; run 'port49 login', then run this again")
+		return 1
+	case errors.As(err, &refused):
+		fmt.Fprintf(stderr, "port49 revoke: refused: %s: %s\n", safeLine(refused.Code), safeLine(refused.Detail))
+		return 1
+	case err != nil:
+		// A 503 (revocation_busy among them) carries its code, detail and
+		// retry hint in the APIError's text; ErrAgentTooOld says to log in
+		// again; a RevokedError says why the session ended.
+		fmt.Fprintln(stderr, "port49 revoke:", safeLine(unprefixed(err)))
+		return 1
+	}
+	printRevokeReport(rep, stdout)
+	if rep.Incomplete != "" || (rep.Saved != nil && !*rep.Saved) {
+		return 3
+	}
+	return 0
+}
+
+// printRevokeReport prints what the broker says it reached.
+func printRevokeReport(rep api.RevokeResponse, stdout io.Writer) {
+	if rep.By != "self" && rep.Principal != "" {
+		// Whom the broker revoked, by the policy's subject, so a misspelt
+		// colleague is seen at once (pre-flight M11).
+		subject := "no subject in the policy in force names it"
+		if rep.Subject != "" {
+			subject = "subject " + safeLine(rep.Subject)
+		}
+		fmt.Fprintf(stdout, "target: %s (%s)\n", safeLine(rep.Principal), subject)
+	}
+	fmt.Fprintln(stdout, safeText(rep.Text))
+}
+
+// confirmIn and confirmTTY are where port49 revoke --principal asks before it
+// puts a standing mark on someone from a laptop (pre-flight M11): the
+// terminal, and only when stdin is one. Swapped in tests.
 var (
 	confirmIn  io.Reader = os.Stdin
 	confirmTTY           = func() bool { return isTerminal(os.Stdin) }
@@ -239,7 +244,7 @@ var (
 // does not.
 func confirmRevoke(principal string, stderr io.Writer) bool {
 	fmt.Fprintf(stderr, "revoke %s everywhere? It is a standing mark: every mint by it is refused until it is "+
-		"lifted on port49d's admin socket. [y/N] ", principal)
+		"lifted with port49 revoke --lift. [y/N] ", principal)
 	line, _ := bufio.NewReader(confirmIn).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
@@ -326,34 +331,4 @@ func derPrivateKey(raw []byte) bool {
 	}
 	_, err := x509.ParseECPrivateKey(raw)
 	return err == nil
-}
-
-// unansweredError is askAdmin's failure after the request was written: the
-// op may have run.
-type unansweredError struct{ err error }
-
-func (e *unansweredError) Error() string { return e.err.Error() }
-func (e *unansweredError) Unwrap() error { return e.err }
-
-// askAdmin sends req to port49d's admin socket and returns its one answer,
-// waiting at most wait. The socket answers port49d's user and root alone.
-// The write side stays open until the answer is read: port49d takes a
-// half-close for a hang-up and abandons the op. A failure once the request
-// is written is an *unansweredError.
-func askAdmin(socket string, req admin.Request, wait time.Duration) (admin.Response, error) {
-	c, err := net.DialTimeout("unix", socket, 5*time.Second)
-	if err != nil {
-		return admin.Response{}, fmt.Errorf("%v (is admin_socket set in port49d.yaml, and are you port49d's user "+
-			"or root?)", err)
-	}
-	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(wait))
-	if err := json.NewEncoder(c).Encode(req); err != nil {
-		return admin.Response{}, err
-	}
-	var resp admin.Response
-	if err := json.NewDecoder(c).Decode(&resp); err != nil {
-		return admin.Response{}, &unansweredError{err}
-	}
-	return resp, nil
 }

@@ -36,5 +36,6 @@ __pycache__/
 /clients/python/src/*.egg-info/
 # containerlab's per-lab working directory, created beside the topology it runs
 /tests/lab/topologies/clab-*/
-# deploy/compose's trial PKI and env files (go run ./tests/compose/cmd/compose-pki)
+# deploy/compose's trial PKI and secret files (go run ./tests/compose/cmd/compose-pki)
 /deploy/compose/local/
+/cmd/port49/port49

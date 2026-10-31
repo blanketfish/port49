@@ -64,7 +64,11 @@ func (q *qualEnv) l78() {
 		q.t.Fatal(err)
 	}
 	cfg := q.config() // writes the private copy of the policy the steps replace
-	policy := filepath.Join(root, "tests", "lab", "logs", "port49d-qual-"+q.l.p.name+"-policy", "policy.yaml")
+	privDir, err := labPrivateSub("port49d-qual-" + q.l.p.name + "-policy")
+	if err != nil {
+		q.t.Fatal(err)
+	}
+	policy := filepath.Join(privDir, "policy.yaml")
 	if _, err := os.Stat(policy); err != nil {
 		q.t.Fatalf("INVALID: the conformance config's private policy is not at %s: %v", policy, err)
 	}
@@ -249,7 +253,7 @@ func (q *qualEnv) scrub(s string) string {
 // l78Mint runs `port49 token`; unlike q.mint a refusal is a result, not a
 // harness fault. The token is never printed. mintErr is stderr's first line.
 func (q *qualEnv) l78Mint() (tok, mintErr string) {
-	cmd := exec.Command(filepath.Join(root, "bin", "port49"), "token", "--socket", q.sock, q.l.p.node)
+	cmd := withAgent(exec.Command(filepath.Join(root, "bin", "port49"), "token", q.l.p.node), q.sock)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

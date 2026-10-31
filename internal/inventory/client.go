@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
@@ -154,7 +154,7 @@ func readCA(caFile string) (*x509.CertPool, error) {
 	if caFile == "" {
 		return nil, errors.New("ca_file: none given; the client trusts the one CA that issues the service's certificate")
 	}
-	raw, err := config.ReadRegular(caFile, maxCAFile)
+	raw, err := fence.Read(caFile, maxCAFile, "ca_file")
 	if err != nil {
 		return nil, fmt.Errorf("ca_file: %w", err)
 	}

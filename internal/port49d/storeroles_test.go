@@ -69,8 +69,7 @@ func writeStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string, etcdLin
 	}
 	raw = append(raw, []byte("\nstores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://127.0.0.1:2379]\n"+
 		"      ca_file: "+ca+"\n      daemon: {cert_file: "+d[0]+", key_file: "+d[1]+"}\n"+
-		"      broker: {cert_file: "+b[0]+", key_file: "+b[1]+"}\n"+deeper.String()+
-		"admin_socket: "+filepath.Join(dir, "admin.sock")+"\n")...) // etcd needs one (Task 10, I16)
+		"      broker: {cert_file: "+b[0]+", key_file: "+b[1]+"}\n"+deeper.String())...)
 	p := filepath.Join(dir, "port49d.yaml")
 	if err := os.WriteFile(p, raw, 0o600); err != nil {
 		t.Fatal(err)
@@ -260,8 +259,7 @@ func writeTwoStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string) stri
 			"      ca_file: " + ca + "\n      daemon: {cert_file: " + d[0] + ", key_file: " + d[1] + "}\n" +
 			"      broker: {cert_file: " + b[0] + ", key_file: " + b[1] + "}\n"
 	}
-	raw = append(raw, []byte("\nstores:\n"+block("directory", "dir-0")+block("session", "sess-0")+
-		"admin_socket: "+filepath.Join(dir, "admin.sock")+"\n")...)
+	raw = append(raw, []byte("\nstores:\n"+block("directory", "dir-0")+block("session", "sess-0"))...)
 	p := filepath.Join(dir, "port49d.yaml")
 	if err := os.WriteFile(p, raw, 0o600); err != nil {
 		t.Fatal(err)

@@ -92,7 +92,16 @@ func Challenge(s string) ([]byte, error) {
 
 // Exporter is the connection's exporter value for a touch proof.
 func Exporter(cs tls.ConnectionState) ([]byte, error) {
-	ekm, err := cs.ExportKeyingMaterial(api.MFAExporterLabel, nil, 32)
+	return exporter(cs, api.MFAExporterLabel)
+}
+
+// AdminExporter is the connection's exporter value for an admin proof.
+func AdminExporter(cs tls.ConnectionState) ([]byte, error) {
+	return exporter(cs, api.AdminExporterLabel)
+}
+
+func exporter(cs tls.ConnectionState, label string) ([]byte, error) {
+	ekm, err := cs.ExportKeyingMaterial(label, nil, 32)
 	if err != nil {
 		return nil, fmt.Errorf("the connection's exporter value: %w", err)
 	}
@@ -104,6 +113,25 @@ func Exporter(cs tls.ConnectionState) ([]byte, error) {
 // inside. The caller holds no connection across it.
 func Sign(touch crypto.Signer, challenge, ekm []byte) ([]byte, error) {
 	return api.SignRefresh(touch, api.MFAMessage(challenge, ekm))
+}
+
+// SignAdmin is the touch key's signature over api.AdminMessage for one admin
+// request, as the broker verifies it: the challenge, the request's own hash
+// (api.AdminRequestSHA256) and the connection's admin exporter value. The
+// touch happens inside; the caller holds no connection across it.
+func SignAdmin(touch crypto.Signer, challenge []byte, request [32]byte, ekm []byte) ([]byte, error) {
+	return api.SignRefresh(touch, api.AdminMessage(challenge, request, ekm))
+}
+
+// AdminHeader is the Port49-Admin-Proof header's value for a signed
+// challenge: base64url of the proof's JSON.
+func AdminHeader(challenge string, sig []byte, chain []string) (string, error) {
+	raw, err := json.Marshal(api.AdminProof{Challenge: challenge, Signature: base64.RawURLEncoding.EncodeToString(sig),
+		Attestation: chain})
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 // Request is POST /v1/mfa's body for a touch proof.
@@ -124,24 +152,48 @@ func Request(challenge string, sig []byte, chain []string) ([]byte, error) {
 // dialed.
 func Post(ctx context.Context, do func(*http.Request) (*http.Response, error), url string, body, ekm []byte,
 	state func(net.Conn) (tls.ConnectionState, bool)) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return post(ctx, do, req, Exporter, body, ekm, state)
+}
+
+// PostRequest is Post for a request the caller built: its method, URL and
+// headers are sent as they are, under Post's connection rule. A request that
+// carries api.AdminProofHeader is an admin call, and ekm is then the
+// connection's exporter value under api.AdminExporterLabel; any other is held
+// to the per-login value, as Post is. So a value of the other label is a
+// connection that changed, and nothing is sent. req's own body is replaced by
+// body.
+func PostRequest(ctx context.Context, do func(*http.Request) (*http.Response, error), req *http.Request, body, ekm []byte,
+	state func(net.Conn) (tls.ConnectionState, bool)) (*http.Response, error) {
+	of := Exporter
+	if req.Header.Get(api.AdminProofHeader) != "" {
+		of = AdminExporter
+	}
+	return post(ctx, do, req, of, body, ekm, state)
+}
+
+func post(ctx context.Context, do func(*http.Request) (*http.Response, error), req *http.Request,
+	of func(tls.ConnectionState) ([]byte, error), body, ekm []byte,
+	state func(net.Conn) (tls.ConnectionState, bool)) (*http.Response, error) {
 	var changed, ok atomic.Bool
 	// The last connection the transport took is the one the body goes on.
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
 		match := false
 		if cs, has := state(i.Conn); has {
-			now, err := Exporter(cs)
+			now, err := of(cs)
 			match = err == nil && bytes.Equal(now, ekm)
 		}
 		ok.Store(match)
 		changed.Store(!match)
 	}}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, url,
-		&gatedBody{r: bytes.NewReader(body), ok: &ok})
-	if err != nil {
-		return nil, err
-	}
+	req = req.Clone(httptrace.WithClientTrace(ctx, trace))
+	req.Body = io.NopCloser(&gatedBody{r: bytes.NewReader(body), ok: &ok})
+	req.GetBody = nil
 	req.ContentLength = int64(len(body))
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := do(req)
 	if changed.Load() {
 		if err == nil {

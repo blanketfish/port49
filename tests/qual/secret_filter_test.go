@@ -273,11 +273,32 @@ func grepInvertsIgnoringCase(ln string) bool {
 	return false
 }
 
+// resultsDir is the one directory a lab job may upload: the harness's own results
+// (tests/shapes/l82 and its successors), which they build from the cells and from nothing else and
+// which refuse any text that looks like a key. Nothing else is filtered on its way into an artifact.
+const resultsDir = "bin/lab-out/"
+
+// uploadsOnlyResults reports whether the step whose `uses: ...upload-artifact` line precedes after
+// (the lines that follow it, up to the next step's "- ") names exactly one path, under resultsDir,
+// with no "..".
+func uploadsOnlyResults(after []string) bool {
+	for _, ln := range after {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "- ") {
+			break
+		}
+		if v, ok := strings.CutPrefix(t, "path: "); ok {
+			return strings.HasPrefix(v, resultsDir) && !strings.Contains(v, "..")
+		}
+	}
+	return false
+}
+
 // filterUse walks root for what would show a lab log to the public job log unfiltered: a shell,
 // make or workflow copy of the filter's rules anywhere but tests/qual/secret-filter.sh; a workflow
 // line that runs a lab step without ending in filterPipe (a \-continued line is judged whole);
 // and an artifact upload from a workflow that runs a lab step or names tests/lab, since an
-// uploaded file is never filtered. It returns the problems and the number of lab steps found.
+// uploaded file is never filtered, except of the harness's own results directory (uploadsOnlyResults). It returns the problems and the number of lab steps found.
 // (tests/lab's Go note filters are separate and not checked here.)
 func filterUse(root string) (problems []string, steps int, err error) {
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -331,7 +352,7 @@ func filterUse(root string) (problems []string, steps int, err error) {
 		steps += fileSteps
 		if fileSteps > 0 || bytes.Contains(b, []byte("tests/lab")) {
 			for i, ln := range lines {
-				if strings.Contains(ln, "upload-artifact") {
+				if strings.Contains(ln, "upload-artifact") && !uploadsOnlyResults(lines[i+1:]) {
 					problems = append(problems, fmt.Sprintf("%s:%d uploads an artifact from a lab job; an uploaded file is not filtered", rel, i+1))
 				}
 			}
@@ -394,7 +415,16 @@ func TestSecretFilterUseFixtures(t *testing.T) {
 		{"other lab cmd", wf, "      - run: go run ./tests/lab/cmd/l99report -x\n", true},
 		{"other qual cmd", wf, "      - run: go run ./tests/qual/cmd/qualified\n", true},
 		{"upload of a raw lab log", wf, good + "      - uses: actions/upload-artifact@v4\n        with: {path: tests/lab/out.log}\n", true},
+		// an upload of the harness's own results directory is the one allowed upload (L82's results
+		// are built by tests/shapes/l82, which refuses key-like text), and only that path
+		{"upload that climbs out of the results directory", wf, good + "      - uses: actions/upload-artifact@v4\n        with:\n          name: x\n          path: bin/lab-out/../../tests/lab/logs\n", true},
+		{"upload of two paths", wf, good + "      - uses: actions/upload-artifact@v4\n        with:\n          path: |\n            bin/lab-out/l82\n            tests/lab/logs\n", true},
+		{"a raw upload after an allowed one", wf, good + "      - uses: actions/upload-artifact@v4\n        with:\n          path: bin/lab-out/l82\n      - uses: actions/upload-artifact@v4\n        with:\n          path: tests/lab/out.log\n", true},
+		{"upload from another bin directory", wf, good + "      - uses: actions/upload-artifact@v4\n        with:\n          path: bin/other/out\n", true},
+		{"an upload with no path before an allowed one", wf, good + "      - uses: actions/upload-artifact@v4\n        with: {name: x}\n      - uses: actions/upload-artifact@v4\n        with:\n          path: bin/lab-out/l82\n", true},
+		{"an upload that names no path", wf, good + "      - uses: actions/upload-artifact@v4\n        with: {name: x}\n", true},
 		// compliant shapes
+		{"upload of the harness's own results", wf, good + "      - if: always()\n        uses: actions/upload-artifact@v4\n        with:\n          name: lab-l82\n          path: bin/lab-out/l82\n          retention-days: 30\n", false},
 		{"continued line ending in the pipe", wf, "      - run: |\n          go test -tags lab ./tests/lab/ \\\n            -run '^TestX$' 2>&1 | bash tests/qual/secret-filter.sh\n", false},
 		{"plain grep -v", "scripts/z.sh", "grep -v '^#' f\n", false},
 		{"comment naming genprofile", wf, "      # genprofile -check compares the stimulus\n", false},

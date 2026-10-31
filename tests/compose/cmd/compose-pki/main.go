@@ -1,7 +1,7 @@
 // Command compose-pki writes deploy/compose/local/ for a trial of the
 // compose stack (plan 7f, Task 1): etcd's CA, members and users, the
-// broker's PKI with a client certificate for -email, and the two env
-// files. It protects nothing real, is valid 24h, and the directory is
+// broker's PKI with client certificates, the device key and the two sealing key
+// files (no env file). It protects nothing real, is valid 24h, and the directory is
 // git-ignored. A deployment brings its own PKI (deploy/compose/README.md).
 package main
 

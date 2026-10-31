@@ -29,7 +29,6 @@ import (
 	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
@@ -93,11 +92,13 @@ var permit = api.MintItem{Device: "leaf1", Verdict: "permit", Username: "alice",
 func TestTokenPrintsTheLoginTokenAndNothingElse(t *testing.T) {
 	p := fakeAgent(t, http.StatusOK, permit)
 	var out, errb bytes.Buffer
-	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"token", "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" {
 		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 	out.Reset()
-	if code := run([]string{"token", "--json", "--socket", p, "leaf1"}, &out, &errb); code != 0 {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"token", "--json", "leaf1"}, &out, &errb); code != 0 {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
 	var item api.MintItem
@@ -109,7 +110,8 @@ func TestTokenPrintsTheLoginTokenAndNothingElse(t *testing.T) {
 func TestADenialIsAFailureWithItsReason(t *testing.T) {
 	p := fakeAgent(t, http.StatusOK, api.MintItem{Device: "leaf1", Verdict: "deny", Reason: "no_grants_matched"})
 	var out, errb bytes.Buffer
-	code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	code := run([]string{"token", "leaf1"}, &out, &errb)
 	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "leaf1: deny no_grants_matched") {
 		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
@@ -121,7 +123,8 @@ func TestADenialIsAFailureWithItsReason(t *testing.T) {
 func TestAnItemErrorNamesTheDeviceAndPrintsNoToken(t *testing.T) {
 	p := fakeAgent(t, http.StatusOK, api.MintItem{Device: "leaf1", Error: "device_unconfigured",
 		Detail: "not in the inventory", Login: "LOGINTOKEN"})
-	for _, args := range [][]string{{"token", "--socket", p, "leaf1"}, {"token", "--json", "--socket", p, "leaf1"}} {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	for _, args := range [][]string{{"token", "leaf1"}, {"token", "--json", "leaf1"}} {
 		var out, errb bytes.Buffer
 		code := run(args, &out, &errb)
 		if code != 1 || strings.Contains(errb.String(), "LOGINTOKEN") || strings.Contains(out.String(), "LOGINTOKEN") ||
@@ -152,7 +155,8 @@ func TestAnEndedSessionOrNoAgentSaysToLogIn(t *testing.T) {
 		"no directory": filepath.Join(empty, "port49", "agent.sock"),
 	} {
 		var out, errb bytes.Buffer
-		if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "port49 login") {
+		t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+		if code := run([]string{"token", "leaf1"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "port49 login") {
 			t.Errorf("%s: code %d stderr %q", name, code, errb.String())
 		}
 	}
@@ -165,7 +169,8 @@ func TestAnEndedSessionSaysWhy(t *testing.T) {
 	p := fakeAgent(t, http.StatusGone, api.MintItem{Detail: "agent: the session is over; run `port49 login`: " +
 		"the broker no longer trusts this certificate (x509: certificate has expired)"})
 	var out, errb bytes.Buffer
-	code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	code := run([]string{"token", "leaf1"}, &out, &errb)
 	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "port49 login") ||
 		!strings.Contains(errb.String(), "no longer trusts this certificate (x509: certificate has expired)") {
 		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
@@ -176,7 +181,8 @@ func TestAnEndedSessionSaysWhy(t *testing.T) {
 // `$(port49 token leaf1)` an empty password.
 func TestAPermitWithNoTokenIsAFailure(t *testing.T) {
 	p := fakeAgent(t, http.StatusOK, api.MintItem{Device: "leaf1", Verdict: "permit", Username: "alice"})
-	for _, args := range [][]string{{"token", "--socket", p, "leaf1"}, {"token", "--json", "--socket", p, "leaf1"}} {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	for _, args := range [][]string{{"token", "leaf1"}, {"token", "--json", "leaf1"}} {
 		var out, errb bytes.Buffer
 		code := run(args, &out, &errb)
 		if code != 1 || !strings.Contains(errb.String(), "leaf1: the broker answered permit with no token") {
@@ -194,12 +200,14 @@ func TestAPermitWithNoTokenIsAFailure(t *testing.T) {
 func TestLoginRefusesWhatItCanCheckFirst(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "agent.sock")
 	var out, errb bytes.Buffer
-	if code := run([]string{"login", "--socket", sock}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "all required") {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"login"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "all required") {
 		t.Fatalf("no flags: code %d %q", code, errb.String())
 	}
 	errb.Reset()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
 	code := run([]string{"login", "--broker", "https://127.0.0.1:1", "--cert", "/nonexistent.pem", "--key", "/nonexistent.pem",
-		"--broker-ca", "/nonexistent.pem", "--socket", sock}, &out, &errb)
+		"--broker-ca", "/nonexistent.pem"}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "client certificate") {
 		t.Fatalf("missing files: code %d %q", code, errb.String())
 	}
@@ -214,8 +222,9 @@ func TestLoginRefusesWhatItCanCheckFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	errb.Reset()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
 	code = run([]string{"login", "--broker", "https://127.0.0.1:1", "--cert", filepath.Join(dir, testpki.LabClientCert),
-		"--key", key, "--broker-ca", filepath.Join(dir, testpki.LabCA), "--socket", sock}, &out, &errb)
+		"--key", key, "--broker-ca", filepath.Join(dir, testpki.LabCA)}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "chmod 600") {
 		t.Fatalf("a world-readable key: code %d %q", code, errb.String())
 	}
@@ -230,8 +239,9 @@ func TestLoginRequiresTheBrokerCA(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(t.TempDir(), "agent.sock"))
 	code := run([]string{"login", "--broker", "https://127.0.0.1:1", "--cert", filepath.Join(dir, testpki.LabClientCert),
-		"--key", filepath.Join(dir, testpki.LabClientKey), "--socket", filepath.Join(t.TempDir(), "agent.sock")}, &out, &errb)
+		"--key", filepath.Join(dir, testpki.LabClientKey)}, &out, &errb)
 	if code != 2 || !strings.Contains(errb.String(), "--broker-ca") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -252,9 +262,9 @@ func TestTheAgentSaysWhyTheBrokerDoesNotVerify(t *testing.T) {
 	}
 	defer os.RemoveAll(sockDir)
 	var out, errb bytes.Buffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(sockDir, "agent.sock"))
 	code := run([]string{"agent", "--broker", broker.URL, "--cert", filepath.Join(dir, testpki.LabClientCert),
-		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA),
-		"--socket", filepath.Join(sockDir, "agent.sock")}, &out, &errb)
+		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA)}, &out, &errb)
 	// A CA this host does not trust is what a host away through a whole
 	// rotation meets: the line names the fix (decision 43 ruling 25).
 	if code != 1 || !strings.Contains(errb.String(), "does not verify") ||
@@ -294,9 +304,9 @@ func TestLoginSaysAgentRefusalsWithOnePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(sockDir, "agent.sock"))
 	code := run([]string{"login", "--broker", "https://127.0.0.1:1", "--cert", filepath.Join(dir, testpki.LabClientCert),
-		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA),
-		"--socket", filepath.Join(sockDir, "agent.sock")}, &out, &errb)
+		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA)}, &out, &errb)
 	if code != 1 || !strings.HasPrefix(errb.String(), "port49 login: ") || !strings.Contains(errb.String(), "0700") ||
 		strings.Contains(errb.String(), "agent: agent:") || strings.Contains(errb.String(), "login: agent:") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
@@ -382,11 +392,10 @@ type labBroker struct {
 	bl   *broker.Listener
 	// The directory sign-in (labOpts.signIn): the directory it asks, the
 	// sealed file its second factors live in, the key that seals it, and the
-	// admin socket `port49 directory ...` is run against.
+	// broker API `port49 directory ...` is run against.
 	signIn     *fakeSignInDirectory
 	enrollPath string
 	enrollKeys crypt.Keys
-	adminSock  string
 	// onAccept, when set, runs for each connection the broker accepts, before
 	// it is served.
 	onAccept atomic.Pointer[func()]
@@ -420,10 +429,11 @@ func (l *labBroker) step(d time.Duration) {
 	l.mu.Unlock()
 }
 
-func (l *labBroker) flags(socket string) []string {
+func (l *labBroker) flags(t *testing.T, socket string) []string {
+	t.Helper()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", socket)
 	return []string{"--broker", l.url, "--cert", filepath.Join(l.dir, testpki.LabClientCert),
-		"--key", filepath.Join(l.dir, testpki.LabClientKey), "--broker-ca", filepath.Join(l.dir, testpki.LabCA),
-		"--socket", socket}
+		"--key", filepath.Join(l.dir, testpki.LabClientKey), "--broker-ca", filepath.Join(l.dir, testpki.LabCA)}
 }
 
 func newLabBroker(t *testing.T, maxAge time.Duration) *labBroker {
@@ -457,6 +467,10 @@ type labOpts struct {
 	// enrollment store that does not exist until `port49 directory
 	// init-enrollments` creates it.
 	signIn *fakeSignInDirectory
+	// admin gives alice's subject api: revoke_others, lift_revocations; front
+	// wraps the broker's handler (admin_test.go).
+	admin bool
+	front func(http.Handler) http.Handler
 }
 
 // fakeSignInDirectory is a directory of people by name: their entry and
@@ -541,11 +555,15 @@ func newLabBrokerOpts(t *testing.T, o labOpts) *labBroker {
 	if o.mfa {
 		requirement = ", per_login_mfa: {accept: [hardware_key_touch, idp_mfa], reuse_for: 15m}"
 	}
+	rights := ""
+	if o.admin {
+		rights = ", api: [revoke_others, lift_revocations, forget_principals, reset_second_factor, unlock_sign_in, import_enrollments]"
+	}
 	policyFile := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(policyFile, []byte(`
 scopes: [{name: all_devices, match: {}`+requirement+`}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
-subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s`+rights+`}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `), 0o600); err != nil {
 		t.Fatal(err)
@@ -644,6 +662,9 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 			inner.ServeHTTP(w, r)
 		})
 	}
+	if o.front != nil {
+		srv.Handler = o.front(srv.Handler)
+	}
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -667,11 +688,8 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 // verifier (internal/port49d/signin.go): the verifier, the directory, an
 // issuing CA, certificates trusted only if the broker issued them, the
 // enrollment store as a sealed file in a private directory under test keys
-// (never created: `port49 directory init-enrollments` is the one creator),
-// and an admin socket answering the directory sign-in's operator commands.
-// The admin server's three handlers are hand-built here, not port49d's own
-// (serveSignInOps): this suite tests the broker and the CLI, and L67(g) covers
-// port49d's wiring of them.
+// (never created: `port49-broker init-enrollments` is the one creator),
+// and nothing else: the operator's commands call the broker directly (operator).
 func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 	t.Helper()
 	if l.b.Issuer == nil {
@@ -694,26 +712,6 @@ func (l *labBroker) wireSignIn(t *testing.T, dir *fakeSignInDirectory) {
 	l.enrollPath = filepath.Join(privateDir(t), "enrollments.json")
 	l.b.EnrollmentFile = l.enrollPath
 	l.reopenEnrollments(t)
-
-	l.adminSock = privateSocket(t)
-	ln, err := admin.Listen(l.adminSock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	origin := func(uid uint32) string { return fmt.Sprintf("admin_socket uid %d", uid) }
-	srv := &admin.Server{Now: time.Now, Proc: "port49-broker",
-		SecondFactorReset: func(ctx context.Context, p string, all bool, uid uint32) (string, error) {
-			return l.b.ResetSecondFactor(ctx, p, all, origin(uid))
-		},
-		SignInUnlock: func(ctx context.Context, p string, uid uint32) (string, error) {
-			return l.b.UnlockSignIn(ctx, p, origin(uid))
-		},
-		EnrollmentsInit: func(ctx context.Context, uid uint32) (string, error) {
-			return l.b.InitEnrollments(ctx, origin(uid))
-		}}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go srv.Serve(ctx, ln)
 }
 
 // reopenEnrollments opens the enrollment file afresh, as a broker's start
@@ -803,7 +801,8 @@ func TestRefreshSaysWhatHappenedToEachDevice(t *testing.T) {
 			{Device: "bare", Username: "alice", Outcome: "not_judged"},
 		}})
 	var out, errb bytes.Buffer
-	if code := run([]string{"refresh", "--socket", p}, &out, &errb); code != 0 {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"refresh"}, &out, &errb); code != 0 {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 	want := "refreshed at 2026-10-01T09:00:00Z; this login lasts until 2026-10-01T21:00:00Z\n" +
@@ -819,7 +818,8 @@ func TestRefreshSaysWhatHappenedToEachDevice(t *testing.T) {
 	p = refreshStub(t, agent.Status{}, http.StatusOK, api.RefreshResponse{AuthTime: "2026-10-01T09:00:00Z",
 		SessionEndsAt: "2026-10-01T21:00:00Z", Sessions: []api.RefreshedSession{}})
 	out.Reset()
-	if code := run([]string{"refresh", "--socket", p}, &out, &errb); code != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"refresh"}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "  no live device session to extend\n") {
 		t.Fatalf("code %d stdout %q", code, out.String())
 	}
@@ -834,19 +834,22 @@ func TestRefreshWithNoAgentOrARefusal(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(empty) })
 	var out, errb bytes.Buffer
-	if code := run([]string{"refresh", "--socket", filepath.Join(empty, "nobody.sock")}, &out, &errb); code != 1 ||
-		!strings.Contains(errb.String(), "run 'port49 login'") {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", filepath.Join(empty, "nobody.sock"))
+	if code := run([]string{"refresh"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "start one with 'port49 login'") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 	p := refreshStub(t, agent.Status{}, http.StatusBadGateway, api.Error{Error: "refresh_failed",
 		Detail: "agent: the broker refused a refresh challenge: this connection refreshed moments ago; wait and retry (refresh_too_soon); retry in 7s"})
 	errb.Reset()
-	if code := run([]string{"refresh", "--socket", p}, &out, &errb); code != 1 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"refresh"}, &out, &errb); code != 1 ||
 		errb.String() != "port49 refresh: the broker refused a refresh challenge: this connection refreshed moments ago; "+
 			"wait and retry (refresh_too_soon); retry in 7s\n" {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
-	if code := run([]string{"refresh", "--socket", p, "extra"}, &out, &errb); code != 2 {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"refresh", "extra"}, &out, &errb); code != 2 {
 		t.Fatalf("an argument: code %d", code)
 	}
 }
@@ -867,8 +870,9 @@ func TestLoginWithAnAgentRunningRefreshes(t *testing.T) {
 	}
 	const brokerURL = "https://broker.example:8443"
 	args := func(sock string) []string {
+		t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
 		return []string{"login", "--broker", brokerURL + "/", "--cert", filepath.Join(dir, testpki.LabClientCert),
-			"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA), "--socket", sock}
+			"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA)}
 	}
 	ours := agent.Status{Broker: brokerURL, CertFingerprint: agent.CertFingerprint(cert)}
 	p, refreshes := countingRefreshStub(t, ours, http.StatusOK, api.RefreshResponse{
@@ -906,8 +910,8 @@ func TestLoginWithAnAgentRunningRefreshes(t *testing.T) {
 		out.Reset()
 		errb.Reset()
 		if code := run(args(p), &out, &errb); code != 1 || out.Len() != 0 || refreshes.Load() != 0 ||
-			!strings.HasPrefix(errb.String(), c.want+p+"; run 'port49 refresh' to extend that session, "+
-				"stop that agent first, or use --socket\n") {
+			!strings.HasPrefix(errb.String(), c.want+"the agent; run 'port49 refresh' to extend that session, "+
+				"or stop that agent first\n") {
 			t.Errorf("%s: code %d, %d refreshes, stdout %q stderr %q", name, code, refreshes.Load(), out.String(), errb.String())
 		}
 	}
@@ -921,7 +925,7 @@ func TestARefreshedAgentOutlivesItsFirstDeadline(t *testing.T) {
 	sock := privateSocket(t)
 	var log lockedBuffer
 	exited := make(chan int, 1)
-	go func() { exited <- run(append([]string{"agent"}, l.flags(sock)...), io.Discard, &log) }()
+	go func() { exited <- run(append([]string{"agent"}, l.flags(t, sock)...), io.Discard, &log) }()
 	c := agent.NewClient(sock)
 	var up time.Time
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
@@ -935,7 +939,8 @@ func TestARefreshedAgentOutlivesItsFirstDeadline(t *testing.T) {
 	}
 	time.Sleep(time.Until(up.Add(2 * time.Second)))
 	var out, errb bytes.Buffer
-	if code := run([]string{"refresh", "--socket", sock}, &out, &errb); code != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"refresh"}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
@@ -955,7 +960,8 @@ func TestARefreshedAgentOutlivesItsFirstDeadline(t *testing.T) {
 	}
 	l.step(11 * time.Second)
 	errb.Reset()
-	if code := run([]string{"refresh", "--socket", sock}, &out, &errb); code != 1 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"refresh"}, &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "this principal was revoked") || strings.Contains(errb.String(), "port49 login") {
 		t.Fatalf("a revoked refresh: code %d stderr %q\n%s", code, errb.String(), log.String())
 	}
@@ -991,14 +997,16 @@ func TestTokenWarnsNearTheDevicesCeiling(t *testing.T) {
 	want := fmt.Sprintf("port49: your session on leaf1 ends at %s (in 29m); run 'port49 refresh'\n",
 		expires.UTC().Format(time.RFC3339))
 	var out, errb bytes.Buffer
-	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"token", "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" ||
 		errb.String() != want {
 		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 	out.Reset()
 	errb.Reset()
 	var item api.MintItem
-	if code := run([]string{"token", "--json", "--socket", p, "leaf1"}, &out, &errb); code != 0 || errb.String() != want ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"token", "--json", "leaf1"}, &out, &errb); code != 0 || errb.String() != want ||
 		json.Unmarshal(out.Bytes(), &item) != nil || item.Login != "LOGINTOKEN" {
 		t.Fatalf("--json: code %d stderr %q", code, errb.String())
 	}
@@ -1009,7 +1017,8 @@ func TestTokenWarnsNearTheDevicesCeiling(t *testing.T) {
 	} {
 		out.Reset()
 		errb.Reset()
-		if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" ||
+		t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+		if code := run([]string{"token", "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" ||
 			errb.Len() != 0 {
 			t.Errorf("%s: code %d stdout %s stderr %q", name, code, tokenOut(out.String()), errb.String())
 		}
@@ -1022,7 +1031,8 @@ func TestASessionExpiredDenialSaysToRefresh(t *testing.T) {
 	p := fakeAgent(t, http.StatusOK, api.MintItem{Device: "leaf1", Verdict: "deny", Reason: "session_expired",
 		Detail: "your session on leaf1 reached its ceiling; run 'port49 refresh'"})
 	var out, errb bytes.Buffer
-	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 1 || out.Len() != 0 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", p)
+	if code := run([]string{"token", "leaf1"}, &out, &errb); code != 1 || out.Len() != 0 ||
 		errb.String() != "port49 token: leaf1: deny session_expired: your session on leaf1 reached its ceiling; run 'port49 refresh'\n" {
 		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
@@ -1063,7 +1073,8 @@ func TestRevokeMineBehindAnEarlierRevocationSaysItWasNotSent(t *testing.T) {
 			Detail: "agent: an earlier revocation still held the connection; this one was not sent"})
 	}))
 	var out, errb bytes.Buffer
-	if code := run([]string{"revoke", "--mine", "--agent-socket", sock}, &out, &errb); code != 1 ||
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	if code := run([]string{"revoke", "--mine"}, &out, &errb); code != 1 ||
 		errb.String() != "port49 revoke: an earlier revocation still held the connection; this one was not sent\n" {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}

@@ -226,8 +226,8 @@ func TestSignInRecordBlocksMarshalAsTheSpecSays(t *testing.T) {
 		want string
 	}{
 		{"sign_in source only", SignIn{Source: "192.0.2.0/32"}, `{"source":"192.0.2.0/32"}`},
-		{"second_factor_reset created", SecondFactorReset{Created: true, Origin: "admin_socket uid 0"},
-			`{"created":true,"origin":"admin_socket uid 0"}`},
+		{"second_factor_reset created", SecondFactorReset{Created: true, Origin: "offline uid 0"},
+			`{"created":true,"origin":"offline uid 0"}`},
 	} {
 		got, err := json.Marshal(c.v)
 		if err != nil || string(got) != c.want {
@@ -239,7 +239,7 @@ func TestSignInRecordBlocksMarshalAsTheSpecSays(t *testing.T) {
 		v    any
 		want string
 	}{
-		{"sign_in_unlock", SignInUnlock{Failures: new(3), Origin: "admin_socket uid 0"}, `{"failures":3,"origin":"admin_socket uid 0"}`},
+		{"sign_in_unlock", SignInUnlock{Failures: new(3), Origin: "offline uid 0"}, `{"failures":3,"origin":"offline uid 0"}`},
 		{"enrollments_import", EnrollmentsImport{Records: 2, ExportedAt: "2026-10-14T00:00:00Z", Origin: "o"},
 			`{"records":2,"exported_at":"2026-10-14T00:00:00Z","origin":"o"}`},
 	} {

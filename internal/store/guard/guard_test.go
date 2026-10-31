@@ -124,6 +124,9 @@ func TestACallPastItsTimeoutIsUnavailable(t *testing.T) {
 	if !errors.Is(err, store.ErrUnavailable) || time.Since(start) > 500*time.Millisecond {
 		t.Fatalf("%v after %v", err, time.Since(start))
 	}
+	if errors.Is(err, store.ErrNotSent) { // it was sent: its write may land
+		t.Fatalf("a call that reached the store is classed not sent: %v", err)
+	}
 }
 
 // After Failures consecutive failures a pool's circuit opens: calls fail
@@ -139,7 +142,7 @@ func TestTheCircuitOpensAfterFailuresAndProbes(t *testing.T) {
 	}
 	before := inner.count()
 	start := time.Now()
-	if _, err := g.GetContext(context.Background(), k); !errors.Is(err, store.ErrUnavailable) || inner.count() != before ||
+	if _, err := g.GetContext(context.Background(), k); !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) || inner.count() != before ||
 		time.Since(start) > 10*time.Millisecond {
 		t.Fatalf("an open circuit reached the store or waited: %v, %d calls, %v", err, inner.count()-before, time.Since(start))
 	}
@@ -382,7 +385,7 @@ func TestACallersDeadlineWaitingForASlotIsSaturated(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	_, err := g.GetContext(ctx, k)
 	cancel()
-	if !errors.Is(err, store.ErrUnavailable) || inner.count() != 2 {
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) || inner.count() != 2 {
 		t.Fatalf("a caller's deadline with both slots held: %v, %d calls", err, inner.count())
 	}
 	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "saturated")); n != 1 {
@@ -408,7 +411,7 @@ func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
 	past, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	for i := 0; i < 200; i++ {
-		if _, err := g.GetContext(past, k); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, store.ErrUnavailable) {
+		if _, err := g.GetContext(past, k); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
 			t.Fatalf("a call past its deadline: %v", err)
 		}
 	}

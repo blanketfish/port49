@@ -1,0 +1,9 @@
+[Unit]
+Description=port49 enrollment export, daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

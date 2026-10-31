@@ -40,6 +40,11 @@ const (
 )
 
 func regionNS(i int) string { return fmt.Sprintf("p49r%d", i) }
+
+// regionOncall is the person who revokes and lifts: the rights are in
+// regionPolicy, the touch key is a software one (admin_api_test.go).
+const regionOncall = "oncall@example.com"
+
 func regionIP(i int) string { return fmt.Sprintf("10.149.0.%d", 10+i) }
 
 // inNetns is argv run as root in namespace ns (the caller adds sudo -n).
@@ -205,7 +210,13 @@ func newRegionPKI(t *testing.T) *regionPKI {
 	p.root, p.rootKey = issue(testpki.Leaf{CommonName: "root", Client: true}, "root")
 	p.daemon, p.daemonKey = issue(testpki.Leaf{CommonName: "port49-daemon", Client: true}, "port49-daemon")
 	p.broker, p.brokerKey = issue(testpki.Leaf{CommonName: "port49-broker", Client: true}, "port49-broker")
-	if err := testpki.WriteLab(p.lab, "alice@example.com", now); err != nil {
+	// The brokers answer on their regions' addresses, so the server certificate
+	// names them; the on-call is the second person (regionOncall).
+	var brokerIPs []net.IP
+	for i := 1; i <= 3; i++ {
+		brokerIPs = append(brokerIPs, net.ParseIP(regionIP(i)))
+	}
+	if err := testpki.WriteLabAt(p.lab, "alice@example.com", []string{regionOncall}, brokerIPs, now); err != nil {
 		t.Fatal(err)
 	}
 	return p

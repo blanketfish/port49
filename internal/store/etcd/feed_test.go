@@ -243,7 +243,7 @@ func TestTheMarkFeedBringsPutsAndLifts(t *testing.T) {
 		t.Fatalf("rev %d %v: %v", rev, rs, err)
 	}
 	cert := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp/CA", "0a"), At: at,
-		Origin: "admin_socket uid 0"} // a '/' in the key: escaped, and parsed back
+		Origin: "offline uid 0"} // a '/' in the key: escaped, and parsed back
 	if err := s.PutRevocation(ctx, cert); err != nil {
 		t.Fatal(err)
 	}

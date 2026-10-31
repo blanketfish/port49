@@ -822,9 +822,9 @@ func l29Agent(t *testing.T) (sock string, stop func()) {
 	sock = filepath.Join(dir, "a", "agent.sock")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
+	out, err := withAgent(exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock).CombinedOutput()
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), sock).CombinedOutput()
 	if err != nil {
 		os.RemoveAll(dir)
 		t.Fatalf("port49 login: %v\n%s", err, out)
@@ -837,7 +837,7 @@ func l29Agent(t *testing.T) (sock string, stop func()) {
 func l29Mint(sock, device string) (said, tok string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "token", "--socket", sock, device)
+	cmd := withAgent(exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "token", device), sock)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

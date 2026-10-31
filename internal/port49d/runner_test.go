@@ -328,7 +328,7 @@ func TestAFailedLogoutReachIsTriedAgain(t *testing.T) {
 	stderr = &out
 	var mu sync.Mutex
 	tries := map[string]int{}
-	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+	r := &runner{brk: &broker.Broker{}, followed: make(chan store.Revocation, 1),
 		followedLogouts: make(chan store.LogoutEntry, 8)}
 	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
 		mu.Lock()
@@ -391,7 +391,7 @@ func TestARecoveredLogoutSaysItsRemedyAgainWhenItFailsAgain(t *testing.T) {
 	var mu sync.Mutex
 	results := []error{fmt.Errorf("%w: no quorum", store.ErrUnavailable), nil, fmt.Errorf("%w: no quorum", store.ErrUnavailable),
 		fmt.Errorf("%w: no quorum", store.ErrUnavailable)}
-	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+	r := &runner{brk: &broker.Broker{}, followed: make(chan store.Revocation, 1),
 		followedLogouts: make(chan store.LogoutEntry, 8)}
 	r.reach = func(context.Context, store.Logout) (broker.RevokeReport, error) {
 		mu.Lock()
@@ -444,7 +444,7 @@ func TestALapsedLogoutLeavesNoFailureCount(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { reachFailuresSeen = wasSeen })
-	r := &runner{brk: &broker.Broker{AdminSocket: "/run/port49/admin.sock"}, followed: make(chan store.Revocation, 1),
+	r := &runner{brk: &broker.Broker{}, followed: make(chan store.Revocation, 1),
 		followedLogouts: make(chan store.LogoutEntry, 8)}
 	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
 		if l.Key == "other" {

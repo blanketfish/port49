@@ -25,7 +25,7 @@ func wrapped(marks *store.Marks) (s store.Store, session, directory *memory.Stor
 func TestTheMarksAreTheDirectorys(t *testing.T) {
 	ctx := context.Background()
 	s, session, directory := wrapped(store.NewMarks())
-	r := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: t0, Origin: "admin_socket uid 0"}
+	r := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: t0, Origin: "offline uid 0"}
 	if err := s.PutRevocation(ctx, r); err != nil {
 		t.Fatal(err)
 	}

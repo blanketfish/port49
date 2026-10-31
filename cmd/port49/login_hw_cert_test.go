@@ -64,7 +64,7 @@ func TestLoginWithTheCertificateOnTheTokenStartsTheAgent(t *testing.T) {
 
 	prompts, shown := pinPty(t, hwtest.SoftHSMUserPIN)
 	var out, errb bytes.Buffer
-	code := run(append([]string{"login"}, flagsWithKey(l, sock, ref, true)...), &out, &errb)
+	code := run(append([]string{"login"}, flagsWithKey(t, l, sock, ref, true)...), &out, &errb)
 	if code != 0 || !strings.Contains(out.String(), "port49: logged in to "+l.url) {
 		t.Fatalf("code %d stdout %q stderr %q log %q", code, out.String(), errb.String(), agentLog(sock))
 	}

@@ -3,6 +3,9 @@ package port49d
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,13 +13,19 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
-// revoke without --offline is port49 revoke's, on the admin socket: said,
-// exit 2.
-func TestARevokeWithoutOfflineNamesTheSocket(t *testing.T) {
+// revoke without --offline is port49 revoke's, through the broker API: said,
+// exit 2, on both binaries.
+func TestARevokeWithoutOfflineNamesTheAPI(t *testing.T) {
 	var o, e bytes.Buffer
 	if code := offlineRevoke([]string{"--principal", "user:alice@example.com"}, &o, &e); code != 2 ||
-		!strings.Contains(e.String(), "port49 revoke --socket") {
+		!strings.Contains(e.String(), "use port49 revoke, which asks the broker API with a security key press") {
 		t.Fatalf("exit %d: %s", code, e.String())
+	}
+	o.Reset()
+	e.Reset()
+	if code := offlineRevokeDaemon([]string{"--principal", "user:alice@example.com"}, &o, &e); code != 2 ||
+		!strings.Contains(e.String(), "port49d revoke: this is the break-glass form") {
+		t.Fatalf("port49d: exit %d: %s", code, e.String())
 	}
 }
 
@@ -45,11 +54,27 @@ func TestAnOfflineRevokeRefusesWhatItCannotRun(t *testing.T) {
 // A state directory another user owns is refused in the tool's words: run it
 // as the owner, never chown the directory (R1-I-2).
 func TestAnOfflineOwnerRefusalNeverAdvisesAChown(t *testing.T) {
+	old := offlineOwnerName
+	offlineOwnerName = func(uid uint32) string { return map[uint32]string{996: "port49-broker"}[uid] }
 	s := offlineOwnerHint(&wrongOwnerError{what: "broker.state_dir /var/lib/port49", uid: 996, euid: 0}).Error()
 	if strings.Contains(s, "chown it") || !strings.Contains(s, "run it as the user that owns broker.state_dir (uid 996)") ||
 		!strings.Contains(s, "do not chown the directory") {
 		t.Fatal(s)
 	}
+	// the exact line the operator pastes, as port49d's own refusal gives one
+	if want := "e.g. sudo -u port49-broker port49-broker revoke --offline ..."; !strings.Contains(s, want) {
+		t.Errorf("the refusal lacks %q: %s", want, s)
+	}
+	// an owner with no name on this host is said by its number, with no sudo line: sudo refuses
+	// a #uid unless runas_allow_unknown_id is set
+	offlineOwnerName = old
+	offlineOwnerName = func(uint32) string { return "" }
+	s = offlineOwnerHint(&wrongOwnerError{what: "broker.state_dir /var/lib/port49", uid: 4242, euid: 0}).Error()
+	if strings.Contains(s, "sudo") || !strings.Contains(s, "run it as uid 4242, the owner of broker.state_dir") ||
+		!strings.Contains(s, "do not chown the directory") {
+		t.Errorf("an unnamed owner: %s", s)
+	}
+	offlineOwnerName = old
 }
 
 // A revocation or lift the store refused says the tool's own words: what
@@ -70,6 +95,29 @@ func TestAnOfflineFailureGivesTheToolsOwnAdvice(t *testing.T) {
 			!strings.Contains(s, "the same command is safe to run again") ||
 			!strings.Contains(s, "as etcd's root under rv/") {
 			t.Errorf("lift %v: %q", lift, s)
+		}
+	}
+}
+
+// The break-glass form refuses a port49-broker that answers /readyz on its metrics listener, like port49d's
+// does: a revocation written beside a running broker races its own marks, and the API is the way with one up.
+// The listener is read from the file alone, so a config that fails for another reason hides nothing.
+func TestOfflineRevokeOnTheBrokerRefusesARunningBroker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	cfg := filepath.Join(t.TempDir(), "port49-broker.yaml")
+	if err := os.WriteFile(cfg, []byte("metrics_listen: \""+srv.Listener.Addr().String()+"\"\nbroker:\n  state_dir: /var/lib/port49-broker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"--principal", "user:alice@example.com"}, {"--principal", "user:alice@example.com", "--lift"}} {
+		var log, say bytes.Buffer
+		code := offlineRevoke(append([]string{"--offline", "--config", cfg}, args...), &log, &say)
+		if code != 1 || !strings.Contains(say.String(), "something answers /readyz on "+srv.Listener.Addr().String()) ||
+			!strings.Contains(say.String(), "port49-broker is running") || !strings.Contains(say.String(), "use port49 revoke") {
+			t.Errorf("%v: exit %d: %s", args, code, say.String())
+		}
+		if log.Len() != 0 {
+			t.Errorf("%v: a refused revocation wrote a decision record", args)
 		}
 	}
 }

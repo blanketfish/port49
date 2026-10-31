@@ -123,7 +123,7 @@ func TestSSHRestoresTheTerminalWhenItEnds(t *testing.T) {
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = fake
+	r.flags[1] = fake
 	prev := os.Stdin
 	os.Stdin = s
 	t.Cleanup(func() { os.Stdin = prev })

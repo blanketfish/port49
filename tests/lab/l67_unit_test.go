@@ -5,7 +5,10 @@ package lab
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,9 +16,11 @@ import (
 	"unicode"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/rhwendt/port49/internal/agent"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/totp"
 	"github.com/rhwendt/port49/internal/userconfig"
 )
@@ -452,6 +457,8 @@ func TestL67ComposeBrokerLoads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	requireDaemonPolicy(t, files)
+	placeComposeSecrets(t, dir, files)
 	moved := func(s string) string {
 		s = strings.ReplaceAll(s, e2eDirDir, filepath.Join(dir, "directory"))
 		s = strings.ReplaceAll(s, "/etc/port49", filepath.Join(dir, "etc"))
@@ -498,8 +505,12 @@ func TestL67BrokerConfigLoads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s window %v: %v\n%s", name, window, err, files["port49d.yaml"])
 			}
-			if cfg.Broker.ClientCAFile != "" {
-				t.Fatalf("%s: the broker sets client_ca_file %q; the shape under test has no x509 verifier", name, cfg.Broker.ClientCAFile)
+			// The one x509 verifier is the on-call's, who unlocks by certificate.
+			if want := filepath.Join(sub, "pki", testpki.LabCA); cfg.Broker.ClientCAFile != want {
+				t.Fatalf("%s: the x509 anchor is %q, want the lab CA %q", name, cfg.Broker.ClientCAFile, want)
+			}
+			if m := cfg.Broker.Identity.PerLoginMFA; m == nil || m.AttestationRootsFile != filepath.Join(sub, adminRolesFile) {
+				t.Fatalf("%s: per_login_mfa is %+v; the broker must read the run's attestation roots", name, m)
 			}
 			ps := cfg.Broker.Identity.PasswordSignIn
 			if ps == nil || len(ps.PrincipalDomains) != 1 || ps.PrincipalDomains[0] != "corp.example.com" {
@@ -581,4 +592,117 @@ func TestL67NoteSaysHowOpenLDAPWasConfigured(t *testing.T) {
 	if strings.Contains(y.note(), "ssf=56") {
 		t.Errorf("the Samba note names OpenLDAP's ssf")
 	}
+}
+
+// A cell that needs a person an INVALID or skipped cell should have enrolled says so, instead of
+// dereferencing nil and killing the binary with every later cell unreported.
+func TestL67APersonNoCellEnrolledIsAnInvalidNotAPanic(t *testing.T) {
+	x := &l67X{}
+	if p, err := x.person("carol"); p != nil || err == nil ||
+		!strings.Contains(err.Error(), "carol was not enrolled (an earlier cell did not complete)") {
+		t.Fatalf("a person nobody enrolled: %v %v", p, err)
+	}
+	x.people = map[string]*l67Person{"carol": {name: "carol"}}
+	if p, err := x.person("carol"); err != nil || p == nil || p.name != "carol" {
+		t.Fatalf("an enrolled person: %v %v", p, err)
+	}
+	if _, err := x.person("dave"); err == nil {
+		t.Fatal("a person nobody enrolled was found")
+	}
+}
+
+// A failure line quotes where the raw text is kept, never the text, and the file is the user's alone.
+func TestL67KeptWritesThePrivateFileAndQuotesOnlyItsPath(t *testing.T) {
+	raw := "a line the log must never carry: " + labKeyDefault
+	path := l67Kept("unit", raw)
+	t.Cleanup(func() { os.Remove(path) })
+	if strings.Contains(path, raw) || strings.Contains(path, labKeyDefault) {
+		t.Fatalf("the quoted path carries the text: %q", path)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, want 0600", fi.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(path); string(got) != raw {
+		t.Errorf("the file does not hold the text")
+	}
+}
+
+// l67UnitBins builds port49d for a test that runs a broker, and points the harness at it.
+func l67UnitBins(t *testing.T) {
+	t.Helper()
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "port49d")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/port49d")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building port49d: %v: %s", err, tailOf(string(out), 400))
+	}
+	prev := l67BinsOf
+	l67BinsOf = func(*testing.T) (string, string) { return bin, "" }
+	t.Cleanup(func() { l67BinsOf = prev })
+}
+
+// A running broker that found its enrollment store missing follows an offline init-enrollments only at
+// its next recheck (30 s). L67 therefore runs init-enrollments before the broker starts; started first,
+// the broker answers enrollment_store_lost to the first sign-ins of every cell.
+func TestL67AnOfflineInitReachesABrokerStartedAfterItNotOneAlreadyRunning(t *testing.T) {
+	t.Setenv("PORT49_LAB_KEY", labKeyDefault)
+	t.Setenv("PORT49_LAB_ENC_KEY", labEncKeyDefault)
+	l67UnitBins(t)
+	x := l67TestDir(t, platOpenLDAP)
+	answer := func(b *l67Broker) string {
+		return b.api(t).signIn("l67-nobody", "a-wrong-value", "").Error
+	}
+	running := newL67Broker(t, t, x, l67BrokerOpts{})
+	running.mustInitEnrollments(t)
+	if got := answer(running); got != "enrollment_store_lost" {
+		t.Errorf("a broker already running answered %q right after the offline init, want enrollment_store_lost (it rechecks every 30s)", got)
+	}
+	first := newL67BrokerWith(t, t, x, l67BrokerOpts{}, func(b *l67Broker) { b.mustInitEnrollments(t) })
+	if got := answer(first); got == "enrollment_store_lost" {
+		t.Errorf("a broker started after init-enrollments still answered %q", got)
+	}
+}
+
+// The admin commands do not depend on another test having filled in the root global: with it empty
+// they still run in the checkout, and a command that never started says why.
+func TestLabAdminFindsTheRepoWithTheRootGlobalEmptyAndSaysWhyItCouldNotRun(t *testing.T) {
+	prev := root
+	t.Cleanup(func() { root = prev })
+	root = ""
+	if d := labRepo(); d == "" || d == "." {
+		t.Fatalf("labRepo with root empty is %q", d)
+	} else if _, err := os.Stat(filepath.Join(d, "go.mod")); err != nil {
+		t.Fatalf("labRepo %q is not the repository: %v", d, err)
+	}
+	root = t.TempDir() // no bin/port49 under it
+	out, code := (&labAdmin{env: os.Environ()}).runCmd("directory", "unlock", "user:x@example.com")
+	if code != -1 || !strings.Contains(out, "port49") {
+		t.Errorf("a command that could not start answered %d %q, want -1 and the reason", code, out)
+	}
+}
+
+// A broker keeps its admin agent for every cell that unlocks. The agent ends with the broker's owner, not
+// with the cell that happened to start it: a cell's end must not leave the next one "no agent is running".
+func TestAnAdminAgentStartedInOneCellStillAnswersInTheNext(t *testing.T) {
+	var admin *labAdmin
+	outer := t
+	t.Run("first cell", func(t *testing.T) {
+		admin = serveLabAgent(t, outer, agent.New(agent.Config{Log: io.Discard}))
+	})
+	t.Run("second cell", func(t *testing.T) {
+		c, err := net.DialTimeout("unix", admin.sock, time.Second)
+		if err != nil {
+			t.Fatalf("the agent started in the first cell is gone in the second: %v", err)
+		}
+		c.Close()
+	})
 }

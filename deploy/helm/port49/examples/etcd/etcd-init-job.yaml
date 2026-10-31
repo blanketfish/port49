@@ -1,0 +1,78 @@
+# One-shot, as etcd's root: applies `port49d store-roles`' output and enables auth, once; a later
+# run finds auth enabled and changes nothing (the compose stack's etcd-init, as a Job). Create
+# the ConfigMap `port49-etcd-roles` from store-roles' output (key roles.sh, one etcdctl command per
+# line, run it where the Secrets are):
+#
+#   port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml > roles.sh
+#   kubectl -n port49-etcd create configmap port49-etcd-roles --from-file=roles.sh
+#
+# Both configs name /etc/port49/etcd/tls.crt, because each pod mounts its own Secret there, and
+# store-roles refuses two components with one certificate CN. Run it with the broker's config
+# naming the broker's own certificate (its etcd cert_file and key_file in another directory, where
+# you have put port49-etcd-broker's tls.crt and tls.key).
+#
+# Secret `port49-etcd-root` holds etcd's root client certificate (ca.crt tls.crt tls.key). UNVERIFIED
+# until Task 11's kind smoke runs it: the etcd image has no shell, so this Job runs alpine and
+# installs etcdctl from the distribution (needs egress to the package mirror: replace it with an
+# image of your own that carries etcdctl and a shell).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: etcd-init
+  namespace: port49-etcd
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      automountServiceAccountToken: false   # etcdctl does not call the Kubernetes API
+      restartPolicy: OnFailure
+      containers:
+        - name: etcd-init
+          image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              apk add --no-cache etcd-ctl >/dev/null
+              export ETCDCTL_ENDPOINTS=https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379
+              export ETCDCTL_CACERT=/etcd-root/ca.crt ETCDCTL_CERT=/etcd-root/tls.crt ETCDCTL_KEY=/etcd-root/tls.key
+              i=0
+              until etcdctl endpoint health >/dev/null 2>&1; do
+                i=$((i + 1))
+                [ "$i" -lt 120 ] || { echo "etcd-init: the three members did not all answer in 120s" >&2; exit 1; }
+                sleep 1
+              done
+              if etcdctl auth status 2>/dev/null | grep -q 'Authentication Status: true'; then
+                echo "etcd-init: auth is already enabled; the roles stand as applied"
+                exit 0
+              fi
+              # Each line of roles.sh is one etcdctl command. `role add` and `user add` fail on a
+              # name that exists: a run that stopped partway is finished by the next, so tolerate
+              # exactly that.
+              apply() {
+                if out=$("$@" 2>&1); then return 0; fi
+                case "$out" in *"already exists"*) return 0 ;; esac
+                echo "etcd-init: $* failed: $out" >&2
+                exit 1
+              }
+              while IFS= read -r line; do
+                case "$line" in "" | "#"*) continue ;; esac
+                # one etcdctl command per line, split on spaces
+                apply $line
+              done < /roles/roles.sh
+              apply etcdctl user add root --no-password
+              apply etcdctl user grant-role root root
+              etcdctl auth enable
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
+            - {name: roles, mountPath: /roles, readOnly: true}
+      volumes:
+        - name: etcd-root
+          secret: {secretName: port49-etcd-root, defaultMode: 0400}
+        - name: roles
+          configMap: {name: port49-etcd-roles}

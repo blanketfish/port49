@@ -298,7 +298,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	probe, ok := pl.enter(g.c.Now())
 	if !ok {
 		g.count(p, "circuit_open")
-		return fmt.Errorf("%w: the %s pool's circuit is open", store.ErrUnavailable, p)
+		return fmt.Errorf("%w: the %s pool's circuit is open (%w)", store.ErrUnavailable, p, store.ErrNotSent)
 	}
 	// A caller already gone, or already past its deadline, is read before
 	// the slot wait: a select on a free slot and a closed Done picks either
@@ -308,7 +308,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	if err := ctx.Err(); err != nil {
 		outcome := "canceled"
 		if errors.Is(err, context.DeadlineExceeded) {
-			outcome, err = "deadline", fmt.Errorf("%w: the caller's deadline had passed (%w)", store.ErrUnavailable, err)
+			outcome, err = "deadline", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
 		}
 		g.count(p, outcome)
 		if changed, open := pl.leave(g.c.Now(), probe, outcome, err, g.c.Failures, g.c.OpenFor); changed {
@@ -329,7 +329,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 		// The caller's deadline or the pool's: either way every slot was
 		// held for as long as this call could wait.
 		g.count(p, "saturated")
-		return fmt.Errorf("%w: every %s slot was busy for as long as the call could wait", store.ErrUnavailable, p)
+		return fmt.Errorf("%w: every %s slot was busy for as long as the call could wait (%w)", store.ErrUnavailable, p, store.ErrNotSent)
 	}
 	start := time.Now()
 	err := f(cctx)

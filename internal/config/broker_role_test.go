@@ -23,7 +23,6 @@ func brokerRoleYAML(t *testing.T) string {
 		"inventory_file: " + write(t, "inv.yaml", inv),
 		"encryption:",
 		"  current: {id: v2, secret_ref: env:PORT49_ENC_V2}",
-		"admin_socket: " + filepath.Join(dir, "broker.sock"),
 		"broker:",
 		"  listen: 127.0.0.1:0",
 		"  tls_cert_file: /etc/port49/broker.pem",
@@ -56,7 +55,6 @@ func daemonRoleYAML(t *testing.T) string {
 	return withPolicy(fmt.Sprintf(sampleHead, write(t, "inv.yaml", inv))) +
 		"encryption:\n  current: {id: v2, secret_ref: env:PORT49_ENC_V2}\n" +
 		"policy: {file: /etc/port49/policy.yaml}\n" +
-		"admin_socket: " + filepath.Join(dir, "admin.sock") + "\n" +
 		"stores:\n  directory:\n    backend: etcd\n    etcd:\n      endpoints: [https://etcd-0:2379]\n" +
 		"      ca_file: " + filepath.Join(dir, "ca.pem") + "\n" +
 		"      daemon: {cert_file: " + filepath.Join(dir, "d.pem") + ", key_file: " + filepath.Join(dir, "d-key.pem") + "}\n"
@@ -116,7 +114,7 @@ func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 
 // port49-broker.yaml requires each of these, naming it.
 func TestTheBrokersConfigRequiresItsKeys(t *testing.T) {
-	for _, cut := range []string{"state_dir:", "admin_socket:", "backend: etcd", "      broker: {",
+	for _, cut := range []string{"state_dir:", "backend: etcd", "      broker: {",
 		"  current: {id: v2"} {
 		var lines []string
 		for _, l := range strings.Split(brokerRoleYAML(t), "\n") {

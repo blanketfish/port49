@@ -64,13 +64,21 @@ func composeStoreBlock(component string) string {
 		"      hold_ttl: 60s\n%s", component, identity, identity, health)
 }
 
+// Where the compose containers read the lab's secrets: the sealing key in each component's volume and the
+// device key in the port49d-keys volume (deploy/compose/setup.sh places each from local/).
+const (
+	composeEncKeyPath    = "/etc/port49/secrets/encryption.key"
+	composeDeviceKeyPath = "/run/port49/keys/lab_key_v1"
+)
+
 // composeLabFiles is the lab's version of deploy/compose's four YAML files
-// and two env files, by name. base is port49d-lab.yaml's text already
+// and the secret files setup places from local/, by name (secrets/..., keys/...).
+// base is port49d-lab.yaml's text already
 // derived for the platform; brokerSlice, policy and inventory are
 // slice/broker.yaml's, slice/policy.yaml's and inventory-lab.yaml's.
-// It reads no file. The device key is port49d's env alone.
+// It reads no file. The device key is port49d's alone.
 func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]string, error) {
-	daemon, err := splitDaemonYAML(base, splitNode{Listen: ":49", Metrics: ":9049", Admin: "/run/port49/port49d.sock",
+	daemon, err := splitDaemonYAML(base, splitNode{Listen: ":49", Metrics: ":9049",
 		Spool: "/var/spool/port49d/acct.jsonl"}, "/etc/port49/policy.yaml", "/etc/port49/inventory.yaml",
 		composeStoreBlock("daemon"))
 	if err != nil {
@@ -78,7 +86,7 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 	}
 	broker, err := splitBrokerYAML(base, brokerSlice, splitBrokerOpts{Policy: "/etc/port49/policy.yaml",
 		Inventory: "/etc/port49/inventory.yaml", State: "/var/lib/port49-broker", Metrics: ":9050",
-		Admin: "/run/port49/port49-broker.sock", Store: composeStoreBlock("broker"), PKI: "/etc/port49/broker"})
+		Store: composeStoreBlock("broker"), PKI: "/etc/port49/broker"})
 	if err != nil {
 		return nil, err
 	}
@@ -102,13 +110,24 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 	if encKey == "" {
 		encKey = labEncKeyDefault
 	}
+	// Secrets are files in the stack (spec decision 54 ruling 2): the product's compose passes no
+	// environment, and setup places what local/ holds (deploy/compose/setup.sh).
+	for _, c := range []*string{&daemon, &broker} {
+		if *c, err = swapLine(*c, "secret_ref: env:PORT49_LAB_ENC_KEY", "secret_ref: file:"+composeEncKeyPath); err != nil {
+			return nil, err
+		}
+	}
+	if policy, err = swapLine(policy, "secret_ref: env:PORT49_KEY_LAB", "secret_ref: file:"+composeDeviceKeyPath); err != nil {
+		return nil, err
+	}
 	return map[string]string{
-		"port49d.yaml":       daemon,
-		"port49-broker.yaml": broker,
-		"policy.yaml":        policy,
-		"inventory.yaml":     inv,
-		"port49d.env":        "PORT49_KEY_LAB=" + labKey + "\nPORT49_LAB_ENC_KEY=" + encKey + "\n",
-		"port49-broker.env":  "PORT49_LAB_ENC_KEY=" + encKey + "\n",
+		"port49d.yaml":                                daemon,
+		"port49-broker.yaml":                          broker,
+		"policy.yaml":                                 policy,
+		"inventory.yaml":                              inv,
+		"secrets/port49d-encryption.key":              encKey,
+		"secrets/broker-encryption.key":               encKey,
+		"keys/" + filepath.Base(composeDeviceKeyPath): labKey,
 	}, nil
 }
 
@@ -150,6 +169,106 @@ type composeStack struct {
 
 // run runs docker compose on the stack's files and records what it ran in
 // compose.log.
+// states is each service's state and exit code on one line, service=state/exit: structured fields only,
+// never a log, so the line that reports a failure can carry them.
+func (c *composeStack) states() string {
+	out, err := c.run("ps", "-a", "--format", "{{.Service}}={{.State}}/{{.ExitCode}}")
+	if err != nil {
+		return "(not read: " + oneLineMax(err.Error(), 100) + ")"
+	}
+	return composeStates(out)
+}
+
+// composeExit is the command's exit code, or that it never ran.
+func composeExit(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("exit %d", ee.ExitCode())
+	}
+	return "did not run"
+}
+
+// daemonLine is the first line of logs that begins with a daemon's own error prefix, cut to 200
+// characters: the one line a crashing daemon says before it exits, and nothing a library printed.
+func daemonLine(logs string) string {
+	for _, ln := range strings.Split(logs, "\n") {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "port49-broker: ") || strings.HasPrefix(ln, "port49d: ") {
+			return oneLineMax(ln, 197)
+		}
+	}
+	return ""
+}
+
+// crashTags are the causes a daemon's own error line can be named by, matched by a substring of the
+// line. The tag is all the INVALID line carries of a line it may not quote.
+var crashTags = []struct{ tag, has string }{
+	{"lab_seed_file", "seed_token_file"},
+	{"directory_key_window", "key window"},
+	{"directory_key_window", "does not hold"},
+	{"two_stores_check", "cluster id"},
+	{"two_stores_check", "probe lease"},
+	{"issuer_record", "issuing CA"},
+	{"listener", "listener on"},
+	{"metrics_listener", "metrics listener"},
+	{"policy", "policy"},
+	{"config", "config:"},
+	{"directory_open", "directory"},
+}
+
+// crashTag names the cause of the last line of logs that begins with a daemon's own prefix, the one
+// said before the exit, from crashTags: "unlisted" for a line none matches, "" when no line has the prefix.
+func crashTag(logs string) string {
+	line := ""
+	for _, ln := range strings.Split(logs, "\n") {
+		if ln = strings.TrimSpace(ln); strings.HasPrefix(ln, "port49-broker: ") || strings.HasPrefix(ln, "port49d: ") {
+			line = ln
+		}
+	}
+	if line == "" {
+		return ""
+	}
+	for _, c := range crashTags {
+		if strings.Contains(line, c.has) {
+			return c.tag
+		}
+	}
+	return "unlisted"
+}
+
+// crashes keeps the last 50 log lines of each daemon in a private file and quotes the file's path with
+// the daemon's first own line; the rest of the log is never quoted.
+func (c *composeStack) crashes() string {
+	var parts []string
+	for _, svc := range []string{"port49-broker", "port49d"} {
+		out, err := c.run("logs", "--no-log-prefix", "--tail", "50", svc)
+		if err != nil {
+			parts = append(parts, svc+": log not read")
+			continue
+		}
+		part := svc + ": log kept in " + l67Kept("compose-"+svc, out)
+		if first := daemonLine(out); first != "" {
+			part += ", first line: " + first
+		}
+		if tag := crashTag(out); tag != "" {
+			part += ", cause: " + tag
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// composeStates keeps the service=state/exit words of ps's output, one line.
+func composeStates(out string) string {
+	var words []string
+	for _, w := range strings.Fields(out) {
+		if i := strings.IndexByte(w, '='); i > 0 && strings.Contains(w, "/") && !strings.ContainsAny(w, "\"'") {
+			words = append(words, w)
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 func (c *composeStack) run(args ...string) (string, error) { return c.runIn("", args...) }
 
 // runIn is run with stdin fed to the command.
@@ -269,12 +388,13 @@ func (c *composeStack) StartDaemon() error {
 	return c.follow(composeProject+"-port49d-1", since, c.l.logPath, c.l.errPath)
 }
 
-// Revoke runs `port49 revoke` on the broker's admin socket, in its
-// container, and returns what it printed and whether it exited 0, as
-// revokeCLI does.
+// Revoke runs `port49-broker revoke --offline` in a container of the
+// broker's image, the break-glass form that writes the mark through etcd
+// (the live form is the API with a security key press, which a stack with no
+// key cannot make), and returns what it printed and whether it exited 0.
 func (c *composeStack) Revoke(args ...string) (string, bool) {
-	out, err := c.run(append([]string{"exec", "-T", "port49-broker", "port49", "revoke", "--socket",
-		"/run/port49/port49-broker.sock"}, args...)...)
+	out, err := c.run(append([]string{"run", "--rm", "--no-deps", "--entrypoint", "port49-broker", "port49-broker",
+		"revoke", "--offline"}, args...)...)
 	return out, err == nil
 }
 
@@ -427,8 +547,12 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 	}
 	for name, body := range files {
 		dst := filepath.Join(c.config, name)
-		if strings.HasSuffix(name, ".env") {
+		// What setup places from local/: secret and key files (deploy/compose/setup.sh).
+		if strings.HasPrefix(name, "secrets/") || strings.HasPrefix(name, "keys/") {
 			dst = filepath.Join(c.local, name)
+			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := os.WriteFile(dst, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -474,7 +598,9 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 	}
 
 	if out, err := c.run("up", "-d", "--build"); err != nil {
-		t.Fatalf("docker compose up: %v\n%s\ncompose.log (tail):\n%s", err, out, c.tail(40))
+		// Build and pull logs: kept in a private file, and the line carries the structured part.
+		t.Fatalf("INVALID: docker compose up failed (%s); services (service=state/exit code): %s; output kept in %s",
+			composeExit(err), c.states(), l67Kept("compose-up", out))
 	}
 	l.logPath = filepath.Join(c.dir, "decisions-"+l.p.name+".jsonl")
 	l.errPath = filepath.Join(c.dir, "port49d-"+l.p.name+".log")
@@ -488,7 +614,8 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 		deadline := time.Now().Add(3 * time.Minute)
 		for !httpOK("http://" + addr + "/readyz") {
 			if time.Now().After(deadline) {
-				t.Fatalf("%s/readyz not 200 in 3m\ncompose.log (tail):\n%s", addr, c.tail(40))
+				t.Fatalf("INVALID: %s/readyz not 200 in 3m; services (service=state/exit code): %s; %s\ncompose.log (tail):\n%s", addr,
+					c.states(), c.crashes(), c.tail(40))
 			}
 			time.Sleep(time.Second)
 		}

@@ -1,0 +1,107 @@
+# port49 on Kubernetes (plan 12b, Task 10). Every secret is a Secret you create (or External
+# Secrets renders: examples/external-secret.yaml) and name here; none is a value in this file
+# and none is in a container's environment. Keys required to install are empty and refused by
+# values.schema.json until set.
+
+image:
+  repository: ghcr.io/rhwendt/port49
+  tag: ""            # empty: the chart's appVersion
+  pullPolicy: IfNotPresent
+# The root initContainers that make each data directory 0700 (alpine:3.22, as the Dockerfile's
+# setup target). They run as root, so the namespace needs Pod Security "baseline".
+initImage: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+
+port49d:
+  replicas: 2
+  resources: {}
+  # How long a terminating pod keeps serving before port49d closes its listeners (a preStop sleep), so
+  # the route to it is withdrawn first (L85 measured 6.6 s for MetalLB BGP; kube-proxy and cloud load
+  # balancers take about as long). Needs Kubernetes 1.30 or later; 0 turns it off. The grace period
+  # must be at least this plus 30, the longest drain.
+  preStopSeconds: 15
+  terminationGracePeriodSeconds: 60
+  # The accounting spool: one PVC per replica. A scale-down retains it (README).
+  spool: {size: 1Gi, storageClassName: ""}
+
+broker:
+  replicas: 2
+  resources: {}
+  # broker.state_dir: one PVC per replica, never shared.
+  state: {size: 1Gi, storageClassName: ""}
+  # The broker's API serving certificate and key (tls.crt, tls.key) and the CA that signs the
+  # people's client certificates (ca.crt). Required.
+  tls: {existingSecret: ""}
+  # This broker's directory site (PORT49_SITE); the same for every replica of a release.
+  site: ""
+  # The name of a ConfigMap holding attestation-roots.pem (Yubico's PIV roots). Set, the chart
+  # renders attestation_roots_file; unset, every admin call is refused 503 (spec §12).
+  attestationRootsConfigMap: ""
+  # A Secret holding the directory bind keytab and krb5.conf; mounted at /etc/port49/directory.
+  directory: {keytabSecret: ""}
+
+# The device keys: one key per version in this Secret, named <ref>_v<N> (examples/external-secret.yaml).
+# Mounted whole at /run/port49/keys in port49d's pod only, never by subPath. Required.
+keys: {existingSecret: ""}
+
+# The sealing key (encryption.key), the same 32 bytes in both pods. Required.
+encryption:
+  id: c1
+  key: encryption.key       # the current key's file in the Secret
+  existingSecret: ""
+  # Set during a rotation only (README, Rotating the encryption key): the old key's id and its file in the same Secret.
+  previous: {id: "", key: ""}
+
+# port49's own etcd, never the control plane's. List every member's URL (never a Service or
+# VIP): port49d prints each one's version at its start and refuses one below the floor.
+etcd:
+  endpoints: []
+  caSecret: ""            # ca.crt; mounted in both pods
+  port49d: {existingSecret: ""}   # tls.crt, tls.key: port49d's client identity; port49d's pod only
+  broker: {existingSecret: ""}    # tls.crt, tls.key: the broker's client identity; the broker's pod only
+
+tlsListener:
+  enabled: false
+  existingSecret: ""      # tls.crt, tls.key, ca.crt (the devices' CA); mounted in port49d
+  port: 300
+
+service:
+  type: LoadBalancer
+  # Local keeps the device's source address. Whether it does on a given cluster is unmeasured
+  # (spec §15 L39 b, c).
+  externalTrafficPolicy: Local
+  annotations: {}
+  # An anycast address advertised by MetalLB in BGP mode (spec §15 L85, measured on kind with an FRR
+  # peer). It adds MetalLB's address annotation and nothing else: MetalLB, its address pool and the
+  # BGP peers are yours. Needs type LoadBalancer, the Local policy and port49d.preStopSeconds >= 15.
+  anycast:
+    enabled: false
+    address: ""
+brokerService:
+  type: ClusterIP
+  annotations: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  averageConnections: 500
+
+issuerDiscovery:
+  enabled: false
+
+# The sealed enrollment store, exported daily by a CronJob into your PVC (never created here).
+# examples/backup-cronjob.yaml is the etcd snapshot, which needs etcd's root certificate and is yours.
+backup:
+  enrollments:
+    enabled: false
+    claimName: ""        # an existing PVC; required when enabled
+    schedule: "23 2 * * *"
+
+# The policy and the inventory, as YAML text. Required to be non-empty for a useful install.
+policy: ""
+inventory: ""
+
+# Merged into each rendered config (maps merge, values here win). snake_case, as the files are.
+config:
+  port49d: {}
+  broker: {}

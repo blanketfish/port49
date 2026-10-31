@@ -19,7 +19,7 @@ const (
 )
 
 const apiRevokeClaim = "The HTTP revocation (`POST /v1/tokens/revoke`, plan 7c; spec §5.1.4, §13 decision 34) reaches " +
-	"a live SSH session as the admin socket's does, under the caller's api: rights: a peer with no right who names " +
+	"a live SSH session under the caller's api: rights and a press of their security key: a peer with no right who names " +
 	"the operator is refused 403 api_right_missing and the operator's next command still runs; the operator's " +
 	"`port49 revoke --mine` refuses the open session's next command on a platform that authorizes each command (Junos " +
 	"keeps what it had at login and the report names it), refuses the unspent token token_not_found, and leaves no " +
@@ -45,11 +45,14 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		}
 		brokerYAML = []byte(strings.Replace(string(brokerYAML), "tests/lab/slice/policy.yaml",
 			"tests/lab/slice/api-policy.yaml", 1))
-		// Relative to the repository root, where port49d and revokeCLI both run,
-		// so the principal's report quotes no machine's checkout (review M3).
-		socket := filepath.Join("tests", "lab", "logs", "api-revoke-admin.sock")
-		cfg, err := l.derivedConfig("api-revoke", platformSessionAttributes[l.p.name],
-			string(brokerYAML)+"\nadmin_socket: "+socket+"\n")
+		// The on-call and the peer press a software key whose attestation chains
+		// to a root this run made; the broker trusts that root alone.
+		piv, roots := adminTouchRoots(t, filepath.Join(root, "tests", "lab", "logs", "api-revoke-pki"))
+		touchYAML, err := withAdminTouch(string(brokerYAML), roots)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := l.derivedConfig("api-revoke", platformSessionAttributes[l.p.name], touchYAML)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +60,7 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := l.startDaemonWith(cfg, true); err != nil {
-			t.Fatalf("port49d would not start with the broker and the admin socket: %v", err)
+			t.Fatalf("port49d would not start with the broker and its admin roots: %v", err)
 		}
 		if err := l.awaitTACACS(); err != nil {
 			t.Fatal(err)
@@ -82,11 +85,11 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		aliceSock, alicePID, stopAlice := personAgent(t, testpki.LabClientCert, testpki.LabClientKey)
 		defer stopAlice()
 		bobCert, bobKey := testpki.LabClientFiles(oncallEmail)
-		bobSock, _, stopBob := personAgent(t, bobCert, bobKey)
-		defer stopBob()
+		bob := startLabAdmin(t, piv, sliceBrokerURL, filepath.Join(pki, testpki.LabCA), filepath.Join(pki, bobCert),
+			filepath.Join(pki, bobKey))
 		carolCert, carolKey := testpki.LabClientFiles(peerEmail)
-		carolSock, _, stopCarol := personAgent(t, carolCert, carolKey)
-		defer stopCarol()
+		carol := startLabAdmin(t, piv, sliceBrokerURL, filepath.Join(pki, testpki.LabCA), filepath.Join(pki, carolCert),
+			filepath.Join(pki, carolKey))
 
 		// 1. A live session, and an unspent token beside it.
 		_, tok1 := l29Mint(aliceSock, l.p.node)
@@ -101,13 +104,13 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		defer sh.Close()
 
 		// 2. The peer, with no right, names alice: refused, and her session goes on.
-		peerText, peerCode := agentRevoke(carolSock, "--via-agent", "--principal", slicePrincipal)
+		peerText, peerCode := carol.run("--principal", slicePrincipal)
 		if peerCode != 1 || !strings.Contains(peerText, "needs the api: revoke_others right") {
 			fail("the peer's revocation of alice: exit %d: %s", peerCode, peerText)
 		}
 		// The key form without the right is refused too, never answered as
 		// carol's own sessions there (pre-flight I2).
-		peerKeyText, peerKeyCode := agentRevoke(carolSock, "--via-agent", "--device", l.p.node, "--username", sliceUser)
+		peerKeyText, peerKeyCode := carol.run("--device", l.p.node, "--username", sliceUser)
 		if peerKeyCode != 1 || !strings.Contains(peerKeyText, "needs the api: revoke_others right") {
 			fail("the peer's key revocation: exit %d: %s", peerKeyCode, peerKeyText)
 		}
@@ -168,7 +171,7 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		}
 
 		// 4. The on-call ends alice's session on this device by key.
-		keyText, keyCode := agentRevoke(bobSock, "--via-agent", "--device", l.p.node, "--username", sliceUser)
+		keyText, keyCode := bob.run("--device", l.p.node, "--username", sliceUser)
 		if keyCode != 0 || !strings.Contains(keyText, "ended the session on "+l.p.node+" ("+sliceUser+")") {
 			fail("the on-call's key revocation: exit %d: %s", keyCode, keyText)
 		}
@@ -194,21 +197,21 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		}
 
 		// 5. The on-call revokes the principal: a standing mark, his origin.
-		markText, markCode := agentRevoke(bobSock, "--via-agent", "--principal", slicePrincipal)
+		markText, markCode := bob.run("--principal", slicePrincipal)
 		if markCode != 0 || !strings.Contains(markText, "every mint by "+slicePrincipal+" is refused") {
 			fail("the on-call's revocation of alice: exit %d: %s", markCode, markText)
 		}
 		revokeReport(markText, l.p.node, sessionOnly, "the on-call's principal", fail)
-		listText, _ := revokeCLI(socket, "--list")
+		listText, _ := bob.cli("--list")
 		listCell := "`--list` names `api user:" + oncallEmail + "`"
 		if !strings.Contains(listText, "(api user:"+oncallEmail+")") {
 			fail("port49 revoke --list does not name the on-call as the origin: %s", listText)
 			listCell = "`--list` **does not name** `api user:" + oncallEmail + "`: " + l29Cell(listText)
 		}
 		agentSaid, agentGone, _ := revokedMint(aliceSock, alicePID, l.p.node, "the principal's", fail)
-		liftText, ok := revokeCLI(socket, "--lift", "--principal", slicePrincipal)
+		liftText, ok := bob.cli("--lift", "--principal", slicePrincipal)
 		if !ok {
-			fail("the lift on the admin socket: %s", liftText)
+			fail("the on-call's lift: %s", liftText)
 		}
 		sock2, _, stopAlice2 := personAgent(t, testpki.LabClientCert, testpki.LabClientKey)
 		defer stopAlice2()
@@ -246,20 +249,20 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 				"names them not reached.\n\n"
 		}
 		obs := fmt.Sprintf("| Step | What happened |\n|---|---|\n"+
-			"| carol (no right): `port49 revoke --via-agent --principal %s` | exit %d: %s |\n"+
-			"| carol (no right): `--via-agent --device %s --username %s` | exit %d: %s |\n"+
+			"| carol (no right): `port49 revoke --principal %s` | exit %d: %s |\n"+
+			"| carol (no right): `--device %s --username %s` | exit %d: %s |\n"+
 			"| alice's `show version` after both | %s |\n"+
 			"| alice: `port49 revoke --mine` | exit %d; report below |\n"+
 			"| alice's `show version` in the same session after it | %s |\n"+
 			"| a login with a token minted before it, unspent | %s, `%s` |\n"+
 			"| a login with a token minted after it | %s |\n"+
 			"| %s | %s |\n"+
-			"| bob (revoke_others): `--via-agent --device %s --username %s` | exit %d; report below |\n"+
+			"| bob (revoke_others): `--device %s --username %s` | exit %d; report below |\n"+
 			"| alice's re-login session's `show version` after it | %s |\n"+
 			"| a login after the key revocation | %s |\n"+
-			"| bob: `--via-agent --principal %s` | exit %d; %s |\n"+
+			"| bob: `--principal %s` | exit %d; %s |\n"+
 			"| alice's agent's next mint | %s: %s; the agent %s |\n"+
-			"| a lift on the admin socket, a new agent, a mint and a login | %s |\n\n"+
+			"| a lift by the on-call, a new agent, a mint and a login | %s |\n\n"+
 			"%sRevoke records by `by` and reason: %v.\n\n"+
 			"carol's refusals, in full:\n\n```\n%s\n%s\n```\n\n"+
 			"`port49 revoke --mine` printed:\n\n```\n%s\n```\n\n"+

@@ -3,7 +3,6 @@ package port49d
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +20,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -83,9 +81,8 @@ func runSplitDaemon(t *testing.T, cfgPath string, out *syncBuffer, n int) (tacac
 }
 
 // copyDaemon writes a copy of the daemon config at cfg with its own
-// admin_socket, accounting.spool_path and metrics_listen, in a safeDir of
-// its own, and returns its path: admin.Listen refuses a socket another
-// port49d answers on.
+// accounting.spool_path and metrics_listen, in a safeDir of its own, and
+// returns its path.
 func copyDaemon(t *testing.T, cfg string) string {
 	t.Helper()
 	raw, err := os.ReadFile(cfg)
@@ -93,9 +90,7 @@ func copyDaemon(t *testing.T, cfg string) string {
 		t.Fatal(err)
 	}
 	dir := safeDir(t)
-	body := regexp.MustCompile(`(?m)^admin_socket: .*$`).ReplaceAllString(string(raw),
-		"admin_socket: "+filepath.Join(dir, "a.sock"))
-	body = regexp.MustCompile(`(?m)^accounting: .*$`).ReplaceAllString(body,
+	body := regexp.MustCompile(`(?m)^accounting: .*$`).ReplaceAllString(string(raw),
 		"accounting: {spool_path: "+filepath.Join(dir, "acct.jsonl")+"}")
 	body = regexp.MustCompile(`(?m)^metrics_listen: .*$`).ReplaceAllString(body, `metrics_listen: "127.0.0.1:0"`)
 	p := filepath.Join(dir, "port49d.yaml")
@@ -105,33 +100,44 @@ func copyDaemon(t *testing.T, cfg string) string {
 	return p
 }
 
-// askAdmin serves srv on a socket of the test's own and asks it req.
-func askAdmin(t *testing.T, srv *admin.Server, req admin.Request) admin.Response {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "port49d.sock")
-	ln, err := admin.Listen(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go srv.Serve(ctx, ln)
-	return askSocket(t, p, req)
+// revokeReq is one revocation or lift, the offline tool's flags: the tests
+// make their marks the way an operator with every broker down does (the API's
+// admin call needs a security key, which the broker package's tests drive).
+type revokeReq struct {
+	Principal, CertIssuer, CertSerial string
+	Lift                              bool
 }
 
-// askSocket asks the admin socket at p req.
-func askSocket(t *testing.T, p string, req admin.Request) admin.Response {
+// revokeReply is what a revocation answered: the report, or the failure, both
+// the tool's output.
+type revokeReply struct {
+	Text, Error string
+}
+
+// askRevoke runs `port49-broker revoke --offline` on the config at cfg for req.
+func askRevoke(cfg string, req revokeReq) (revokeReply, error) {
+	args := []string{"--offline", "--config", cfg}
+	if req.Principal != "" {
+		args = append(args, "--principal", req.Principal)
+	}
+	if req.CertIssuer != "" {
+		args = append(args, "--cert-issuer", req.CertIssuer, "--cert-serial", req.CertSerial)
+	}
+	if req.Lift {
+		args = append(args, "--lift")
+	}
+	var log, out bytes.Buffer
+	if code := offlineRevoke(args, &log, &out); code != 0 {
+		return revokeReply{Error: out.String()}, nil
+	}
+	return revokeReply{Text: out.String()}, nil
+}
+
+// revokeAt is askRevoke for a test that has no use for the error.
+func revokeAt(t *testing.T, cfg string, req revokeReq) revokeReply {
 	t.Helper()
-	c, err := net.Dial("unix", p)
+	r, err := askRevoke(cfg, req)
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	if err := json.NewEncoder(c).Encode(req); err != nil {
-		t.Fatal(err)
-	}
-	var r admin.Response
-	if err := json.NewDecoder(c).Decode(&r); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -214,15 +220,11 @@ func TestTwoDaemonsServeOneKeyspace(t *testing.T) {
 	}
 	waitForCount(t, &out, "port49d: ledger: ", 2)
 	waitForCount(t, &out, "port49d: store: 0 revocation(s) in force from the store", 2)
-	// Its admin socket sends a revocation to port49-broker's (Ruling 13).
-	raw, err := os.ReadFile(daemonCfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	socket := regexp.MustCompile(`(?m)^admin_socket: (\S+)$`).FindSubmatch(raw)[1]
-	if r := askSocket(t, string(socket), admin.Request{Op: "revoke", Principal: "user:alice@example.com"}); !strings.Contains(
-		r.Error, "port49-broker's admin socket") {
-		t.Fatalf("a revocation at the daemon's socket: %+v", r)
+	// A revocation at a port49d with no broker is port49-broker's (Ruling 13).
+	var o, e2 bytes.Buffer
+	if code := offlineRevokeDaemon([]string{"--offline", "--config", daemonCfg, "--principal", "user:alice@example.com"},
+		&o, &e2); code != 1 || !strings.Contains(e2.String(), "port49-broker revoke --offline") {
+		t.Fatalf("exit %d: %s", code, e2.String())
 	}
 }
 
@@ -403,16 +405,6 @@ func TestAColdStartDoesNotWaitForHealthPasses(t *testing.T) {
 	startSplitDaemon(t, daemonCfg, &out, 1)
 	if strings.Contains(out.String(), "consecutive health checks pass") {
 		t.Fatalf("a cold start waited for passes:\n%s", out.String())
-	}
-}
-
-// A revocation sent to port49d's socket with no broker in it is refused,
-// naming port49-broker's socket (Ruling 13).
-func TestARevocationAtTheDaemonsSocketNamesTheBrokers(t *testing.T) {
-	srv := &admin.Server{Now: time.Now, RevokeElsewhere: "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"}
-	resp := askAdmin(t, srv, admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	if !strings.Contains(resp.Error, "port49 revoke --socket") || !strings.Contains(resp.Error, "port49-broker") {
-		t.Fatalf("%+v", resp)
 	}
 }
 

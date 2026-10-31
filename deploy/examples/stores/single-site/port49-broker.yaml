@@ -1,0 +1,34 @@
+# Single site (spec §13 decision 51): one etcd cluster of three, and stores.session omitted,
+# so the session store is the directory store. This is the systemd shape's own file; it is
+# here so the three shapes' examples sit side by side.
+# port49-broker on a systemd host (plan 12b): /etc/port49/port49-broker.yaml.
+metrics_listen: "127.0.0.1:9050"
+inventory_file: /etc/port49/inventory.yaml
+encryption:
+  current: {id: e1, secret_ref: file:/etc/port49/secrets/broker-encryption.key}
+broker:
+  listen: ":8443"
+  tls_cert_file: /etc/port49/broker/broker.pem
+  tls_key_file: /etc/port49/broker/broker-key.pem
+  # The CA that signs your people's client certificates. For OIDC sign-in, replace this
+  # with an identity: block (spec §13 decision 39).
+  client_ca_file: /etc/port49/broker/client-ca.pem
+  policy_file: /etc/port49/policy.yaml
+  # StateDirectory=port49-broker in the unit: 0700, owned by port49-broker, and it holds
+  # the issuing CA's key.
+  state_dir: /var/lib/port49-broker
+  # How a revoked client certificate is noticed (spec §5.1.4): each certificate's own OCSP
+  # responder here. Name your CA's CRLs instead with crls: (and leave on_unavailable at
+  # refuse); the README says where the CRL file goes, and SSL_CERT_FILE for the roots.
+  # Never set disabled: true outside a trial.
+  certificate_status: {ocsp: {use_aia: true}}
+  #
+  # The directory (LDAP groups) is off. See deploy/compose/config/port49-broker.yaml for the
+  # full block, and the README for PORT49_SITE and the keytab (systemctl edit).
+stores:
+  directory:
+    backend: etcd
+    etcd:
+      endpoints: [https://etcd-1.example.com:2379, https://etcd-2.example.com:2379, https://etcd-3.example.com:2379]
+      ca_file: /etc/port49/etcd/ca.pem
+      broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}

@@ -368,7 +368,7 @@ func Generate(path string) (*Signer, error) {
 func Open(path string) (*Signer, error) {
 	// Owner-only: every port49 user is in tss, and the key has an empty auth, so
 	// the file's mode is all that keeps another user from signing as its owner.
-	file, err := keyfile.ReadSecret(path)
+	file, err := keyfile.ReadOwn(path)
 	if err != nil {
 		return nil, fmt.Errorf("tpm: %w", err)
 	}

@@ -232,7 +232,7 @@ func TestANonOpenSSHIsPointedAtPort49Token(t *testing.T) {
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho 'dropbear v2022.83' >&2\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = fake
+	r.flags[1] = fake
 	code, _, errb := r.run(t, "leaf1")
 	if code != 1 || r.mints.Load() != 0 || !strings.Contains(errb, "port49 token leaf1") {
 		t.Fatalf("code %d mints %d stderr %q", code, r.mints.Load(), errb)
@@ -250,7 +250,7 @@ func TestTheHostKeyHintIsConditionalOnSSHsMessage(t *testing.T) {
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = fake
+	r.flags[1] = fake
 	code, _, errb := r.run(t, "leaf1")
 	if code != 255 || !strings.Contains(errb, "so it was never sent") ||
 		!strings.Contains(errb, "If it says Host key verification failed") ||
@@ -270,7 +270,7 @@ func TestSSHsStderrIsTheCallersOwn(t *testing.T) {
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = fake
+	r.flags[1] = fake
 	f, err := os.CreateTemp(t.TempDir(), "stderr")
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +278,7 @@ func TestSSHsStderrIsTheCallersOwn(t *testing.T) {
 	defer f.Close()
 	start := time.Now()
 	var out lockedBuffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", r.sock)
 	code := run(append(append([]string{"ssh"}, r.flags...), "leaf1"), &out, f)
 	if code != 0 || time.Since(start) > 2*time.Second {
 		t.Fatalf("code %d after %v: a descendant holding ssh's stderr held port49 ssh", code, time.Since(start))

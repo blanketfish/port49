@@ -27,7 +27,7 @@ func etcdBlock(dir, indent, endpoint, prefix string, extra ...string) string {
 }
 
 func TestNoStoresIsOneMemoryStore(t *testing.T) {
-	s, err := StoresBlocks([]byte("admin_socket: /run/port49/port49d.sock\n"))
+	s, err := StoresBlocks([]byte("listen: 127.0.0.1:49\n"))
 	if err != nil || !s.Shared || s.Directory.Backend != BackendMemory || s.Session.Backend != BackendMemory ||
 		s.SessionPath() != "stores.directory" {
 		t.Fatalf("%+v %v", s, err)

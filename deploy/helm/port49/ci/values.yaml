@@ -1,0 +1,20 @@
+# The values `helm lint` and the render tests install with. Every name is fake; no secret is here.
+image: {repository: ghcr.io/rhwendt/port49, tag: "0.1.0"}
+keys: {existingSecret: port49-device-keys}
+encryption: {id: c1, existingSecret: port49-encryption}
+broker:
+  tls: {existingSecret: port49-broker-tls}
+etcd:
+  endpoints:
+    - https://etcd-0.etcd.port49-etcd.svc:2379
+    - https://etcd-1.etcd.port49-etcd.svc:2379
+    - https://etcd-2.etcd.port49-etcd.svc:2379
+  caSecret: port49-etcd-ca
+  port49d: {existingSecret: port49-etcd-port49d}
+  broker: {existingSecret: port49-etcd-broker}
+config:
+  broker:
+    broker:
+      # A trial PKI publishes no CRL. A deployment names its CRL (or OCSP) and leaves
+      # on_unavailable at refuse (spec §5.1.4).
+      certificate_status: {disabled: true}

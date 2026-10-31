@@ -21,7 +21,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/store"
@@ -149,7 +148,7 @@ func TestABrokerOnTwoStoresMarksInTheDirectory(t *testing.T) {
 	f.judged(t)
 	startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "port49-broker: store: 0 revocation(s) in force from the directory store")
-	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	r, err := askRevoke(f.broker, revokeReq{Principal: "user:alice@example.com"})
 	if err != nil || r.Error != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -161,9 +160,11 @@ func TestABrokerOnTwoStoresMarksInTheDirectory(t *testing.T) {
 	}
 }
 
-// Review Focus 5: with the directory cut, a revocation is refused within the
-// directory's call_timeout, saying it may not have been recorded, and the
-// broker says the directory is not answering.
+// Review Focus 5: with the directory cut, an offline revocation is refused
+// within the directory's call_timeout, saying nothing was revoked (it never got
+// as far as a write), and the running broker says the directory is not
+// answering. A write that was sent and not answered says it may not have been
+// recorded (TestARevocationOnAHungStoreGivesUpAtTheDeadlineAndSaysSo).
 func TestARevocationWithTheDirectoryCutFailsPromptly(t *testing.T) {
 	var out syncBuffer
 	e := stderr
@@ -175,8 +176,8 @@ func TestARevocationWithTheDirectoryCutFailsPromptly(t *testing.T) {
 	startBroker(t, f.broker, &out, 1)
 	f.dproxy.Hang(true)
 	start := time.Now()
-	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	if err != nil || !strings.Contains(r.Error, "may not have been recorded") || time.Since(start) > 5*time.Second {
+	r, err := askRevoke(f.broker, revokeReq{Principal: "user:alice@example.com"})
+	if err != nil || !strings.Contains(r.Error, "nothing was revoked") || time.Since(start) > 5*time.Second {
 		t.Fatalf("%+v %v after %v", r, err, time.Since(start))
 	}
 	waitWithin(t, &out, "port49-broker: directory store: not answering", 10*time.Second)
@@ -204,7 +205,7 @@ func TestAMarkMadeInAnotherRegionReachesThisRegionsTokens(t *testing.T) {
 	if n := keysUnder(t, c.srv, "/port49/v1/t/"); n != 1 {
 		t.Fatalf("setup: %d token record(s) in region c", n)
 	}
-	r, err := ask(adminSocketOf(t, a.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	r, err := askRevoke(a.broker, revokeReq{Principal: "user:alice@example.com"})
 	if err != nil || r.Error != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -550,7 +551,7 @@ func TestAMarkAlreadyInTheDirectoryIsInForceOnTheFirstRequest(t *testing.T) {
 	}
 	t.Cleanup(func() { raw.Close() })
 	if err := raw.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
-		Key: "user:alice@example.com", At: time.Now(), Origin: "admin_socket uid 0"}); err != nil {
+		Key: "user:alice@example.com", At: time.Now(), Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	api, _ := startBroker(t, f.broker, &out, 1)
@@ -746,7 +747,7 @@ func TestAMarkMadeDuringACutReachesTheDaemonOnHeal(t *testing.T) {
 	c.dproxy.Hang(true)
 	c.ddproxy.Hang(true)
 	waitWithin(t, &out, "port49d: directory store: not answering", 10*time.Second)
-	r, err := ask(adminSocketOf(t, a.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	r, err := askRevoke(a.broker, revokeReq{Principal: "user:alice@example.com"})
 	if err != nil || r.Error != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -831,7 +832,7 @@ func TestADaemonLoadsItsMarksFromTheDirectoryStore(t *testing.T) {
 	f.twoStores(t)
 	f.judged(t)
 	startBroker(t, f.broker, &out, 1)
-	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	r, err := askRevoke(f.broker, revokeReq{Principal: "user:alice@example.com"})
 	if err != nil || r.Error != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -946,7 +947,7 @@ func TestADaemonRefusesNestedPrefixesOnOneCluster(t *testing.T) {
 	}
 	body := string(raw)
 	body = body[:strings.Index(body, "stores:\n")] + "stores:\n  directory:\n" + block("b-daemon", "/port49/dir/", "https://"+proxy.Addr()) +
-		"  session:\n    packet_deadline: 1s\n" + block("a-daemon", "/port49/", srv.Endpoint) + body[strings.Index(body, "admin_socket:"):]
+		"  session:\n    packet_deadline: 1s\n" + block("a-daemon", "/port49/", srv.Endpoint) + body[strings.Index(body, "limits:"):]
 	if err := os.WriteFile(f.daemon, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1076,7 @@ func TestAHeldRunRefusesADirectoryThatFailsTheStartChecks(t *testing.T) {
 	if got := out.String()[mark:]; !strings.Contains(got, "key-from-elsewhere") || strings.Contains(got, "port49d: port49d:") {
 		t.Fatalf("the refusal reads wrong:\n%s", got)
 	}
-	r, err := ask(adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+	r, err := askRevoke(f.broker, revokeReq{Principal: "user:alice@example.com"})
 	if err != nil || r.Error != "" {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -1306,16 +1307,16 @@ func TestStoreStatusOnTwoStores(t *testing.T) {
 	f.judged(t)
 	startBroker(t, f.broker, &out, 1)
 	startSplitDaemon(t, f.daemon, &out, 1)
-	sock := adminSocketOf(t, f.daemon)
-	r, err := ask(sock, admin.Request{Op: "store_status"})
-	if err != nil || r.Degraded || !strings.Contains(r.Text, "directory  etcd    1/1 members  reachable  cache ") ||
-		!strings.Contains(r.Text, "session    etcd    1/1 members  reachable") {
-		t.Fatalf("%+v %v", r, err)
+	addr := daemonMetrics(t, &out)
+	code, text := storeStatusAt(t, addr)
+	if code != http.StatusOK || !strings.Contains(text, "directory  etcd    1/1 members  reachable  cache ") ||
+		!strings.Contains(text, "session    etcd    1/1 members  reachable") {
+		t.Fatalf("%d %q", code, text)
 	}
 	f.ddproxy.Hang(true)
 	waitWithin(t, &out, "port49d: directory store: not answering", 10*time.Second)
-	r, err = ask(sock, admin.Request{Op: "store_status"})
-	if err != nil || !r.Degraded || !strings.Contains(r.Text, "unreachable") {
-		t.Fatalf("with the directory cut: %+v %v", r, err)
+	code, text = storeStatusAt(t, addr)
+	if code != http.StatusServiceUnavailable || !strings.Contains(text, "unreachable") {
+		t.Fatalf("with the directory cut: %d %q", code, text)
 	}
 }

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/egress"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
@@ -181,11 +181,12 @@ func readCA(path string) (*x509.CertPool, error) {
 		return nil, errors.New("ca_file: none given; name the CA bundle that issues the source's certificate " +
 			"(the host's own bundle file is a valid choice for a public one)")
 	}
-	// As the service client reads its CA (internal/inventory/client.go): a
-	// regular file, opened without blocking and bounded, so a FIFO at ca_file
-	// is refused rather than hanging a dial (pre-flight M2). A symbolic link
-	// is followed, so a distribution's bundle link still works.
-	raw, err := config.ReadRegular(path, maxCAFile)
+	// As the service client reads its CA (internal/inventory/client.go): under the policy-file fence
+	// (decision 54 ruling 16): a regular file, opened without blocking and bounded, so a FIFO at ca_file
+	// is refused rather than hanging a dial (pre-flight M2), and one that only root or this user could
+	// have written. A symbolic link is followed through such directories, so a distribution's bundle link
+	// still works.
+	raw, err := fence.Read(path, maxCAFile, "ca_file")
 	if err != nil {
 		return nil, fmt.Errorf("ca_file %s: %w", path, err)
 	}

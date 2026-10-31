@@ -42,7 +42,7 @@ type devicePKI struct {
 
 func writeDevicePKI(t *testing.T) devicePKI {
 	t.Helper()
-	dir := t.TempDir()
+	dir := safeDir(t)
 	now := time.Now()
 	ca, err := testpki.NewCA("Device CA", now.Add(-time.Hour), now.Add(24*time.Hour))
 	if err != nil {

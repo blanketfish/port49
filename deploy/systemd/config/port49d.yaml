@@ -1,0 +1,39 @@
+# port49d on a systemd host (plan 12b): /etc/port49/port49d.yaml. Every secret is a file
+# port49d reads, never a value written here.
+listen: ":49"
+metrics_listen: "127.0.0.1:9049"
+inventory_file: /etc/port49/inventory.yaml
+policy: {file: /etc/port49/policy.yaml, watch_interval: 5s}
+# The key that seals what port49d stores. The same value as the broker's
+# broker-encryption.key; each file is owned by its own process (README, "Rotating the
+# encryption key").
+encryption:
+  current: {id: e1, secret_ref: file:/etc/port49/secrets/encryption.key}
+# Where a policy's device keys may be read from: a root-owned 0750 directory, group
+# port49d, each key a 0440 file. Not /run: a reboot clears it.
+key_secret_refs: {file_dir: /etc/port49/keys}
+accounting:
+  spool_path: /var/spool/port49d/acct.jsonl
+# limits.max_connections is left unset on purpose: port49d sizes it from the unit's
+# LimitNOFILE=65536.
+#
+# TACACS+ over TLS (RFC 9887, spec §13 decision 50) is off until you want it. To turn it
+# on, uncomment this block, put the three PEM files in /etc/port49/tls, and open port
+# 300 to your devices.
+# tls_listener:
+#   listen: ":300"
+#   cert_file: /etc/port49/tls/server.pem
+#   key_file: /etc/port49/tls/server-key.pem
+#   client_ca_file: /etc/port49/tls/device-ca.pem
+#   # Revocation checking of device certificates is required (RFC 9887 §3.4): each
+#   # certificate's own OCSP responder, or crls: with a state_dir under /var/spool/port49d.
+#   certificate_status: {ocsp: {use_aia: true}}
+stores:
+  directory:
+    backend: etcd
+    etcd:
+      # Every member's URL, never a VIP or a load balancer: port49d checks each member
+      # against the etcd floor and says so at start.
+      endpoints: [https://etcd-1.example.com:2379, https://etcd-2.example.com:2379, https://etcd-3.example.com:2379]
+      ca_file: /etc/port49/etcd/ca.pem
+      daemon: {cert_file: /etc/port49/etcd/port49d.pem, key_file: /etc/port49/etcd/port49d-key.pem}

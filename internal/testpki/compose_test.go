@@ -12,8 +12,10 @@ import (
 
 // WriteCompose writes every file deploy/compose reads from local/: etcd's
 // CA and members (any-purpose, for peer and client), a client per etcd
-// user, the broker's lab PKI, and an env file per component, the device
-// key in port49d's alone (plan 7f, Ruling 8).
+// user, the broker's lab PKI with a client certificate each for the admin
+// operator and bob, the device key as a file under keys/, and one sealing
+// key file per component under secrets/ (plan 7f, Ruling 8; plan 12b, Task
+// 6: no env file, nothing secret in a container's environment).
 func TestWriteComposeWritesTheStacksFiles(t *testing.T) {
 	dir := t.TempDir()
 	if err := WriteCompose(dir, "alice@example.com", time.Now()); err != nil {
@@ -22,13 +24,13 @@ func TestWriteComposeWritesTheStacksFiles(t *testing.T) {
 	for _, f := range []string{"etcd/ca.pem", "etcd/etcd-1.pem", "etcd/etcd-1-key.pem", "etcd/etcd-3.pem",
 		"etcd/root.pem", "etcd/root-key.pem", "etcd/port49d.pem", "etcd/port49d-key.pem",
 		"etcd/port49-broker.pem", "etcd/port49-broker-key.pem", "broker/" + LabCA, "broker/" + LabServerCert,
-		"broker/" + LabServerKey, "broker/" + LabClientCert, "broker/" + LabClientKey, "port49d.env",
-		"port49-broker.env"} {
+		"broker/" + LabServerKey, "broker/" + LabClientCert, "broker/" + LabClientKey, "broker/" + operatorKey(), "broker/" + operatorCert(),
+		"broker/" + bobCert(), "keys/tacacs_v1", "secrets/port49d-encryption.key", "secrets/broker-encryption.key"} {
 		fi, err := os.Stat(filepath.Join(dir, f))
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
-		if strings.HasSuffix(f, "-key.pem") || strings.HasSuffix(f, ".env") {
+		if strings.HasSuffix(f, "-key.pem") || strings.HasPrefix(f, "keys/") || strings.HasPrefix(f, "secrets/") {
 			if fi.Mode().Perm() != 0o600 {
 				t.Errorf("%s is %v, want 0600", f, fi.Mode().Perm())
 			}
@@ -50,15 +52,20 @@ func TestWriteComposeWritesTheStacksFiles(t *testing.T) {
 	if cn("etcd/port49d.pem") != "port49d" || cn("etcd/port49-broker.pem") != "port49-broker" || cn("etcd/root.pem") != "root" {
 		t.Fatalf("CNs %q %q %q", cn("etcd/port49d.pem"), cn("etcd/port49-broker.pem"), cn("etcd/root.pem"))
 	}
-	broker, err := os.ReadFile(filepath.Join(dir, "port49-broker.env"))
-	if err != nil {
-		t.Fatal(err)
+	for _, gone := range []string{"port49d.env", "port49-broker.env"} {
+		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
+			t.Errorf("%s is written: the stack keeps no env file", gone)
+		}
 	}
-	if strings.Contains(string(broker), "PORT49_KEY_TACACS") {
-		t.Fatal("the broker's env file holds the device key")
-	}
-	daemon, _ := os.ReadFile(filepath.Join(dir, "port49d.env"))
-	if !strings.Contains(string(daemon), "PORT49_KEY_TACACS=") || !strings.Contains(string(daemon), "PORT49_ENC_KEY=") {
-		t.Fatalf("port49d.env: %d bytes, missing a key", len(daemon))
+	// One sealing key, in both components' files, 32 bytes; the device key is not it.
+	d, _ := os.ReadFile(filepath.Join(dir, "secrets/port49d-encryption.key"))
+	b, _ := os.ReadFile(filepath.Join(dir, "secrets/broker-encryption.key"))
+	k, _ := os.ReadFile(filepath.Join(dir, "keys/tacacs_v1"))
+	if len(d) != 32 || string(d) != string(b) || string(k) == string(d) || len(k) != 32 {
+		t.Errorf("key files: sealing %d and %d bytes (equal %v), device key %d bytes", len(d), len(b), string(d) == string(b), len(k))
 	}
 }
+
+func operatorCert() string { c, _ := LabClientFiles(ComposeOperator); return c }
+func operatorKey() string  { _, k := LabClientFiles(ComposeOperator); return k }
+func bobCert() string      { c, _ := LabClientFiles(ComposeBob); return c }

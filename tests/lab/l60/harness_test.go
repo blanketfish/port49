@@ -111,6 +111,7 @@ func gate(t *testing.T, name, what string) {
 // started, and where the observations go.
 type lab struct {
 	t       *testing.T
+	study   string // the register entry the observations belong to: "L60", or "L86" (l86_test.go)
 	cell    string
 	dir     string    // the lab directory
 	tty     *os.File  // nil in the self-test, which asks nothing
@@ -123,24 +124,35 @@ type lab struct {
 	agents  map[string]int // socket -> agent pid
 	obsFile *os.File
 	broker  *labBroker // the cell's broker, whose refresh pacing a refresh steps past
+	// onKill is what a killed cell also undoes (the lab lock, Keycloak): the
+	// signal guard (l86Guard) runs it after the agents and the terminal.
+	onKill []func()
 }
 
 // newLab opens Ryan's terminal and the lab directory, and with build builds
 // port49.
-func newLab(t *testing.T, cell string, build bool) *lab {
+func newLab(t *testing.T, cell string, build bool) *lab { return newStudyLab(t, "L60", cell, build) }
+
+// newStudyLab is newLab for the register entry study.
+func newStudyLab(t *testing.T, study, cell string, build bool) *lab {
 	t.Helper()
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		t.Fatalf("no terminal: run this from your own terminal, not under a tool (%v)", err)
 	}
 	t.Cleanup(func() { tty.Close() })
-	return setupLab(t, cell, build, tty, tty, labDir(t))
+	return setupStudyLab(t, study, cell, build, tty, tty, labDir(t))
 }
 
 // setupLab is newLab on a given terminal (nil for none) and lab directory.
 func setupLab(t *testing.T, cell string, build bool, tty *os.File, out io.Writer, dir string) *lab {
 	t.Helper()
-	h := &lab{t: t, cell: cell, tty: tty, out: out, module: cmpOr(os.Getenv(envModule), defaultModule),
+	return setupStudyLab(t, "L60", cell, build, tty, out, dir)
+}
+
+func setupStudyLab(t *testing.T, study, cell string, build bool, tty *os.File, out io.Writer, dir string) *lab {
+	t.Helper()
+	h := &lab{t: t, study: study, cell: cell, tty: tty, out: out, module: cmpOr(os.Getenv(envModule), defaultModule),
 		agents: map[string]int{}, dir: dir}
 	if tty != nil {
 		if st, err := term.GetState(int(tty.Fd())); err == nil {
@@ -158,7 +170,7 @@ func setupLab(t *testing.T, cell string, build bool, tty *os.File, out io.Writer
 		h.restoreTTY()
 		h.obsFile.Close()
 	})
-	h.say("\n=== L60 cell %s, %s ===", cell, time.Now().Format(time.RFC3339))
+	h.say("\n=== %s cell %s, %s ===", study, cell, time.Now().Format(time.RFC3339))
 	h.obs("run_started", time.Now().UTC().Format(time.RFC3339))
 	if build {
 		h.bin = buildPort49(t, h)
@@ -227,6 +239,13 @@ func repoRoot(t *testing.T) string {
 // the lab directory, fresh each run so it is this tree's port49.
 func buildPort49(t *testing.T, h *lab) string {
 	t.Helper()
+	if p := os.Getenv("PORT49_L86_BIN"); p != "" && h.study == "L86" {
+		// make l86-build's client, so the run is that build's (tests/lab/L86-runbook.md).
+		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+			t.Fatalf("PORT49_L86_BIN=%s is not an executable file: run make l86-build", p)
+		}
+		return p
+	}
 	out := filepath.Join(h.dir, "bin", "port49-client")
 	h.say("building port49 with the hwkey_dlopen tag (under a minute)...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -252,7 +271,12 @@ func (h *lab) step(n, format string, a ...any) {
 
 // obs records one observation: in the test log and in observations.log.
 func (h *lab) obs(field, value string) {
-	line := fmt.Sprintf("L60 %s %s: %s", h.cell, field, oneLine(redact(value)))
+	if h.study == "L86" {
+		// An admin call's words never carry a token, a challenge or a signature; a long opaque
+		// run is masked all the same.
+		value = longOpaque.ReplaceAllString(value, "<opaque>")
+	}
+	line := fmt.Sprintf("%s %s %s: %s", h.study, h.cell, field, oneLine(redact(value)))
 	h.t.Log(line)
 	fmt.Fprintf(h.obsFile, "%s %s\n", time.Now().UTC().Format(time.RFC3339), line)
 }
@@ -275,6 +299,9 @@ func oneLine(s string) string {
 	}
 	return s
 }
+
+// longOpaque is a run that can only be a token, a hash or a signature.
+var longOpaque = regexp.MustCompile(`[A-Za-z0-9+_=-]{40,}`)
 
 var (
 	serialHash  = regexp.MustCompile(`(#|%23)\d+`)
@@ -388,8 +415,12 @@ func (h *lab) port49(o runOpts, args ...string) result {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), o.deadline)
 	defer cancel()
+	args, sock := splitSock(args)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.Env = h.childEnv()
+	if sock != "" {
+		cmd.Env = append(cmd.Env, "PORT49_TEST_AGENT_SOCKET="+sock)
+	}
 	// SIGTERM first: port49's PIN prompt restores the terminal on it.
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 5 * time.Second
@@ -426,7 +457,7 @@ func (h *lab) port49(o runOpts, args ...string) result {
 		clear(outb.Bytes())
 	} else {
 		r.stdout = outb.String()
-		h.noteAgent(args, r.stdout)
+		h.noteAgent(sock, r.stdout)
 	}
 	return r
 }
@@ -458,17 +489,31 @@ func parseAgentLine(stdout string) (pid int, log string, ok bool) {
 	return pid, m[2], err == nil
 }
 
-// noteAgent remembers an agent a login started, by its --socket.
-func (h *lab) noteAgent(args []string, stdout string) {
+// sockMark begins an argument that is not for port49: it names the agent the
+// command talks to, which no flag does. port49 strips it and puts the path in
+// PORT49_TEST_AGENT_SOCKET in the child's environment (splitSock).
+const sockMark = "\x00agent="
+
+// onSock is the argument that points a command at the agent at sock.
+func onSock(sock string) string { return sockMark + sock }
+
+// splitSock separates the agent's socket from the arguments for port49.
+func splitSock(args []string) (rest []string, sock string) {
+	for _, a := range args {
+		if p, ok := strings.CutPrefix(a, sockMark); ok {
+			sock = p
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return rest, sock
+}
+
+// noteAgent remembers an agent a login started, by its socket.
+func (h *lab) noteAgent(sock string, stdout string) {
 	pid, _, ok := parseAgentLine(stdout)
 	if !ok {
 		return
-	}
-	sock := ""
-	for i, a := range args {
-		if a == "--socket" && i+1 < len(args) {
-			sock = args[i+1]
-		}
 	}
 	h.mu.Lock()
 	h.agents[sock] = pid
@@ -764,7 +809,7 @@ func (h *lab) yubicoRoots() []byte {
 // loginArgs are a `port49 login`'s flags: the broker, its CA, the socket, the
 // key, and the certificate file when one is given (else the token's).
 func loginArgs(b *labBroker, sock, key, cert, touch string) []string {
-	a := []string{"login", "--broker", b.url, "--broker-ca", b.serverCA, "--socket", sock, "--key", key}
+	a := []string{"login", "--broker", b.url, "--broker-ca", b.serverCA, onSock(sock), "--key", key}
 	if cert != "" {
 		a = append(a, "--cert", cert)
 	}

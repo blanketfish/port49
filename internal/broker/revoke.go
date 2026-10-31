@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/k8sid"
+	"github.com/rhwendt/port49/internal/normal"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
@@ -24,6 +23,23 @@ var ErrBadRevocation = errors.New("broker: a revocation names a principal, or a 
 // its ctx ended: another revocation or lift was running, and this one did
 // nothing (decision 34). The HTTP endpoint answers it 503 revocation_busy.
 var ErrRevocationBusy = errors.New("broker: another revocation or lift is still running")
+
+// ErrUnrecorded wraps the error of a revocation whose write the store did not answer: a copy already
+// sent can still land, over a lift made meanwhile, so the outcome is unknown, not "nothing was
+// revoked". A write the store refused wrote nothing and is not this.
+var ErrUnrecorded = errors.New("broker: the revocation may not have been recorded")
+
+// ErrLiftUnrecorded is ErrUnrecorded's for a lift whose delete the store did not answer: the mark may
+// or may not be gone.
+var ErrLiftUnrecorded = errors.New("broker: the lift may not have been recorded")
+
+// ErrNotRecorded is a revocation the store was never sent (the guard's open circuit, no free slot, a
+// deadline already past): it cannot land later, yet this process keeps denying what it names.
+var ErrNotRecorded = errors.New("broker: the revocation was not recorded in the store")
+
+// ErrLiftNotDone is a lift that definitely did not happen: the read of the mark failed, or the store
+// refused the delete (a role that never heals) or never received it. The mark stands.
+var ErrLiftNotDone = errors.New("broker: the revocation could not be lifted, and stands")
 
 // ErrNotRevoked is a lift of a revocation that is not in force.
 var ErrNotRevoked = errors.New("broker: no such revocation is in force")
@@ -63,8 +79,8 @@ type RevokeReport struct {
 	// limited to one key, named.
 	Key store.TokenKey
 	// LiftNote says where a standing mark made over HTTP is lifted: the
-	// endpoint sets it from Broker.AdminSocket (decision 34), and Text prints
-	// it after the mark's own text. Empty from the admin socket, whose
+	// endpoint sets it (liftNote; decision 34), and Text prints
+	// it after the mark's own text. Empty from `revoke --offline`, whose
 	// caller is already there.
 	LiftNote string
 	// OwnNote is the first line of a self revocation the request named by
@@ -82,10 +98,13 @@ type RevokeReport struct {
 	Unreached   []store.ContextRef
 	TokenKeys   int
 	Connections int
-	Saved       bool
-	SaveErr     error
-	Err         error
-	Unnamed     bool
+	// Saved is whether broker.revocations_file was written; Attempted is whether
+	// there was a file to write (Broker.Persist set), so a broker that keeps none
+	// reports no Saved at all.
+	Saved, Attempted bool
+	SaveErr          error
+	Err              error
+	Unnamed          bool
 	// decimal is set when the serial was typed in decimal digits alone,
 	// which is read as hex: openssl prints a small serial in decimal (M1).
 	decimal bool
@@ -98,12 +117,6 @@ type RevokeReport struct {
 	// ruling 8).
 	workload bool
 }
-
-// principalPrefixes are the forms a verifier gives a principal (spec §2):
-// user: for people, app: for an OIDC machine (plan 7h), spiffe:// for a
-// workload certificate (plan 8), system:serviceaccount: for a cluster's
-// service account (plan 10).
-var principalPrefixes = []string{"user:", "app:", spiffe.Scheme, k8sid.Prefix}
 
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
@@ -130,23 +143,14 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 	case req.Issuer == "" || req.Serial == "":
 		return req, "", "", fmt.Errorf("%w: a certificate is named by its issuer and its serial, both", ErrBadRevocation)
 	}
-	if len(req.Issuer) > 2048 || !utf8.ValidString(req.Issuer) ||
-		strings.IndexFunc(req.Issuer, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
-		return req, "", "", fmt.Errorf("%w: the issuer has a control or format character or is not UTF-8", ErrBadRevocation)
+	if err := normal.Issuer(req.Issuer); err != nil {
+		return req, "", "", fmt.Errorf("%w: %v", ErrBadRevocation, err)
 	}
-	s := strings.ReplaceAll(strings.ToLower(req.Serial), ":", "")
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(strings.TrimPrefix(s, "-"), "0x")
-	if s == "" || len(s) > 64 || strings.Trim(s, "0123456789abcdef") != "" {
-		return req, "", "", fmt.Errorf("%w: a serial is hexadecimal", ErrBadRevocation)
+	serial, err := normal.Serial(req.Serial)
+	if err != nil {
+		return req, "", "", fmt.Errorf("%w: %v", ErrBadRevocation, err)
 	}
-	if s = strings.TrimLeft(s, "0"); s == "" {
-		s, neg = "0", false
-	}
-	if neg {
-		s = "-" + s
-	}
-	req.Serial = s
+	req.Serial = serial
 	return req, store.RevocationCert, store.CertKey(req.Issuer, req.Serial), nil
 }
 
@@ -158,42 +162,11 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // a request names only after this, so no spelling makes another principal
 // read as the caller, or the caller as another (decision 34).
 func normalPrincipal(p string) (string, error) {
-	if strings.HasPrefix(strings.ToLower(p), spiffe.Scheme) {
-		// Before the 1024-byte guard below: an ID may be spiffe.MaxLen bytes,
-		// and the verifier authenticates one that long, so the operator must be
-		// able to revoke it. Verbatim: the path is case-sensitive, and the
-		// verifier gives the ID only in the form ParseWorkload accepts, which
-		// bounds its length and characters (decision 40 ruling 4).
-		if _, err := spiffe.ParseWorkload(p); err != nil {
-			return "", fmt.Errorf("%w: %s is not a workload's SPIFFE ID as the broker spells one (%v)",
-				ErrBadRevocation, printsafe.Line(p, 200), err)
-		}
-		return p, nil
+	n, err := normal.Principal(p)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrBadRevocation, err)
 	}
-	if strings.HasPrefix(strings.ToLower(p), k8sid.Prefix) {
-		// Verbatim: a cluster names accounts in lower case alone, and the
-		// verifier gives one only in the form k8sid.Parse accepts (decision 49
-		// ruling 8). Before the 1024-byte guard, as a spiffe ID is.
-		id, err := k8sid.Parse(p)
-		if err != nil {
-			return "", fmt.Errorf("%w: %s is not a service account as its cluster names one (%v)", ErrBadRevocation,
-				printsafe.Line(p, 200), err)
-		}
-		return id.String(), nil
-	}
-	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
-		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
-	}
-	for _, pre := range principalPrefixes {
-		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
-			if pre == "app:" {
-				return pre + p[len(pre):], nil // a client id is case-sensitive
-			}
-			return pre + strings.ToLower(p[len(pre):]), nil
-		}
-	}
-	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci, spiffe://corp.example.com/host/oxidized-01, system:serviceaccount:netops:oxidized)",
-		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
+	return n, nil
 }
 
 // Revoke puts a mark in force and reaches everything it names (spec
@@ -232,8 +205,8 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		return RevokeReport{}, err
 	}
 	if b.Sessions == nil {
-		// A wiring fault, said rather than panicked on: the admin socket's
-		// goroutine shares the process with TACACS+ (M12).
+		// A wiring fault, said rather than panicked on: a request goroutine
+		// shares the process with TACACS+ (M12).
 		return RevokeReport{}, errors.New("broker: revocation is not wired (no session manager); nothing was revoked")
 	}
 	release, err := b.acquireRevoke(ctx)
@@ -273,7 +246,9 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		// A copy already sent may land when the store answers again, held
 		// or not, and over a lift made meanwhile (L79 k): its mark is said
 		// as this process's own then (MarkChanged; post-11b, C2).
-		b.Marks.NoteFailedWrite(mark)
+		if !errors.Is(err, store.ErrNotSent) { // a write never sent cannot land late, and is not said to have
+			b.Marks.NoteFailedWrite(mark)
+		}
 		// Once the store holds it after all (another process's revocation,
 		// or this write committed with its reply lost), the marks feed
 		// brings it to this listener (Marks.Unrecorded; review I1); when
@@ -285,10 +260,11 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			}
 			b.MarkChanged(store.MarkChange{Revocation: told, Standing: true})
 		}
-		return RevokeReport{}, fmt.Errorf("broker: the revocation may not have been recorded: a copy already sent "+
-			"can still land when the directory answers again, and then stands everywhere, even over a lift made "+
-			"meanwhile. Until then this %s denies what it names, until a lift on this %s or its restart; after the "+
-			"heal check `port49 revoke --list` (%w); "+b.fallback(), b.proc(), b.proc(), err)
+		if errors.Is(err, store.ErrNotSent) {
+			// Nothing reached the store, so nothing can land; the pending mark stays all the same (fail closed).
+			return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrNotRecorded, b.notRecordedWhat(), err)
+		}
+		return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrUnrecorded, b.unrecordedWhat(), err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
@@ -313,6 +289,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
+	rep.Attempted = b.Persist != nil
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	n, refs, rerr := b.ReachMark(ctx, rep.Mark)
 	rep.TokenKeys, rep.Contexts = n, refs
@@ -457,7 +434,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 		b.Marks.Set(store.Revocation{Kind: kind, Key: key}, false)
 		return RevokeReport{}, ErrNotRevoked
 	case err != nil:
-		return RevokeReport{}, fmt.Errorf("broker: reading the revocation: %w", err)
+		return RevokeReport{}, fmt.Errorf("%w: the store did not answer the read, so nothing was sent (%w)", ErrLiftNotDone, err)
 	}
 	if err := b.Store.DeleteRevocation(ctx, kind, key, store.Lift{At: b.Now(), Origin: req.Origin}); err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -466,13 +443,19 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 			return RevokeReport{}, fmt.Errorf("broker: nothing was lifted: %s was revoked again while this lift "+
 				"ran, and that revocation stands; lift again only if it should go too", markWhat(cur))
 		}
-		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be lifted, and stands: %w", err)
+		if errors.Is(err, store.ErrRefused) || errors.Is(err, store.ErrNotSent) {
+			return RevokeReport{}, fmt.Errorf("%w: the store refused the delete or it never reached the store (%w)", ErrLiftNotDone, err)
+		}
+		return RevokeReport{}, fmt.Errorf("%w: the store did not confirm the delete (%w), so the mark may or may not be "+
+			"gone and this %s keeps denying what it names; after the heal check `port49 revoke --list` and lift again "+
+			"if it stands", ErrLiftUnrecorded, err, b.proc())
 	}
 	b.Marks.Set(cur, false)
 	if b.Conns != nil {
 		b.Conns.Revoked(cur, false)
 	}
 	rep := RevokeReport{Request: req, By: cur.Kind, Mark: cur}
+	rep.Attempted = b.Persist != nil
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	b.recordRevocation(b.Now(), rep, decision.VerdictPermit, decision.RevocationLifted, "lifted")
 	return rep, nil
@@ -528,8 +511,8 @@ func (b *Broker) acquireRevoke(ctx context.Context) (func(), error) {
 	}
 }
 
-// DefaultRevokeTimeout is RevokeTimeout's zero value. port49d sets
-// RevokeTimeout to the admin socket's own bound (admin.OpTimeout).
+// DefaultRevokeTimeout is RevokeTimeout's zero value. The daemons set
+// RevokeTimeout to api.OpTimeout.
 const DefaultRevokeTimeout = 60 * time.Second
 
 // detach is the ctx a revocation or lift runs on once it holds revokeSem:
@@ -540,6 +523,20 @@ func (b *Broker) detach(ctx context.Context) (context.Context, context.CancelFun
 		d = DefaultRevokeTimeout
 	}
 	return context.WithTimeout(context.WithoutCancel(ctx), d)
+}
+
+// notRecordedWhat is what a revocation the store was never sent means for whoever asked.
+func (b *Broker) notRecordedWhat() string {
+	return "not recorded in the store and will not land later, but this " + b.proc() + " denies what it names " +
+		"until a lift on this " + b.proc() + " or its restart; run it again once the store answers"
+}
+
+// unrecordedWhat is what an unrecorded revocation means for whoever asked, without the store's own
+// words: it can still land, and until then this process denies what it names.
+func (b *Broker) unrecordedWhat() string {
+	return "a copy already sent can still land when the directory answers again, and then stands everywhere, even " +
+		"over a lift made meanwhile. Until then this " + b.proc() + " denies what it names, until a lift on this " +
+		b.proc() + " or its restart; after the heal check `port49 revoke --list`"
 }
 
 // persist writes the marks in force to broker.revocations_file.
@@ -572,8 +569,8 @@ func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict strin
 	if rep.Key != (store.TokenKey{}) {
 		body.Device, body.Username = rep.Key.NAS, rep.Key.Username
 	}
-	if rep.By == ByPrincipal || rep.By == ByCert {
-		saved := rep.Saved // a standing mark's file; self and key write none
+	if (rep.By == ByPrincipal || rep.By == ByCert) && rep.Attempted {
+		saved := rep.Saved // a standing mark's file; self and key write none, and a broker without one has none
 		body.Saved = &saved
 	}
 	for _, ref := range rep.Unreached {

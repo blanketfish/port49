@@ -413,11 +413,12 @@ func (r *l69Run) verifier(c *kindCluster, namespaces ...string) k8sVerifier {
 }
 
 // k8sBrokerFiles are port49d.yaml, policy.yaml and inventory.yaml for a broker
-// whose machines are vs and whose admin socket is dir's admin.sock: L48's
+// whose machines are vs and whose on-call (alice, who may revoke and lift) presses
+// a software key that chains to roots: L48's
 // localBrokerFiles with its x509 verifier replaced (certificate_status is
 // disabled, there is none). The policy's one subject, svc_backup, is
 // l69SA.
-func k8sBrokerFiles(dir, pki string, vs []k8sVerifier) (cfg, policy, inventory string) {
+func k8sBrokerFiles(dir, pki, roots string, vs []k8sVerifier) (cfg, policy, inventory string) {
 	var machines strings.Builder
 	for _, v := range vs {
 		fmt.Fprintf(&machines, "      - {type: k8s, cluster: %s, issuer: %s, jwks: %s, ca_file: %s, audience: %s, namespaces: [%s]}\n",
@@ -426,7 +427,6 @@ func k8sBrokerFiles(dir, pki string, vs []k8sVerifier) (cfg, policy, inventory s
 	cfg = fmt.Sprintf(`listen: "127.0.0.1:0"
 metrics_listen: "127.0.0.1:0"
 inventory_file: %s
-admin_socket: %s
 encryption:
   current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
 accounting: {spool_path: %s}
@@ -438,15 +438,17 @@ broker:
   identity:
     humans:
       - {type: x509, trust_anchor_file: %s}
+    per_login_mfa:
+      hardware_key_touch: {attestation_roots_file: %s}
     machines:
 %s  policy_file: %s
   revocations_file: %s
   policy_watch_interval: 1s
   certificate_status:
     disabled: true
-`, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "admin.sock"), filepath.Join(dir, "acct.jsonl"), l48CandidateCap,
+`, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"), l48CandidateCap,
 		filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey),
-		filepath.Join(pki, testpki.LabCA), machines.String(), filepath.Join(dir, "policy.yaml"),
+		filepath.Join(pki, testpki.LabCA), roots, machines.String(), filepath.Join(dir, "policy.yaml"),
 		filepath.Join(dir, "revocations.json"))
 	policy = fmt.Sprintf(`scopes:
   - {name: all_devices, match: {}}
@@ -454,6 +456,7 @@ roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}
 subjects:
   - {name: svc_backup, identity: ["%s"], username: svc-backup, token_ttl: 60s}
+  - {name: oncall, identity: ["%s"], username: oncall, token_ttl: 60s, api: [revoke_others, lift_revocations]}
 grants:
   - {subject: svc_backup, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups:
@@ -461,13 +464,13 @@ key_groups:
 keys:
   lab_key:
     current: {version: 1, secret_ref: env:PORT49_KEY_LAB}
-`, l69SA)
+`, l69SA, slicePrincipal)
 	inventory = fmt.Sprintf("devices:\n  - {name: %s, platform: arista_eos, addresses: [127.0.0.1]}\n", l48Device)
 	return cfg, policy, inventory
 }
 
 // startK8sBroker runs bin/port49d with the verifiers vs. The directory is
-// short: the admin socket's path has a length limit.
+// short: the on-call's agent socket lives under it.
 func (r *l69Run) startK8sBroker(vs ...k8sVerifier) *localBroker {
 	t := r.t
 	t.Helper()
@@ -480,22 +483,31 @@ func (r *l69Run) startK8sBroker(vs ...k8sVerifier) *localBroker {
 	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	cfg, policy, inventory := k8sBrokerFiles(dir, pki, vs)
+	piv, roots := adminTouchRoots(t, dir)
+	cfg, policy, inventory := k8sBrokerFiles(dir, pki, roots, vs)
 	for name, body := range map[string]string{"port49d.yaml": cfg, "policy.yaml": policy, "inventory.yaml": inventory} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	b, _ := startBrokerProcess(t, r.repo, dir, pki, "")
+	b.piv = piv
 	r.mu.Lock()
 	r.brokers = append(r.brokers, b)
 	r.mu.Unlock()
 	return b
 }
 
-// revoke is port49 revoke against the broker's admin socket.
-func (b *localBroker) revoke(args ...string) (string, bool) {
-	return revokeCLI(filepath.Join(b.dir, "admin.sock"), args...)
+// revoke is port49 revoke at b as its on-call, alice: through the broker API
+// with a software key's press. The on-call's agent is started on the first
+// call.
+func (r *l69Run) revoke(b *localBroker, args ...string) (string, bool) {
+	r.t.Helper()
+	if b.admin == nil {
+		b.admin = startLabAdmin(r.t, b.piv, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA),
+			filepath.Join(b.pki, testpki.LabClientCert), filepath.Join(b.pki, testpki.LabClientKey))
+	}
+	return b.admin.cli(args...)
 }
 
 // decisions is the broker's stdout, the decision log, as lines.
@@ -1039,7 +1051,7 @@ func (r *l69Run) cellE(a *kindCluster, br *localBroker) {
 			r.t.Fatalf("(e) TokenReview T2 (INVALID): %v", err)
 		}
 		m2 := r.mint(br, t2)
-		said, ran := br.revoke("--principal", l69SA)
+		said, ran := r.revoke(br, "--principal", l69SA)
 		m3 := r.mint(br, t2)
 		c.Observed["pod_deleted"] = map[string]any{"tokenreview_authenticated": auth1, "tokenreview_error": err1, "mint": m1}
 		c.Observed["serviceaccount_deleted"] = map[string]any{"tokenreview_authenticated": auth2, "tokenreview_error": err2, "mint": m2}

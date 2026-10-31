@@ -26,7 +26,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
@@ -97,7 +96,7 @@ func splitFleetOpts(t *testing.T, policyBody string, others []string, o etcdtest
 // brokerVia writes a port49-broker.yaml reaching etcd at endpoint as the
 // etcd user cn, with extra appended under stores.directory.etcd, and returns its
 // path. Each has its own broker.listen and metrics_listen (both
-// 127.0.0.1:0), its own admin_socket, its own broker.state_dir (mode
+// 127.0.0.1:0), its own broker.state_dir (mode
 // 0700), and its own broker.policy_file, a copy of f.policy, in a safeDir.
 func (f *fleet) brokerVia(t *testing.T, endpoint, cn, extra string) string {
 	t.Helper()
@@ -119,7 +118,6 @@ metrics_listen: "127.0.0.1:0"
 inventory_file: %s
 encryption:
   current: {id: v1, secret_ref: env:T_RUN_ENC}
-admin_socket: %s
 broker:
   listen: "127.0.0.1:0"
   tls_cert_file: %s
@@ -139,7 +137,7 @@ stores:
       call_timeout: 200ms
       hold_ttl: 10s
       breaker: {failures: 3, open_for: 2s}
-%s`, f.inventory, filepath.Join(dir, "b.sock"), filepath.Join(f.pki, testpki.LabServerCert),
+%s`, f.inventory, filepath.Join(f.pki, testpki.LabServerCert),
 		filepath.Join(f.pki, testpki.LabServerKey), filepath.Join(f.pki, testpki.LabCA), pol, state, endpoint,
 		filepath.Join(f.srv.Dir, "ca.pem"), bc, bk, extra)), 0o600); err != nil {
 		t.Fatal(err)
@@ -148,7 +146,7 @@ stores:
 }
 
 // copyBroker writes another replica's port49-broker.yaml: f.broker's, with
-// its own listeners, admin socket, state_dir and policy file.
+// its own listeners, state_dir and policy file.
 func (f *fleet) copyBroker(t *testing.T) string {
 	t.Helper()
 	return f.brokerVia(t, f.proxy.Addr(), "port49-broker", "")
@@ -275,16 +273,6 @@ func copyHolds(t *testing.T, dir string, keys ...string) string {
 		b.WriteString(held)
 	}
 	return b.String()
-}
-
-// adminSocketOf is the admin_socket the config at cfg names.
-func adminSocketOf(t *testing.T, cfg string) string {
-	t.Helper()
-	raw, err := os.ReadFile(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return regexp.MustCompile(`(?m)^admin_socket: (\S+)$`).FindStringSubmatch(string(raw))[1]
 }
 
 // startBroker runs port49-broker on cfg until the test ends or stop is
@@ -1137,7 +1125,7 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	}
 }
 
-// A mark made on one port49-broker's admin socket reaches the other
+// A mark made through one port49-broker's revoke reaches the other
 // replica through the marks feed (plan 7e, Ruling 5): alice's held
 // connection to it is closed, said on port49-broker's stderr through
 // brk.Say (Ruling T9-c), and the daemon's marks deny her next command
@@ -1161,7 +1149,7 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 	principal := lastCommandPrincipal(t, &log)
 	waitBrokerMetric(t, &out, `port49_store_feed_up{feed="marks"} 1`) // B's marks feed runs (review M4)
 	conn := heldBrokerConn(t, f.pki, apiB)
-	if r := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: principal}); r.Error != "" {
+	if r := revokeAt(t, f.broker, revokeReq{Principal: principal}); r.Error != "" {
 		t.Fatalf("revoke on A's socket: %+v", r)
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -1177,7 +1165,7 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
 		t.Fatalf("the denial: %v", r)
 	}
-	if r := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: principal,
+	if r := revokeAt(t, f.broker, revokeReq{Principal: principal,
 		Lift: true}); r.Error != "" {
 		t.Fatalf("lift on A's socket: %+v", r)
 	}
@@ -1295,14 +1283,21 @@ func TestBrokerMainTakesConfigAlone(t *testing.T) {
 }
 
 // floorIn polls the ledger record at key, as etcd's root, until it holds a
-// revocation floor, or 10s pass.
+// revocation floor, or 10s pass. A floor is a non-zero revoked_at and a
+// floor_seq above 0: the encoder writes a zero revoked_at into a record that
+// has none, so the key alone proves nothing.
 func floorIn(t *testing.T, root *clientv3.Client, key string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 &&
-			strings.Contains(string(resp.Kvs[0].Value), `"revoked_at":`) {
-			return
+		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 {
+			var rec struct {
+				RevokedAt time.Time `json:"revoked_at"`
+				FloorSeq  uint64    `json:"floor_seq"`
+			}
+			if json.Unmarshal(resp.Kvs[0].Value, &rec) == nil && !rec.RevokedAt.IsZero() && rec.FloorSeq > 0 {
+				return
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -1587,7 +1582,7 @@ func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
 // After a restore loses a revocation, the runner's takeover puts it back
 // from its copy and says so; a mark lifted through the watch is not put
 // back (Ruling 12; pre-flight I5). Both were made and the lift lifted on
-// the runner's own admin socket: its own changes reach its copy too, a
+// the runner's own revoke: its own changes reach its copy too, a
 // lift before it is answered (marksCopy.Lifted).
 func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	var out syncBuffer
@@ -1598,13 +1593,12 @@ func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	root := f.srv.Client(t, "root")
 	_, stop := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	sock := adminSocketOf(t, f.broker)
-	for _, req := range []admin.Request{
-		{Op: "revoke", Principal: "user:alice@example.com"},
-		{Op: "revoke", Principal: "user:carol@example.com"},
-		{Op: "revoke", Principal: "user:carol@example.com", Lift: true},
+	for _, req := range []revokeReq{
+		{Principal: "user:alice@example.com"},
+		{Principal: "user:carol@example.com"},
+		{Principal: "user:carol@example.com", Lift: true},
 	} {
-		if resp := askSocket(t, sock, req); resp.Error != "" {
+		if resp := revokeAt(t, f.broker, req); resp.Error != "" {
 			t.Fatalf("%+v: %+v", req, resp)
 		}
 	}
@@ -1613,7 +1607,7 @@ func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	// after her lift, not one the watch has yet to reach. Without the fix
 	// this check is racy: the put-back line below, whose count would then
 	// name carol, is what catches a regression here; the unit test
-	// (TestALiftOnTheAdminSocketLeavesTheCopyBeforeItIsAnswered) is the
+	// (TestALiftLeavesTheCopyBeforeItIsAnswered) is the
 	// deterministic one.
 	if got := copyHolds(t, f.stateDir(t), "user:carol@example.com"); got != "0" {
 		t.Fatalf("carol is in the copy after her lift was answered")
@@ -1658,7 +1652,7 @@ func TestALiftAcrossAShortWatchBreakIsNotPutBack(t *testing.T) {
 	startBroker(t, cfgB, &out, 2)
 	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
 	const alice = "user:alice@example.com"
-	if resp := askSocket(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+	if resp := revokeAt(t, cfgB, revokeReq{Principal: alice}); resp.Error != "" {
 		t.Fatalf("revoke on B: %+v", resp)
 	}
 	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
@@ -1678,7 +1672,7 @@ func TestALiftAcrossAShortWatchBreakIsNotPutBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxyA.Hang(true)
-	if resp := askSocket(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice,
+	if resp := revokeAt(t, cfgB, revokeReq{Principal: alice,
 		Lift: true}); resp.Error != "" {
 		t.Fatalf("lift on B: %+v", resp)
 	}
@@ -1707,7 +1701,7 @@ func TestARestartedReplicaKeepsAMarkTheStoreLost(t *testing.T) {
 	const alice = "user:alice@example.com"
 	_, stopA := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	if resp := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+	if resp := revokeAt(t, f.broker, revokeReq{Principal: alice}); resp.Error != "" {
 		t.Fatalf("revoke: %+v", resp)
 	}
 	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDir(t), alice) == "1" })
@@ -2008,7 +2002,7 @@ func TestARestoreUnderARunningRunnerIsPutBackBeforeTheReload(t *testing.T) {
 	cfgA, proxyA := f.copyBrokerVia(t)
 	apiA, _ := startBroker(t, cfgA, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	if resp := askSocket(t, adminSocketOf(t, cfgA), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+	if resp := revokeAt(t, cfgA, revokeReq{Principal: alice}); resp.Error != "" {
 		t.Fatalf("revoke: %+v", resp)
 	}
 	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
@@ -2057,6 +2051,7 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	runnerPasses := countRunnerPasses(t)
 	root := f.srv.Client(t, "root")
 	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
@@ -2111,7 +2106,7 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	}
 	// One restore, one purge: the record follows the purge, so the passes
 	// after it find nothing (Task 15c review I-1).
-	time.Sleep(2 * witnessEvery)
+	runnerPasses(t, 1, 2)
 	if n := strings.Count(out.String()[before:], "every unspent token is purged"); n != 1 {
 		t.Fatalf("%d purges for one restore:\n%s", n, out.String()[before:])
 	}
@@ -2174,6 +2169,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	followed := followGuard(t)
 	// The restore keeps etcd away for over five seconds; the checks would
 	// close the listeners first, and this test measures the restore guard.
 	addUnderEtcd(t, f.daemon, "    health: {close_after: 60}\n")
@@ -2203,7 +2199,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 		t.Fatalf("control: the token's first login: %d", st)
 	}
 	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
-	time.Sleep(2 * witnessEvery) // port49d follows it
+	followed(t, 1, witnessAt(t, root)) // port49d follows it
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -2257,6 +2253,7 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	followed := followGuard(t)
 	root := f.srv.Client(t, "root")
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	metricsD := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())[1]
@@ -2290,7 +2287,7 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 		t.Fatalf("control: the token's first login: %d", st)
 	}
 	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
-	time.Sleep(2 * witnessEvery) // port49d follows it
+	followed(t, 1, witnessAt(t, root)) // port49d follows it
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}

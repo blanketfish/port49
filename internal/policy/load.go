@@ -270,18 +270,32 @@ var DefaultPipe = []string{"include **", "exclude **", "begin **", "section **",
 var reservedLevels = []string{"readonly", "operator", "admin"}
 
 // The broker API rights a subject may declare (spec §2). revoke_others and
-// explain_others unlock a broker endpoint; sync, keys_show and replay are
-// reserved: declared, reported by CI and the gate, and granting nothing until
-// an endpoint they guard exists (spec §13 decision 34).
+// explain_others unlock a broker endpoint, as do the five admin rights below
+// (plan 12b; decision 54 ruling 15); sync, keys_show and replay are reserved:
+// declared, reported by CI and the gate, and granting nothing until an
+// endpoint they guard exists (spec §13 decision 34).
 const (
 	RightRevokeOthers  = "revoke_others"
 	RightExplainOthers = "explain_others"
 	RightSync          = "sync"
 	RightKeysShow      = "keys_show"
 	RightReplay        = "replay"
+
+	RightLiftRevocations   = "lift_revocations"
+	RightForgetPrincipals  = "forget_principals"
+	RightResetSecondFactor = "reset_second_factor"
+	RightUnlockSignIn      = "unlock_sign_in"
+	RightImportEnrollments = "import_enrollments"
 )
 
-var apiRights = []string{RightRevokeOthers, RightExplainOthers, RightSync, RightKeysShow, RightReplay}
+var apiRights = []string{RightRevokeOthers, RightExplainOthers, RightLiftRevocations, RightForgetPrincipals,
+	RightResetSecondFactor, RightUnlockSignIn, RightImportEnrollments, RightSync, RightKeysShow, RightReplay}
+
+// AdminRights are the admin-level rights (spec §2): each needs a security key
+// press on top of the right (§5.1.6), so each is refused where no attestation
+// roots are loaded.
+var AdminRights = []string{RightRevokeOthers, RightLiftRevocations, RightForgetPrincipals, RightResetSecondFactor,
+	RightUnlockSignIn, RightImportEnrollments}
 
 // Design §8: device tokens live 30–900s.
 const (

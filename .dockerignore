@@ -9,3 +9,12 @@ deploy/compose/local/
 .worktrees/
 .superpowers/
 **/deploy/compose/local/
+.claude/
+**/tests/lab/logs/
+# secret-looking files never enter the build context (tests/image holds this)
+**/*.env
+**/*-key.pem
+**/*.key
+**/*.keytab
+**/secrets*
+**/realm.json

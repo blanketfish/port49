@@ -681,6 +681,18 @@ func (r *runner) keepWitness(ctx context.Context) {
 // witness's own revision. A quiet store writes nothing: the rewrite's
 // revision is the one the next pass compares with.
 func (r *runner) witnessPass(ctx context.Context) error {
+	err := r.witnessPassOnce(ctx)
+	if err == nil {
+		witnessPassed(r)
+	}
+	return err
+}
+
+// witnessPassed is told each completed pass of a runner's witness; only tests
+// swap it, to wait for passes instead of sleeping (keyed by the runner).
+var witnessPassed = func(r *runner) {}
+
+func (r *runner) witnessPassOnce(ctx context.Context) error {
 	rctx, cancel := context.WithTimeout(ctx, witnessEvery)
 	read, gone, why, err := readWitness(rctx, r.witness, r.raw.Witness)
 	cancel()

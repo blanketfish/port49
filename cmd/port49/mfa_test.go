@@ -158,12 +158,19 @@ func (m *mfaLab) seen(r *http.Request) {
 // asks sign-ins to send.
 func newMFALab(t *testing.T, withTouch bool, iss *oidctest.Issuer, acr string) *mfaLab {
 	t.Helper()
+	return newMFALabWith(t, withTouch, iss, acr, labOpts{})
+}
+
+// newMFALabWith is newMFALab with the extra lab options extra names (admin,
+// front).
+func newMFALabWith(t *testing.T, withTouch bool, iss *oidctest.Issuer, acr string, extra labOpts) *mfaLab {
+	t.Helper()
 	piv, err := testpki.NewPIV(time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := &mfaLab{piv: piv, sink: &secretSink{}, logs: &lockedBuffer{}}
-	o := labOpts{maxAge: 12 * time.Hour, iss: iss, keepX509: true, mfa: true, acr: acr, logs: m.logs, spy: m.seen}
+	o := labOpts{maxAge: 12 * time.Hour, iss: iss, keepX509: true, mfa: true, acr: acr, logs: m.logs, spy: m.seen, admin: extra.admin, front: extra.front}
 	if withTouch {
 		o.piv = piv
 	}
@@ -203,9 +210,11 @@ func newMFALab(t *testing.T, withTouch bool, iss *oidctest.Issuer, acr string) *
 	return m
 }
 
-func (m *mfaLab) token(args ...string) (code int, stdout, stderr string) {
+func (m *mfaLab) token(t *testing.T, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
 	var out, errb bytes.Buffer
-	code = run(append([]string{"token", "--socket", m.socket}, args...), &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", m.socket)
+	code = run(append([]string{"token"}, args...), &out, &errb)
 	return code, out.String(), errb.String()
 }
 
@@ -222,7 +231,7 @@ func withTerminal(t *testing.T, is bool) {
 // agent, and mints again naming the challenge: the token alone on stdout.
 func TestTokenProvesATouchAndMintsAgain(t *testing.T) {
 	m := newMFALab(t, true, nil, "")
-	code, out, errb := m.token("leaf1")
+	code, out, errb := m.token(t, "leaf1")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb)
 	}
@@ -241,7 +250,7 @@ func TestTokenProvesATouchAndMintsAgain(t *testing.T) {
 		t.Fatalf("the touch key signed %d times", m.touch.Signs())
 	}
 	// Reused for the rest of reuse_for: the second token asks for no touch.
-	code, out, errb = m.token("leaf1")
+	code, out, errb = m.token(t, "leaf1")
 	if code != 0 || strings.Contains(errb, "touch your key") || m.posts.Load() != 1 {
 		t.Fatalf("a second token inside reuse_for: exit %d stderr %q, %d proofs", code, errb, m.posts.Load())
 	}
@@ -252,7 +261,7 @@ func TestTokenProvesATouchAndMintsAgain(t *testing.T) {
 func TestATouchNotMadeIsExitOne(t *testing.T) {
 	m := newMFALab(t, true, nil, "")
 	m.touch.OnSign(func() error { return hwkey.ErrTouchTimeout })
-	code, out, errb := m.token("leaf1")
+	code, out, errb := m.token(t, "leaf1")
 	if code != 1 || out != "" || !strings.Contains(errb, "no touch within 15s; touch the key when it blinks and try again") {
 		t.Fatalf("exit %d stdout %s stderr %q", code, tokenOut(out), errb)
 	}
@@ -261,7 +270,7 @@ func TestATouchNotMadeIsExitOne(t *testing.T) {
 	}
 	// Touched this time: the same command goes through.
 	m.touch.OnSign(nil)
-	if code, _, errb = m.token("leaf1"); code != 0 {
+	if code, _, errb = m.token(t, "leaf1"); code != 0 {
 		t.Fatalf("the command run again: exit %d: %s", code, errb)
 	}
 }
@@ -284,7 +293,8 @@ func TestASecondRequirementIsNotLooped(t *testing.T) {
 		}
 	}))
 	var out, errb bytes.Buffer
-	code := run([]string{"token", "--socket", sock, "core-sw01"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "core-sw01"}, &out, &errb)
 	if code != 1 || out.Len() != 0 || asks.Load() != 2 {
 		t.Fatalf("exit %d, %d mints, stdout %s, stderr %q", code, asks.Load(), tokenOut(out.String()), errb.String())
 	}
@@ -316,7 +326,7 @@ func TestTokenFallsBackToTheSignInWhenNoTouchKey(t *testing.T) {
 	t.Setenv(userconfig.EnvConfig, cfg)
 
 	withTerminal(t, false)
-	code, out, errb := m.token("leaf1")
+	code, out, errb := m.token(t, "leaf1")
 	if code != 1 || out != "" || !strings.Contains(errb, "this device asks for a sign-in at your identity provider and "+
 		"there is no terminal; run it at a terminal") || len(as.Authorizations()) != 0 {
 		t.Fatalf("no terminal: exit %d stdout %s stderr %q, %d sign-ins", code, tokenOut(out), errb, len(as.Authorizations()))
@@ -327,7 +337,7 @@ func TestTokenFallsBackToTheSignInWhenNoTouchKey(t *testing.T) {
 	openBrowser = func(u string) error { go func() { _ = iss.Browser()(u) }(); return nil }
 	readPaste = func() (string, error) { return "", io.EOF }
 	t.Cleanup(func() { openBrowser, readPaste = savedBrowser, savedPaste })
-	code, out, errb = m.token("leaf1")
+	code, out, errb = m.token(t, "leaf1")
 	if code != 0 || strings.Count(out, "\n") != 1 {
 		t.Fatalf("at a terminal: exit %d stdout %s stderr %q", code, tokenOut(out), errb)
 	}
@@ -354,7 +364,7 @@ func TestTokenFallsBackToTheSignInWhenNoTouchKey(t *testing.T) {
 			t.Fatal("an ID token reached the terminal")
 		}
 	}
-	if code, _, errb = m.token("leaf1"); code != 0 || m.bearers.Load() != 1 {
+	if code, _, errb = m.token(t, "leaf1"); code != 0 || m.bearers.Load() != 1 {
 		t.Fatalf("inside reuse_for: exit %d stderr %q, %d bearers", code, errb, m.bearers.Load())
 	}
 }
@@ -392,7 +402,8 @@ func TestATouchKeyThatCannotProveIsNotTried(t *testing.T) {
 			}))
 			withTerminal(t, false)
 			var out, errb bytes.Buffer
-			code := run([]string{"token", "--socket", sock, "core-sw01"}, &out, &errb)
+			t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+			code := run([]string{"token", "core-sw01"}, &out, &errb)
 			if code != 1 || out.Len() != 0 || touches.Load() != 0 || strings.Contains(errb.String(), "touch your key now") {
 				t.Fatalf("exit %d, %d touch posts, stdout %s, stderr %q", code, touches.Load(), tokenOut(out.String()), errb.String())
 			}
@@ -411,7 +422,8 @@ func TestATouchKeyThatCannotProveIsNotTried(t *testing.T) {
 func TestRefreshProvesOnceAndRefreshesAgain(t *testing.T) {
 	m := newMFALab(t, true, nil, "")
 	var out, errb bytes.Buffer
-	if code := run([]string{"refresh", "--socket", m.socket}, &out, &errb); code != 0 {
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", m.socket)
+	if code := run([]string{"refresh"}, &out, &errb); code != 0 {
 		t.Fatalf("exit %d: %s", code, errb.String())
 	}
 	if m.posts.Load() != 1 || strings.Count(errb.String(), "touch your key now") != 1 ||
@@ -440,7 +452,7 @@ func TestRevokeIsNotHeldBehindATouch(t *testing.T) {
 	})
 	done := make(chan int, 1)
 	go func() {
-		code, _, _ := m.token("leaf1")
+		code, _, _ := m.token(t, "leaf1")
 		done <- code
 	}()
 	select {
@@ -450,8 +462,9 @@ func TestRevokeIsNotHeldBehindATouch(t *testing.T) {
 	}
 	revoked := make(chan int, 1)
 	var out, errb bytes.Buffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", m.socket)
 	go func() {
-		revoked <- run([]string{"revoke", "--mine", "--device", "leaf1", "--username", "alice", "--agent-socket", m.socket}, &out, &errb)
+		revoked <- run([]string{"revoke", "--mine", "--device", "leaf1", "--username", "alice"}, &out, &errb)
 	}()
 	select {
 	case code := <-revoked:
@@ -485,7 +498,8 @@ func TestAChangedConnectionIsSaidByTheCommand(t *testing.T) {
 		}
 	}))
 	var out, errb bytes.Buffer
-	code := run([]string{"token", "--socket", sock, "core-sw01"}, &out, &errb)
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "core-sw01"}, &out, &errb)
 	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "the connection changed during the touch; run it again") {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}
@@ -528,7 +542,7 @@ func TestTheSignInsProofIsPostedWhereItWasMeantAndChecked(t *testing.T) {
 // no challenge, no signature, no ID token and no agent session.
 func TestNothingSecretIsPrinted(t *testing.T) {
 	m := newMFALab(t, true, nil, "")
-	code, out, errb := m.token("--json", "leaf1")
+	code, out, errb := m.token(t, "--json", "leaf1")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errb)
 	}

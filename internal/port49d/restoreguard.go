@@ -65,6 +65,22 @@ func (g *restoreGuard) Allows() bool {
 	return g.checked && !g.guarded
 }
 
+// guardFollowed is told each revision of meta/witness port49d's follower gave
+// g, after g took it, and restorePassed each completed pass of g. Only tests
+// swap them, to wait on port49d's guard instead of sleeping; both are keyed
+// by the guard, not by process, because a test process may run several
+// daemons.
+var (
+	guardFollowed = func(g *restoreGuard, rev uint64) {}
+	restorePassed = func(g *restoreGuard) {}
+)
+
+// followed is what port49d's FollowWitness calls: Saw, then the hook.
+func (g *restoreGuard) followed(rev uint64) {
+	g.Saw(rev)
+	guardFollowed(g, rev)
+}
+
 // Saw raises the witness followed. It never lifts the guard.
 func (g *restoreGuard) Saw(rev uint64) {
 	g.mu.Lock()
@@ -164,7 +180,7 @@ func (g *restoreGuard) setGauge() {
 func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store, callTimeout time.Duration) {
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); s.FollowWitness(ctx, g.Saw) }()
+	go func() { defer wg.Done(); s.FollowWitness(ctx, g.followed) }()
 	defer wg.Wait()
 	t := time.NewTicker(witnessEvery)
 	defer t.Stop()
@@ -193,5 +209,6 @@ func (g *restoreGuard) pass(ctx context.Context, callTimeout time.Duration,
 		return false
 	}
 	g.judge(r, err, high, seen)
+	restorePassed(g)
 	return true
 }

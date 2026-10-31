@@ -51,14 +51,10 @@ type Deps struct {
 	// KeySeen marks the key version each admitted device's connection
 	// validated under (keyring.Seen.Mark); nil marks nothing.
 	KeySeen func(device, keyRef string, version int)
-	// Held keeps each admitted device's last unvalidated packet for `port49
-	// keys diagnose` (spec §10); nil keeps nothing. port49d sets it only with
-	// admin_socket configured.
-	Held   *keyring.Held
-	Authen *authen.Handler
-	Author *author.Handler
-	Acct   *acct.Handler
-	Limits *limits.Limiter
+	Authen  *authen.Handler
+	Author  *author.Handler
+	Acct    *acct.Handler
+	Limits  *limits.Limiter
 	// Slots is the global connection cap shared by every listener (decision 53
 	// ruling 8); nil is no cap.
 	Slots       *Slots

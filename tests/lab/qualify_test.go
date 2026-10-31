@@ -238,8 +238,15 @@ func (q *qualEnv) config() string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		q.t.Fatal(err)
 	}
-	text, err = privatePolicy(text, filepath.Join(dir, "port49d-qual-"+q.l.p.name+"-policy"))
+	priv, err := labPrivateSub("port49d-qual-" + q.l.p.name + "-policy")
 	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	text, err = privatePolicy(text, priv)
+	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	if text, err = stagePrivateFiles(text); err != nil {
 		q.t.Fatalf("INVALID: %v", err)
 	}
 	q.cfgText = text
@@ -298,9 +305,9 @@ func (q *qualEnv) login() {
 	}
 	q.t.Cleanup(func() { os.RemoveAll(sockDir) })
 	q.sock = filepath.Join(sockDir, "a", "agent.sock")
-	out, err := exec.Command(port49, "login", "--broker", sliceBrokerURL,
+	out, err := withAgent(exec.Command(port49, "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", q.sock).CombinedOutput()
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), q.sock).CombinedOutput()
 	if err != nil {
 		q.t.Fatalf("INVALID: port49 login: %v", err)
 	}

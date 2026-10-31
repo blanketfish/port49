@@ -76,6 +76,11 @@ subjects:
 grants:
   - {subject: netops_oncall, scope: all_devices, roles: [network_admin]}
   - {subject: bob, scope: all_devices, roles: [network_admin]}
+# The device key set the inventory's key group names (decision 53 ruling 3); the secret is the file
+# setup places in the port49d-keys volume (composeDeviceKeyPath).
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: file:` + composeDeviceKeyPath + `}
 `
 
 // e2eDirectoryBlock is the broker's refresh_interval and broker.directory:
@@ -232,9 +237,9 @@ func tryAgent(cert, key string) (sock string, pid int, out string, stop func(), 
 		return "", 0, "", nil, err
 	}
 	sock = filepath.Join(dir, "a", "agent.sock")
-	cmd := exec.Command(filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
+	cmd := withAgent(exec.Command(filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
 		"--cert", filepath.Join(pki, cert), "--key", filepath.Join(pki, key),
-		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock)
+		"--broker-ca", filepath.Join(pki, testpki.LabCA)), sock)
 	cmd.Dir = root
 	var b strings.Builder
 	cmd.Stdout, cmd.Stderr = &b, &b

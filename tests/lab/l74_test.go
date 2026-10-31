@@ -90,8 +90,13 @@ type regionWorld struct {
 	dirMembers, sess  [4]*regionEtcd // indexed 1..3
 	brokers, daemons  [4]*regionProc
 	encKey, tacacsKey string
-	secrets           []string
-	mu                sync.Mutex
+	// piv chains the on-call's software touch key; the brokers trust its root
+	// (rootsFile). admins are the on-call's agents, one per region's broker.
+	piv       *testpki.PIV
+	rootsFile string
+	admins    [4]*labAdmin
+	secrets   []string
+	mu        sync.Mutex
 	// home is the $HOME every port49 CLI run gets: its .port49/config.yaml
 	// pins issued_key_store: file (pinFileKeyStore), so no run probes the
 	// machine's TPM (lab rules). guard is the STOP and disk check, run
@@ -143,8 +148,17 @@ func (w *regionWorld) client(i int) regionClient {
 	return regionClient{addr: regionIP(i) + ":4949", key: []byte(w.tacacsKey)}
 }
 
-func (w *regionWorld) adminSock(i int, proc string) string {
-	return filepath.Join(w.dir, fmt.Sprintf("r%d-%s.sock", i, proc))
+// revoke is `port49 revoke args…` as the on-call at region i's broker: the
+// broker API with a software key's press. It answers like port49.
+func (w *regionWorld) revoke(i int, args ...string) (string, int, time.Duration) {
+	start := time.Now()
+	out, code := w.admins[i].run(args...)
+	return out, code, time.Since(start)
+}
+
+// storeStatus is `port49 store status` at region i's port49d, or its broker.
+func (w *regionWorld) storeStatus(addr string) (string, int, time.Duration) {
+	return w.port49("store", "status", "--metrics", addr)
 }
 
 // port49 runs the CLI and answers its output, exit code and duration.
@@ -264,6 +278,7 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 	if err := pinFileKeyStore(w.home); err != nil {
 		t.Fatalf("INVALID: the CLI's home: %v", err)
 	}
+	w.piv, w.rootsFile = adminTouchRoots(t, dir)
 	bins := filepath.Join(dir, "bin")
 	if root == "" {
 		t.Fatal("INVALID: the repository root is not set")
@@ -372,6 +387,13 @@ func startRegions(t *testing.T, etcdBin string) *regionWorld {
 			}
 		}
 	}
+	// The on-call logs in at each region's broker once they all listen, before
+	// any cell cuts one.
+	cert, key := testpki.LabClientFiles(regionOncall)
+	for i := 1; i <= 3; i++ {
+		w.admins[i] = startLabAdmin(t, w.piv, "https://"+regionIP(i)+":8443", filepath.Join(w.pki.lab, testpki.LabCA),
+			filepath.Join(w.pki.lab, cert), filepath.Join(w.pki.lab, key))
+	}
 	return w
 }
 
@@ -391,6 +413,8 @@ roles:
   - {name: admin, privilege: admin, permit: ["**"]}
 subjects:
   - {name: alice, identity: ["user:alice@example.com"], username: alice, token_ttl: 900s}
+  - {name: oncall, identity: ["user:oncall@example.com"], username: oncall, token_ttl: 900s,
+     api: [revoke_others, lift_revocations]}
 grants:
   - {subject: alice, scope: all, roles: [admin]}
 key_groups:
@@ -418,31 +442,34 @@ inventory_file: %[2]s/inventory.yaml
 policy: {file: %[2]s/policy.yaml, watch_interval: 5s}
 encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
-admin_socket: %[3]s
-accounting: {spool_path: %[2]s/r%[4]d-acct.jsonl}
-`, regionIP(i), w.dir, w.adminSock(i, "d"), i) + regionStoresYAML(w.pki, "daemon", regionSessionClient)
+accounting: {spool_path: %[2]s/r%[3]d-acct.jsonl}
+`, regionIP(i), w.dir, i) + regionStoresYAML(w.pki, "daemon", regionSessionClient)
 }
 
 func (w *regionWorld) brokerYAML(i int) string {
 	state := filepath.Join(w.dir, fmt.Sprintf("r%d-state", i))
 	os.Mkdir(state, 0o700)
-	return fmt.Sprintf(`metrics_listen: "%[1]s:9050"
+	block := fmt.Sprintf(`metrics_listen: "%[1]s:9050"
 inventory_file: %[2]s/inventory.yaml
 encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
-admin_socket: %[3]s
 broker:
   listen: "%[1]s:8443"
-  tls_cert_file: %[4]s
-  tls_key_file: %[5]s
-  client_ca_file: %[6]s
+  tls_cert_file: %[3]s
+  tls_key_file: %[4]s
+  client_ca_file: %[5]s
   policy_file: %[2]s/policy.yaml
-  state_dir: %[7]s
+  state_dir: %[6]s
   policy_watch_interval: 5s
   certificate_status: {disabled: true}
-`, regionIP(i), w.dir, w.adminSock(i, "b"), filepath.Join(w.pki.lab, testpki.LabServerCert),
-		filepath.Join(w.pki.lab, testpki.LabServerKey), filepath.Join(w.pki.lab, testpki.LabCA), state) +
-		regionStoresYAML(w.pki, "broker", regionSessionClient)
+`, regionIP(i), w.dir, filepath.Join(w.pki.lab, testpki.LabServerCert),
+		filepath.Join(w.pki.lab, testpki.LabServerKey), filepath.Join(w.pki.lab, testpki.LabCA), state)
+	// The broker verifies the on-call's key press against roots this run made.
+	text, err := withAdminTouch(block, filepath.Join(w.dir, adminRolesFile))
+	if err != nil {
+		panic(err) // the template above has exactly one client_ca_file line
+	}
+	return text + regionStoresYAML(w.pki, "broker", regionSessionClient)
 }
 
 func TestRegions(t *testing.T) {
@@ -550,10 +577,10 @@ func l74CellB(w *regionWorld, row func(id, claim, observed string, agrees bool))
 			w.t.Fatalf("INVALID: %v", err)
 		}
 	}
-	_, code, took := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com")
+	_, code, took := w.revoke(1, "--principal", "user:alice@example.com")
 	d2, ok2 := w.until(2, "deny", 30*time.Second)
 	d3, ok3 := w.until(3, "deny", 30*time.Second)
-	_, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
+	_, lcode, _ := w.revoke(1, "--principal", "user:alice@example.com", "--lift")
 	row("b", "a revocation made in region 1: the time until region 2's and region 3's next command is denied",
 		fmt.Sprintf("revoke exit %d in %v; region 2 denied after %v (%v), region 3 after %v (%v); lift exit %d",
 			code, took.Round(time.Millisecond), d2.Round(10*time.Millisecond), ok2, d3.Round(10*time.Millisecond), ok3, lcode),
@@ -609,7 +636,7 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	}
 	pre := w.mint(3)
 	// A mark region 3 holds before the cut, for (e)'s lift.
-	if _, code, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:carol@example.com"); code != 0 {
+	if _, code, _ := w.revoke(1, "--principal", "user:carol@example.com"); code != 0 {
 		w.t.Fatal("INVALID: carol's revocation before the cut")
 	}
 	if _, err := w.brokers[3].wait("a revocation of user:carol@example.com made elsewhere reached", 30*time.Second); err != nil {
@@ -638,7 +665,7 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 
 	cst := w.answered("(c) region 3's open session's command")(w.client(3).command("alice", "show", "version"))
 	lst := w.answered("(c) region 3's login with the token minted before the cut")(w.client(3).login("alice", pre))
-	status, code, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	status, code, _ := w.storeStatus(regionDaemonMetrics(3))
 	m := w.metrics(3)
 	reach := metricOf(m, "port49_store_directory_reachable")
 	age := float64(time.Now().Unix()) - metricOf(m, "port49_store_directory_confirmed_timestamp_seconds")
@@ -649,7 +676,7 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 		cst == "permit" && lst == "pass" && code == 3 && reach == 0)
 
 	w.guard()
-	rout, rcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com")
+	rout, rcode, _ := w.revoke(1, "--principal", "user:alice@example.com")
 	// Region 2's port49d learns the mark from its marks watch, which sits on one
 	// member's connection: on the cut member's it is silent until gRPC's
 	// keepalive (10s + 2s) fails that connection, so the control is polled for
@@ -670,8 +697,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 		rcode == 0 && d3 == "permit" && d2 == "deny")
 
 	w.guard()
-	out1, c1, t1 := w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", "user:bob@example.com")
-	out2, c2, t2 := w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", "user:carol@example.com", "--lift")
+	out1, c1, t1 := w.revoke(3, "--principal", "user:bob@example.com")
+	out2, c2, t2 := w.revoke(3, "--principal", "user:carol@example.com", "--lift")
 	row("e", "during the cut, port49 revoke and port49 revoke --lift on region 3's broker: each refused, and how long each took",
 		fmt.Sprintf("revoke: exit %d in %v: %s; lift: exit %d in %v: %s", c1, t1.Round(time.Millisecond),
 			firstLine(out1), c2, t2.Round(time.Millisecond), firstLine(out2)),
@@ -695,7 +722,7 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	// The session open before the restart: its command is served from the
 	// snapshot too (alice's revocation was not in it).
 	fcmd, _, _ := w.client(3).command("alice", "show", "version")
-	fstatus, _, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	fstatus, _, _ := w.storeStatus(regionDaemonMetrics(3))
 	snapOK := lerr == nil && berr == nil && fst == "pass" && fcmd == "permit" && strings.Contains(fstatus, "(snapshot)")
 	snapSaid := fmt.Sprintf("from the snapshot: port49d listened %v, the broker listened %v, a mint and login: %s, "+
 		"the open session's command: %s, status: %s", lerr == nil, berr == nil, fst, fcmd, strings.ReplaceAll(fstatus, "\n", " / "))
@@ -718,7 +745,7 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	for _, p := range []string{"user:alice@example.com", "user:carol@example.com"} {
 		// Cleanup between cells: a lift that fails shows as a mint still refused
 		// just below, where the retry ends in INVALID.
-		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", p, "--lift")
+		w.revoke(1, "--principal", p, "--lift")
 	}
 
 	// Broker 3 has the lifts before the next cut: a session opens at region 3
@@ -815,7 +842,7 @@ func (c *regionCutState) heal() {
 
 // (h) the members port49 store status prints with auth on, from region 1's port49d.
 func l74CellH(w *regionWorld, row func(id, claim, observed string, agrees bool)) {
-	out, code, _ := w.port49("store", "status", "--socket", w.adminSock(1, "d"))
+	out, code, _ := w.storeStatus(regionDaemonMetrics(1))
 	row("h", "with auth on, the members port49 store status prints: whether a non-root identity's member list and per-member status answer",
 		fmt.Sprintf("exit %d: %s", code, strings.ReplaceAll(out, "\n", " / ")),
 		code == 0 && strings.Contains(out, "directory  etcd    3/3 members  reachable"))
@@ -973,7 +1000,7 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: %v", err)
 	}
 	w.brokers[3].mark()
-	if _, code, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com"); code != 0 {
+	if _, code, _ := w.revoke(1, "--principal", "user:alice@example.com"); code != 0 {
 		w.t.Fatalf("INVALID: alice's revocation before the cut: exit %d", code)
 	}
 	if _, ok := w.until(3, "deny", 30*time.Second); !ok {
@@ -1003,7 +1030,7 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if err := feedStopped(w.brokers[3], 30*time.Second); err != nil {
 		w.t.Fatalf("INVALID: %v", err)
 	}
-	if _, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift"); lcode != 0 {
+	if _, lcode, _ := w.revoke(1, "--principal", "user:alice@example.com", "--lift"); lcode != 0 {
 		w.t.Fatalf("INVALID: the lift in region 1: exit %d", lcode)
 	}
 	// One write after the lift, and the compaction at that revision: etcd keeps
@@ -1082,7 +1109,7 @@ func l74CellI(w *regionWorld, row func(id, claim, observed string, agrees bool))
 			w.l79Lines(said[0], l79Who, 3), w.l79Lines(said[1], l79Who, 3), w.l79Lines(said[2], l79Who, 3)),
 		l74IAgrees(perr == nil, n, said))
 	// Cleanup after the last cell: nothing is measured from it.
-	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", "user:alice@example.com", "--lift")
+	w.revoke(1, "--principal", "user:alice@example.com", "--lift")
 }
 
 // What cell (i)'s agreement needs said (task 2 review I1): the mark broker
@@ -1241,7 +1268,7 @@ func l79KAgrees(code int, back bool, cli, broker3, broker1, list string) bool {
 // state both cells start from. It is INVALID when it cannot be set up.
 func (w *regionWorld) l79Revoked() {
 	w.brokers[3].mark()
-	if out, code, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal); code != 0 {
+	if out, code, _ := w.revoke(1, "--principal", l79Principal); code != 0 {
 		w.t.Fatalf("INVALID: the revocation from region 1 before the cut: exit %d: %s", code, w.leakless(out))
 	}
 	if _, err := w.brokers[3].wait("a revocation of user:alice@example.com made elsewhere reached", 30*time.Second); err != nil {
@@ -1255,8 +1282,8 @@ func (w *regionWorld) l79Revoked() {
 // l79Clean lifts alice's mark from region 3's broker (its own copy) and from
 // region 1, so the next cell starts clean; INVALID if the mark is still in the directory.
 func (w *regionWorld) l79Clean() {
-	w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", l79Principal, "--lift")
-	w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal, "--lift")
+	w.revoke(3, "--principal", l79Principal, "--lift")
+	w.revoke(1, "--principal", l79Principal, "--lift")
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		in, err := w.l79Marks(w.dirEndpoints())
@@ -1266,7 +1293,7 @@ func (w *regionWorld) l79Clean() {
 		if time.Now().After(deadline) {
 			w.t.Fatalf("INVALID: alice's mark could not be cleared after the cell (%v, %v)", in, err)
 		}
-		w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal, "--lift")
+		w.revoke(1, "--principal", l79Principal, "--lift")
 		time.Sleep(time.Second)
 	}
 }
@@ -1295,12 +1322,12 @@ func l79CellJ(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	cut := w.cutRegion3()
 	defer cut.heal()
 	cutAt := time.Now()
-	out, code, took := w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", l79Principal, "--lift")
+	out, code, took := w.revoke(3, "--principal", l79Principal, "--lift")
 	inDuring, derr := w.l79Marks("https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379")
 	if derr != nil {
 		w.t.Fatalf("INVALID: reading the mark during the cut: %v", derr)
 	}
-	status, scode, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	status, scode, _ := w.storeStatus(regionDaemonMetrics(3))
 	w.brokers[3].mark()
 	w.daemons[3].mark()
 	healed, err := cut.healAt(cutAt, l79Cells[0].Heal)
@@ -1308,7 +1335,7 @@ func l79CellJ(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
 	polls := w.l79PollAfterHeal(healed)
-	after, _, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	after, _, _ := w.storeStatus(regionDaemonMetrics(3))
 	_, markRev, _ := w.l79MarkRev(w.dirEndpoints())
 	stands := len(polls) > 0 && polls[len(polls)-1]
 	said := strings.Contains(out, "could not be lifted")
@@ -1329,10 +1356,10 @@ func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	cut := w.cutRegion3()
 	defer cut.heal()
 	cutAt := time.Now()
-	out, code, took := w.port49("revoke", "--socket", w.adminSock(3, "b"), "--principal", l79Principal)
+	out, code, took := w.revoke(3, "--principal", l79Principal)
 	st1, _ := w.dirMembers[1].ctl("https://"+regionIP(1)+":2379,https://"+regionIP(2)+":2379", "endpoint", "status", "-w", "json")
 	revAtCut := revisionOf(st1)
-	_, lcode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--principal", l79Principal, "--lift")
+	_, lcode, _ := w.revoke(1, "--principal", l79Principal, "--lift")
 	inDuring, derr := w.l79Marks("https://" + regionIP(1) + ":2379,https://" + regionIP(2) + ":2379")
 	if derr != nil {
 		w.t.Fatalf("INVALID: reading the mark during the cut: %v", derr)
@@ -1342,7 +1369,7 @@ func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if lcode != 0 || inDuring {
 		w.t.Fatalf("INVALID: the lift in region 1 left the mark (exit %d, mark %v)", lcode, inDuring)
 	}
-	status, scode, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	status, scode, _ := w.storeStatus(regionDaemonMetrics(3))
 	w.brokers[1].mark()
 	w.brokers[3].mark()
 	w.daemons[3].mark()
@@ -1351,7 +1378,7 @@ func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool))
 		w.t.Fatalf("INVALID: the heal: %v", err)
 	}
 	polls := w.l79PollAfterHeal(healed)
-	after, _, _ := w.port49("store", "status", "--socket", w.adminSock(3, "d"))
+	after, _, _ := w.storeStatus(regionDaemonMetrics(3))
 	_, markRev, _ := w.l79MarkRev(w.dirEndpoints())
 	back := false
 	for _, in := range polls {
@@ -1361,7 +1388,7 @@ func l79CellK(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	// inside the poll window; a short wait covers a slow feed.
 	w.brokers[3].wait(l79Own, 10*time.Second)
 	w.brokers[1].wait(l79Before, 10*time.Second)
-	list, lscode, _ := w.port49("revoke", "--socket", w.adminSock(1, "b"), "--list")
+	list, lscode, _ := w.revoke(1, "--list")
 	row("k", l79Cells[1].Claim,
 		fmt.Sprintf("revoke from region 3 exit %d in %v: %s; the lift in region 1 exit %d; the mark during the cut after the lift: %v; %s; store status in region 3 during the cut (exit %d): %s; after the heal: %s; broker 3's lines naming alice since the heal: %s; port49d 3's lines naming the directory since the heal: %s",
 			code, took.Round(time.Millisecond), w.leakless(oneLineOf(out)), lcode, inDuring, l79Timeline(false, polls, l79Poll),

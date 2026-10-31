@@ -80,9 +80,8 @@ func TestARevocationIsComparedAsTheBrokerSpellsIt(t *testing.T) {
 // M2). mine is not told.
 func TestTheCallersOwnPrincipalByNameSaysNoMarkWasMade(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
-	f.b.AdminSocket = "/run/port49/port49d.sock"
-	const first = "this is your own principal: no mark was made; to lock it, ask an operator to use port49d's " +
-		"admin socket (/run/port49/port49d.sock)\n"
+	const first = "this is your own principal: no mark was made; to lock it, ask an operator holding api: " +
+		"revoke_others to run `port49 revoke --principal <principal>`\n"
 	r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"user:alice@example.com"}`))
 	if r.By != "self" || r.Standing || !strings.HasPrefix(r.Text, first) ||
 		!strings.Contains(r.Text, "nothing stands against user:alice@example.com") {
@@ -93,12 +92,6 @@ func TestTheCallersOwnPrincipalByNameSaysNoMarkWasMade(t *testing.T) {
 	}
 	if r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true}`)); strings.Contains(r.Text, "your own principal") {
 		t.Fatalf("mine: %q", r.Text)
-	}
-	f.b.AdminSocket = ""
-	r = decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"user:alice@example.com"}`))
-	if !strings.HasPrefix(r.Text, "this is your own principal: no mark was made; to lock it, port49d needs an "+
-		"admin_socket, or an operator removes your grants from broker.policy_file\n") {
-		t.Fatalf("with no admin socket: %q", r.Text)
 	}
 }
 
@@ -129,6 +122,7 @@ func TestMineIsASelfRevocation(t *testing.T) {
 // reaches nothing of alice's.
 func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	ctx := context.Background()
 	f.mintFor(t, "alice@example.com", "leaf1")
 	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
@@ -157,8 +151,8 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 		t.Fatalf("bob's key revocation: %+v", key)
 	}
 	mark := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`))
-	if mark.By != "principal" || !mark.Standing || mark.Saved == nil || mark.Subject != "netops" ||
-		!strings.Contains(mark.Text, "port49d has no admin_socket configured: lifting this needs port49d stopped") {
+	if mark.By != "principal" || !mark.Standing || mark.Saved != nil || mark.Subject != "netops" ||
+		!strings.Contains(mark.Text, "lift it with `port49 revoke --lift` and the same principal or certificate") {
 		t.Fatalf("bob's revocation of alice: %+v", mark)
 	}
 	rv, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alicePrincipal)
@@ -169,11 +163,10 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 		!strings.Contains(w.Body.String(), "credential_revoked") {
 		t.Fatalf("alice's mint after the mark: %s", answer(w))
 	}
-	f.b.AdminSocket = "/run/port49/port49d.sock"
 	again := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"`+alice2+`"}`))
-	if !strings.HasSuffix(again.Text, "the lift is made on port49d's admin socket (/run/port49/port49d.sock), "+
-		"by port49d's user or root") {
-		t.Fatalf("a mark with an admin socket: %s", again.Text)
+	if !strings.HasSuffix(again.Text, "lift it with `port49 revoke --lift` and the same principal or certificate "+
+		"(it needs api: lift_revocations and a press of your security key)") {
+		t.Fatalf("the lift note: %s", again.Text)
 	}
 }
 
@@ -200,29 +193,20 @@ func TestARevocationBodyIsOneForm(t *testing.T) {
 	}
 }
 
-// A revocation the store cannot record is 503 with a fixed sentence; the
-// store's error goes to the process log, not to the caller. The way out it
-// names is one that exists: port49 revoke on the admin socket, or, with
-// none configured, the policy file (review M2).
+// A revocation the store did not answer is 503 revocation_unconfirmed with a fixed sentence (it may
+// still land; see unconfirmed_test.go); the store's error goes to the process log, not to the caller. The way out it
+// names is one that exists: look with port49 revoke --list, or cut with the policy file (review M2).
 func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	f.b.Store = putRevocationFails{f.st}
-	for socket, want := range map[string]string{
-		"": "port49d has no admin_socket configured, so meanwhile have an operator remove the principal's " +
-			"grants from broker.policy_file",
-		"/run/port49/port49d.sock": "ask an operator to run `port49 revoke` on port49d's admin socket " +
-			"(/run/port49/port49d.sock)",
-	} {
-		f.b.AdminSocket = socket
-		w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
-		if w.Code != 503 || !strings.Contains(w.Body.String(), "store_unavailable") ||
-			strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
-			!strings.Contains(w.Body.String(), want) {
-			t.Fatalf("admin socket %q: %d %s", socket, w.Code, w.Body)
-		}
-		if socket == "" && strings.Contains(w.Body.String(), "port49 revoke") {
-			t.Fatalf("no admin socket, yet port49 revoke is offered: %s", w.Body)
-		}
+	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "revocation_unconfirmed") ||
+		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
+		!strings.Contains(w.Body.String(), "check `port49 revoke --list` once the store answers, before trying again") ||
+		!strings.Contains(w.Body.String(), "remove the principal's grants from broker.policy_file") ||
+		strings.Contains(w.Body.String(), "socket") {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }
 
@@ -237,6 +221,7 @@ func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error
 // (pre-flight M18).
 func TestABusyRevocationIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	defer func(d time.Duration) { revokeSlotWait = d }(revokeSlotWait)
 	revokeSlotWait = 50 * time.Millisecond
 	release, err := f.b.acquireRevoke(context.Background())
@@ -281,6 +266,7 @@ func (s tokensByPrincipalHangs) TokensByPrincipal(ctx context.Context, principal
 // (ruling M4).
 func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	f.mintFor(t, "alice@example.com", "leaf1")
 	hang := tokensByPrincipalHangs{Store: f.st, principal: "user:bob@example.com", hung: &atomic.Bool{}, entered: make(chan struct{}),
 		release: make(chan struct{})}
@@ -324,17 +310,13 @@ func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
 	}
 }
 
-// On port49-broker the notes name its admin socket and its process, not
-// port49d's: on etcd port49d's socket refuses revocations (Task 15a review
-// M-6).
-func TestTheRevokeNotesNameTheBrokersProcess(t *testing.T) {
-	for _, socket := range []string{"", "/run/port49/broker.sock"} {
-		b := &Broker{Proc: "port49-broker", AdminSocket: socket}
-		for _, note := range []string{b.unrecordedNote(), b.ownNote(), b.liftNote()} {
-			if strings.Contains(note, "port49d") || !strings.Contains(note, "port49-broker") ||
-				(socket != "" && !strings.Contains(note, "port49-broker's admin socket ("+socket+")")) {
-				t.Fatalf("admin socket %q: %s", socket, note)
-			}
+// On port49-broker the lift note and the others name the command, not a
+// process or a socket (Task 15a review M-6; plan 12b task 3d).
+func TestTheRevokeNotesNameTheCommand(t *testing.T) {
+	b := &Broker{Proc: "port49-broker"}
+	for _, note := range []string{b.unrecordedNote(), b.ownNote(), b.liftNote()} {
+		if strings.Contains(note, "socket") || !strings.Contains(note, "port49 revoke") {
+			t.Fatalf("%s", note)
 		}
 	}
 }
@@ -372,19 +354,13 @@ func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 	}
 }
 
-// A request that asks for a lift over the API is told where a lift is made:
-// on the serving process's own admin socket (Task 18).
-func TestALiftOverTheAPISaysWhichSocketLiftsPerProcess(t *testing.T) {
-	for _, c := range []struct{ proc, want string }{
-		{"", "a lift is port49d's admin socket's"},
-		{"port49-broker", "a lift is port49-broker's admin socket's"},
-	} {
-		f := newFixtureWithPolicy(t, 8, sharedPolicy)
-		f.b.Proc = c.proc
-		w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com","lift":true}`)
-		if w.Code != 400 || !strings.Contains(w.Body.String(), c.want) {
-			t.Errorf("proc %q: %d %s", c.proc, w.Code, w.Body)
-		}
+// A request that asks for a lift on the revoke endpoint is told where a lift
+// is made: POST /v1/revocations/lift, under lift_revocations (plan 12b).
+func TestALiftOnTheRevokeEndpointNamesTheLiftEndpoint(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com","lift":true}`)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "a lift is POST /v1/revocations/lift") {
+		t.Errorf("%d %s", w.Code, w.Body)
 	}
 }
 
@@ -409,6 +385,7 @@ func (f *fixture) carolToken(t *testing.T, iss *oidctest.Issuer) string {
 
 func TestRevokeBySidNeedsTheRightAndEndsTheSession(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	ctx := context.Background()
 	now := f.b.Now()
@@ -445,6 +422,7 @@ func TestRevokeBySidNeedsTheRightAndEndsTheSession(t *testing.T) {
 // the sid with its issuer, both named.
 func TestRevokeBySidTakesTheShapeTheOperatorLineNames(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	body := `{"sid": "s-sub-alice", "issuer": "` + iss.URL + `"}`
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", body, f.carolToken(t, iss)); w.Code != 200 {
@@ -456,6 +434,7 @@ func TestRevokeBySidTakesTheShapeTheOperatorLineNames(t *testing.T) {
 // slot, so a retry while one runs is 503 revocation_busy and ends nothing.
 func TestRevokeBySidHoldsTheAskersSlot(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	release, ok := f.b.holdOwnRevoke("user:carol@example.com")
 	if !ok {
@@ -470,6 +449,7 @@ func TestRevokeBySidHoldsTheAskersSlot(t *testing.T) {
 
 func TestRevokeBySidRefusesWhatItCannotName(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	carol := f.carolToken(t, iss)
 	for _, c := range []struct{ body, says string }{
@@ -502,6 +482,7 @@ func TestRevokeBySidRefusesWhatItCannotName(t *testing.T) {
 // so: 503, never a 200 "ended".
 func TestRevokeBySidWithTheStoreDownIsNotAnAnswerOfSuccess(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutLogout": func() error { return store.ErrUnavailable }}}
@@ -519,6 +500,7 @@ func TestRevokeBySidWithTheStoreDownIsNotAnAnswerOfSuccess(t *testing.T) {
 // first would end the wrong one's session.
 func TestRevokeBySidNeedsItsIssuerWithTwoProviders(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	f.addIssuer(t, oidctest.NewIssuer(t), "example.com", false)
 	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
@@ -535,6 +517,7 @@ func TestRevokeBySidNeedsItsIssuerWithTwoProviders(t *testing.T) {
 // answer names both.
 func TestRevokeBySidAnswerNamesEveryOwnerPrincipal(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
 	iss := f.withOIDC(t)
 	ctx := context.Background()
 	const alice2 = "user:alice2@example.com"

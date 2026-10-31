@@ -1,4 +1,4 @@
-.PHONY: qual qual-vet qual-update qual-fleet qualified-platforms test test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client check-static check-darwin evidence image compose-smoke leaks
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -11,6 +11,13 @@ build:
 # system's dynamic loader. Written beside, never over, bin/port49.
 build-client:
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
+
+# L86's binaries, at the fixed paths tests/lab/L86-runbook.md runs: the client and the L86 cells
+# as one compiled test binary, so what Ryan runs is this tree's. Nothing here touches a token.
+l86-build:
+	mkdir -p bin/l86
+	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/l86/port49 ./cmd/port49
+	CGO_ENABLED=0 go test -tags hwkey_dlopen -c -o bin/l86/l60.test ./tests/lab/l60
 
 # The Secure Enclave backend and the L63 spike, built and vetted for macOS
 # without a Mac (decision 45 ruling 6): the client build of port49 and the
@@ -58,11 +65,52 @@ HW_PACKAGES = ./internal/hwkey/... ./internal/clientkey/... ./internal/agent/...
 test-hw: check-static
 	CGO_ENABLED=0 PORT49_TEST_HW_REQUIRED=1 go test -tags hwkey,hwkey_dlopen $(HW_PACKAGES) -count=1 -timeout 20m
 
-# internal/port49d runs about 9.5 minutes under the full parallel suite, close
-# to go test's 10-minute default, so the limit is set here rather than left to
-# turn a slow machine into a timeout panic.
+# internal/port49d took about 943 s under the full parallel suite (12a), against
+# a 20-minute limit, so the limit is set here rather than left to turn a slow
+# machine into a timeout panic.
 test: lab-unit test-python
-	go test ./... -count=1 -timeout 20m
+	go test ./... -count=1 -timeout 30m
+
+# CI runs the suite in three kinds of job (.github/workflows/test.yml):
+#   test-rest   everything but internal/port49d, plus the ACL and busybox tests
+#               that must not skip;
+#   test-shard  one third of internal/port49d, SHARD=i/n. tests/ci/cmd/testshard
+#               builds the regex from `go test -list`, and fails when it lists
+#               nothing or the shard is empty; a separate job checks that the
+#               shards together hold every test;
+#   test-root   the tests that skip unless run as root, which must pass, not skip.
+# A skip in a must-pass test fails: tests/ci/cmd/mustpass reads go test -json.
+PORT49D_PKG = github.com/rhwendt/port49/internal/port49d
+ACL_TEST = TestAnACLGrantingWriteIsRefused
+# The tests that must pass, not skip, as a comma list: it is mustpass's -tests as it stands,
+# and test-root turns it into the -run alternation below.
+ROOT_TESTS = TestAKeyFileTheBrokerDidNotWriteIsRefused
+# The secret filter's busybox engine skips where busybox is absent: CI installs it, and a skip fails.
+FILTER_TEST = TestSecretFilterEngines/busybox
+comma := ,
+REST_PKGS = $$(go list -f '{{if ne .ImportPath "$(PORT49D_PKG)"}}{{.ImportPath}}{{end}}' ./...)
+# RACE=-race runs a shard under the race detector (CI's race jobs, 4 shards).
+RACE ?=
+
+test-rest: lab-unit test-python
+	go test $(REST_PKGS) -count=1 -timeout 30m
+	go test -json ./internal/fence/ -run '^$(ACL_TEST)$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(ACL_TEST)
+	go test -json ./tests/qual/ -run '^TestSecretFilterEngines$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(FILTER_TEST)
+
+race-rest:
+	go test -race $(REST_PKGS) -count=1 -timeout 30m
+
+test-shard:
+	@test -n "$(SHARD)" || { echo "usage: make test-shard SHARD=i/n"; exit 2; }
+	@re=$$(go run ./tests/ci/cmd/testshard -pkg ./internal/port49d -shard $(SHARD)) || exit 1; \
+	  go test $(RACE) ./internal/port49d/ -count=1 -timeout 30m -run "$$re"
+
+race-shard:
+	$(MAKE) test-shard RACE=-race SHARD=$(SHARD)
+
+test-root:
+	@test "$$(id -u)" = 0 || { echo "make test-root must run as root (sudo -E env \"PATH=\$$PATH\" make test-root)"; exit 1; }
+	go test -json ./internal/port49d/ -run '^($(subst $(comma),|,$(ROOT_TESTS)))$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(ROOT_TESTS)
 
 # The Python library and the Ansible lookup (plan 9d), stdlib unittest. A
 # missing python3 fails it: make test runs it (decision 46 ruling 14).
@@ -137,6 +185,8 @@ vet:
 	go vet -tags compose ./tests/compose/...
 	go vet -tags hwkey_dlopen ./...
 	go vet -tags hwkey,hwkey_dlopen $(HW_PACKAGES) ./tests/lab/l60/
+	go vet -tags systemd,helm,kind,image,packages ./tests/...
+	go vet -tags lab ./tests/lab/
 
 # Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
 # unauthenticated connection; CI-sized. keyring is here because Resolve runs
@@ -200,6 +250,18 @@ lab-qualify:
 lab-l80:
 	@case "$(ARM)" in baseline|fixed) ;; *) echo "usage: make lab-l80 ARM=baseline|fixed [CELLS=...]"; exit 2;; esac
 	PORT49_L80_ARM=$(ARM) PORT49_L80_CELLS=$(CELLS) PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL80Remeasure$$' -count=1 -v -timeout 240m
+
+# L84 (plan 12b, Task 15): host credential mechanisms against fence.ReadSecret. lab-l84 runs the Compose
+# cells on the local images (nothing is pulled or built) and writes the note from the cells; with
+# A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
+# Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
+lab-l84:
+	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
+
+lab-l84-systemd: smoke-keyhost packages
+	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
+	rc=0; PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
+	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+
@@ -339,6 +401,11 @@ lab:
 image:
 	docker build --target port49 -t port49:dev .
 
+# The image's directory and binary modes (plan 12b, Task 5): builds, then reads the
+# exported filesystem. Behind the image tag so `go test ./...` never needs Docker.
+image-check: image
+	go test -tags image ./tests/image/ -count=1 -v
+
 # The compose stack end to end: up, a device login, the stack recreated
 # with its volumes kept, the session and the broker's state_dir kept. Needs
 # Docker with Compose v2.24.4+; behind the `compose` tag so `go test ./...`
@@ -365,6 +432,116 @@ bin/gitleaks-$(GITLEAKS_VERSION):
 	mv bin/gitleaks bin/gitleaks-$(GITLEAKS_VERSION)
 	rm bin/gitleaks.tar.gz
 
+# Release packages (plan 12b, Task 8). GoReleaser is pinned by sha256 like gitleaks. Run on
+# 2026-10-30: the digest checked and `make packages` built the snapshot, and `make packages-check` passes
+# on the debs and rpms (the client-package import test, which installs with pip, was not run).
+# `make packages` builds dist/ locally and publishes and signs nothing (--snapshot
+# --skip=publish,sign): signing belongs to the release workflow.
+# `make packages-check` then runs tests/packages, which fails, never skips, when dist/ is empty.
+GORELEASER_VERSION ?= 2.19.0
+GORELEASER_SHA256_LINUX_X64 = ebc3194ad1d1b1787614405285a0039665cd4c5bd3305215a1b201600f90630b
+
+bin/goreleaser-$(GORELEASER_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install goreleaser $(GORELEASER_VERSION) yourself and put it at bin/goreleaser-$(GORELEASER_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/goreleaser.tar.gz https://github.com/goreleaser/goreleaser/releases/download/v$(GORELEASER_VERSION)/goreleaser_Linux_x86_64.tar.gz
+	echo "$(GORELEASER_SHA256_LINUX_X64)  bin/goreleaser.tar.gz" | sha256sum -c -
+	tar -xzf bin/goreleaser.tar.gz -C bin goreleaser
+	mv bin/goreleaser bin/goreleaser-$(GORELEASER_VERSION)
+	rm bin/goreleaser.tar.gz
+
+packages: bin/goreleaser-$(GORELEASER_VERSION)
+	bin/goreleaser-$(GORELEASER_VERSION) release --snapshot --clean --skip=publish,sign
+
+# The release workflow's step: the same pinned binary, publishing (GITHUB_TOKEN in its environment).
+# Never run locally; make packages is the local build.
+release-packages: bin/goreleaser-$(GORELEASER_VERSION)
+	bin/goreleaser-$(GORELEASER_VERSION) release --clean
+
+# packaging/requirements-release.txt, from the .in beside it, with hashes (plan 12b, Task 12). pip-tools
+# runs from a throwaway venv under bin/ at an exact version; the .txt is never hand-edited. Its header
+# records the Python that compiled it (3.14 here; the release workflow installs with 3.12). The pins of
+# build and ansible-core carry no marker that differs between the two; a bump that adds a marker-gated
+# dependency must be compiled with the workflow's Python.
+PIP_TOOLS_VERSION ?= 7.5.0
+requirements-release:
+	python3 -m venv bin/piptools-venv
+	bin/piptools-venv/bin/pip install --disable-pip-version-check pip-tools==$(PIP_TOOLS_VERSION)
+	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-release.txt packaging/requirements-release.in
+	bin/piptools-venv/bin/pip-compile --generate-hashes --allow-unsafe --strip-extras --quiet \
+		-o packaging/requirements-ci.txt packaging/requirements-ci.in
+
+
+# The Helm chart's render checks (plan 12b, Task 10). Helm is pinned by sha256 (the digest is the
+# one get.helm.sh's .sha256sum and the GitHub release both give). Run on
+# 2026-10-30: the digest checked and the helm-tagged tests pass against helm 3.22.0. tests/helm's helm-tagged files fail, never
+# skip, when bin/helm-$(HELM_VERSION) is absent; `make test` never builds them.
+HELM_VERSION ?= 3.22.0
+HELM_SHA256_LINUX_AMD64 = 1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
+
+bin/helm-$(HELM_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install helm $(HELM_VERSION) yourself and put it at bin/helm-$(HELM_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/helm.tar.gz https://get.helm.sh/helm-v$(HELM_VERSION)-linux-amd64.tar.gz
+	echo "$(HELM_SHA256_LINUX_AMD64)  bin/helm.tar.gz" | sha256sum -c -
+	tar -xzf bin/helm.tar.gz -C bin --strip-components=1 linux-amd64/helm
+	mv bin/helm bin/helm-$(HELM_VERSION)
+	rm bin/helm.tar.gz
+
+# bin/helm is the pinned binary under the name release.yml's chart job calls.
+bin/helm: bin/helm-$(HELM_VERSION)
+	cp bin/helm-$(HELM_VERSION) bin/helm
+
+helm-test: bin/helm-$(HELM_VERSION)
+	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
+
+# The container and cluster smokes run with enough privilege to escape to the host if their contents are
+# hostile, so they refuse to start on a host with a TPM (/dev/tpm0, /dev/tpmrm0) or a Yubico hidraw device,
+# which they only stat and read from sysfs. PORT49_SMOKE_ON_KEY_HOST=1 overrides it: its owner's decision.
+smoke-keyhost:
+	@go run ./tests/shapes/cmd/keyhost
+
+# The Kubernetes shape end to end (plan 12b, Task 11): the chart on a kind cluster. kind and kubectl are
+# pinned by sha256 like helm. UNVERIFIED: none of these targets has run; the first `make kind-smoke` is
+# the check. Behind the `kind` tag so `go test ./...` never needs Docker or a cluster, and it fails,
+# never skips, without the pinned tools. The post-renderer for the fsGroup cell's red run is built
+# here, test-only, and is not part of the chart.
+KIND_VERSION ?= 0.29.0
+KIND_SHA256_LINUX_AMD64 = c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284
+KUBECTL_VERSION ?= 1.33.1
+KUBECTL_SHA256_LINUX_AMD64 = 5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3
+
+bin/kind-v$(KIND_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install kind v$(KIND_VERSION) yourself and put it at bin/kind-v$(KIND_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/kind.dl https://github.com/kubernetes-sigs/kind/releases/download/v$(KIND_VERSION)/kind-linux-amd64
+	echo "$(KIND_SHA256_LINUX_AMD64)  bin/kind.dl" | sha256sum -c -
+	chmod 0755 bin/kind.dl
+	mv bin/kind.dl bin/kind-v$(KIND_VERSION)
+
+bin/kubectl-$(KUBECTL_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install kubectl v$(KUBECTL_VERSION) yourself and put it at bin/kubectl-$(KUBECTL_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/kubectl.dl https://dl.k8s.io/release/v$(KUBECTL_VERSION)/bin/linux/amd64/kubectl
+	echo "$(KUBECTL_SHA256_LINUX_AMD64)  bin/kubectl.dl" | sha256sum -c -
+	chmod 0755 bin/kubectl.dl
+	mv bin/kubectl.dl bin/kubectl-$(KUBECTL_VERSION)
+
+# Whatever the result, the cluster is deleted afterwards (the test's own guard covers a signal and the
+# deadline; this covers a make killed between them). To clean up by hand after any aborted run:
+# `bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke`, then `kind get clusters` is empty.
+kind-smoke: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	go build -o bin/oldroot ./tests/kind/cmd/oldroot
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
+	  go test -tags kind ./tests/kind/ -count=1 -v -timeout 40m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
+
+packages-check:
+	go test -tags packages ./tests/packages/ -count=1 -v
+
 # The history scan is of the checked-out branch only (--log-opts=HEAD), which is what CI scans;
 # other local branches and refs do not fail it. The working tree is scanned through git
 # (--pre-commit for tracked changes, --staged for the index), never `gitleaks dir`, which reads
@@ -373,3 +550,108 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 	bin/gitleaks-$(GITLEAKS_VERSION) git $(GITLEAKS_FLAGS) --log-opts=HEAD .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --pre-commit $(GITLEAKS_FLAGS) .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
+
+# The fsGroup cell's red run: the same install with the first design's 2755 volume root, by the
+# test-only post-renderer. The test PASSES only when the kubelet's walk
+# under that root leaves the broker's issuing-ca.key unusable (a broker that still issues fails it),
+# so a passing target is the red result observed. It builds the setup image the test loads, and deletes the
+# cluster afterwards like kind-smoke.
+kind-smoke-red: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	go build -o bin/oldroot ./tests/kind/cmd/oldroot
+	rc=0; KIND_OLD_ROOT=1 KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
+	  go test -tags kind ./tests/kind/ -run TestKindSmoke -count=1 -v -timeout 40m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
+
+# Lab entry L82 (plan 12b, Task 13): Secret volumes and the External Secrets Operator on kind. It runs
+# in CI only (.github/workflows/lab-kind.yml): kind's nodes are privileged containers, so smoke-keyhost
+# refuses on a host with a TPM or a security key. The operator's chart is pinned by sha256 like helm.
+# The harness writes its results to $(LAB_OUT)/l82, which the workflow uploads as an artifact; the
+# results note tests/lab/results/L82-kind.md is written from that artifact. The cluster is deleted
+# afterwards whatever the result, as kind-smoke does.
+ESO_VERSION ?= 2.12.0
+ESO_APP_VERSION ?= v2.12.0
+ESO_CHART_SHA256 = 4b584136b7311c0af8c8719d377cc5b1a7ef12c2de18f1fdb30614eab75bdeb3
+LAB_OUT ?= $(CURDIR)/bin/lab-out
+
+bin/external-secrets-$(ESO_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/eso.dl https://github.com/external-secrets/external-secrets/releases/download/helm-chart-$(ESO_VERSION)/external-secrets-$(ESO_VERSION).tgz
+	echo "$(ESO_CHART_SHA256)  bin/eso.dl" | sha256sum -c -
+	mv bin/eso.dl bin/external-secrets-$(ESO_VERSION).tgz
+
+lab-l82: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/external-secrets-$(ESO_VERSION).tgz
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l82
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) ESO_CHART=$(CURDIR)/bin/external-secrets-$(ESO_VERSION).tgz \
+	  ESO_CHART_VERSION=$(ESO_VERSION) ESO_APP_VERSION=$(ESO_APP_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l82 \
+	  PORT49_LAB_L82=1 go test -tags lab ./tests/lab/ -run '^TestL82$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l82; exit $$rc
+
+# Lab entry L83 (plan 12b, Task 14): Vault Agent's injector and the Secrets Store CSI driver on kind,
+# in CI only like L82. Both charts are pinned by sha256: the vault chart brings the injector and the
+# Vault CSI provider, and the driver is its own chart. Vault's root token is made by the test at run
+# time and is never in this file, an argument, a log or the artifact.
+VAULT_VERSION ?= 0.34.1
+VAULT_CHART_SHA256 = df4c37fac32496892ff1e1d6fd7954d3a402cc7b1b2b4c2226af11b8a57564c4
+CSI_VERSION ?= 1.6.1
+CSI_CHART_SHA256 = d312041d5334a1e5b0b9fe602a5cdcc1bfe028e0e9a4a8b3a14a24236497e1b6
+
+bin/vault-$(VAULT_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/vault.dl https://helm.releases.hashicorp.com/vault-$(VAULT_VERSION).tgz
+	echo "$(VAULT_CHART_SHA256)  bin/vault.dl" | sha256sum -c -
+	mv bin/vault.dl bin/vault-$(VAULT_VERSION).tgz
+
+bin/secrets-store-csi-driver-$(CSI_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/csi.dl https://kubernetes-sigs.github.io/secrets-store-csi-driver/charts/secrets-store-csi-driver-$(CSI_VERSION).tgz
+	echo "$(CSI_CHART_SHA256)  bin/csi.dl" | sha256sum -c -
+	mv bin/csi.dl bin/secrets-store-csi-driver-$(CSI_VERSION).tgz
+
+lab-l83: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/vault-$(VAULT_VERSION).tgz bin/secrets-store-csi-driver-$(CSI_VERSION).tgz
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l83
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VAULT_CHART=$(CURDIR)/bin/vault-$(VAULT_VERSION).tgz \
+	  CSI_CHART=$(CURDIR)/bin/secrets-store-csi-driver-$(CSI_VERSION).tgz \
+	  VAULT_CHART_VERSION=$(VAULT_VERSION) CSI_CHART_VERSION=$(CSI_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l83 \
+	  PORT49_LAB_L83=1 go test -tags lab ./tests/lab/ -run '^TestL83$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l83; exit $$rc
+
+# Lab entry L85 (plan 12b, Task 16): MetalLB in BGP mode as an anycast address for port49d, on kind
+# with an FRR router, in CI only like L82. The chart is pinned by sha256 and FRR's image by digest
+# (tests/lab/l85_test.go). The test makes a docker network and two containers by fixed names, which
+# are removed afterwards whatever the result, as is the cluster.
+METALLB_VERSION ?= 0.16.1
+METALLB_CHART_SHA256 = fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc
+
+bin/metallb-$(METALLB_VERSION).tgz:
+	mkdir -p bin
+	curl -fsSL -o bin/metallb.dl https://github.com/metallb/metallb/releases/download/metallb-chart-$(METALLB_VERSION)/metallb-$(METALLB_VERSION).tgz
+	echo "$(METALLB_CHART_SHA256)  bin/metallb.dl" | sha256sum -c -
+	mv bin/metallb.dl bin/metallb-$(METALLB_VERSION).tgz
+
+lab-l85: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/metallb-$(METALLB_VERSION).tgz
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l85
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) METALLB_CHART=$(CURDIR)/bin/metallb-$(METALLB_VERSION).tgz \
+	  METALLB_CHART_VERSION=$(METALLB_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l85 \
+	  PORT49_LAB_L85=1 go test -tags lab ./tests/lab/ -run '^TestL85$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l85; \
+	  docker rm -f port49l85-frr port49l85-client >/dev/null 2>&1; docker network rm port49l85dev >/dev/null 2>&1; exit $$rc
+
+# The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
+# installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
+# host. The container is never run with full privilege, a device or a bind mount of /dev, but it is NOT an
+# isolation boundary: CAP_SYS_ADMIN with an unconfined AppArmor profile and no user namespace is a known
+# container-escape set (kind's nodes are privileged, which is worse). So it refuses to start on a host with
+# a TPM or a Yubico key (smoke-keyhost); CI runners have neither. sdtest.RunArgs justifies each flag. It builds tests/systemd/Dockerfile (apt and the etcd image are
+# pulled by that build) and fails, never skips, when dist/ holds no package. Whatever the result, the
+# container and the network are removed afterwards, by their fixed names.
+systemd-smoke: smoke-keyhost packages
+	rc=0; go test -tags systemd ./tests/systemd/ -run '^TestSystemdSmoke$$' -count=1 -v -timeout 30m || rc=$$?; \
+	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc

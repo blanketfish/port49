@@ -1,0 +1,5 @@
+# The inputs of packaging/requirements-ci.txt, which .github/workflows/python.yml installs with
+# --require-hashes (the Python client's test tools). Exact versions; regenerate with `make requirements-release`.
+ansible-core==2.21.4
+paramiko==5.0.0
+ansible-pylibssh==1.4.0

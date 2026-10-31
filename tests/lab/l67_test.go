@@ -918,13 +918,31 @@ func (p *l67Person) code() string {
 	return c
 }
 
+// l67Kept writes raw (a command's output, a daemon's stderr) to a 0600 file under the lab's private
+// directory and returns its path. A failure line quotes that path, never the text: the text can hold
+// what no log may, and the lab log's readers filter it away whole.
+func l67Kept(label, raw string) string {
+	dir, err := labPrivateSub("l67-failures")
+	if err == nil {
+		err = os.MkdirAll(dir, 0o700)
+	}
+	if err != nil {
+		return "(not kept: " + err.Error() + ")"
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", label, time.Now().UnixNano()))
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		return "(not kept: " + err.Error() + ")"
+	}
+	return path
+}
+
 // enroll takes name through the enrollment: the first sign-in with no code
 // answers 202 with the secret, the first code confirms it.
 func (x *l67X) enroll(t *testing.T, a *l67API, name string) *l67Person {
 	t.Helper()
 	ans := a.signIn(name, x.pw, "")
 	if ans.Status != http.StatusAccepted || ans.Enroll == nil {
-		t.Fatalf("INVALID: enrolling %s: %d %s (%s)", name, ans.Status, ans.Error, ans.Detail)
+		t.Fatalf("INVALID: enrolling %s: %d %s", name, ans.Status, ans.Error)
 	}
 	secret, err := l67SecretOf(ans.Enroll.URI)
 	if err != nil {
@@ -934,7 +952,7 @@ func (x *l67X) enroll(t *testing.T, a *l67API, name string) *l67Person {
 	p := &l67Person{name: name, secret: secret, rec: &x.sec}
 	conf := a.confirm(ans.Enroll.Handle, p.code())
 	if conf.Status != http.StatusOK || !conf.Cert {
-		t.Fatalf("INVALID: confirming %s's enrollment: %d %s (%s)", name, conf.Status, conf.Error, conf.Detail)
+		t.Fatalf("INVALID: confirming %s's enrollment: %d %s", name, conf.Status, conf.Error)
 	}
 	return p
 }
@@ -957,16 +975,25 @@ func (x *l67X) startBroker(t *testing.T, opts l67BrokerOpts) {
 	if x.broker != nil {
 		return
 	}
-	x.broker = newL67Broker(t, x.owner, x.dir, opts)
-	if out, code := x.broker.port49(t, "directory", "init-enrollments", "--socket", x.broker.admin); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, oneLineMax(out, 300))
-	}
+	// init-enrollments first, as an install does: a running broker that found the store missing follows
+	// an offline init only at its next recheck.
+	x.broker = newL67BrokerWith(t, x.owner, x.dir, opts, func(b *l67Broker) { b.mustInitEnrollments(t) })
 	a := x.broker.api(t)
 	x.people = map[string]*l67Person{}
 	for _, n := range []string{"carol", "dave"} {
 		x.people[n] = x.enroll(t, a, n)
 		x.broker.unlock(t, n)
 	}
+}
+
+// person is name's authenticator, or the error that says the cell which enrolls them did not complete: a
+// cell that ended INVALID or was skipped leaves nobody enrolled, and the cells after it fail INVALID
+// rather than crash the whole binary.
+func (x *l67X) person(name string) (*l67Person, error) {
+	if p := x.people[name]; p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("%s was not enrolled (an earlier cell did not complete)", name)
 }
 
 // wrongSignIn is one sign-in for name with a wrong password and the right code
@@ -976,7 +1003,11 @@ func (x *l67X) wrongSignIn(t *testing.T, a *l67API, name string, takesStep bool)
 	t.Helper()
 	code := "000000"
 	if takesStep {
-		code = x.people[name].code()
+		p, err := x.person(name)
+		if err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+		code = p.code()
 	}
 	sent = time.Now()
 	ans = a.signIn(name, x.wrong(), code)
@@ -1091,13 +1122,16 @@ func (x *l67X) cellD(t *testing.T) {
 func (x *l67X) cellE(t *testing.T) {
 	x.startBroker(t, l67BrokerOpts{Window: l67Window})
 	a := x.broker.api(t)
-	p := x.people["carol"]
+	p, err := x.person("carol")
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	x.broker.unlock(t, "carol")
 	// The control: the right password and the right code sign in.
 	ans := a.signIn("carol", x.pw, p.code())
 	x.row("e. control", "right password, right code: %d %s", ans.Status, ans.Error)
 	if ans.Status != http.StatusOK || !ans.Cert {
-		t.Fatalf("INVALID: carol's right sign-in: %d %s (%s)", ans.Status, ans.Error, ans.Detail)
+		t.Fatalf("INVALID: carol's right sign-in: %d %s", ans.Status, ans.Error)
 	}
 	before, err := x.state(t, "carol")
 	if err != nil {
@@ -1136,12 +1170,12 @@ func (x *l67X) cellG(t *testing.T) {
 	if ans.Status != http.StatusServiceUnavailable || ans.Error != "enrollment_store_lost" || statErr == nil {
 		t.Fatalf("INVALID: before init-enrollments: %d %s, enrollments.json exists %v", ans.Status, ans.Error, statErr == nil)
 	}
-	if out, code := b.port49(t, "directory", "init-enrollments", "--socket", b.admin); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, oneLineMax(out, 300))
-	}
+	b.mustInitEnrollments(t)
 	if _, err := os.Stat(filepath.Join(b.dir, "enrollments.json")); err != nil {
 		x.fail("g (memory): init-enrollments left no enrollments.json: %v", err)
 	}
+	followed := l67WaitStoreFollowed(t, a, x.wrong(), 90*time.Second)
+	x.row("g. memory, offline init", "the running broker took the new store %s after init-enrollments (its recheck is every 30s)", followed.Round(time.Second))
 	cli := newL67CLI(t, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA))
 	x.endToEnd(t, "memory", cli, l67Device, func() { gate.stop() }, func(string) { b.leakCheck(t, x) })
 }
@@ -1337,8 +1371,7 @@ func (x *l67X) composeHalf(t *testing.T) {
 	if ans.Status != http.StatusServiceUnavailable || ans.Error != "enrollment_store_lost" {
 		t.Fatalf("INVALID: before init-enrollments: %d %s, want 503 enrollment_store_lost", ans.Status, ans.Error)
 	}
-	if out, err := c.run("exec", "-T", "port49-broker", "port49", "directory", "init-enrollments", "--socket",
-		"/run/port49/port49-broker.sock"); err != nil {
+	if out, err := c.run("exec", "-T", "port49-broker", "port49-broker", "init-enrollments"); err != nil {
 		t.Fatalf("INVALID: init-enrollments: %v: %s", err, oneLineMax(out, 300))
 	}
 	// The broker over etcd holds mints until its runner's first takeover is
@@ -1351,6 +1384,9 @@ func (x *l67X) composeHalf(t *testing.T) {
 	}
 	x.row("g. etcd, mint gate", "opened %.0fs after the broker restart (this wait: %.0fs, for the broker's policy: mints open: line)",
 		time.Since(restartedAt).Seconds(), opened.Seconds())
+	// An offline init-enrollments reaches a broker already running at its next recheck (30 s).
+	followed := l67WaitStoreFollowed(t, a, x.wrong(), 90*time.Second)
+	x.row("g. etcd, offline init", "the running broker took the new store %s after init-enrollments (its recheck is every 30s)", followed.Round(time.Second))
 	cli := newL67CLI(t, sliceBrokerURL, brokerCA)
 	x.endToEnd(t, "etcd", cli, l.p.node, func() {
 		if out, err := c.run("stop", "openldap"); err != nil {
@@ -1534,6 +1570,10 @@ func TestL67Windows(t *testing.T) {
 const l67Device = "leaf1"
 
 // l67BrokerOpts is what a cell changes about the broker's configuration.
+// l67OncallEmail is the person who unlocks: alice, whose directory entry and
+// certificate agree on this address.
+const l67OncallEmail = "alice@corp.example.com"
+
 type l67BrokerOpts struct {
 	Window time.Duration // rate_limits.window; 0 is port49's default
 	DirURI string        // the directory's URI as the broker reaches it; "" is the directory's own
@@ -1552,7 +1592,8 @@ func l67HostPort(uri string) string {
 
 // l67BrokerFiles are port49d.yaml, policy.yaml and inventory.yaml for a broker
 // in dir with the TLS files of pki, a directory_password verifier over x, and
-// admin_socket, by name.
+// an x509 one for the on-call who unlocks (adminRolesFile in dir holds the roots
+// the on-call's software key chains to).
 func l67BrokerFiles(dir, pki string, x *labDir, o l67BrokerOpts) map[string]string {
 	uri := o.DirURI
 	if uri == "" {
@@ -1564,52 +1605,60 @@ func l67BrokerFiles(dir, pki string, x *labDir, o l67BrokerOpts) map[string]stri
 	}
 	cfg := fmt.Sprintf(`listen: "127.0.0.1:0"
 metrics_listen: "127.0.0.1:0"
-admin_socket: %[1]s
-inventory_file: %[2]s
+inventory_file: %[1]s
 encryption:
   current: {id: lab1, secret_ref: env:PORT49_LAB_ENC_KEY}
-accounting: {spool_path: %[3]s}
+accounting: {spool_path: %[2]s}
 broker:
   listen: "127.0.0.1:0"
-  tls_cert_file: %[4]s
-  tls_key_file: %[5]s
+  tls_cert_file: %[3]s
+  tls_key_file: %[4]s
   identity:
     humans:
       - type: directory_password
         principal_domains: [corp.example.com]
         second_factor: totp
-%[6]s    issuance: {}
-  policy_file: %[7]s
-  revocations_file: %[8]s
+%[5]s      - {type: x509, trust_anchor_file: %[16]s}
+    per_login_mfa:
+      hardware_key_touch: {attestation_roots_file: %[17]s}
+    issuance: {}
+  policy_file: %[6]s
+  revocations_file: %[7]s
   policy_watch_interval: 1s
   refresh_interval: 5m
+  certificate_status: {disabled: true}
   directory:
     servers:
-      - {uri: "%[9]s", priority: 100, site: lab}
+      - {uri: "%[8]s", priority: 100, site: lab}
     site: lab
-    ca_file: %[10]s
+    ca_file: %[9]s
     bind:
       mechanism: simple
-      bind_dn: "%[11]s"
+      bind_dn: "%[10]s"
       password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD
-    base_dn: "%[12]s"
-    groups_base_dn: "%[13]s"
-    user_filter: "%[14]s"
-    group_filter: "%[15]s"
+    base_dn: "%[11]s"
+    groups_base_dn: "%[12]s"
+    user_filter: "%[13]s"
+    group_filter: "%[14]s"
     principal_attribute: mail
-    username_attribute: %[16]s
+    username_attribute: %[15]s
+    certificate_mapping:
+      kind: san_email
+      allow_weak: true
+      issuers: ["CN=port49 lab slice CA"]
     nested_groups: direct
     grace: 4h
-`, filepath.Join(dir, "admin.sock"), filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
+`, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
 		filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey), limits,
-		filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "revocations.json"), uri, x.d.pki.caFile, x.bindDN, x.baseDN,
-		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr)
+		filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "revocations.json"), uri, x.d.pki.privateCA(), x.bindDN, x.baseDN,
+		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr, filepath.Join(pki, testpki.LabCA),
+		filepath.Join(dir, adminRolesFile))
 	policy := `scopes:
   - {name: all_devices, match: {}}
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}
 subjects:
-  - {name: alice, identity: ["user:alice@corp.example.com"], token_ttl: 900s}
+  - {name: alice, identity: ["user:alice@corp.example.com"], token_ttl: 900s, api: [unlock_sign_in]}
 grants:
   - {subject: alice, scope: all_devices, roles: [network_admin], max_privilege: admin}
 key_groups:
@@ -1624,13 +1673,18 @@ keys:
 
 // l67Broker is bin/port49d running a broker over a directory.
 type l67Broker struct {
-	x                  *labDir
-	dir, pki, cfg      string
-	admin, addr, errTo string
-	bin, cli           string
-	cmd                *exec.Cmd
-	done               chan struct{}
-	opts               l67BrokerOpts
+	owner         *testing.T // the test whose end stops the broker and its admin agent
+	x             *labDir
+	dir, pki, cfg string
+	addr, errTo   string
+	bin, cli      string
+	// piv and admin are the on-call's software key hierarchy and agent, for
+	// unlock (startLabAdmin); admin is nil until the first unlock.
+	piv   *testpki.PIV
+	admin *labAdmin
+	cmd   *exec.Cmd
+	done  chan struct{}
+	opts  l67BrokerOpts
 }
 
 func l67Bins(t *testing.T) (port49d, port49 string) {
@@ -1653,7 +1707,18 @@ func l67Bins(t *testing.T) (port49d, port49 string) {
 // to the directory's test, not to the cell that happened to start it.
 func newL67Broker(t, owner *testing.T, x *labDir, o l67BrokerOpts) *l67Broker {
 	t.Helper()
-	port49d, port49 := l67Bins(t)
+	return newL67BrokerWith(t, owner, x, o, nil)
+}
+
+// l67BinsOf finds the binaries; a unit test builds its own.
+var l67BinsOf = l67Bins
+
+// newL67BrokerWith is newL67Broker with beforeStart run after the files and the CA exist and before the
+// broker starts: the install order for init-enrollments, which a running broker follows only at its
+// next recheck (30 s), not at once.
+func newL67BrokerWith(t, owner *testing.T, x *labDir, o l67BrokerOpts, beforeStart func(*l67Broker)) *l67Broker {
+	t.Helper()
+	port49d, port49 := l67BinsOf(t)
 	dir, err := os.MkdirTemp("", "p49l67")
 	if err != nil {
 		t.Fatal(err)
@@ -1662,19 +1727,26 @@ func newL67Broker(t, owner *testing.T, x *labDir, o l67BrokerOpts) *l67Broker {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	b := &l67Broker{x: x, dir: dir, pki: filepath.Join(dir, "pki"), cfg: filepath.Join(dir, "port49d.yaml"),
-		admin: filepath.Join(dir, "admin.sock"), errTo: filepath.Join(dir, "port49d.err"), bin: port49d, cli: port49, opts: o}
-	if err := testpki.WriteLab(b.pki, sliceEmail, time.Now()); err != nil {
+	b := &l67Broker{owner: owner, x: x, dir: dir, pki: filepath.Join(dir, "pki"), cfg: filepath.Join(dir, "port49d.yaml"),
+		errTo: filepath.Join(dir, "port49d.err"), bin: port49d, cli: port49, opts: o}
+	// The unlock is alice's, by certificate: her directory entry's mail is on a
+	// second certificate from the lab CA (l67OncallEmail), which the broker maps
+	// by san_email.
+	if err := testpki.WriteLabWith(b.pki, sliceEmail, []string{l67OncallEmail}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	b.piv, _ = adminTouchRoots(t, dir)
 	b.write(t, o)
 	env := b.env()
 	for _, args := range [][]string{{"init-revocations", "--config", b.cfg}, {"init-issuer", "--config", b.cfg}} {
 		cmd := exec.Command(port49d, args...)
 		cmd.Env = env
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("INVALID: port49d %s: %v: %s", args[0], err, oneLineMax(string(out), 400))
+			t.Fatalf("INVALID: port49d %s: %v, output kept in %s", args[0], err, l67Kept(args[0], string(out)))
 		}
+	}
+	if beforeStart != nil {
+		beforeStart(b)
 	}
 	b.start(t)
 	owner.Cleanup(b.stop)
@@ -1701,7 +1773,6 @@ func (b *l67Broker) said() string {
 
 func (b *l67Broker) start(t *testing.T) {
 	t.Helper()
-	_ = os.Remove(b.admin)
 	errf, err := os.Create(b.errTo)
 	if err != nil {
 		t.Fatal(err)
@@ -1724,20 +1795,14 @@ func (b *l67Broker) start(t *testing.T) {
 		}
 		select {
 		case <-b.done:
-			t.Fatalf("port49d exited during startup; its stderr:\n%s", tailOf(b.said(), 2000))
+			t.Fatalf("INVALID: port49d exited during startup; its stderr is kept in %s", l67Kept("start-exited", b.said()))
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("port49d never said it was listening; its stderr:\n%s", tailOf(b.said(), 2000))
+			t.Fatalf("INVALID: port49d never said it was listening; its stderr is kept in %s", l67Kept("start-silent", b.said()))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	for ; time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if _, err := os.Stat(b.admin); err == nil {
-			return
-		}
-	}
-	t.Fatalf("port49d's admin socket never appeared; its stderr:\n%s", tailOf(b.said(), 2000))
 }
 
 func (b *l67Broker) stop() {
@@ -1760,6 +1825,7 @@ func (b *l67Broker) restart(t *testing.T, o l67BrokerOpts) {
 	b.stop()
 	b.opts = o
 	b.write(t, o)
+	b.admin = nil // the old agent is logged in at the old address
 	b.start(t)
 }
 
@@ -1778,12 +1844,60 @@ func (b *l67Broker) port49(t *testing.T, args ...string) (string, int) {
 	return string(out) + err.Error(), -1
 }
 
-// unlock clears name's failed-sign-in count at the broker (the operator's
-// `port49 directory unlock`).
+// initEnrollments is `port49d init-enrollments` on the broker's config: the
+// local command that creates its sealed enrollment store once.
+func (b *l67Broker) mustInitEnrollments(t *testing.T) {
+	t.Helper()
+	if out, code := b.initEnrollments(t); code != 0 {
+		t.Fatalf("INVALID: init-enrollments: exit %d, output kept in %s", code, l67Kept("init-enrollments", out))
+	}
+}
+
+// l67WaitStoreFollowed polls until the running broker no longer answers enrollment_store_lost for
+// a name the directory does not hold (the store is read before the name is looked up), and returns how long
+// that took. The broker looks again every 30 s while the store is lost; limit is past that.
+func l67WaitStoreFollowed(t *testing.T, a *l67API, wrong string, limit time.Duration) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for {
+		if ans := a.signIn("l67-nobody", wrong, ""); ans.Error != "enrollment_store_lost" {
+			return time.Since(start)
+		}
+		if time.Since(start) > limit {
+			t.Fatalf("INVALID: the broker still answered enrollment_store_lost %s after init-enrollments", limit)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func (b *l67Broker) initEnrollments(t *testing.T) (string, int) {
+	t.Helper()
+	cmd := exec.Command(b.bin, "init-enrollments", "--config", b.cfg)
+	cmd.Dir = b.dir
+	cmd.Env = b.env()
+	out, err := cmd.CombinedOutput()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return string(out), 0
+	case errors.As(err, &ee):
+		return string(out), ee.ExitCode()
+	}
+	return string(out) + err.Error(), -1
+}
+
+// unlock clears name's failed-sign-in count at the broker (the on-call's
+// `port49 directory unlock`, through the broker API with a software key's
+// press).
 func (b *l67Broker) unlock(t *testing.T, name string) {
 	t.Helper()
-	if out, code := b.port49(t, "directory", "unlock", "--socket", b.admin, "user:"+name+"@corp.example.com"); code != 0 {
-		t.Fatalf("INVALID: directory unlock %s: exit %d: %s", name, code, oneLineMax(out, 300))
+	if b.admin == nil {
+		cert, key := testpki.LabClientFiles(l67OncallEmail)
+		b.admin = startLabAdminFor(t, b.owner, b.piv, "https://"+b.addr, filepath.Join(b.pki, testpki.LabCA),
+			filepath.Join(b.pki, cert), filepath.Join(b.pki, key))
+	}
+	if out, code := b.admin.runCmd("directory", "unlock", "user:"+name+"@corp.example.com"); code != 0 {
+		t.Fatalf("INVALID: directory unlock %s: exit %d, output kept in %s", name, code, l67Kept("unlock", out))
 	}
 }
 
@@ -2095,9 +2209,10 @@ func l67Said(screen string, secrets ...string) string {
 func (c *l67CLI) login(t *testing.T, in l67LoginIn) l67LoginOut {
 	t.Helper()
 	term, slave := newL67Term(t)
-	args := append([]string{"login", "--directory", "--name", in.name, "--broker", c.broker, "--broker-ca", c.ca, "--socket", c.sock}, in.extra...)
+	args := append([]string{"login", "--directory", "--name", in.name, "--broker", c.broker, "--broker-ca", c.ca}, in.extra...)
 	cmd := exec.Command(c.bin, args...)
 	cmd.Env = c.env
+	withAgent(cmd, c.sock)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start port49 login: %v", err)
@@ -2214,8 +2329,9 @@ type l67TokenOut struct {
 // whole of stdout and is never kept: only that one line came.
 func (c *l67CLI) token(t *testing.T, device string) l67TokenOut {
 	t.Helper()
-	cmd := exec.Command(c.bin, "token", "--socket", c.sock, device)
+	cmd := exec.Command(c.bin, "token", device)
 	cmd.Env = c.env
+	withAgent(cmd, c.sock)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

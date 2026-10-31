@@ -32,9 +32,9 @@ func TestTheFlagSurvivesTheRevocationsFile(t *testing.T) {
 	at := time.Date(2026, 10, 21, 3, 0, 0, 0, time.UTC)
 	before := memory.New(time.Now)
 	for _, r := range []store.Revocation{
-		{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0",
+		{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "offline uid 0",
 			LandedAfterLift: true},
-		{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: at, Origin: "admin_socket uid 0"},
+		{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: at, Origin: "offline uid 0"},
 	} {
 		if err := before.PutRevocation(ctx, r); err != nil {
 			t.Fatal(err)
@@ -157,7 +157,7 @@ func TestARunnersPutBackOverALiveLiftIsSaidAsAPutBack(t *testing.T) {
 	region1, region3 := open(), open()
 	now := time.Now().UTC().Round(0)
 	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com",
-		At: now.Add(-20 * time.Second).Truncate(time.Second), Origin: "admin_socket uid 0"}
+		At: now.Add(-20 * time.Second).Truncate(time.Second), Origin: "offline uid 0"}
 	if err := region1.PutRevocation(ctx, alice); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestARunnersPutBackOverALiveLiftIsSaidAsAPutBack(t *testing.T) {
 	c := openMarksCopy(filepath.Join(safeStateDir(t), "marks.json"), &out)
 	c.Apply(store.MarkChange{Revocation: alice, Standing: true}) // region 3 saw the mark, never its lift
 	if err := region1.DeleteRevocation(ctx, alice.Kind, alice.Key, store.Lift{At: now,
-		Origin: "admin_socket uid 0"}); err != nil {
+		Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	// Broker 3's own path (task 2 re-review RR-I1): its marks feed, holding

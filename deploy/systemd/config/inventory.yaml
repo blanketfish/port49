@@ -1,0 +1,5 @@
+# Your devices, by the addresses port49d sees them connect from (design §13). These are
+# documentation addresses (RFC 5737): replace them.
+devices:
+  - {name: edge-sw1, platform: arista_eos, addresses: [192.0.2.10]}
+  - {name: edge-rtr1, platform: cisco_iosxe, addresses: [192.0.2.20]}

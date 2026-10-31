@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/edkey"
 )
 
 // maxVerifyKey bounds a verify key's read: a PEM ed25519 public key is 113
@@ -22,7 +22,7 @@ func ReadVerifyKeys(key string, files []string) ([]ed25519.PublicKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s[%d] %s: %w", key, i, f, err)
 		}
-		k, err := keyfile.ParseEd25519Public(raw, f)
+		k, err := edkey.ParseEd25519Public(raw, f)
 		if err != nil {
 			return nil, fmt.Errorf("%s[%d]: %w", key, i, err)
 		}

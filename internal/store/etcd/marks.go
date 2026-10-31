@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -52,6 +53,14 @@ func (s *Store) PutRevocation(ctx context.Context, r store.Revocation) error {
 	return unavailable(err)
 }
 
+// notSent is unavailable(err) for a failure before the lift's delete went out: it cannot land later.
+func notSent(err error) error {
+	if err = unavailable(err); errors.Is(err, store.ErrUnavailable) {
+		return fmt.Errorf("%w (%w)", err, store.ErrNotSent)
+	}
+	return err
+}
+
 func (s *Store) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
 	var r markRec
 	_, ok, err := getJSON(ctx, s.tok, s.k.mark(kind, key), &r)
@@ -87,7 +96,7 @@ func (s *Store) DeleteRevocation(ctx context.Context, kind, key string, by store
 	k, tomb := s.k.mark(kind, key), s.k.lift(kind, key)
 	resp, err := s.tok.Get(ctx, k)
 	if err != nil {
-		return unavailable(err)
+		return notSent(err)
 	}
 	if len(resp.Kvs) == 0 {
 		return nil
@@ -106,7 +115,7 @@ func (s *Store) DeleteRevocation(ctx context.Context, kind, key string, by store
 		// on a dark member's stalled connection fails one lift in three.
 		lease, err := s.tokLeases.For(idempotent(ctx), until)
 		if err != nil {
-			return unavailable(err)
+			return notSent(err)
 		}
 		tr, err := s.tok.Txn(idempotent(ctx)).
 			If(clientv3.Compare(clientv3.ModRevision(k), "=", resp.Kvs[0].ModRevision)).

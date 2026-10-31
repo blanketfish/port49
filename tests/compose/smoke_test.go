@@ -1,17 +1,20 @@
 //go:build compose
 
-// Package compose is the container shape's smoke test (plan 7f, Task 1):
-// deploy/compose brought up on a fresh PKI, a device login through it, the
-// stack recreated with its volumes kept, and then the same session's next
-// command answered, a token minted before redeemed, and the broker's
-// broker.state_dir accepted as it was left. `make compose-smoke` runs it;
+// Package compose is the container shape's smoke test (plan 7f, Task 1; plan
+// 12b, Task 6): deploy/compose brought up on a fresh PKI, a device login
+// through it, the stack recreated with its volumes kept, and then the same
+// session's next command answered, a token minted before redeemed, and the
+// broker's broker.state_dir accepted as it was left. Then a device key
+// version added with no restart, the admin cells (a revoke with no touch is
+// 401, and the break-glass revoke and lift round trip), and a check that no
+// secret is in any container's environment. `make compose-smoke` runs it;
 // `go test ./...` never builds it.
 package compose
 
 import (
-	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,15 +24,19 @@ import (
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/tests/shapes/shapetest"
 )
 
-const project = "port49smoke"
+const (
+	project  = "port49smoke"
+	rootsRef = "/etc/port49/broker/" + shapetest.RootsName
+)
 
 // stack runs docker compose on deploy/compose/compose.yaml as project,
-// with local as PORT49_COMPOSE_LOCAL.
+// with local as PORT49_COMPOSE_LOCAL and config as PORT49_COMPOSE_CONFIG.
 type stack struct {
-	t           *testing.T
-	file, local string
+	t                   *testing.T
+	file, local, config string
 }
 
 func (s stack) run(args ...string) string {
@@ -43,44 +50,63 @@ func (s stack) run(args ...string) string {
 
 func (s stack) try(args ...string) (string, error) {
 	cmd := exec.Command("docker", append([]string{"compose", "-p", project, "-f", s.file}, args...)...)
-	cmd.Env = append(os.Environ(), "PORT49_COMPOSE_LOCAL="+s.local)
+	cmd.Env = append(os.Environ(), "PORT49_COMPOSE_LOCAL="+s.local, "PORT49_COMPOSE_CONFIG="+s.config)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// ready waits up to 3 minutes for /readyz at addr to answer 200.
-func ready(t *testing.T, s stack, addr string) {
+// newStack writes the trial PKI and a copy of the shipped config, rendered
+// for the admin cells (AdminBroker, AdminPolicy), and returns the stack with
+// the cleanup that takes it down, volumes too, even on failure.
+func newStack(t *testing.T) stack {
 	t.Helper()
-	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(time.Second) {
-		resp, err := http.Get("http://" + addr + "/readyz")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s/readyz not 200 in 3m (%v)\n%s", addr, err, s.run("logs", "--no-color"))
-		}
-	}
-}
-
-// envValue is name's value in the env file at path.
-func envValue(t *testing.T, path, name string) string {
-	t.Helper()
-	f, err := os.Open(path)
+	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if v, ok := strings.CutPrefix(sc.Text(), name+"="); ok {
-			return v
+	local := t.TempDir()
+	if err := testpki.WriteCompose(local, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	_, subject := shapetest.AdminSetup(t, filepath.Join(local, "broker"))
+	shipped := filepath.Join(root, "deploy", "compose", "config")
+	cfg := t.TempDir()
+	entries, err := os.ReadDir(shipped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(shipped, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch e.Name() {
+		case "port49-broker.yaml":
+			b = []byte(shapetest.AdminBroker(t, string(b), rootsRef))
+		case "policy.yaml":
+			b = []byte(shapetest.AdminPolicy(t, string(b), subject))
+		}
+		if err := os.WriteFile(filepath.Join(cfg, e.Name()), b, 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	t.Fatalf("%s names no %s", path, name)
-	return ""
+	s := stack{t: t, file: filepath.Join(root, "deploy", "compose", "compose.yaml"), local: local, config: cfg}
+	// A run that was killed leaves its project, volumes included, behind: start from nothing.
+	s.try("down", "-v", "--remove-orphans")
+	t.Cleanup(func() {
+		if t.Failed() {
+			out, _ := s.try("logs", "--no-color")
+			t.Logf("docker compose logs:\n%s", shapetest.Filtered(root, out))
+		}
+		s.try("down", "-v", "--remove-orphans")
+	})
+	return s
+}
+
+// ready is shapetest.Ready (the cleanup prints the logs on a failure).
+func (s stack) ready(addr string) {
+	s.t.Helper()
+	shapetest.Ready(s.t, addr)
 }
 
 // waitMarks waits up to 30s for marks.json to exist and be non-empty in the
@@ -100,64 +126,136 @@ func waitMarks(t *testing.T) {
 	t.Fatalf("broker.state_dir/marks.json was not written in 30s after the revoke: %v\n%s", err, out)
 }
 
+// composeRotator writes through a throwaway container on the setup image,
+// which mounts the volumes the stack's processes read, as root (setup.sh's
+// own owner and modes).
+type composeRotator struct {
+	s      stack
+	policy []byte
+}
+
+func (c composeRotator) KeyDir() string     { return "/run/port49/keys" }
+func (c composeRotator) BasePolicy() []byte { return c.policy }
+
+func (c composeRotator) sh(stdin []byte, script string, args ...string) error {
+	cmd := exec.Command("docker", append([]string{"run", "--rm", "-i",
+		"-v", project + "_port49d-keys:/k", "-v", project + "_port49d-etc:/e", "-v", project + "_broker-etc:/b",
+		"--entrypoint", "sh", "port49-setup:dev", "-c", script, "sh"}, args...)...)
+	cmd.Stdin = strings.NewReader(string(stdin))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// The script's output is names and exit codes, never the bytes it was given.
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	return nil
+}
+
+// WritePolicy is the operator's way (README): write config/policy.yaml, then
+// `docker compose up -d`, whose setup copies it into both -etc volumes. port49d
+// reads it at policy.watch_interval, with no restart.
+func (c composeRotator) WritePolicy(policyYAML []byte) error {
+	if err := os.WriteFile(filepath.Join(c.s.config, "policy.yaml"), policyYAML, 0o644); err != nil {
+		return err
+	}
+	if out, err := c.s.try("up", "-d"); err != nil {
+		return fmt.Errorf("docker compose up -d: %v\n%s", err, out)
+	}
+	return nil
+}
+
+// WriteKey makes keys/<name> root:65532 0440 in port49d-keys, never replacing one.
+func (c composeRotator) WriteKey(name string, secret []byte) error {
+	return c.sh(secret, `set -eu; umask 077; cd /k
+{ [ ! -e "$1" ] && [ ! -L "$1" ]; } || exit 1
+t=$(mktemp ./.key.XXXXXX); trap 'rm -f "$t"' EXIT
+cat > "$t"; chown 0:65532 "$t"; chmod 0440 "$t"; ln "$t" "$1"`, name)
+}
+
+// volumeSHA256 is the sha256 of path in volume, hashed in a throwaway container
+// (hex only: the bytes never leave it).
+func volumeSHA256(t *testing.T, volume, path string) string {
+	t.Helper()
+	out, err := exec.Command("docker", "run", "--rm", "-v", project+"_"+volume+":/v:ro", "--entrypoint", "sha256sum",
+		"port49-setup:dev", "/v/"+path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("sha256sum %s in %s: %v", path, volume, err)
+	}
+	return strings.Fields(string(out))[0]
+}
+
+// volumeHolds reports whether file in volume contains text.
+func volumeHolds(t *testing.T, volume, file, text string) bool {
+	t.Helper()
+	err := exec.Command("docker", "run", "--rm", "-v", project+"_"+volume+":/v:ro", "--entrypoint", "grep",
+		"port49-setup:dev", "-q", text, "/v/"+file).Run()
+	return err == nil
+}
+
+func (c composeRotator) StartedAt() string {
+	c.s.t.Helper()
+	id := strings.TrimSpace(c.s.run("ps", "-q", "port49d"))
+	out, err := exec.Command("docker", "inspect", "-f", "{{.State.StartedAt}}", id).CombinedOutput()
+	if err != nil {
+		c.s.t.Fatalf("docker inspect port49d: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func TestComposeSmoke(t *testing.T) {
-	root, err := filepath.Abs("../..")
+	s := newStack(t)
+	brokerDir := filepath.Join(s.local, "broker")
+	s.run("up", "-d", "--build")
+	s.ready("127.0.0.1:9050")
+	s.ready("127.0.0.1:9049")
+
+	key, err := os.ReadFile(filepath.Join(s.local, "keys", "tacacs_v1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	local := t.TempDir()
-	if err := testpki.WriteCompose(local, "alice@example.com", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	s := stack{t: t, file: filepath.Join(root, "deploy", "compose", "compose.yaml"), local: local}
-	t.Cleanup(func() {
-		if t.Failed() {
-			out, _ := s.try("logs", "--no-color")
-			t.Logf("docker compose logs:\n%s", out)
-		}
-		s.try("down", "-v", "--remove-orphans")
-	})
-	s.run("up", "-d", "--build")
-	ready(t, s, "127.0.0.1:9050")
-	ready(t, s, "127.0.0.1:9049")
-
-	dev := device{t: t, addr: "127.0.0.1:49", key: []byte(envValue(t, filepath.Join(local, "port49d.env"), "PORT49_KEY_TACACS"))}
-	if st := dev.login("alice", mint(t, local, "127.0.0.1:8443", "smoke1")); st != wire.AuthenStatusPass {
+	dev := shapetest.Device{T: t, Addr: "127.0.0.1:49", Key: key}
+	mint := func() string { return shapetest.Mint(t, brokerDir, "127.0.0.1:8443", "smoke1") }
+	if st := dev.Login("alice", mint()); st != wire.AuthenStatusPass {
 		t.Fatalf("a device login through the stack: status %d", st)
 	}
-	if !dev.permits("alice") || !dev.permits("alice", "show", "version") {
+	if !dev.Permits("alice") || !dev.Permits("alice", "show", "version") {
 		t.Fatal("the session's authorization was refused")
 	}
-	later := mint(t, local, "127.0.0.1:8443", "smoke1") // redeemed after the recreate
+	// Decision 54 ruling 14: the etcd floor, naming every member, never a VIP.
+	shapetest.FloorLine(t, s.run("logs", "--no-color", "port49d"),
+		[]string{"https://etcd-1:2379", "https://etcd-2:2379", "https://etcd-3:2379"})
+	later := mint() // redeemed after the recreate
 
 	// A revocation writes the broker's copy of the marks into
 	// broker.state_dir (marks.json), which the recreate must keep.
-	s.run("exec", "-T", "port49-broker", "port49", "revoke", "--socket", "/run/port49/port49-broker.sock",
-		"--principal", "user:bob@example.com") // s.run fails the test on a non-zero exit
+	// The live form is the API with a security key press (spec §5.1.6), which a
+	// stack with no key cannot make: the break-glass form writes the same mark
+	// through etcd as the broker's own user. carol is not a principal the later
+	// cells use.
+	s.run("run", "--rm", "--no-deps", "port49-broker", "revoke", "--offline",
+		"--principal", "user:carol@example.com") // s.run fails the test on a non-zero exit
 	first := s.run("logs", "--no-color", "port49-broker")
 	if !strings.Contains(first, "broker.state_dir/marks.json is absent") {
 		t.Fatalf("a first start did not say its copy starts from the store:\n%s", first)
 	}
 
-	// The broker writes its copy from the store's watch, after `port49
-	// revoke` has returned (internal/port49d/markscopy.go:303-311): wait for
-	// marks.json before the recreate, or a fast `down` makes "is absent" flaky.
+	// The broker writes its copy from the store's watch, after the offline
+	// revoke has returned (internal/port49d/markscopy.go): wait for marks.json
+	// before the recreate, or a fast `down` makes "is absent" flaky.
 	waitMarks(t)
 
 	// Recreate every container; the named volumes stay.
 	s.run("down")
 	s.run("up", "-d")
-	ready(t, s, "127.0.0.1:9050")
-	ready(t, s, "127.0.0.1:9049")
+	s.ready("127.0.0.1:9050")
+	s.ready("127.0.0.1:9049")
 
 	second := s.run("logs", "--no-color", "port49-broker")
 	if strings.Contains(second, "is absent") || strings.Contains(second, "cannot tell whether the store was restored") {
 		t.Fatalf("the recreated broker did not find its broker.state_dir as it was left:\n%s", second)
 	}
-	if !dev.permits("alice", "show", "version") {
+	if !dev.Permits("alice", "show", "version") {
 		t.Fatal("the session's next command after the recreate was refused: its context did not survive in etcd")
 	}
-	if st := dev.login("alice", later); st != wire.AuthenStatusPass {
+	if st := dev.Login("alice", later); st != wire.AuthenStatusPass {
 		t.Fatalf("a token minted before the recreate: status %d", st)
 	}
 	// The volume as the image made it, and as the broker left it.
@@ -175,5 +273,186 @@ func TestComposeSmoke(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(sp)) != "65532 65532 700" {
 		t.Fatalf("port49d-spool: %q (%v), want 65532 65532 700", sp, err)
 	}
-	fmt.Fprintln(os.Stderr, "compose smoke: login, recreate, session kept, token redeemed, state_dir kept")
+
+	// A key version added with no restart (decision 54 ruling 2).
+	policy, err := os.ReadFile(filepath.Join(s.config, "policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapetest.RotateCell(t, dev, "alice", mint, "127.0.0.1:9049", 90*time.Second, composeRotator{s: s, policy: policy})
+
+	// The policy is config/'s, copied at every up: the version 2 line the
+	// rotation added through config/ is still in both volumes after another up.
+	s.run("up", "-d")
+	for _, v := range []string{"port49d-etc", "broker-etc"} {
+		if !volumeHolds(t, v, "policy.yaml", "tacacs_v2") {
+			t.Fatalf("a second `up -d` reverted the version 2 policy in %s", v)
+		}
+	}
+
+	// A key is placed once (setup.sh): a different local/keys/tacacs_v1 is
+	// refused with a line naming the file and the volume's bytes stay; a key
+	// removed from local/ stops nothing and is kept.
+	keyPath := filepath.Join(s.local, "keys", "tacacs_v1")
+	want := sha256.Sum256(key)
+	wantHex := hex.EncodeToString(want[:])
+	if err := os.WriteFile(keyPath, []byte("a-different-fake-key-value-0123456789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := s.try("up", "-d"); err == nil {
+		t.Fatalf("`up -d` with a changed local/keys/tacacs_v1 succeeded:\n%s", out)
+	}
+	if logs := s.run("logs", "--no-color", "setup"); !strings.Contains(logs, "tacacs_v1") ||
+		!strings.Contains(logs, "keys are never replaced in place") {
+		t.Fatalf("setup's refusal does not name the file and say keys are never replaced in place:\n%s", logs)
+	}
+	if got := volumeSHA256(t, "port49d-keys", "tacacs_v1"); got != wantHex {
+		t.Fatal("the key in the port49d-keys volume changed under a different local/keys/tacacs_v1")
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	s.run("up", "-d") // a key gone from local/ stops nothing
+	if logs := s.run("logs", "--no-color", "setup"); !strings.Contains(logs, "is gone; keeping the installed") {
+		t.Fatalf("setup did not say it kept the installed key:\n%s", logs)
+	}
+	if got := volumeSHA256(t, "port49d-keys", "tacacs_v1"); got != wantHex {
+		t.Fatal("the key in the port49d-keys volume changed when local/keys/tacacs_v1 was removed")
+	}
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.run("up", "-d")
+	s.ready("127.0.0.1:9049")
+
+	// The admin cells: a revoke with no touch is 401 and changes nothing, and
+	// the break-glass form (every broker stopped) revokes and lifts.
+	const bob = "user:bob@example.com"
+	shapetest.AdminNeedsTouch(t, brokerDir, "127.0.0.1:8443", bob)
+	for _, lift := range []bool{false, true} {
+		args := []string{"run", "--rm", "--no-deps", "port49-broker", "revoke", "--offline", "--principal", bob}
+		if lift {
+			args = append(args, "--lift")
+		}
+		s.run("stop", "port49-broker")
+		s.run(args...)
+		s.run("start", "port49-broker")
+		s.ready("127.0.0.1:9050")
+		if lift {
+			shapetest.OfflineLifted(t, brokerDir, "127.0.0.1:8443", bob)
+		} else {
+			shapetest.OfflineRevoked(t, brokerDir, "127.0.0.1:8443", bob)
+		}
+	}
+	rotateEncryptionKey(t, s, dev, mint)
+	fmt.Fprintln(os.Stderr, "compose smoke: login, floor line, recreate, session kept, token redeemed, state_dir kept, key version added, admin cells, encryption key rotated")
+}
+
+// volumeFileExists reports whether path is in volume (a throwaway container; the bytes never leave it).
+func volumeFileExists(t *testing.T, volume, path string) bool {
+	t.Helper()
+	return exec.Command("docker", "run", "--rm", "-v", project+"_"+volume+":/v:ro", "--entrypoint", "test",
+		"port49-setup:dev", "-e", "/v/"+path).Run() == nil
+}
+
+// rotateEncryptionKey is the README's rotation through its third step (Task 6 re-review, I-4): the
+// new sealing key placed beside the old, made current with the old as previous, then the old one
+// removed from local/ first and from the volumes, and every later `up` starts clean with the old
+// key still gone (setup skips a sealing key that is in neither place). The new key's bytes are an
+// obviously fake 32-byte value.
+func rotateEncryptionKey(t *testing.T, s stack, dev shapetest.Device, mint func() string) {
+	t.Helper()
+	const fake = "not-a-real-key-for-the-smoke-e2!"
+	if len(fake) != 32 {
+		t.Fatalf("the fake sealing key is %d bytes, want 32", len(fake))
+	}
+	c := composeRotator{s: s}
+	// stdin is read once: write the first copy, copy it to the second.
+	if err := c.sh([]byte(fake), `set -eu; umask 077
+cat > /e/secrets/encryption-e2.key; cp /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key
+chown 65532:65532 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key
+chmod 0400 /e/secrets/encryption-e2.key /b/secrets/encryption-e2.key`); err != nil {
+		t.Fatal(err)
+	}
+	const cur = "  current: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}\n"
+	edit := func(block string) {
+		t.Helper()
+		for _, f := range []string{"port49d.yaml", "port49-broker.yaml"} {
+			p := filepath.Join(s.config, f)
+			b, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Always from the shipped text, so step 3 does not depend on step 2's edit.
+			if !strings.Contains(string(b), cur) && !strings.Contains(string(b), "id: c2") {
+				t.Fatalf("%s has no encryption block the smoke recognises", f)
+			}
+			out := string(b)
+			if i := strings.Index(out, "encryption:\n"); i >= 0 {
+				j := i + len("encryption:\n")
+				for strings.HasPrefix(out[j:], "  ") {
+					j += strings.Index(out[j:], "\n") + 1
+				}
+				out = out[:i] + block + out[j:]
+			}
+			if err := os.WriteFile(p, []byte(out), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	restart := func() {
+		t.Helper()
+		s.run("up", "-d")
+		s.run("restart", "port49d", "port49-broker")
+		s.ready("127.0.0.1:9050")
+		s.ready("127.0.0.1:9049")
+		if st := dev.Login("alice", mint()); st != wire.AuthenStatusPass {
+			t.Fatalf("a login after the encryption key change: status %d", st)
+		}
+	}
+	// Step 2: c2 current, c1 previous.
+	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}\n" +
+		"  previous: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}\n")
+	restart()
+	// Step 3: previous removed; local/ first, then the volumes.
+	edit("encryption:\n  current: {id: c2, secret_ref: file:/etc/port49/secrets/encryption-e2.key}\n")
+	for _, f := range []string{"port49d-encryption.key", "broker-encryption.key"} {
+		if err := os.Remove(filepath.Join(s.local, "secrets", f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command("docker", "run", "--rm", "-v", project+"_port49d-etc:/e", "-v", project+"_broker-etc:/b",
+		"--entrypoint", "rm", "port49-setup:dev", "/e/secrets/encryption.key", "/b/secrets/encryption.key").CombinedOutput(); err != nil {
+		t.Fatalf("removing the old key from the volumes: %v\n%s", err, out)
+	}
+	restart()
+	// Another up: setup starts clean and the old key stays gone.
+	s.run("up", "-d")
+	for _, v := range []string{"port49d-etc", "broker-etc"} {
+		if volumeFileExists(t, v, "secrets/encryption.key") {
+			t.Fatalf("the old encryption key is back in %s after another up", v)
+		}
+		if !volumeFileExists(t, v, "secrets/encryption-e2.key") {
+			t.Fatalf("the new encryption key is missing from %s", v)
+		}
+	}
+}
+
+// TestTheStackHasNoEnvSecret: no running container's environment holds a
+// device key or a sealing key. Failures name the variable, never its value.
+func TestTheStackHasNoEnvSecret(t *testing.T) {
+	s := newStack(t)
+	s.run("up", "-d", "--build")
+	for _, id := range strings.Fields(s.run("ps", "-q")) {
+		out, err := exec.Command("docker", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", id).Output()
+		if err != nil {
+			t.Fatalf("docker inspect %s: %v", id, err)
+		}
+		for _, kv := range strings.Split(string(out), "\n") {
+			name, _, _ := strings.Cut(kv, "=")
+			if strings.HasPrefix(name, "PORT49_KEY_") || strings.HasPrefix(name, "PORT49_ENC") {
+				t.Errorf("container %.12s has %s in its environment", id, name)
+			}
+		}
+	}
 }

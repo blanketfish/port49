@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -19,58 +21,117 @@ import (
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
+	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/guard"
 	"github.com/rhwendt/port49/internal/store/placement"
+
+	"gopkg.in/yaml.v3"
 )
 
 // offlineSay begins each line of port49-broker revoke --offline.
 const offlineSay = "port49-broker: revoke (offline, no API): "
 
+// offlineFlags is what `revoke --offline` reads, on port49-broker and on port49d.
+type offlineFlags struct {
+	cfgPath, principal, issuer, serial string
+	lift, list                         bool
+}
+
+// parseOffline reads the flags of `<proc> revoke`, and answers the exit code
+// when the command is not to run: 2 for a usage error (said to out). proc is
+// "port49-broker" or "port49d".
+func parseOffline(proc, defCfg string, args []string, out io.Writer) (f offlineFlags, code int, stop bool) {
+	fs := flag.NewFlagSet(proc+" revoke", flag.ContinueOnError)
+	fs.SetOutput(out)
+	offline := fs.Bool("offline", false, "revoke through the store with every "+proc+" down")
+	fs.StringVar(&f.cfgPath, "config", defCfg, "path to "+proc+"'s yaml")
+	fs.StringVar(&f.principal, "principal", "", "the principal, as the log names it: user:alice@example.com")
+	fs.StringVar(&f.issuer, "cert-issuer", "", "the certificate's issuer, as the broker spells it (RFC 2253: CN=…,O=…)")
+	fs.StringVar(&f.serial, "cert-serial", "", "the certificate's serial, in hex")
+	fs.BoolVar(&f.lift, "lift", false, "lift the revocation instead")
+	fs.BoolVar(&f.list, "list", false, "list the revocations in force, each with its origin")
+	if err := fs.Parse(args); err != nil {
+		return f, 2, true
+	}
+	byCert := f.issuer != "" || f.serial != ""
+	named := f.principal != "" || byCert
+	switch {
+	case fs.NArg() != 0:
+		fmt.Fprintln(out, "usage: "+proc+" revoke --offline [--config FILE] (--principal P | --cert-issuer I "+
+			"--cert-serial S) [--lift] | --list")
+		return f, 2, true
+	case !*offline:
+		fmt.Fprintln(out, proc+" revoke: this is the break-glass form for when every "+proc+" is down: add --offline. "+
+			"With one running, use port49 revoke, which asks the broker API with a security key press")
+		return f, 2, true
+	case f.list && (named || f.lift):
+		fmt.Fprintln(out, proc+" revoke: --list takes no principal, certificate or --lift")
+		return f, 2, true
+	case f.list:
+		return f, 0, false
+	case (f.principal != "") == byCert, byCert && (f.issuer == "" || f.serial == ""):
+		fmt.Fprintln(out, proc+" revoke: name --principal, or --cert-issuer and --cert-serial; one of the two")
+		return f, 2, true
+	}
+	return f, 0, false
+}
+
 // offlineRevoke is `port49-broker revoke --offline` (plan 7e, Ruling 13;
 // pre-flight I4): the break-glass revocation with every port49-broker
-// down, when port49 revoke has no admin socket to ask. It runs the whole
+// down, when the API has no broker to ask. It runs the whole
 // revocation, or a lift, through the store on the broker's identity, as
-// the admin socket's would: the mark, the unspent tokens deleted, the live
+// the API's would: the mark, the unspent tokens deleted, the live
 // contexts marked revoked. port49d's marks feed brings the mark to every
 // session, and the next port49-broker start loads it before it serves, so
 // nothing mints for the principal after. It takes no hold, binds nothing
 // and keeps no copy; the report goes to out as port49 revoke prints it,
-// and the revoke record to log, port49-broker's decision log. Exit 0 on a
-// whole report, 1 on an error or a partial one, 2 on a usage error.
+// and the revoke record to log, port49-broker's decision log. With --list
+// it prints the marks in force, each with its origin. A user who does not own
+// broker.state_dir is refused before anything is written. Exit 0 on a
+// whole report, 1 on an error, a refusal or a partial one, 2 on a usage error.
 func offlineRevoke(args []string, log, out io.Writer) int {
-	fs := flag.NewFlagSet("port49-broker revoke", flag.ContinueOnError)
-	fs.SetOutput(out)
-	offline := fs.Bool("offline", false, "revoke through the store with every port49-broker down")
-	cfgPath := fs.String("config", "/etc/port49/port49-broker.yaml", "path to port49-broker.yaml")
-	principal := fs.String("principal", "", "the principal, as the log names it: user:alice@example.com")
-	issuer := fs.String("cert-issuer", "", "the certificate's issuer, as the broker spells it (RFC 2253: CN=…,O=…)")
-	serial := fs.String("cert-serial", "", "the certificate's serial, in hex")
-	lift := fs.Bool("lift", false, "lift the revocation instead")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	f, code, done := parseOffline("port49-broker", "/etc/port49/port49-broker.yaml", args, out)
+	if done {
+		return code
 	}
-	switch byCert := *issuer != "" || *serial != ""; {
-	case fs.NArg() != 0:
-		fmt.Fprintln(out, "usage: port49-broker revoke --offline [--config FILE] (--principal P | --cert-issuer I "+
-			"--cert-serial S) [--lift]")
-		return 2
-	case !*offline:
-		fmt.Fprintln(out, "port49-broker revoke: without --offline, revoke on the running broker's admin socket: "+
-			"port49 revoke --socket <its admin_socket>")
-		return 2
-	case (*principal != "") == byCert, byCert && (*issuer == "" || *serial == ""):
-		fmt.Fprintln(out, "port49-broker revoke: name --principal, or --cert-issuer and --cert-serial; one of the two")
-		return 2
-	}
+	cfgPath, principal, issuer, serial, lift := &f.cfgPath, &f.principal, &f.issuer, &f.serial, &f.lift
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// A user who does not own broker.state_dir is refused before anything is opened or written: the
+	// etcd client key is the owner's too, so opening it first would tell root to chown a key, the
+	// opposite of the hint; and the copy this ends by writing is refused anyway, so a revoke that stands
+	// in the store while the command says it could not finish is half a revoke at 3am. Only the owner is
+	// knowable here; an I/O failure of the copy is not, and keeps its write-anyway rule (final review
+	// 7e-2 I-2). --list writes nothing, so any user may run it and it keeps to the store alone.
+	if !f.list {
+		// A running broker owns its marks and its replica's state: with one up the revocation goes through
+		// its API (the same refusal port49d's form makes). The listener is read from the file alone, so a
+		// config that fails to load for another reason does not hide this line.
+		if err := answeringOn(ctx, offlineMetricsListenOf(*cfgPath), "port49-broker", "broker.state_dir"); err != nil {
+			fmt.Fprintf(out, "%s%v\n", offlineSay, err)
+			return 1
+		}
+		if dir, ok := offlineStateDirOf(*cfgPath); ok {
+			if err := ownStateDir(dir); err != nil {
+				var wo *wrongOwnerError
+				if errors.As(err, &wo) {
+					what := "revoked"
+					if *lift {
+						what = "lifted"
+					}
+					fmt.Fprintf(out, "%snothing was %s: %v\n", offlineSay, what, offlineOwnerHint(wo))
+					return 1
+				}
+			}
+		}
+	}
 	run, err := offlineBroker(ctx, *cfgPath, log, out)
 	if err != nil {
 		fmt.Fprintf(out, "%s%v; nothing was revoked; with no broker host, write the mark as etcd's root under rv/, "+
@@ -79,7 +140,10 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	}
 	defer run.close()
 	brk := run.brk
-	// Who ran it, as the admin socket's origin names its caller (spec §5.7).
+	if f.list {
+		return offlineList(ctx, brk.Store, offlineSay, out)
+	}
+	// Who ran it, as the API's origin names its caller (spec §5.7).
 	req := broker.RevokeRequest{Principal: *principal, Issuer: *issuer, Serial: *serial,
 		Origin: fmt.Sprintf("offline uid %d", os.Getuid())}
 	if *lift {
@@ -131,6 +195,21 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	return 0
 }
 
+// offlineList prints the marks st holds, each with its origin and the lift
+// that a landed-after-lift mark followed, as port49 revoke --list does. Exit
+// 0, or 1 when the store did not answer.
+func offlineList(ctx context.Context, st store.Store, say string, out io.Writer) int {
+	rs, err := st.ListRevocations(ctx)
+	if err != nil {
+		fmt.Fprintf(out, "%sthe revocations in force could not be read (%v)\n", say, printsafe.Line(err.Error(), 300))
+		return 1
+	}
+	fmt.Fprintln(out, broker.RevocationsText(rs, func(kind, key string) (store.Lift, error) {
+		return st.GetLift(ctx, kind, key)
+	}))
+	return 0
+}
+
 // offlineCopy stands mark in this host's broker.state_dir/marks.json, or
 // drops it when lifted, through the copy port49-broker keeps (openMarksCopy),
 // after the same owner checks a start makes (ownStateDir): the copy is what a
@@ -166,11 +245,65 @@ func offlineCopy(stateDir string, mark store.Revocation, lifted bool, out io.Wri
 	return c.writeErr()
 }
 
+// offlineOwnerName is the name of the user with uid on this host, or "" when it has none.
+// A variable so a test can say.
+var offlineOwnerName = func(uid uint32) string {
+	if u, err := user.LookupId(strconv.FormatUint(uint64(uid), 10)); err == nil {
+		return u.Username
+	}
+	return ""
+}
+
+// offlineStateDirOf is broker.state_dir as the config file names it, read without the checks
+// config.LoadBroker makes: the owner check must not wait for a whole config to load, since a config
+// that fails for another reason (a file or a key the owner holds, as root cannot read it) would
+// otherwise hide the one line that tells root to run the command as the owner. ok is false when the
+// file does not read or names no directory; the load then says what is wrong.
+func offlineStateDirOf(cfgPath string) (string, bool) {
+	raw, err := config.ReadRegular(cfgPath, config.MaxConfigSize)
+	if err != nil {
+		return "", false
+	}
+	var c struct {
+		Broker struct {
+			StateDir string `yaml:"state_dir"`
+		} `yaml:"broker"`
+	}
+	if yaml.Unmarshal(raw, &c) != nil || !filepath.IsAbs(c.Broker.StateDir) {
+		return "", false
+	}
+	return c.Broker.StateDir, true
+}
+
+// offlineMetricsListenOf is metrics_listen as the config file names it, port49-broker's default when it
+// names none or the file does not read (the load then says what is wrong).
+func offlineMetricsListenOf(cfgPath string) string {
+	const def = ":9050"
+	raw, err := config.ReadRegular(cfgPath, config.MaxConfigSize)
+	if err != nil {
+		return def
+	}
+	var c struct {
+		MetricsListen string `yaml:"metrics_listen"`
+	}
+	if yaml.Unmarshal(raw, &c) != nil || c.MetricsListen == "" {
+		return def
+	}
+	return c.MetricsListen
+}
+
 // offlineOwnerHint is the refusal of a state path another user owns, in the
-// tool's words: run it as the owner, never chown the directory.
+// tool's words: run it as the owner, never chown the directory. An owner with a
+// name gets the sudo -u line, as port49d's own refusal gives one; one with none
+// gets its number, since sudo refuses a #uid without runas_allow_unknown_id.
 func offlineOwnerHint(wo *wrongOwnerError) error {
+	how := fmt.Sprintf("run it as uid %d, the owner of broker.state_dir", wo.uid)
+	if who := offlineOwnerName(wo.uid); who != "" {
+		how = fmt.Sprintf("e.g. sudo -u %s port49-broker revoke --offline ...", who)
+	}
 	return fmt.Errorf("%s is owned by uid %d and this runs as uid %d: run it as the user that owns "+
-		"broker.state_dir (uid %d), and do not chown the directory", wo.what, wo.uid, wo.euid, wo.uid)
+		"broker.state_dir (uid %d), %s, and do not chown the directory",
+		wo.what, wo.uid, wo.euid, wo.uid, how)
 }
 
 // offlineFailed is the line for a revocation (or a lift) that did not
@@ -205,6 +338,12 @@ type offlineRun struct {
 	noPolicy bool
 	stateDir string
 	close    func()
+	// cfg, keys and dir are what the enrollment commands add: the config the
+	// run loaded, its sealing keys, and the directory store's raw handle (the
+	// session store's own in a shared store).
+	cfg  config.Config
+	keys crypt.Keys
+	dir  *etcdstore.Store
 }
 
 // offlineBroker is the broker offlineRevoke runs on: port49-broker.yaml
@@ -263,6 +402,7 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 	st := crypt.Wrap(guard.WrapRev(b, gc), keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()),
 		crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now)))
 	closeAll := func() { b.Close() }
+	run.cfg, run.keys, run.dir = cfg, keys, b
 	if !cfg.Stores.Shared {
 		d, err := attempt(ctx, cfg, directoryRef(cfg), m, out, false)
 		if err != nil {
@@ -278,10 +418,11 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 		st = placement.Wrap(placement.Config{Session: st, Directory: d, CallTimeout: de.CallTimeout,
 			BulkTimeout: de.BulkTimeout})
 		closeAll = func() { b.Close(); d.Close() }
+		run.dir = d
 	}
 	brk := &broker.Broker{Policy: policy.NewLive(pol), Store: st, Now: time.Now, Metrics: m,
 		Log:            decision.NewJSONLinesWithFailureHook(log, m.DecisionLogWriteFailures.Inc),
-		ContextIdleTTL: cfg.ContextIdleTTL, GraceWindow: cfg.Session.GraceWindow, RevokeTimeout: admin.OpTimeout,
+		ContextIdleTTL: cfg.ContextIdleTTL, GraceWindow: cfg.Session.GraceWindow, RevokeTimeout: revokeRunTimeout,
 		Proc: "port49-broker"}
 	brk.Redact = redactorFor(brk.Policy)
 	brk.Sessions = session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
@@ -295,9 +436,17 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run
 // device, said once, with the cause. The report then lists every live context
 // as one to close on the device.
 func offlineNoPolicy(out io.Writer, cause error) *policy.Policy {
+	if cause == nil {
+		return emptyOfflinePolicy()
+	}
 	fmt.Fprintf(out, "%sthe policy does not load (%v): the report names every live context as one to close on the "+
 		"device, and cannot say whether the policy names the principal; the revocation does not depend on it\n",
 		offlineSay, cause)
+	return emptyOfflinePolicy()
+}
+
+// emptyOfflinePolicy is the policy that names no subject and no device.
+func emptyOfflinePolicy() *policy.Policy {
 	pol, err := bundle.Parse([]byte(noPolicyBody), admission.Inventory{}, policy.Env{})
 	if err != nil {
 		panic("port49d: the offline revocation's empty policy does not compile: " + err.Error())

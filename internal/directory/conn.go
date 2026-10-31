@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/types"
 
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
@@ -42,8 +42,10 @@ func (c *Credentials) Format(f fmt.State, _ rune) { fmt.Fprint(f, c.String()) }
 func (c *Credentials) Who() string                { return c.who }
 
 // LoadCredentials reads the bind's secret once, at start. A keytab is read
-// through keyfile.ReadSecret: owned by port49's user or root, no group or
-// other bit, no link.
+// through keyfile.ReadSecret (spec §13 decision 54 ruling 16): owned by
+// port49's user or root, writable by its owner alone, no world bit, group-read
+// only for a group the process is in; a link is followed only inside the
+// file's own directory.
 func LoadCredentials(b Bind, resolve func(ref string) ([]byte, error)) (*Credentials, error) {
 	c := &Credentials{mech: b.Mechanism}
 	switch b.Mechanism {
@@ -66,9 +68,9 @@ func LoadCredentials(b Bind, resolve func(ref string) ([]byte, error)) (*Credent
 		if err := kt.Unmarshal(raw); err != nil {
 			return nil, fmt.Errorf("broker.directory.bind.keytab_file %s: not a keytab", b.KeytabFile)
 		}
-		conf, err := os.ReadFile(b.KRB5Conf)
+		conf, err := readKRB5Conf(b.KRB5Conf)
 		if err != nil {
-			return nil, fmt.Errorf("broker.directory.bind.krb5_conf: %w", err)
+			return nil, err
 		}
 		kc, err := krbconfig.NewFromString(string(conf))
 		if err != nil {
@@ -125,7 +127,7 @@ func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	pem, err := os.ReadFile(cfg.CAFile)
+	pem, err := fence.Read(cfg.CAFile, fence.TrustFileMax, "directory ca_file")
 	if err != nil {
 		return nil, fmt.Errorf("broker.directory.ca_file: %w", err)
 	}
@@ -378,4 +380,15 @@ func timeLeft(ctx context.Context) time.Duration {
 		return time.Until(dl)
 	}
 	return 0
+}
+
+// readKRB5Conf reads krb5_conf, which names the KDCs the broker trusts, through the policy-file fence
+// (decision 54 ruling 16): a directory others can write, a link out of its directory and a named pipe
+// are refused, and the error names the field.
+func readKRB5Conf(path string) ([]byte, error) {
+	b, err := fence.Read(path, fence.TrustFileMax, "broker.directory.bind.krb5_conf")
+	if err != nil {
+		return nil, fmt.Errorf("broker.directory.bind.krb5_conf %s: %w", path, err)
+	}
+	return b, nil
 }

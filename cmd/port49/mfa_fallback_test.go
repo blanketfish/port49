@@ -67,7 +67,7 @@ func TestTheSignInsProofGoesToTheAgentsBrokerNotTheConfigs(t *testing.T) {
 	}
 	as := signInFixture(t, m, iss, "broker: "+otherSrv.URL+"\nbroker_ca: "+otherCA+"\n")
 
-	code, out, errb := m.token("leaf1")
+	code, out, errb := m.token(t, "leaf1")
 	if code != 0 || strings.Count(out, "\n") != 1 {
 		t.Fatalf("exit %d stdout %s stderr %q", code, tokenOut(out), errb)
 	}
@@ -85,7 +85,7 @@ func TestTheSignInTakesTheBrokerCAFromTheAgentsSession(t *testing.T) {
 	iss := oidctest.NewIssuer(t)
 	m := newMFALab(t, false, iss, "")
 	as := signInFixture(t, m, iss, "") // a config with no broker and no broker_ca
-	code, out, errb := m.token("leaf1")
+	code, out, errb := m.token(t, "leaf1")
 	if code != 0 || strings.Count(out, "\n") != 1 || m.bearers.Load() != 1 || len(as.Authorizations()) != 1 {
 		t.Fatalf("exit %d stdout %s stderr %q (%d bearers)", code, tokenOut(out), errb, m.bearers.Load())
 	}
@@ -110,7 +110,7 @@ func TestTokenFallsBackToTheSignInWhenTheTouchCannotBeMade(t *testing.T) {
 			m := newMFALab(t, true, iss, "")
 			as := signInFixture(t, m, iss, "broker: "+m.url+"\nbroker_ca: "+filepath.Join(m.dir, testpki.LabCA)+"\n")
 			tc.prep(m)
-			code, out, errb := m.token("leaf1")
+			code, out, errb := m.token(t, "leaf1")
 			if code != 0 || strings.Count(out, "\n") != 1 {
 				t.Fatalf("exit %d stdout %s stderr %q", code, tokenOut(out), errb)
 			}
@@ -159,7 +159,8 @@ func TestAKeyThatIsOutWithNoFallbackIsInsertYourKey(t *testing.T) {
 			}))
 			withTerminal(t, tc.term)
 			var out, errb bytes.Buffer
-			code := run([]string{"token", "--socket", sock, "core-sw01"}, &out, &errb)
+			t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+			code := run([]string{"token", "core-sw01"}, &out, &errb)
 			if code != 1 || out.Len() != 0 || strings.Contains(errb.String(), "touch your key now") ||
 				!strings.Contains(errb.String(), "insert your key") {
 				t.Fatalf("exit %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())

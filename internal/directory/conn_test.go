@@ -54,10 +54,10 @@ func TestCredentialsWithholdTheirSecrets(t *testing.T) {
 
 // A keytab another user could read is refused, before gokrb5 sees it: the
 // keytab here is valid, so only the permission check can say no.
-func TestAGroupReadableKeytabIsRefused(t *testing.T) {
+func TestAWorldReadableKeytabIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	kt := writeKeytab(t, dir)
-	if err := os.Chmod(kt, 0o640); err != nil {
+	if err := os.Chmod(kt, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	krb := filepath.Join(dir, "krb5.conf")
@@ -304,6 +304,9 @@ func writeKeytab(t *testing.T, dir string) string {
 	}
 	raw, err := kt.Marshal()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil { // the secret-file rule refuses a group-writable directory
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "port49.keytab")

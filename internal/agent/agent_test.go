@@ -31,7 +31,6 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -858,8 +857,9 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	if err := os.Chmod(wide, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Listen(filepath.Join(wide, "agent.sock")); err == nil || !strings.Contains(err.Error(), "0700") {
-		t.Fatalf("a directory others can enter: %v", err)
+	if _, err := Listen(filepath.Join(wide, "agent.sock")); err == nil || !strings.Contains(err.Error(), "0700") ||
+		!strings.Contains(err.Error(), "chmod 700 "+wide) || !strings.Contains(err.Error(), "XDG_RUNTIME_DIR") {
+		t.Fatalf("a directory others can enter, with its remedy: %v", err)
 	}
 	// A symlink is refused even to a private directory: on the /tmp fallback,
 	// whoever planted it owns where the socket lands (pre-flight F4). The
@@ -872,14 +872,15 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("a symlinked directory: %v", err)
+	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") ||
+		!strings.Contains(err.Error(), "XDG_RUNTIME_DIR") {
+		t.Fatalf("a symlinked directory, with its remedy: %v", err)
 	}
 }
 
 // A socket path longer than a Unix socket address holds is refused by name,
 // with what to do about it, not as a bare "bind: invalid argument". A long
-// $XDG_RUNTIME_DIR or --socket is how an operator gets there (T14 review).
+// $XDG_RUNTIME_DIR is how an operator gets there (T14 review).
 func TestASocketPathTooLongIsRefusedByName(t *testing.T) {
 	base := shortDir(t)
 	fits := filepath.Join(base, strings.Repeat("d", maxSocketPath-len(base)-len("/agent.sock")-1), "agent.sock")
@@ -893,7 +894,7 @@ func TestASocketPathTooLongIsRefusedByName(t *testing.T) {
 	ln.Close()
 	long := filepath.Join(base, strings.Repeat("d", maxSocketPath-len(base)-len("/agent.sock")), "agent.sock")
 	_, err = Listen(long)
-	if err == nil || !strings.Contains(err.Error(), "too long") || !strings.Contains(err.Error(), "--socket") {
+	if err == nil || !strings.Contains(err.Error(), "too long") || !strings.Contains(err.Error(), "XDG_RUNTIME_DIR") {
 		t.Fatalf("a %d-byte socket path: %v", len(long), err)
 	}
 	if _, err := os.Stat(filepath.Dir(long)); !os.IsNotExist(err) {
@@ -1462,6 +1463,11 @@ type realOpts struct {
 	// follows for a POST whose body it cannot replay, as a GET with the
 	// request's custom headers (the agent session among them).
 	redirectMFA string
+	// admin gives alice's subject api: revoke_others and lift_revocations, so
+	// the admin calls of spec §5.1.6 are hers (admin_test.go).
+	admin bool
+	// front, when set, wraps the broker's handler.
+	front func(http.Handler) http.Handler
 }
 
 // realMFAPolicy asks for a second factor at each login, on every device.
@@ -1496,6 +1502,9 @@ func newRealRigWith(t *testing.T, o realOpts) *realRig {
 	polText := realPolicy
 	if o.mfa {
 		polText = realMFAPolicy
+	}
+	if o.admin {
+		polText = strings.Replace(polText, "token_ttl: 60s}", "token_ttl: 60s, api: [revoke_others, lift_revocations]}", 1)
 	}
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(path, []byte(polText), 0o600); err != nil {
@@ -1586,6 +1595,9 @@ func newRealRigWith(t *testing.T, o realOpts) *realRig {
 	srv, err := r.b.Server("127.0.0.1:0", srvCert, ca.Pool())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if o.front != nil {
+		srv.Handler = o.front(srv.Handler)
 	}
 	if o.redirectMFA != "" {
 		inner := srv.Handler
@@ -2344,15 +2356,15 @@ func TestARevocationsEmptyAnswerMayBeInForce(t *testing.T) {
 }
 
 // The agent's wait on a revocation outlasts the broker's worst case: the
-// wait for the slot, the run port49d bounds at admin.OpTimeout, the
+// wait for the slot, the run port49d bounds at api.OpTimeout, the
 // revocations_file save. The socket client outlasts the agent, so the agent
 // is always the side that gives up and says so (final review I1).
 func TestTheRevocationWaitsOutlastTheBroker(t *testing.T) {
-	if broker.DefaultRevokeTimeout > admin.OpTimeout {
-		t.Fatalf("the broker's default run bound %v is past the admin.OpTimeout %v the agent waits on",
-			broker.DefaultRevokeTimeout, admin.OpTimeout)
+	if broker.DefaultRevokeTimeout > api.OpTimeout {
+		t.Fatalf("the broker's default run bound %v is past the api.OpTimeout %v the agent waits on",
+			broker.DefaultRevokeTimeout, api.OpTimeout)
 	}
-	worst := api.RevokeSlotWait + admin.OpTimeout + admin.PersistTimeout
+	worst := api.RevokeSlotWait + api.OpTimeout + api.PersistTimeout
 	if revokeWait <= worst || socketTimeout <= revokeWait {
 		t.Fatalf("broker %v, agent %v, socket %v", worst, revokeWait, socketTimeout)
 	}

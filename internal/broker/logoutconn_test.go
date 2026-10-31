@@ -158,7 +158,6 @@ func TestALogoutWhosePutOnceFailedSaysSo(t *testing.T) {
 	f, iss, _ := oidcLoggedIn(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutOnce": func() error { return store.ErrUnavailable }}}
 	raw := logoutFor(t, f, iss, "s-sub-alice", "j-secret-jti")
@@ -168,8 +167,8 @@ func TestALogoutWhosePutOnceFailedSaysSo(t *testing.T) {
 	out := said.String()
 	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
 	if !strings.Contains(out, "the store did not answer") || !strings.Contains(out, "port49 revoke --principal") ||
-		!strings.Contains(out, "--lift` there only after "+lift) ||
-		!strings.Contains(out, `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) {
+		!strings.Contains(out, "--lift --principal ") || !strings.Contains(out, ") only after "+lift) ||
+		!strings.Contains(out, `port49 revoke --sid 's-sub-alice' --sid-issuer `) {
 		t.Fatalf("the PutOnce failure said:\n%s", out)
 	}
 	if strings.Contains(out, raw) || strings.Contains(out, "j-secret-jti") {
@@ -201,19 +200,18 @@ func TestALogoutRefusedForUnavailableKeysSaysSo(t *testing.T) {
 	}
 }
 
-// The no-principal sub-logout line gives the runnable command, on the
-// process's admin socket (final review F5).
+// The no-principal sub-logout line gives the runnable command, through the
+// operator's agent (final review F5).
 func TestASubLogoutWithNoPrincipalNamesTheRunnableRevoke(t *testing.T) {
 	f := newFixture(t, 8)
 	iss := f.withOIDC(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
-	f.b.AdminSocket = "/run/port49/admin.sock"
 	if w := f.postLogout(logoutFor(t, f, iss, "", "j-nobody")); w.Code != 200 {
 		t.Fatalf("%s", lshown(w))
 	}
 	if out := said.String(); !strings.Contains(out, "no principal is on record") ||
-		!strings.Contains(out, "`port49 revoke --principal <principal>` on port49d's admin socket (/run/port49/admin.sock)") {
+		!strings.Contains(out, "`port49 revoke --principal <principal>` (api: revoke_others") {
 		t.Fatalf("the line said:\n%s", out)
 	}
 }

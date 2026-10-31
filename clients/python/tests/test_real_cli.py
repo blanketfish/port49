@@ -98,13 +98,20 @@ class RealCLI(unittest.TestCase):
         cls.stub.server_close()
         shutil.rmtree(cls.dir, ignore_errors=True)
 
+    def at(self, sock):
+        """Point the CLI at the agent on sock, the way the tests do (no flag names it)."""
+        os.environ["PORT49_TEST_AGENT_SOCKET"] = sock
+        self.addCleanup(os.environ.pop, "PORT49_TEST_AGENT_SOCKET", None)
+
     def agent(self):
-        return Agent(port49=self.binary, socket=self.socket, stderr=io.StringIO())
+        self.at(self.socket)
+        return Agent(port49=self.binary, stderr=io.StringIO())
 
     def stubbed(self, name, attempts=1):
         self.stub.answer = ANSWERS[name]
         self.stub.status = STATUS.get(name, (404, {"error": "not_found"}))
-        return Agent(port49=self.binary, socket=self.stub_socket, stderr=io.StringIO(), attempts=attempts)
+        self.at(self.stub_socket)
+        return Agent(port49=self.binary, stderr=io.StringIO(), attempts=attempts)
 
     def test_no_agent_is_no_agent(self):
         with self.assertRaises(NoAgent) as cm:

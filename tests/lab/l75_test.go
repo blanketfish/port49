@@ -91,42 +91,58 @@ func l75BrokerYAML(o l75Opts) string {
 inventory_file: %[1]s/l75-inventory.yaml
 encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
-admin_socket: %[1]s/b%[2]d.sock
 broker:
   listen: "127.0.0.1:0"
-  tls_cert_file: %[3]s
-  tls_key_file: %[4]s
+  tls_cert_file: %[2]s
+  tls_key_file: %[3]s
   policy_file: %[1]s/l75-policy.yaml
-  state_dir: %[5]s
+  state_dir: %[4]s
   policy_watch_interval: 5s
   certificate_status: {disabled: true}
   identity:
     humans:
-      - {type: x509, trust_anchor_file: %[6]s}
-%[7]s%[16]s  directory:
+      - {type: x509, trust_anchor_file: %[5]s}
+%[6]s    per_login_mfa:
+      hardware_key_touch: {attestation_roots_file: %[16]s}
+%[15]s  directory:
     servers:
-      - {uri: "ldaps://%[8]s", priority: 100, site: lab}
+      - {uri: "ldaps://%[7]s", priority: 100, site: lab}
     site: lab
-    ca_file: %[9]s
+    ca_file: %[8]s
     bind:
       mechanism: simple
-      bind_dn: "%[10]s"
+      bind_dn: "%[9]s"
       password_secret_ref: env:LAB_DIRECTORY_BIND_PASSWORD
-    base_dn: "%[11]s"
-    groups_base_dn: "%[12]s"
-    user_filter: "%[13]s"
-    group_filter: "%[14]s"
+    base_dn: "%[10]s"
+    groups_base_dn: "%[11]s"
+    user_filter: "%[12]s"
+    group_filter: "%[13]s"
     principal_attribute: mail
-    username_attribute: %[15]s
+    username_attribute: %[14]s
     certificate_mapping:
       kind: san_email
       allow_weak: true
       issuers: ["CN=L75 users CA"]
     nested_groups: direct
     grace: 4h
-`, o.dir, o.i, filepath.Join(o.pki.lab, testpki.LabServerCert), filepath.Join(o.pki.lab, testpki.LabServerKey), state,
-		o.usersCA, human, l67HostPort(o.x.uri), o.x.d.pki.caFile, o.x.bindDN, o.x.baseDN, o.x.groupsBaseDN,
-		o.x.userFilter, o.x.groupFilter, o.x.usernameAttr, issuance) + stores
+`, o.dir, filepath.Join(o.pki.lab, testpki.LabServerCert), filepath.Join(o.pki.lab, testpki.LabServerKey), state,
+		o.usersCA, human, l67HostPort(o.x.uri), o.x.d.pki.privateCA(), o.x.bindDN, o.x.baseDN, o.x.groupsBaseDN,
+		o.x.userFilter, o.x.groupFilter, o.x.usernameAttr, issuance, filepath.Join(o.dir, adminRolesFile)) + stores
+}
+
+// l75ShareIssuer copies b1's issuing CA and its key into another broker's state dir, both 0600 as the
+// systemd README installs them, inside that broker's own private state dir.
+func l75ShareIssuer(from, to string) error {
+	for _, name := range []string{"issuing-ca.pem", "issuing-ca.key"} {
+		b, err := os.ReadFile(filepath.Join(from, name))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(to, name), b, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func l75Policy() string {
@@ -135,11 +151,17 @@ func l75Policy() string {
 roles:
   - {name: admin, privilege: admin, permit: ["**"]}
 subjects:
-  - {name: carol, identity: ["user:carol@corp.example.com"], token_ttl: 900s}
-  - {name: bob, identity: ["user:bob@corp.example.com"], token_ttl: 900s}
+  - {name: carol, identity: ["user:carol@corp.example.com"], token_ttl: 900s,
+     api: [unlock_sign_in, reset_second_factor, forget_principals]}
+  - {name: bob, identity: ["user:bob@corp.example.com"], token_ttl: 900s,
+     api: [unlock_sign_in, reset_second_factor, forget_principals]}
+  - {name: dave, identity: ["user:dave@corp.example.com"], token_ttl: 900s}
+  - {name: alice, identity: ["user:alice@corp.example.com"], token_ttl: 900s}
 grants:
   - {subject: carol, scope: all, roles: [admin]}
   - {subject: bob, scope: all, roles: [admin]}
+  - {subject: dave, scope: all, roles: [admin]}
+  - {subject: alice, scope: all, roles: [admin]}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: k}
 keys:
@@ -242,8 +264,6 @@ func l75Addrs(log string) (api, metrics string) {
 // read from proc.said(), which restarts at every mark.
 func (b *l75Broker) addr() string { return b.api }
 
-func (b *l75Broker) sock() string { return filepath.Join(b.o.dir, fmt.Sprintf("b%d.sock", b.o.i)) }
-
 // hang cuts b3 from the directory (or heals it) and answers whether the
 // broker's own `port49 store status` then says so (exit 3 cut, exit 0 healed)
 // within the bound: the cut is judged by what the broker reports, not by the
@@ -257,7 +277,7 @@ func (b *l75Broker) hang(w *regionWorld, on bool) bool {
 		want, bound = 3, 30*time.Second
 	}
 	for deadline := time.Now().Add(bound); ; time.Sleep(time.Second) {
-		if _, code, _ := w.port49("store", "status", "--socket", b.sock()); code == want {
+		if _, code, _ := w.port49("store", "status", "--metrics", b.metrics); code == want {
 			return true
 		}
 		if time.Now().After(deadline) {
@@ -512,7 +532,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 		return &c
 	}
-	carolCert, bobCert := certOf("carol"), certOf("bob")
+	carolCert, bobCert, daveCert, aliceCert := certOf("carol"), certOf("bob"), certOf("dave"), certOf("alice")
 	iss := oidctest.NewIssuer(t)
 	issCA := filepath.Join(w.dir, "l75-issuer-ca.pem")
 	if err := os.WriteFile(issCA, iss.CertPEM(), 0o600); err != nil {
@@ -580,16 +600,24 @@ func l75(t *testing.T, w *regionWorld) []string {
 		s := bs[i].sess
 		applyRoles(t, string(out), map[string]func(args ...string) (string, error){
 			"session": func(args ...string) (string, error) { return s.ctl("https://"+s.client, args...) }})
-		cmd := exec.Command(w.broker, "init-issuer", "--config", bs[i].cfg)
-		cmd.Env = cmdEnv
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("INVALID: port49-broker init-issuer for b%d: %v: %s", i, err, w.leakless(oneLineMax(string(out), 400)))
+		// One issuing CA for every broker, as the README has an operator do it: made on b1, then copied
+		// into the others' state dirs. Each making its own is a fleet the store's same-CA check refuses.
+		if i == 1 {
+			cmd := exec.Command(w.broker, "init-issuer", "--config", bs[i].cfg)
+			cmd.Env = cmdEnv
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("INVALID: port49-broker init-issuer for b%d: %v: %s", i, err, w.leakless(oneLineMax(string(out), 400)))
+			}
+		} else if err := l75ShareIssuer(filepath.Join(w.dir, "b1-state"), filepath.Join(w.dir, fmt.Sprintf("b%d-state", i))); err != nil {
+			t.Fatalf("INVALID: b%d's issuing CA: %v", i, err)
 		}
 		bs[i].start(w)
 		t.Cleanup(bs[i].proc.stop)
 	}
-	if out, code, _ := w.port49("directory", "init-enrollments", "--socket", bs[1].sock()); code != 0 {
-		t.Fatalf("INVALID: init-enrollments: exit %d: %s", code, w.leakless(oneLineMax(out, 300)))
+	initCmd := exec.Command(w.broker, "init-enrollments", "--config", bs[1].cfg)
+	initCmd.Env = cmdEnv
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("INVALID: port49-broker init-enrollments: %v: %s", err, w.leakless(oneLineMax(string(out), 300)))
 	}
 	// Brokers 2 and 3 started before init-enrollments: they take the new store
 	// up within 30s, and (a) must not run before they have.
@@ -604,8 +632,53 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 		return a
 	}
+	// Bob and carol are the brokers' operators too: each holds the unlock, reset
+	// and forget rights, and each acts on the other (a person does not reset
+	// their own second factor). Their software keys chain to the run's roots.
+	userFiles := func(name string, c *tls.Certificate) (certFile, keyFile string) {
+		certPEM, keyPEM, err := testpki.PEMs(*c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		certFile, keyFile = filepath.Join(w.dir, "l75-"+name+".pem"), filepath.Join(w.dir, "l75-"+name+"-key.pem")
+		if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return certFile, keyFile
+	}
+	bobCertFile, bobKeyFile := userFiles("bob", bobCert)
+	carolCertFile, carolKeyFile := userFiles("carol", carolCert)
+	admins := map[string]*labAdmin{}
+	// adminAt is who's agent at broker at, started once per address: a restart
+	// that moves the broker's port gets a new one.
+	adminAt := func(at *l75Broker, who string) *labAdmin {
+		key := who + "@" + at.addr()
+		if admins[key] == nil {
+			certFile, keyFile := bobCertFile, bobKeyFile
+			if who == "carol" {
+				certFile, keyFile = carolCertFile, carolKeyFile
+			}
+			admins[key] = startLabAdmin(t, w.piv, "https://"+at.addr(), filepath.Join(w.pki.lab, testpki.LabCA), certFile, keyFile)
+		}
+		return admins[key]
+	}
+	// asAdmin is `port49 args…` as who at broker at, with the exit code and
+	// the time it took.
+	asAdmin := func(at *l75Broker, who string, args ...string) (string, int, time.Duration) {
+		start := time.Now()
+		out, code := adminAt(at, who).runCmd(append([]string{"directory"}, args...)...)
+		return out, code, time.Since(start)
+	}
 	unlock := func(at *l75Broker) (string, int, time.Duration) {
-		return w.port49("directory", "unlock", "--socket", at.sock(), "user:carol@corp.example.com")
+		return asAdmin(at, "bob", "unlock", "user:carol@corp.example.com")
+	}
+	// Each broker's two agents log in before any cell cuts one.
+	for i := 1; i <= 3; i++ {
+		adminAt(bs[i], "bob")
+		adminAt(bs[i], "carol")
 	}
 	mustUnlock := func(at *l75Broker) {
 		if out, code, _ := unlock(at); code != 0 {
@@ -614,7 +687,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 
 	// Carol enrolls at b1: a sign-in with no code answers 202 and the
-	// secret, and her first code confirms it (L67's flow).
+	// secret, and their first code confirms it (L67's flow).
 	a1 := apiOf(bs[1])
 	ans := a1.signIn("carol", pw, "")
 	if ans.Status != http.StatusAccepted || ans.Enroll == nil {
@@ -726,9 +799,9 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	mustUnlock(bs[3])
 	// Bob signs in by certificate alone and has no second factor, so resetting
-	// his is harmless (it only opens an enrollment window): the control that
+	// theirs is harmless (it only opens an enrollment window): the control that
 	// reset-second-factor works at b3 before the cut.
-	if out, code, _ := w.port49("directory", "reset-second-factor", "--socket", bs[3].sock(),
+	if out, code, _ := asAdmin(bs[3], "carol", "reset-second-factor",
 		"user:bob@corp.example.com"); code != 0 {
 		t.Fatalf("INVALID: reset-second-factor of bob at b3 before its cut: exit %d: %s", code, w.leakless(oneLineMax(out, 300)))
 	}
@@ -745,7 +818,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	e1 := apiOf(bs[3]).signIn("carol", pw, code3)
 	t1 := time.Since(start)
 	o2, c2, t2 := unlock(bs[3])
-	o3, c3e, t3 := w.port49("directory", "reset-second-factor", "--socket", bs[3].sock(), "user:bob@corp.example.com")
+	o3, c3e, t3 := asAdmin(bs[3], "carol", "reset-second-factor", "user:bob@corp.example.com")
 	healed := bs[3].hang(w, false)
 	if !healed {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
@@ -760,11 +833,11 @@ func l75(t *testing.T, w *regionWorld) []string {
 	// (f) membership's pin across brokers (R13).
 	w.guard()
 	d1 := w.dirMembers[1]
-	pinKey := "/port49/v1/mb/user:carol@corp.example.com" // esc() is url.PathEscape, which keeps : and @
-	pinRev := func() int64 {
-		js, err := d1.ctl(w.dirEndpoints(), "get", pinKey, "-w", "json")
+	pinKey := "/port49/v1/mb/user:dave@corp.example.com" // esc() is url.PathEscape, which keeps : and @
+	pinRevOf := func(key string) int64 {
+		js, err := d1.ctl(w.dirEndpoints(), "get", key, "-w", "json")
 		if err != nil {
-			w.t.Fatalf("INVALID: reading carol's pin from the directory: %v", err)
+			w.t.Fatalf("INVALID: reading a pin from the directory: %v", err)
 		}
 		var r struct {
 			Kvs []struct {
@@ -776,27 +849,35 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 		return r.Kvs[0].ModRevision
 	}
-	carolC, bobC := l75Client(w.pki, carolCert), l75Client(w.pki, bobCert)
-	m1, _ := l75Mint(w, carolC, bs[2].addr(), "")
+	pinRev := func() int64 { return pinRevOf(pinKey) }
+	// Cell f uses principals no earlier cell used: the first bind is alice's, so b3 has no pin for them, and
+	// the cached pin is dave's, whom no earlier cut told a cached-membership line about (the line is at most
+	// once per principal per 10 minutes). Bob and carol made the earlier cells' admin calls through b3.
+	alicePinKey := "/port49/v1/mb/user:alice@corp.example.com"
+	daveC, aliceC := l75Client(w.pki, daveCert), l75Client(w.pki, aliceCert)
+	m1, _ := l75Mint(w, daveC, bs[2].addr(), "")
 	rev1 := pinRev()
-	// b3 mints for carol while the directory answers: its session store holds
-	// her membership with the pin as it stands (the cached pin the cut serves).
-	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
-		t.Fatalf("INVALID: carol's mint at b3 before the forget: %d %s", st, e)
+	// b3 mints for dave while the directory answers: its session store holds
+	// their membership with the pin as it stands (the cached pin the cut serves).
+	if st, e := l75Mint(w, daveC, bs[3].addr(), ""); st != http.StatusOK {
+		t.Fatalf("INVALID: dave's mint at b3 before the forget: %d %s", st, e)
 	}
-	_, fcode, _ := w.port49("directory", "forget", "--socket", bs[1].sock(), "user:carol@corp.example.com")
-	// b2's next mint pins her again once its pins feed has delivered the forget:
+	_, fcode, _ := asAdmin(bs[1], "bob", "forget", "user:dave@corp.example.com")
+	// b2's next mint pins them again once its pins feed has delivered the forget:
 	// mint until the pin's revision moves, or give up after 30s.
 	m2, rev2 := 0, rev1
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
-		m2, _ = l75Mint(w, carolC, bs[2].addr(), "")
+		m2, _ = l75Mint(w, daveC, bs[2].addr(), "")
 		if rev2 = pinRev(); rev2 > rev1 {
 			break
 		}
 	}
 	// And b3 reads the new pin the same way, before the cut.
-	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
-		t.Fatalf("INVALID: carol's mint at b3 after the re-pin: %d %s", st, e)
+	if st, e := l75Mint(w, daveC, bs[3].addr(), ""); st != http.StatusOK {
+		t.Fatalf("INVALID: dave's mint at b3 after the re-pin: %d %s", st, e)
+	}
+	if r := pinRevOf(alicePinKey); r != 0 {
+		t.Fatalf("INVALID: alice is already pinned in the directory (revision %d), so cell f's first bind is not one", r)
 	}
 	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
@@ -804,14 +885,14 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	// store status pings live and says "cut" up to one freshness check before
 	// the copy knows: until then the forget waits out the call timeout and
-	// carol's pin is served from the watch with no cached-membership line.
+	// dave's pin is served from the watch with no cached-membership line.
 	if err := l75NotAnswering(bs[3].proc, 30*time.Second); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	_, f3, ft3 := w.port49("directory", "forget", "--socket", bs[3].sock(), "user:carol@corp.example.com")
-	m3, _ := l75Mint(w, carolC, bs[3].addr(), "")
-	cached := strings.Contains(bs[3].proc.said(), "serving user:carol@corp.example.com's cached directory membership")
-	mb, mbErr := l75Mint(w, bobC, bs[3].addr(), "")
+	_, f3, ft3 := asAdmin(bs[3], "bob", "forget", "user:dave@corp.example.com")
+	m3, _ := l75Mint(w, daveC, bs[3].addr(), "")
+	cached := strings.Contains(bs[3].proc.said(), "serving user:dave@corp.example.com's cached directory membership")
+	mb, mbErr := l75Mint(w, aliceC, bs[3].addr(), "")
 	if !bs[3].hang(w, false) {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
 	}
@@ -820,13 +901,13 @@ func l75(t *testing.T, w *regionWorld) []string {
 	if err := l75AnsweringAgain(bs[3].proc, 30*time.Second); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	// The control for bob's refusal: after the heal he is a member b3 mints for.
-	mbAfter, _ := l75Mint(w, bobC, bs[3].addr(), "")
+	// The control for alice's refusal: after the heal they are a member b3 mints for.
+	mbAfter, _ := l75Mint(w, aliceC, bs[3].addr(), "")
 	row("f", "membership's pin: written once in the directory; a forget at broker 1 re-pins at broker 2's next "+
 		"mint; with broker 3 cut, a forget there refused, a pinned member served from the cached pin and said, "+
 		"a first bind refused (and served after the heal)",
 		fmt.Sprintf("mint at b2 %d, pin revision %d; forget at b1 exit %d; next mint at b2 %d, pin revision %d; cut: "+
-			"forget at b3 exit %d in %v; carol's mint at b3 %d (said %v); bob's first mint at b3 %d %s; bob's mint at b3 after the heal %d",
+			"forget at b3 exit %d in %v; dave's mint at b3 %d (said %v); alice's first mint at b3 %d %s; alice's mint at b3 after the heal %d",
 			m1, rev1, fcode, m2, rev2, f3, ft3.Round(time.Millisecond), m3, cached, mb, mbErr, mbAfter),
 		m1 == http.StatusOK && rev1 > 0 && fcode == 0 && m2 == http.StatusOK && rev2 > rev1 && f3 != 0 &&
 			m3 == http.StatusOK && cached && mb != http.StatusOK && mbAfter == http.StatusOK)
@@ -898,7 +979,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	// read at once can lag the logout it just took: poll for up to 10s.
 	var scode int
 	status, statusAfter, _ := l75Poll(func() string {
-		out, code, _ := w.port49("store", "status", "--socket", bs[3].sock())
+		out, code, _ := w.port49("store", "status", "--metrics", bs[3].metrics)
 		scode = code
 		return out
 	}, l75OnePending, 10*time.Second, time.Second)

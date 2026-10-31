@@ -9,6 +9,15 @@ import "time"
 // never the side that gives up on a revocation that goes on to finish.
 const RevokeSlotWait = 10 * time.Second
 
+// OpTimeout bounds a revocation's or lift's run once it holds the slot, and
+// a list. Every process that runs a broker sets Broker.RevokeTimeout to it,
+// so a client sizing its wait from it never gives up first.
+const OpTimeout = 60 * time.Second
+
+// PersistTimeout bounds the revocations_file write a revocation or lift
+// waits on; the persister gives up on the file at it.
+const PersistTimeout = 5 * time.Second
+
 // RevokeRequest is POST /v1/tokens/revoke (design §17; spec §5.1.4). Exactly
 // one form: Mine (alone, or with Device and Username for the caller's own
 // on one key); Principal; or Device and Username (whoever holds the key,
@@ -22,6 +31,10 @@ type RevokeRequest struct {
 	Username  string `json:"username,omitempty"`
 	Sid       string `json:"sid,omitempty"`
 	Issuer    string `json:"issuer,omitempty"`
+	// CertIssuer and CertSerial, together, revoke one certificate (a
+	// standing mark) under revoke_others and a touch (plan 12b).
+	CertIssuer string `json:"cert_issuer,omitempty"`
+	CertSerial string `json:"cert_serial,omitempty"`
 }
 
 // SessionRef names a live session by device and device-facing username.
@@ -35,7 +48,7 @@ type SessionRef struct {
 // subject the revoked principal, or the key's owner, resolves to, so a
 // misspelt colleague is seen at once; empty for self, or when no subject
 // names the principal. Saved is a standing mark's alone: whether
-// broker.revocations_file was written. Incomplete is set when a step did
+// broker.revocations_file was written; absent when the broker keeps no such file. Incomplete is set when a step did
 // not finish; running the same request again repeats every step. Text is
 // what port49 revoke prints.
 type RevokeResponse struct {

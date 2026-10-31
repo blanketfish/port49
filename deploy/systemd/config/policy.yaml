@@ -1,0 +1,13 @@
+# A starting policy: replace the subjects, and the network in key_groups.
+# Device keys are files in /etc/port49/keys, one per version, never rewritten in place;
+# add a version by adding a file and a line (README, "Adding a key version").
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: network_admin, privilege: admin, permit: ["**"]}]
+subjects:
+  - {name: alice, identity: ["user:alice@example.com"], username: alice, token_ttl: 15m}
+grants:
+  - {subject: alice, scope: all_devices, roles: [network_admin]}
+key_groups: [{match: {cidr: 192.0.2.0/24}, key_ref: example}]
+keys:
+  example:
+    current: {version: 1, secret_ref: "file:/etc/port49/keys/example-v1"}

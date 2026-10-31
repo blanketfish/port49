@@ -35,9 +35,6 @@ options:
     description: The port49 CLI.
     type: str
     default: port49
-  socket:
-    description: The agent's socket.
-    type: str
   broker:
     description: Workload mode, the broker URL.
     type: str
@@ -349,7 +346,7 @@ class LookupModule(LookupBase):
                     if d not in res.tokens:
                         _fail(f"port49: {d}: the CLI's answer left this device out")
                 return [_value(res.tokens[d], field) for d in terms]
-            agent = _agent(port49=opt("port49") or "port49", socket=opt("socket"))
+            agent = _agent(port49=opt("port49") or "port49")
             return [_value(agent.token(d, enable=enable, ttl=ttl), field) for d in terms]
         except port49.Port49Error as e:
             said = str(e)

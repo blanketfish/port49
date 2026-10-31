@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1807,21 +1808,32 @@ func TestAnOpenConnectionDoesNotOutliveItsVersionsDate(t *testing.T) {
 	}
 }
 
-// A packet no key an admitted device is assigned validates is held, as it
-// arrived, for keys diagnose; it is never logged (spec §10).
-func TestAnUnvalidatedPacketIsHeldForDiagnosis(t *testing.T) {
+// No unvalidated packet is held: the server keeps no copy of a packet no key
+// validates (its bytes are attacker-controlled and `port49d keys-diagnose`
+// reads a capture instead, spec §10). The record and the metric stay, with the
+// body's hash and never its bytes.
+func TestNoUnvalidatedPacketIsHeld(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeOf(Deps{}), reflect.TypeOf(conn{})} {
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			if f.Name == "Held" || strings.Contains(f.Type.String(), "Held") {
+				t.Errorf("%s has a field %s %s: a packet no key validates is not kept", typ.Name(), f.Name, f.Type)
+			}
+		}
+	}
 	log := &syncBuffer{}
-	held := &keyring.Held{}
-	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) { d.Held = held })
-	c := dial(t, ts.addr, []byte("some-other-key"))
+	addr, _, m := startServer(t, log)
+	c := dial(t, addr, []byte("some-other-key"))
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
-	if !waitFor(t, func() bool { _, ok := held.Get("leaf-01"); return ok }) {
-		t.Fatal("nothing held")
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"no_known_key_matches"`) }) {
+		t.Fatalf("the unvalidated record was not written: %s", log.String())
 	}
-	p, _ := held.Get("leaf-01")
-	if p.Source.String() != "127.0.0.1" || !keyring.Validates(p.Header, wire.Obfuscate(p.Header, []byte("some-other-key"), p.Body)) {
-		t.Fatalf("%+v", p)
+	if !log.contains(`"body_sha256":"`) || log.contains("p49_e2e") {
+		t.Fatalf("the record must carry the body's hash and never its bytes: %s", log.String())
+	}
+	if got := testutil.ToFloat64(m.Unvalidated.WithLabelValues("no_known_key_matches")); got < 1 {
+		t.Fatalf("unvalidated_packets_total{no_known_key_matches} = %v", got)
 	}
 }
 

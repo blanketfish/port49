@@ -309,3 +309,141 @@ func TestAPastedSecretAsAPolicyEnvNameIsNeverPrinted(t *testing.T) {
 		t.Fatalf("the refusal is missing, or names the pasted variable, or not the key and version")
 	}
 }
+
+// putFileKeys builds and puts in force a policy whose keys.k version 1 is the
+// file at path, and returns the keys.
+func putFileKeys(t *testing.T, dir, path string) *liveKeys {
+	t.Helper()
+	k := newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "PORT49_KEY_", FileDir: dir})
+	kb, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 1, secret_ref: file:"+path+"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.put(kb)
+	return k
+}
+
+// A held file rewritten in place is found, and the secret in force is still
+// the one read (decision 54 ruling 11; spec §12).
+func TestAKeyFileRewrittenInPlaceIsFoundAndNotRead(t *testing.T) {
+	const orig, rewritten = "not-a-real-key-v1", "not-a-real-key-v1-rewritten"
+	dir := safeDir(t)
+	path := filepath.Join(dir, "k_v1")
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	if err := os.WriteFile(path, []byte(rewritten), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := k.rewritten()
+	if len(got) != 1 || got[0].Ref != "k" || got[0].Version != 1 || got[0].Path != path ||
+		got[0].State != keyFileChanged || got[0].Err != nil {
+		t.Fatalf("findings = %+v, want one keyFileChanged for k version 1", got)
+	}
+	held := k.Set("k").Versions[0].Secret.Bytes()
+	if string(held) != orig {
+		t.Fatalf("the secret in force is not the one read: held %d bytes, rewritten file %d", len(held), len(rewritten))
+	}
+	k.mu.Lock()
+	heldText := k.held["file:"+path].Bytes()
+	k.mu.Unlock()
+	if string(heldText) != orig {
+		t.Fatalf("k.held no longer holds the bytes read: %d bytes, rewritten file %d", len(heldText), len(rewritten))
+	}
+}
+
+func TestAKeyFileRemovedIsFoundUnreadable(t *testing.T) {
+	const orig = "not-a-real-key-v1"
+	dir := safeDir(t)
+	path := filepath.Join(dir, "k_v1")
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	os.Remove(path)
+	got := k.rewritten()
+	if len(got) != 1 || got[0].State != keyFileUnreadable || got[0].Err == nil {
+		t.Fatalf("findings = %+v, want one keyFileUnreadable with an error", got)
+	}
+	if strings.Contains(got[0].Err.Error(), orig) {
+		t.Fatal("the error carries the secret")
+	}
+}
+
+func TestAnEnvKeyIsNeverReread(t *testing.T) {
+	t.Setenv("PORT49_KEY_T", "not-a-real-key-env")
+	k := newLiveKeys(secretref.New(), secretref.Allowance{EnvPrefix: "PORT49_KEY_", FileDir: safeDir(t)})
+	kb, err := k.build(keyedPolicy(t, "keys:\n  k:\n    current: {version: 1, secret_ref: env:PORT49_KEY_T}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.put(kb)
+	t.Setenv("PORT49_KEY_T", "not-a-real-key-env-changed")
+	if got := k.rewritten(); len(got) != 0 {
+		t.Fatalf("an env: reference was found changed: %+v", got)
+	}
+}
+
+func TestAnUnchangedKeyFileIsNotAFinding(t *testing.T) {
+	dir := safeDir(t)
+	path := filepath.Join(dir, "k_v1")
+	if err := os.WriteFile(path, []byte("not-a-real-key-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	if got := k.rewritten(); len(got) != 0 {
+		t.Fatalf("findings = %+v, want none", got)
+	}
+	var nilKeys *liveKeys
+	if got := nilKeys.rewritten(); got != nil {
+		t.Fatal("a nil liveKeys has findings")
+	}
+}
+
+// The re-read keeps the bound the first read had: a link in the key directory
+// that now leads outside key_secret_refs.file_dir is not followed.
+func TestAKeyFileLinkedOutsideTheKeyDirIsUnreadable(t *testing.T) {
+	dir := safeDir(t)
+	path := filepath.Join(dir, "k_v1")
+	if err := os.WriteFile(path, []byte("not-a-real-key-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	outside := filepath.Join(safeDir(t), "elsewhere")
+	if err := os.WriteFile(outside, []byte("not-a-real-key-other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(path)
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	got := k.rewritten()
+	if len(got) != 1 || got[0].State != keyFileUnreadable || got[0].Err == nil ||
+		!strings.Contains(got[0].Err.Error(), "outside") {
+		t.Fatalf("findings = %+v, want one keyFileUnreadable naming the bound", got)
+	}
+}
+
+// ...and keeps the bound's width as well: a link that leads out of the
+// reference's own directory but stays inside key_secret_refs.file_dir, as a
+// Secret volume's `..data` links do, is followed.
+func TestAKeyFileLinkedWithinTheKeyDirIsRead(t *testing.T) {
+	dir := safeDir(t)
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, []byte("not-a-real-key-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sub, "k_v1")
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	k := putFileKeys(t, dir, path)
+	if got := k.rewritten(); len(got) != 0 {
+		t.Fatalf("findings = %+v, want none: the link stays inside file_dir", got)
+	}
+}

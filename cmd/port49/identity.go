@@ -18,7 +18,7 @@ import (
 func identityCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 identity", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	socket := fs.String("socket", agent.SocketPath(), "the agent's socket")
+	socket := agent.SocketPath()
 	asJSON := fs.Bool("json", false, "print the broker's answer as JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -27,10 +27,10 @@ func identityCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	id, err := agent.NewClient(*socket).Identity(context.Background())
+	id, err := agent.NewClient(socket).Identity(context.Background())
 	switch {
 	case errors.Is(err, agent.ErrNoAgent):
-		fmt.Fprintf(stderr, "port49 identity: no agent at %s; run 'port49 login'\n", *socket)
+		fmt.Fprint(stderr, noAgentLine("port49 identity", socket))
 		return 1
 	case err != nil:
 		fmt.Fprintln(stderr, "port49 identity:", unprefixed(err))

@@ -1,0 +1,20 @@
+# The directory's enrollment store, exported still sealed, on a broker host. It reads the
+# store with the broker's own etcd identity, so it needs no admin credential. systemd's
+# StandardOutput=file: does not truncate, so a shorter export would keep the older one's tail
+# and `port49 directory import` would refuse the file. The command's --out writes a new temporary
+# file (O_EXCL, 0600, synced, removed if the export fails) in /var/backups/port49-broker (0700, the
+# broker's, from tmpfiles.d) and the unit renames it to enrollments-<date>.json, so each day has its
+# own copy and a failed run changes nothing. --out never replaces a file, so a temporary file a
+# killed run left is removed first.
+# It keeps fourteen days, and removes a temporary file a killed run left behind after a day. $$ and %% are systemd's escapes for $ and %.
+# Unmeasured on a real host: run it once by hand (README) before relying on the timer.
+# Restore with `port49 directory import`, which needs an admin and a key press.
+[Unit]
+Description=port49 enrollment export
+
+[Service]
+Type=oneshot
+User=port49-broker
+Group=port49-broker
+UMask=0077
+ExecStart=/bin/sh -c 'set -eu; umask 077; d=/var/backups/port49-broker; f=$$d/enrollments-$$(date +%%F).json; rm -f "$$f.tmp"; if /usr/bin/port49-broker export-enrollments --out "$$f.tmp"; then mv "$$f.tmp" "$$f"; else rm -f "$$f.tmp"; exit 1; fi; /usr/bin/find "$$d" -name "enrollments-*.json" -mtime +14 -delete; /usr/bin/find "$$d" -name "enrollments-*.json.tmp" -mtime +1 -delete'

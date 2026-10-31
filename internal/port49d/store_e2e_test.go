@@ -46,7 +46,7 @@ func rolesMemberOpts(t *testing.T, o etcdtest.Options) (*etcdtest.Server, *etcdt
 // etcdSplit is a split daemon's port49d.yaml (plan 7e) on a TLS etcd
 // member with the roles, through a proxy the test can hang: the
 // run_test.go config with policy: in place of broker:, the daemon's
-// identity alone, and an admin_socket (etcd requires one, Ruling 13).
+// identity alone.
 func etcdSplit(t *testing.T) (daemonCfg string, proxy *etcdtest.Proxy) {
 	t.Helper()
 	daemonCfg, proxy, _ = etcdSplitServer(t)
@@ -86,8 +86,8 @@ func etcdSplitServerOpts(t *testing.T, policyBody string, others []string, o etc
 		"stores:\n  directory:\n    backend: etcd\n    packet_deadline: 1s\n    etcd:\n"+
 		"      endpoints: [https://%s]\n      ca_file: %s\n      daemon: {cert_file: %s, key_file: %s}\n"+
 		"      call_timeout: 200ms\n      hold_ttl: 10s\n      breaker: {failures: 3, open_for: 2s}\n"+
-		"admin_socket: %s\nlimits: {idle_timeout: 2m}\n", b.PolicyFile, proxy.Addr(),
-		filepath.Join(srv.Dir, "ca.pem"), dc, dk, filepath.Join(t.TempDir(), "a.sock"))
+		"limits: {idle_timeout: 2m}\n", b.PolicyFile, proxy.Addr(),
+		filepath.Join(srv.Dir, "ca.pem"), dc, dk)
 	if err := os.WriteFile(daemonCfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

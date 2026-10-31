@@ -26,7 +26,7 @@ func TestForgetRemovesThePinAndIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Mixed case names the same principal: the broker spells it as the log does.
-	text, err := f.b.Forget(ctx, "user:Alice@Example.COM", "admin_socket uid 0")
+	text, err := f.b.Forget(ctx, "user:Alice@Example.COM", "offline uid 0")
 	if err != nil || !strings.Contains(text, "guid:0a1b") || !strings.Contains(text, "CN=Alice,OU=Staff,DC=corp") {
 		t.Fatalf("%q %v", text, err)
 	}
@@ -51,14 +51,14 @@ func TestForgetRemovesThePinAndIsRecorded(t *testing.T) {
 	}
 	body, _ := forgets[0]["forget"].(map[string]any)
 	if forgets[0]["principal"] != alice || forgets[0]["verdict"] != nil || body["entry_id"] != "guid:0a1b" ||
-		body["dn"] != "CN=Alice,OU=Staff,DC=corp" || body["refused"] != true || body["origin"] != "admin_socket uid 0" ||
+		body["dn"] != "CN=Alice,OU=Staff,DC=corp" || body["refused"] != true || body["origin"] != "offline uid 0" ||
 		body["verified_at"] == "" {
 		t.Fatalf("%v", forgets[0])
 	}
 	if _, has := forgets[0]["groups"]; has || strings.Contains(f.log.String(), "group") {
 		t.Fatalf("a group reached the record: %v", forgets[0])
 	}
-	if text, err := f.b.Forget(ctx, alice, "admin_socket uid 0"); err != nil || !strings.Contains(text, "forgotten all the same") {
+	if text, err := f.b.Forget(ctx, alice, "offline uid 0"); err != nil || !strings.Contains(text, "forgotten all the same") {
 		t.Fatalf("a second forget: %q %v", text, err)
 	}
 	if n := len(forgetsIn()); n != 1 {
@@ -80,7 +80,7 @@ func TestAForgetIsNotUndoneByAnEarlierVerification(t *testing.T) {
 	if err := f.st.PutMembership(ctx, m, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.b.Forget(ctx, alice, "admin_socket uid 0"); err != nil {
+	if _, err := f.b.Forget(ctx, alice, "offline uid 0"); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.st.PutMembership(ctx, m, time.Hour); err != nil { // the verification in flight
@@ -97,7 +97,7 @@ func TestAFailedForgetSaysToRunItAgain(t *testing.T) {
 	f := newFixture(t, 8)
 	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, nil)
 	f.b.Store = failingMembership{f.b.Store}
-	_, err := f.b.Forget(context.Background(), alice, "admin_socket uid 0")
+	_, err := f.b.Forget(context.Background(), alice, "offline uid 0")
 	if err == nil || !strings.Contains(err.Error(), "run it again") || strings.Contains(err.Error(), "disk on fire") {
 		t.Fatalf("%v", err)
 	}
@@ -117,12 +117,12 @@ func (failingMembership) DeleteMembership(context.Context, string) (store.Member
 // (pre-flight I-10's machine principals).
 func TestForgetRefusesWhatHoldsNoMembership(t *testing.T) {
 	f := newFixture(t, 8)
-	if _, err := f.b.Forget(context.Background(), alice, "admin_socket uid 0"); err == nil ||
+	if _, err := f.b.Forget(context.Background(), alice, "offline uid 0"); err == nil ||
 		!strings.Contains(err.Error(), "no broker.directory") {
 		t.Fatalf("without a directory: %v", err)
 	}
 	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, nil)
-	if _, err := f.b.Forget(context.Background(), "app:ci-runner", "admin_socket uid 0"); err == nil ||
+	if _, err := f.b.Forget(context.Background(), "app:ci-runner", "offline uid 0"); err == nil ||
 		!strings.Contains(err.Error(), "neither a user: principal nor a workload's spiffe:// ID") {
 		t.Fatalf("a machine principal: %v", err)
 	}

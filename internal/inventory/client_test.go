@@ -29,6 +29,9 @@ import (
 func (rig *apiRig) clientFiles(t *testing.T, l testpki.Leaf) (ca, cert, key string) {
 	t.Helper()
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // the secret-file rule refuses a group-writable directory
+		t.Fatal(err)
+	}
 	l.Client, l.NotBefore, l.NotAfter = true, time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
 	c, err := rig.ca.Issue(l)
 	if err != nil {

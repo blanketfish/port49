@@ -60,15 +60,15 @@ func TestL60SelfTest(t *testing.T) {
 	if st := h.obsStatus("status", s); st.KeyState != "present" {
 		t.Fatalf("status %+v", st)
 	}
-	if r := h.port49(runOpts{}, "refresh", "--socket", s); r.code != 0 || !strings.Contains(r.stdout, leafPlain) {
+	if r := h.port49(runOpts{}, "refresh", onSock(s)); r.code != 0 || !strings.Contains(r.stdout, leafPlain) {
 		t.Fatalf("refresh: %+v", r)
 	}
-	r = h.port49(runOpts{token: true}, "token", "--socket", s, leafPlain)
+	r = h.port49(runOpts{token: true}, "token", onSock(s), leafPlain)
 	h.obsResult("token", r)
 	if r.code != 0 || r.tokenBytes == 0 || r.stdout != "" {
 		t.Fatalf("token: %+v", r)
 	}
-	r = h.port49(runOpts{token: true}, "token", "--socket", s, leafTouch)
+	r = h.port49(runOpts{token: true}, "token", onSock(s), leafTouch)
 	h.obsResult("touch_token", r)
 	if r.code != 1 || !strings.Contains(r.stderr, "hardware_key_touch") || r.tokenBytes != 0 {
 		t.Fatalf("touch device: %+v", r)

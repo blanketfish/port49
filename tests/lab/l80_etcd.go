@@ -16,11 +16,11 @@ import (
 
 // l80EtcdDaemonYAML is the conformance config's text (qualConfigYAML's) as the
 // daemon of a split deployment runs it: no broker: block, the policy it admits
-// from, the daemon's stores: block and its admin socket (etcd requires one).
+// from, the daemon's stores: block.
 // store is a stores: block that opens with a newline, as splitDaemonYAML takes it.
 // It also returns the policy file the broker: block named, which the daemon and
 // the broker's own config now both read.
-func l80EtcdDaemonYAML(qual, admin, store string) (text, policy string, err error) {
+func l80EtcdDaemonYAML(qual, store string) (text, policy string, err error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(qual), &doc); err != nil {
 		return "", "", err
@@ -42,7 +42,7 @@ func l80EtcdDaemonYAML(qual, admin, store string) (text, policy string, err erro
 				}
 			}
 			continue
-		case "policy", "stores", "admin_socket":
+		case "policy", "stores":
 			return "", "", errors.New("the conformance config already has a " + m.Content[i].Value + ": key")
 		}
 		kept = append(kept, m.Content[i], m.Content[i+1])
@@ -60,5 +60,5 @@ func l80EtcdDaemonYAML(qual, admin, store string) (text, policy string, err erro
 	if err := enc.Close(); err != nil {
 		return "", "", err
 	}
-	return buf.String() + "\npolicy:\n  file: " + policy + "\n  watch_interval: 1s\n" + store + "admin_socket: " + admin + "\n", policy, nil
+	return buf.String() + "\npolicy:\n  file: " + policy + "\n  watch_interval: 1s\n" + store, policy, nil
 }

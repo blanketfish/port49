@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/edkey"
 )
 
 // maxPolicySize and maxInventorySize are port49d's bounds for its two files
@@ -541,7 +541,7 @@ func verifyKeyAt(t *testing.T, dir, name string, perm os.FileMode) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, pubPEM, err := keyfile.EncodeEd25519(priv)
+	_, pubPEM, err := edkey.EncodeEd25519(priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1024,5 +1024,92 @@ func TestAnAncestorWhoseOwnerCannotBeReadIsRefusedInPlainText(t *testing.T) {
 	want := "the directory " + mid + " (above " + p + "): cannot read its owner"
 	if _, err := Read(p, maxPolicySize, "policy file"); err == nil || err.Error() != want {
 		t.Fatalf("got %v, want %q", err, want)
+	}
+}
+
+// Group-read on a secret file is allowed only to a group this process is in: the file's gid must be
+// the process's gid or one of its supplementary groups (fsGroup is one on Kubernetes; the service
+// user's own group is the primary one under systemd). Without that, root:ssl-cert 0640 lets every
+// member of ssl-cert read the broker's key. A file with no group bit says nothing about its gid.
+func TestASecretsGroupReadIsForOurGroupsOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "k")
+	if err := os.WriteFile(file, []byte("secret!"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func(fs.FileInfo) (uint32, bool), g func() ([]int, error), e func() int) {
+		FileGroup, getgroups, getegid = f, g, e
+	}(FileGroup, getgroups, getegid)
+	getegid = func() int { return 1000 }
+	getgroups = func() ([]int, error) { return []int{2000, 65532}, nil }
+	for _, tc := range []struct {
+		name string
+		mode os.FileMode
+		gid  uint32
+		ok   bool
+	}{
+		{"our primary gid", 0o440, 1000, true},
+		{"a supplementary gid (fsGroup)", 0o440, 65532, true},
+		{"a foreign gid, group-readable", 0o440, 4242, false},
+		{"a foreign gid, 0640", 0o640, 4242, false},
+		{"a foreign gid, no group bit", 0o400, 4242, true},
+	} {
+		FileGroup = func(fi fs.FileInfo) (uint32, bool) { return tc.gid, true }
+		if err := os.Chmod(file, tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ReadSecret(file, dir, 1<<20)
+		if tc.ok && err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "gid 4242")) {
+			t.Errorf("%s: want a refusal naming gid 4242, got %v", tc.name, err)
+		}
+	}
+	// A group lookup that fails closes the door.
+	FileGroup = func(fi fs.FileInfo) (uint32, bool) { return 0, false }
+	if err := os.Chmod(file, 0o440); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSecret(file, dir, 1<<20); err == nil {
+		t.Error("a file whose group cannot be read was accepted")
+	}
+}
+
+// The fix a refusal offers must work. `chmod 0600` on a file root owns (root:port49d 0440, as the
+// packages and the compose setup ship it) leaves it readable by root alone, so the next start says
+// "permission denied" and the crash loop goes on: chmod is offered only to the file's owner.
+func TestTheGroupRefusalOffersChmodOnlyToTheFilesOwner(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "k")
+	if err := os.WriteFile(file, []byte("secret!"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func(fs.FileInfo) (uint32, bool), o func(fs.FileInfo) (uint32, bool), g func() ([]int, error), e func() int, u func() int) {
+		FileGroup, FileOwner, getgroups, getegid, Geteuid = f, o, g, e, u
+	}(FileGroup, FileOwner, getgroups, getegid, Geteuid)
+	getegid = func() int { return 1000 }
+	getgroups = func() ([]int, error) { return nil, nil }
+	Geteuid = func() int { return 1000 }
+	FileGroup = func(fi fs.FileInfo) (uint32, bool) { return 4242, true }
+	for _, tc := range []struct {
+		name  string
+		owner uint32
+		chmod bool
+	}{{"owned by the process's user", 1000, true}, {"owned by root", 0, false}} {
+		FileOwner = func(fi fs.FileInfo) (uint32, bool) { return tc.owner, true }
+		_, err := ReadSecret(file, dir, 1<<20)
+		if err == nil || !strings.Contains(err.Error(), "chgrp it") {
+			t.Fatalf("%s: want a refusal offering chgrp, got %v", tc.name, err)
+		}
+		if got := strings.Contains(err.Error(), "chmod 0600"); got != tc.chmod {
+			t.Errorf("%s: the refusal offers chmod 0600 = %v, want %v: %v", tc.name, got, tc.chmod, err)
+		}
 	}
 }

@@ -210,7 +210,7 @@ func TestSelfAndKeyRevocationsAreRecorded(t *testing.T) {
 	k := store.TokenKey{NAS: "leaf1", Username: "alice"}
 	f.b.RevokeOwn(ctx, alicePrincipal, &k, "api "+alicePrincipal)
 	f.b.RevokeKey(ctx, k, "api user:bob@example.com")
-	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice2, Origin: "admin_socket uid 0"}); err != nil {
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice2, Origin: "offline uid 0"}); err != nil {
 		t.Fatal(err)
 	}
 	recs := eventsOf(f.records(t), "revoke")
@@ -225,7 +225,8 @@ func TestSelfAndKeyRevocationsAreRecorded(t *testing.T) {
 			t.Fatalf("%s: %v", by, recs[i])
 		}
 	}
-	if rv := recs[2]["revocation"].(map[string]any); rv["by"] != "principal" || rv["saved"] != false {
+	// This broker keeps no revocations_file, so a standing mark's record has no saved.
+	if rv := recs[2]["revocation"].(map[string]any); rv["by"] != "principal" || rv["saved"] != nil {
 		t.Fatalf("a standing mark's record: %v", recs[2])
 	}
 	if recs[0]["principal"] != alicePrincipal || recs[0]["revocation"].(map[string]any)["origin"] != "api "+alicePrincipal {

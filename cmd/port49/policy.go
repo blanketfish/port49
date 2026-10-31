@@ -70,7 +70,7 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 	device := fs.String("device", "", "the device, by its inventory name")
 	command := fs.String("command", "", "the command line, quoted; omit it to see the session")
 	attrs := fs.Bool("show-attributes", false, "show the session attributes and where each came from")
-	socket := fs.String("socket", agent.SocketPath(), "the agent's socket, when no --policy is given")
+	socket := agent.SocketPath()
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -90,12 +90,12 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprint(stderr, usage)
 			return 2
 		}
-		e, err := agent.NewClient(*socket).Explain(context.Background(),
+		e, err := agent.NewClient(socket).Explain(context.Background(),
 			api.ExplainRequest{Device: *device, Command: *command, Principal: *principal})
 		var refused *agent.APIError
 		switch {
 		case errors.Is(err, agent.ErrNoAgent):
-			fmt.Fprintf(stderr, "port49 explain: no agent at %s; run 'port49 login', or give --policy and --inventory\n", *socket)
+			fmt.Fprint(stderr, noAgentLine("port49 explain", socket, "give --policy and --inventory"))
 			return 1
 		case errors.As(err, &refused) && refused.Code == "api_right_missing" && *principal != "":
 			fmt.Fprintln(stderr, "port49 explain: refused: explaining another principal needs the api: explain_others "+

@@ -79,6 +79,9 @@ func TestDirectoryEnvCoversWhatTheScriptsRead(t *testing.T) {
 // authz-regexp matches; a SID extension reads back as the SID it was given.
 func TestDirectoryPKIShape(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // the secret-file rule refuses a group-writable directory
+		t.Fatal(err)
+	}
 	p, err := writeDirectoryPKI(dir, time.Now())
 	if err != nil {
 		t.Fatal(err)

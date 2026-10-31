@@ -1,0 +1,11 @@
+# port49's system-wide client settings, /etc/port49/config.yaml. The port49 package installs
+# this file as a conffile: your edits survive an upgrade. It sets nothing as shipped, because
+# a site's broker URL and CA are for your configuration management; no package can know them.
+# Each user's ~/.port49/config.yaml overrides this file, and a flag overrides both.
+#
+# broker: https://broker.example.com:8443
+# broker_ca: /etc/port49/broker-ca.pem
+# broker_crl: check          # check (the default), require or off
+# touch_key: pkcs11:...      # the always-touch slot a security key press uses
+# key: pkcs11:...            # the session key's reference
+# issued_key_store: auto     # auto, file, tpm, secure_enclave or pkcs11

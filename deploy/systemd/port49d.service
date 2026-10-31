@@ -1,0 +1,58 @@
+# port49d, the TACACS+ server (plan 12b). Installed by the port49-server package at
+# /usr/lib/systemd/system/; enable it yourself: `systemctl enable --now port49d`.
+#
+# What is deliberately absent:
+#   ProtectSystem=strict|full, ReadOnlyPaths=, BindReadOnlyPaths=, InaccessiblePaths=,
+#   ProtectHome=read-only. Each would mount /etc read-only inside the unit, and the
+#   fence excuses a directory's mode on a read-only mount, so a group-writable
+#   /etc/port49 on the host would pass. ProtectSystem=true leaves /etc writable.
+#   RuntimeDirectory=: /run/port49 is for nothing here; device keys are under
+#   /etc/port49/keys, which a reboot does not clear.
+#   ExecStartPre= running init-revocations or init-enrollments: those run once, by hand.
+[Unit]
+Description=port49 TACACS+ server
+Documentation=https://github.com/rhwendt/port49
+After=network-online.target
+Wants=network-online.target
+# No start limit: a store that is down at boot would use five starts in under five minutes
+# (30s start_timeout, then RestartSec), and the unit would stay failed after the store
+# came back. A refused config retries every RestartSec, under journald's rate limit.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=port49d
+Group=port49d
+ExecStart=/usr/bin/port49d --config /etc/port49/port49d.yaml
+ExecReload=/bin/sh -c 'kill -HUP "$MAINPID"'
+# kill is the shell's builtin: /bin/kill is procps's, which a minimal host does not have
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=65536
+UMask=0077
+# Port 49 is privileged; the binary carries no file capability.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=true
+ProtectHome=yes
+# More hardening, none of it making /etc read-only (see above). Unmeasured under real systemd:
+# the first start on a host is the check, and `systemd-analyze security` scores the result.
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

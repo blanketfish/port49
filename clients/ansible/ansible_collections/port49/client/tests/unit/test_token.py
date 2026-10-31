@@ -134,8 +134,8 @@ class Plugin(PluginCase):
             self.lookup(["leaf1"], broker="https://b")
 
     def test_options_reach_the_library_and_nothing_reruns(self):
-        self.lookup(["leaf1"], enable=True, ttl=120, port49="/opt/p49", socket="/run/s")
-        self.assertEqual(self.calls.agent[0], ("init", {"port49": "/opt/p49", "socket": "/run/s"}))
+        self.lookup(["leaf1"], enable=True, ttl=120, port49="/opt/p49")
+        self.assertEqual(self.calls.agent[0], ("init", {"port49": "/opt/p49"}))
         self.assertEqual(self.calls.agent[1], ("token", "leaf1", True, 120))
         with self.assertRaises(AnsibleError):
             self.lookup(["denied"])

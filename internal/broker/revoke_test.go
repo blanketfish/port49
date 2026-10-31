@@ -75,7 +75,7 @@ func TestRevokingAPrincipalReachesEverything(t *testing.T) {
 	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
 	f.liveContext(t, "bare", "alice", alice, certKey(f.alice))
 
-	rep, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice, Origin: "admin_socket uid 0"})
+	rep, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice, Origin: "offline uid 0"})
 	if err != nil || rep.Err != nil || rep.SaveErr != nil {
 		t.Fatalf("%+v %v", rep, err)
 	}
@@ -107,7 +107,7 @@ func TestRevokingAPrincipalReachesEverything(t *testing.T) {
 	}
 	body := recs[0]["revocation"].(map[string]any)
 	if body["by"] != "principal" || body["contexts"] != float64(2) || body["token_keys"] != float64(2) ||
-		body["connections"] != float64(1) || body["saved"] != true || body["origin"] != "admin_socket uid 0" {
+		body["connections"] != float64(1) || body["saved"] != true || body["origin"] != "offline uid 0" {
 		t.Fatalf("revocation body: %v", body)
 	}
 	if un := body["unreached"].([]any); len(un) != 1 || un[0].(map[string]any)["device"] != "bare" {
@@ -411,7 +411,7 @@ func TestLiftingARevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.advance(time.Minute)
-	rep, err := f.b.Lift(ctx, RevokeRequest{Principal: "user:ALICE@example.com", Origin: "admin_socket uid 0"})
+	rep, err := f.b.Lift(ctx, RevokeRequest{Principal: "user:ALICE@example.com", Origin: "offline uid 0"})
 	if err != nil || !strings.Contains(rep.LiftedText(), "unless another revocation stands") || !rep.Saved || saved != 2 {
 		t.Fatalf("%+v %v (saved %d)", rep, err, saved)
 	}
@@ -423,7 +423,7 @@ func TestLiftingARevocation(t *testing.T) {
 	}
 	recs := eventsOf(f.records(t), "revoke")
 	if len(recs) != 2 || recs[1]["verdict"] != "permit" || recs[1]["reason"] != "revocation_lifted" ||
-		recs[1]["principal"] != alice || recs[1]["revocation"].(map[string]any)["origin"] != "admin_socket uid 0" {
+		recs[1]["principal"] != alice || recs[1]["revocation"].(map[string]any)["origin"] != "offline uid 0" {
 		t.Fatalf("%v", recs)
 	}
 	if got := testutil.ToFloat64(f.b.Metrics.Revocations.WithLabelValues("principal", "lifted")); got != 1 {
@@ -777,10 +777,10 @@ func TestRevocationsTextNamesEachMark(t *testing.T) {
 		return store.Lift{}, store.ErrNotFound
 	}
 	text := RevocationsText([]store.Revocation{
-		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at, Origin: "admin_socket uid 0"},
-		{Kind: store.RevocationPrincipal, Key: alice, At: at, Origin: "admin_socket uid 0"}}, noLift)
-	want := `certificate issuer="CN=Corp CA,O=Example" serial=3f9a01 since 2026-10-01T03:00:00Z (admin_socket uid 0)` +
-		"\nprincipal user:alice@example.com since 2026-10-01T03:00:00Z (admin_socket uid 0)"
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at, Origin: "offline uid 0"},
+		{Kind: store.RevocationPrincipal, Key: alice, At: at, Origin: "offline uid 0"}}, noLift)
+	want := `certificate issuer="CN=Corp CA,O=Example" serial=3f9a01 since 2026-10-01T03:00:00Z (offline uid 0)` +
+		"\nprincipal user:alice@example.com since 2026-10-01T03:00:00Z (offline uid 0)"
 	if text != want {
 		t.Fatalf("got\n%s\nwant\n%s", text, want)
 	}
@@ -1081,7 +1081,7 @@ func TestARevokedPrincipalRefusesEveryCertificateOfTheWorkload(t *testing.T) {
 	if res := f.post(context.Background(), chainState(w, wca), mintLeaf1, "k1"); res.Code != http.StatusOK {
 		t.Fatalf("%s", answer(res))
 	}
-	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: workloadID, Origin: "admin_socket uid 0"})
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: workloadID, Origin: "offline uid 0"})
 	if err != nil || rep.TokenKeys != 1 || rep.Mark.Key != workloadID {
 		t.Fatalf("%+v %v", rep, err)
 	}
@@ -1114,7 +1114,7 @@ func TestASpiffePrincipalIsNormalisedVerbatimOrRefused(t *testing.T) {
 func TestRevokingAWorkloadCertificateSaysItDoesNotFollowARenewal(t *testing.T) {
 	f, _, w := newWorkloadFixture(t)
 	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: w.Leaf.Issuer.String(),
-		Serial: w.Leaf.SerialNumber.Text(16), Origin: "admin_socket uid 0"})
+		Serial: w.Leaf.SerialNumber.Text(16), Origin: "offline uid 0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1123,7 +1123,7 @@ func TestRevokingAWorkloadCertificateSaysItDoesNotFollowARenewal(t *testing.T) {
 		t.Fatalf("%s", text)
 	}
 	alice, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: f.alice.Leaf.Issuer.String(),
-		Serial: f.alice.Leaf.SerialNumber.Text(16), Origin: "admin_socket uid 0"})
+		Serial: f.alice.Leaf.SerialNumber.Text(16), Origin: "offline uid 0"})
 	if err != nil || strings.Contains(alice.Text(), "renews it") {
 		t.Fatalf("a person's certificate: %s %v", alice.Text(), err)
 	}
@@ -1144,7 +1144,7 @@ func TestRevokingAWorkloadCertificateUnderAnIntermediateSaysItToo(t *testing.T) 
 		t.Fatal(err)
 	}
 	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: w.Leaf.Issuer.String(),
-		Serial: w.Leaf.SerialNumber.Text(16), Origin: "admin_socket uid 0"})
+		Serial: w.Leaf.SerialNumber.Text(16), Origin: "offline uid 0"})
 	if err != nil || !strings.Contains(rep.Text(), "the workload renews it under a new serial this mark does not name") {
 		t.Fatalf("%s %v", rep.Text(), err)
 	}
@@ -1154,7 +1154,7 @@ func TestRevokingAWorkloadCertificateUnderAnIntermediateSaysItToo(t *testing.T) 
 func TestAnUnknownWorkloadPrincipalIsSaidInItsOwnTerms(t *testing.T) {
 	f, _, _ := newWorkloadFixture(t)
 	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: "spiffe://corp.example.com/host/nobody",
-		Origin: "admin_socket uid 0"})
+		Origin: "offline uid 0"})
 	if err != nil || !strings.Contains(rep.Text(), "a workload's principal is its certificate's SPIFFE ID, verbatim") {
 		t.Fatalf("%s %v", rep.Text(), err)
 	}
@@ -1186,7 +1186,7 @@ func TestALongWorkloadIDIsRevokedAndExplained(t *testing.T) {
 	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"verdict":"permit"`) {
 		t.Fatalf("explain: %s", answer(res))
 	}
-	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: id, Origin: "admin_socket uid 0"})
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: id, Origin: "offline uid 0"})
 	if err != nil || rep.TokenKeys != 1 || rep.Mark.Key != id {
 		t.Fatalf("%+v %v", rep, err)
 	}
@@ -1214,7 +1214,7 @@ func TestReachMarkReachesWhatAMarkMadeElsewhereNames(t *testing.T) {
 	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
 	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
 	n, refs, err := f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.now,
-		Origin: "admin_socket uid 0"})
+		Origin: "offline uid 0"})
 	if err != nil || n != 2 || len(refs) != 1 || refs[0].NAS != "leaf1" {
 		t.Fatalf("%d %v %v", n, refs, err)
 	}
@@ -1243,7 +1243,7 @@ func TestReachMarkByCertSplitsIssuerAndSerial(t *testing.T) {
 	ctx := context.Background()
 	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
 	n, refs, err := f.b.ReachMark(ctx, store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now,
-		Origin: "admin_socket uid 0"})
+		Origin: "offline uid 0"})
 	if err != nil || n != 0 || len(refs) != 1 || refs[0].NAS != "leaf1" {
 		t.Fatalf("%d %v %v", n, refs, err)
 	}
@@ -1327,8 +1327,8 @@ func (s deleteRevocationFails) DeleteRevocation(context.Context, string, string,
 
 // A lift whose mark was revoked again while it ran lifts nothing, and says
 // so in the operator's words, never the store's "context changed" (dial fix
-// round 4 review, I1); any other failure keeps "could not be lifted, and
-// stands". Neither is recorded, and the listener keeps the mark.
+// round 4 review, I1); any other failure says the lift may not have been
+// recorded. Neither is recorded, and the listener keeps the mark.
 func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
 	f := newFixture(t, 8)
 	ctx := context.Background()
@@ -1346,7 +1346,9 @@ func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
 			"broker: nothing was lifted: principal " + alice + " was revoked again while this lift ran, and that " +
 				"revocation stands; lift again only if it should go too"},
 		{fmt.Errorf("%w: no quorum", store.ErrUnavailable),
-			"broker: the revocation could not be lifted, and stands: store: unavailable: no quorum"},
+			"broker: the lift may not have been recorded: the store did not confirm the delete (store: unavailable: " +
+				"no quorum), so the mark may or may not be gone and this port49d keeps denying what it names; after " +
+				"the heal check `port49 revoke --list` and lift again if it stands"},
 	} {
 		f.b.Store = deleteRevocationFails{st, c.err}
 		if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err == nil || err.Error() != c.want {
@@ -1358,5 +1360,46 @@ func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
 	}
 	if recs := eventsOf(f.records(t), "revoke"); len(recs) != 1 {
 		t.Fatalf("a failed lift was recorded: %v", recs)
+	}
+}
+
+// A broker that keeps no broker.revocations_file (a standalone port49-broker, whose marks live in
+// the directory store) has nothing to save: its answer and its record carry no saved at all. A
+// saved:false there made `port49 revoke` exit 3 on a revocation that had worked.
+func TestARevocationWithNoFileToWriteReportsNoSaved(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Persist = nil
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil || rep.Partial() || rep.Attempted {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := rep.response(); !got.Standing || got.Saved != nil {
+		t.Fatalf("the wire form of a revocation with no file: standing %v, saved %v", got.Standing, got.Saved)
+	}
+	body := eventsOf(f.records(t), "revoke")[0]["revocation"].(map[string]any)
+	if _, ok := body["saved"]; ok {
+		t.Fatalf("the record carries saved: %v", body)
+	}
+	lifted, err := f.b.Lift(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil || lifted.Attempted || lifted.response().Saved != nil {
+		t.Fatalf("a lift with no file: %+v %v", lifted, err)
+	}
+}
+
+// With a file to write, saved is reported either way.
+func TestARevocationWithAFileReportsSaved(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Persist = func(context.Context) error { return nil }
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if err != nil || !rep.Attempted || rep.response().Saved == nil || !*rep.response().Saved {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if body := eventsOf(f.records(t), "revoke")[0]["revocation"].(map[string]any); body["saved"] != true {
+		t.Fatalf("record: %v", body)
+	}
+	f.b.Persist = func(context.Context) error { return errors.New("no space left on device") }
+	rep, _ = f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+	if s := rep.response().Saved; s == nil || *s {
+		t.Fatalf("a failed write must say saved:false: %v", s)
 	}
 }

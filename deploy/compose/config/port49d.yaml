@@ -6,8 +6,7 @@ metrics_listen: ":9049"
 inventory_file: /etc/port49/inventory.yaml
 policy: {file: /etc/port49/policy.yaml, watch_interval: 5s}
 encryption:
-  current: {id: c1, secret_ref: env:PORT49_ENC_KEY}
-admin_socket: /run/port49/port49d.sock
+  current: {id: c1, secret_ref: file:/etc/port49/secrets/encryption.key}
 accounting:
   spool_path: /var/spool/port49d/acct.jsonl
 stores:

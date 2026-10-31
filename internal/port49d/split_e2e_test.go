@@ -12,13 +12,12 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // copyDaemon writes another port49d's config: f.daemon's, with its own
-// admin socket, accounting spool and metrics address.
+// accounting spool and metrics address.
 func (f *fleet) copyDaemon(t *testing.T) string {
 	t.Helper()
 	return copyDaemon(t, f.daemon)
@@ -35,11 +34,12 @@ func closedWithin(c net.Conn, d time.Duration) bool {
 }
 
 // stopEveryBroker stops the one broker after it has run the keyspace and
-// kept its witness, then waits until its hold is gone from etcd and two
-// witness periods have passed: the daemons then run on with a runner that
-// held the keyspace and is dead, which is the 3am case (design §6), not
-// one that never started.
-func stopEveryBroker(t *testing.T, root *clientv3.Client, out *syncBuffer, stop func() error) {
+// kept its witness, then waits until its hold is gone from etcd and each
+// of the daemons' guards has completed two passes since (passes, from countPasses):
+// the daemons then run on with a runner that held the keyspace and is dead,
+// which is the 3am case (design §6), not one that never started.
+func stopEveryBroker(t *testing.T, root *clientv3.Client, out *syncBuffer, stop func() error,
+	passes func(t *testing.T, daemons, n int), daemons int) {
 	t.Helper()
 	waitWithin(t, out, "runner: took keyspace /port49/", 20*time.Second)
 	waitUntil(t, "the runner's witness", func() bool { return witnessAt(t, root) > 0 })
@@ -52,7 +52,7 @@ func stopEveryBroker(t *testing.T, root *clientv3.Client, out *syncBuffer, stop 
 		resp, err := root.Get(ctx, "/port49/v1/meta/hold", clientv3.WithPrefix(), clientv3.WithCountOnly())
 		return err == nil && resp.Count == 0
 	})
-	time.Sleep(2 * witnessEvery)
+	passes(t, daemons, 2) // two witness periods of each daemon's guard, with the runner dead
 }
 
 // lastOf is the last of recs, nil when there is none.
@@ -73,12 +73,6 @@ func mintStatus(t *testing.T, api, pki, device string) (int, string) {
 		t.Fatal(err)
 	}
 	return resp.StatusCode, string(body)
-}
-
-// askAdminAt asks the admin socket at p req.
-func askAdminAt(t *testing.T, p string, req admin.Request) admin.Response {
-	t.Helper()
-	return askSocket(t, p, req)
 }
 
 // A login on one port49d is answered on another at its next command, as
@@ -114,13 +108,13 @@ func TestARevocationOnOneBrokerReachesTheOther(t *testing.T) {
 	f.judged(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	apiA, _ := startBroker(t, f.broker, &out, 1)
-	cfgB := f.copyBroker(t) // its own API address and admin socket
+	cfgB := f.copyBroker(t) // its own API address
 	startBroker(t, cfgB, &out, 2)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	loginSession(t, dev, mintOn(t, apiA, f.pki, "leaf1"), &log)
 	principal := lastCommandPrincipal(t, &log)
 	held := heldBrokerConn(t, f.pki, apiA) // alice's connection to A, one request answered, kept open
-	resp := askAdminAt(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: principal})
+	resp := revokeAt(t, cfgB, revokeReq{Principal: principal})
 	if resp.Error != "" {
 		t.Fatalf("the revocation on B: %+v", resp)
 	}
@@ -206,6 +200,7 @@ func TestARootWrittenMarkDeniesWithEveryBrokerStopped(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	passes := countPasses(t)
 	root := f.srv.Client(t, "root")
 	a := startSplitDaemon(t, f.daemon, &out, 1)
 	b := startSplitDaemon(t, f.copyDaemon(t), &out, 2)
@@ -216,7 +211,7 @@ func TestARootWrittenMarkDeniesWithEveryBrokerStopped(t *testing.T) {
 	// After the takeover, whose purge takes every token minted before it.
 	waitWithin(t, &out, "runner: took keyspace /port49/", 20*time.Second)
 	spare := mintOn(t, api, f.pki, "leaf1")
-	stopEveryBroker(t, root, &out, stop)
+	stopEveryBroker(t, root, &out, stop, passes, 2)
 	if !devA.permits("alice", "configure") || !devB.permits("alice", "configure") {
 		t.Fatal("control: the session runs on, on either daemon, with every broker stopped")
 	}
@@ -250,6 +245,7 @@ func TestWithEveryBrokerStoppedOpenSessionsRunOn(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	passes := countPasses(t)
 	root := f.srv.Client(t, "root")
 	a := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
@@ -258,7 +254,7 @@ func TestWithEveryBrokerStoppedOpenSessionsRunOn(t *testing.T) {
 	// After the takeover, whose purge takes every token minted before it.
 	waitWithin(t, &out, "runner: took keyspace /port49/", 20*time.Second)
 	spare := mintOn(t, api, f.pki, "leaf1")
-	stopEveryBroker(t, root, &out, stop)
+	stopEveryBroker(t, root, &out, stop, passes, 1)
 	if !dev.permits("alice", "configure") {
 		t.Fatalf("an open session's command with every broker stopped: %v", lastCommand(t, &log))
 	}

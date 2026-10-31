@@ -31,7 +31,7 @@ import (
 // put back, and so is a mark whose lift this copy missed (lifted on
 // another replica and this one stopped before its watch delivered it, or
 // while it was stopped, or while its watch was compacted away). A lift made
-// on this replica's admin socket leaves the copy before it is answered
+// on this replica leaves the copy before it is answered
 // (Lifted), but three windows remain, each denying more: a reload whose
 // list was read before the lift's delete can stand the mark again until the
 // watch delivers the delete; the runner's putBackMissing, listing the store
@@ -352,8 +352,9 @@ func (c *marksCopy) All() []store.Revocation {
 // change this process's marks already hold. A revocation or lift made on
 // this replica is applied to its marks before the watch delivers it
 // (broker.Revoke, Lift), and the copy must see it too. A revocation reaches
-// it through the watch; a lift made on the admin socket, from adminRevoke
-// (Lifted), before it is answered, for a stop before the watch delivers it.
+// it through the watch; a lift made on this replica, from broker.Lift's
+// OnLift hook (Lifted), before it is answered, for a stop before the watch
+// delivers it.
 type copyingFeed struct {
 	store.MarkFeed
 	copy *marksCopy

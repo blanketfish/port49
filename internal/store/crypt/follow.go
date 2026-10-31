@@ -145,7 +145,12 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 			if !c.Deleted {
 				observe(l, keys, c.Key, c.Context, false)
 			}
-			l.changed(c.Key)
+			if c.Deleted {
+				l.changed(c.Key)
+			} else {
+				// the echo of a write the cache entry already holds must not evict it
+				l.changedAt(c.Key, c.Rev)
+			}
 			again()
 			if c.Rev > from {
 				from = c.Rev

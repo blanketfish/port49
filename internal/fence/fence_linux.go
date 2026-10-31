@@ -40,6 +40,21 @@ var FileOwner = func(fi fs.FileInfo) (uint32, bool) {
 	return st.Uid, true
 }
 
+// FileGroup is the gid owning what fi describes, getegid and getgroups the process's own: swapped
+// in tests for the same reason as FileOwner.
+var FileGroup = func(fi fs.FileInfo) (uint32, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Gid, true
+}
+
+var (
+	getegid   = os.Getegid
+	getgroups = os.Getgroups
+)
+
 // stRdonly is ST_RDONLY in statfs's flags, which package syscall does not
 // name.
 const stRdonly = 0x1
@@ -54,6 +69,10 @@ var ReadOnlyFS = func(f *os.File) (bool, error) {
 	}
 	return st.Flags&stRdonly != 0, nil
 }
+
+// AfterResolve runs in ReadSecret between resolving the path and opening the target: a test seam
+// for the atomic writer swapping generations in that window.
+var AfterResolve = func() {}
 
 // Read reads path, refusing a file anyone but the user this process runs as,
 // or root, could have written (spec §5.1.3). The file is reloaded live, so
@@ -110,8 +129,10 @@ func Read(path string, max int64, what string) ([]byte, error) {
 // root own (secretDirWritableByUsAlone). within must be absolute, clean and
 // not "/". The file must be owned by this process's user or root, writable by
 // its owner alone, and carry no world bit: group-read is allowed, which
-// fsGroup and an agent's perms = "0440" give. No error carries the file's
-// bytes.
+// fsGroup and an agent's perms = "0440" give, but only to a group this
+// process is in (its gid, or a supplementary group such as fsGroup), so a
+// group it is not in, like Debian's ssl-cert, cannot read the secret too.
+// No error carries the file's bytes.
 func ReadSecret(path, within string, max int64) ([]byte, error) {
 	if !filepath.IsAbs(within) || filepath.Clean(within) != within {
 		return nil, fmt.Errorf("%s: the directory a secret file must stay inside is not an absolute, clean path", path)
@@ -132,6 +153,7 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("%s resolves to %s, outside %s: a secret file, and every link to it, stays "+
 			"inside that directory", path, target, w)
 	}
+	AfterResolve()
 	dir, base := filepath.Dir(target), filepath.Base(target)
 	d, di, err := openDir(dir)
 	if err != nil {
@@ -152,6 +174,11 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 			return fmt.Errorf("%s is mode %v: a secret file may be group-readable, never world-readable or "+
 				"writable by anyone but its owner - chmod 0440 or 0600 it, or, on a mounted volume, set the "+
 				"mode where it is rendered (Kubernetes defaultMode and fsGroup, Vault Agent's perms)", target, perm)
+		}
+		if fi.Mode().Perm()&0o040 != 0 {
+			if err := groupIsOurs("the secret file "+target, fi); err != nil {
+				return err
+			}
 		}
 		excused, err := secretDirWritableByUsAlone("the directory "+dir, di)
 		if err != nil || !excused {
@@ -472,6 +499,33 @@ func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
 			"so it must belong to the user this process runs as (uid %d) or to root - chown it", what, uid, euid)
 	}
 	return nil
+}
+
+// groupIsOurs refuses a group-readable file whose group is not the process's gid or one of its
+// supplementary groups: its group-read would be a door for people this process is not.
+func groupIsOurs(what string, fi fs.FileInfo) error {
+	gid, ok := FileGroup(fi)
+	if !ok {
+		return fmt.Errorf("%s: cannot read its group", what)
+	}
+	if int(gid) == getegid() {
+		return nil
+	}
+	if groups, err := getgroups(); err == nil {
+		for _, g := range groups {
+			if int(gid) == g {
+				return nil
+			}
+		}
+	}
+	fix := "chgrp it to the service's group (on Kubernetes, fsGroup does)"
+	// chmod 0600 only helps a file this process's user owns; on a file root owns it would leave the
+	// secret readable by root alone and the next start would fail with "permission denied"
+	if uid, ok := FileOwner(fi); ok && int(uid) == Geteuid() {
+		fix += ", or chmod 0600 it"
+	}
+	return fmt.Errorf("%s is group-readable by gid %d, which this process is not in (gid %d); members of that group "+
+		"could read the secret too - %s", what, gid, getegid(), fix)
 }
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {

@@ -1,0 +1,8 @@
+# The inputs of packaging/requirements-release.txt, which the release workflow installs with
+# --require-hashes. Versions are exact: a bump is an edit here and a regeneration, reviewed.
+# Regenerate (never hand-edit the .txt), from the repository root, with `make requirements-release`. The
+# .txt's header records pip-compile's own command line, whose `--no-index` and `=None` options are
+# cosmetic (unset options, not what ran): do not paste that command, run the make target.
+build==1.2.2.post1
+setuptools==80.9.0
+ansible-core==2.21.4

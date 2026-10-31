@@ -140,7 +140,7 @@ func TestTheKeygenHintForAQuotedAliasPastes(t *testing.T) {
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r.flags[3] = fake
+	r.flags[1] = fake
 	code, _, errb := r.run(t, "leaf1")
 	if code != 255 || !strings.Contains(errb, "run ssh-keygen -f "+r.known+" -R 'a b' and") || strings.Contains(errb, "'ssh-keygen -R") {
 		t.Fatalf("code %d stderr %q", code, errb)
