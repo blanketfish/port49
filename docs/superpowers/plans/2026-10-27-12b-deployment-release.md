@@ -295,7 +295,7 @@ These are the conditions most likely to bite an operator that no single task's h
    - Task 2's tests: warned, never refused, held bytes kept;
    - every smoke's rotation cell adds a version under a new name and asserts it is in force without a restart.
 5. **A release publishes from the wrong ref or the wrong version**, or a pull request job gains `id-token`. *Pinned:*
-   - Task 12's `TestReleaseRunsOnTagsOnly`, `TestOnlyThreeJobsHoldIDToken`, `TestPublishJobsBuildNothing` and `versioncheck` at the tag;
+   - Task 12's `TestReleaseRunsOnTagsOnly`, `TestOnlyFourJobsHoldIDToken`, `TestPublishJobsBuildNothing` and `versioncheck` at the tag;
    - Task 4's `versions` job on every pull request.
 6. **A captured admin proof is replayed against another call**: the same proof for another target, another operation, another connection, or a second time. *Pinned:* Task 3b's `TestAProofIsBoundToItsRequest`, `TestAProofIsBoundToItsConnection`, `TestAProofIsSpentOnce` and `TestAPerLoginProofIsNotAnAdminProof`.
 
@@ -1553,7 +1553,7 @@ The workflow `.github/workflows/kind.yml` lands in Task 13, after L82 closes. Th
 - [ ] **Step 1: Write the failing tests.**
 
   - `TestReleaseRunsOnTagsOnly`: `release.yml`'s `on` is exactly `push: {tags: ['v*']}`, with no `pull_request`, `workflow_dispatch` or branch trigger.
-  - `TestOnlyThreeJobsHoldIDToken`:
+  - `TestOnlyFourJobsHoldIDToken`:
     - every workflow's top-level `permissions` is `contents: read`, never `id-token` or `write-all`;
     - `id-token: write` appears only in release.yml's jobs `pypi`, `goreleaser` and `image` (the last two for attestations), and in no other workflow file;
     - `pypi` has `environment: pypi`; `galaxy` has `environment: galaxy`, and reads `secrets.GALAXY_API_KEY` only in its publish step's `env:`; no other job names an environment or that secret;

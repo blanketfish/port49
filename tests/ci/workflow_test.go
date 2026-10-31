@@ -54,7 +54,7 @@ var releaseJobPerms = map[string]map[string]string{
 	"check":        {"contents": "read"},
 	"goreleaser":   {"contents": "write", "attestations": "write", "id-token": "write"},
 	"image":        {"contents": "read", "packages": "write", "attestations": "write", "id-token": "write"},
-	"chart":        {"contents": "read", "packages": "write"},
+	"chart":        {"contents": "read", "packages": "write", "attestations": "write", "id-token": "write"},
 	"build-python": {"contents": "read"},
 	"pypi":         {"id-token": "write"},
 	"build-galaxy": {"contents": "read"},

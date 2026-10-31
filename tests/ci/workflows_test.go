@@ -90,7 +90,7 @@ func TestReleaseRunsOnTagsOnly(t *testing.T) {
 	}
 }
 
-func TestOnlyThreeJobsHoldIDToken(t *testing.T) {
+func TestOnlyFourJobsHoldIDToken(t *testing.T) {
 	for name, text := range allWorkflows(t) {
 		f, _ := load(t, "../../.github/workflows/"+name)
 		if !readOnly(f.Permissions) {
@@ -106,7 +106,7 @@ func TestOnlyThreeJobsHoldIDToken(t *testing.T) {
 		}
 		for id, j := range f.Jobs {
 			holds := j.Permissions["id-token"] != nil
-			may := name == "release.yml" && (id == "pypi" || id == "goreleaser" || id == "image")
+			may := name == "release.yml" && (id == "pypi" || id == "goreleaser" || id == "image" || id == "chart")
 			if holds && !may {
 				t.Errorf("%s: job %s holds id-token", name, id)
 			}
@@ -617,5 +617,23 @@ func TestTheHelmTestRunsInCI(t *testing.T) {
 	}
 	if !found {
 		t.Error("the helm job does not run make helm-test")
+	}
+}
+
+// The chart is attested like the image: the attestation names the digest helm pushed, read from its own
+// output, and the registry gets the provenance (a chart pulled by tag alone could otherwise be anything).
+func TestTheChartJobAttestsThePushedDigest(t *testing.T) {
+	_, text := release(t)
+	i := strings.Index(text, "\n  chart:")
+	j := strings.Index(text, "\n  build-python:")
+	if i < 0 || j < i {
+		t.Fatal("cannot find the chart job")
+	}
+	job := text[i:j]
+	for _, want := range []string{"actions/attest-build-provenance@", "subject-name: ghcr.io/rhwendt/charts/port49",
+		"subject-digest: ${{ steps.push.outputs.digest }}", "push-to-registry: true", "sed -n 's/^Digest: //p'"} {
+		if !strings.Contains(job, want) {
+			t.Errorf("the chart job lacks %q", want)
+		}
 	}
 }
