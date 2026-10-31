@@ -1116,7 +1116,7 @@ revocation takes no slot, and one caller has one in flight at a time: a caller's
 key revocation, while its first is still running, is answered `503 revocation_busy` at once,
 with `Retry-After`, nothing revoked. Neither busy answer writes a record. The response
 says what was reached, names the contexts on a platform that never asks about a command, and
-repeats the text `port49 revoke` prints. A revocation whose store write is not answered may still land when the store does, over a lift made meanwhile (L79 k): it is answered `503 revocation_unconfirmed` (a lift whose delete is not answered too: the mark may or may not be gone), never "nothing was revoked"; the detail says this broker keeps denying what it names, and to check `port49 revoke --list` after the heal. A write the store refused wrote nothing and is still `503 store_unavailable`, nothing revoked. The agent waits on a revocation past these bounds (the
+repeats the text `port49 revoke` prints. A revocation whose store write is not answered may still land when the store does, over a lift made meanwhile (L79 k): it is answered `503 revocation_unconfirmed` (a lift whose delete is not answered too: the mark may or may not be gone), never "nothing was revoked"; the detail says this broker keeps denying what it names, and to check `port49 revoke --list` before trying again (a second try can stack another mark). A write the store refused, or that the store guard failed before sending (an open circuit, no free slot, a deadline already past), wrote nothing and is still `503 store_unavailable`, nothing revoked; a lift in that case, or one whose read of the mark failed, is `503 store_unavailable` too, "could not be lifted, and stands", without the store's own words. The agent waits on a revocation past these bounds (the
 slot's 10 s, the run's `RevokeTimeout`, the file's save) and never sends one twice once it began
 writing it: one it sent and got no answer to may be in force, and `port49 revoke` says to check
 `--list` or the decision log before running it again.
@@ -6621,7 +6621,8 @@ cannot reach; `--cert` reads the issuer and serial from the certificate itself, 
 the broker compares, which is safer than typing a distinguished name. `--list` shows marks only,
 and says on stderr that a self or key revocation, which leaves none, is named in the decision log.
 It exits 0 when the revocation, lift or list is done; 1 when it did not take force (refused:
-`api_right_missing`, `revocation_busy`, a touch not made, declined at the prompt; or no agent), or
+`api_right_missing`, `revocation_busy`, a touch not made, declined at the prompt; or no agent), when
+the broker answered `revocation_unconfirmed` (the write may still land: `--list` says), or
 when the broker did not answer, the revocation then possibly in force (`--list`, or for a self or
 key revocation the decision log, says), since the agent waits past the broker's own bounds and
 never sends a revocation twice; 3 when it took force and did not finish or was not saved, the mark

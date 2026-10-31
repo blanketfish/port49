@@ -246,7 +246,8 @@ func TestRevokeUnconfirmedIsNeverNothingWasDone(t *testing.T) {
 	} {
 		answer = func() (int, any) { return 503, api.Error{Error: "revocation_unconfirmed", Detail: detail} }
 		var out, errb bytes.Buffer
-		if code := run(args, &out, &errb); code == 0 || !strings.Contains(errb.String(), "port49 revoke --list") ||
+		if code := run(args, &out, &errb); code == 0 || !strings.Contains(errb.String(), "port49 revoke: the broker could not confirm it: "+detail) ||
+			!strings.Contains(errb.String(), "port49 revoke --list") ||
 			!strings.Contains(errb.String(), "even over a lift made meanwhile") ||
 			strings.Contains(errb.String(), "nothing was done") {
 			t.Errorf("%v: exit %d: %q", args, code, errb.String())

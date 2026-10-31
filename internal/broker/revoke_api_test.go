@@ -195,8 +195,7 @@ func TestARevocationBodyIsOneForm(t *testing.T) {
 
 // A revocation the store did not answer is 503 revocation_unconfirmed with a fixed sentence (it may
 // still land; see unconfirmed_test.go); the store's error goes to the process log, not to the caller. The way out it
-// names is one that exists: port49 revoke through an agent, or the policy
-// file (review M2).
+// names is one that exists: look with port49 revoke --list, or cut with the policy file (review M2).
 func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
 	f.b.skipAdminProof = true // legacy: this test is about what a revocation does, not its proof
@@ -204,7 +203,7 @@ func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "revocation_unconfirmed") ||
 		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
-		!strings.Contains(w.Body.String(), "ask an operator holding api: revoke_others to run `port49 revoke") ||
+		!strings.Contains(w.Body.String(), "check `port49 revoke --list` once the store answers, before trying again") ||
 		!strings.Contains(w.Body.String(), "remove the principal's grants from broker.policy_file") ||
 		strings.Contains(w.Body.String(), "socket") {
 		t.Fatalf("%d %s", w.Code, w.Body)

@@ -33,6 +33,10 @@ var ErrUnrecorded = errors.New("broker: the revocation may not have been recorde
 // or may not be gone.
 var ErrLiftUnrecorded = errors.New("broker: the lift may not have been recorded")
 
+// ErrLiftNotDone is a lift that definitely did not happen: the read of the mark failed, or the store
+// refused the delete (a role that never heals) or never received it. The mark stands.
+var ErrLiftNotDone = errors.New("broker: the revocation could not be lifted, and stands")
+
 // ErrNotRevoked is a lift of a revocation that is not in force.
 var ErrNotRevoked = errors.New("broker: no such revocation is in force")
 
@@ -226,7 +230,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	// delivered: a lift recorded above it is one this process had not seen,
 	// and the store flags the mark landed_after_lift (decision 51).
 	if err := b.Store.PutRevocation(store.WithMarkFloor(ctx, b.Marks.ConfirmedRevision()), mark); err != nil {
-		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) {
+		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) || errors.Is(err, store.ErrNotSent) {
 			if held { // a refused write never lands: the mark held here stands (task 2 review M2)
 				return RevokeReport{}, fmt.Errorf("broker: the revocation was refused; the revocation of %s this %s "+
 					"already holds stands (%w); "+b.fallback(), printsafe.Line(key, 160), b.proc(), err)
@@ -420,7 +424,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 		b.Marks.Set(store.Revocation{Kind: kind, Key: key}, false)
 		return RevokeReport{}, ErrNotRevoked
 	case err != nil:
-		return RevokeReport{}, fmt.Errorf("broker: reading the revocation: %w", err)
+		return RevokeReport{}, fmt.Errorf("%w: the store did not answer the read, so nothing was sent (%w)", ErrLiftNotDone, err)
 	}
 	if err := b.Store.DeleteRevocation(ctx, kind, key, store.Lift{At: b.Now(), Origin: req.Origin}); err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -428,6 +432,9 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 			// sessions; this names the mark and what to do.
 			return RevokeReport{}, fmt.Errorf("broker: nothing was lifted: %s was revoked again while this lift "+
 				"ran, and that revocation stands; lift again only if it should go too", markWhat(cur))
+		}
+		if errors.Is(err, store.ErrRefused) || errors.Is(err, store.ErrNotSent) {
+			return RevokeReport{}, fmt.Errorf("%w: the store refused the delete or it never reached the store (%w)", ErrLiftNotDone, err)
 		}
 		return RevokeReport{}, fmt.Errorf("%w: the store did not confirm the delete (%w), so the mark may or may not be "+
 			"gone and this %s keeps denying what it names; after the heal check `port49 revoke --list` and lift again "+

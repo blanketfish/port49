@@ -47,6 +47,12 @@ var ErrUnavailable = errors.New("store: unavailable")
 // (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
 var ErrRefused = errors.New("store: refused this identity")
 
+// ErrNotSent rides beside ErrUnavailable when the guard failed a call before
+// anything went to the store (an open circuit, every slot busy, a deadline
+// already past): the write cannot land later, so a caller may say "nothing
+// was done" where an unanswered call must say "may or may not have been".
+var ErrNotSent = errors.New("nothing was sent")
+
 // ErrPinHeld is a write that would move a principal's pin to another entry:
 // refused, since only a forget frees a principal (Ruling 3). It is no
 // access-control refusal (ErrRefused): the store is fine, and the operator's

@@ -213,6 +213,12 @@ func (b *Broker) revocationsLift(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_revoked", "no such revocation is in force (`port49 revoke --list`)")
 	case errors.Is(err, ErrRevocationBusy):
 		writeBusy(w, "another revocation or lift is still running, so nothing was lifted; try again")
+	case errors.Is(err, ErrLiftNotDone):
+		// The store's own words (a role, a key path) go to the log, not to the answer.
+		b.logf("broker: a lift asked by %s was not made: %v", c.principal, err)
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not be "+
+			"lifted, and stands; try again once the store answers (port49d's log says why if it keeps failing)")
 	case errors.Is(err, ErrLiftUnrecorded):
 		b.logf("broker: a lift asked by %s may not have been recorded: %v", c.principal, err)
 		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the lift may not have been "+
