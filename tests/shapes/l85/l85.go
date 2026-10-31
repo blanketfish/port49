@@ -22,7 +22,11 @@ import (
 	"github.com/rhwendt/port49/tests/shapes/l82"
 )
 
-// WithdrawWithin is (c): the route is withdrawn within this long of the pod's deletion.
+// WithdrawWithin is (c): the route is withdrawn within this long of the pod's listener closing. The
+// clock is the listener's close, not the pod's deletion: a pod keeps serving through its preStop sleep
+// (port49d.preStopSeconds), and the route is meant to outlast the deletion by that long. The first run
+// (41142675001, no preStop) measured 6.6 s from deletion; the second (41151306253, preStop 15 s) measured
+// 21.6 s from deletion with every login passing, which the old bound failed.
 const WithdrawWithin = 10 * time.Second
 
 // PoolName is MetalLB's address pool.
@@ -35,7 +39,7 @@ func title(id string) string {
 	return map[string]string{
 		"a": "(a) the source port49d sees under externalTrafficPolicy: Local is the device's own address",
 		"b": "(b) exactly the nodes running a ready port49d pod advertise the address",
-		"c": "(c) a deleted pod's route is withdrawn within 10 s, and a per-transaction client's next login passes",
+		"c": "(c) a deleted pod's route is withdrawn within 10 s of its listener closing, and no login fails past one retry",
 		"d": "(d) a rolling restart with one login a second: no login fails past one retry",
 	}[id]
 }
@@ -111,16 +115,40 @@ func JudgeNodes(advertising, ready []string) string {
 // Withdrawal is what (c) saw.
 type Withdrawal struct {
 	Withdrawn       bool          // the deleted pod's node left FRR's next hops
-	Delay           time.Duration // from the deletion to that
+	Delay           time.Duration // from the deletion to that (an observation)
+	ListenerClosed  bool          // the pod's listener close was seen
+	ClosedAfter     time.Duration // from the deletion to the listener closing
 	NextLoginPassed bool          // the per-transaction client's next login passed
+	LoginsSeen      bool          // the per-transaction client's window was read
+	FailedPastRetry int           // per-transaction logins in the window that failed past their retry
 }
 
-// JudgeWithdrawal is (c).
+// Lag is how long after the listener closed the route was withdrawn; negative when it left first.
+func (w Withdrawal) Lag() time.Duration { return w.Delay - w.ClosedAfter }
+
+// JudgeWithdrawal is (c): the route is withdrawn within WithdrawWithin of the listener closing, no login
+// fails past one retry in the window, and the next login passes. The deletion-to-withdrawal delay is an
+// observation. A close that was not seen cannot be judged: FAIL, and the row says why.
 func JudgeWithdrawal(w Withdrawal) string {
-	if w.Withdrawn && w.Delay <= WithdrawWithin && w.NextLoginPassed {
+	if w.Withdrawn && w.ListenerClosed && w.Lag() <= WithdrawWithin && w.NextLoginPassed && w.LoginsSeen && w.FailedPastRetry == 0 {
 		return l82.Pass
 	}
 	return l82.Fail
+}
+
+var closeLine = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT[0-9:.]+Z) port49d: signal received, draining$`)
+
+// ClosedAfter reads `kubectl logs --timestamps` of the deleted pod: the time of port49d's "signal
+// received, draining" line (the listeners close with it) after deletedAt.
+func ClosedAfter(logs string, deletedAt time.Time) (time.Duration, bool) {
+	for _, ln := range strings.Split(logs, "\n") {
+		if m := closeLine.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
+			if t, err := time.Parse(time.RFC3339Nano, m[1]); err == nil {
+				return t.Sub(deletedAt), true
+			}
+		}
+	}
+	return 0, false
 }
 
 // LoopStats counts the client's one-login-a-second lines.

@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,6 +157,42 @@ func (c *Cluster) Context() string { return "kind-" + c.Name }
 
 func (c *Cluster) cmd(args ...string) *exec.Cmd {
 	return exec.Command(c.kubectl, append([]string{"--kubeconfig", c.Kubeconfig, "--context", c.Context()}, args...)...)
+}
+
+// Follow starts a kubectl command that keeps running (logs -f) and returns a function that stops it and
+// returns what it printed so far. The caller filters the text before it is shown.
+func (c *Cluster) Follow(args ...string) (stop func() string) {
+	cmd := c.cmd(args...)
+	var out bytes.Buffer
+	var mu sync.Mutex
+	cmd.Stdout = &lockedBuffer{b: &out, mu: &mu}
+	if err := cmd.Start(); err != nil {
+		return func() string { return "" }
+	}
+	done := make(chan struct{})
+	go func() { cmd.Wait(); close(done) }()
+	return func() string {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			cmd.Process.Kill()
+			<-done
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return out.String()
+	}
+}
+
+type lockedBuffer struct {
+	b  *bytes.Buffer
+	mu *sync.Mutex
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
 }
 
 // KubectlTry runs kubectl and returns its stdout, and the error with the (filtered) stderr.

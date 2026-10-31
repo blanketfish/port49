@@ -53,10 +53,23 @@ func TestTheVerdicts(t *testing.T) {
 	check("nodes, one missing", JudgeNodes([]string{"a"}, []string{"a", "b"}), F)
 	check("nodes, one extra", JudgeNodes([]string{"a", "b", "c"}, []string{"a", "b"}), F)
 	check("nodes, none advertise", JudgeNodes(nil, nil), F)
-	check("withdrawn in 10 s", JudgeWithdrawal(Withdrawal{true, 10 * time.Second, true}), P)
-	check("withdrawn in 11 s", JudgeWithdrawal(Withdrawal{true, 11 * time.Second, true}), F)
-	check("never withdrawn", JudgeWithdrawal(Withdrawal{false, 0, true}), F)
-	check("next login fails", JudgeWithdrawal(Withdrawal{true, time.Second, false}), F)
+	w := func(delay, closed time.Duration, mod func(*Withdrawal)) Withdrawal {
+		x := Withdrawal{Withdrawn: true, Delay: delay, ListenerClosed: true, ClosedAfter: closed, NextLoginPassed: true, LoginsSeen: true}
+		if mod != nil {
+			mod(&x)
+		}
+		return x
+	}
+	check("run 1: no preStop, closed at 0, withdrawn at 6.6 s", JudgeWithdrawal(w(6600*time.Millisecond, 0, nil)), P)
+	check("run 2: preStop 15 s, withdrawn at 21.6 s", JudgeWithdrawal(w(21600*time.Millisecond, 15*time.Second, nil)), P)
+	check("10 s after the close", JudgeWithdrawal(w(25*time.Second, 15*time.Second, nil)), P)
+	check("11 s after the close", JudgeWithdrawal(w(26*time.Second, 15*time.Second, nil)), F)
+	check("withdrawn before the listener closed", JudgeWithdrawal(w(5*time.Second, 15*time.Second, nil)), P)
+	check("never withdrawn", JudgeWithdrawal(w(0, 0, func(x *Withdrawal) { x.Withdrawn = false })), F)
+	check("the close was not seen", JudgeWithdrawal(w(5*time.Second, 0, func(x *Withdrawal) { x.ListenerClosed = false })), F)
+	check("next login fails", JudgeWithdrawal(w(time.Second, 0, func(x *Withdrawal) { x.NextLoginPassed = false })), F)
+	check("the window was not read", JudgeWithdrawal(w(time.Second, 0, func(x *Withdrawal) { x.LoginsSeen = false })), F)
+	check("a login failed past its retry", JudgeWithdrawal(w(time.Second, 0, func(x *Withdrawal) { x.FailedPastRetry = 1 })), F)
 	check("rollout clean", JudgeRollout(LoopStats{Seconds: 100, PassFirst: 97, PassOnRetry: 3}), P)
 	check("rollout with a failure past the retry", JudgeRollout(LoopStats{Seconds: 100, PassFirst: 96, PassOnRetry: 3, FailedPastRetry: 1}), F)
 	check("no logins at all", JudgeRollout(LoopStats{}), F)
@@ -233,5 +246,18 @@ func TestAStoppedSessionWithNoEndIsStillOpenNotUnreadable(t *testing.T) {
 	}
 	if _, err := ParseStoppedSession("ok 0\nweird\n", true); err == nil {
 		t.Error("garbage was accepted")
+	}
+}
+
+func TestClosedAfterReadsTheDrainingLineOfTheDeletedPod(t *testing.T) {
+	del := time.Date(2026, 10, 31, 0, 10, 0, 0, time.UTC)
+	logs := "2026-10-31T00:09:00.1Z port49d: listening on [::]:49\n2026-10-31T00:10:15.250000000Z port49d: signal received, draining\n"
+	if d, ok := ClosedAfter(logs, del); !ok || d != 15250*time.Millisecond {
+		t.Errorf("%v %v", d, ok)
+	}
+	for _, none := range []string{"", "port49d: signal received, draining\n", "2026-10-31T00:10:15Z port49d: stopped\n"} {
+		if _, ok := ClosedAfter(none, del); ok {
+			t.Errorf("%q read as a close", none)
+		}
 	}
 }

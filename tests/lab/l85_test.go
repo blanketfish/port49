@@ -451,6 +451,8 @@ func (r *l85Run) cellC(t *testing.T, cell *l82.Cell) {
 		stops = append(stops, r.background(l85Client, "session", "-addr", addr, "-for", "75s"))
 	}
 	loop := r.background(l85Client, "loop", "-addr", addr, "-for", "75s")
+	// the deleted pod's own log, with times, ends at its drain: the listener closes with the line
+	drainLog := cl.Follow("-n", ns, "logs", "-f", "--timestamps", "-c", "port49d", "t-port49d-0")
 	time.Sleep(5 * time.Second)
 
 	t0 := time.Now()
@@ -464,13 +466,23 @@ func (r *l85Run) cellC(t *testing.T, cell *l82.Cell) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if w.Withdrawn {
-		l82Row(cell, "delay from the pod's deletion to its node leaving FRR's next hops", w.Delay.Round(100*time.Millisecond).String())
+		l82Row(cell, "delay from the pod's deletion to its node leaving FRR's next hops (an observation)", w.Delay.Round(100*time.Millisecond).String())
 		got, _ := r.client(l85Client, "probe", "-addr", addr)
 		got = strings.TrimSpace(got)
 		l82Row(cell, "a per-transaction client's next login, after the withdrawal", got)
 		w.NextLoginPassed = got == "pass"
 	} else {
 		l82Row(cell, "the deleted pod's node in FRR's next hops", "still there after 1m0s")
+	}
+	// the drain line is read once the pod's log has ended
+	w.ClosedAfter, w.ListenerClosed = l85.ClosedAfter(drainLog(), t0)
+	if w.ListenerClosed {
+		l82Row(cell, "delay from the pod's deletion to its listener closing (the end of its preStop)", w.ClosedAfter.Round(100*time.Millisecond).String())
+		if w.Withdrawn {
+			l82Row(cell, "delay from the listener closing to the node leaving FRR's next hops (negative: before)", w.Lag().Round(100*time.Millisecond).String())
+		}
+	} else {
+		l82Row(cell, "the pod's listener closing", "not seen in its log, so the route cannot be judged against it")
 	}
 	l82Row(cell, "next hops before the deletion", r.names(hops))
 	l82Row(cell, "the deleted pod's node", r.names([]string{victim.HostIP}))
@@ -495,6 +507,7 @@ func (r *l85Run) cellC(t *testing.T, cell *l82.Cell) {
 	}
 	loopOut, _ := loop()
 	if ls, err := l85.ParseLoop(loopOut); err == nil {
+		w.LoginsSeen, w.FailedPastRetry = true, ls.FailedPastRetry
 		l82Row(cell, "per-transaction logins in the same window", fmt.Sprintf("%d: %d passed first, %d on the retry, %d failed past it", ls.Seconds, ls.PassFirst, ls.PassOnRetry, ls.FailedPastRetry))
 	}
 	cell.Verdict = l85.JudgeWithdrawal(w)
