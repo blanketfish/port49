@@ -109,12 +109,30 @@ func (f *File) read() error {
 
 // pickUpLate reads the file again when this handle opened with none there and has written none: the
 // store is created by another process (init-enrollments runs beside a running broker), and a handle
-// that read the path once would otherwise never see it. Under f.mu.
-func (f *File) pickUpLate() {
+// that read the path once would otherwise never see it. A file it finds and cannot take (a link, an
+// unreadable or foreign one, one sealed under another key) is an error that says why and is not
+// remembered, so the next look reads the path again and the operator's fix needs no restart. Under f.mu.
+func (f *File) pickUpLate() error {
 	if f.present || f.lost != "" || f.mark != nil || len(f.records) > 0 {
-		return
+		return nil
 	}
-	_ = f.read() // a link at the path stays as it was; the next look tries again
+	raw, err := fence.ReadNoLink(f.path, maxFile, "enrollments file")
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	why := ""
+	if err != nil {
+		why = "it cannot be read (" + err.Error() + "): fix its owner and mode, or remove a link"
+	} else {
+		var body store.EnrollmentBody
+		if body, why = f.open(raw); why == "" {
+			f.present = true
+			f.load(body)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s: %s; this broker looks again at its next recheck, with no restart", store.ErrEnrollmentStoreLost,
+		f.path, why)
 }
 
 // Lost is why the file did not open, "" when it did.
@@ -265,7 +283,9 @@ func (f *File) SecondFactorPrincipals(_ context.Context) ([]string, error) {
 func (f *File) GetEnrollmentMark(_ context.Context) (store.EnrollmentMark, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.pickUpLate()
+	if err := f.pickUpLate(); err != nil {
+		return store.EnrollmentMark{}, err
+	}
 	if err := f.lostErr(); err != nil {
 		return store.EnrollmentMark{}, err
 	}

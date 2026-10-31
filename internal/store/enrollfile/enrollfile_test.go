@@ -542,3 +542,38 @@ func TestAHandleThatWroteNeverAdoptsAFileThatAppearsLater(t *testing.T) {
 		t.Fatalf("a handle that wrote adopted the file that appeared: %v", err)
 	}
 }
+
+// A late file the fence refuses (a link at the path), one that does not decode, and one sealed under
+// a key this broker lacks are each said, as lost with their reason, and none is remembered: the next
+// look reads the path again, so the operator's fix takes effect with no restart.
+func TestALateFileThatCannotBeReadIsSaidAndRetriedAtTheNextLook(t *testing.T) {
+	ctx := context.Background()
+	dir := dirFor(t)
+	path := filepath.Join(dir, "enrollments.json")
+	running := openAt(t, path, keys())
+	good := filepath.Join(dir, "good.json")
+	written(t, good, keys())
+	lost := func(want string) {
+		t.Helper()
+		_, err := running.GetEnrollmentMark(ctx)
+		if !errors.Is(err, store.ErrEnrollmentStoreLost) || !strings.Contains(err.Error(), want) ||
+			!strings.Contains(err.Error(), "looks again") {
+			t.Fatalf("got %v, want lost naming %q and saying it looks again", err, want)
+		}
+	}
+	if err := os.Symlink(good, path); err != nil {
+		t.Fatal(err)
+	}
+	lost("symbolic link")
+	os.Remove(path)
+	if err := os.WriteFile(path, []byte("not an enrollments file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lost("not an enrollments file this port49 reads")
+	if err := os.Rename(good, path); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := running.GetEnrollmentMark(ctx); err != nil || !m.CreatedAt.Equal(t0) {
+		t.Fatalf("after the fix: %v, %v", m, err)
+	}
+}
