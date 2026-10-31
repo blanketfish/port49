@@ -213,6 +213,11 @@ func (b *Broker) revocationsLift(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_revoked", "no such revocation is in force (`port49 revoke --list`)")
 	case errors.Is(err, ErrRevocationBusy):
 		writeBusy(w, "another revocation or lift is still running, so nothing was lifted; try again")
+	case errors.Is(err, ErrLiftUnrecorded):
+		b.logf("broker: a lift asked by %s may not have been recorded: %v", c.principal, err)
+		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the lift may not have been "+
+			"recorded: the store did not confirm it, so the mark may or may not be gone and this "+b.proc()+
+			" keeps denying what it names; after the heal check `port49 revoke --list` and lift again if it stands")
 	case err != nil:
 		b.adminFailed(w, "lift", err)
 	default:

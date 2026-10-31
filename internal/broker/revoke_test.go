@@ -1327,8 +1327,8 @@ func (s deleteRevocationFails) DeleteRevocation(context.Context, string, string,
 
 // A lift whose mark was revoked again while it ran lifts nothing, and says
 // so in the operator's words, never the store's "context changed" (dial fix
-// round 4 review, I1); any other failure keeps "could not be lifted, and
-// stands". Neither is recorded, and the listener keeps the mark.
+// round 4 review, I1); any other failure says the lift may not have been
+// recorded. Neither is recorded, and the listener keeps the mark.
 func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
 	f := newFixture(t, 8)
 	ctx := context.Background()
@@ -1346,7 +1346,9 @@ func TestALiftThatFindsTheMarkMadeAgainSaysNothingWasLifted(t *testing.T) {
 			"broker: nothing was lifted: principal " + alice + " was revoked again while this lift ran, and that " +
 				"revocation stands; lift again only if it should go too"},
 		{fmt.Errorf("%w: no quorum", store.ErrUnavailable),
-			"broker: the revocation could not be lifted, and stands: store: unavailable: no quorum"},
+			"broker: the lift may not have been recorded: the store did not confirm the delete (store: unavailable: " +
+				"no quorum), so the mark may or may not be gone and this port49d keeps denying what it names; after " +
+				"the heal check `port49 revoke --list` and lift again if it stands"},
 	} {
 		f.b.Store = deleteRevocationFails{st, c.err}
 		if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err == nil || err.Error() != c.want {

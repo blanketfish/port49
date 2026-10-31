@@ -24,6 +24,15 @@ var ErrBadRevocation = errors.New("broker: a revocation names a principal, or a 
 // nothing (decision 34). The HTTP endpoint answers it 503 revocation_busy.
 var ErrRevocationBusy = errors.New("broker: another revocation or lift is still running")
 
+// ErrUnrecorded wraps the error of a revocation whose write the store did not answer: a copy already
+// sent can still land, over a lift made meanwhile, so the outcome is unknown, not "nothing was
+// revoked". A write the store refused wrote nothing and is not this.
+var ErrUnrecorded = errors.New("broker: the revocation may not have been recorded")
+
+// ErrLiftUnrecorded is ErrUnrecorded's for a lift whose delete the store did not answer: the mark may
+// or may not be gone.
+var ErrLiftUnrecorded = errors.New("broker: the lift may not have been recorded")
+
 // ErrNotRevoked is a lift of a revocation that is not in force.
 var ErrNotRevoked = errors.New("broker: no such revocation is in force")
 
@@ -241,10 +250,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			}
 			b.MarkChanged(store.MarkChange{Revocation: told, Standing: true})
 		}
-		return RevokeReport{}, fmt.Errorf("broker: the revocation may not have been recorded: a copy already sent "+
-			"can still land when the directory answers again, and then stands everywhere, even over a lift made "+
-			"meanwhile. Until then this %s denies what it names, until a lift on this %s or its restart; after the "+
-			"heal check `port49 revoke --list` (%w); "+b.fallback(), b.proc(), b.proc(), err)
+		return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrUnrecorded, b.unrecordedWhat(), err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
@@ -423,7 +429,9 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 			return RevokeReport{}, fmt.Errorf("broker: nothing was lifted: %s was revoked again while this lift "+
 				"ran, and that revocation stands; lift again only if it should go too", markWhat(cur))
 		}
-		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be lifted, and stands: %w", err)
+		return RevokeReport{}, fmt.Errorf("%w: the store did not confirm the delete (%w), so the mark may or may not be "+
+			"gone and this %s keeps denying what it names; after the heal check `port49 revoke --list` and lift again "+
+			"if it stands", ErrLiftUnrecorded, err, b.proc())
 	}
 	b.Marks.Set(cur, false)
 	if b.Conns != nil {
@@ -498,6 +506,14 @@ func (b *Broker) detach(ctx context.Context) (context.Context, context.CancelFun
 		d = DefaultRevokeTimeout
 	}
 	return context.WithTimeout(context.WithoutCancel(ctx), d)
+}
+
+// unrecordedWhat is what an unrecorded revocation means for whoever asked, without the store's own
+// words: it can still land, and until then this process denies what it names.
+func (b *Broker) unrecordedWhat() string {
+	return "a copy already sent can still land when the directory answers again, and then stands everywhere, even " +
+		"over a lift made meanwhile. Until then this " + b.proc() + " denies what it names, until a lift on this " +
+		b.proc() + " or its restart; after the heal check `port49 revoke --list`"
 }
 
 // persist writes the marks in force to broker.revocations_file.

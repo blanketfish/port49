@@ -229,8 +229,15 @@ func (b *Broker) runRevoke(w http.ResponseWriter, r *http.Request, pol *policy.P
 		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
 	case errors.Is(err, ErrRevocationBusy):
 		writeBusy(w, "another revocation or lift is still running, so nothing was revoked; try again")
+	case errors.Is(err, ErrUnrecorded):
+		// The write may still land when the store answers, over a lift made meanwhile: the outcome is
+		// unknown, and is said so (the store's own words go to the log).
+		b.logf("broker: a revocation asked by %s may not have been recorded: %v", asker, err)
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the revocation may not have been "+
+			"recorded: "+b.unrecordedWhat()+"; "+b.unrecordedNote())
 	case err != nil:
-		// The mark was not written, so nothing was revoked beyond this
+		// The store refused the mark, so nothing was revoked beyond this
 		// port49d's own copy (Revoke): Revoke's own error names the store's
 		// fault and the fallback, for port49d's log.
 		what := req.Principal

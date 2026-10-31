@@ -232,3 +232,31 @@ func TestRevokeExitFollowsSavedAndIncomplete(t *testing.T) {
 		}
 	}
 }
+
+// A revocation or lift the broker could not confirm may still land: the CLI prints the broker's words,
+// exits non-zero, and never says "nothing was done". A plain unavailable store still means it did not run.
+func TestRevokeUnconfirmedIsNeverNothingWasDone(t *testing.T) {
+	var answer func() (int, any)
+	newAdminStub(t, func(agent.AdminRequest) (int, any) { return answer() })
+	const detail = "the revocation may not have been recorded: a copy already sent can still land when the directory " +
+		"answers again, and then stands everywhere, even over a lift made meanwhile; after the heal check `port49 revoke --list`"
+	for _, args := range [][]string{
+		{"revoke", "--principal", "user:carol@example.com", "--yes"},
+		{"revoke", "--lift", "--principal", "user:carol@example.com"},
+	} {
+		answer = func() (int, any) { return 503, api.Error{Error: "revocation_unconfirmed", Detail: detail} }
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code == 0 || !strings.Contains(errb.String(), "port49 revoke --list") ||
+			!strings.Contains(errb.String(), "even over a lift made meanwhile") ||
+			strings.Contains(errb.String(), "nothing was done") {
+			t.Errorf("%v: exit %d: %q", args, code, errb.String())
+		}
+	}
+	answer = func() (int, any) {
+		return 503, api.Error{Error: "store_unavailable", Detail: "the revocations could not be read"}
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"revoke", "--list"}, &out, &errb); code == 0 || strings.Contains(errb.String(), "nothing was done") {
+		t.Errorf("an unavailable store: exit %d: %q", code, errb.String())
+	}
+}

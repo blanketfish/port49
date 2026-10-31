@@ -103,13 +103,16 @@ func adminRefused(name string, resp agent.AdminResponse, touched bool, stderr io
 	case resp.Status == 503 && e.Error == "revocation_busy":
 		fmt.Fprintf(stderr, "%s: another revocation or lift is still running, so nothing was done; run it again in a "+
 			"few seconds\n", name)
+	case resp.Status == 503 && e.Error == "revocation_unconfirmed":
+		// It may have gone through, even over a lift made meanwhile: the broker's words, not "nothing was done".
+		fmt.Fprintf(stderr, "%s: the broker could not confirm it: %s\n", name, printsafe.Line(e.Detail, 1200))
 	case resp.Status == 413:
 		fmt.Fprintf(stderr, "%s: the broker takes at most %d MiB; an export port49 wrote is smaller than that: check "+
 			"the file is the export\n", name, api.MaxImportBytes>>20)
 	case resp.Status == 400:
 		fmt.Fprintf(stderr, "%s: the broker refused the request: %s; fix that and run it again\n", name, detail)
 	case resp.Status == 503:
-		fmt.Fprintf(stderr, "%s: the broker is unavailable just now (%s: %s); nothing was done: run it again shortly\n",
+		fmt.Fprintf(stderr, "%s: the broker is unavailable just now (%s: %s); run it again shortly\n",
 			name, safeLine(e.Error), detail)
 	default:
 		fmt.Fprintf(stderr, "%s: the broker answered %d %s: %s; nothing is known to have run: look at the broker's "+

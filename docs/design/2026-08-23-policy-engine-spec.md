@@ -1116,7 +1116,7 @@ revocation takes no slot, and one caller has one in flight at a time: a caller's
 key revocation, while its first is still running, is answered `503 revocation_busy` at once,
 with `Retry-After`, nothing revoked. Neither busy answer writes a record. The response
 says what was reached, names the contexts on a platform that never asks about a command, and
-repeats the text `port49 revoke` prints. The agent waits on a revocation past these bounds (the
+repeats the text `port49 revoke` prints. A revocation whose store write is not answered may still land when the store does, over a lift made meanwhile (L79 k): it is answered `503 revocation_unconfirmed` (a lift whose delete is not answered too: the mark may or may not be gone), never "nothing was revoked"; the detail says this broker keeps denying what it names, and to check `port49 revoke --list` after the heal. A write the store refused wrote nothing and is still `503 store_unavailable`, nothing revoked. The agent waits on a revocation past these bounds (the
 slot's 10 s, the run's `RevokeTimeout`, the file's save) and never sends one twice once it began
 writing it: one it sent and got no answer to may be in force, and `port49 revoke` says to check
 `--list` or the decision log before running it again.
@@ -1342,7 +1342,7 @@ import's is `merge` or `replace`, a space, and the 12 hex digits. A proved call 
 step did not finish and the call is to be run again (exit 3). An operation that refuses after its
 proof (a forget with no `broker.directory`, an import that would undo a later enrollment) answers
 `409 admin_operation_failed` with the operation's own text; a lift of a mark that is not in force,
-`404 not_revoked`; a revocation or lift behind another, `503 revocation_busy`. `POST
+`404 not_revoked`; a revocation or lift behind another, `503 revocation_busy`; one whose store write is not answered, `503 revocation_unconfirmed`. `POST
 /v1/directory/import` takes the sealed export as its body, at most 16 MiB (413 `payload_too_large`
 over it, before any challenge), under a read deadline of its own, 120 s, since the server's 30 s
 bounds a mint and would hold a 16 MiB body to about 4.5 Mbit/s. `?replace=true|false` is the only
