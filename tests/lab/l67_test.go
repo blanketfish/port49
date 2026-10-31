@@ -1613,7 +1613,7 @@ broker:
     grace: 4h
 `, filepath.Join(dir, "inventory.yaml"), filepath.Join(dir, "acct.jsonl"),
 		filepath.Join(pki, testpki.LabServerCert), filepath.Join(pki, testpki.LabServerKey), limits,
-		filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "revocations.json"), uri, x.d.pki.caFile, x.bindDN, x.baseDN,
+		filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "revocations.json"), uri, x.d.pki.privateCA(), x.bindDN, x.baseDN,
 		x.groupsBaseDN, x.userFilter, x.groupFilter, x.usernameAttr, filepath.Join(pki, testpki.LabCA),
 		filepath.Join(dir, adminRolesFile))
 	policy := `scopes:

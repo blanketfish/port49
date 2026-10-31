@@ -126,7 +126,7 @@ broker:
     nested_groups: direct
     grace: 4h
 `, o.dir, filepath.Join(o.pki.lab, testpki.LabServerCert), filepath.Join(o.pki.lab, testpki.LabServerKey), state,
-		o.usersCA, human, l67HostPort(o.x.uri), o.x.d.pki.caFile, o.x.bindDN, o.x.baseDN, o.x.groupsBaseDN,
+		o.usersCA, human, l67HostPort(o.x.uri), o.x.d.pki.privateCA(), o.x.bindDN, o.x.baseDN, o.x.groupsBaseDN,
 		o.x.userFilter, o.x.groupFilter, o.x.usernameAttr, issuance, filepath.Join(o.dir, adminRolesFile)) + stores
 }
 

@@ -937,8 +937,15 @@ func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, e
 	if suffix != "" {
 		name += "-" + suffix
 	}
-	out, err = privatePolicy(out, filepath.Join(dir, name+"-policy"))
+	priv, err := labPrivateSub(name + "-policy")
 	if err != nil {
+		return "", err
+	}
+	out, err = privatePolicy(out, priv)
+	if err != nil {
+		return "", err
+	}
+	if out, err = stagePrivateFiles(out); err != nil {
 		return "", err
 	}
 	// A broker block makes its policy_file port49d's policy, and the device key sets are then that file's
@@ -1077,6 +1084,18 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	dir := filepath.Join(root, "tests", "lab", "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	// The fence refuses the repository's group-writable ancestors: a trust or secret file the config names
+	// inside the tree is read from a private copy, in a config of its own beside the original.
+	if raw, err := os.ReadFile(cfgPath); err != nil {
+		return err
+	} else if staged, err := stagePrivateFiles(string(raw)); err != nil {
+		return err
+	} else if staged != string(raw) {
+		cfgPath = filepath.Join(dir, strings.TrimSuffix(filepath.Base(cfgPath), ".yaml")+"-staged.yaml")
+		if err := os.WriteFile(cfgPath, []byte(staged), 0o644); err != nil {
+			return err
+		}
 	}
 	l.logPath = filepath.Join(dir, "decisions-"+l.p.name+".jsonl")
 	l.errPath = filepath.Join(dir, "port49d-"+l.p.name+".log")

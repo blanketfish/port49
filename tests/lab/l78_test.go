@@ -64,7 +64,11 @@ func (q *qualEnv) l78() {
 		q.t.Fatal(err)
 	}
 	cfg := q.config() // writes the private copy of the policy the steps replace
-	policy := filepath.Join(root, "tests", "lab", "logs", "port49d-qual-"+q.l.p.name+"-policy", "policy.yaml")
+	privDir, err := labPrivateSub("port49d-qual-" + q.l.p.name + "-policy")
+	if err != nil {
+		q.t.Fatal(err)
+	}
+	policy := filepath.Join(privDir, "policy.yaml")
 	if _, err := os.Stat(policy); err != nil {
 		q.t.Fatalf("INVALID: the conformance config's private policy is not at %s: %v", policy, err)
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/testpki"
@@ -41,6 +42,7 @@ func assertBrokerFilesAreRight(t *testing.T, name, yaml string, load func(string
 		t.Errorf("%s: tls_cert_file %s and tls_key_file %s are not a certificate and its key: %v",
 			name, filepath.Base(b.TLSCertFile), filepath.Base(b.TLSKeyFile), err)
 	}
+	assertFencedFilesReadable(t, name, yaml)
 	if b.ClientCAFile == "" {
 		t.Errorf("%s: no x509 trust anchor\n%s", name, yaml)
 		return
@@ -117,6 +119,10 @@ func labTree(t *testing.T) string {
 	if err := testpki.WriteLabWith(filepath.Join(lab, "logs", "slice-pki"), sliceEmail, []string{oncallEmail}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// A checkout on a lab host sits under a group-writable directory, which the fence refuses above any file.
+	if err := os.Chmod(dst, 0o775); err != nil {
+		t.Fatal(err)
+	}
 	old := root
 	root = dst
 	t.Cleanup(func() { root = old })
@@ -163,7 +169,11 @@ func TestDerivedDaemonConfigsLoad(t *testing.T) {
 	slice := string(raw)
 	apiPolicy := strings.Replace(slice, "tests/lab/slice/policy.yaml", "tests/lab/slice/api-policy.yaml", 1)
 	sessionPolicy := strings.Replace(slice, "tests/lab/slice/policy.yaml", "tests/lab/slice/session-policy.yaml", 1)
-	touch, err := withAdminTouch(apiPolicy, filepath.Join(r, adminRolesFile))
+	roots := filepath.Join(r, adminRolesFile)
+	if err := os.WriteFile(roots, []byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	touch, err := withAdminTouch(apiPolicy, roots)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +184,15 @@ func TestDerivedDaemonConfigsLoad(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		assertDaemonConfigLoads(t, name, path)
+		cfg, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		staged, err := stagePrivateFiles(string(cfg))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		assertFencedFilesReadable(t, name, staged)
 	}
 }
 
@@ -195,5 +214,47 @@ func TestL74DaemonConfigLoads(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertDaemonConfigLoads(t, "l74 daemon "+string(rune('0'+i)), path)
+	}
+}
+
+// assertFencedFilesReadable reads every trust or secret file a config names through the fence, from a tree
+// whose root is group-writable, as a lab host's checkout is: one left inside the tree is refused.
+func assertFencedFilesReadable(t *testing.T, name, cfg string) {
+	t.Helper()
+	seen := 0
+	for _, m := range stagedKeys.FindAllStringSubmatch(cfg, -1) {
+		seen++
+		p := m[2]
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, p)
+		}
+		if _, err := os.Lstat(p); err != nil && m[1] == "attestation_roots_file" {
+			continue // the cell writes its roots when it runs
+		}
+		if _, err := fence.Read(p, fence.TrustFileMax, m[1]); err != nil {
+			t.Errorf("%s: %s %s is refused by the fence: %v", name, m[1], m[2], err)
+		}
+	}
+	if strings.Contains(cfg, "tls_cert_file") && seen == 0 {
+		t.Errorf("%s: no fenced file found in the config: the scan is broken", name)
+	}
+}
+
+// The directory CA a broker or this process reads is a private copy outside the tree.
+func TestTheDirectoryCAIsStagedOutsideTheTree(t *testing.T) {
+	r := labTree(t)
+	ca := filepath.Join(r, "tests", "lab", "logs", "directory", "pki", "ca.pem")
+	if err := os.MkdirAll(filepath.Dir(ca), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ca, []byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := &dirPKI{caFile: ca}
+	if _, err := fence.Read(ca, fence.TrustFileMax, "ca_file"); err == nil {
+		t.Fatal("the control: a file in a group-writable tree was read; the fixture proves nothing")
+	}
+	if _, err := fence.Read(p.privateCA(), fence.TrustFileMax, "ca_file"); err != nil {
+		t.Fatalf("the staged copy is refused: %v", err)
 	}
 }

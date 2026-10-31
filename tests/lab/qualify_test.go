@@ -238,8 +238,15 @@ func (q *qualEnv) config() string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		q.t.Fatal(err)
 	}
-	text, err = privatePolicy(text, filepath.Join(dir, "port49d-qual-"+q.l.p.name+"-policy"))
+	priv, err := labPrivateSub("port49d-qual-" + q.l.p.name + "-policy")
 	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	text, err = privatePolicy(text, priv)
+	if err != nil {
+		q.t.Fatalf("INVALID: %v", err)
+	}
+	if text, err = stagePrivateFiles(text); err != nil {
 		q.t.Fatalf("INVALID: %v", err)
 	}
 	q.cfgText = text

@@ -616,7 +616,7 @@ func (l *labDir) config(mode directory.Nested, groupsBase string, bind directory
 		m.Attribute = m.Kind.DefaultAttribute()
 	}
 	return directory.Config{
-		Servers: []directory.Server{{URI: l.uri, Priority: 100, StartTLS: l.startTLS}}, CAFile: l.d.pki.caFile, Bind: bind,
+		Servers: []directory.Server{{URI: l.uri, Priority: 100, StartTLS: l.startTLS}}, CAFile: l.d.pki.privateCA(), Bind: bind,
 		BaseDN: l.baseDN, GroupsBaseDN: groupsBase, UserFilter: l.userFilter, GroupFilter: l.groupFilter,
 		PrincipalAttribute: "mail", UsernameAttribute: l.usernameAttr, GroupNameAttribute: "cn", MemberAttribute: "member",
 		Mapping: m, Nested: mode, MaxDepth: 16, QueryTimeout: 15 * time.Second, HealthInterval: 30 * time.Second,
