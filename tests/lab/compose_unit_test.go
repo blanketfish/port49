@@ -4,6 +4,7 @@ package lab
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -88,5 +89,14 @@ func TestComposeStatesKeepsOnlyServiceStateAndExitCode(t *testing.T) {
 	got := composeStates("time=x level=warn msg=\"a warning\"\nport49-broker=exited/1\nport49d=running/0\netcd-1=running/0\n")
 	if want := "port49-broker=exited/1 port49d=running/0 etcd-1=running/0"; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestComposeExitNamesTheExitCodeOrThatItDidNotRun(t *testing.T) {
+	if got := composeExit(exec.Command("sh", "-c", "exit 3").Run()); got != "exit 3" {
+		t.Errorf("got %q", got)
+	}
+	if got := composeExit(exec.Command("/nonexistent/port49-test").Run()); got != "did not run" {
+		t.Errorf("got %q", got)
 	}
 }

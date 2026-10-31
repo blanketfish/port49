@@ -160,6 +160,15 @@ func (c *composeStack) states() string {
 	return composeStates(out)
 }
 
+// composeExit is the command's exit code, or that it never ran.
+func composeExit(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("exit %d", ee.ExitCode())
+	}
+	return "did not run"
+}
+
 // composeStates keeps the service=state/exit words of ps's output, one line.
 func composeStates(out string) string {
 	var words []string
@@ -496,7 +505,9 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 	}
 
 	if out, err := c.run("up", "-d", "--build"); err != nil {
-		t.Fatalf("docker compose up: %v\n%s\ncompose.log (tail):\n%s", err, out, c.tail(40))
+		// Build and pull logs: kept in a private file, and the line carries the structured part.
+		t.Fatalf("INVALID: docker compose up failed (%s); services (service=state/exit code): %s; output kept in %s",
+			composeExit(err), c.states(), l67Kept("compose-up", out))
 	}
 	l.logPath = filepath.Join(c.dir, "decisions-"+l.p.name+".jsonl")
 	l.errPath = filepath.Join(c.dir, "port49d-"+l.p.name+".log")
