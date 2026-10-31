@@ -455,8 +455,8 @@ encryption:
   current: {id: l74, secret_ref: env:L74_ENC_KEY}
 broker:
   listen: "%[1]s:8443"
-  tls_cert_file: %[4]s
-  tls_key_file: %[5]s
+  tls_cert_file: %[3]s
+  tls_key_file: %[4]s
   client_ca_file: %[5]s
   policy_file: %[2]s/policy.yaml
   state_dir: %[6]s
