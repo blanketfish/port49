@@ -687,7 +687,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 
 	// Carol enrolls at b1: a sign-in with no code answers 202 and the
-	// secret, and her first code confirms it (L67's flow).
+	// secret, and their first code confirms it (L67's flow).
 	a1 := apiOf(bs[1])
 	ans := a1.signIn("carol", pw, "")
 	if ans.Status != http.StatusAccepted || ans.Enroll == nil {
@@ -799,7 +799,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	}
 	mustUnlock(bs[3])
 	// Bob signs in by certificate alone and has no second factor, so resetting
-	// his is harmless (it only opens an enrollment window): the control that
+	// theirs is harmless (it only opens an enrollment window): the control that
 	// reset-second-factor works at b3 before the cut.
 	if out, code, _ := asAdmin(bs[3], "carol", "reset-second-factor",
 		"user:bob@corp.example.com"); code != 0 {
@@ -850,7 +850,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		return r.Kvs[0].ModRevision
 	}
 	pinRev := func() int64 { return pinRevOf(pinKey) }
-	// Cell f uses principals no earlier cell used: the first bind is alice's, so b3 has no pin for her, and
+	// Cell f uses principals no earlier cell used: the first bind is alice's, so b3 has no pin for them, and
 	// the cached pin is dave's, whom no earlier cut told a cached-membership line about (the line is at most
 	// once per principal per 10 minutes). Bob and carol made the earlier cells' admin calls through b3.
 	alicePinKey := "/port49/v1/mb/user:alice@corp.example.com"
@@ -858,12 +858,12 @@ func l75(t *testing.T, w *regionWorld) []string {
 	m1, _ := l75Mint(w, daveC, bs[2].addr(), "")
 	rev1 := pinRev()
 	// b3 mints for dave while the directory answers: its session store holds
-	// his membership with the pin as it stands (the cached pin the cut serves).
+	// their membership with the pin as it stands (the cached pin the cut serves).
 	if st, e := l75Mint(w, daveC, bs[3].addr(), ""); st != http.StatusOK {
 		t.Fatalf("INVALID: dave's mint at b3 before the forget: %d %s", st, e)
 	}
 	_, fcode, _ := asAdmin(bs[1], "bob", "forget", "user:dave@corp.example.com")
-	// b2's next mint pins her again once its pins feed has delivered the forget:
+	// b2's next mint pins them again once its pins feed has delivered the forget:
 	// mint until the pin's revision moves, or give up after 30s.
 	m2, rev2 := 0, rev1
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
@@ -901,7 +901,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	if err := l75AnsweringAgain(bs[3].proc, 30*time.Second); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	// The control for alice's refusal: after the heal he is a member b3 mints for.
+	// The control for alice's refusal: after the heal they are a member b3 mints for.
 	mbAfter, _ := l75Mint(w, aliceC, bs[3].addr(), "")
 	row("f", "membership's pin: written once in the directory; a forget at broker 1 re-pins at broker 2's next "+
 		"mint; with broker 3 cut, a forget there refused, a pinned member served from the cached pin and said, "+
