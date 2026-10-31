@@ -149,16 +149,42 @@ func TestALiftThatWasRefusedOrNeverSentStands(t *testing.T) {
 	}
 }
 
-// A write the guard failed before anything was sent cannot land later: nothing was revoked.
-func TestARevocationThatWasNeverSentIsNothingRevoked(t *testing.T) {
+// A write the guard failed before anything was sent cannot land later, but this broker still denies what
+// it names (revoke fails closed): the mark stays, the answer is store_unavailable and never says nothing
+// was revoked. A write the store refused wrote nothing, and its pending mark goes.
+func TestARevocationThatWasNeverSentKeepsDenyingHere(t *testing.T) {
 	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Marks = store.NewMarks()
 	f.b.Store = putRevocationNotSent{f.b.Store}
 	code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
-	if code != 503 || decodeAdminAnswer(t, raw).Error != "store_unavailable" || !strings.Contains(string(raw), "nothing was revoked") {
+	if code != 503 || decodeAdminAnswer(t, raw).Error != "store_unavailable" {
 		t.Fatalf("%d %s", code, raw)
 	}
-	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); errors.Is(err, ErrUnrecorded) {
-		t.Fatalf("a write never sent was classed unconfirmed: %v", err)
+	for _, want := range []string{"not recorded in the store", "will not land later", "denies what it names", "port49 revoke --list"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the answer lacks %q: %s", want, raw)
+		}
+	}
+	for _, bad := range []string{"nothing was revoked", "nothing was done", "circuit"} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("the answer says %q: %s", bad, raw)
+		}
+	}
+	if !f.b.Marks.Holds(store.RevocationPrincipal, bobKey) {
+		t.Fatal("a revocation never sent dropped this broker's own deny")
+	}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); errors.Is(err, ErrUnrecorded) || !errors.Is(err, ErrNotRecorded) {
+		t.Fatalf("a write never sent: %v", err)
+	}
+}
+
+func TestARefusedRevocationDropsItsPendingMark(t *testing.T) {
+	f := newMFAFixture(t, withAllAdminRights())
+	f.b.Marks = store.NewMarks()
+	f.b.Store = putRevocationRefused{f.b.Store}
+	f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+	if f.b.Marks.Holds(store.RevocationPrincipal, bobKey) {
+		t.Fatal("a refused revocation left a mark here")
 	}
 }
 
@@ -173,7 +199,7 @@ func TestTheUnconfirmedAnswerSaysCheckBeforeTryingAgain(t *testing.T) {
 		t.Errorf("the answer points a self-revoker at another operator: %s", s)
 	}
 	list, again := strings.Index(s, "port49 revoke --list"), strings.Index(s, "try again")
-	if list < 0 || (again >= 0 && again < list) || !strings.Contains(s, "stack") {
+	if list < 0 || (again >= 0 && again < list) || !strings.Contains(s, "landed") {
 		t.Errorf("the answer must say to check --list before any retry, and why: %s", s)
 	}
 }

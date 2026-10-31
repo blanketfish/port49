@@ -236,6 +236,11 @@ func (b *Broker) runRevoke(w http.ResponseWriter, r *http.Request, pol *policy.P
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the revocation may not have been "+
 			"recorded: "+b.unrecordedWhat()+"; "+b.unconfirmedNote())
+	case errors.Is(err, ErrNotRecorded):
+		b.logf("broker: a revocation asked by %s was not sent to the store: %v", asker, err)
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation was "+
+			b.notRecordedWhat()+"; check `port49 revoke --list` first")
 	case err != nil:
 		// The store refused the mark, so nothing was revoked beyond this
 		// port49d's own copy (Revoke): Revoke's own error names the store's
@@ -385,8 +390,9 @@ func (b *Broker) unrecordedNote() string {
 // again, because a retry can stack a second mark. Whoever asked may be revoking their own principal,
 // so it names no one else to ask.
 func (b *Broker) unconfirmedNote() string {
-	return "check `port49 revoke --list` once the store answers, before trying again: a second try can stack another " +
-		"mark; meanwhile an operator can remove the principal's grants from broker.policy_file"
+	return "check `port49 revoke --list` once the store answers, before trying again: if the mark is there it landed " +
+		"and needs nothing; if it is absent and nobody lifted it, run it again; meanwhile an operator can remove the " +
+		"principal's grants from broker.policy_file"
 }
 
 // ownNote is the first line of a self revocation asked by the caller's own

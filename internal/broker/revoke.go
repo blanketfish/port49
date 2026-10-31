@@ -33,6 +33,10 @@ var ErrUnrecorded = errors.New("broker: the revocation may not have been recorde
 // or may not be gone.
 var ErrLiftUnrecorded = errors.New("broker: the lift may not have been recorded")
 
+// ErrNotRecorded is a revocation the store was never sent (the guard's open circuit, no free slot, a
+// deadline already past): it cannot land later, yet this process keeps denying what it names.
+var ErrNotRecorded = errors.New("broker: the revocation was not recorded in the store")
+
 // ErrLiftNotDone is a lift that definitely did not happen: the read of the mark failed, or the store
 // refused the delete (a role that never heals) or never received it. The mark stands.
 var ErrLiftNotDone = errors.New("broker: the revocation could not be lifted, and stands")
@@ -230,7 +234,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	// delivered: a lift recorded above it is one this process had not seen,
 	// and the store flags the mark landed_after_lift (decision 51).
 	if err := b.Store.PutRevocation(store.WithMarkFloor(ctx, b.Marks.ConfirmedRevision()), mark); err != nil {
-		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) || errors.Is(err, store.ErrNotSent) {
+		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) {
 			if held { // a refused write never lands: the mark held here stands (task 2 review M2)
 				return RevokeReport{}, fmt.Errorf("broker: the revocation was refused; the revocation of %s this %s "+
 					"already holds stands (%w); "+b.fallback(), printsafe.Line(key, 160), b.proc(), err)
@@ -253,6 +257,10 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 				told = r
 			}
 			b.MarkChanged(store.MarkChange{Revocation: told, Standing: true})
+		}
+		if errors.Is(err, store.ErrNotSent) {
+			// Nothing reached the store, so nothing can land; the pending mark stays all the same (fail closed).
+			return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrNotRecorded, b.notRecordedWhat(), err)
 		}
 		return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrUnrecorded, b.unrecordedWhat(), err)
 	}
@@ -513,6 +521,12 @@ func (b *Broker) detach(ctx context.Context) (context.Context, context.CancelFun
 		d = DefaultRevokeTimeout
 	}
 	return context.WithTimeout(context.WithoutCancel(ctx), d)
+}
+
+// notRecordedWhat is what a revocation the store was never sent means for whoever asked.
+func (b *Broker) notRecordedWhat() string {
+	return "not recorded in the store and will not land later, but this " + b.proc() + " denies what it names " +
+		"until a lift on this " + b.proc() + " or its restart; run it again once the store answers"
 }
 
 // unrecordedWhat is what an unrecorded revocation means for whoever asked, without the store's own

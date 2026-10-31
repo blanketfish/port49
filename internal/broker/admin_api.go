@@ -218,7 +218,7 @@ func (b *Broker) revocationsLift(w http.ResponseWriter, r *http.Request) {
 		b.logf("broker: a lift asked by %s was not made: %v", c.principal, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not be "+
-			"lifted, and stands; try again once the store answers (port49d's log says why if it keeps failing)")
+			"lifted, and stands; try again once the store answers ("+b.proc()+"'s log says why if it keeps failing)")
 	case errors.Is(err, ErrLiftUnrecorded):
 		b.logf("broker: a lift asked by %s may not have been recorded: %v", c.principal, err)
 		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the lift may not have been "+
