@@ -499,3 +499,27 @@ func TestTheFileHoldsEveryEnrollmentProperty(t *testing.T) {
 }
 
 func kp(k crypt.Key) *crypt.Key { return &k }
+
+// A process that opened the path while no file was there is a running broker; init-enrollments, run
+// by another process, then creates the file. The running one must find it at its next look, or an
+// offline init takes effect only at a restart.
+func TestAHandleOpenedBeforeTheFileExistedFindsItWhenAnotherProcessCreatesIt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(dirFor(t), "enrollments.json")
+	running := openAt(t, path, keys())
+	if _, err := running.GetEnrollmentMark(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("before the init: %v, want ErrNotFound", err)
+	}
+	other := openAt(t, path, keys())
+	if err := other.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := running.GetEnrollmentMark(ctx)
+	if err != nil || !m.CreatedAt.Equal(t0) {
+		t.Fatalf("after another process created the file: %v, %v", m, err)
+	}
+	// And it then holds what the file holds: a create from this handle is refused.
+	if err := running.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0}); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("a second create: %v, want ErrConflict", err)
+	}
+}

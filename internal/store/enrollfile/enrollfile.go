@@ -74,28 +74,47 @@ func Open(path string, keys crypt.Keys, now func() time.Time) (*File, error) {
 	}
 	f := &File{path: abs, dir: filepath.Dir(abs), base: filepath.Base(abs), keys: keys, now: now,
 		records: map[string]store.SecondFactor{}}
-	raw, err := fence.ReadNoLink(abs, maxFile, "enrollments file")
+	if err := f.read(); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// read loads the file at f.path into f, once: a missing file leaves f an empty store with no mark; one
+// that does not open leaves it lost; a link at the path is an error.
+func (f *File) read() error {
+	raw, err := fence.ReadNoLink(f.path, maxFile, "enrollments file")
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return f, nil
+		return nil
 	case errors.Is(err, syscall.ELOOP):
-		return nil, err // a link at the path: a configuration refusal, as the fence's others
+		return err // a link at the path: a configuration refusal, as the fence's others
 	case err != nil:
 		// A file that cannot be read (a restore left it root's at 0600, an
 		// I/O error, one over maxFile) does not open: lost, so the broker's
 		// other paths keep serving and only password sign-in refuses (D7).
 		f.present, f.lost = true, "it cannot be read ("+err.Error()+"): fix its owner and mode, restore it, or "+
 			"run `port49 directory reset-second-factor --all`"
-		return f, nil
+		return nil
 	}
 	f.present = true
 	body, why := f.open(raw)
 	if why != "" {
 		f.lost = why
-		return f, nil
+		return nil
 	}
 	f.load(body)
-	return f, nil
+	return nil
+}
+
+// pickUpLate reads the file again when this handle opened with none there and has written none: the
+// store is created by another process (init-enrollments runs beside a running broker), and a handle
+// that read the path once would otherwise never see it. Under f.mu.
+func (f *File) pickUpLate() {
+	if f.present || f.lost != "" || f.mark != nil || len(f.records) > 0 {
+		return
+	}
+	_ = f.read() // a link at the path stays as it was; the next look tries again
 }
 
 // Lost is why the file did not open, "" when it did.
@@ -246,6 +265,7 @@ func (f *File) SecondFactorPrincipals(_ context.Context) ([]string, error) {
 func (f *File) GetEnrollmentMark(_ context.Context) (store.EnrollmentMark, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.pickUpLate()
 	if err := f.lostErr(); err != nil {
 		return store.EnrollmentMark{}, err
 	}

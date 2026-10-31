@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/rhwendt/port49/internal/store/enrollfile"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
 
@@ -152,5 +153,42 @@ func TestTheWiringsGoroutinesEndWithTheContext(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the goroutines did not end with the context")
+	}
+}
+
+// A broker running on the sealed file, which found no file at start, leaves enrollment_store_lost
+// within one interval of an offline init-enrollments, which another process runs: without a restart.
+func TestARunningBrokerOnTheFileFollowsAnOfflineInit(t *testing.T) {
+	old := broker.EnrollmentRecheckEvery
+	broker.EnrollmentRecheckEvery = 20 * time.Millisecond
+	t.Cleanup(func() { broker.EnrollmentRecheckEvery = old })
+
+	cfg, file := signInConfig(t, "127.0.0.1:0")
+	m := metrics.New(prometheus.NewRegistry())
+	b := builtSignInBroker(t, cfg, m)
+	b.Say = func(string, ...any) {}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wirePasswordSignIn(ctx, cfg, b, signInTestKeys, m, nil, io.Discard)
+	if b.EnrollmentStoreLost() == "" {
+		t.Fatal("the broker is not lost before the init")
+	}
+	other, err := enrollfile.Open(file, signInTestKeys, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine := crypt.WrapEnrollments(other, signInTestKeys, metrics.New(prometheus.NewRegistry()).CryptOpenFailures)
+	if err := mine.CreateEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for b.EnrollmentStoreLost() != "" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the running broker is still lost after an offline init: %q", b.EnrollmentStoreLost())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if v := testutil.ToFloat64(m.DirectoryEnrollmentStoreOK); v != 1 {
+		t.Errorf("the gauge reads %v after the init", v)
 	}
 }
