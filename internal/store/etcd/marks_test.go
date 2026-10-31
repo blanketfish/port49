@@ -144,6 +144,34 @@ func TestALiftWhoseLeaseFailsLiftsNothing(t *testing.T) {
 	}
 }
 
+// A lift whose own read of the mark fails sent nothing: ErrNotSent, so the broker says the mark stands
+// instead of "may or may not be gone" (L79 j).
+func TestALiftWhoseReadFailsWasNotSent(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	r := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: t0}
+	if err := s.PutRevocation(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	dead, err := clientv3.New(clientv3.Config{Endpoints: []string{"127.0.0.1:1"}, DialTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dead.Close() })
+	ok := s.tok
+	s.tok = dead
+	lctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	err = s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0})
+	s.tok = ok
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
+		t.Fatalf("a lift whose read failed (nothing was sent): %v", err)
+	}
+	if _, err := s.GetRevocation(ctx, r.Kind, r.Key); err != nil {
+		t.Fatalf("the mark does not stand: %v", err)
+	}
+}
+
 // A lift whose reply was lost after it committed, sent again (the hedge's
 // copy) and answered by the else branch, still counts as this process's
 // own lift: its own later revoke is not flagged.
