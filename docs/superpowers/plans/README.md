@@ -351,6 +351,10 @@ spec, two code, two CI, seven artifact-and-smoke, four lab, one docs; decision 5
 the systemd, container and Kubernetes shapes as peers, each with a CI smoke test, plus the tag-only release (packages, image,
 chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite warning, and lab rows L82–L85.
 **12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: L82, L83 and L85 closed 2026-10-31 (kind run 41155086403; see Carried forward), L84 partial (Compose measured, systemd and the Docker cells open), L86 closed 2026-11-01 (`tests/lab/results/L86-ser8.md`).
+**12c written 2026-10-31** (`2026-10-31-12c-reference-configs-alarms-load.md`, eighteen tasks; decision 55 written by its Task 1). It builds
+the reference device AAA configuration per platform (RFC 8907 and RFC 9887), the alert rules, load validation at the design §5 rate, the
+failure matrix on the compose stack, the Junos `idle-timeout` per class, `policy diff`'s ceiling line and the bounded `key_ref` label, and
+lab rows L39 (b, c), L84's systemd cells and L87–L90. Two decisions are open for Ryan (the plan's "Decisions for Ryan").
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7595,6 +7599,10 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
     - load validation at the §5 rate and the items sized from it.
   - Inventory themes C, D and F. Written after 12b merges.
   - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, L84 (a) and the systemd (c) cells, and whatever L83 or L85 left FAIL (L83: the injector as a reload and the CSI driver).
+  - **Plan:** `2026-10-31-12c-reference-configs-alarms-load.md`.
+  - **Spec:** decision 55 (its Task 1); §5.6 and decision 21 (the class `idle-timeout`), decision 33; §15 L39, L84 and L87–L90; design §5, §12, §13, §14 and §15.
+  - **Lab:** opens L87 (SR Linux on an ERROR), L88 (the reference configurations on every platform), L89 (Velero) and L90 (Oxidized host keys); closes L39 and L84 with them. Load runs on the lab host (`make lab-load`); the kind rows and L84 run in label-gated CI.
+  - Status: **written 2026-10-31**; eighteen tasks (one spec, three code, one alerts, three load, one failure matrix, one reference configurations, six lab, one CI test, one docs). Two decisions are open for Ryan (the Junos `idle-timeout` per class; the restore guard's ERROR), each written to its recommendation.
 
 Carried here from plan 1's review:
 
