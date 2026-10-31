@@ -118,7 +118,7 @@ here) and the new version takes effect with no restart: `port49_key_secret_files
 **Order matters.** Put the key file in place first, then add the policy line that names it. To remove a
 key, take the policy line out first, then the file. The other order is a 3am outage: a policy line naming a
 file that is not there makes port49d refuse its start (`lstat ...: no such file`), so on a restart it
-crash-loops until you restore the file in the `port49-keys` volume or take the policy line out.
+crash-loops until you restore the file in the `port49d-keys` volume or take the policy line out.
 
 ## A deployment
 
@@ -342,7 +342,7 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 |---|---|---|---|
 | A secret file missing or unreadable | `config: encryption.current.secret_ref (id "c1") file:/etc/port49/secrets/encryption.key: open ...: permission denied` (or the file it names); a key file: `config: keys.k version 1 secret_ref file:/run/port49/keys/tacacs_v1: ...` | `docker compose logs port49d` | write the file as the table above says (`setup` installs a key that is absent, and refuses one that differs; it never rewrites one) |
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | fix the mode the line names in the volume (`docker run --rm -v <volume>:/v alpine:3.22 chmod go-w /v/<dir>`) |
-| A key readable by a group the container is not in | `...is group-readable by gid N, which this process is not in (gid M); ...` | same | the container's group is 65532: `chgrp 65532` the file in the volume, or `chmod 0600` it |
+| A key readable by a group the container is not in | `...is group-readable by gid N, which this process is not in (gid M); ...` | same | the container's group is 65532: `chgrp 65532` the file in the volume (`chmod 0600` only if the container's user owns the file: on a `root:65532` file it makes the key unreadable) |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `docker compose logs port49-broker` | copy `issuing-ca.pem` and `.key` from a broker that holds it (above) |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `docker compose logs port49d` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the container restarts | `docker compose logs port49d` | nothing: it retries; start etcd |
@@ -353,4 +353,4 @@ Each etcd data volume and `broker-state` (design §13's runbook).
 
 ## Not here yet
 
-Plan 12's install page, compaction quota sizing, and etcd alarms.
+Plan 13's install page, compaction quota sizing, and etcd alarms.

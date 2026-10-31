@@ -240,3 +240,29 @@ func TestNoExampleHoldsASecret(t *testing.T) {
 		t.Error("walked no file under deploy/")
 	}
 }
+
+// The compose etcd is pinned by the digest the chart's example pins, and port49d and the broker carry the
+// chart's hardening: a tag can move, and a container with a writable root and every capability is more than it needs.
+func TestComposeIsPinnedAndHardenedLikeTheChart(t *testing.T) {
+	digest := regexp.MustCompile(`etcd:v[0-9.]+@sha256:[0-9a-f]{64}`)
+	compose := read(t, "deploy/compose/compose.yaml")
+	want := digest.FindString(read(t, "deploy/helm/port49/examples/etcd/statefulset.yaml"))
+	if want == "" || !strings.Contains(compose, want) {
+		t.Errorf("compose's etcd is not pinned to the chart's %q", want)
+	}
+	for _, svc := range []string{"port49-broker", "port49d"} {
+		i := strings.Index(compose, "\n  "+svc+":\n")
+		if i < 0 {
+			t.Fatalf("no %s service", svc)
+		}
+		block := compose[i+1:]
+		if end := regexp.MustCompile("\n  [a-z]").FindStringIndex(block[3:]); end != nil {
+			block = block[:3+end[0]] // up to the next service
+		}
+		for _, line := range []string{"no-new-privileges:true", "cap_drop: [ALL]", "read_only: true"} {
+			if !strings.Contains(block, line) {
+				t.Errorf("%s lacks %q", svc, line)
+			}
+		}
+	}
+}

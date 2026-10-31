@@ -14,7 +14,7 @@
 name: port49
 
 x-etcd: &etcd
-  image: gcr.io/etcd-development/etcd:v3.6.15
+  image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
   user: "65532:65532"
   restart: unless-stopped
   networks: [port49]
@@ -105,6 +105,11 @@ services:
     build: {context: ../.., target: port49}
     entrypoint: [/usr/local/bin/port49-broker]
     restart: unless-stopped
+    # the chart's hardening (deploy/helm/port49/templates/_helpers.tpl): neither process writes outside its
+    # volumes, and port49d binds 49 by the sysctl, so no capability is needed
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
     networks: [port49]
     ports:
       - ${PORT49_BROKER_PUBLISH:-127.0.0.1:8443}:8443
@@ -124,6 +129,11 @@ services:
     # on the one tag, and `never` keeps `up` from trying to pull it
     pull_policy: never
     restart: unless-stopped
+    # the chart's hardening (deploy/helm/port49/templates/_helpers.tpl): neither process writes outside its
+    # volumes, and port49d binds 49 by the sysctl, so no capability is needed
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    read_only: true
     networks: [port49]
     # Non-root binds 49: Docker sets this in each container's network
     # namespace already; it is stated so a runtime that does not is caught.
