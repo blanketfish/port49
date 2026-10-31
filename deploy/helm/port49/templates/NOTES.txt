@@ -13,4 +13,9 @@ No attestation roots are configured (broker.attestationRootsConfigMap): every ad
 No policy is set (--set-file policy=policy.yaml): port49d refuses to serve one it cannot load.
 {{- end }}
 
-The issuing CA: run deploy/helm/port49/scripts/copy-issuer.sh {{ .Release.Namespace }} {{ .Release.Name }} once, then every broker is the same CA.
+{{- $own := index .Values.config.broker "broker" | default dict }}
+{{- $id := index $own "identity" | default dict }}
+{{- if index $id "issuance" }}
+
+The issuing CA: run deploy/helm/port49/scripts/copy-issuer.sh {{ .Release.Namespace }} {{ .Release.Name }} --from 0 once, then every broker is the same CA.
+{{- end }}

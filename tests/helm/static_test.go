@@ -445,3 +445,36 @@ func TestAnycastRefusalsOnTheGoRender(t *testing.T) {
 		t.Errorf("the boundary (15) was refused: %v", err)
 	}
 }
+
+func TestAHalfDescribedPreviousEncryptionKeyIsRefusedAtRender(t *testing.T) {
+	for name, v := range map[string]string{
+		"no key file":   "encryption:\n  previous: {id: c0}\n",
+		"the same id":   "encryption:\n  previous: {id: c1, key: old.key}\n",
+		"the same file": "encryption:\n  id: e2\n  key: encryption.key\n  previous: {id: c1, key: encryption.key}\n",
+	} {
+		if _, err := goRenderErr(t, baseValues(t, v)...); err == nil || !strings.Contains(err.Error(), "encryption.previous") {
+			t.Errorf("%s: want a refusal naming encryption.previous, got %v", name, err)
+		}
+	}
+	if _, err := goRenderErr(t, baseValues(t, rotateOn)...); err != nil {
+		t.Errorf("a rotation was refused: %v", err)
+	}
+}
+
+// NOTES.txt tells the person who just installed what to run: the copy-issuer line is the exact command
+// (--from is required, and pasting it without gives the usage error), and only when issuance is on.
+func TestTheNotesGiveTheRunnableCopyIssuerLineOnlyWithIssuance(t *testing.T) {
+	s := read(t, "deploy/helm/port49/templates/NOTES.txt")
+	i := strings.Index(s, "copy-issuer.sh")
+	if i < 0 {
+		t.Fatal("NOTES.txt no longer names copy-issuer.sh")
+	}
+	line := s[i:]
+	line = line[:strings.Index(line, "\n")]
+	if !strings.Contains(line, "--from 0") {
+		t.Errorf("the NOTES line %q lacks --from 0", line)
+	}
+	if !strings.Contains(s[:i], `index $id "issuance"`) {
+		t.Error("the copy-issuer line is printed whether or not issuance is on")
+	}
+}
