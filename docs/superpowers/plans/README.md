@@ -8130,6 +8130,14 @@ and no result is asserted for it until its results note and spec §15 row exist.
     ruleset, public GHCR at go-public); no automated admin call (offboarding goes through the identity provider's back-channel logout);
     the L86 run.
 
+## Pre-beta review (between plan 12c and plan 13)
+
+Ryan, 2026-10-31: after plan 12c merges and before plan 13 starts, one adversarial whole-project
+review on Opus 5.5 at effort `xhigh`. It looks for cross-plan gaps that per-plan final reviews,
+which each see one branch, cannot see. Its findings are fixed before plan 13, so the docs
+describe reviewed behavior and no flaw it finds goes public. Order: 12b, lab L86, 12c, this
+review, 13, then the `v0.1.0` beta.
+
 ## Plan 13 — User and admin documentation
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
