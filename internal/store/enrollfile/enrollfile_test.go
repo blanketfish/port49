@@ -612,6 +612,14 @@ func TestAWriteNeverDestroysALateFileItHasNotJudged(t *testing.T) {
 		{"reset --all", func(f *File) error {
 			return f.PutEnrollmentMark(ctx, store.EnrollmentMark{CreatedAt: t0})
 		}, false},
+		{"import", func(f *File) error {
+			raw, err := json.Marshal(store.EnrollmentBody{CreatedAt: t0, ExportedAt: t0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = f.Import(ctx, raw, true)
+			return err
+		}, false},
 		{"unlock", func(f *File) error { return f.PutUnlock(ctx, alice, t0) }, true},
 		{"enrolling", func(f *File) error { return f.SwapSecondFactor(ctx, factor(alice, "uuid:1"), 0) }, true},
 	} {
