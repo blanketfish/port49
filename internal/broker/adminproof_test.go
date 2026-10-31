@@ -893,3 +893,36 @@ func TestReloadedAttestationRootsTakeEffect(t *testing.T) {
 		t.Fatal("a refused proof revoked someone")
 	}
 }
+
+// whyWords is a copy of a list the spec owns: the test below reads the spec's row and fails when the two
+// drift, so a word added to the spec (or here) cannot slip past the no-proof-material scan.
+func TestTheWhyWordsAreTheSpecsClosedSet(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/design/2026-08-23-policy-engine-spec.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(l, "| `admin_touch` | broker |") {
+			row = l
+			break
+		}
+	}
+	if row == "" {
+		t.Fatal("the spec has no admin_touch event row")
+	}
+	i := strings.Index(row, "one of a closed set of fixed words")
+	if i < 0 {
+		t.Fatal("the spec's admin_touch row no longer states the closed set")
+	}
+	tail := row[i:]
+	tail = tail[strings.Index(tail, ": ")+2:]
+	tail = tail[:strings.Index(tail, ". ")]
+	var spec []string
+	for _, w := range strings.Split(tail, ",") {
+		spec = append(spec, strings.Trim(strings.TrimSpace(w), "`"))
+	}
+	if !slices.Equal(spec, whyWords) {
+		t.Errorf("spec's why words %v differ from whyWords %v", spec, whyWords)
+	}
+}
