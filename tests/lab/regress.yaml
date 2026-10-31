@@ -464,3 +464,5 @@ excluded:
     reason: measured in the Junos lab tests of 2026-09 and recorded in port49-junos-lab-tests-results.md, which no harness test writes.
   - rows: [L54]
     reason: its test went with `port49 devices trust` (459efda6); the note is a record and nothing rewrites it. L53's host-key scan remains in the L53 entry.
+  - rows: [L82, L83, L85]
+    reason: kind clusters whose nodes are privileged containers, run in CI only (the lab-kind label and .github/workflows/lab-kind.yml, which run make lab-l82, lab-l83 and lab-l85). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.
