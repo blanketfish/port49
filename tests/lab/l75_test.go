@@ -155,9 +155,11 @@ subjects:
      api: [unlock_sign_in, reset_second_factor, forget_principals]}
   - {name: bob, identity: ["user:bob@corp.example.com"], token_ttl: 900s,
      api: [unlock_sign_in, reset_second_factor, forget_principals]}
+  - {name: dave, identity: ["user:dave@corp.example.com"], token_ttl: 900s}
 grants:
   - {subject: carol, scope: all, roles: [admin]}
   - {subject: bob, scope: all, roles: [admin]}
+  - {subject: dave, scope: all, roles: [admin]}
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: k}
 keys:
@@ -528,7 +530,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 		return &c
 	}
-	carolCert, bobCert := certOf("carol"), certOf("bob")
+	carolCert, bobCert, daveCert := certOf("carol"), certOf("bob"), certOf("dave")
 	iss := oidctest.NewIssuer(t)
 	issCA := filepath.Join(w.dir, "l75-issuer-ca.pem")
 	if err := os.WriteFile(issCA, iss.CertPEM(), 0o600); err != nil {
@@ -830,10 +832,10 @@ func l75(t *testing.T, w *regionWorld) []string {
 	w.guard()
 	d1 := w.dirMembers[1]
 	pinKey := "/port49/v1/mb/user:carol@corp.example.com" // esc() is url.PathEscape, which keeps : and @
-	pinRev := func() int64 {
-		js, err := d1.ctl(w.dirEndpoints(), "get", pinKey, "-w", "json")
+	pinRevOf := func(key string) int64 {
+		js, err := d1.ctl(w.dirEndpoints(), "get", key, "-w", "json")
 		if err != nil {
-			w.t.Fatalf("INVALID: reading carol's pin from the directory: %v", err)
+			w.t.Fatalf("INVALID: reading a pin from the directory: %v", err)
 		}
 		var r struct {
 			Kvs []struct {
@@ -845,7 +847,11 @@ func l75(t *testing.T, w *regionWorld) []string {
 		}
 		return r.Kvs[0].ModRevision
 	}
-	carolC, bobC := l75Client(w.pki, carolCert), l75Client(w.pki, bobCert)
+	pinRev := func() int64 { return pinRevOf(pinKey) }
+	// The first bind is dave's: no earlier cell used him at any broker, so b3 has no pin for him (bob and
+	// carol made the earlier cells' admin calls through b3 and are pinned there already).
+	davePinKey := "/port49/v1/mb/user:dave@corp.example.com"
+	carolC, daveC := l75Client(w.pki, carolCert), l75Client(w.pki, daveCert)
 	m1, _ := l75Mint(w, carolC, bs[2].addr(), "")
 	rev1 := pinRev()
 	// b3 mints for carol while the directory answers: its session store holds
@@ -867,6 +873,9 @@ func l75(t *testing.T, w *regionWorld) []string {
 	if st, e := l75Mint(w, carolC, bs[3].addr(), ""); st != http.StatusOK {
 		t.Fatalf("INVALID: carol's mint at b3 after the re-pin: %d %s", st, e)
 	}
+	if r := pinRevOf(davePinKey); r != 0 {
+		t.Fatalf("INVALID: dave is already pinned in the directory (revision %d), so cell f's first bind is not one", r)
+	}
 	bs[3].proc.mark()
 	if !bs[3].hang(w, true) {
 		t.Fatal("INVALID: b3's store status never said the directory was cut")
@@ -880,7 +889,7 @@ func l75(t *testing.T, w *regionWorld) []string {
 	_, f3, ft3 := asAdmin(bs[3], "bob", "forget", "user:carol@corp.example.com")
 	m3, _ := l75Mint(w, carolC, bs[3].addr(), "")
 	cached := strings.Contains(bs[3].proc.said(), "serving user:carol@corp.example.com's cached directory membership")
-	mb, mbErr := l75Mint(w, bobC, bs[3].addr(), "")
+	mb, mbErr := l75Mint(w, daveC, bs[3].addr(), "")
 	if !bs[3].hang(w, false) {
 		t.Fatal("INVALID: b3 did not reach the directory again within 90s of the heal")
 	}
@@ -889,13 +898,13 @@ func l75(t *testing.T, w *regionWorld) []string {
 	if err := l75AnsweringAgain(bs[3].proc, 30*time.Second); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	// The control for bob's refusal: after the heal he is a member b3 mints for.
-	mbAfter, _ := l75Mint(w, bobC, bs[3].addr(), "")
+	// The control for dave's refusal: after the heal he is a member b3 mints for.
+	mbAfter, _ := l75Mint(w, daveC, bs[3].addr(), "")
 	row("f", "membership's pin: written once in the directory; a forget at broker 1 re-pins at broker 2's next "+
 		"mint; with broker 3 cut, a forget there refused, a pinned member served from the cached pin and said, "+
 		"a first bind refused (and served after the heal)",
 		fmt.Sprintf("mint at b2 %d, pin revision %d; forget at b1 exit %d; next mint at b2 %d, pin revision %d; cut: "+
-			"forget at b3 exit %d in %v; carol's mint at b3 %d (said %v); bob's first mint at b3 %d %s; bob's mint at b3 after the heal %d",
+			"forget at b3 exit %d in %v; carol's mint at b3 %d (said %v); dave's first mint at b3 %d %s; dave's mint at b3 after the heal %d",
 			m1, rev1, fcode, m2, rev2, f3, ft3.Round(time.Millisecond), m3, cached, mb, mbErr, mbAfter),
 		m1 == http.StatusOK && rev1 > 0 && fcode == 0 && m2 == http.StatusOK && rev2 > rev1 && f3 != 0 &&
 			m3 == http.StatusOK && cached && mb != http.StatusOK && mbAfter == http.StatusOK)
