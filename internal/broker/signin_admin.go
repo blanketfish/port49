@@ -391,9 +391,16 @@ func (b *Broker) InitEnrollments(ctx context.Context, origin string) (string, er
 	b.say("sign-in: %s created the enrollment store", origin)
 	if err := b.CheckEnrollmentStore(ctx); err != nil {
 		return "created the enrollment store; the broker could not read it back yet (" +
-			printsafe.Line(err.Error(), 200) + "), and the next scheduled pass looks again", nil
+			printsafe.Line(err.Error(), 200) + "), and the next scheduled pass looks again" + runningNote(), nil
 	}
-	return "created the enrollment store; password sign-in is on" + enrollWindowNote(b, now), nil
+	return "created the enrollment store; password sign-in is on" + enrollWindowNote(b, now) + runningNote(), nil
+}
+
+// runningNote is what init-enrollments tells the operator about a broker already running: it is another
+// process, and it finds the new store at its next recheck.
+func runningNote() string {
+	return "; a broker already running picks the store up within " + EnrollmentRecheckEvery.String() +
+		", and until then its sign-ins answer enrollment_store_lost"
 }
 
 // enrollWindowNote says who can enroll in the new store at now: the rollout

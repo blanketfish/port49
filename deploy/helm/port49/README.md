@@ -172,7 +172,8 @@ workstation that can reach the `<release>-broker` Service.
 Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <release> -- --principal
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
 broker-0's volume, and scales back on every exit. `init-revocations` and `init-enrollments` are
-one-off Jobs, run once per new deployment.
+one-off Jobs, run once per new deployment. A broker already running when `init-enrollments` finishes
+finds the new store within 30 seconds; until then its sign-ins answer `enrollment_store_lost`.
 
 ## At 3am
 

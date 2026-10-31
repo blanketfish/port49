@@ -483,6 +483,12 @@ func TestInitEnrollmentsCreatesTheStoreOnce(t *testing.T) {
 	if f.b.EnrollmentStoreLost() != "" || testutil.ToFloat64(f.b.Metrics.DirectoryEnrollmentStoreOK) != 1 {
 		t.Fatal("the store is still lost")
 	}
+	// A broker already running is a different process: it follows at its recheck, and until then refuses.
+	for _, want := range []string{"already running", EnrollmentRecheckEvery.String(), "enrollment_store_lost"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("init-enrollments says %q, want it to say %q", text, want)
+		}
+	}
 	recs := eventsOf(f.records(t), decision.EventSecondFactorReset)
 	if len(recs) != 1 || recs[0]["principal"] != nil ||
 		recs[0]["second_factor_reset"].(map[string]any)["created"] != true {

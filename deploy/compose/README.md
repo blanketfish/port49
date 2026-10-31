@@ -218,6 +218,8 @@ docker compose start port49-broker
 
 `--lift` instead of the principal's revoke lifts it. `init-enrollments` and `export-enrollments`
 are local subcommands of the same form: `docker compose run --rm port49-broker init-enrollments`.
+Run `init-enrollments` before the broker's first start; a broker already running finds the new store
+within 30 seconds, and until then its sign-ins answer `enrollment_store_lost`.
 `port49 store status --metrics 127.0.0.1:9050` reads the broker's stores on the metrics port.
 
 ### The 3am table

@@ -246,7 +246,8 @@ Environment=PORT49_SITE=hq
 ```
 
 Run `port49-broker init-enrollments` once, as `port49-broker`, if you use directory password
-sign-in. Run `port49d init-revocations` once at install only for a port49d that holds its broker
+sign-in, before the first start: a broker that is already running finds the new store within 30 seconds
+(`port49-broker` says so), and until then its sign-ins answer `enrollment_store_lost`. Run `port49d init-revocations` once at install only for a port49d that holds its broker
 in process (`broker.revocations_file`). Neither belongs in `ExecStartPre=`: they refuse when
 anything is already there, and a unit must never initialize.
 

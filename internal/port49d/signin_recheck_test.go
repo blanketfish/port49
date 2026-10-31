@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/store"
@@ -23,9 +24,9 @@ import (
 // brokers on one global enrollment store, both lost, the mark made through a
 // third handle; both leave the state within one interval and the gauge reads 1.
 func TestAReplicaLeavesTheLostStateWhenTheMarkAppears(t *testing.T) {
-	old := enrollmentRecheckEvery
-	enrollmentRecheckEvery = 20 * time.Millisecond
-	t.Cleanup(func() { enrollmentRecheckEvery = old })
+	old := broker.EnrollmentRecheckEvery
+	broker.EnrollmentRecheckEvery = 20 * time.Millisecond
+	t.Cleanup(func() { broker.EnrollmentRecheckEvery = old })
 
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	es := &cfg.Broker.Directory.EnrollmentStore
@@ -87,9 +88,9 @@ func (d *downStore) GetEnrollmentMark(ctx context.Context) (store.EnrollmentMark
 // has no gauge either; it looks again by itself and the gauge appears once the
 // store answers (N1), so an absent() alert clears without a restart.
 func TestAReplicaWhoseStoreDidNotAnswerAtStartSetsTheGaugeWhenItDoes(t *testing.T) {
-	old := enrollmentRecheckEvery
-	enrollmentRecheckEvery = 20 * time.Millisecond
-	t.Cleanup(func() { enrollmentRecheckEvery = old })
+	old := broker.EnrollmentRecheckEvery
+	broker.EnrollmentRecheckEvery = 20 * time.Millisecond
+	t.Cleanup(func() { broker.EnrollmentRecheckEvery = old })
 
 	cfg, _ := signInConfig(t, "127.0.0.1:0")
 	es := &cfg.Broker.Directory.EnrollmentStore

@@ -914,6 +914,11 @@ func (b *Broker) EnrollmentStoreChecked() bool {
 	return b.enrollChecked
 }
 
+// EnrollmentRecheckEvery is how often a process that finds its enrollment store lost, or not yet
+// answered, looks at the mark again; a variable so a test can shorten it. A broker already running
+// follows an init-enrollments, an import or a reset run elsewhere within it, and init-enrollments says so.
+var EnrollmentRecheckEvery = 30 * time.Second
+
 // CheckEnrollmentStore is the start's and each scheduled pass's look at the
 // enrollment store (D7): its mark present is well (gauge 1, lost cleared);
 // no mark (ErrNotFound, a new install included) or a store that will not

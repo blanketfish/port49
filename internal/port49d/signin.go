@@ -109,10 +109,10 @@ func wireSignIn(ctx context.Context, cfg config.Config, b *broker.Broker, keys c
 	defer cancel()
 	if err := b.CheckEnrollmentStore(cctx); err != nil {
 		say("sign-in: the enrollment store did not answer at start (%v): password sign-in answers "+
-			"store_unavailable until it does; this process looks again every %s", printsafeErr(err), enrollmentRecheckEvery)
+			"store_unavailable until it does; this process looks again every %s", printsafeErr(err), broker.EnrollmentRecheckEvery)
 	}
 	wg.Add(1)
-	go func() { defer wg.Done(); recheckEnrollmentStore(ctx, b, enrollmentRecheckEvery) }()
+	go func() { defer wg.Done(); recheckEnrollmentStore(ctx, b, broker.EnrollmentRecheckEvery) }()
 	say("broker: directory-password sign-in on (second factor totp; principal domains %s; enrollments in %s; %s; "+
 		"limits %d per principal, %s, per %s)", strings.Join(p.PrincipalDomains, ", "), where, enrollWindow(p),
 		p.FailuresPerPrincipal, perSource(p), durText(p.Window))
@@ -156,10 +156,6 @@ func enrollmentOpener(cfg config.Config, keys crypt.Keys, m *metrics.Metrics, sh
 	}
 	return open, where
 }
-
-// enrollmentRecheckEvery is how often a process that finds its enrollment
-// store lost looks again; a variable so a test can shorten it.
-var enrollmentRecheckEvery = 30 * time.Second
 
 // recheckEnrollmentStore leaves the lost state without a restart (D7): while
 // the store is lost, or has not yet answered at all (the gauge is absent until

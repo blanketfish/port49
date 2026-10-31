@@ -6813,7 +6813,9 @@ store from the file, refusing to replace one holding a later enrollment or reset
 broker's or port49d's user) create the enrollment store once per install (D7): they write the
 creation mark, refuse when a store or a mark is already there, and record `second_factor_reset`
 with `"created": true`; port49d never creates the store itself, and until this runs password
-sign-in is refused `enrollment_store_lost`. **`port49-broker export-enrollments`** and
+sign-in is refused `enrollment_store_lost`. A broker already running is another process: it finds the
+new store at its next recheck (every 30 s; `broker.EnrollmentRecheckEvery`), and its sign-ins answer
+`enrollment_store_lost` until then, which the command's output says. Run it before the first start, as an install does. **`port49-broker export-enrollments`** and
 **`port49d export-enrollments`** read the sealed store through the process's own store identity
 and write it, still sealed, to stdout, refusing a terminal, or with `--out FILE` to a new file created
 0600 that never replaces an existing one (`O_EXCL`; synced; a failed export leaves no partial file), so a
