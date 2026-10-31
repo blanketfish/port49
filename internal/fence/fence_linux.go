@@ -518,9 +518,14 @@ func groupIsOurs(what string, fi fs.FileInfo) error {
 			}
 		}
 	}
+	fix := "chgrp it to the service's group (on Kubernetes, fsGroup does)"
+	// chmod 0600 only helps a file this process's user owns; on a file root owns it would leave the
+	// secret readable by root alone and the next start would fail with "permission denied"
+	if uid, ok := FileOwner(fi); ok && int(uid) == Geteuid() {
+		fix += ", or chmod 0600 it"
+	}
 	return fmt.Errorf("%s is group-readable by gid %d, which this process is not in (gid %d); members of that group "+
-		"could read the secret too - chgrp it to the service's group (on Kubernetes, fsGroup does), or chmod 0600 it",
-		what, gid, getegid())
+		"could read the secret too - %s", what, gid, getegid(), fix)
 }
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {

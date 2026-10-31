@@ -1078,3 +1078,38 @@ func TestASecretsGroupReadIsForOurGroupsOnly(t *testing.T) {
 		t.Error("a file whose group cannot be read was accepted")
 	}
 }
+
+// The fix a refusal offers must work. `chmod 0600` on a file root owns (root:port49d 0440, as the
+// packages and the compose setup ship it) leaves it readable by root alone, so the next start says
+// "permission denied" and the crash loop goes on: chmod is offered only to the file's owner.
+func TestTheGroupRefusalOffersChmodOnlyToTheFilesOwner(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "k")
+	if err := os.WriteFile(file, []byte("secret!"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func(fs.FileInfo) (uint32, bool), o func(fs.FileInfo) (uint32, bool), g func() ([]int, error), e func() int, u func() int) {
+		FileGroup, FileOwner, getgroups, getegid, Geteuid = f, o, g, e, u
+	}(FileGroup, FileOwner, getgroups, getegid, Geteuid)
+	getegid = func() int { return 1000 }
+	getgroups = func() ([]int, error) { return nil, nil }
+	Geteuid = func() int { return 1000 }
+	FileGroup = func(fi fs.FileInfo) (uint32, bool) { return 4242, true }
+	for _, tc := range []struct {
+		name  string
+		owner uint32
+		chmod bool
+	}{{"owned by the process's user", 1000, true}, {"owned by root", 0, false}} {
+		FileOwner = func(fi fs.FileInfo) (uint32, bool) { return tc.owner, true }
+		_, err := ReadSecret(file, dir, 1<<20)
+		if err == nil || !strings.Contains(err.Error(), "chgrp it") {
+			t.Fatalf("%s: want a refusal offering chgrp, got %v", tc.name, err)
+		}
+		if got := strings.Contains(err.Error(), "chmod 0600"); got != tc.chmod {
+			t.Errorf("%s: the refusal offers chmod 0600 = %v, want %v: %v", tc.name, got, tc.chmod, err)
+		}
+	}
+}
