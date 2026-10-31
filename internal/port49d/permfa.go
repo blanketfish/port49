@@ -1,11 +1,10 @@
 package port49d
 
 import (
-	"io"
-	"os"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/pivattest"
 	"github.com/rhwendt/port49/internal/policy"
@@ -14,6 +13,9 @@ import (
 // maxAttestationRootsBytes bounds attestation_roots_file: a few PEM
 // certificates, never a bundle of a system's.
 const maxAttestationRootsBytes = 1 << 20
+
+// maxCAFileBytes bounds an OIDC verifier's ca_file, a few certificates likewise.
+const maxCAFileBytes = 1 << 20
 
 // loadPerLoginMFA is broker.identity.per_login_mfa resolved for the broker
 // (plan 9c; decision 45), or nil when none is configured. A roots file that
@@ -30,7 +32,7 @@ func loadPerLoginMFA(cfg *oidc.PerLoginMFA, say func(string, ...any)) *broker.MF
 	if cfg.AttestationRootsFile == "" {
 		return v
 	}
-	raw, err := readLimited(cfg.AttestationRootsFile, maxAttestationRootsBytes)
+	raw, err := readLimited(cfg.AttestationRootsFile, maxAttestationRootsBytes, "attestation roots file")
 	if err == nil {
 		var a pivattest.Anchors
 		if a, err = pivattest.ParseAnchors(raw); err == nil {
@@ -54,7 +56,7 @@ func reloadAttestationRoots(cfg *oidc.PerLoginMFA, b *broker.Broker, pol func() 
 	if cfg == nil || cfg.AttestationRootsFile == "" || b == nil {
 		return
 	}
-	raw, err := readLimited(cfg.AttestationRootsFile, maxAttestationRootsBytes)
+	raw, err := readLimited(cfg.AttestationRootsFile, maxAttestationRootsBytes, "attestation roots file")
 	var a pivattest.Anchors
 	if err == nil {
 		a, err = pivattest.ParseAnchors(raw)
@@ -82,11 +84,10 @@ func reloadAttestationRoots(cfg *oidc.PerLoginMFA, b *broker.Broker, pol func() 
 	}
 }
 
-func readLimited(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, limit))
+// readLimited reads a certificate file through the policy-file fence (fence.Read): the file and its
+// directory are ours or root's alone to write, a link is followed only through directories held to
+// that rule, a named pipe is refused, and more than limit bytes is refused. A file anyone else can
+// replace would add a trusted root.
+func readLimited(path string, limit int64, what string) ([]byte, error) {
+	return fence.Read(path, limit, what)
 }

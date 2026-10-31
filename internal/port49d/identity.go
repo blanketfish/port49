@@ -8,7 +8,6 @@ import (
 	"io"
 	"maps"
 	"net/url"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -79,7 +78,7 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 		if ks == nil {
 			var roots *x509.CertPool
 			if v.CAFile != "" {
-				pem, err := os.ReadFile(v.CAFile)
+				pem, err := readLimited(v.CAFile, maxCAFileBytes, "ca_file")
 				if err != nil {
 					return nil, fmt.Errorf("config: broker.identity %s: ca_file: %w", verifierName(v, i), err)
 				}
