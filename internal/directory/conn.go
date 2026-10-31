@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -69,9 +68,9 @@ func LoadCredentials(b Bind, resolve func(ref string) ([]byte, error)) (*Credent
 		if err := kt.Unmarshal(raw); err != nil {
 			return nil, fmt.Errorf("broker.directory.bind.keytab_file %s: not a keytab", b.KeytabFile)
 		}
-		conf, err := os.ReadFile(b.KRB5Conf)
+		conf, err := readKRB5Conf(b.KRB5Conf)
 		if err != nil {
-			return nil, fmt.Errorf("broker.directory.bind.krb5_conf: %w", err)
+			return nil, err
 		}
 		kc, err := krbconfig.NewFromString(string(conf))
 		if err != nil {
@@ -381,4 +380,15 @@ func timeLeft(ctx context.Context) time.Duration {
 		return time.Until(dl)
 	}
 	return 0
+}
+
+// readKRB5Conf reads krb5_conf, which names the KDCs the broker trusts, through the policy-file fence
+// (decision 54 ruling 16): a directory others can write, a link out of its directory and a named pipe
+// are refused, and the error names the field.
+func readKRB5Conf(path string) ([]byte, error) {
+	b, err := fence.Read(path, fence.TrustFileMax, "broker.directory.bind.krb5_conf")
+	if err != nil {
+		return nil, fmt.Errorf("broker.directory.bind.krb5_conf %s: %w", path, err)
+	}
+	return b, nil
 }

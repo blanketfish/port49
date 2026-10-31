@@ -11361,7 +11361,7 @@ shapes; Kubernetes is native and never required.
   refused), at the start and at every reload, because a file others can replace adds a trusted root, a
   client CA, a forged CRL issuer or a fake etcd or directory. A refused reload keeps what is in force and
   says so once; a refused start names the directory. `internal/config/trustfiles_test.go` reads the config
-  structs and fails on any `*_file` field it has not classified (trust, policy, secret, or other with a
+  structs and fails on any field whose yaml key is `file` or `path` or ends in `_file`, `_files`, `_conf`, `_path` or `_dir` and that it has not classified (trust, policy, secret, or other with a
   reason), whatever its name, so a new field cannot skip the fence. The trust files:
 
   | Field | Reader |
@@ -11371,6 +11371,7 @@ shapes; Kubernetes is native and never required.
   | `attestation_roots_file` | `loadPerLoginMFA`, `reloadAttestationRoots` |
   | `stores.*.etcd.ca_file` | `caCerts` |
   | `broker.directory.ca_file` | `directory.tlsConfig`, at each dial |
+| `broker.directory.bind.krb5_conf` (names the KDCs the broker trusts) | `directory.readKRB5Conf` |
   | `inventory.service.ca_file`, a source's `ca_file` | `inventory.readCA`, `sot.readCA` |
   | `tls_listener.client_ca_file`, `intermediates_file` | `tlsListener.read` |
   | `certificate_status.crls[].issuer_file` | `readIssuerFile` |

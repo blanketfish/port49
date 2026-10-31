@@ -55,8 +55,11 @@ var fileFields = map[string]fileClass{
 	"sourceYAML.CAFile":                    trust("internal/sot/client.go"),
 	"TLSListenerConfig.ClientCAFile":       trust("internal/port49d/tlslistener.go"),
 	"TLSListenerConfig.IntermediatesFile":  trust("internal/port49d/tlslistener.go"),
+	"bindYAML.KRB5Conf":                    {class: "trust", file: "internal/directory/conn.go", call: "readKRB5Conf("},
 	// policy
 	"BrokerConfig.PolicyFile":               policy("internal/port49d/policyfile.go", "fence.Read("),
+	"policyYAML.File":                       policy("internal/port49d/policyfile.go", "fence.Read("),
+	"sourceYAML.Path":                       policy("internal/inventory/source.go", "fence.Read("),
 	"fileConfig.PolicyFile":                 policy("internal/inventory/sync.go", "fence.Read("),
 	"fileConfig.InventoryFile":              policy("internal/port49d/policyfile.go", "fence.Read("),
 	"fileConfig.VerifyKeyFiles":             policy("cmd/port49-inventory/main.go", "fence.ReadVerifyKeys("),
@@ -80,8 +83,30 @@ var fileFields = map[string]fileClass{
 	"InventoryServiceConfig.TLSCertFile": other(publicCert),
 	"TLSListenerConfig.CertFile":         other(publicCert),
 	"BrokerConfig.RevocationsFile":       other("port49d's own state file, written by port49d under its own flock and owner check, not an operator input"),
+	"AccountingConfig.SpoolPath":         other("a path port49d writes its accounting spool to, not an operator input it trusts"),
+	"BrokerConfig.StateDir":              other("a directory port49 writes its own state in, checked for its owner at start (ownStateDir)"),
+	"TLSListenerConfig.StateDir":         other("a directory port49d keeps its own state in, not an input it trusts"),
+	"InventoryServiceConfig.StateDir":    other("a directory port49 writes its own state in, not an input it trusts"),
+	"fileConfig.StateDir":                other("a directory port49-inventory writes its own state in, not an input it trusts"),
+	"InventoryServiceConfig.MirrorDir":   other("a directory port49-inventory writes the mirror to; daemons read the copy through inventory_file, which is fenced"),
+	"fileConfig.MirrorDir":               other("a directory port49-inventory writes the mirror to; daemons read the copy through inventory_file, which is fenced"),
+	"CertificateStatusCRL.File":          other("a CRL read non-blocking and regular-only; it is signed, and verified against issuer_file (a trust file) before it is used"),
 	"LabConfig.FaultFile":                other("lab-only fault injection, refused outside a lab build"),
 	"LabConfig.SeedTokenFile":            other("lab-only seed tokens, refused outside a lab build"),
+}
+
+// namesAPath is whether a yaml key names a file or a directory: file or path, or a key ending in one of
+// the suffixes below.
+func namesAPath(tag string) bool {
+	if tag == "file" || tag == "path" {
+		return true
+	}
+	for _, suf := range []string{"_file", "_files", "_conf", "_path", "_dir"} {
+		if strings.HasSuffix(tag, suf) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEveryFileFieldIsClassified(t *testing.T) {
@@ -117,7 +142,7 @@ func TestEveryFileFieldIsClassified(t *testing.T) {
 									continue
 								}
 								tag := strings.Split(reflect.StructTag(strings.Trim(fl.Tag.Value, "`")).Get("yaml"), ",")[0]
-								if strings.HasSuffix(tag, "_file") || strings.HasSuffix(tag, "_files") {
+								if namesAPath(tag) {
 									found[ts.Name.Name+"."+fl.Names[0].Name] = tag
 								}
 							}
