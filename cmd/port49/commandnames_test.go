@@ -19,7 +19,8 @@ func TestEveryDirectorySubcommandARefusalNamesIsOneTheCLIAccepts(t *testing.T) {
 		m, _ := filepath.Glob(g)
 		files = append(files, m...)
 	}
-	files = append(files, "../../docs/design/2026-08-23-policy-engine-spec.md")
+	design, _ := filepath.Glob("../../docs/design/*.md")
+	files = append(files, design...)
 	re := regexp.MustCompile("port49 directory ([a-z][a-z-]*)")
 	seen := 0
 	for _, f := range files {
@@ -45,5 +46,77 @@ func TestEveryDirectorySubcommandARefusalNamesIsOneTheCLIAccepts(t *testing.T) {
 	}
 	if seen < 5 {
 		t.Errorf("found %d command names, want many more: the scan is broken", seen)
+	}
+}
+
+// The same for the two servers: every `port49-broker <sub>` and `port49d <sub>` that a refusal, a README or
+// the design names is a subcommand of that binary. The sets are read from the dispatch in BrokerMain and Main
+// (a literal `args[0] == "sub"`), so a command that is renamed or never added is found. A name counts when it
+// sits in a code span or a string, or is followed by a flag, so prose such as "port49d reads" is not one.
+func TestEveryServerSubcommandNamedIsOneTheBinaryHas(t *testing.T) {
+	lit := regexp.MustCompile(`args\[0\] == "([a-z][a-z-]*)"`)
+	setOf := func(file, fn string) map[string]bool {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(b)
+		i := strings.Index(text, "func "+fn+"(")
+		if i < 0 {
+			t.Fatalf("no %s in %s", fn, file)
+		}
+		body := text[i:]
+		if j := strings.Index(body, "\n}\n"); j > 0 {
+			body = body[:j]
+		}
+		set := map[string]bool{}
+		for _, m := range lit.FindAllStringSubmatch(body, -1) {
+			set[m[1]] = true
+		}
+		if len(set) < 4 {
+			t.Fatalf("%s: found %d subcommands, want more: the scan is broken", fn, len(set))
+		}
+		return set
+	}
+	sets := map[string]map[string]bool{
+		"port49-broker": setOf("../../internal/port49d/brokerd.go", "BrokerMain"),
+		"port49d":       setOf("../../internal/port49d/main.go", "Main"),
+	}
+	ref := regexp.MustCompile("(`)?\\b(port49-broker|port49d) ([a-z][a-z-]+)")
+	var files []string
+	for _, g := range []string{"../../internal/*/*.go", "../../cmd/*/*.go", "../../docs/design/*.md", "../../deploy/*/README.md",
+		"../../deploy/*/*/README.md", "../../deploy/systemd/*.service", "../../packaging/README.md"} {
+		m, _ := filepath.Glob(g)
+		files = append(files, m...)
+	}
+	seen := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for n, line := range strings.Split(string(b), "\n") {
+			for _, m := range ref.FindAllStringSubmatchIndex(line, -1) {
+				tick := m[2] >= 0
+				bin, sub := line[m[4]:m[5]], line[m[6]:m[7]]
+				rest := line[m[7]:]
+				if !tick && !strings.HasPrefix(rest, " --") && !strings.HasPrefix(rest, "`") {
+					continue
+				}
+				if strings.HasSuffix(f, ".md") && strings.Contains(line, "(socket)") {
+					continue
+				}
+				seen++
+				if !sets[bin][sub] {
+					t.Errorf("%s:%d names `%s %s`, which %s does not have", f, n+1, bin, sub, bin)
+				}
+			}
+		}
+	}
+	if seen < 20 {
+		t.Errorf("found %d server command names, want many more: the scan is broken", seen)
 	}
 }
