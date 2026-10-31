@@ -457,6 +457,7 @@ func TestL67ComposeBrokerLoads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	placeComposeSecrets(t, dir, files)
 	moved := func(s string) string {
 		s = strings.ReplaceAll(s, e2eDirDir, filepath.Join(dir, "directory"))
 		s = strings.ReplaceAll(s, "/etc/port49", filepath.Join(dir, "etc"))

@@ -563,6 +563,7 @@ func TestWorkloadE2EFilesLoadForBothRoles(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		placeComposeSecrets(t, dir, files)
 		moved := func(s string) string {
 			s = strings.ReplaceAll(s, "/etc/port49-workload", filepath.Join(dir, "etc", "wl"))
 			s = strings.ReplaceAll(s, "/etc/port49", filepath.Join(dir, "etc"))

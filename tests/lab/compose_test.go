@@ -64,11 +64,19 @@ func composeStoreBlock(component string) string {
 		"      hold_ttl: 60s\n%s", component, identity, identity, health)
 }
 
+// Where the compose containers read the lab's secrets: the sealing key in each component's volume and the
+// device key in the port49d-keys volume (deploy/compose/setup.sh places each from local/).
+const (
+	composeEncKeyPath    = "/etc/port49/secrets/encryption.key"
+	composeDeviceKeyPath = "/run/port49/keys/lab_key_v1"
+)
+
 // composeLabFiles is the lab's version of deploy/compose's four YAML files
-// and two env files, by name. base is port49d-lab.yaml's text already
+// and the secret files setup places from local/, by name (secrets/..., keys/...).
+// base is port49d-lab.yaml's text already
 // derived for the platform; brokerSlice, policy and inventory are
 // slice/broker.yaml's, slice/policy.yaml's and inventory-lab.yaml's.
-// It reads no file. The device key is port49d's env alone.
+// It reads no file. The device key is port49d's alone.
 func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]string, error) {
 	daemon, err := splitDaemonYAML(base, splitNode{Listen: ":49", Metrics: ":9049",
 		Spool: "/var/spool/port49d/acct.jsonl"}, "/etc/port49/policy.yaml", "/etc/port49/inventory.yaml",
@@ -102,13 +110,24 @@ func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]st
 	if encKey == "" {
 		encKey = labEncKeyDefault
 	}
+	// Secrets are files in the stack (spec decision 54 ruling 2): the product's compose passes no
+	// environment, and setup places what local/ holds (deploy/compose/setup.sh).
+	for _, c := range []*string{&daemon, &broker} {
+		if *c, err = swapLine(*c, "secret_ref: env:PORT49_LAB_ENC_KEY", "secret_ref: file:"+composeEncKeyPath); err != nil {
+			return nil, err
+		}
+	}
+	if policy, err = swapLine(policy, "secret_ref: env:PORT49_KEY_LAB", "secret_ref: file:"+composeDeviceKeyPath); err != nil {
+		return nil, err
+	}
 	return map[string]string{
-		"port49d.yaml":       daemon,
-		"port49-broker.yaml": broker,
-		"policy.yaml":        policy,
-		"inventory.yaml":     inv,
-		"port49d.env":        "PORT49_KEY_LAB=" + labKey + "\nPORT49_LAB_ENC_KEY=" + encKey + "\n",
-		"port49-broker.env":  "PORT49_LAB_ENC_KEY=" + encKey + "\n",
+		"port49d.yaml":                                daemon,
+		"port49-broker.yaml":                          broker,
+		"policy.yaml":                                 policy,
+		"inventory.yaml":                              inv,
+		"secrets/port49d-encryption.key":              encKey,
+		"secrets/broker-encryption.key":               encKey,
+		"keys/" + filepath.Base(composeDeviceKeyPath): labKey,
 	}, nil
 }
 
@@ -167,6 +186,37 @@ func composeExit(err error) string {
 		return fmt.Sprintf("exit %d", ee.ExitCode())
 	}
 	return "did not run"
+}
+
+// daemonLine is the first line of logs that begins with a daemon's own error prefix, cut to 200
+// characters: the one line a crashing daemon says before it exits, and nothing a library printed.
+func daemonLine(logs string) string {
+	for _, ln := range strings.Split(logs, "\n") {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "port49-broker: ") || strings.HasPrefix(ln, "port49d: ") {
+			return oneLineMax(ln, 197)
+		}
+	}
+	return ""
+}
+
+// crashes keeps the last 50 log lines of each daemon in a private file and quotes the file's path with
+// the daemon's first own line; the rest of the log is never quoted.
+func (c *composeStack) crashes() string {
+	var parts []string
+	for _, svc := range []string{"port49-broker", "port49d"} {
+		out, err := c.run("logs", "--no-log-prefix", "--tail", "50", svc)
+		if err != nil {
+			parts = append(parts, svc+": log not read")
+			continue
+		}
+		part := svc + ": log kept in " + l67Kept("compose-"+svc, out)
+		if first := daemonLine(out); first != "" {
+			part += ", first line: " + first
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // composeStates keeps the service=state/exit words of ps's output, one line.
@@ -458,8 +508,12 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 	}
 	for name, body := range files {
 		dst := filepath.Join(c.config, name)
-		if strings.HasSuffix(name, ".env") {
+		// What setup places from local/: secret and key files (deploy/compose/setup.sh).
+		if strings.HasPrefix(name, "secrets/") || strings.HasPrefix(name, "keys/") {
 			dst = filepath.Join(c.local, name)
+			if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if err := os.WriteFile(dst, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -521,8 +575,8 @@ func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
 		deadline := time.Now().Add(3 * time.Minute)
 		for !httpOK("http://" + addr + "/readyz") {
 			if time.Now().After(deadline) {
-				t.Fatalf("INVALID: %s/readyz not 200 in 3m; services (service=state/exit code): %s\ncompose.log (tail):\n%s", addr,
-					c.states(), c.tail(40))
+				t.Fatalf("INVALID: %s/readyz not 200 in 3m; services (service=state/exit code): %s; %s\ncompose.log (tail):\n%s", addr,
+					c.states(), c.crashes(), c.tail(40))
 			}
 			time.Sleep(time.Second)
 		}

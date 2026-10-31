@@ -58,6 +58,7 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	placeComposeSecrets(t, dir, files)
 	moved := func(s string) string {
 		// /etc/port49-oidc first: /etc/port49 is its prefix
 		s = strings.ReplaceAll(s, "/etc/port49-oidc", filepath.Join(dir, "oidc"))

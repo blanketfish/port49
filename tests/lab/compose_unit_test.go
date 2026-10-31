@@ -61,8 +61,22 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 			t.Errorf("%s names a context cache:\n%s", name, files[name])
 		}
 	}
-	if strings.Contains(files["port49-broker.env"], "PORT49_KEY_LAB") || !strings.Contains(files["port49d.env"], "PORT49_KEY_LAB=") {
-		t.Errorf("the device key is not port49d's alone")
+	// Secrets are files, as the product's compose has them (decision 54 ruling 2): no environment
+	// reference is left in a config or the policy, and each file ref has its source in local/.
+	for _, name := range []string{"port49d.yaml", "port49-broker.yaml", "policy.yaml"} {
+		if strings.Contains(files[name], "secret_ref: env:") {
+			t.Errorf("%s still names a secret by environment, which the compose stack does not pass:\n%s", name, files[name])
+		}
+	}
+	for _, want := range []string{"secrets/port49d-encryption.key", "secrets/broker-encryption.key", "keys/lab_key_v1"} {
+		if files[want] == "" {
+			t.Errorf("no source file %s for setup to place", want)
+		}
+	}
+	if !strings.Contains(files["policy.yaml"], "file:"+composeDeviceKeyPath) ||
+		!strings.Contains(files["port49d.yaml"], "file:"+composeEncKeyPath) ||
+		!strings.Contains(files["port49-broker.yaml"], "file:"+composeEncKeyPath) {
+		t.Errorf("a file reference is missing")
 	}
 }
 
@@ -98,5 +112,35 @@ func TestComposeExitNamesTheExitCodeOrThatItDidNotRun(t *testing.T) {
 	}
 	if got := composeExit(exec.Command("/nonexistent/port49-test").Run()); got != "did not run" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// placeComposeSecrets writes the secret files setup places from local/, at the paths the moved configs name
+// under dir (etc for /etc/port49, run for /run/port49), so a loader that reads them finds them.
+func placeComposeSecrets(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for src, dst := range map[string]string{"secrets/broker-encryption.key": "etc/secrets/encryption.key",
+		"keys/lab_key_v1": "run/keys/lab_key_v1"} {
+		path := filepath.Join(dir, dst)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(files[src]), 0o400); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Only a line that begins with a daemon's own prefix is quoted, whole and cut to 200 characters.
+func TestDaemonLineQuotesOnlyTheDaemonsOwnFirstLine(t *testing.T) {
+	logs := "2026/10/31 library chatter\nport49-broker: config: the first thing it said\nport49-broker: a second line\n"
+	if got := daemonLine(logs); got != "port49-broker: config: the first thing it said" {
+		t.Errorf("got %q", got)
+	}
+	if got := daemonLine("something else\nnot port49d: inside\n"); got != "" {
+		t.Errorf("a line without the prefix was quoted: %q", got)
+	}
+	if got := daemonLine("port49d: " + strings.Repeat("x", 500)); len(got) > 200 {
+		t.Errorf("a line of %d characters", len(got))
 	}
 }
