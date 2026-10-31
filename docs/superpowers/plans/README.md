@@ -350,7 +350,7 @@ It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-
 spec, two code, two CI, seven artifact-and-smoke, four lab, one docs; decision 54, rulings 1–14, written by its Task 1). It builds
 the systemd, container and Kubernetes shapes as peers, each with a CI smoke test, plus the tag-only release (packages, image,
 chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite warning, and lab rows L82–L85.
-**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: TODO(L82), TODO(L83), TODO(L85), TODO(L86).
+**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: L82, L83 and L85 closed 2026-10-31 (kind run 41155086403; see Carried forward), TODO(L86).
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7594,7 +7594,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
     - the Junos `idle-timeout` per role (pending a ruling);
     - load validation at the §5 rate and the items sized from it.
   - Inventory themes C, D and F. Written after 12b merges.
-  - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, and whatever L83, L84 or L85 left FAIL. TODO(L83) TODO(L85)
+  - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, and whatever L83, L84 or L85 left FAIL (L83: the injector as a reload and the CSI driver).
 
 Carried here from plan 1's review:
 
@@ -7989,8 +7989,8 @@ These are the notes the pull request body carries. Each is true of the code as b
 
 Executed 2026-10-27 to 2026-10-30 on `feature/12b-deployment-release` (draft PR #36). Twenty-five tasks: one spec, two code, the admin-over-API
 amendment (3a–3h), two CI, seven artifact-and-smoke, four lab, one docs. Every task was reviewed (Opus for security, CI and release tasks, Sonnet
-for mechanical ones) and every finding closed before the next task began. **Not yet recorded here, pending the CI runs: the lab states of L82, L83,
-L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted until its results note and spec §15 row exist.
+for mechanical ones) and every finding closed before the next task began. **Lab states: L82, L83 and L85 are closed (kind run 41155086403, 2026-10-31); L86 is still the `TODO(L86)` marker below,
+and no result is asserted for it until its results note and spec §15 row exist.**
 
 #### Commits per task
 
@@ -8052,11 +8052,15 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
 
 #### Carried forward
 
-- **TODO(L82):** Secret volumes and External Secrets on kind. Harness written; state to be filled from the `lab-l82` artifact.
-- **TODO(L83):** Vault Agent and the Secrets Store CSI driver. Harness written; state to be filled from the `lab-l83` artifact. The injector
-  variant needs `automountServiceAccountToken: true`; the chart's default stays `false` and the caveat belongs in the L83 note only.
-- **TODO(L85):** MetalLB anycast. Harness written. The chart's `externalTrafficPolicy: Local` anycast option is added only if all four cells
-  PASS; otherwise commit `docs: record lab register entry L85 (MetalLB anycast not offered)`.
+- **L82 closed** (`tests/lab/results/L82-kind.md`): all four cells PASS. A Secret volume mounted whole, with `defaultMode: 0440` and
+  `fsGroup: 65532`, starts port49d; a new key reaches the mount in 1m3s; a `subPath` mount does not see it; the External Secrets example
+  (`creationPolicy: Owner`) puts a version in force with no restart in 1m34s.
+- **L83 closed** (`tests/lab/results/L83-kind.md`): Vault Agent starts port49d only with `agent-run-as-same-user: "true"` (the default uid 100
+  owns the file and the owner rule refuses it), and a new version is a pod rollout; the Secrets Store CSI driver FAILs both cells and is not
+  named for device keys. The injector variant needs `automountServiceAccountToken: true`; the chart's default stays `false` and the caveat
+  belongs in the L83 note and the README only.
+- **L85 closed** (`tests/lab/results/L85-kind.md`): all four cells PASS on cell (c) as redefined (timed from the listener closing, with no login
+  failing past one retry); the note states all three runs. The chart gained `service.anycast` (MetalLB BGP, `Local`, `preStopSeconds` >= 15).
 - **TODO(L86):** an admin call's touch on a real YubiKey. Harness and runbook written; Ryan's run is on the SER8 (planned 2026-10-31).
 - **L84** is partial: Compose `secrets:` measured (long and short syntax PASS; a new secret needs `up -d`); `LoadCredential=` runs in CI.
 - The detached JWKS fetch may save after `Run` returns (`identity.go:155`). Benign: the file is public, written atomically and owner-only. For the
@@ -8098,8 +8102,7 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
 - **CI jobs:** `test` (vet, rest, port49d in three shards, race, root, versions, release requirements, packages), `systemd`, `compose`, `kind`,
   `hwkeys`, `python`, `qual`, `leaks`, `lab-free`, and the label-gated `lab-kind` (`l82`, `l83`, `l85`).
 - **The chart runs in a `baseline` namespace.** The kind smoke labels its namespace `enforce=baseline`.
-- **Unmeasured:** the kind smoke's two-generation fsGroup cell against a real kubelet until its CI run; TODO(L82), TODO(L83), TODO(L85),
-  TODO(L86).
+- **Unmeasured:** TODO(L86) only. The kind smoke, including its two-generation fsGroup cell, ran green in CI (runs 41151306253 and 41155086403).
 
 #### Hand-offs
 
@@ -8114,7 +8117,7 @@ L85 and L86.** Those are the `TODO(L8x)` markers below; no result is asserted un
   - **the Oxidized `secure: true` follow-up** (plan 9d carry): measure Oxidized's host-key options against accept-new, and change
     `examples/oxidized` or say why not;
   - **a Velero example** for the chart's PVCs, with a measurement behind it (pre-flight M10);
-  - whatever L83, L84 or L85 left FAIL that a later platform change might reopen. TODO(L83) TODO(L85)
+  - whatever L83, L84 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
 - **Plan 13:** install pages from each README, the "When it will not start" tables, and the `encryption:` rotation runbook; `--version` and
   `healthcheck`.
   - **Versioning (Ryan 2026-10-30): SemVer.** `v0.1.0` is the beta, and 0.x may break config with loud notes. `1.0.0` is the compatibility promise. Bumps come from Conventional Commits, and there is one version across every artifact. Tags are manual and carry no pre-release suffix unless it is mapped to PEP 440. The release docs state this.
