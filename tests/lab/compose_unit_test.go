@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"github.com/rhwendt/port49/internal/policy"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,6 +62,7 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 			t.Errorf("%s names a context cache:\n%s", name, files[name])
 		}
 	}
+	requireDaemonPolicy(t, files)
 	// Secrets are files, as the product's compose has them (decision 54 ruling 2): no environment
 	// reference is left in a config or the policy, and each file ref has its source in local/.
 	for _, name := range []string{"port49d.yaml", "port49-broker.yaml", "policy.yaml"} {
@@ -142,5 +144,22 @@ func TestDaemonLineQuotesOnlyTheDaemonsOwnFirstLine(t *testing.T) {
 	}
 	if got := daemonLine("port49d: " + strings.Repeat("x", 500)); len(got) > 200 {
 		t.Errorf("a line of %d characters", len(got))
+	}
+}
+
+// requireDaemonPolicy is the check port49d and the broker make of the compose policy at start: it
+// parses and declares its keys: block (decision 53 ruling 3), and holds the lab key set the
+// inventory's key group names, read from the file placeComposeSecrets writes.
+func requireDaemonPolicy(t *testing.T, files map[string]string) {
+	t.Helper()
+	p, err := policy.Parse([]byte(files["policy.yaml"]), policy.Env{})
+	if err != nil {
+		t.Fatalf("the compose policy does not parse: %v", err)
+	}
+	if !p.KeysDeclared() {
+		t.Fatalf("the compose policy declares no keys: block, which port49d and the broker refuse at start:\n%s", files["policy.yaml"])
+	}
+	if !strings.Contains(files["policy.yaml"], "lab_key:") || !strings.Contains(files["policy.yaml"], "file:"+composeDeviceKeyPath) {
+		t.Fatalf("the compose policy holds no lab_key set read from %s:\n%s", composeDeviceKeyPath, files["policy.yaml"])
 	}
 }

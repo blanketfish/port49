@@ -58,6 +58,7 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	requireDaemonPolicy(t, files)
 	placeComposeSecrets(t, dir, files)
 	moved := func(s string) string {
 		// /etc/port49-oidc first: /etc/port49 is its prefix

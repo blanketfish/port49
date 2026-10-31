@@ -76,6 +76,11 @@ subjects:
 grants:
   - {subject: netops_oncall, scope: all_devices, roles: [network_admin]}
   - {subject: bob, scope: all_devices, roles: [network_admin]}
+# The device key set the inventory's key group names (decision 53 ruling 3); the secret is the file
+# setup places in the port49d-keys volume (composeDeviceKeyPath).
+keys:
+  lab_key:
+    current: {version: 1, secret_ref: file:` + composeDeviceKeyPath + `}
 `
 
 // e2eDirectoryBlock is the broker's refresh_interval and broker.directory:
