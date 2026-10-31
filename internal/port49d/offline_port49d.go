@@ -142,6 +142,11 @@ func offlineDaemon(ctx context.Context, cfgPath string, log io.Writer) (*broker.
 // file and its marks, so the revocation goes through it (the API), or after it
 // is stopped. A listener on port 0 cannot be dialed and is not asked.
 func daemonAnswering(ctx context.Context, listen string) error {
+	return answeringOn(ctx, listen, "port49d", "broker.revocations_file")
+}
+
+// answeringOn is daemonAnswering for the process proc, which owns what.
+func answeringOn(ctx context.Context, listen, proc, owns string) error {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil || port == "0" {
 		return nil
@@ -161,7 +166,7 @@ func daemonAnswering(ctx context.Context, listen string) error {
 		return nil
 	}
 	resp.Body.Close()
-	return fmt.Errorf("something answers /readyz on %s, so port49d is running and owns broker.revocations_file: "+
+	return fmt.Errorf("something answers /readyz on %s, so %s is running and owns %s: "+
 		"with it running, use port49 revoke, which asks the broker API with a security key press; to revoke "+
-		"with it stopped, stop it first", addr)
+		"with it stopped, stop it first", addr, proc, owns)
 }

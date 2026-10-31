@@ -3,6 +3,9 @@ package port49d
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,6 +95,29 @@ func TestAnOfflineFailureGivesTheToolsOwnAdvice(t *testing.T) {
 			!strings.Contains(s, "the same command is safe to run again") ||
 			!strings.Contains(s, "as etcd's root under rv/") {
 			t.Errorf("lift %v: %q", lift, s)
+		}
+	}
+}
+
+// The break-glass form refuses a port49-broker that answers /readyz on its metrics listener, like port49d's
+// does: a revocation written beside a running broker races its own marks, and the API is the way with one up.
+// The listener is read from the file alone, so a config that fails for another reason hides nothing.
+func TestOfflineRevokeOnTheBrokerRefusesARunningBroker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	cfg := filepath.Join(t.TempDir(), "port49-broker.yaml")
+	if err := os.WriteFile(cfg, []byte("metrics_listen: \""+srv.Listener.Addr().String()+"\"\nbroker:\n  state_dir: /var/lib/port49-broker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"--principal", "user:alice@example.com"}, {"--principal", "user:alice@example.com", "--lift"}} {
+		var log, say bytes.Buffer
+		code := offlineRevoke(append([]string{"--offline", "--config", cfg}, args...), &log, &say)
+		if code != 1 || !strings.Contains(say.String(), "something answers /readyz on "+srv.Listener.Addr().String()) ||
+			!strings.Contains(say.String(), "port49-broker is running") || !strings.Contains(say.String(), "use port49 revoke") {
+			t.Errorf("%v: exit %d: %s", args, code, say.String())
+		}
+		if log.Len() != 0 {
+			t.Errorf("%v: a refused revocation wrote a decision record", args)
 		}
 	}
 }

@@ -111,6 +111,13 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	// knowable here; an I/O failure of the copy is not, and keeps its write-anyway rule (final review
 	// 7e-2 I-2). --list writes nothing, so any user may run it and it keeps to the store alone.
 	if !f.list {
+		// A running broker owns its marks and its replica's state: with one up the revocation goes through
+		// its API (the same refusal port49d's form makes). The listener is read from the file alone, so a
+		// config that fails to load for another reason does not hide this line.
+		if err := answeringOn(ctx, offlineMetricsListenOf(*cfgPath), "port49-broker", "broker.state_dir"); err != nil {
+			fmt.Fprintf(out, "%s%v\n", offlineSay, err)
+			return 1
+		}
 		if dir, ok := offlineStateDirOf(*cfgPath); ok {
 			if err := ownStateDir(dir); err != nil {
 				var wo *wrongOwnerError
@@ -266,6 +273,23 @@ func offlineStateDirOf(cfgPath string) (string, bool) {
 		return "", false
 	}
 	return c.Broker.StateDir, true
+}
+
+// offlineMetricsListenOf is metrics_listen as the config file names it, port49-broker's default when it
+// names none or the file does not read (the load then says what is wrong).
+func offlineMetricsListenOf(cfgPath string) string {
+	const def = ":9050"
+	raw, err := config.ReadRegular(cfgPath, config.MaxConfigSize)
+	if err != nil {
+		return def
+	}
+	var c struct {
+		MetricsListen string `yaml:"metrics_listen"`
+	}
+	if yaml.Unmarshal(raw, &c) != nil || c.MetricsListen == "" {
+		return def
+	}
+	return c.MetricsListen
 }
 
 // offlineOwnerHint is the refusal of a state path another user owns, in the
