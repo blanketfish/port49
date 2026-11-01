@@ -8,7 +8,8 @@
 - load validation at the design §5 rate, and the defaults sized from it;
 - the failure matrix of design §12 and §14 as a test;
 - the lab rows 12b handed on (L39 (b) and (c), L84's systemd cells), and four new ones: L87 (SR Linux on an ERROR), L88 (the reference configurations), L89 (Velero) and L90 (Oxidized host keys);
-- three code items carried here: the Junos `idle-timeout` per class, `policy diff` reporting a changed session ceiling, and the `key_ref` label bounded.
+- three code items carried here: the Junos `idle-timeout` per class, `policy diff` reporting a changed session ceiling, and the `key_ref` label bounded;
+- `port49 hwkey setup` and `port49 hwkey status` (Ryan, 2026-11-01): a read-only check of the user's security key, and a guide for it, with lab row L91 for Ryan's run on the SER8.
 
 **Architecture:**
 - Device configurations live in `deploy/device-aaa/`, one file per platform and transport, written with closed-set `<PLACEHOLDER>` markers. `tests/deviceaaa` renders them. Its unit tests run under `make test`, and the L88 harness loads the same files onto each lab image.
@@ -148,7 +149,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
   - a failure dump goes through `tests/qual/secret-filter.sh`;
   - a test that asserts a secret is absent checks before printing.
 - **Files never read** by an agent or a harness log: `realm.json`, `*.env`, `*-key.pem`, `*.keytab`, `router.db`, `/tmp/port49-lab-tokens.jsonl` and `tests/lab/logs/**`. Every recursive grep excludes them.
-- **Hardware.** Agents never touch a real YubiKey or TPM, and never run `ykman`, `tpm2_*` or `pkcs11-tool`. Every harness that writes a client config pins `issued_key_store: file`.
+- **Hardware.** Agents never touch a real YubiKey or TPM, and never run `ykman`, `tpm2_*` or `pkcs11-tool`. Every harness that writes a client config pins `issued_key_store: file`, except L91's, which Ryan runs on his own token (Task 18). Unit tests use `hwfake` and `testpki.NewPIV`.
 - **Lab tasks** (11, 12, 13, 14, 15, 16, and Task 7's run):
   - Single occupant: take `/tmp/port49-lab.lock` (`labOccupyForRun`). A kind or CI cell runs on a hosted runner instead.
   - Run a background stall watchdog for the whole run, re-armed on wake. An idle "waiting" notice proves nothing.
@@ -203,9 +204,10 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
 | `tests/lab/l89_test.go`, `tests/shapes/l89/`, `deploy/helm/port49/examples/velero/`, `tests/lab/results/L89-kind.md` | lab row L89 | 15 |
 | `tests/lab/l49_test.go`, `examples/oxidized/`, `tests/lab/results/L90-oxidized-arista_eos.md` | lab row L90 | 16 |
 | `tests/kind/enrollments_test.go`, `tests/ci/kind_workflows_test.go`, `Makefile`, `.github/workflows/kind.yml` | the enrollments CronJob run | 17 |
-| `docs/superpowers/plans/README.md` | As built, operator notes, hand-offs | 18 |
+| `docs/design/2026-08-23-policy-engine-spec.md`, `cmd/port49/hwkey.go`, `cmd/port49/mfa.go`, `internal/hwkeysetup/`, `internal/userconfig/userconfig.go`, `tests/lab/l60/l91_test.go`, `tests/lab/L91-runbook.md` | `port49 hwkey setup` and `port49 hwkey status`; lab row L91 | 18 |
+| `docs/superpowers/plans/README.md` | As built, operator notes, hand-offs | 19 |
 
-Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmarks `ClassAges`), then 7, 8, 9, 10. Next 11 must land before 12, because L87 decides SR Linux's 3am line. Then 13–17 in any order, and 18 last.
+Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmarks `ClassAges`), then 7, 8, 9, 10. Next 11 must land before 12, because L87 decides SR Linux's 3am line. Then 13–18 in any order, and 19 last.
 
 ---
 
@@ -1065,7 +1067,146 @@ The matrix has its own build tag, so `make compose-smoke` (`go test -tags compos
 
 ---
 
-### Task 18: The roadmap's record and the operator notes
+### Task 18: `port49 hwkey setup` and `port49 hwkey status` (Ryan, 2026-11-01)
+
+A per-user check and guide for the security key that `hardware_key_touch` needs (decision 45 ruling 12), and the read-only status behind it. The commands are `hwkey` because `port49 keys status` already exists for TACACS+ shared keys (`cmd/port49/keys.go`, `keysCmd`).
+
+**Files:**
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (decision 55 rulings 16 and 17; §12's command list; row L91 after L90)
+- Create:
+  - `internal/hwkeysetup/hwkeysetup.go`: the checks, shared by both commands;
+  - `internal/hwkeysetup/advice.go`: the ykman lines;
+  - `internal/hwkeysetup/hwkeysetup_test.go`;
+  - `cmd/port49/hwkey.go`, `cmd/port49/hwkey_test.go`;
+  - `tests/lab/l60/l91_test.go` (under `l86_test.go`'s build tags, beside L60 and L86), `tests/lab/L91-runbook.md`.
+- Modify:
+  - `cmd/port49/main.go` (a `case "hwkey":` beside `case "keys":`, and the usage text);
+  - `internal/userconfig/userconfig.go` (a new `attestation_roots_file` key, and `SetKeys`);
+  - `cmd/port49/mfa.go` (three remedy lines), `cmd/port49/mfa_test.go`, `cmd/port49/mfa_fallback_test.go`;
+  - `Makefile` (`l86-build` also builds the L91 cells).
+
+**Interfaces:**
+- Consumes:
+  - `pivattest.ParseAnchors(b []byte) (Anchors, error)`, `pivattest.Verify(a Anchors, device, slot *x509.Certificate, now time.Time) (Attestation, error)`, `pivattest.TouchAlways`, `Attestation.{Serial, PINPolicy, TouchPolicy, Key}`. These are the broker's checks in `verifyTouchMessage` (`internal/broker/mfa.go`), reused, never copied.
+  - `mfatouch.Chain(certs []*x509.Certificate, touch, session crypto.PublicKey) ([]string, error)`.
+  - `agent.SameToken(session any, touch hwkey.Key) (ok bool, why string)`.
+  - `pkcs11.ParseURI`, `pkcs11.Open` and `(*Signer).Certificates()`, `TokenSerial()`, `ModulePath()`, with the module `userconfig.CheckOwned` accepts: the agent's own.
+  - `agent.NewClient(agent.SocketPath()).Status(ctx) (agent.Status, error)` (`TouchKey`, `TouchKeyUnusable`).
+  - `userconfig.Path()`, `userconfig.Load`.
+  - `hwfake.New(k *ecdsa.PrivateKey, module, serial string) *Key` with `SetCertificates`, and `testpki.NewPIV(now)` with `Slot(pub, touch)` and `Anchors()`.
+- Produces:
+  - `type Check struct { Name string; OK bool; Why string }`. `Name` is one of `session_slot`, `touch_slot`, `attestation_roots`, `session_attested`, `touch_attested`, `touch_policy`, `pin_policy`, `same_token`, and, for status alone, `config_issued_key`, `config_touch_key`, `issued_certificate`, `certificate_expiry`, `agent`.
+  - `type Report struct { Token string; Checks []Check; Ready bool }`. `Token` is the token label with the serial masked as `<serial>`, by the rule `tests/lab/l60/harness_test.go`'s `redact` applies, moved into `internal/hwkeysetup` as `MaskSerial(s string) string` and used by both.
+  - `func Inspect(k Keys, anchors *pivattest.Anchors, now time.Time) Report`, where `type Keys struct { Session, Touch hwkey.Key }`.
+  - `func Advice(r Report, sessionSlot string) []string`: the ykman lines, empty when ready.
+  - `func (f *File) SetKeys(path, issuedKey, touchKey string) (changed bool, err error)` in `userconfig`. It edits only those two keys through a `yaml.v3` node, keeps every other line and comment, and writes atomically with the file's own mode.
+
+- [ ] **Step 1: Spec first.**
+
+  - **Decision 55 ruling 16, `port49 hwkey setup`.**
+    - **Read-only on the token.** It never generates a key, writes an object, or asks for the PIV management key. Decision 45 ruling 7's "For `pkcs11`, port49 never generates a key or writes an object on the token" stands.
+    - It finds the YubiKey through the PKCS#11 module the agent uses.
+    - It reads the slot attestations for 9a (the session key; `--session-slot 9e` for a site that keeps it there, as L86 did) and 9c (the touch key), and the f9 certificate.
+    - It verifies them with the broker's code (decision 45 ruling 12): the chain to the roots; touch policy `0x02` for 9c; a PIN policy `internal/pivattest` accepts; and both slots on one token (`agent.SameToken`, and the two attestations' serials equal).
+    - **The roots.** main bundles no Yubico root. They come from `--roots FILE`, or from `attestation_roots_file` in the system config (`/etc/port49/config.yaml`, the root-owned conffile 12b ships, beside `broker_ca`). With neither, the chain is unchecked: the `attestation_roots` check fails and names both places.
+    - **For anything missing or wrong,** it prints the exact commands to run. ykman, not port49, asks for the management key. They are:
+      - `ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a port49-9a.pub.pem`;
+      - `ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy ALWAYS 9c port49-9c.pub.pem`;
+      - for a slot that has a key but no certificate, `ykman piv certificates generate --subject "CN=port49 <slot>" <slot> port49-<slot>.pub.pem`. libykcs11 lists a slot's key only with a certificate in it (unmeasured: L91 cell c).
+
+      No line names a serial, PIN, PUK or management key.
+    - **It never prints a serial.** Every line goes through `MaskSerial`.
+    - **When every check passes,** it writes `issued_key:` (the session slot's `pkcs11:` URI) and `touch_key:` (9c's) to the user's config (`userconfig.Path()`).
+      - If both are already present and equal, it changes nothing and says so.
+      - If either differs, it shows the old and new values (serial masked) and asks at a terminal. With no terminal it changes nothing and exits 1.
+    - **Exit codes:** 0 ready; 1 action needed; 2 error (no module, an unreadable config, a bad flag).
+    - **Where a user meets the missing key,** the remedy names this command. `port49 token`'s touch-only refusal, and the `touch_key_unusable` and idp_mfa-fallback lines, end "run `port49 hwkey setup`" (Step 5a).
+    - **A TPM or file session key** (`issued_key_store: tpm` or `file`, or `auto` resolving to either) gets one plain statement: "`hardware_key_touch` needs the session key and the touch key on one YubiKey; this login's session key is not on a token. Your site's other per-login factor is `idp_mfa`." Exit 1.
+  - **Decision 55 ruling 17, `port49 hwkey status`.**
+    - It is read-only everywhere. It runs ruling 16's checks, and also:
+      - the config's `issued_key` and `touch_key` name those slots;
+      - the issued certificate (`userconfig.IssuedTokenPaths(broker, issued_key)`) holds the session slot's public key, or there is none yet;
+      - the certificate's expiry: a FAIL once it has passed, and the time left otherwise;
+      - when an agent is running, its view: `touch_key: true`, or `touch_key_unusable: <why>`.
+    - It never writes config and never prints a ykman line. Any FAIL names `port49 hwkey setup` as the fix.
+    - **Exit codes:** 0 ready, 1 not ready, 2 error.
+    - `--json` prints `{"token": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys snake_case. The serial is masked, and neither form holds a secret.
+  - **§12:** list both commands with one line each.
+  - **Row L91** (Status `open`):
+
+    | ID | Claim to measure | What rests on it | Platforms |
+    |---|---|---|---|
+    | **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan present; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 |
+
+  - Commit: `docs: decision 55 rulings 16 and 17, port49 hwkey setup and status, and lab row L91`.
+
+- [ ] **Step 2: Write the failing tests.**
+
+  Each fixture builds keys with `testpki.NewPIV(now)` and `hwfake.New`, with the slot certificates set through `SetCertificates`. The fixtures use no real token and run no ykman.
+  - `internal/hwkeysetup/hwkeysetup_test.go`:
+    - `TestAGoodTokenIsReady`: 9a with touch never and 9c with touch always, on one device. Every check passes.
+    - `TestATouchKeyWithoutAlwaysIsNotReady`: 9c attested with `TouchCached`. `touch_policy` fails, and `Advice` holds the 9c generate line with `--touch-policy ALWAYS`.
+    - `TestTwoTokensAreRefused`: the 9c attestation comes from a second `NewPIV`. `same_token` fails.
+    - `TestAWrongRootFailsTheChain`: the anchors are another `NewPIV`'s. `session_attested` and `touch_attested` fail, and the message names the roots file.
+    - `TestNoRootsSaysWhereToPutThem`.
+    - `TestAMissingSlotAdvisesItsGenerateLine`: no 9c. The line carries `--pin-policy ONCE --touch-policy ALWAYS 9c`.
+    - `TestNoAdviceNamesASecretOrSerial`: every `Advice` line, under every fixture, contains no serial (the fake's `12345678`), and no `management`, `PIN`, `PUK` or `--management-key` value.
+    - `TestMaskSerialMatchesTheL60Rule`: L60's `TestUnitRedactMasksTheSerial` input gives the same output.
+  - `cmd/port49/hwkey_test.go`:
+    - `TestSetupWritesBothKeysWhenReady`: a temp config with other keys and a comment. After setup, `issued_key` and `touch_key` are set, everything else is byte-identical, and the exit is 0.
+    - `TestSetupChangesNothingWhenTheyMatch`: the file's bytes and mtime are unchanged, and it says so.
+    - `TestSetupAsksBeforeChangingADifferentKey`: with no terminal, the exit is 1 and the file is unchanged.
+    - `TestSetupNeverOpensTheTokenForWriting`: the fake records every call. No sign, no `Unlock`, and nothing beyond `Certificates`, `Public`, `TokenSerial` and `ModulePath`.
+    - `TestATPMSessionKeyNamesIdpMFA`: `issued_key_store: tpm`. The statement names `idp_mfa`, and the exit is 1.
+    - `TestStatusNeverWrites`: the config is unchanged in every case, and no line contains `ykman`.
+    - `TestStatusReadsTheAgent`: a stub agent at a temp socket (as `cmd/port49/nosocket_test.go`'s helpers do) answering `touch_key_unusable: "locked"` makes the `agent` check FAIL with that word.
+    - `TestStatusCertificateKeyMustMatchTheSlot`: an issued certificate for another key fails `issued_certificate`. None at all passes, with `why` reading "no certificate yet".
+    - `TestStatusExpiredCertificateFails`.
+    - `TestStatusJSONIsSnakeCaseAndMasked`: the JSON parses, every key matches `^[a-z_]+$`, and it contains no serial.
+    - `TestExitCodes`: 0 for ready, 1 for not ready, 2 for no module or a bad flag, for both commands.
+
+- [ ] **Step 3: Run them and see them fail.**
+
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|Status|TPMSession|ExitCodes' -count=1`. Expected: FAIL to compile.
+
+- [ ] **Step 4: Implement.**
+
+  - `Inspect` reads `Certificates()` from both keys and takes the device and slot certificates through `mfatouch.Chain`. It runs `pivattest.Verify` on each slot, then the serial comparison and `agent.SameToken`, then `TouchPolicy == pivattest.TouchAlways` for the touch slot.
+  - The broker's checks stay in `verifyTouchMessage`. If a check there and here would read the same bytes two ways, move the shared part into `internal/pivattest` and call it from both.
+  - `cmd/port49/hwkey.go`'s `hwkeyCmd(args []string, stdout, stderr io.Writer) int` dispatches `setup` and `status`. It reads the config with `userconfig.Load`, opens each key without a PIN (`pkcs11.Open` with a nil PIN: attestation objects are public), and closes them before any write.
+  - `--json` is status's only.
+
+- [ ] **Step 5: Run the tests and see them pass.**
+
+  - Run the Step 3 command.
+  - Run `make test && make vet`, and `go vet -tags hwkey_dlopen ./...` (the client build).
+
+- [ ] **Step 5a: Name the command where a user meets the missing key (`cmd/port49/mfa.go`).**
+
+  These lines are CLI messages, not §12 warnings or §5.7 reason codes, and no spec passage quotes them. Ruling 16 records the remedy.
+  - Write the failing tests first in `cmd/port49/mfa_test.go` and `cmd/port49/mfa_fallback_test.go`. Each asserts its new text exactly and fails on today's.
+    - `TestTouchOnlyRefusalNamesHwkeySetup` (mfa.go:155–156): the error reads "this device accepts only hardware_key_touch, and the agent has no touch key it can use: set touch_key to a key on your session key's token: run `port49 hwkey setup`, then `port49 login` again".
+    - `TestFallbackLineNamesHwkeySetup` (mfa.go:143): the stderr line reads "port49: <why>; falling back to idp_mfa (a sign-in at your identity provider); to use your security key instead, run `port49 hwkey setup`".
+    - `TestUnusableTouchKeyLineNamesHwkeySetup` (mfa.go:147): the stderr line reads "port49: <touch_key_unusable>; to use your security key, run `port49 hwkey setup`".
+  - Run `go test ./cmd/port49/ -run 'NamesHwkeySetup' -count=1` and see all three FAIL. Change the three strings. Run it again and see them PASS. Then run any existing test that pinned the old wording, updated to the new.
+
+- [ ] **Step 6: Write the L91 harness and runbook (written for Ryan's run; no agent touches the token).**
+
+  - `tests/lab/l60/l91_test.go` follows `l86_test.go`, under the same build tags. `make l86-build` gains the L91 cells in the same compiled `bin/l86/l60.test`, so Ryan runs this tree's binary. It records each command's stdout and stderr through `redact`, asks Ryan to type `ykman piv info` before and after (b) and to confirm the two listings match, and writes `tests/lab/results/L91-ser8.md`.
+  - `tests/lab/L91-runbook.md` marks every "Ryan types this" step, as `L86-runbook.md` does.
+  - The runbook runs `bin/l86/l60.test -test.run '^TestL91$' -test.count=1 -test.v`, anchored. No Makefile target runs it on a token.
+  - The run is Ryan's, on the SER8. TODO(L91) stands until his note and the §15 Status exist, as TODO(L86) does.
+
+- [ ] **Step 7: Commit.**
+
+  ```bash
+  git add internal/hwkeysetup cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
+  git commit -m "feat: port49 hwkey setup and status, read-only on the token, the broker's attestation checks reused"
+  ```
+
+---
+
+### Task 19: The roadmap's record and the operator notes
 
 **Files:**
 - Modify: `docs/superpowers/plans/README.md` (the status line, the 12c entry, a new "Plan 12c — As built" before "Pre-beta review")
@@ -1085,10 +1226,14 @@ The matrix has its own build tag, so `make compose-smoke` (`go test -tags compos
     - the load numbers and the host they came from;
     - the failure matrix's table;
     - whether Velero and `LoadCredential=` are named;
-    - the Oxidized change.
+    - the Oxidized change;
+    - `port49 hwkey setup` and `port49 hwkey status`: read-only on the token, the ykman lines they print, the exit codes, and `--json`.
+      - Plan 13's "set up your key" page is `port49 hwkey setup`.
+      - Its risk notes: a lent YubiKey plus its PIN is the user's login and touch, so a key is never shared; and a wrong attestation root, which makes every check pass against the wrong vendor or fail for everyone. The roots come only from the root-owned system config or `--roots`.
+      - L91's state (TODO(L91) until Ryan's run).
   - "Hand-offs":
     - **Pre-beta review:** the load note, the failure matrix and every open row.
-    - **Plan 13:** one device page per platform from `deploy/device-aaa/README.md`; the alerts page from `deploy/alerts/README.md`; the 3am table.
+    - **Plan 13:** one device page per platform from `deploy/device-aaa/README.md`; the alerts page from `deploy/alerts/README.md`; the 3am table; the "set up your key" page from `port49 hwkey setup`, with its two risk notes.
 
 - [ ] **Step 2: Verify.** Run `make test && make vet` (PASS) and `make leaks` (no finding).
 

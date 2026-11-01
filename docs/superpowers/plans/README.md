@@ -355,7 +355,8 @@ chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite war
 the reference device AAA configuration per platform (RFC 8907 and RFC 9887), the alert rules, load validation at the design §5 rate, the
 failure matrix on the compose stack, the Junos `idle-timeout` per class, `policy diff`'s ceiling line and the bounded `key_ref` label, and
 lab rows L39 (b, c), L84's systemd cells and L87–L90. Three decisions are open for Ryan (the plan's "Decisions for Ryan"). Revised 2026-10-31
-after its pre-flight (I1–I13 and M1–M22 applied).
+after its pre-flight (I1–I13 and M1–M22 applied). Amended 2026-11-01 (Ryan): Task 18 adds `port49 hwkey setup` and `port49 hwkey status`
+and lab row L91; nineteen tasks.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7602,8 +7603,8 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
   - **Hands on:** the artifacts 12b ships (Plan 12b — As built, Hand-offs, below): the `port49_key_secret_files_changed` alarm, L39 (b), the Oxidized `secure: true` follow-up, a measured Velero example, L84 (a) and the systemd (c) cells, and whatever L83 or L85 left FAIL (L83: the injector as a reload and the CSI driver).
   - **Plan:** `2026-10-31-12c-reference-configs-alarms-load.md`.
   - **Spec:** decision 55 (its Task 1); §5.6 and decision 21 (the class `idle-timeout`), decision 33; §15 L39, L84 and L87–L90; design §5, §12, §13, §14 and §15.
-  - **Lab:** opens L87 (SR Linux on an ERROR), L88 (the reference configurations on every platform), L89 (Velero) and L90 (Oxidized host keys); closes L39 and L84 with them. Load runs on the lab host (`make lab-load`); the kind rows and L84 run in label-gated CI.
-  - Status: **written 2026-10-31**; eighteen tasks (one spec, three code, one alerts, three load, one failure matrix, one reference configurations, six lab, one CI test, one docs). Revised the same day after its pre-flight (13 Important, 22 Minor applied). Three decisions are open for Ryan (the Junos `idle-timeout` per class, which under the default delivery is one fleet-wide minimum; the restore guard's ERROR, bounded by stopping port49d; Junos's `authentication-order tacplus` alone), each written to its recommendation.
+  - **Lab:** opens L87 (SR Linux on an ERROR), L88 (the reference configurations on every platform), L89 (Velero), L90 (Oxidized host keys) and L91 (`port49 hwkey` on a real YubiKey, Ryan's run on the SER8); closes L39 and L84 with them. Load runs on the lab host (`make lab-load`); the kind rows and L84 run in label-gated CI.
+  - Status: **written 2026-10-31**; eighteen tasks (one spec, three code, one alerts, three load, one failure matrix, one reference configurations, six lab, one CI test, one docs), nineteen since 2026-11-01's `port49 hwkey` task (Ryan). Revised the same day after its pre-flight (13 Important, 22 Minor applied). Three decisions are open for Ryan (the Junos `idle-timeout` per class, which under the default delivery is one fleet-wide minimum; the restore guard's ERROR, bounded by stopping port49d; Junos's `authentication-order tacplus` alone), each written to its recommendation.
 
 Carried here from plan 1's review:
 
