@@ -258,6 +258,43 @@ func TestAPastedAddressCompletesTheSignIn(t *testing.T) {
 	credentialsNowhere(t, text, as.Issued())
 }
 
+// The authorization address is the one URL a person is shown to open: the
+// line before it names the provider by host, never by a URL a terminal makes
+// a link (L86 cell (c): the issuer was clicked instead of the address).
+func TestOnlyTheAuthorizationAddressIsALink(t *testing.T) {
+	iss, _, p := provider(t)
+	host, _ := url.Parse(p.Issuer)
+	for _, opened := range []bool{true, false} {
+		e, _ := Discover(context.Background(), p)
+		var mu sync.Mutex
+		var out bytes.Buffer
+		o := LoginOptions{Browser: iss.Browser(), Out: &lockedWriter{mu: &mu, w: &out}}
+		if !opened {
+			authURL := make(chan string, 1)
+			o.Browser = func(u string) error { authURL <- u; return errors.New("no display") }
+			o.Paste = func() (string, error) { return iss.Redirected(<-authURL) }
+		}
+		if _, err := Login(context.Background(), p, e, o); err != nil {
+			t.Fatalf("opened %v: %v", opened, err)
+		}
+		mu.Lock()
+		lines := strings.Split(out.String(), "\n")
+		mu.Unlock()
+		links, at := 0, -1
+		for i, l := range lines {
+			if strings.Contains(l, "://") {
+				links++
+				at = i
+			}
+		}
+		if links != 1 || at < 1 || !strings.HasPrefix(lines[at], "  "+p.Issuer) ||
+			!strings.Contains(lines[at-1], host.Host) {
+			t.Errorf("opened %v: %d lines carry a URL (want 1, the indented address after a line naming %s)",
+				opened, links, host.Host)
+		}
+	}
+}
+
 // A fixed port is the one the redirect names (oidc_redirect_port).
 func TestAFixedPortIsUsed(t *testing.T) {
 	iss, as, p := provider(t)
