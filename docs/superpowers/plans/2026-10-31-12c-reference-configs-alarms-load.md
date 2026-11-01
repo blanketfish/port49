@@ -1081,7 +1081,9 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `tests/lab/l60/l91_test.go` (under `l86_test.go`'s build tags, beside L60 and L86), `tests/lab/L91-runbook.md`.
 - Modify:
   - `cmd/port49/main.go` (a `case "hwkey":` beside `case "keys":`, and the usage text);
-  - `internal/userconfig/userconfig.go` (a new `attestation_roots_file` key, and `SetKeys`);
+  - `internal/userconfig/userconfig.go` (`SetKeys`; no new config key);
+  - `internal/broker/api/api.go` (`Config.HardwareKeyTouch`), `internal/broker/broker.go` (the `/v1/config` builder, ~line 352) and the per-login MFA config that loads `attestation_roots_file` (it keeps the file's PEM beside the parsed `Anchors`), with `internal/broker/broker_test.go`;
+  - `cmd/port49/issue.go` (`fetchBrokerConfig`, reused as it stands: TLS 1.3 to the configured broker CA alone, no proxy);
   - `cmd/port49/mfa.go` (three remedy lines), `cmd/port49/mfa_test.go`, `cmd/port49/mfa_fallback_test.go`;
   - `Makefile` (`l86-build` also builds the L91 cells).
 
@@ -1093,10 +1095,14 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `pkcs11.ParseURI`, `pkcs11.Open` and `(*Signer).Certificates()`, `TokenSerial()`, `ModulePath()`, with the module `userconfig.CheckOwned` accepts: the agent's own.
   - `agent.NewClient(agent.SocketPath()).Status(ctx) (agent.Status, error)` (`TouchKey`, `TouchKeyUnusable`).
   - `userconfig.Path()`, `userconfig.Load`.
+  - `fetchBrokerConfig(ctx, broker string, pool *x509.CertPool, verify func(tls.ConnectionState) error) (api.Config, error)` (`cmd/port49/issue.go`).
   - `hwfake.New(k *ecdsa.PrivateKey, module, serial string) *Key` with `SetCertificates`, and `testpki.NewPIV(now)` with `Slot(pub, touch)` and `Anchors()`.
 - Produces:
   - `type Check struct { Name string; OK bool; Why string }`. `Name` is one of `session_slot`, `touch_slot`, `attestation_roots`, `session_attested`, `touch_attested`, `touch_policy`, `pin_policy`, `same_token`, and, for status alone, `config_issued_key`, `config_touch_key`, `issued_certificate`, `certificate_expiry`, `agent`.
-  - `type Report struct { Token string; Checks []Check; Ready bool }`. `Token` is the token label with the serial masked as `<serial>`, by the rule `tests/lab/l60/harness_test.go`'s `redact` applies, moved into `internal/hwkeysetup` as `MaskSerial(s string) string` and used by both.
+  - `type HardwareKeyTouchConfig struct { AttestationRootsPEM string \`json:"attestation_roots_pem"\` }` in `internal/broker/api`, and field `Config.HardwareKeyTouch *HardwareKeyTouchConfig \`json:"hardware_key_touch,omitempty"\``.
+  - `type Roots struct { Anchors pivattest.Anchors; Source string }` in `internal/hwkeysetup`. `Source` is `--roots <file>` or `from broker <host>`.
+  - `func LoadRoots(ctx context.Context, rootsFile, broker string, fetch func(ctx context.Context) (api.Config, error)) (Roots, error)`, returning `ErrBrokerUnreachable` or `ErrNoRoots` (both exit 2).
+  - `type Report struct { Token string; Roots string; Checks []Check; Ready bool }`. `Token` is the token label with the serial masked as `<serial>`, by the rule `tests/lab/l60/harness_test.go`'s `redact` applies, moved into `internal/hwkeysetup` as `MaskSerial(s string) string` and used by both.
   - `func Inspect(k Keys, anchors *pivattest.Anchors, now time.Time) Report`, where `type Keys struct { Session, Touch hwkey.Key }`.
   - `func Advice(r Report, sessionSlot string) []string`: the ykman lines, empty when ready.
   - `func (f *File) SetKeys(path, issuedKey, touchKey string) (changed bool, err error)` in `userconfig`. It edits only those two keys through a `yaml.v3` node, keeps every other line and comment, and writes atomically with the file's own mode.
@@ -1108,7 +1114,13 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - It finds the YubiKey through the PKCS#11 module the agent uses.
     - It reads the slot attestations for 9a (the session key; `--session-slot 9e` for a site that keeps it there, as L86 did) and 9c (the touch key), and the f9 certificate.
     - It verifies them with the broker's code (decision 45 ruling 12): the chain to the roots; touch policy `0x02` for 9c; a PIN policy `internal/pivattest` accepts; and both slots on one token (`agent.SameToken`, and the two attestations' serials equal).
-    - **The roots.** main bundles no Yubico root. They come from `--roots FILE`, or from `attestation_roots_file` in the system config (`/etc/port49/config.yaml`, the root-owned conffile 12b ships, beside `broker_ca`). With neither, the chain is unchecked: the `attestation_roots` check fails and names both places.
+    - **The roots are the broker's own** (the lead's ruling, 2026-11-01). A copy held by every user or host would be toil, and it could drift from what the broker checks.
+      - When `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file` is loaded, `GET /v1/config` gains `hardware_key_touch: {attestation_roots_pem: "…"}`. These are public certificates, never secrets.
+      - The client fetches it as it fetches the rest of `/v1/config`: over TLS, against the configured broker CA (`fetchBrokerConfig`).
+      - **Precedence:** `--roots FILE` first, for offline use, then the broker's `/v1/config`. There is no config key for roots.
+      - **With no roots from either,** the command says so and exits 2.
+      - **An unreachable broker** gets its own line, and exit 2: "port49: the broker <host> is unreachable, so the attestation roots could not be fetched: retry, or pass --roots FILE".
+      - Each run says which roots it used: "roots: from broker <host>" or "roots: --roots <file>".
     - **For anything missing or wrong,** it prints the exact commands to run. ykman, not port49, asks for the management key. They are:
       - `ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a port49-9a.pub.pem`;
       - `ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy ALWAYS 9c port49-9c.pub.pem`;
@@ -1119,7 +1131,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - **When every check passes,** it writes `issued_key:` (the session slot's `pkcs11:` URI) and `touch_key:` (9c's) to the user's config (`userconfig.Path()`).
       - If both are already present and equal, it changes nothing and says so.
       - If either differs, it shows the old and new values (serial masked) and asks at a terminal. With no terminal it changes nothing and exits 1.
-    - **Exit codes:** 0 ready; 1 action needed; 2 error (no module, an unreadable config, a bad flag).
+    - **Exit codes:** 0 ready; 1 action needed; 2 error (no module, an unreadable config, a bad flag, no roots, an unreachable broker).
     - **Where a user meets the missing key,** the remedy names this command. `port49 token`'s touch-only refusal, and the `touch_key_unusable` and idp_mfa-fallback lines, end "run `port49 hwkey setup`" (Step 5a).
     - **A TPM or file session key** (`issued_key_store: tpm` or `file`, or `auto` resolving to either) gets one plain statement: "`hardware_key_touch` needs the session key and the touch key on one YubiKey; this login's session key is not on a token. Your site's other per-login factor is `idp_mfa`." Exit 1.
   - **Decision 55 ruling 17, `port49 hwkey status`.**
@@ -1129,9 +1141,11 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
       - the certificate's expiry: a FAIL once it has passed, and the time left otherwise;
       - when an agent is running, its view: `touch_key: true`, or `touch_key_unusable: <why>`.
     - It never writes config and never prints a ykman line. Any FAIL names `port49 hwkey setup` as the fix.
-    - **Exit codes:** 0 ready, 1 not ready, 2 error.
-    - `--json` prints `{"token": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys snake_case. The serial is masked, and neither form holds a secret.
+    - It takes its roots as ruling 16 does, and its output starts with the roots line.
+    - **Exit codes:** 0 ready, 1 not ready, 2 error (no roots and an unreachable broker included).
+    - `--json` prints `{"token": "...", "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys snake_case. The serial is masked, and neither form holds a secret.
   - **§12:** list both commands with one line each.
+  - **§17's `/v1/config` description** (design document) and the spec's `/v1/config` field list: add `hardware_key_touch.attestation_roots_pem`.
   - **Row L91** (Status `open`):
 
     | ID | Claim to measure | What rests on it | Platforms |
@@ -1147,8 +1161,14 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestAGoodTokenIsReady`: 9a with touch never and 9c with touch always, on one device. Every check passes.
     - `TestATouchKeyWithoutAlwaysIsNotReady`: 9c attested with `TouchCached`. `touch_policy` fails, and `Advice` holds the 9c generate line with `--touch-policy ALWAYS`.
     - `TestTwoTokensAreRefused`: the 9c attestation comes from a second `NewPIV`. `same_token` fails.
-    - `TestAWrongRootFailsTheChain`: the anchors are another `NewPIV`'s. `session_attested` and `touch_attested` fail, and the message names the roots file.
-    - `TestNoRootsSaysWhereToPutThem`.
+    - `TestAWrongRootFailsTheChain`: the anchors are another `NewPIV`'s. `session_attested` and `touch_attested` fail, and the message names the roots' source.
+    - `TestLoadRootsPrefersTheFlag`: with `--roots` set, `fetch` is never called, and `Source` is `--roots <file>`.
+    - `TestLoadRootsFromTheBroker`: with no flag, a `fetch` returning `HardwareKeyTouch.AttestationRootsPEM` gives `Source` `from broker <host>`.
+    - `TestNoRootsIsAnError`: `fetch` returns a config with no `hardware_key_touch`. The result is `ErrNoRoots`, and the message names `--roots` and the broker setting.
+    - `TestAnUnreachableBrokerIsItsOwnError`: `fetch` returns a dial error. The result is `ErrBrokerUnreachable`, with the line telling the user to retry or pass `--roots`.
+  - `internal/broker/broker_test.go`:
+    - `TestConfigServesAttestationRootsOnlyWhenLoaded`: with `hardware_key_touch` configured, `/v1/config` carries `attestation_roots_pem`, byte-equal to the file. Without it, the field is absent.
+    - `TestTheRootsFieldHoldsCertificatesOnly`: every PEM block in it is a `CERTIFICATE`.
     - `TestAMissingSlotAdvisesItsGenerateLine`: no 9c. The line carries `--pin-policy ONCE --touch-policy ALWAYS 9c`.
     - `TestNoAdviceNamesASecretOrSerial`: every `Advice` line, under every fixture, contains no serial (the fake's `12345678`), and no `management`, `PIN`, `PUK` or `--management-key` value.
     - `TestMaskSerialMatchesTheL60Rule`: L60's `TestUnitRedactMasksTheSerial` input gives the same output.
@@ -1163,11 +1183,12 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestStatusCertificateKeyMustMatchTheSlot`: an issued certificate for another key fails `issued_certificate`. None at all passes, with `why` reading "no certificate yet".
     - `TestStatusExpiredCertificateFails`.
     - `TestStatusJSONIsSnakeCaseAndMasked`: the JSON parses, every key matches `^[a-z_]+$`, and it contains no serial.
-    - `TestExitCodes`: 0 for ready, 1 for not ready, 2 for no module or a bad flag, for both commands.
+    - `TestExitCodes`: 0 for ready, 1 for not ready, and 2 for no module, a bad flag, no roots, or an unreachable broker (a closed port as `--broker`), for both commands.
+    - `TestStatusSaysWhichRootsItUsed`: the first line is "roots: --roots <file>" with the flag, and "roots: from broker <host>" without it.
 
 - [ ] **Step 3: Run them and see them fail.**
 
-  `go test ./internal/hwkeysetup/ ./cmd/port49/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|Status|TPMSession|ExitCodes' -count=1`. Expected: FAIL to compile.
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField' -count=1`. Expected: FAIL to compile.
 
 - [ ] **Step 4: Implement.**
 
@@ -1200,7 +1221,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 - [ ] **Step 7: Commit.**
 
   ```bash
-  git add internal/hwkeysetup cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
+  git add internal/hwkeysetup internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
   git commit -m "feat: port49 hwkey setup and status, read-only on the token, the broker's attestation checks reused"
   ```
 
@@ -1229,7 +1250,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - the Oxidized change;
     - `port49 hwkey setup` and `port49 hwkey status`: read-only on the token, the ykman lines they print, the exit codes, and `--json`.
       - Plan 13's "set up your key" page is `port49 hwkey setup`.
-      - Its risk notes: a lent YubiKey plus its PIN is the user's login and touch, so a key is never shared; and a wrong attestation root, which makes every check pass against the wrong vendor or fail for everyone. The roots come only from the root-owned system config or `--roots`.
+      - Its risk notes: a lent YubiKey plus its PIN is the user's login and touch, so a key is never shared; and a wrong attestation root, which makes every check pass against the wrong vendor or fail for everyone. The roots come from the broker's `/v1/config`, over TLS to the broker CA, or from `--roots` for offline use. Each run says which.
       - L91's state (TODO(L91) until Ryan's run).
   - "Hand-offs":
     - **Pre-beta review:** the load note, the failure matrix and every open row.
