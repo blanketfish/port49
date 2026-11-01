@@ -88,16 +88,23 @@ func Login(ctx context.Context, p Provider, e Endpoints, o LoginOptions) (Tokens
 	go func() { _ = srv.Serve(ln) }()
 	defer srv.Close()
 	opened := o.Browser != nil && o.Browser(authURL) == nil
+	// The provider is named by host alone, so the address below is the one
+	// link a terminal shows (L86: the issuer's URL read as the link).
+	provider := p.Issuer
+	if u, err := url.Parse(p.Issuer); err == nil && u.Host != "" {
+		provider = u.Host
+	}
 	switch {
 	case opened:
-		fmt.Fprintf(o.Out, "port49: sign in at %s in the browser that opened; if none did, open this address:\n  %s\n",
-			p.Issuer, authURL)
+		fmt.Fprintf(o.Out, "port49: sign in with your identity provider (%s) in the browser that opened; if none "+
+			"did, open this address:\n  %s\n", provider, authURL)
 	case o.Paste == nil && o.Port == 0:
 		// No browser here, no terminal to paste into, and a port no ssh -L
 		// can name in advance: nothing can bring the answer back.
 		return Tokens{}, ErrNoWayBack
 	default:
-		fmt.Fprintf(o.Out, "port49: open this address in a browser and sign in at %s:\n  %s\n", p.Issuer, authURL)
+		fmt.Fprintf(o.Out, "port49: open this address in a browser to sign in with your identity provider (%s):\n  %s\n",
+			provider, authURL)
 	}
 	switch {
 	case o.Paste != nil:
