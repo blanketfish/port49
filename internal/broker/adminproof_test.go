@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/issuer"
 	"github.com/blanketfish/port49/internal/pivattest"
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/testpki"
@@ -327,6 +329,33 @@ func TestABearerCannotProve(t *testing.T) {
 	}
 	if f.adminRecords(t, "admin_touch_required") != 0 {
 		t.Fatal("a bearer was issued a challenge")
+	}
+}
+
+// A certificate this broker issued on an OIDC sign-in is a client
+// certificate, not a bearer: its caller carries the sign-in's assertion for
+// the logout checks (decision 43 ruling 16), and an admin call on its
+// connection is proved by a touch like any other (L86 cell (c)).
+func TestAnIssuedCertificateCanProve(t *testing.T) {
+	f := newAdminFixture(t, withIssuing())
+	s := issuer.SignIn{Principal: alicePrincipal, Issuer: f.iss.URL, Subject: "sub-alice", Sid: "s-sub-alice",
+		AMR: []string{"pwd", "otp"}, ACR: "1", AuthTime: f.b.Now(), IssuedAt: f.b.Now()}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := f.b.Issuer.Issue(key.Public(), s, f.b.Now(), 12*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	who := f.actor(t, tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: key, Leaf: leaf}, true)
+	code, raw := f.adminCall(t, who, who.conn, revokePath, bobBody)
+	if code != 200 {
+		a := decodeAdminAnswer(t, raw)
+		t.Fatalf("an issued certificate's proved call was answered %d %s: %s", code, a.Error, a.Detail)
+	}
+	if !f.marked(t, bobKey) {
+		t.Fatal("the proved call left no mark")
 	}
 }
 

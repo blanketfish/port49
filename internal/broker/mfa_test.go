@@ -32,6 +32,7 @@ import (
 	"github.com/blanketfish/port49/internal/broker/api"
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/issuer"
 	"github.com/blanketfish/port49/internal/oidc"
 	"github.com/blanketfish/port49/internal/oidc/oidctest"
 	"github.com/blanketfish/port49/internal/pivattest"
@@ -62,6 +63,7 @@ type mfaOpts struct {
 	allAdminRight bool   // and every other admin-level right (plan 12b, task 3c)
 	bobAPI        string // the one right bob's subject declares, if any
 	directory     bool   // the broker has a directory from the start, so each held connection is pinned to one
+	issuing       bool   // the broker has an issuing CA from the start (plan 9b), so its listener trusts it
 }
 
 type mfaOpt func(*mfaOpts)
@@ -76,6 +78,7 @@ func withShortCeiling() mfaOpt        { return func(o *mfaOpts) { o.shortCeiling
 func withJunosCore() mfaOpt           { return func(o *mfaOpts) { o.junosCore = true } }
 func withAdminRight() mfaOpt          { return func(o *mfaOpts) { o.adminRight = true } }
 func withTestDirectory() mfaOpt       { return func(o *mfaOpts) { o.directory = true } }
+func withIssuing() mfaOpt             { return func(o *mfaOpts) { o.issuing = true } }
 func withBobAPI(right string) mfaOpt  { return func(o *mfaOpts) { o.bobAPI = right } }
 func withBobLifting() mfaOpt          { return withBobAPI("lift_revocations") }
 func withAllAdminRights() mfaOpt {
@@ -374,6 +377,12 @@ func newMFAFixture(t *testing.T, opts ...mfaOpt) *mfaFixture {
 			return directory.Answer{Membership: store.Membership{Principal: p,
 				Username: strings.TrimPrefix(strings.SplitN(p, "@", 2)[0], "user:")}, Source: directory.Fresh}, nil
 		})
+	}
+	if o.issuing {
+		// Before the server is made, so its client pool trusts the issuing CA.
+		if f.b.Issuer, err = issuer.Ephemeral(f.now); err != nil {
+			t.Fatal(err)
+		}
 	}
 	f.addr, _ = serveThroughWith(t, base, ListenerLimits{MaxPendingPerSource: 16, MaxPerPrincipal: 8,
 		HandshakeTimeout: 10 * time.Second}, nil, f.b.Wire)
