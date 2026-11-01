@@ -12,7 +12,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // A reload refused because a key's file is not there yet is tried again

@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/crypto/ocsp"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 type ocspEntry struct {

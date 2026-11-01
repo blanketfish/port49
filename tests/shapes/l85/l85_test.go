@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/shapes/l82"
+	"github.com/blanketfish/port49/tests/shapes/l82"
 )
 
 const bgp = `{"prefix":"10.85.85.1/32","paths":[

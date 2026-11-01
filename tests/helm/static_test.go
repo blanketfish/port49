@@ -11,8 +11,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/tests/ci/versions"
-	"github.com/rhwendt/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/ci/versions"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
 )
 
 func TestTheChartVersionsAgreeWithTheReleaseArtifacts(t *testing.T) {
@@ -305,7 +305,7 @@ func TestTheBackupCronJobsFollowOnePattern(t *testing.T) {
 	}
 	for file, w := range map[string]struct{ image, name string }{
 		"backup-cronjob.yaml":     {"gcr.io/etcd-development/etcd:v3.6.15@sha256:", "etcd-snapshot"},
-		"enrollments (the chart)": {"ghcr.io/rhwendt/port49:", "enrollments"},
+		"enrollments (the chart)": {"ghcr.io/blanketfish/port49:", "enrollments"},
 	} {
 		var cj doc
 		if file == "backup-cronjob.yaml" {

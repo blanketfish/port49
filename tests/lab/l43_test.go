@@ -16,7 +16,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 const l43Claim = "Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL " +

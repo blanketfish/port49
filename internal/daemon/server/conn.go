@@ -16,12 +16,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // maxLiveSessions bounds the per-connection session map. Only a single-connect

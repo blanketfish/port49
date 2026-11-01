@@ -17,7 +17,7 @@ and the `galaxy` and `release` environments set up. After the first tag publishe
   after `HTTP Code: 400` was read from ansible-core's source and not yet seen from the real server. If the
   re-run fails with that line, fix the pattern in `.github/workflows/release.yml` to the line it printed.
 - Pull the chart and the image by digest and check their attestations: `gh attestation verify
-  oci://ghcr.io/rhwendt/charts/port49:<version> --repo rhwendt/port49`.
+  oci://ghcr.io/blanketfish/charts/port49:<version> --repo blanketfish/port49`.
 
 ## Two packages
 

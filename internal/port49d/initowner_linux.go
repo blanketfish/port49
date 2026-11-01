@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // initOwner refuses `port49d init-revocations` run by anyone but the owner

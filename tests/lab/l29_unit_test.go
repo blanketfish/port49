@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 var l29Nodes = map[string]string{"leaf1": "arista_eos", "srx1": "juniper_junos", "vsrx1": "juniper_junos",

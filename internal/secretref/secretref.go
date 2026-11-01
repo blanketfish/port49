@@ -17,7 +17,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 const (

@@ -17,8 +17,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Status is what one record's replay found.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // BackchannelLogoutEvent is the events member a logout token carries

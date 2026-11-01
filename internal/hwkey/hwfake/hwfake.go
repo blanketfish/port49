@@ -11,7 +11,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // Key is a present, unlocked key on a fake token.

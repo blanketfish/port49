@@ -184,7 +184,7 @@ None of these blocks a task; each has a recommendation the plan implements as wr
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -926,7 +926,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // The minter writes the mint record, so the policy that allowed the mint has
@@ -1394,10 +1394,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 func blobFixture(t *testing.T) (*Blob, store.Context) {
@@ -1496,9 +1496,9 @@ package author
 import (
 	"context"
 
-	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Blob answers from the compiled blob a context names (spec §5.1.2): the
@@ -1786,8 +1786,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 type fileRole struct {
@@ -2063,7 +2063,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/blob"
 )
 
 // Spec §5.1: roles are the union across the grants, privilege the max over the
@@ -2162,8 +2162,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // Resolution is what one mint needs from policy for one principal on one
@@ -2376,7 +2376,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func TestIdentity(t *testing.T) {
@@ -2434,7 +2434,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A private key is loaded only from a regular file its owner alone can read,
@@ -2714,7 +2714,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // ErrUntrusted is a caller the trust anchor does not vouch for, now: no
@@ -2881,14 +2881,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/broker/policy"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/policy"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 const testPolicy = `
@@ -3020,10 +3020,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // A batch is answered per item: a granted device gets a pair, an unknown one
@@ -3266,14 +3266,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/broker/policy"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/blob"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/policy"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // maxBody bounds a mint request. A batch is capped at BatchMax device names,
@@ -3620,8 +3620,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func startServer(t *testing.T, f *fixture) string {
@@ -3864,7 +3864,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // MaxConns caps the broker's open connections. Every agent holds one for its
@@ -4201,12 +4201,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func brokerConfig(t *testing.T, policyBody string) config.Config {
@@ -4286,8 +4286,8 @@ Expected: FAIL to build — `undefined: buildBroker`.
 
 - [ ] **Step 5: Wire it**
 
-In `cmd/port49d/main.go`, add to the imports `"github.com/rhwendt/port49/internal/admission"`,
-`"github.com/rhwendt/port49/internal/broker"` and `"github.com/rhwendt/port49/internal/broker/policy"`.
+In `cmd/port49d/main.go`, add to the imports `"github.com/blanketfish/port49/internal/admission"`,
+`"github.com/blanketfish/port49/internal/broker"` and `"github.com/blanketfish/port49/internal/broker/policy"`.
 
 Add, above `func run`:
 
@@ -4493,8 +4493,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // fakeBroker speaks the broker's wire format and records every mint's
@@ -4891,7 +4891,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // Config is what opens a session.
@@ -5184,7 +5184,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // ErrNoAgent is a socket nothing answers on. The answer is `port49 login`.
@@ -5373,8 +5373,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // fakeAgent answers the agent socket's POST /token with a fixed item, or with
@@ -5521,8 +5521,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 const usage = `usage:
@@ -5829,7 +5829,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func main() {
@@ -5938,8 +5938,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // The vertical slice (plan 3; design §19 step 3): the first login to a real

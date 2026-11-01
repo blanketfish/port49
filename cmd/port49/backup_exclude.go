@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // cacheDirTagSignature is the first line of a CACHEDIR.TAG, the mark borg,

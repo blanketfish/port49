@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rhwendt/port49/tests/ci/versions"
+	"github.com/blanketfish/port49/tests/ci/versions"
 )
 
 func main() {

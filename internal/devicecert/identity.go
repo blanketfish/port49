@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Rule is tls_listener.device_identity (decision 50 ruling 6): which

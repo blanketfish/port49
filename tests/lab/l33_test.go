@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // l33Record is one stack's L33 run.

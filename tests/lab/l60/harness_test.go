@@ -46,8 +46,8 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The environment the cells read. Each cell has its own gate.

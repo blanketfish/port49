@@ -3,7 +3,7 @@ package port49d
 import (
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // A swap that puts a bundle in force writes one generic_platform record per

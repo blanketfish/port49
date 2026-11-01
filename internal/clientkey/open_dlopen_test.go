@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/hwkey/secureenclave"
+	"github.com/blanketfish/port49/internal/hwkey/secureenclave"
 )
 
 // The client build sends a secure-enclave: reference to the Secure Enclave

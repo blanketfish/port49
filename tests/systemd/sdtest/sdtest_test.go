@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/tests/kind/kindtest"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 	"gopkg.in/yaml.v3"
 )
 

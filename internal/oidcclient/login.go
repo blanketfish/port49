@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // SignInWait is how long a sign-in waits for the browser, and how old a

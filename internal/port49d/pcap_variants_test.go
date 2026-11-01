@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Synthetic captures, built here from headers and made-up bytes, one per way a

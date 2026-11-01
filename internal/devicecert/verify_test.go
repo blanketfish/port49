@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 var dev01 = admission.Device{Name: "leaf-01", Transport: admission.TransportTLS,

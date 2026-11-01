@@ -78,7 +78,7 @@ can never present as, or inherit the grants of, a person.
 - **`tests/lab`**: a step-ca harness (L48) and an Oxidized harness on the compose stack (L49).
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, no cgo, **no new module**. `crypto/x509`, `crypto/tls`
+- Go 1.26, module `github.com/blanketfish/port49`, no cgo, **no new module**. `crypto/x509`, `crypto/tls`
   and `net/http` from the standard library; SPIFFE ID parsing is in-house (about 80 lines against
   the SPIFFE ID specification's §2, not `go-spiffe`).
 - etcd v3.6.15 as today.
@@ -466,7 +466,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
   module**.
 - snake_case everywhere it is data: YAML keys (`spiffe_trust_domains`), JSON log keys, config, metric
   names.
@@ -1322,7 +1322,7 @@ with
 		return "machines", nil
 ```
 
-and import `github.com/rhwendt/port49/internal/spiffe`.
+and import `github.com/blanketfish/port49/internal/spiffe`.
 
 In `internal/policy/member.go`, after `DeclaredUsernames`, add:
 
@@ -1594,7 +1594,7 @@ func spiffeTrustDomains(at string, tds []string) ([]string, error) {
 }
   ```
 
-  and import `github.com/rhwendt/port49/internal/spiffe`.
+  and import `github.com/blanketfish/port49/internal/spiffe`.
 
 - [ ] **Step 5: `BrokerConfig.WorkloadCAFile`, the status rule and the collision lists**
 
@@ -1685,7 +1685,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // workloadID is the fixture workload's SPIFFE ID, in workloadPolicy's
@@ -1883,8 +1883,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/spiffe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Workload is the broker's workload certificate verifier (plan 8; spec §13
@@ -2098,10 +2098,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // workloadPolicy is testPolicy with svc_oxidized: the workload's SPIFFE ID
@@ -2635,10 +2635,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // startServerWith is startServer with the listener wired as both daemons
@@ -3252,11 +3252,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // withWorkloadAnchor writes ca as the workload anchor of cfg's broker, for
@@ -3769,8 +3769,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // fakeBroker answers /v1/config with batchMax and each /v1/tokens call with
@@ -4108,8 +4108,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // DefaultDeadline is how long a run retries a broker that cannot answer now.
@@ -4451,8 +4451,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // workloadBroker serves /v1/config and /v1/tokens as answer says, over TLS
@@ -4690,8 +4690,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/workload"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/workload"
 )
 
 // exitTemporary is EX_TEMPFAIL: the broker could not answer by the deadline,
@@ -5034,10 +5034,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/workload"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/workload"
 )
 
 const (

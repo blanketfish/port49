@@ -10,8 +10,8 @@ import (
 	"os"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // keepCABundle keeps the CA bundle the broker sent on the connection the

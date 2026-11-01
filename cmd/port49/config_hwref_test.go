@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // A pkcs11 key named on the command line without --cert is not a complete

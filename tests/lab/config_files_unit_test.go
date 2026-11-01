@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // assertBrokerFilesAreRight loads the rendered broker config as port49-broker

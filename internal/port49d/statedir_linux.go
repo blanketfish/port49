@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // The files port49-broker keeps in broker.state_dir beside the CRLs: its

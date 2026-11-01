@@ -16,9 +16,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // ID names a bundle: "sha256:" over the policy file's sha256 and the

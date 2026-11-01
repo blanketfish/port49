@@ -80,7 +80,7 @@ test: lab-unit test-python
 #               shards together hold every test;
 #   test-root   the tests that skip unless run as root, which must pass, not skip.
 # A skip in a must-pass test fails: tests/ci/cmd/mustpass reads go test -json.
-PORT49D_PKG = github.com/rhwendt/port49/internal/port49d
+PORT49D_PKG = github.com/blanketfish/port49/internal/port49d
 ACL_TEST = TestAnACLGrantingWriteIsRefused
 # The tests that must pass, not skip, as a comma list: it is mustpass's -tests as it stands,
 # and test-root turns it into the -run alternation below.

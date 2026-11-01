@@ -15,10 +15,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
 )
 
-const vcsSample = "bin/port49d: go1.26.0\n\tpath\tgithub.com/rhwendt/port49/cmd/port49d\n" +
+const vcsSample = "bin/port49d: go1.26.0\n\tpath\tgithub.com/blanketfish/port49/cmd/port49d\n" +
 	"\tbuild\tvcs=git\n\tbuild\tvcs.revision=0123456789abcdef0123456789abcdef01234567\n\tbuild\tvcs.modified=true\n"
 
 func TestBuildVCSReadsRevisionAndModified(t *testing.T) {

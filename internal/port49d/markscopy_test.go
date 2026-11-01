@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // The copy keeps every mark it was told stands, drops one only on a lift

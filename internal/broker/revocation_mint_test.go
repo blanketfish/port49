@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 func (f *fixture) revoke(t *testing.T, kind, key string) {

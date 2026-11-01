@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // deviceSent is the events a device's own TACACS+ packet produces, once

@@ -339,7 +339,7 @@ func TestTheImageJobTagsAndAttests(t *testing.T) {
 	if tags == nil || build == nil || attest == nil {
 		t.Fatal("the image job lacks its tags step, build or attestation")
 	}
-	if !strings.Contains(tags.Run, `case "$version" in *-*) ;; *) echo "ghcr.io/rhwendt/port49:latest" ;; esac`) {
+	if !strings.Contains(tags.Run, `case "$version" in *-*) ;; *) echo "ghcr.io/blanketfish/port49:latest" ;; esac`) {
 		t.Error("the :latest tag is not withheld from a pre-release")
 	}
 	if build.With["target"] != "port49" || build.With["platforms"] != "linux/amd64,linux/arm64" || build.With["push"] != true {
@@ -630,7 +630,7 @@ func TestTheChartJobAttestsThePushedDigest(t *testing.T) {
 		t.Fatal("cannot find the chart job")
 	}
 	job := text[i:j]
-	for _, want := range []string{"actions/attest-build-provenance@", "subject-name: ghcr.io/rhwendt/charts/port49",
+	for _, want := range []string{"actions/attest-build-provenance@", "subject-name: ghcr.io/blanketfish/charts/port49",
 		"subject-digest: ${{ steps.push.outputs.digest }}", "push-to-registry: true", "sed -n 's/^Digest: //p'"} {
 		if !strings.Contains(job, want) {
 			t.Errorf("the chart job lacks %q", want)

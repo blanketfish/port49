@@ -8,9 +8,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // adminCall makes one admin call through your agent (spec §5.1.6) and returns

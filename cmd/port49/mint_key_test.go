@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // A key that is out is said as the agent said it, without the "agent: "

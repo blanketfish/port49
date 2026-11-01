@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // The directory commands send their one call through the agent and print the

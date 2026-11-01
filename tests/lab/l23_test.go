@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
+	adapter "github.com/blanketfish/port49/internal/platform"
 )
 
 // TestL23InertBesideReadonly re-measures L22's inert candidates beside

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // TestAdapterCarried is the rest of L22 (plan 5a, Task 17): the measurements

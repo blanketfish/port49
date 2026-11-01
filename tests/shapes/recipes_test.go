@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // The key recipes in README.md are run as they are written, with only the destination

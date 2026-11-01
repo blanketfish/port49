@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
 	"gopkg.in/yaml.v3"
 )
 

@@ -77,7 +77,7 @@ goes between 9b (merged) and 9c (not written), so it is `09b1`, not `09c0`. Bran
   `junos_baseline_test.go`, `junos_baseline_unit_test.go`; `projection_test.go` runs under a
   named set.
 
-**Tech Stack:** Go 1.26, module `github.com/rhwendt/port49`, no cgo, no new module. Containerlab
+**Tech Stack:** Go 1.26, module `github.com/blanketfish/port49`, no cgo, no new module. Containerlab
 with vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (both images present on the lab host).
 
 **Spec:**
@@ -1372,8 +1372,8 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // TestL57JunosGroups measures what a configuration capture carries for groups
@@ -4475,7 +4475,7 @@ func (c checkRun) one(device, file string) int {
 }
 ```
 
-  Add `"path/filepath"` and `"github.com/rhwendt/port49/internal/policy"` to the imports if not
+  Add `"path/filepath"` and `"github.com/blanketfish/port49/internal/policy"` to the imports if not
   present. Update the doc comment (the `--batch` form; the capture is `platform.ConfigCapture`)
   and `main.go`'s usage line:
 
@@ -4681,7 +4681,7 @@ var projectionShapes120 = []struct{ name, roles, want string }{
   under its own top-level `^ *(save|junoscript)( .*)? *(\|.*)?$`. Set 1.2.0 sends that
   alternative nested inside `^( … )$` beside the grant's deny. In
   `tests/lab/junos_baseline_test.go`, add `"os"`, `"path/filepath"`, `"time"`,
-  `"github.com/rhwendt/port49/internal/admission"` and `"github.com/rhwendt/port49/internal/policy"`
+  `"github.com/blanketfish/port49/internal/admission"` and `"github.com/blanketfish/port49/internal/policy"`
   to the imports, and add:
 
 ```go

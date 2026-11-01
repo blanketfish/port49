@@ -68,7 +68,7 @@
 
 ## Global Constraints
 
-- **Toolchain.** Go 1.26+, module `github.com/rhwendt/port49`; `gofmt` and `go vet` clean; no cgo; no new module.
+- **Toolchain.** Go 1.26+, module `github.com/blanketfish/port49`; `gofmt` and `go vet` clean; no cgo; no new module.
 - **snake_case** for every data key: `secret_ref`, `password_secret_ref`, `token_secret_ref`, `webhook_secret_ref`, `key_secret_refs.env_prefix`, `key_secret_refs.file_dir`, `limits.max_connections`, the `meta/issuer` record's JSON.
 - **Reason codes** come only from spec §5.7 (`internal/decision/reasons.go`). This plan adds none: every refusal it adds is a start or reload line, or an existing record (`matches_retired`, `device_unknown`).
 - **Warnings and report codes** come only from spec §12. This plan adds no report code; `port49 policy test`'s existing `keys:` and `report:` lines change source (the policy, not port49d.yaml). The two operator lines the global cap says (shedding begun, still shedding) are written into §12 by Task 1 before Task 11 emits them.
@@ -976,7 +976,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 const (

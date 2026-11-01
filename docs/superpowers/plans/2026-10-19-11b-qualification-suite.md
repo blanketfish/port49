@@ -56,7 +56,7 @@ A generator, `tests/qual/cmd/genprofile`, builds part 1 from a lab conformance r
 
 ## Global Constraints
 
-- **Toolchain.** Go 1.26+, module `github.com/rhwendt/port49`; `gofmt` and `go vet` clean; no cgo; no new module.
+- **Toolchain.** Go 1.26+, module `github.com/blanketfish/port49`; `gofmt` and `go vet` clean; no cgo; no new module.
 - **snake_case** for every data key: profile YAML, golden JSON, evidence JSON, manifest YAML, metric names.
 - **Reason codes** come only from spec §5.7 (`internal/decision/reasons.go`). This plan adds none.
 - **Metrics:** no device identity in a metric label. Fleet mode adds no metric.
@@ -1496,7 +1496,7 @@ package decision
 import (
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // PacketFields is a validated request's header fields, as names (spec §5.7;
@@ -2102,7 +2102,7 @@ func statusErr(where, status string, src []Source) []error {
 }
 ```
 
-Imports: `bytes`, `errors`, `fmt`, `os`, `path`, `path/filepath`, `regexp`, `slices`, `strings`, `time`, `gopkg.in/yaml.v3`, `github.com/rhwendt/port49/internal/tacacs/wire`.
+Imports: `bytes`, `errors`, `fmt`, `os`, `path`, `path/filepath`, `regexp`, `slices`, `strings`, `time`, `gopkg.in/yaml.v3`, `github.com/blanketfish/port49/internal/tacacs/wire`.
 
 - [ ] **Step 6: Run the tests**
 
@@ -3241,7 +3241,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // (Target, Login, StepResult, Transcript as in Interfaces.)
@@ -3939,7 +3939,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 type qualCell struct {
@@ -4279,7 +4279,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 func TestGenerateTheFixture(t *testing.T) {
@@ -4445,7 +4445,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 var allowedFiles = []string{"run.json", "decisions.jsonl", "*.conns.json", "*.tls.json"}

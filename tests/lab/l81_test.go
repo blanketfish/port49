@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // TestL81IPv6ServerName runs spec §15 L81 cell (a) on the lab host: L72's

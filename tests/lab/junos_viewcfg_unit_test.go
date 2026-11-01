@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/projection"
+	"github.com/blanketfish/port49/internal/engine"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/projection"
 )
 
 // l68Shipped renders a juniper_junos composition at level on set version, as

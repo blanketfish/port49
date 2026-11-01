@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/pivattest"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/pivattest"
 )
 
 // Signer is one private key object on one token; it implements hwkey.Key.

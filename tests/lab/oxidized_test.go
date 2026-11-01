@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // Oxidized on the lab's compose stack (plan 8, L49): the example's wrapper

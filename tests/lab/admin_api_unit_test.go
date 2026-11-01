@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // withAdminTouch moves the client_ca_file shorthand to broker.identity.humans

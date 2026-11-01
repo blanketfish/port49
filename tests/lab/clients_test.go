@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // L15, the half nobody had driven: **what the clients an operator actually

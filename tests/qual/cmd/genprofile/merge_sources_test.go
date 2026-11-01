@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 // A committed entry whose sources are a superset of the regenerated one's, all else equal, is a hand refinement, no conflict.

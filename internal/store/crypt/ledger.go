@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // ErrNotLastWritten is a context that opens at its key but is sealed below

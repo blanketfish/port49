@@ -15,8 +15,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // maxCertFile bounds the --cert file read: a certificate is a few KiB, and

@@ -39,7 +39,7 @@ In a split, each region's runner applies a mark it follows to its own session st
 (`Broker.ReachMark`). `port49 store status` asks a process's admin socket what each store is and
 how fresh its copy is.
 
-**Tech Stack:** Go 1.26 (module `github.com/rhwendt/port49`), no new module; `go.etcd.io/etcd/client/v3`
+**Tech Stack:** Go 1.26 (module `github.com/blanketfish/port49`), no new module; `go.etcd.io/etcd/client/v3`
 (already a dependency: `MemberList`, `Status`); `internal/config`, `internal/store`
 (`store.go`, `marks.go`, a new `fresh.go`), `internal/store/{placement (new),etcd,memory,enrollfile,crypt,guard,storetest}`,
 `internal/broker`, `internal/port49d`, `internal/daemon/{admin,metrics}`, `cmd/port49`; the lab on
@@ -2293,8 +2293,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/api"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/api"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // twoRegions is two brokers, each on its own session store (its own
@@ -2542,8 +2542,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 var t0 = time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC)
@@ -2692,7 +2692,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Directory is the directory store's revocation half, as the router writes,
@@ -2977,7 +2977,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // Members counts the members etcd lists and those answering at their
@@ -3538,8 +3538,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // twoRegions is two routers sharing one directory, each on a session store
@@ -4452,7 +4452,7 @@ func (p *placed) sayCached(principal string) {
 }
 ```
 
-Imports gain `"slices"`, `"sync"` and `"github.com/rhwendt/port49/internal/printsafe"`.
+Imports gain `"slices"`, `"sync"` and `"github.com/blanketfish/port49/internal/printsafe"`.
 
 `TestOneForgetReachesEveryRegion` relies on the memory store's `DeleteMembership` leaving a
 tombstone, which `GetMembership` now answers as `ErrForgotten`, and on its `PutMembership` taking a
@@ -4639,8 +4639,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // R26: a logout is written to the directory and read from the set; with the
@@ -5242,8 +5242,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // R26: a logout another region ingested reaches this region: the session's
@@ -5443,12 +5443,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/admin"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/admin"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // rolesMemberScoped is a TLS etcd member with the roles of a keyspace
@@ -5673,9 +5673,9 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // storeRef is one of port49's two stores as a process opens it (plan 11a;
@@ -5782,7 +5782,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // directoryCheckEvery is how often a process reads the directory store to
@@ -6426,9 +6426,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // directoryKeysRecheckEvery is how often a runner on a directory of its own
@@ -6612,7 +6612,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `internal/port49d/twostores_linux_test.go` (add `"github.com/rhwendt/port49/internal/tacacs/wire"` to its imports):
+Append to `internal/port49d/twostores_linux_test.go` (add `"github.com/blanketfish/port49/internal/tacacs/wire"` to its imports):
 
 ```go
 // Review Focus 1: a port49d cut from its directory keeps serving from its
@@ -7100,8 +7100,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // R19: a copy past its ceiling answers every read of it store_unavailable:
@@ -7289,7 +7289,7 @@ func TestADeferredKeyFaultEndsPort49d(t *testing.T) {
 }
 ```
 
-Add `"context"`, `"errors"` and `"github.com/rhwendt/port49/internal/store/etcd/etcdtest"` to its
+Add `"context"`, `"errors"` and `"github.com/blanketfish/port49/internal/store/etcd/etcdtest"` to its
 imports if they are not there.
 
 Create `internal/port49d/snapshot_test.go`:
@@ -7302,8 +7302,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // fakeSnapshots is a session store's snapshot records by kind and writer.
@@ -7536,11 +7536,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // snapshotEvery is how often a process in a split writes its directory
@@ -8554,7 +8554,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/blanketfish/port49/internal/daemon/admin"
 )
 
 // serveStatus serves a store_status of text and degraded on a socket of the
@@ -8675,10 +8675,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // roleStatus is one store's line of port49 store status (plan 11a, R21).
@@ -8824,7 +8824,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/blanketfish/port49/internal/daemon/admin"
 )
 
 // storeCmd is `port49 store` (plan 11a): status asks a process's admin
@@ -9013,8 +9013,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 func TestRegionNetworkCommands(t *testing.T) {
@@ -9154,9 +9154,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/api"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/api"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The three-region lab (plan 11a; spec §15 L74, L75): three network
@@ -9680,7 +9680,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 const l74Claim = "spec §15 L74, cell by cell (decision 51: the cache, fail closed, a process with no cache, the runner's reach, port49 store status)."
@@ -9989,7 +9989,7 @@ broker:
 }
 ```
 
-(Add `"github.com/rhwendt/port49/internal/testpki"` to `l74_test.go`'s imports.) `w.dir` is a
+(Add `"github.com/blanketfish/port49/internal/testpki"` to `l74_test.go`'s imports.) `w.dir` is a
 `os.MkdirTemp("", "p49l74")` made 0700: the processes run as this user, through sudo, in it.
 
 `TestRegions`:
@@ -10431,7 +10431,7 @@ The shape (L75's row; R8, R13, R15, R16, R26):
 - [ ] **Step 1: Write the failing unit tests**
 
 Append to `tests/lab/l74_unit_test.go` (its imports gain `"fmt"`, `"time"` and
-`"github.com/rhwendt/port49/internal/oidc"`):
+`"github.com/blanketfish/port49/internal/oidc"`):
 
 ```go
 // L75's broker config loads as port49-broker's, in both identities: the
@@ -10515,11 +10515,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const l75Claim = "spec §15 L75, cell by cell (decision 51: unlocks, TOTP fail-closed, membership's pin, " +

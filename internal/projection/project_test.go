@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // junos is a projected Junos adapter as the tests read one: spec §8's bits,

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 // L30: next is absolute and followed to null returns every device once, on

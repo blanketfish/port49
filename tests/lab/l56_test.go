@@ -29,8 +29,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 const l56Claim = "Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real port49 " +

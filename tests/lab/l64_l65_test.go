@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // L64 and L65 (plan 9d, Task 11): `port49 ssh` under OpenSSH's accept-new, and

@@ -32,11 +32,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/blanketfish/port49/internal/directory"
 	"github.com/go-ldap/ldap/v3"
 	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
 	"github.com/jcmturner/gokrb5/v8/krberror"
 	"github.com/jcmturner/gokrb5/v8/messages"
-	"github.com/rhwendt/port49/internal/directory"
 )
 
 // A secret prints as its key names whatever the verb, so a log line that

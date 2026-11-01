@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	kindstack "github.com/rhwendt/port49/tests/kind"
-	"github.com/rhwendt/port49/tests/kind/kindtest"
-	"github.com/rhwendt/port49/tests/shapes/l82"
-	"github.com/rhwendt/port49/tests/shapes/l85"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	kindstack "github.com/blanketfish/port49/tests/kind"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/shapes/l82"
+	"github.com/blanketfish/port49/tests/shapes/l85"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 // L85's fixed names and addresses. The device network and the anycast address are private ranges

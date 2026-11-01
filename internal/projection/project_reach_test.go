@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 func denyCommands(res Result) string {

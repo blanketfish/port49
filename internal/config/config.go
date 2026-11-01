@@ -30,17 +30,17 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/keyset"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/secretref"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/keyset"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	"github.com/blanketfish/port49/internal/yamlfault"
 )
 
 type AccountingConfig struct {

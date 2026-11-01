@@ -11,11 +11,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // widenedOps is groupPolicy with the grant secret-group's members hold widened

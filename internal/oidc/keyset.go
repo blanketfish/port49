@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/egress"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/egress"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // ErrUnavailable is an issuer whose keys cannot be used: none fetched or

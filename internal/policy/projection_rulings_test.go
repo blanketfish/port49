@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // myJunos is plan 5b pre-flight R-I1's probe: a platform no shipped set

@@ -75,7 +75,7 @@ nfpms:
     ids: [port49d, port49-broker, port49-inventory, port49-static]
     file_name_template: "port49-server_{{ .Version }}_{{ .Arch }}"
     vendor: port49
-    homepage: https://github.com/rhwendt/port49
+    homepage: https://github.com/blanketfish/port49
     maintainer: port49 maintainers <port49@blanketfish.com>
     description: port49 TACACS+ server and broker
     license: Apache-2.0
@@ -150,7 +150,7 @@ nfpms:
     ids: [port49-client]
     file_name_template: "port49_{{ .Version }}_{{ .Arch }}"
     vendor: port49
-    homepage: https://github.com/rhwendt/port49
+    homepage: https://github.com/blanketfish/port49
     maintainer: port49 maintainers <port49@blanketfish.com>
     description: port49 client, Python library and Ansible collection
     license: Apache-2.0
@@ -193,7 +193,7 @@ release:
   replace_existing_artifacts: true
   prerelease: auto
   github:
-    owner: rhwendt
+    owner: blanketfish
     name: port49
 
 changelog:

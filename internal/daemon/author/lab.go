@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Lab is the lab's measurement instrument, not a policy: it returns fixed

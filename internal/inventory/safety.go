@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // checkSafety refuses next (spec §10, "Bounded change per sync"): empty, or

@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/netip"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // A reader for the classic pcap format (tcpdump -w), just enough for

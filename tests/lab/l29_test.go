@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 const l29ReloadClaim = "What a device does when port49d resets an open connection at its first packet after a " +

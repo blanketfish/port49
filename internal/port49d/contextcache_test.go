@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )

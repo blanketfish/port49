@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/mfatouch"
-	"github.com/rhwendt/port49/internal/workload"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/workload"
 )
 
 // mintOutcome says how a mint ended, on stderr, and the exit code it is: 0

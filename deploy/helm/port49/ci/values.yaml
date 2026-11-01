@@ -1,5 +1,5 @@
 # The values `helm lint` and the render tests install with. Every name is fake; no secret is here.
-image: {repository: ghcr.io/rhwendt/port49, tag: "0.1.0"}
+image: {repository: ghcr.io/blanketfish/port49, tag: "0.1.0"}
 keys: {existingSecret: port49-device-keys}
 encryption: {id: c1, existingSecret: port49-encryption}
 broker:

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // ErrUntrusted is a caller the trust anchor does not vouch for, now: no

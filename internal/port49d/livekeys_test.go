@@ -9,11 +9,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/keyset"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/secretref"
-	"github.com/rhwendt/port49/internal/secretref/secretreftest"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/keyset"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref/secretreftest"
 )
 
 // keyedPolicy is the smallest valid policy with the keys: block keys.

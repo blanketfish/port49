@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Go `1.22` module `github.com/rhwendt/port49`; `gofmt` clean; `go vet ./...` clean; no `cgo`.
+- Go `1.22` module `github.com/blanketfish/port49`; `gofmt` clean; `go vet ./...` clean; no `cgo`.
 - **Config keys, YAML keys, JSON log keys, and metric names are `snake_case`.** Never camelCase.
 - **Header validation before anything else** (spec §10): version major `0xc`, `type` in `{1,2,3}`, client `seq_no` odd, `length ≤ 4096`. A failing packet is never parsed further and its body is never logged.
 - **`TAC_PLUS_UNENCRYPTED_FLAG` (0x01) is refused** without parsing the body; `TAC_PLUS_SINGLE_CONNECT_FLAG` (0x04) is honored.
@@ -36,7 +36,7 @@
 ## File Structure
 
 ```
-go.mod                                  module github.com/rhwendt/port49, go 1.22
+go.mod                                  module github.com/blanketfish/port49, go 1.22
 Makefile                                test, vet, fuzz, lab targets
 cmd/port49d/main.go                     flag/config load, wire everything, run
 internal/tacacs/wire/header.go          Header struct, Encode/Decode, Validate
@@ -74,7 +74,7 @@ tests/lab/results/                      L<N>-<platform>.md, written by the lab t
 - Modify: `.gitignore` (add `/tests/lab/captures/`)
 
 **Interfaces:**
-- Produces: the module path `github.com/rhwendt/port49` every later import uses; `make test`, `make vet`, `make fuzz`, `make lab`.
+- Produces: the module path `github.com/blanketfish/port49` every later import uses; `make test`, `make vet`, `make fuzz`, `make lab`.
 
 - [ ] **Step 1: Create the branch**
 
@@ -85,7 +85,7 @@ git checkout -b feature/protocol-core
 - [ ] **Step 2: Write `go.mod`**
 
 ```
-module github.com/rhwendt/port49
+module github.com/blanketfish/port49
 
 go 1.22
 ```
@@ -1319,7 +1319,7 @@ package keyring
 import (
 	"testing"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 func start(t *testing.T) (wire.Header, []byte) {
@@ -1424,7 +1424,7 @@ package keyring
 import (
 	"errors"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type Version struct {
@@ -1960,7 +1960,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 func TestTokenLifecycle(t *testing.T) {
@@ -2068,7 +2068,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 type Store struct {
@@ -2841,12 +2841,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type fixture struct {
@@ -3022,11 +3022,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type Peer struct {
@@ -3257,12 +3257,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 var peer = authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}
@@ -3377,11 +3377,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type Decision struct {
@@ -3507,8 +3507,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Lab is the authorizer used before the policy engine exists (plan 4). It
@@ -3586,8 +3586,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 func TestSpoolDrainsInOrder(t *testing.T) {
@@ -3660,12 +3660,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 var peer = authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}
@@ -3765,8 +3765,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 var ErrSpoolFull = errors.New("acct: spool full")
@@ -3896,12 +3896,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/author"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/author"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type Handler struct {
@@ -4151,9 +4151,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/keyring"
 )
 
 type KeyVersion struct {
@@ -4340,17 +4340,17 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/acct"
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/author"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/acct"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/author"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // client is a minimal TACACS+ client built on the wire package.
@@ -4564,11 +4564,11 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type conn struct {
@@ -4758,15 +4758,15 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/acct"
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/author"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/acct"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/author"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 type Deps struct {
@@ -4842,17 +4842,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/acct"
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/author"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/daemon/server"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/acct"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/author"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/server"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 func main() {

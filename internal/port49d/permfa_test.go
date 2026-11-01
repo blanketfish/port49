@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/pivattest"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/pivattest"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func TestAnUnusableAttestationRootsFileNeverRefusesTheStart(t *testing.T) {

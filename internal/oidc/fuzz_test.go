@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // No input panics ParseCompact or Verify, and a JWS that parses came from

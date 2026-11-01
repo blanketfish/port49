@@ -7,8 +7,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // storeRetryBudget is how long `port49 token` keeps trying a mint refused

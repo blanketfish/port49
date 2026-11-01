@@ -4,7 +4,7 @@
 # values.schema.json until set.
 
 image:
-  repository: ghcr.io/rhwendt/port49
+  repository: ghcr.io/blanketfish/port49
   tag: ""            # empty: the chart's appVersion
   pullPolicy: IfNotPresent
 # The root initContainers that make each data directory 0700 (alpine:3.22, as the Dockerfile's

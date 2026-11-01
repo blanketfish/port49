@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 const clusterPolicy = `

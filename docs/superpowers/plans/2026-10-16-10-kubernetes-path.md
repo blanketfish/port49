@@ -17,7 +17,7 @@ the policy, the verifier and a revocation share (as `internal/spiffe` is shared,
 ruling 4). `port49 workload` gains `--token-file`, which presents the projected token as a bearer
 and reads it again at each request, so the kubelet's rotation needs nothing from the workload.
 
-**Tech Stack:** Go 1.26 (module `github.com/rhwendt/port49`), the standard library only, no new
+**Tech Stack:** Go 1.26 (module `github.com/blanketfish/port49`), the standard library only, no new
 module; `internal/oidc`, `internal/config`, `internal/broker`, `internal/port49d`,
 `internal/workload`, `cmd/port49`, `internal/policy`; the lab on kind (`tests/lab`, build tag
 `lab`, `kind` v0.29.0, `kindest/node:v1.33.1`).
@@ -1104,9 +1104,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 const k8sIssuer = "https://kubernetes.default.svc.cluster.local"
@@ -1441,9 +1441,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 func cluster(ns ...string) oidc.VerifierConfig {
@@ -1622,8 +1622,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/k8sid"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/k8sid"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // K8sBinding is what a verified service account token binds it to (spec
@@ -1881,8 +1881,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 const clusterPolicy = `
@@ -2433,8 +2433,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // tokenHarness is a TLS broker that asks for no client certificate, as an

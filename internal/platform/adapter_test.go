@@ -10,7 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/rhwendt/port49/platforms"
+	"github.com/blanketfish/port49/platforms"
 )
 
 // shipped is set 1.0.0, value for value: the table plan 4 compiled into the

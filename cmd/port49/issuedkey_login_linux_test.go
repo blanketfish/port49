@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // The issued-key tests that drive a whole login against the OIDC lab, whose

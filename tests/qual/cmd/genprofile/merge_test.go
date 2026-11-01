@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 func handReaction(on string) devicemock.Reaction {

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 // L73's captures are TLS. What is in the clear is the ClientHello, the

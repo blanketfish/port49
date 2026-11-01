@@ -8,11 +8,11 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/normal"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/normal"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
 )
 
 // The operator's side of the directory-password sign-in (plan 9e, decision

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // workloadID is the fixture workload's SPIFFE ID, in workloadPolicy's

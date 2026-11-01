@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // The offline broker on two stores opens the directory store without asking

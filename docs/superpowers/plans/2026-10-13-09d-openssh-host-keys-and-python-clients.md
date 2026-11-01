@@ -78,7 +78,7 @@ example's strict pins.
   `plugins/lookup/token.py`, `tests/unit/test_token.py` (stub `ansible` modules).
 - `Makefile`: `test-python`, run by `make test`; `lab-ssh` and `lab-ansible`.
 
-**Tech Stack:** Go 1.26, module `github.com/rhwendt/port49`, `CGO_ENABLED=0`, no new Go module.
+**Tech Stack:** Go 1.26, module `github.com/blanketfish/port49`, `CGO_ENABLED=0`, no new Go module.
 OpenSSH 8.5+ on the operator's host (`ssh`, `ssh-keygen`). Python 3.10+ standard library;
 `netmiko` (with Paramiko) only for `port49.netmiko`; `ansible-core` 2.16+ only for the lookup.
 Lab: the host's `/home/rwendt/lab-venv` (Python 3.14.4, Netmiko 4.7.0, Paramiko 4.0.0,
@@ -1998,9 +1998,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 func TestTokenFailureCodes(t *testing.T) {

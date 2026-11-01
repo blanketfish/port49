@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
 )
 
 // threads is the process's thread count: the entries of /proc/self/task.

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 // tlsConnAt is one header-only TLS connection open from syn to end (zero:

@@ -86,7 +86,7 @@ a human `group:` subject, with the 3am cost of opting in said at start and pinne
   `directory_unavailable`.
 - **`tests/lab`:** `l50_test.go`, three Windows scripts and one Samba script.
 
-**Tech Stack:** Go 1.26, module `github.com/rhwendt/port49`, no cgo, **no new module**
+**Tech Stack:** Go 1.26, module `github.com/blanketfish/port49`, no cgo, **no new module**
 (`github.com/go-ldap/ldap/v3` as today). Lab: the L44 Windows Server 2025 DC (dockur/windows, by
 digest, `tests/lab/windows_test.go`) and the L42/L43 Samba AD container
 (`tests/lab/directory/samba`).
@@ -204,7 +204,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
   module**.
 - snake_case everywhere it is data: YAML keys (`machine_group`, `allow_weak`, `user_filter`), JSON
   log keys, config, metric names.
@@ -1271,7 +1271,7 @@ func (c Config) workloadUnique(s Searcher, id Identity) error {
 }
 ```
 
-Add `"slices"` and `"github.com/rhwendt/port49/internal/spiffe"` to `entry.go`'s imports
+Add `"slices"` and `"github.com/blanketfish/port49/internal/spiffe"` to `entry.go`'s imports
 (`internal/spiffe` is a standard-library-only leaf, so there is no cycle).
 
 - [ ] **Step 6: The resolver**
@@ -1435,7 +1435,7 @@ func (r *Resolver) byWorkloadDN(dn string) func(Searcher) (*ldap.Entry, error) {
 7. `grace` gains the parameter `declared bool` after `who string`. Its declared-username check
    becomes `if subj, ok := r.declared()[m.Username]; declared && ok {`.
 
-Add `"github.com/rhwendt/port49/internal/spiffe"` to `resolver.go`'s imports.
+Add `"github.com/blanketfish/port49/internal/spiffe"` to `resolver.go`'s imports.
 
 - [ ] **Step 7: Run the tests**
 
@@ -1734,7 +1734,7 @@ func checkWorkloadMapping(d oidc.WorkloadDirectory, trustDomains []string, userF
 ```
 
 The `not weak` message reads `broker.identity.machines[].directory: spiffe_id is a weak mapping:
-…`. Add `"github.com/rhwendt/port49/internal/oidc"` to `directory.go`'s imports.
+…`. Add `"github.com/blanketfish/port49/internal/oidc"` to `directory.go`'s imports.
 
 In the same file, give `prewarmYAML.MaxPrincipals` its doc comment (pre-flight M-5):
 
@@ -2511,11 +2511,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // mappedPolicy: a human group subject and a machine_group subject.
@@ -2865,7 +2865,7 @@ func TestForgetTakesASPIFFEID(t *testing.T) {
 }
 ```
 
-Add `"log"` and `"github.com/rhwendt/port49/internal/policy"` to the test file's imports.
+Add `"log"` and `"github.com/blanketfish/port49/internal/policy"` to the test file's imports.
 
 - [ ] **Step 2: Run them to see them fail**
 
@@ -3164,7 +3164,7 @@ In `internal/broker/forget.go`, replace the `user:` check and the `normalPrincip
 	}
 ```
 
-Add `"github.com/rhwendt/port49/internal/directory"` and `"github.com/rhwendt/port49/internal/spiffe"`
+Add `"github.com/blanketfish/port49/internal/directory"` and `"github.com/blanketfish/port49/internal/spiffe"`
 to `forget.go`'s imports. Update `Forget`'s doc
 comment's first line to: `Forget is \`port49 directory forget\` (Ruling 3's escape; decision 41
 ruling 3 for a workload).`
@@ -3334,8 +3334,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 func workloadMapping() *directory.WorkloadMapping {
@@ -3534,7 +3534,7 @@ func (r *Resolver) prewarmWorkloads(ctx context.Context, ids []string, rep *Prew
 }
 ```
 
-Add `"slices"` and `"github.com/rhwendt/port49/internal/spiffe"` to `prewarm.go`'s imports.
+Add `"slices"` and `"github.com/blanketfish/port49/internal/spiffe"` to `prewarm.go`'s imports.
 `prewarm_test.go` calls `Prewarm` and passes unchanged.
 
 - [ ] **Step 4: port49d**

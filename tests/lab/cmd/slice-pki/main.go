@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func main() {

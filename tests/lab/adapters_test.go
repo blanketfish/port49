@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
+	adapter "github.com/blanketfish/port49/internal/platform"
 )
 
 // TestAdapterReplies is the differential test of the per-command adapters

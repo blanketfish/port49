@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 // ---------------------------------------------------------------------------

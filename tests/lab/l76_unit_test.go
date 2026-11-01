@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // Every L76 cell is in the register row, word for word, in order, once.

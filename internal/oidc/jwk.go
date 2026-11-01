@@ -13,7 +13,7 @@ import (
 	"math/big"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Key is one verification key from a JWKS. Alg is the JWK's own alg, ""

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/yamlfault"
 	"gopkg.in/yaml.v3"
 )
 

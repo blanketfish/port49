@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // directoryStdin is where import reads the export from; tests move it.

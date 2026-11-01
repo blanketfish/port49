@@ -145,8 +145,8 @@ This plan's rulings. Task 1 writes them into the spec as decision 54.
      - the archives and packages;
      - `SHA256SUMS`;
      - build provenance through `actions/attest-build-provenance`.
-   - **The image:** `ghcr.io/rhwendt/port49:<version>`, for linux/amd64 and linux/arm64, cross-compiled in the build stage (`--platform=$BUILDPLATFORM`).
-   - **The chart:** `oci://ghcr.io/rhwendt/charts/port49`, at the release version.
+   - **The image:** `ghcr.io/blanketfish/port49:<version>`, for linux/amd64 and linux/arm64, cross-compiled in the build stage (`--platform=$BUILDPLATFORM`).
+   - **The chart:** `oci://ghcr.io/blanketfish/charts/port49`, at the release version.
    - **Build apart from publish** (pre-flight I1):
      - `build-python` and `build-galaxy` build with tools pinned by hash (`packaging/requirements-release.txt`, installed `--require-hashes`) and hand the result on through `actions/upload-artifact`. They hold no token.
      - `pypi` and `galaxy` only download and publish.
@@ -232,7 +232,7 @@ The `.rpm` item is ruled by the team lead (2026-10-27) and written into ruling 6
 - **Note, not a question: one agent per user** (Task 3h). With no socket flag, one user runs one agent, so one identity and one broker at a time. A second `port49 login` is refused until the first agent is stopped. This is intended, and spec §12 says so.
 - **No automated admin call** (ruling 5's consequence). A machine principal cannot press a key, so a SOAR playbook or an HR offboarding hook can no longer revoke another principal through `revoke_others`. Recommended: keep it so. Offboarding goes through the identity provider, whose back-channel logout (`/v1/logout`) needs no right, and the disabled account cannot sign in again. The alternative is a revoke-only machine right with no touch, which would make an exposed workload token able to lock people out.
 - **One-time actions before the first tag:**
-  - register the PyPI trusted publisher: project `port49`, repository `rhwendt/port49`, workflow `release.yml`, environment `pypi`;
+  - register the PyPI trusted publisher: project `port49`, repository `blanketfish/port49`, workflow `release.yml`, environment `pypi`;
   - create the `galaxy` environment holding the secret `GALAXY_API_KEY`;
   - create the `release` environment (goreleaser, image and chart jobs) with Ryan as its required reviewer, so no tag publishes without approval;
   - restrict the `pypi`, `galaxy` and `release` environments' deployment branches and tags to `v*` tags;
@@ -242,7 +242,7 @@ The `.rpm` item is ruled by the team lead (2026-10-27) and written into ruling 6
 ## Global Constraints
 
 - **Toolchain.**
-  - Go 1.26+, module `github.com/rhwendt/port49`.
+  - Go 1.26+, module `github.com/blanketfish/port49`.
   - `gofmt` and `go vet` clean.
   - No cgo, and no new Go module.
   - Linux-only test code goes in `_linux.go` files or behind a build tag, so `make check-darwin` stays clean.
@@ -929,7 +929,7 @@ Needs Ryan present with a YubiKey 5 on the SER8. It runs on the lab host under t
 - [ ] **Step 4: Change the Makefile.**
 
   - `test` keeps `lab-unit test-python` and runs `go test ./... -count=1 -timeout 30m`. Update the comment: `internal/port49d` took about 943 s against 20m (12a).
-  - `test-rest`: `lab-unit test-python`, then `go test $$(go list ./... | grep -vx 'github.com/rhwendt/port49/internal/port49d') -count=1 -timeout 30m`.
+  - `test-rest`: `lab-unit test-python`, then `go test $$(go list ./... | grep -vx 'github.com/blanketfish/port49/internal/port49d') -count=1 -timeout 30m`.
   - `test-shard`:
 
     ```make
@@ -1586,9 +1586,9 @@ The workflow `.github/workflows/kind.yml` lands in Task 13, after L82 closes. Th
   3. **`image`** (`packages: write`, `attestations: write`, `id-token: write`) uses `docker/setup-buildx-action` and `docker/build-push-action`, with:
      - `--target port49`;
      - `platforms: linux/amd64,linux/arm64`;
-     - tags `ghcr.io/rhwendt/port49:${version}` and `:latest`, but `:latest` only when the tag has no `-` (a pre-release does not move it);
+     - tags `ghcr.io/blanketfish/port49:${version}` and `:latest`, but `:latest` only when the tag has no `-` (a pre-release does not move it);
      - an attestation pushed to the registry.
-  4. **`chart`** (`packages: write`) runs `helm package deploy/helm/port49` and `helm push … oci://ghcr.io/rhwendt/charts`, with the pinned `bin/helm`.
+  4. **`chart`** (`packages: write`) runs `helm package deploy/helm/port49` and `helm push … oci://ghcr.io/blanketfish/charts`, with the pinned `bin/helm`.
   5. **`build-python`** (no token): `pip install --require-hashes -r packaging/requirements-release.txt`, then `python -m build --no-isolation clients/python`. It uploads `clients/python/dist/`.
   6. **`pypi`** (`environment: pypi`, `id-token: write`): `actions/download-artifact`, then `pypa/gh-action-pypi-publish` with `packages-dir: dist`, `skip-existing: true`.
   7. **`build-galaxy`** (no token): the same pinned install, then `ansible-galaxy collection build clients/ansible/ansible_collections/port49/client`. It uploads the tarball together with `packaging/requirements-release.txt`.

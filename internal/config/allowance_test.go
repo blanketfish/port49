@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // ownedPaths is one Config per key path or secret_ref port49d.yaml names

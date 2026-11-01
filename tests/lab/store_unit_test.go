@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 // authenPkt is one AUTHEN packet of a test capture: the device's request at

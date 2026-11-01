@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 // L66 (plan 9d, Task 12): the Ansible lookup `port49.client.token` over `ansible.netcommon.network_cli`,

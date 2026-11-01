@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 // VersionInfo is GET /v1/bundle/version: what a daemon compares with what it

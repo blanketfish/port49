@@ -3,7 +3,7 @@ package keyfile
 import (
 	"crypto/ed25519"
 
-	"github.com/rhwendt/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/edkey"
 )
 
 // LoadEd25519 reads the inventory service's signing key (spec §13, decision

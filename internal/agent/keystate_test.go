@@ -17,7 +17,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // fakeKey is a hardware key as the backends behave: its state is cached, and

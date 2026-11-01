@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The unplug on a TPM: swtpm stopped is the key pulled and restarted (the same

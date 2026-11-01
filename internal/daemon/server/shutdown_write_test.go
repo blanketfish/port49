@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // A shutdown never hangs behind a reply write to a peer that stopped reading:

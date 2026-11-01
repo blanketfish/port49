@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 	"gopkg.in/yaml.v3"
 )
 

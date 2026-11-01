@@ -32,7 +32,7 @@ notes, "Carried" and "Open for the final review". Also read `docs/design/2026-08
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo. **No new module**:
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo. **No new module**:
   `golang.org/x/crypto/ssh`, `crypto/rsa` and `embed` are already available.
 - Use snake_case everywhere it is data: JSON keys in scripts' results and in evidence lines, file
   names in `logs/`.
@@ -814,7 +814,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 // A secret prints as its key names whatever the verb, so a log line that
@@ -3424,7 +3424,7 @@ func (w *winDC) configNote() string {
 
 Imports to add to `windows_test.go`: `bytes`, `context`, `net`, `net/http`, `os/exec`, `path`,
 `path/filepath`, `syscall`, `testing`, `golang.org/x/crypto/ssh` and
-`github.com/rhwendt/port49/internal/directory`.
+`github.com/blanketfish/port49/internal/directory`.
 
 - [ ] **Step 2: The feasibility gate test**
 
@@ -3438,7 +3438,7 @@ package lab
 import (
 	"testing"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 // TestL44Bringup is the DC's bring-up alone, with no measurement: everything

@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 // docker's arguments reach `sg docker -c` as one string: each is quoted, so

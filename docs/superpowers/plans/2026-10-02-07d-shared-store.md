@@ -945,7 +945,7 @@ task in this plan, and the tests named pin it.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions", with OD-1 applied:
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1765,7 +1765,7 @@ from Task 5, etcd.
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // loginOf is a login's context and the index it writes, for principal on
@@ -2895,7 +2895,7 @@ from Task 5, etcd.
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // RewriteBindsToTheRevision is RewriteContext (plan 7d; Ruling 17): it
@@ -3912,7 +3912,7 @@ from Task 5, etcd.
      	"errors"
      	"sync"
 
-     	"github.com/rhwendt/port49/internal/store"
+     	"github.com/blanketfish/port49/internal/store"
      )
 
      // ErrNotLastWritten is a context that opens at its key but is not the
@@ -4387,7 +4387,7 @@ from Task 5, etcd.
   	"go.etcd.io/etcd/server/v3/embed"
   	"go.uber.org/zap"
 
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   var shared struct {
@@ -4799,9 +4799,9 @@ from Task 5, etcd.
   	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-  	"github.com/rhwendt/port49/internal/store/storetest"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/store/storetest"
   )
 
   func TestMain(m *testing.M) { os.Exit(etcdtest.Main(m)) }
@@ -4982,7 +4982,7 @@ from Task 5, etcd.
   	"google.golang.org/grpc/codes"
   	"google.golang.org/grpc/status"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // Config is one component's view of etcd.
@@ -5145,7 +5145,7 @@ from Task 5, etcd.
   	"net/url"
   	"strings"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // keys builds every key under one keyspace. Each part is escaped
@@ -5250,7 +5250,7 @@ from Task 5, etcd.
   	"encoding/hex"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // The records as stored: JSON with snake_case keys (spec: data is
@@ -5626,7 +5626,7 @@ from Task 5, etcd.
   	"go.etcd.io/etcd/api/v3/mvccpb"
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // Every token is its own key under its (nas, username), so a put, a
@@ -5969,7 +5969,7 @@ from Task 5, etcd.
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // A mark carries no lease: it never expires, and only DeleteRevocation
@@ -6059,7 +6059,7 @@ from Task 5, etcd.
   	"errors"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // errNotBuilt is a method plan 7d builds in a later task. No production
@@ -6418,7 +6418,7 @@ from Task 5, etcd.
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ctxSnap is one consistent read of a context, its ref's index record,
@@ -7313,7 +7313,7 @@ from Task 5, etcd.
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // refsUnder reads the lookup entries under fam/key and keeps each ref whose
@@ -7751,7 +7751,7 @@ from Task 5, etcd.
 
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // unreadableAt is a store whose context at k will not open, as one sealed
@@ -7929,7 +7929,7 @@ from Task 5, etcd.
     	"context"
     	"errors"
 
-    	"github.com/rhwendt/port49/internal/store"
+    	"github.com/blanketfish/port49/internal/store"
     )
 
     // ReindexContexts is what port49d does with the contexts
@@ -8117,7 +8117,7 @@ from Task 5, etcd.
   }
   ```
 
-  Add imports `encoding/json` and `github.com/rhwendt/port49/internal/store/crypt`.
+  Add imports `encoding/json` and `github.com/blanketfish/port49/internal/store/crypt`.
 
   Run: `go test ./internal/store/etcd/ -count=1`
   Expected: FAIL: the idempotency properties hit `errNotBuilt`, and `idemRecOf` is undefined.
@@ -8161,7 +8161,7 @@ from Task 5, etcd.
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // errNoHolder refuses a record without a holder: the empty holder is one
@@ -8687,11 +8687,11 @@ circuit, and shares the backend's connections.
   	"github.com/prometheus/client_golang/prometheus"
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/etcd"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-  	"github.com/rhwendt/port49/internal/store/memory"
-  	"github.com/rhwendt/port49/internal/store/storetest"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/etcd"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/store/memory"
+  	"github.com/blanketfish/port49/internal/store/storetest"
   )
 
   func testMetrics() Metrics {
@@ -9155,7 +9155,7 @@ circuit, and shares the backend's connections.
 
   	"github.com/prometheus/client_golang/prometheus"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // Pool is one of the three.
@@ -10239,8 +10239,8 @@ store:
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
   )
 
   // provisioned is a TLS member with auth on and port49's roles applied
@@ -10372,7 +10372,7 @@ store:
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   // port49d store-roles prints the etcdctl commands for the keyspace and
@@ -10629,8 +10629,8 @@ store:
   	"os"
   	"strings"
 
-  	"github.com/rhwendt/port49/internal/config"
-  	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+  	"github.com/blanketfish/port49/internal/config"
+  	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
   )
 
   // storeRolesCmd is `port49d store-roles [--config FILE]` (spec §12; plan
@@ -10845,7 +10845,7 @@ store:
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
   )
 
   // One port49d per keyspace: a second Hold waits, saying who holds it,
@@ -11445,7 +11445,7 @@ store:
   Add `"errors"` and `"strings"` to `refresh.go`'s imports if absent.
 
   The log line names the mark's kind, never its key: a certificate key or a principal is an
-  identity, and the line needs only to say a mark was not applied. Add `"github.com/rhwendt/port49/internal/session"`
+  identity, and the line needs only to say a mark was not applied. Add `"github.com/blanketfish/port49/internal/session"`
   and `"time"` to `refresh_test.go`'s imports if absent.
 
   Run: `go test ./internal/broker/ -run 'TestRefreshAtStart|TestApplyMarksAtStart' -count=1` —
@@ -11492,15 +11492,15 @@ store:
   	"strings"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/broker"
-  	"github.com/rhwendt/port49/internal/config"
-  	"github.com/rhwendt/port49/internal/daemon/metrics"
-  	"github.com/rhwendt/port49/internal/keyfile"
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/crypt"
-  	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
-  	"github.com/rhwendt/port49/internal/store/guard"
-  	"github.com/rhwendt/port49/internal/store/memory"
+  	"github.com/blanketfish/port49/internal/broker"
+  	"github.com/blanketfish/port49/internal/config"
+  	"github.com/blanketfish/port49/internal/daemon/metrics"
+  	"github.com/blanketfish/port49/internal/keyfile"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/crypt"
+  	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+  	"github.com/blanketfish/port49/internal/store/guard"
+  	"github.com/blanketfish/port49/internal/store/memory"
   )
 
   // stores is what port49d's components read and write through (plan 7d):
@@ -12014,10 +12014,10 @@ store:
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/config"
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/config"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   // writeIdentity issues a client certificate for cn, valid from nb to na,
@@ -12121,10 +12121,10 @@ store:
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/etcd"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-  	"github.com/rhwendt/port49/internal/tacacs/wire"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/etcd"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/tacacs/wire"
   )
 
   // etcdRun is a port49d config on a TLS etcd member with port49's roles,
@@ -12811,10 +12811,10 @@ an operator can act on, and the start a check.
   	"github.com/prometheus/client_golang/prometheus"
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/daemon/metrics"
-  	"github.com/rhwendt/port49/internal/store/crypt"
-  	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/daemon/metrics"
+  	"github.com/blanketfish/port49/internal/store/crypt"
+  	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
   )
 
   // A start whose store was last written under a current key this
@@ -13604,10 +13604,10 @@ measurement on a hang of its own, the store returned between them. On each image
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store/etcd"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-  	"github.com/rhwendt/port49/internal/tacacs/wire"
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/store/etcd"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/tacacs/wire"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   const storeClaim = "When port49d's store hangs (etcd cut off from port49d), port49d answers a command FAIL " +

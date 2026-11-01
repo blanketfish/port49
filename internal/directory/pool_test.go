@@ -13,7 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
 )
 
 // poolCfg pins the bind mechanism to simple, whose refusals hold the whole

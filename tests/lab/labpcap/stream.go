@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Port is the TACACS+ port. A packet with neither endpoint on it is not this

@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // Published is one bundle the service published: the sealed bytes, and what

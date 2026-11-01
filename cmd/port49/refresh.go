@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // refreshCmd is `port49 refresh` (spec §12): it asks the agent to

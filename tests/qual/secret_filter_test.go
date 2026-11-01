@@ -70,7 +70,7 @@ var filterCases = []filterCase{
 	{"secret in any case", "Password: FAKE", ""},
 	{"ordinary long run", "blob " + fake30 + " end", "blob <LONG> end"},
 	{"ordinary short words", "ok  \tport49/tests/lab\t12.3s", "ok  \tport49/tests/lab\t12.3s"},
-	{"package path is a run", "ok  \tgithub.com/rhwendt/port49/tests/lab\t12.3s", "ok  \t<LONG>\t12.3s"},
+	{"package path is a run", "ok  \tgithub.com/blanketfish/port49/tests/lab\t12.3s", "ok  \t<LONG>\t12.3s"},
 	{"crlf ordinary line kept", "ok  \tport49/tests/lab\t12.3s\r", "ok  \tport49/tests/lab\t12.3s\r"},
 
 	// A byte outside printable ASCII and whitespace drops its line, whatever the locale: a raw

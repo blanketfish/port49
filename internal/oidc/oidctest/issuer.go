@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc"
 )
 
 // Issuer is an OpenID provider on an httptest TLS server: discovery at

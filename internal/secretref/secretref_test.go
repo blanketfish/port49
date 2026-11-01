@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/secretref/secretreftest"
+	"github.com/blanketfish/port49/internal/secretref/secretreftest"
 )
 
 // secretDir is a directory only its owner can write: t.TempDir is made under

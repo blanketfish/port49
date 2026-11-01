@@ -74,7 +74,7 @@ certificate plan 9b issues. Everything after the sign-in is 9b's.
 - `tests/lab/l67_test.go` (new) and the 7g harness's seeds; `Makefile`: `lab-l67`,
   `lab-l67-windows`.
 
-**Tech Stack:** Go 1.26, module `github.com/rhwendt/port49`, `CGO_ENABLED=0`. New direct
+**Tech Stack:** Go 1.26, module `github.com/blanketfish/port49`, `CGO_ENABLED=0`. New direct
 dependency: `github.com/pquerna/otp v1.5.0`, and through it `github.com/boombuler/barcode` (the QR
 code), both pure Go (decision D9). `github.com/go-ldap/ldap/v3 v3.4.14` (in `go.mod` since 7g) for
 the bind. Lab: the 7g harness (OpenLDAP 2.5 with the `ppolicy` overlay added, Samba AD 4.17), the
@@ -1562,7 +1562,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // EnrollmentsBackend is a store.Enrollments implementation the enrollment
@@ -3120,13 +3120,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/totp"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/totp"
 )
 
 // fakeDir is a directory of people by name: their entry and password.

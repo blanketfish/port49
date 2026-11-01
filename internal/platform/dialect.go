@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Dialect is what the policy engine compiles into a blob about one platform

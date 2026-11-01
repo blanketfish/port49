@@ -12,10 +12,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/yamlfault"
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/platforms"
+	"github.com/blanketfish/port49/platforms"
 )
 
 // Redacted is what a removed word becomes (spec §5.8): the vector keeps its

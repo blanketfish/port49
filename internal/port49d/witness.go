@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/printsafe"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // witnessRecord is this replica's record of the restore witness (plan 7e,

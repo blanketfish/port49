@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/projection"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/projection"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // TestProjectionDifferential is spec §8's differential test of decision

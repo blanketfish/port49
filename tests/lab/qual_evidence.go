@@ -13,8 +13,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/devicemock"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 type qualCell struct {

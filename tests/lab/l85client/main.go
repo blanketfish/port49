@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Creds is the device's key and a login's password (a broker-minted token) and user.

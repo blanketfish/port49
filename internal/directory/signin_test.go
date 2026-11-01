@@ -15,7 +15,7 @@ import (
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const aliceDN = "CN=Alice,OU=Staff,DC=corp"

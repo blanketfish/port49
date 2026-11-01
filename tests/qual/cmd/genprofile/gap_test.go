@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 // SR Linux's missing command authorization is L76 cell b's, not the Junos row's L18.

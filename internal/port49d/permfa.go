@@ -3,11 +3,11 @@ package port49d
 import (
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/pivattest"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/pivattest"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // maxAttestationRootsBytes bounds attestation_roots_file: a few PEM

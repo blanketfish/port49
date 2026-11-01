@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Match is one key version a packet validates under.

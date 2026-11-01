@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // L66 (e3) (plan 9f, Task 4): (e)'s moved address, run through the lookup, which checks the address's keys

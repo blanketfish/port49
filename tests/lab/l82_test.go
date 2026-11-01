@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
-	kindstack "github.com/rhwendt/port49/tests/kind"
-	"github.com/rhwendt/port49/tests/kind/kindtest"
-	"github.com/rhwendt/port49/tests/shapes/l82"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
+	kindstack "github.com/blanketfish/port49/tests/kind"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/shapes/l82"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 // TestL82 measures spec §15 L82: Kubernetes Secret volumes as port49d's key directory, on kind,

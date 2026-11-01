@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // storeStatusWait is how long the command waits for the answer: the status's

@@ -54,7 +54,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // ErrUnknownKey is returned when a sealed record names a key id that is neither

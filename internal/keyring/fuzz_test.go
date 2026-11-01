@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/secretref"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Resolve and Validates are the keyring's network-facing surface: every byte

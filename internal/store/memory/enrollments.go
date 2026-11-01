@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // enrollments is store.Enrollments in memory (plan 9e): for tests, and the

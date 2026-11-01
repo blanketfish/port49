@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 func jwks(t *testing.T, keys ...map[string]any) []byte {

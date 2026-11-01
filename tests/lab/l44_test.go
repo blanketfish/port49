@@ -19,7 +19,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 // TestL44Bringup is the DC's bring-up alone, with no measurement: everything

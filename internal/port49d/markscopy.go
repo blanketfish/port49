@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // marksCopy is one port49-broker replica's copy of the revocation marks,

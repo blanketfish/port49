@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // asAnotherUser makes the fleet's broker.state_dir look owned by a uid that is not the caller's (and

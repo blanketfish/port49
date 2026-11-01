@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 // replay is a client of a sottest.Server for stack with n devices, and the

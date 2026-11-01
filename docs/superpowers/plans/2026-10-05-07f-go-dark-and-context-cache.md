@@ -90,7 +90,7 @@ context cache that is served past its TTL through an outage and alarmed.
   - **Lifetime:** it lives as long as a run, so a run after a store gone starts empty.
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, no cgo.
+- Go 1.26, module `github.com/blanketfish/port49`, no cgo.
 - `go.etcd.io/etcd/client/v3` v3.6.15; the compose stack runs `gcr.io/etcd-development/etcd:v3.6.15`,
   the server module's own version in `go.mod`.
 - Docker Engine with Compose v2.24.4 or later (`!override` in the lab's overlay), BuildKit.
@@ -424,7 +424,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - snake_case everywhere it is data: YAML keys, JSON log keys, config, metric names.
 - Reason codes are spec §5.7's closed vocabulary (`internal/decision/reasons.go`). This plan adds
   none.
@@ -788,7 +788,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func main() {
@@ -1271,9 +1271,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // device is the smallest TACACS+ client that logs in and asks for
@@ -1417,8 +1417,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const project = "port49smoke"
@@ -2552,8 +2552,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // PingToken reads on the token connection as Ping does on the context one
@@ -2602,9 +2602,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // scripted is a check that answers from a script, one entry per call,
@@ -2969,7 +2969,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
 )
 
 // health is port49d's store health check on etcd (plan 7f; spec §13,
@@ -3664,8 +3664,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // backing is the store under a cache in these tests: a memory store
@@ -4085,7 +4085,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // CacheConfig is a context cache's bounds and its witnesses (plan 7f;

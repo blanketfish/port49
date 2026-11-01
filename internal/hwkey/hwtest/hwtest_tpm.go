@@ -19,7 +19,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/tcp"
 
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
 )
 
 // TPM is one swtpm: a software TPM 2.0 listening on two loopback ports, with

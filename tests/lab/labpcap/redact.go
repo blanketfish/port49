@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // Fill is the byte a redacted credential is overwritten with. One byte, the

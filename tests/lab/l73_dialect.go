@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // l73Dialect is how TestL73 asks one platform's CLI about its RFC 9887

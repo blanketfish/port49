@@ -292,7 +292,7 @@ The owner's rule is to trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1271,8 +1271,8 @@ read one back; after Task 3 the minter calls neither.
   }
   ```
 
-  (Add `net/http`, `net/http/httptest`, `crypto/rand`, `github.com/rhwendt/port49/internal/token` and
-  `github.com/rhwendt/port49/internal/store` to the imports where `broker_test.go` lacks them.)
+  (Add `net/http`, `net/http/httptest`, `crypto/rand`, `github.com/blanketfish/port49/internal/token` and
+  `github.com/blanketfish/port49/internal/store` to the imports where `broker_test.go` lacks them.)
 
 - [ ] **Step 3: The agent's test.** In `internal/agent/agent_test.go`, add a test against a broker
   stub (follow the file's existing stub-server helper; if it has none, use
@@ -2220,8 +2220,8 @@ before the handshake (plan 3, Decided 2).
 
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   // serveThrough serves f's broker behind a Listener with lim, its lines to
@@ -2670,9 +2670,9 @@ before the handshake (plan 3, Decided 2).
   	"syscall"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/daemon/metrics"
-  	"github.com/rhwendt/port49/internal/printsafe"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/daemon/metrics"
+  	"github.com/blanketfish/port49/internal/printsafe"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ListenerLimits are the broker listener's bounds (design §11's "per source
@@ -3216,7 +3216,7 @@ before the handshake (plan 3, Decided 2).
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   func (f *fixture) revoke(t *testing.T, kind, key string) {
@@ -3561,7 +3561,7 @@ before the handshake (plan 3, Decided 2).
 
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // fakeConns stands in for the Listener: the held connections are (principal,
@@ -4011,9 +4011,9 @@ before the handshake (plan 3, Decided 2).
   	"time"
   	"unicode/utf8"
 
-  	"github.com/rhwendt/port49/internal/decision"
-  	"github.com/rhwendt/port49/internal/printsafe"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/printsafe"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ErrBadRevocation is a revocation that names neither a principal nor a
@@ -4522,9 +4522,9 @@ before the handshake (plan 3, Decided 2).
   	"github.com/prometheus/client_golang/prometheus"
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/daemon/metrics"
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/memory"
+  	"github.com/blanketfish/port49/internal/daemon/metrics"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/memory"
   )
 
   func newMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry()) }
@@ -4939,11 +4939,11 @@ before the handshake (plan 3, Decided 2).
   	"time"
   	"unicode/utf8"
 
-  	"github.com/rhwendt/port49/internal/daemon/metrics"
-  	"github.com/rhwendt/port49/internal/decision"
-  	"github.com/rhwendt/port49/internal/fence"
-  	"github.com/rhwendt/port49/internal/inventory"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/daemon/metrics"
+  	"github.com/blanketfish/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/fence"
+  	"github.com/blanketfish/port49/internal/inventory"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // revocationsFile is broker.revocations_file (plan 7a): the marks in force,
@@ -5550,9 +5550,9 @@ before the handshake (plan 3, Decided 2).
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/daemon/admin"
-  	"github.com/rhwendt/port49/internal/keyring"
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/daemon/admin"
+  	"github.com/blanketfish/port49/internal/keyring"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   // port49 revoke sends one op to the admin socket and prints its answer;
@@ -5693,7 +5693,7 @@ before the handshake (plan 3, Decided 2).
   	"os"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/daemon/admin"
+  	"github.com/blanketfish/port49/internal/daemon/admin"
   )
 
   // revokeCmd is `port49 revoke` (spec §12; plan 7a): it asks port49d, over
@@ -5846,7 +5846,7 @@ slice and spec §14's quarantine through a sync were. If it contradicts a doc, t
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   const revokeClaim = "A revocation by principal or by certificate (`port49 revoke` over the admin socket, plan " +

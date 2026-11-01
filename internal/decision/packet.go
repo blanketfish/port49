@@ -3,7 +3,7 @@ package decision
 import (
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // PacketFields is a validated request's header fields, as names (spec §5.7;

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // TLS serves h over TLS with a certificate for 127.0.0.1 from a CA made for

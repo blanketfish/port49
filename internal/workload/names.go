@@ -3,7 +3,7 @@ package workload
 import (
 	"strings"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // safeNames is device names the broker sent, as one line a terminal or a cron

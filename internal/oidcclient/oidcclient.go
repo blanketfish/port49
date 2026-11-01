@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // maxBody bounds a discovery document and a token response.

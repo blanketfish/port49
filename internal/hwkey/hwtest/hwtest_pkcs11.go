@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
 )
 
 // The test tokens' PINs. They belong to throwaway tokens in a temporary

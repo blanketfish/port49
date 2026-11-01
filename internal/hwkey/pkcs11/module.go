@@ -14,7 +14,7 @@ import (
 
 	"github.com/ebitengine/purego"
 
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // CK_ULONG is eight bytes on the LP64 systems port49's client builds for

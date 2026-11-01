@@ -13,9 +13,9 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The pure helpers of the workload CA and Oxidized harnesses (plan 8, Task 13;

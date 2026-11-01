@@ -45,7 +45,7 @@ plan is reproduced verbatim in the appendix; it is the recovery map and every ru
    anyway, the gotchas are in plan 1 Task 15.
 4. Management subnet: run the subnet check in Task 15's prerequisites. The topologies use
    `172.100.100.0/24`; if it is taken on the SER8, all eight files it names must change together.
-5. Repo: `git clone git@github.com:rhwendt/port49.git ~/git/port49 && git checkout feature/protocol-core`.
+5. Repo: `git clone git@github.com:blanketfish/port49.git ~/git/port49 && git checkout feature/protocol-core`.
 6. Restore the local-only state from `port49-handoff-2026-09-18.tar.gz` (same share):
    ```sh
    cd ~/git/port49 && tar xzf /mnt/images/port49-handoff-2026-09-18.tar.gz \

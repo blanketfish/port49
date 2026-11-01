@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The claim in the harness is spec §15's L69 row, word for word.

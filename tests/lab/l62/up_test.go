@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // TestL62Up stands up what the L62 session needs and holds it: the lab

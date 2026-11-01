@@ -1,6 +1,6 @@
 package authen
 
-import "github.com/rhwendt/port49/internal/username"
+import "github.com/blanketfish/port49/internal/username"
 
 // Canonical is username.Canonical. The name stays exported here because plan 1's
 // handler, its tests and package author all call it by this name; the body moved

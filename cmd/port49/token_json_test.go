@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/brokercrl"
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/brokercrl"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 func TestTokenFailureCodes(t *testing.T) {

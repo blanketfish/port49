@@ -76,7 +76,7 @@ broker certificate against the CRL it names. The key unplugged mid-session never
 - `cmd/port49`: key references and PINs in `login` and the agent child, `mfa.go` (prompting and
   proving for `token`, `ssh`, `refresh`), `--broker-crl`, `issued_key_store`.
 
-**Tech Stack:** Go 1.26, module `github.com/rhwendt/port49`, `CGO_ENABLED=0`. New modules:
+**Tech Stack:** Go 1.26, module `github.com/blanketfish/port49`, `CGO_ENABLED=0`. New modules:
 `github.com/ebitengine/purego` v0.11.1 and `github.com/google/go-tpm` v0.9.8 (both in the module
 cache, checked 2026-10-09 by decision 42 ruling 13 and again 2026-10-12 while writing this plan:
 go-tpm's `tpm2/transport/tcp` and `tpm2/transport/linuxtpm` import no cgo; purego lists Linux and

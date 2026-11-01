@@ -16,8 +16,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // The second process: opens the key the parent made, signs with it, and

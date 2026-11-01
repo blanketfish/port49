@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/workload"
+	"github.com/blanketfish/port49/internal/workload"
 )
 
 // A broker certificate the CRL check refused stops the run as broker_refused,

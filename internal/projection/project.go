@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // The shapes a reply takes (spec §8, "The projection model").

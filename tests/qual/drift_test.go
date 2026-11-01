@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/devicemock"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // singleConnectDrift holds platform.TLSServerSingleConnect's table and the

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // keyPath is a path port49d.yaml names that holds key material; dir marks one

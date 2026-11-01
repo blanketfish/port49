@@ -3,7 +3,7 @@
 package lab
 
 import (
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/policy"
 	"os"
 	"os/exec"
 	"path/filepath"

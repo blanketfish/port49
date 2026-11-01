@@ -20,7 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/sot"
 )
 
 const hookSecret = "l33-unit-test-webhook-secret-0123456789"

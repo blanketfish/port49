@@ -17,7 +17,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc"
 )
 
 // NewKey is a fresh key for alg: RSA 2048, P-256, P-384 or Ed25519.

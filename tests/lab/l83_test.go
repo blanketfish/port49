@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	kindstack "github.com/rhwendt/port49/tests/kind"
-	"github.com/rhwendt/port49/tests/kind/kindtest"
-	"github.com/rhwendt/port49/tests/shapes/l82"
-	"github.com/rhwendt/port49/tests/shapes/l83"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	kindstack "github.com/blanketfish/port49/tests/kind"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/shapes/l82"
+	"github.com/blanketfish/port49/tests/shapes/l83"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 // TestL83 measures spec §15 L83: Vault Agent's injector and the Secrets Store CSI driver with the

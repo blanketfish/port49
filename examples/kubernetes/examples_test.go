@@ -13,8 +13,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // cronJob is the fields of backup-cronjob.yaml's CronJob the example's claims

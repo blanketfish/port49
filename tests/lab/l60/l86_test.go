@@ -39,8 +39,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 const (

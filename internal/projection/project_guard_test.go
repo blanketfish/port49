@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // No reply that carries a deny lets the device enter configuration mode,

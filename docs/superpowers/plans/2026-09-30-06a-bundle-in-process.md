@@ -306,7 +306,7 @@ The owner's rule is to trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1876,7 +1876,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 const keyGrouped = good + `
@@ -2273,7 +2273,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // buildKeyGroups reads key_groups (spec §10). A group matches on a CIDR or on
@@ -2581,9 +2581,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 const pol = `
@@ -2719,9 +2719,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // ID names a bundle: "sha256:" over the policy file's sha256 and the
@@ -2840,7 +2840,7 @@ func (f *policyFiles) load() (*policy.Policy, error) {
 }
 ```
 
-  (import `github.com/rhwendt/port49/internal/bundle`). The other tools that load a policy against
+  (import `github.com/blanketfish/port49/internal/bundle`). The other tools that load a policy against
   an inventory load it the same way, so every bundle string a tool prints is port49d's for those
   files, and a policy still reading its key groups from the inventory sees them (I7). Delete
   `offlineEnv` and replace its four callers:
@@ -2979,8 +2979,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // A policy with a security_log scope, for the diff's security changes.
@@ -3171,8 +3171,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // What a swap can change about a device (spec §10), as `port49 inventory
@@ -5520,7 +5520,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 func TestSeenCountsEachDevicesLatestVersion(t *testing.T) {
@@ -6000,7 +6000,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 var t0 = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
@@ -6074,7 +6074,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 const keysPolicy = `
@@ -6172,7 +6172,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // Device is an inventory device and the key_ref it is assigned.
@@ -6430,8 +6430,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/keystatus"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/keystatus"
 )
 
 // keysCmd is `port49 keys` (spec §12): status and show read files and the
@@ -6671,7 +6671,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 func heldUnder(t *testing.T, secret string) *Held {
@@ -6728,7 +6728,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/keyring"
 )
 
 func TestAnswerRefusesAnUnknownOpAndAnUnheldDevice(t *testing.T) {
@@ -6769,7 +6769,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/keyring"
 )
 
 // The socket is 0600 and answers its owner (SO_PEERCRED, plan 6a owner
@@ -6844,7 +6844,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Held keeps, per admitted device, the last packet no key it is assigned
@@ -6894,7 +6894,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Match is one key version a held packet validates under.
@@ -6980,7 +6980,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/keyring"
 )
 
 // Request is one line a client sends.
@@ -7582,8 +7582,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 func inventoryCmd(args []string, stdout, stderr io.Writer) int {

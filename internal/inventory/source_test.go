@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/sot"
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 // fencedFile writes body where the fence passes it: a directory only its

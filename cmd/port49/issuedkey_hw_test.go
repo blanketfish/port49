@@ -16,10 +16,10 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // loginTo runs `port49 login --oidc` against o on sock and returns what it

@@ -1,6 +1,6 @@
 package port49d
 
-import "github.com/rhwendt/port49/internal/fence"
+import "github.com/blanketfish/port49/internal/fence"
 
 // maxPolicySize bounds the policy file's read: a policy file is kilobytes,
 // and a link aimed at a multi-gigabyte file must not be read at every poll.

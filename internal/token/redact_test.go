@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/secretref/secretreftest"
+	"github.com/blanketfish/port49/internal/secretref/secretreftest"
 )
 
 type windowHolder struct{ w TagWindow }

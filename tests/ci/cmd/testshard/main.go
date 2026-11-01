@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rhwendt/port49/tests/ci/testshard"
+	"github.com/blanketfish/port49/tests/ci/testshard"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

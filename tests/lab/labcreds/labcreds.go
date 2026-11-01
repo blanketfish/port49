@@ -28,7 +28,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 const (

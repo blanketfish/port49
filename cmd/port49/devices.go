@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	daemonconfig "github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/username"
+	daemonconfig "github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/username"
 )
 
 // checkConfig is `port49 devices check-config` (spec §5.6, §6): a device's

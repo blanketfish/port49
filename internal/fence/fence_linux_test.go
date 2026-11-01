@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/edkey"
 )
 
 // maxPolicySize and maxInventorySize are port49d's bounds for its two files

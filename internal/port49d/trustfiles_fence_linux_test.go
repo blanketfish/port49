@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // The files that name what port49d trusts - a client CA or a trust anchor, etcd's CA, a CRL issuer, a CA

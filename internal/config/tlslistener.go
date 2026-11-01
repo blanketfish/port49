@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // ListenNone is listen's value that turns the RFC 8907 listener off (spec

@@ -9,7 +9,7 @@ import (
 	"io"
 	"math/big"
 
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // TagLen, SecretLen, and Len are the fixed sizes of the token format: a

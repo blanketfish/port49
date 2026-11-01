@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // GET /v1/config carries the CA bundle the broker was given, no field at all

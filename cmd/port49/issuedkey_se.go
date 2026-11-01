@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/secureenclave"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/secureenclave"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // heldSEPair is the held pair a named secure_enclave looks for. Off macOS, or
