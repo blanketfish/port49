@@ -454,6 +454,8 @@ entries:
 excluded:
   - rows: [L62]
     reason: needs the real TPM and Ryan present at the machine; no agent or unattended run touches the TPM. Run by hand with `make lab-l62-up` before a release.
+  - rows: [L86]
+    reason: needs the real YubiKey and Ryan present to type the PIN, touch, and pull the key; no agent or unattended run touches the token. Run by hand with tests/lab/L86-runbook.md (`make l86-build`, then `l86 TestL86A` through `TestL86D`) before a release.
   - rows: [L44, L50]
     reason: need the Windows Server VM under KVM, the cached evaluation ISO and 66 GiB, and run up to 240 minutes (`PORT49_LAB_L44=1`, `make lab-l50`). Left out of the default run; run by hand before a release. L67's Windows cell (`make lab-l67-windows`, 240m) is likewise by hand; the L67 entry here reruns its OpenLDAP and Samba AD cells only.
   - rows: [L27, L30, L32, L33]

@@ -13,7 +13,7 @@ import (
 func TestL56AuthURLReadsPort49sLine(t *testing.T) {
 	for line, want := range map[string]string{
 		"  https://keycloak.port49.lab:18443/realms/port49-lab/protocol/openid-connect/auth?client_id=port49-cli&state=x": "https://keycloak.port49.lab:18443/realms/port49-lab/protocol/openid-connect/auth?client_id=port49-cli&state=x",
-		"port49: open this address in a browser and sign in at https://keycloak.port49.lab:18443/realms/port49-lab:":      "",
+		"port49: open this address in a browser to sign in with your identity provider (keycloak.port49.lab:18443):":      "",
 		"  http://127.0.0.1:18749/callback": "",
 	} {
 		if got, ok := l56AuthURL(line); got != want || ok != (want != "") {

@@ -205,7 +205,10 @@ func startBrokerWire(t *testing.T, clientCA *testpki.CA, pivRoots []byte, logTo 
 	}
 	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
 		br.Metrics, br.Now, nil)
-	bl.Refused = br.RefusedAtBind
+	// Wired as port49d and port49-broker wire it: without Caller the listener
+	// reads a certificate by its email SAN alone, and refuses one this broker
+	// issued (cell (c)'s EOF after the handshake).
+	br.Wire(bl)
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	b.url = "https://" + raw.Addr().String()

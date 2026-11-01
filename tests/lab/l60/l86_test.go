@@ -60,7 +60,6 @@ const (
 	insertWords       = "insert your key"
 	refusedReason     = "admin_touch_refused" // spec §5.7 (decision.AdminTouchRefused)
 	signedInWords     = "; your certificate from "
-	tokenKeyWords     = "the key is the one issued_key names, on your token"
 	oidcDeadline      = 5 * time.Minute // a sign-in in a browser, then the PIN
 	gapBetweenCalls   = 5 * time.Second
 	adminDeadline     = 60 * time.Second
@@ -127,17 +126,21 @@ func l86VerdictB(c result, list result, target string) l86Verdict {
 }
 
 // l86VerdictC: the session key was issued by the OIDC sign-in (the login exited 0,
-// said the certificate is the sign-in's and the key is the token's issued_key, and the
+// said the certificate is the sign-in's, asked the token's PIN once, and the
 // broker's log holds a permitted issue record), and the admin call with that key
-// succeeds with one touch.
-func l86VerdictC(login, call result, issued bool, touches int) l86Verdict {
+// succeeds with one touch. The cell pins issued_key_store: pkcs11, which refuses
+// rather than falls back, so the key is the token's; login says "the key is the
+// one issued_key names" only when it chose the store itself, never under a
+// pinned store (L86 run 2026-11-01). The one PIN prompt is the token's own
+// evidence: no other store asks for a PIN.
+func l86VerdictC(login, call result, issued bool, pinPrompts, touches int) l86Verdict {
 	switch {
 	case login.code != 0:
 		return l86Verdict{false, fmt.Sprintf("the OIDC login exited %d", login.code)}
 	case !strings.Contains(login.stdout, signedInWords):
 		return l86Verdict{false, "the login did not say a certificate was issued for the sign-in"}
-	case !strings.Contains(login.stderr, tokenKeyWords):
-		return l86Verdict{false, "the login did not say the key is the one issued_key names, on the token"}
+	case pinPrompts != 1:
+		return l86Verdict{false, fmt.Sprintf("Ryan counted %d PIN prompts, want 1: the token's key asks once", pinPrompts)}
 	case !issued:
 		return l86Verdict{false, "the broker's log has no permitted issue record: the certificate was not issued by this sign-in"}
 	case call.code != 0:
@@ -518,7 +521,8 @@ func TestL86C(t *testing.T) {
 		"--broker-ca", b.serverCA, "--oidc-ca", k.caFile, "--redirect-port", strconv.Itoa(kcRedirectPort), onSock(c.sock))
 	login.stderr = l86LoginWords(login.stderr)
 	h.obsResult("login", login)
-	h.obs("login_pin_prompts", strconv.Itoa(h.askInt("How many times did port49 ask for the PIN?")))
+	pinPrompts := h.askInt("How many times did port49 ask for the PIN?")
+	h.obs("login_pin_prompts", strconv.Itoa(pinPrompts))
 	h.mustOK(login, "the OIDC login")
 	text, _ := os.ReadFile(c.logPath)
 	issued := l86Issued(string(text))
@@ -531,7 +535,7 @@ func TestL86C(t *testing.T) {
 	call := c.revoke("call", l86Target("c", 1))
 	touches := h.askInt("How many times did you touch the key?")
 	h.obs("touches", strconv.Itoa(touches))
-	c.finish(l86VerdictC(login, call, issued, touches))
+	c.finish(l86VerdictC(login, call, issued, pinPrompts, touches))
 }
 
 // TestL86C9eFallback is the proxy for cell (c): the same admin path with a lab-CA

@@ -68,6 +68,7 @@ func (s *Signer) clock() time.Time {
 }
 
 var _ hwkey.Key = (*Signer)(nil)
+var _ hwkey.Prober = (*Signer)(nil)
 
 // trimField is a blank-padded CK_UTF8CHAR field without its padding.
 func trimField(b []byte) string { return strings.TrimRight(string(b), " \x00") }
@@ -502,6 +503,41 @@ func (s *Signer) State() hwkey.State {
 		s.reopenLocked()
 	}
 	return s.state
+}
+
+// Probe is State after looking for the token now (hwkey.Prober), with no PIN
+// and no login: C_GetSlotList(tokenPresent) and C_GetTokenInfo. A token no
+// longer in its slot, or another token in it, is Absent, and the session is
+// dropped as a failed Sign would drop it; then State's own re-probe runs. A
+// module that cannot answer leaves the state as it was: the Sign says.
+func (s *Signer) Probe() hwkey.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkSession()
+	if s.state != hwkey.Absent && !s.tokenInSlotLocked() {
+		s.absent()
+	}
+	if s.state == hwkey.Absent && !s.closed {
+		s.reopenLocked()
+	}
+	return s.state
+}
+
+// tokenInSlotLocked is whether the token s opened on is still in its slot.
+// The caller holds s.mu.
+func (s *Signer) tokenInSlotLocked() bool {
+	slots, err := s.m.slotList()
+	if err != nil {
+		return true
+	}
+	for _, slot := range slots {
+		if slot != s.slot {
+			continue
+		}
+		ti, err := s.m.tokenInfo(slot)
+		return err != nil || trimField(ti.serial[:]) == s.serial
+	}
+	return false
 }
 
 // dropSession closes the session while s still owns it and forgets its number

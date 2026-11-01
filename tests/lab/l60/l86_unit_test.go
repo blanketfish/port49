@@ -83,27 +83,28 @@ func TestL86VerdictB(t *testing.T) {
 }
 
 func TestL86VerdictC(t *testing.T) {
-	login := result{code: 0, stdout: "port49 login: signed in as user:alice@corp.example.com" + signedInWords + "2026-10-28T10:00:00Z",
-		stderr: "port49 login: " + tokenKeyWords + "\n"}
+	login := result{code: 0, stdout: "port49 login: signed in as user:alice@corp.example.com" + signedInWords + "2026-10-28T10:00:00Z"}
 	ok := res(0, "")
 	for _, c := range []struct {
 		name    string
 		login   result
 		call    result
 		issued  bool
+		pins    int
 		touches int
 		pass    bool
 	}{
-		{"the OIDC path, one touch", login, ok, true, 1, true},
-		{"two touches", login, ok, true, 2, false},
-		{"no touch counted", login, ok, true, 0, false},
-		{"the call failed", login, res(1, "x"), true, 1, false},
-		{"the login failed", res(1, "x"), ok, true, 1, false},
-		{"no issued-certificate words: a held certificate, not a sign-in", result{stderr: login.stderr}, ok, true, 1, false},
-		{"the key is not the token's issued_key", result{stdout: login.stdout, stderr: "port49 login: a file key"}, ok, true, 1, false},
-		{"the broker issued nothing", login, ok, false, 1, false},
+		{"the OIDC path, one touch", login, ok, true, 1, 1, true},
+		{"two touches", login, ok, true, 1, 2, false},
+		{"no touch counted", login, ok, true, 1, 0, false},
+		{"the call failed", login, res(1, "x"), true, 1, 1, false},
+		{"the login failed", res(1, "x"), ok, true, 1, 1, false},
+		{"no issued-certificate words: a held certificate, not a sign-in", result{}, ok, true, 1, 1, false},
+		{"no PIN prompt: not the token's key", login, ok, true, 0, 1, false},
+		{"two PIN prompts", login, ok, true, 2, 1, false},
+		{"the broker issued nothing", login, ok, false, 1, 1, false},
 	} {
-		if v := l86VerdictC(c.login, c.call, c.issued, c.touches); v.pass != c.pass {
+		if v := l86VerdictC(c.login, c.call, c.issued, c.pins, c.touches); v.pass != c.pass {
 			t.Errorf("%s: %v", c.name, v)
 		}
 	}

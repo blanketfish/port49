@@ -350,7 +350,7 @@ It opens no lab row. **12a executed 2026-10-26 and 2026-10-27** on `feature/12a-
 spec, two code, two CI, seven artifact-and-smoke, four lab, one docs; decision 54, rulings 1–14, written by its Task 1). It builds
 the systemd, container and Kubernetes shapes as peers, each with a CI smoke test, plus the tag-only release (packages, image,
 chart, PyPI, Galaxy), `make test`/`make vet` in CI, the in-place key rewrite warning, and lab rows L82–L85.
-**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: L82, L83 and L85 closed 2026-10-31 (kind run 41155086403; see Carried forward), L84 partial (Compose measured, systemd and the Docker cells open), TODO(L86).
+**12b executed 2026-10-27 to 2026-10-30** on `feature/12b-deployment-release` (Plan 12b — As built, below; draft PR #36). Lab states: L82, L83 and L85 closed 2026-10-31 (kind run 41155086403; see Carried forward), L84 partial (Compose measured, systemd and the Docker cells open), L86 closed 2026-11-01 (`tests/lab/results/L86-ser8.md`).
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7989,7 +7989,7 @@ These are the notes the pull request body carries. Each is true of the code as b
 
 Executed 2026-10-27 to 2026-10-30 on `feature/12b-deployment-release` (draft PR #36). Twenty-five tasks: one spec, two code, the admin-over-API
 amendment (3a–3h), two CI, seven artifact-and-smoke, four lab, one docs. Every task was reviewed (Opus for security, CI and release tasks, Sonnet
-for mechanical ones) and every finding closed before the next task began. **Lab states: L82, L83 and L85 are closed (kind run 41155086403, 2026-10-31); L84 is partial (Compose `secrets:` measured; `LoadCredential=` and the systemd cells not run); L86 is still the `TODO(L86)` marker below,
+for mechanical ones) and every finding closed before the next task began. **Lab states: L82, L83 and L85 are closed (kind run 41155086403, 2026-10-31); L84 is partial (Compose `secrets:` measured; `LoadCredential=` and the systemd cells not run); L86 closed 2026-11-01 (`tests/lab/results/L86-ser8.md`),
 and no result is asserted for it until its results note and spec §15 row exist.**
 
 #### Commits per task
@@ -8061,7 +8061,7 @@ and no result is asserted for it until its results note and spec §15 row exist.
   belongs in the L83 note and the README only.
 - **L85 closed** (`tests/lab/results/L85-kind.md`): all four cells PASS on cell (c) as redefined (timed from the listener closing, with no login
   failing past one retry); the note states all three runs. The chart gained `service.anycast` (MetalLB BGP, `Local`, `preStopSeconds` >= 15).
-- **TODO(L86):** an admin call's touch on a real YubiKey. Harness and runbook written; Ryan's run is on the SER8 (planned 2026-10-31).
+- **L86 closed** (`tests/lab/results/L86-ser8.md`, 2026-11-01): all four cells PASS on the real YubiKey; the run found and fixed two product bugs (an issued certificate refused as a bearer at the admin touch; a pulled touch key found only after sending) and three harness bugs.
 - **L84** is partial: Compose `secrets:` measured (long and short syntax PASS; a new secret needs `up -d`); `LoadCredential=` is not measured: the systemd cells are written and have not run (they need a hosted runner with systemd; `tests/lab/results/L84-systemd-docker.md` holds the Compose half).
 - The detached JWKS fetch may save after `Run` returns (`identity.go:155`). Benign: the file is public, written atomically and owner-only. For the
   pre-beta review.
@@ -8103,7 +8103,7 @@ and no result is asserted for it until its results note and spec §15 row exist.
 - **CI jobs:** `test` (vet, rest, port49d in three shards, race, root, versions, release requirements, packages), `systemd`, `compose`, `kind`,
   `hwkeys`, `python`, `qual`, `leaks`, `lab-free`, and the label-gated `lab-kind` (`l82`, `l83`, `l85`).
 - **The chart runs in a `baseline` namespace.** The kind smoke labels its namespace `enforce=baseline`.
-- **Unmeasured:** TODO(L86) only. The kind smoke, including its two-generation fsGroup cell, ran green in CI (runs 41151306253 and 41155086403).
+- **Unmeasured:** nothing (L86 closed 2026-11-01). The kind smoke, including its two-generation fsGroup cell, ran green in CI (runs 41151306253 and 41155086403).
 
 #### Hand-offs
 

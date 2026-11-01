@@ -351,6 +351,7 @@ func (h *lab) readLine(d time.Duration) (string, error) {
 // cell fails, so nothing hangs.
 func (h *lab) waitEnter(what string, d time.Duration) {
 	h.t.Helper()
+	h.flushInput()
 	h.say("  >>> %s\n      Press Enter when done (deadline %v).", what, d)
 	if _, err := h.readLine(d); err != nil {
 		h.t.Fatalf("step not confirmed: %v", err)
@@ -360,6 +361,10 @@ func (h *lab) waitEnter(what string, d time.Duration) {
 // askInt asks Ryan for a number.
 func (h *lab) askInt(question string) int {
 	h.t.Helper()
+	// Only what is typed after the question answers it (L86 cell (c): a stray
+	// line from the login was read as the first answer, and the question asked
+	// twice).
+	h.flushInput()
 	for range 3 {
 		h.say("  ??? %s (type a number, Enter; deadline %v)", question, handDeadline)
 		s, err := h.readLine(handDeadline)
@@ -372,6 +377,13 @@ func (h *lab) askInt(question string) int {
 	}
 	h.t.Fatal("no number after three asks")
 	return 0
+}
+
+// flushInput discards what was typed before a question was shown.
+func (h *lab) flushInput() {
+	if h.tty != nil {
+		flushTTYInput(h.tty)
+	}
 }
 
 // restoreTTY puts Ryan's terminal back as the cell found it.

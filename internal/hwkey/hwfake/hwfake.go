@@ -26,6 +26,10 @@ type Key struct {
 	state   hwkey.State // the zero State is Present
 	closed  bool
 	pinSeen int
+	// pulled is a token taken out that State has not yet seen: as a PKCS#11
+	// Signer's, State keeps its last state until a Probe or a Sign looks.
+	pulled bool
+	probes int
 }
 
 // New is k on the token serial of module.
@@ -56,11 +60,17 @@ func (k *Key) Signs() int {
 	return k.signs
 }
 
-// Sign counts the call, runs the OnSign hook and signs.
+// Sign counts the call, runs the OnSign hook and signs. A pulled token
+// signs nothing: ErrKeyAbsent, and State says Absent from then on.
 func (k *Key) Sign(rd io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	k.mu.Lock()
 	k.signs++
 	f := k.onSign
+	if k.pulled {
+		k.state = hwkey.Absent
+		k.mu.Unlock()
+		return nil, hwkey.ErrKeyAbsent
+	}
 	k.mu.Unlock()
 	if f != nil {
 		if err := f(); err != nil {
@@ -82,6 +92,34 @@ func (k *Key) State() hwkey.State {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.state
+}
+
+// Pull takes the token out (true) or puts it back (false) without State
+// seeing it, as a real token's pull is not seen until something looks. Put
+// back, State stays what it last was: SetState says what the return finds.
+func (k *Key) Pull(out bool) {
+	k.mu.Lock()
+	k.pulled = out
+	k.mu.Unlock()
+}
+
+// Probe looks for the token now (hwkey.Prober): Absent while it is pulled,
+// and State says so from then on; else State.
+func (k *Key) Probe() hwkey.State {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.probes++
+	if k.pulled {
+		k.state = hwkey.Absent
+	}
+	return k.state
+}
+
+// Probes is how many times Probe was called.
+func (k *Key) Probes() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.probes
 }
 
 // Unlock counts the PIN it was given and clears it.
