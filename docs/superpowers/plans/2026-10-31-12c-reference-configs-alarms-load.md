@@ -1088,6 +1088,9 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `internal/pivattest/pivattest.go` and `pivattest_test.go` (`VerifyPair`, extracted; `Anchors.PEM`);
   - `internal/broker/mfa.go` (`verifyTouchMessage` calls `VerifyPair`), with `internal/broker/mfa_test.go`;
   - `internal/hwkey/hwfake/hwfake.go` (an `Unlocks() int` counter beside `Signs()`);
+  - `internal/hwkey/pkcs11/tokens.go` (new: `Tokens`) and `internal/hwkey/pkcs11/softhsm_test.go`;
+  - `internal/hwkey/serialmask/serialmask.go` and its test (new: `MaskSerial`, moved from L60's `redact`, imported by `hwkeysetup`, `pkcs11` and the L60 harness);
+  - `tests/lab/l60/harness_test.go` (`redact` calls `serialmask.MaskSerial`; `slot9a`/`slot9c` come from `hwkeysetup.SlotIDs`);
   - `Makefile` (`l86-build` also builds the L91 cells).
 
 **Interfaces:**
@@ -1111,11 +1114,16 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `var SlotIDs = map[string]byte{"9a": 0x01, "9c": 0x02, "9d": 0x03, "9e": 0x04}` in `internal/hwkeysetup`: the PIV slot to libykcs11 `CKA_ID`. 9a, 9c and 9e are measured (`tests/lab/results/L60-ser8.md`, the read-only-session table: `0x01`, `0x02`, `0x04`, and f9 at `0x19`). 9d is the PIV standard's and is unmeasured, and no default uses it.
   - `func SlotURI(module, tokenLabel, slot string) (string, error)` builds `pkcs11:token=<label>;id=%<id>?module-path=<module>` through `pkcs11`'s own encoder (`uri.go`). It is printed only through `MaskSerial`.
   - `var openToken = pkcs11.Open` in `cmd/port49/hwkey.go`, a seam that tests replace with `hwfake`. A test asserts the real call passes a nil PIN.
+  - `func Tokens(modulePath string) ([]Token, error)` in `internal/hwkey/pkcs11`, where `type Token struct { Slot uint; Label, MaskedLabel, Model, MaskedSerial string }`.
+    - It is read-only: `C_Initialize`, `C_GetSlotList(true)` and `C_GetTokenInfo` through the existing `(*Module).slotList` and `tokenInfo` (module.go:208, :227), then `C_Finalize`. It opens no session, never calls `C_Login`, and never asks for a PIN.
+    - `Model` is `CK_TOKEN_INFO.model`. `MaskedLabel` and `MaskedSerial` are masked by `hwkeysetup`'s rule; `pkcs11` takes the rule as a moved `MaskSerial` in a leaf package (`internal/hwkey/serialmask`) that both import, so neither imports the other.
+    - The raw `Label` exists only to build the `token=` attribute of the URI that setup writes. It is never printed.
+  - `var listTokens = pkcs11.Tokens` in `cmd/port49/hwkey.go`: the second seam, beside `openToken`.
   - `type Check struct { Name string; OK bool; Why string }`. `Name` is one of `session_slot`, `touch_slot`, `attestation_roots`, `session_attested`, `touch_attested`, `touch_policy`, `pin_policy`, `same_token`, and, for status alone, `config_issued_key`, `config_touch_key`, `issued_certificate`, `certificate_expiry`, `agent`.
   - `type HardwareKeyTouchConfig struct { AttestationRootsPEM string \`json:"attestation_roots_pem"\` }` in `internal/broker/api`, and field `Config.HardwareKeyTouch *HardwareKeyTouchConfig \`json:"hardware_key_touch,omitempty"\``.
   - `type Roots struct { Anchors pivattest.Anchors; Source string }` in `internal/hwkeysetup`. `Source` is `--roots <file>` or `from broker <host>`.
   - `func LoadRoots(ctx context.Context, rootsFile, broker string, fetch func(ctx context.Context) (api.Config, error)) (Roots, error)`, returning `ErrBrokerUnreachable` or `ErrNoRoots` (both exit 2).
-  - `type Report struct { Token string; Roots string; Checks []Check; Ready bool }`. `Token` is the token label with the serial masked as `<serial>`, by the rule `tests/lab/l60/harness_test.go`'s `redact` applies, moved into `internal/hwkeysetup` as `MaskSerial(s string) string` and used by both.
+  - `type Report struct { Token string; Roots string; Checks []Check; Ready bool }`. `Token` is the token label with the serial masked as `<serial>`, by the rule `tests/lab/l60/harness_test.go`'s `redact` applies, moved into the leaf package `internal/hwkey/serialmask` as `MaskSerial(s string) string`. `hwkeysetup`, `pkcs11.Tokens` and the L60 harness all call it, so the rule cannot drift.
   - `func Inspect(k Keys, anchors *pivattest.Anchors, now time.Time) Report`, where `type Keys struct { Session, Touch hwkey.Key }`.
   - `func Advice(r Report, sessionSlot string) []string`: the ykman lines, empty when ready.
   - `func SetKeys(path, issuedKey, touchKey string) (changed bool, err error)` in `userconfig`. It edits lines, never re-encodes:
@@ -1134,15 +1142,17 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
       3. a probe of a fixed list of system install paths, in this order:
          - `/usr/lib/<multiarch>/libykcs11.so.2`, then `/usr/lib/<multiarch>/libykcs11.so` (Debian and Ubuntu; `<multiarch>` from `runtime.GOARCH`: `x86_64-linux-gnu`, `aarch64-linux-gnu`). The L60 and L86 harnesses load `/usr/lib/x86_64-linux-gnu/libykcs11.so` on the SER8 (`tests/lab/l60/harness_test.go`).
          - `/usr/lib64/libykcs11.so.2`, then `/usr/lib64/libykcs11.so` (Fedora and RHEL);
-         - `/usr/local/lib/libykcs11.so` (Linux), or `/usr/local/lib/libykcs11.dylib` (macOS, Intel Homebrew and Yubico's own installer);
+         - `/usr/local/lib/libykcs11.dylib` (macOS, Intel Homebrew and Yubico's own installer). No Linux `/usr/local/lib` path: only a source build puts one there, and no package installs it;
          - `/opt/homebrew/lib/libykcs11.dylib` (macOS, Apple-silicon Homebrew).
 
          The implementer verifies each path against the package's published file list before committing: Debian's and Ubuntu's `ykcs11` package, Fedora's `yubico-piv-tool`, Homebrew's `yubico-piv-tool` formula, and Yubico's macOS installer. Each source is recorded in a comment beside its path. A path no package installs is dropped, never guessed.
-      - **The check.** A probed candidate is loaded only if it passes `userconfig.CheckOwned`, the rule the agent applies to a module (`userconfig.go:474`): every link and the file owned by root or the user, with no group or world write. A candidate that fails is skipped, and the skip is said in one line naming the path. An attacker-writable library is code execution.
+      - **The check, for all three sources.** A module is loaded only if it passes `userconfig.CheckOwned`, the rule the agent applies to a module (`userconfig.go:474`): every link and the file owned by root or the user, with no group or world write. An attacker-writable library is code execution.
+        - A `--module` or an existing key's `module-path` that fails is refused (exit 2), naming the path and the rule, before anything loads.
+        - A probed candidate is first `stat`ed. A path that does not exist is passed over silently. One that exists and fails the check is skipped, with one line naming it.
       - The first candidate that passes is used, and the run prints it: "module: <path> (found)". Setup writes it into `issued_key`/`touch_key`, so later commands do not probe.
       - **None found:** exit 2, with "no libykcs11 found; install yubico-piv-tool or pass --module".
       - main has no default module and no system-config module line (checked), and this ruling adds no config key.
-    - **The token.** It lists the tokens the module shows. More than one YubiKey refuses (exit 2) unless `--token <label>` names one. Labels are printed through `MaskSerial`.
+    - **The token.** It lists the tokens the module shows with `pkcs11.Tokens`, which never logs in. More than one token refuses (exit 2) and prints the list: number, model and masked label. `--token <n>` picks one by that number, so the user never needs the serial.
     - **The slots.** It reads the slot attestations for 9a (the session key; `--session-slot 9e` for a site that keeps it there, as L86 did) and 9c (the touch key), and the f9 certificate. It finds them by the fixed slot→`CKA_ID` table (`SlotIDs`; measured in L60), and builds each `pkcs11:` URI with the token's label.
     - **The checks** are the broker's own code, the one function `pivattest.VerifyPair` that `verifyTouchMessage` calls (decision 45 ruling 12):
       - the chain to the roots;
@@ -1222,10 +1232,13 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestSetupReportsAnOverlaidKey`: a `touch_key` that comes from the system config through `LoadAll` is reported and not written to the user file.
     - `TestModuleSourceOrder`: `--module` wins over an existing key's `module-path`, which wins over the probe.
     - `TestTheProbeOrder`: over a temp root standing in for `/` (the probe list is a function of a root and `GOOS`/`GOARCH`, so tests never read the real `/usr`), with candidates at two listed paths, the earlier one in the list is used and printed as "module: <path> (found)".
+    - `TestAMissingCandidateIsSilent`: the probe walks past absent paths, and prints no line for them.
+    - `TestAnUnsafeFlagModuleIsRefused`: a group-writable `--module`, and a group-writable `module-path` from an existing key, each give exit 2 before any load. The `openToken` and `listTokens` seams record no call.
     - `TestAGroupWritableCandidateIsSkipped`: the first candidate is mode 0664 (or sits under a group-writable directory). It is skipped with a line naming it, and the next passing candidate is used.
     - `TestNoModuleFoundExits2`: no candidate, no flag and no existing key give exit 2 and the exact line "no libykcs11 found; install yubico-piv-tool or pass --module".
     - `TestSetupWritesTheProbedModule`: after a probed setup, both written URIs carry that `module-path`.
-    - `TestTwoTokensNeedTheTokenFlag`: two fakes on one module give exit 2 unless `--token` names one. Neither label's serial appears in the output.
+    - `TestTwoTokensNeedTheTokenFlag`: through the `listTokens` and `openToken` seams, two fake tokens give exit 2 and a numbered list, and `--token 2` picks the second. Neither label's serial appears in the output.
+  - `internal/hwkey/pkcs11/softhsm_test.go` (the `hwkeys` CI job's build tags), `TestTokensListsWithoutLogin`. Against two SoftHSM tokens, `Tokens` returns both, with `Model` set and the serials masked. `LoginCalls()` is unchanged, and no session opened by it remains. No `C_GenerateKeyPair` or `C_CreateObject` is reachable from `Tokens`: a static test asserts that `tokens.go` references neither function index.
     - `TestAnOpenErrorIsMasked`: an open error naming two tokens' serials prints neither, in the text form or in `--json`'s `why`.
     - `TestTheRealOpenGetsNoPIN`: the `openToken` seam records its PIN argument as nil.
     - `TestBrokerFetchUsesThePinnedPool`: the `/v1/config` fetch uses `fetchBrokerConfig` with the configured broker CA, and a broker whose certificate is from another CA fails with the unreachable line.
@@ -1243,7 +1256,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 
 - [ ] **Step 3: Run them and see them fail.**
 
-  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule' -count=1`, and the same `-run` over `./internal/pivattest/`. Expected: FAIL to compile.
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule|MissingCandidate|UnsafeFlagModule' -count=1`, and the same `-run` over `./internal/pivattest/` and `./internal/hwkey/serialmask/`. Run `make test-hw` for `TestTokensListsWithoutLogin` (the SoftHSM job's target). Expected: FAIL to compile.
 
 - [ ] **Step 4: Implement.**
 
@@ -1292,7 +1305,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 - [ ] **Step 7: Commit.**
 
   ```bash
-  git add internal/hwkeysetup internal/pivattest internal/hwkey/hwfake/hwfake.go internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go internal/broker/mfa_test.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
+  git add internal/hwkeysetup internal/pivattest internal/hwkey/hwfake/hwfake.go internal/hwkey/serialmask internal/hwkey/pkcs11/tokens.go internal/hwkey/pkcs11/softhsm_test.go tests/lab/l60/harness_test.go internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go internal/broker/mfa_test.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
   git commit -m "feat: port49 hwkey setup and status, read-only on the token, the broker's attestation checks reused"
   ```
 
