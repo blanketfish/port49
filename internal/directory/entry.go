@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/spiffe"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // Identity is one directory entry as a principal (Ruling 3). EntryID is

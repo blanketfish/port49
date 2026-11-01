@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/projection"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/projection"
 )
 
 // ErrNoGrants is no_grants_matched: no subject lists the principal, or no

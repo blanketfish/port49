@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // program compiles a blob from "permit rule" and "deny rule" lines, one role

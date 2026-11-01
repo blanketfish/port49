@@ -93,7 +93,7 @@ same change.
   to the directory (design §10: "Neither sits on the authentication hot path").
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, no cgo.
+- Go 1.26, module `github.com/blanketfish/port49`, no cgo.
 - `github.com/go-ldap/ldap/v3` v3.4.14 (pure Go; its `gssapi` subpackage).
 - `github.com/jcmturner/gokrb5/v8` v8.4.4 (pure Go; go-ldap's own requirement).
 - etcd v3.6.15 as today.
@@ -741,7 +741,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, **no cgo**.
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, **no cgo**.
   GSSAPI is gokrb5 (pure Go).
 - snake_case everywhere it is data: YAML keys, JSON log keys, config, metric names.
 - Reason codes are spec §5.7's closed vocabulary (`internal/decision/reasons.go`). This plan adds
@@ -1340,7 +1340,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // StampRaisesRefreshedAtAndKeepsPolicyRev: the scheduled refresh's stamp
@@ -1761,7 +1761,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 func dirYAML(t *testing.T) directoryYAML {
@@ -1980,7 +1980,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 type serverYAML struct {
@@ -2434,7 +2434,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // MembershipKeepsTheLaterAndIsFoundByKey: a membership is read back whole
@@ -2934,7 +2934,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // membershipRec is mb/<principal> (plan 7g, Ruling 10): what crypt sealed,
@@ -3420,7 +3420,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
 )
 
 func poolCfg(site string, servers ...Server) Config {
@@ -3853,8 +3853,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Searcher is what one query sees: a connection whose searches are
@@ -4377,7 +4377,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A simple bind's password and a keytab's bytes never appear in any
@@ -4462,7 +4462,7 @@ import (
 	krbconfig "github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/keytab"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // Credentials are how the broker binds (Ruling 8). The secret each holds is
@@ -5130,8 +5130,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 var (
@@ -5523,8 +5523,8 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // Identity is one directory entry as a principal (Ruling 3). EntryID is
@@ -6209,9 +6209,9 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 type world struct {
@@ -6606,9 +6606,9 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 type Source string
@@ -7342,7 +7342,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // DirectoryMode is whether the process loading a policy resolves humans
@@ -7787,10 +7787,10 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // directoryRefusal is a resolver error as the API answers it (Ruling 4).
@@ -8252,8 +8252,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // port49 directory forget deletes the principal's membership, pin
@@ -8469,10 +8469,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Forget is `port49 directory forget` (Ruling 3's escape). An entry
@@ -8599,7 +8599,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/blanketfish/port49/internal/daemon/admin"
 )
 
 // directoryCmd is `port49 directory forget` (plan 7g, Ruling 3's escape):
@@ -9055,8 +9055,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // RefreshDirectory is the scheduled refresh (spec §5.1.3; plan 7g Ruling
@@ -9313,12 +9313,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 var openDirectoryHook = openDirectory

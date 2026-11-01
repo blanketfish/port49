@@ -89,7 +89,7 @@ flooding source is refused at Accept.
 
 ## Global Constraints
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - snake_case for every metric name and label value: `declined_refused`.
 - Reason codes and diagnoses are spec §5.7's closed vocabulary (`internal/decision/reasons.go`,
   `internal/keyring`). This plan adds none.
@@ -1241,8 +1241,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 const l31Claim = "What break-glass costs on IOS-XE and NX-OS with single-connection on when port49d declines " +

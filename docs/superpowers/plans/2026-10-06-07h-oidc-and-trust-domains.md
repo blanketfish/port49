@@ -99,7 +99,7 @@ back-channel logout.
   - Readiness never follows the provider.
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, no cgo.
+- Go 1.26, module `github.com/blanketfish/port49`, no cgo.
 - The standard library's `crypto/rsa`, `crypto/ecdsa`, `crypto/ed25519`, `encoding/json`,
   `net/http`. No new module (OR-1).
 - etcd v3.6.15 as today.
@@ -835,7 +835,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
   module** (OR-1).
 - snake_case everywhere it is data: YAML keys, JSON log keys, config, metric names.
 - Reason codes are spec §5.7's closed vocabulary (`internal/decision/reasons.go`). **This plan
@@ -1841,8 +1841,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // rfcExample is one RFC example: its public key as a JWK and its JWS.
@@ -2091,8 +2091,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // wycheFile is Wycheproof's testvectors_v1 schema, as far as these five
@@ -2213,8 +2213,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // No input panics ParseCompact or Verify, and a JWS that parses came from
@@ -2282,8 +2282,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 func jwks(t *testing.T, keys ...map[string]any) []byte {
@@ -2606,7 +2606,7 @@ import (
 	"math/big"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Key is one verification key from a JWKS. Alg is the JWK's own alg, ""
@@ -2782,7 +2782,7 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc"
 )
 
 // NewKey is a fresh key for alg: RSA 2048, P-256, P-384 or Ed25519.
@@ -2997,7 +2997,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc"
 )
 
 // Issuer is an OpenID provider on an httptest TLS server: discovery at
@@ -3205,9 +3205,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 type clock struct {
@@ -3657,8 +3657,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // ErrUnavailable is an issuer whose keys cannot be used: none fetched or
@@ -4166,10 +4166,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 const clientID = "port49-cli"
@@ -4692,9 +4692,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 var (
@@ -5227,8 +5227,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // logoutClaims is a Keycloak-shaped logout token for clientID at now; extra
@@ -5618,7 +5618,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc"
 )
 
 // brokerWithIdentity is brokerBlock with client_ca_file replaced by an
@@ -5825,7 +5825,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc"
 )
 
 // identityVerifierYAML is one entry of broker.identity.humans or .machines
@@ -6181,7 +6181,7 @@ remove `{"broker.client_ca_file", b.ClientCAFile}` from `required`, and replace 
 ```
 
 (`ri, err := refreshInterval(…)` below still compiles: `ri` is new.) Import
-`github.com/rhwendt/port49/internal/oidc` in `config.go`.
+`github.com/blanketfish/port49/internal/oidc` in `config.go`.
 
 Every other reader of `b.ClientCAFile` in `config.go` (`ownRevocationsFile`'s and the kept-CRL
 path's lists of files that may not collide) already skips an empty path (`if o.path == ""`);
@@ -6294,7 +6294,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // OncePutsOnceAndTakesOnce: a once-only record is written only where none
@@ -6848,7 +6848,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // onceRec is on/<key> (plan 7h).
@@ -7155,12 +7155,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 const mintLeaf1 = `{"devices":["leaf1"],"ttl_seconds":60}`
@@ -7531,11 +7531,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // caller is who a request is: from its connection's certificate, or from
@@ -7948,8 +7948,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func TestConfigNamesTheHumanOIDCVerifiers(t *testing.T) {
@@ -8207,8 +8207,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // oidcSession is a fixture with OIDC and alice's live context on leaf1,
@@ -8523,11 +8523,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // oidcChallengeTTL is how long an OIDC refresh challenge may be answered: a
@@ -8824,10 +8824,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // logoutFor is a Keycloak-shaped logout token for alice from iss at f's
@@ -9216,10 +9216,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // maxLogoutBody bounds a logout request: a logout token is a few hundred
@@ -9747,8 +9747,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // identityCfg is broker.identity with a human and a machine verifier at
@@ -9836,9 +9836,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 func TestOpenIdentitySharesOneKeySetPerIssuer(t *testing.T) {
@@ -10021,10 +10021,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // brokerStateDir is where the broker keeps its own state (config's
@@ -10228,7 +10228,7 @@ In `buildBrokerAnchor` (`internal/port49d/main.go`), the TLS load becomes:
 	}
 ```
 
-(`main.go` imports `github.com/rhwendt/port49/internal/keyfile` for `keyfile.LoadX509KeyPair` if it
+(`main.go` imports `github.com/blanketfish/port49/internal/keyfile` for `keyfile.LoadX509KeyPair` if it
 does not already; pre-flight M-22.) After `announceDirectory(…)`:
 
 ```go
@@ -10510,8 +10510,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 const (
@@ -11453,7 +11453,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const oidcE2EClaim = "A person who logs in at Keycloak mints a token from the broker with the ID token as a bearer " +

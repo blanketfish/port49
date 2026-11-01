@@ -31,7 +31,7 @@ import (
 	"go.etcd.io/etcd/server/v3/storage/wal"
 	"go.uber.org/zap"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 var shared struct {

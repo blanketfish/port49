@@ -11,11 +11,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // bundleStore is what keepBundle reads and writes (etcd.Store).

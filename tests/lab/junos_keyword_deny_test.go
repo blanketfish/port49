@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	keywords "github.com/rhwendt/port49/internal/platform"
+	keywords "github.com/blanketfish/port49/internal/platform"
 )
 
 // TestL26bJunosKeywordDeny proves Junos keywords by what decision 27 is

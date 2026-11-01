@@ -5,7 +5,7 @@ package secureenclave
 import (
 	"runtime"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // Signer is never made in this build: Open and Generate refuse. It embeds a

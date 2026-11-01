@@ -19,7 +19,7 @@ things differ: no key is tried, the unencrypted flag is required, and every repl
 listener's files are loaded into one `server.Material` and swapped whole on change, so a CA
 rotation reaches the next handshake and the next packet of an open connection.
 
-**Tech Stack:** Go 1.26 (module `github.com/rhwendt/port49`), the standard library's
+**Tech Stack:** Go 1.26 (module `github.com/blanketfish/port49`), the standard library's
 `crypto/tls` and `crypto/x509` only, no new module; `internal/tacacs/wire`, `internal/admission`,
 `internal/policy`, `internal/bundle`, `internal/config`, `internal/certstatus`, `internal/decision`,
 `internal/keyring`, `internal/daemon/{server,metrics,authen}`, `internal/port49d`, `cmd/port49`;
@@ -1265,7 +1265,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 func leafNaming(dns []string, ips ...string) *x509.Certificate {
@@ -1342,8 +1342,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 var dev01 = admission.Device{Name: "leaf-01", Transport: admission.TransportTLS,
@@ -1742,8 +1742,8 @@ import (
 
 	"crypto/x509"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Rule is tls_listener.device_identity (decision 50 ruling 6): which
@@ -1849,8 +1849,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Status is a verified chain's revocation status.
@@ -2011,7 +2011,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // seenWindow is how long a device's last verified certificate counts
@@ -3117,12 +3117,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 var loopback = netip.MustParseAddr("127.0.0.1")
@@ -3693,11 +3693,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // TLS is the RFC 9887 listener's part of Deps (spec §13 decision 50). Serve
@@ -3943,7 +3943,7 @@ func (s *conn) transportName() string {
 }
 ```
 
-Add `"io"` and `"github.com/rhwendt/port49/internal/tacacs/wire"` to its imports.
+Add `"io"` and `"github.com/blanketfish/port49/internal/tacacs/wire"` to its imports.
 
 In `internal/daemon/limits/limits.go`, mark a status decline (ruling 8; pre-flight I1). Give
 `failure` a field `status bool // the last decline was DeclineStatus's`, make `Decline` clear it
@@ -4521,9 +4521,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // firstTicket is a client session cache that keeps the first ticket it is
@@ -4873,9 +4873,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // devicePKI is a device CA, port49's TLS server certificate under it, and
@@ -5142,12 +5142,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/certstatus"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/daemon/server"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/certstatus"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/server"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // tlsFileMax bounds each of the listener's files: a chain or a CA bundle is
@@ -5570,7 +5570,7 @@ func TestRefusalSayerGathersStatusUnavailable(t *testing.T) {
 }
 ```
 
-(Add `"github.com/rhwendt/port49/internal/devicecert"` to the test file's imports.)
+(Add `"github.com/blanketfish/port49/internal/devicecert"` to the test file's imports.)
 
 In `internal/port49d/certstatus.go`, change `certStatusConfig`'s signature to
 `certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certificate, stateDir,
@@ -5902,7 +5902,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type result struct {
@@ -6206,8 +6206,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // l72Env is one port49d with both listeners, its PKI and its files, all

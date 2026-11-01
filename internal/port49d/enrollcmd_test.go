@@ -11,7 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
 )
 
 // init-enrollments creates the enrollment store once; a second run exits 1

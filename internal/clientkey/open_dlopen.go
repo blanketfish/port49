@@ -9,10 +9,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
-	"github.com/rhwendt/port49/internal/hwkey/secureenclave"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/hwkey/secureenclave"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // HasPKCS11 is whether this build carries the purego backends (the

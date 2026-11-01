@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 func main() {

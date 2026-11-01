@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // l58ShippedReadonlyDeny is the deny-commands set 1.2.0 sends this lab node

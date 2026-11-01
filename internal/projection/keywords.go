@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Junos matches a deny-commands or allow-commands regex against a command's

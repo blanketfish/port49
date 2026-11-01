@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Spec is one platform block as a file writes it (spec §8): a built-in adapter

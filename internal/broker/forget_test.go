@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // port49 directory forget deletes the principal's membership, pin

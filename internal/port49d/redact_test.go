@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // port49d redacts with the built-in patterns and, where a policy is in force,

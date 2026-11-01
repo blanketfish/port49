@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/secretref/secretreftest"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/secretref/secretreftest"
 )
 
 const keysPolicy = `

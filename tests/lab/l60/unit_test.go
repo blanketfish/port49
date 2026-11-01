@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/mfatouch"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The key-free parts of the harness. None opens a token or runs port49.

@@ -11,9 +11,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // A member below the floor refuses the start, naming it; one that does not

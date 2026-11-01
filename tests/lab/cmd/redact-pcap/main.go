@@ -28,8 +28,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 func main() {

@@ -20,8 +20,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // runKeys is the keys: block a policy a started port49d reads carries: key k

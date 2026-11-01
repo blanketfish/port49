@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/edkey"
 )
 
 // maxVerifyKey bounds a verify key's read: a PEM ed25519 public key is 113

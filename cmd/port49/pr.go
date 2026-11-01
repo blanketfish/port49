@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // branchSafe is a subject name that can stand in a branch name as it is.

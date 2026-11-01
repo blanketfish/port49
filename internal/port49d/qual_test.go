@@ -28,10 +28,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/devicemock"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const qualRoot = "../.."

@@ -227,7 +227,7 @@ The owner's rule: trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -913,7 +913,7 @@ index 0000000..d8f7851
 +	"testing"
 +	"testing/fstest"
 +
-+	"github.com/rhwendt/port49/platforms"
++	"github.com/blanketfish/port49/platforms"
 +)
 +
 +// shipped is the table plan 4 compiled into the binary, value for value.
@@ -1130,7 +1130,7 @@ index 0000000..d8f7851
 - [ ] **Step 2: Run it to see it fail**
 
 Run: `go test ./internal/platform/`
-Expected: FAIL, `[setup failed]` — package `github.com/rhwendt/port49/platforms` does not exist,
+Expected: FAIL, `[setup failed]` — package `github.com/blanketfish/port49/platforms` does not exist,
 and `LoadSets`, `ParseSpecs`, `Validate` are undefined.
 
 - [ ] **Step 3: Write the files and the loader**
@@ -1156,7 +1156,7 @@ index 0000000..8767b09
 +
 +	"gopkg.in/yaml.v3"
 +
-+	"github.com/rhwendt/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/engine"
 +)
 +
 +// Spec is one platform block as a file writes it (spec §8): a built-in adapter
@@ -1554,7 +1554,7 @@ index 0000000..2225ed2
 +	"strconv"
 +	"strings"
 +
-+	"github.com/rhwendt/port49/platforms"
++	"github.com/blanketfish/port49/platforms"
 +)
 +
 +// DefaultSet is the platform set this build renders with: the one a policy
@@ -2002,7 +2002,7 @@ index d8f7851..18e9d43 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -9,8 +9,8 @@ import (
- 	"github.com/rhwendt/port49/platforms"
+ 	"github.com/blanketfish/port49/platforms"
  )
  
 -// shipped is the table plan 4 compiled into the binary, value for value.
@@ -3355,7 +3355,7 @@ index 2225ed2..001f47c 100644
 --- a/internal/platform/set.go
 +++ b/internal/platform/set.go
 @@ -11,10 +11,16 @@ import (
- 	"github.com/rhwendt/port49/platforms"
+ 	"github.com/blanketfish/port49/platforms"
  )
  
 -// DefaultSet is the platform set this build renders with: the one a policy
@@ -3627,8 +3627,8 @@ index 0000000..ec8096a
 +	"strings"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/internal/admission"
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/admission"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// withDevice is the test inventory with one more device, of a platform the
@@ -3873,7 +3873,7 @@ index c892df4..f773363 100644
  
  	"gopkg.in/yaml.v3"
 +
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/platform"
  )
  
  // The policy file's schema (spec §11), snake_case throughout. Every key is
@@ -3928,9 +3928,9 @@ index 5e9a33b..5fabadf 100644
  	"strings"
 @@ -9,6 +10,7 @@ import (
  
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/engine"
-+	"github.com/rhwendt/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/platform"
  )
  
  // Finding is something CI reports about a policy that loads: not an error,
@@ -4223,9 +4223,9 @@ index 4ac442f..90485e7 100644
  	"strings"
  	"testing"
  
- 	"github.com/rhwendt/port49/internal/decision"
- 	"github.com/rhwendt/port49/internal/engine"
--	"github.com/rhwendt/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/decision"
+ 	"github.com/blanketfish/port49/internal/engine"
+-	"github.com/blanketfish/port49/internal/platform"
  )
  
  // unmappedLevel declares a level no built-in platform renders: a role landing
@@ -4270,7 +4270,7 @@ index 4614bd4..86f875a 100644
  	"testing"
  	"time"
 -
--	"github.com/rhwendt/port49/internal/platform"
+-	"github.com/blanketfish/port49/internal/platform"
  )
  
  // The sample config is assembled from three pieces rather than written twice,
@@ -4474,11 +4474,11 @@ index 6a2d61d..0da947f 100644
 +++ b/cmd/port49/policy.go
 @@ -15,7 +15,6 @@ import (
  
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/decision"
--	"github.com/rhwendt/port49/internal/platform"
- 	"github.com/rhwendt/port49/internal/policy"
- 	"github.com/rhwendt/port49/internal/replay"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/decision"
+-	"github.com/blanketfish/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/policy"
+ 	"github.com/blanketfish/port49/internal/replay"
  )
 @@ -26,11 +25,12 @@ import (
  type policyFiles struct{ policy, inventory string }
@@ -5177,10 +5177,10 @@ index 8a41277..07a1968 100644
  	"fmt"
  	"reflect"
 @@ -13,6 +14,7 @@ import (
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/decision"
- 	"github.com/rhwendt/port49/internal/engine"
-+	"github.com/rhwendt/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/decision"
+ 	"github.com/blanketfish/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/platform"
  )
  
  // Diff is the effective-permission diff between two versions of a policy
@@ -5449,7 +5449,7 @@ index 0000000..8feafb7
 +	"strings"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/platforms"
++	"github.com/blanketfish/port49/platforms"
 +)
 +
 +// The built-in table loads, has a default list, and gives Junos its own on
@@ -5748,7 +5748,7 @@ index 0000000..c5fdc51
 +
 +	"gopkg.in/yaml.v3"
 +
-+	"github.com/rhwendt/port49/platforms"
++	"github.com/blanketfish/port49/platforms"
 +)
 +
 +// Redacted is what a removed word becomes (spec §5.8): the vector keeps its
@@ -6114,8 +6114,8 @@ index 0000000..b239d2f
 +	"reflect"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/policy"
++	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/policy"
 +)
 +
 +// port49d redacts with the built-in patterns and, where a policy is in force,
@@ -6623,7 +6623,7 @@ index 0000000..5276533
 +	"strings"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// `port49 platform list` prints every platform with where its adapter comes
@@ -6828,8 +6828,8 @@ index 0000000..f1b0a4e
 +
 +	"gopkg.in/yaml.v3"
 +
-+	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/policy"
++	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/policy"
 +)
 +
 +// platformCmd runs `port49 platform SUBCOMMAND` (spec §8, "Knowing what is
@@ -7376,9 +7376,9 @@ index f1b0a4e..c2429ad 100644
  
  	"gopkg.in/yaml.v3"
  
-+	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/platform"
- 	"github.com/rhwendt/port49/internal/policy"
++	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/policy"
  )
 @@ -32,6 +34,8 @@ func platformCmd(args []string, stdout, stderr io.Writer) int {
  		return platformShow(args[1:], stdout, stderr, false)
@@ -8010,8 +8010,8 @@ index 0000000..e0beafe
 +	"strings"
 +	"time"
 +
-+	"github.com/rhwendt/port49/internal/engine"
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// The intersection checks of spec §12: the effective permission set is what
@@ -9276,7 +9276,7 @@ index 0000000..62d7f96
 +	"regexp"
 +	"strings"
 +
-+	"github.com/rhwendt/port49/internal/policy"
++	"github.com/blanketfish/port49/internal/policy"
 +)
 +
 +// branchSafe is a subject name that can stand in a branch name as it is.
@@ -9500,7 +9500,7 @@ index 0000000..f5db9db
 +
 +	"golang.org/x/crypto/ssh"
 +
-+	adapter "github.com/rhwendt/port49/internal/platform"
++	adapter "github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// TestAdapterReplies is the differential test of the per-command adapters

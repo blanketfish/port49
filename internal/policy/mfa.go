@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // MFAMethod is one way a person proves a second factor at a login (spec

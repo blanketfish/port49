@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
+	adapter "github.com/blanketfish/port49/internal/platform"
 )
 
 // TestL68ViewConfigurationCLI, TestL68ViewConfigurationNetconf and

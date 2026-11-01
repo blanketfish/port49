@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // revoke without --offline is port49 revoke's, through the broker API: said,

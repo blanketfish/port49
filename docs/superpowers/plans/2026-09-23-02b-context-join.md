@@ -158,7 +158,7 @@ Where the decisions leave a shape open, this plan chooses, and says why here onc
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1278,7 +1278,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // JoinRacesRevocation runs logins joining one live context concurrently with a
@@ -1367,9 +1367,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/store/storetest"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store/storetest"
 )
 
 var t0 = time.Unix(1_757_041_495, 0)
@@ -1715,7 +1715,7 @@ func TestJoinRacesRevocationOnTheMemoryStore(t *testing.T) {
 ```
 
 Append to `internal/store/crypt/crypt_test.go`, and add
-`"github.com/rhwendt/port49/internal/store/storetest"` to its imports:
+`"github.com/blanketfish/port49/internal/store/storetest"` to its imports:
 
 ```go
 // The join's merge happens up here, with the sealed fields open, and the
@@ -2661,15 +2661,15 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // joinTagKey is this file's device-tag key. Every secret is the device's tag
@@ -2773,14 +2773,14 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // Test 2 of the decisions, end to end through the authentication and

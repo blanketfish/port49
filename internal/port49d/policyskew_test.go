@@ -11,10 +11,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // A replica's first record of the bundle it serves lands before it serves

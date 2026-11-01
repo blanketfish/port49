@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // TestRedactRemovesEveryCredentialAndNothingElse is the whole contract in one

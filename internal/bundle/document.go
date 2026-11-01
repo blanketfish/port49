@@ -14,9 +14,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/edkey"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // DocumentFormat names the document's shape; Open refuses any other.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A bundle is CAs alone, at most MaxCABundleCerts of them in at most

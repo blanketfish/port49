@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // TestCommittedEvidenceMatchesTheCaptures audits what is actually on this

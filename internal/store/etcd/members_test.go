@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // Members counts the members etcd lists and those answering at their

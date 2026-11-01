@@ -26,7 +26,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Pool is one of the three.

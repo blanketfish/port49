@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/k8sid"
-	"github.com/rhwendt/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/k8sid"
+	"github.com/blanketfish/port49/internal/spiffe"
 )
 
 // DirectoryMode is whether the process loading a policy resolves humans

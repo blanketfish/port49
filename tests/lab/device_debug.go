@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // Device debug capture for EOS, IOS XR, Junos, IOS XE and NX-OS (post-11b fix

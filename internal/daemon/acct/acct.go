@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/author"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/author"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 type Handler struct {

@@ -12,9 +12,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/rhwendt/port49/internal/capability"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/capability"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // devicesCapabilities is `port49 devices capabilities` (spec §9): what each

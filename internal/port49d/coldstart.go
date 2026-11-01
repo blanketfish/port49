@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // fetchClient is what port49d asks the inventory service: the version, and

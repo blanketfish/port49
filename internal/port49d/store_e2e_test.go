@@ -18,10 +18,10 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // rolesMember is a TLS etcd member with port49's roles in force, and a

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/storetest"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/storetest"
 )
 
 func TestSweepDropsExpiredKeys(t *testing.T) {

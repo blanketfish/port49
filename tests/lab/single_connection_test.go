@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // singleConnectionAsks are the positions TestSingleConnectionSyntax asks the

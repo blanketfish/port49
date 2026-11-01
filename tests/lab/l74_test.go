@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 const l74Claim = "spec §15 L74, cell by cell (decision 51: the cache, fail closed, a process with no cache, the runner's reach, port49 store status)."

@@ -15,9 +15,9 @@ import (
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
 )
 
 const persistent tpm2.TPMHandle = 0x81000010

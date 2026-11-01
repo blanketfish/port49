@@ -41,11 +41,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
-	"github.com/rhwendt/port49/tests/lab/labpcap"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
 type platform struct {

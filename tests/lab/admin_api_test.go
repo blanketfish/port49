@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/hwkey/hwfake"
-	"github.com/rhwendt/port49/internal/pivattest"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/hwkey/hwfake"
+	"github.com/blanketfish/port49/internal/pivattest"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The admin operations go over the broker API with a security key press (spec

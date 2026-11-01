@@ -19,13 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // tokenWithTheLabKey is a SoftHSM token holding the lab client's key, so the

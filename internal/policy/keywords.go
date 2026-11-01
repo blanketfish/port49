@@ -1,6 +1,6 @@
 package policy
 
-import "github.com/rhwendt/port49/internal/platform"
+import "github.com/blanketfish/port49/internal/platform"
 
 // setKeywords is a set's keyword tree for a platform (platform.KeywordsFor):
 // the projection sends a rule only where it proves the rule's words keywords

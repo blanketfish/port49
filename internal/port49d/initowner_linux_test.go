@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // init runs as the revocations directory's owner, port49d's user, or not

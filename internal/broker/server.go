@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // MaxConns caps the broker's open connections. Every agent holds one for its

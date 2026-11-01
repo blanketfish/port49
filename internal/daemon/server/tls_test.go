@@ -19,13 +19,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/daemon/limits"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/daemon/limits"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 var loopback = netip.MustParseAddr("127.0.0.1")

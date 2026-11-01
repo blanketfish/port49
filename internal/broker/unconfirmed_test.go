@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // A revocation whose write the store did not answer may still land, even over a lift made meanwhile

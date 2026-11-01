@@ -13,9 +13,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // spec11Env is the corpus's environment: its own inventory file and the

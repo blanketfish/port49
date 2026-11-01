@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // A token printed with any verb withholds its secret, in a slice too (plan

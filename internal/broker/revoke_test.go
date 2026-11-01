@@ -16,11 +16,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/session"
-	"github.com/rhwendt/port49/internal/spiffe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/session"
+	"github.com/blanketfish/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // fakeConns stands in for the Listener: the held connections are (principal,

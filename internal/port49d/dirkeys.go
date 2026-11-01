@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // directoryKeysRecheckEvery is how often a runner on a directory of its own

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/shapes/l82"
+	"github.com/blanketfish/port49/tests/shapes/l82"
 )
 
 // sts is the chart's port49d StatefulSet as `kubectl get sts -o json` prints it, cut to what the

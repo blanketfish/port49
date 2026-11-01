@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
 )
 
 // SoftHSM2 reads SOFTHSM2_CONF once, at C_Initialize, and Load keeps one

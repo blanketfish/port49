@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // ShadowedDeny is one deny a subject holds that a permit it also holds

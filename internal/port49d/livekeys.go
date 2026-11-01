@@ -10,10 +10,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/keyset"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/keyset"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // liveKeys is the device keys in force (spec §10; decision 53 rulings 2, 3):

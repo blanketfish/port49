@@ -15,12 +15,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/mfatouch"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/workload"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/workload"
 )
 
 // exitTemporary is EX_TEMPFAIL: the broker could not answer by the deadline,

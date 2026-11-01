@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // waitLine waits up to 20s for out to hold want n times.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // Every request the agent sends the broker refuses a redirect: a mint's body,

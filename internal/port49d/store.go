@@ -15,17 +15,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/guard"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/store/placement"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/guard"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store/placement"
 )
 
 // holderShape is the holder a port49-broker writes under meta/hold

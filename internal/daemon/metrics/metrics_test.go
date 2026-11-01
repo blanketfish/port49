@@ -8,7 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/devicecert"
 )
 
 func TestNewRegistersEveryMetric(t *testing.T) {

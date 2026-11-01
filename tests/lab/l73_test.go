@@ -25,8 +25,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // scpWrite is the source side of scp's protocol to a sink at path: wait for

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 const podJSON = `{"spec":{"nodeName":"kind-worker"},"status":{"phase":"Running","hostIP":"172.18.0.3",

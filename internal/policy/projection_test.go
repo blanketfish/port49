@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/projection"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/projection"
 )
 
 // projectedSet is the test's second platform set: 1.0.0 with juniper_junos

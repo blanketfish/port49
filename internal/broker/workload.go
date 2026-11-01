@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/spiffe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Workload is the broker's workload certificate verifier (plan 8; spec §13

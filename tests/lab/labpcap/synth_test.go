@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // A capture the tests can build a packet at a time.

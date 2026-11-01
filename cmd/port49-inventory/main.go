@@ -26,12 +26,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/edkey"
-	"github.com/rhwendt/port49/internal/egress"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/egress"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 const prefix = "port49-inventory: "

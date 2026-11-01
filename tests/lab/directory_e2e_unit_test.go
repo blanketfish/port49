@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // The directory end-to-end's configs, derived from the compose lab's, load

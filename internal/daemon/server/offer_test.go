@@ -15,12 +15,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // Spec §13 decision 50 ruling 20: on the RFC 9887 listener port49 offers

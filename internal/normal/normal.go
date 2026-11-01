@@ -13,9 +13,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rhwendt/port49/internal/k8sid"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/k8sid"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/spiffe"
 )
 
 // Prefixes are the forms a verifier gives a principal (spec §2): user: for

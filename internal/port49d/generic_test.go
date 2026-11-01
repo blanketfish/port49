@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // genericInventory is leaf1 on a platform with an adapter and srl1, srl2 on one

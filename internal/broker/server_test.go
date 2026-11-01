@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func startServer(t *testing.T, f *fixture) string {

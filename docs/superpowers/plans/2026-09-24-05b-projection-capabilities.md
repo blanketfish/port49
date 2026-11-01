@@ -1233,7 +1233,7 @@ index 0000000..a234046
 +	"testing"
 +	"testing/fstest"
 +
-+	"github.com/rhwendt/port49/platforms"
++	"github.com/blanketfish/port49/platforms"
 +)
 +
 +const keywordFixture = `platform: juniper_junos
@@ -1386,7 +1386,7 @@ index 0000000..beafd6c
 @@ -0,0 +1,34 @@
 +package policy
 +
-+import "github.com/rhwendt/port49/internal/platform"
++import "github.com/blanketfish/port49/internal/platform"
 +
 +// projectedKeywords is the test set's keyword tree: every word these tests
 +// deny or allow on juniper_junos, as the lab's capture writes it. `show
@@ -1659,7 +1659,7 @@ index 0000000..10d14ee
 +
 +	"gopkg.in/yaml.v3"
 +
-+	"github.com/rhwendt/port49/platforms"
++	"github.com/blanketfish/port49/platforms"
 +)
 +
 +// MaxKeywordNodes and MaxKeywordBytes bound a keyword tree: the lab's capture
@@ -1886,7 +1886,7 @@ index 0000000..12048e8
 @@ -0,0 +1,9 @@
 +package policy
 +
-+import "github.com/rhwendt/port49/internal/platform"
++import "github.com/blanketfish/port49/internal/platform"
 +
 +// setKeywords is a set's keyword tree for a platform (platform.KeywordsFor):
 +// the projection sends a rule only where it proves the rule's words keywords
@@ -1928,7 +1928,7 @@ index 0000000..146c797
 +	"slices"
 +	"strings"
 +
-+	"github.com/rhwendt/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/engine"
 +)
 +
 +// Junos matches a deny-commands or allow-commands regex against a command's
@@ -2327,12 +2327,12 @@ index beafd6c..a83d1e3 100644
 @@ -1,6 +1,11 @@
  package policy
  
--import "github.com/rhwendt/port49/internal/platform"
+-import "github.com/blanketfish/port49/internal/platform"
 +import (
 +	"strings"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/platform"
 +)
  
  // projectedKeywords is the test set's keyword tree: every word these tests
@@ -2716,7 +2716,7 @@ index 0000000..48ac082
 +	"fmt"
 +	"os"
 +
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +func main() {
@@ -3319,7 +3319,7 @@ The owner's rule is to trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -5183,7 +5183,7 @@ index 0000000..9a8e75f
 +	"testing"
 +	"time"
 +
-+	adapter "github.com/rhwendt/port49/internal/platform"
++	adapter "github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// TestL23InertBesideReadonly re-measures L22's inert candidates beside
@@ -5896,7 +5896,7 @@ index 0000000..5d206d1
 +	"strings"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// projectedSet is the test's second platform set: 1.0.0 with juniper_junos
@@ -6683,7 +6683,7 @@ index 0000000..71172ef
 +	"strings"
 +	"unicode"
 +
-+	"github.com/rhwendt/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/engine"
 +)
 +
 +// Facts are what a projection's device was measured doing with a command
@@ -7124,8 +7124,8 @@ index 0000000..c482916
 +	"strings"
 +	"testing"
 +
-+	"github.com/rhwendt/port49/internal/engine"
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// junos is a projected Junos adapter as the tests read one: spec §8's bits,
@@ -7458,7 +7458,7 @@ index 0000000..d53e729
 +	"slices"
 +	"strings"
 +
-+	"github.com/rhwendt/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/engine"
 +)
 +
 +// model is the device's decision under a reply, as spec §8 measured it: a
@@ -7608,8 +7608,8 @@ index 0000000..3beb309
 +	"slices"
 +	"strings"
 +
-+	"github.com/rhwendt/port49/internal/engine"
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// The shapes a reply takes (spec §8, "The projection model").
@@ -8477,9 +8477,9 @@ index 5d206d1..f9fc9b1 100644
  	"testing"
 +	"time"
 +
-+	"github.com/rhwendt/port49/internal/admission"
++	"github.com/blanketfish/port49/internal/admission"
  
- 	"github.com/rhwendt/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/platform"
  )
 @@ -67,3 +73,138 @@ func TestABlockKeepsTheProjection(t *testing.T) {
  	parseProjected(t, platform.BitDeliveryUserPermissions, "platforms:\n  juniper_junos:\n"+
@@ -8765,10 +8765,10 @@ index f7b007b..3a04a7e 100644
  	"fmt"
  	"slices"
 @@ -13,6 +14,7 @@ import (
- 	"github.com/rhwendt/port49/internal/decision"
- 	"github.com/rhwendt/port49/internal/engine"
- 	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/projection"
+ 	"github.com/blanketfish/port49/internal/decision"
+ 	"github.com/blanketfish/port49/internal/engine"
+ 	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/projection"
  )
  
  // ErrNoGrants is no_grants_matched: no subject lists the principal, or no
@@ -8946,7 +8946,7 @@ index aa39f06..bd20cae 100644
 +	"strings"
  	"time"
  
- 	"github.com/rhwendt/port49/internal/decision"
+ 	"github.com/blanketfish/port49/internal/decision"
 @@ -33,6 +34,18 @@ var ErrIdempotencyConflict = errors.New("token: idempotency key reused with a di
  // The daemon cannot refuse a name a device sends; the mint can.
  var ErrUsernameNotCanonical = errors.New("token: device-facing username must be printable ASCII and already canonical")
@@ -9199,7 +9199,7 @@ index 861a89d..ce95000 100644
  	"strings"
  	"unicode/utf8"
 +
-+	"github.com/rhwendt/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/decision"
  )
  
  // Version is the blob format this package writes and the only one it reads.
@@ -9371,10 +9371,10 @@ index f9fc9b1..34aeccc 100644
 --- a/internal/policy/projection_test.go
 +++ b/internal/policy/projection_test.go
 @@ -11,6 +11,7 @@ import (
- 	"github.com/rhwendt/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/admission"
  
- 	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/projection"
+ 	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/projection"
  )
  
  // projectedSet is the test's second platform set: 1.0.0 with juniper_junos
@@ -9612,10 +9612,10 @@ index 9a91683..ad27049 100644
 --- a/internal/policy/lint.go
 +++ b/internal/policy/lint.go
 @@ -11,6 +11,7 @@ import (
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/engine"
- 	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/projection"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/engine"
+ 	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/projection"
  )
  
  // Finding is something CI reports about a policy that loads: not an error,
@@ -10147,10 +10147,10 @@ index a4ce029..95a98a5 100644
 --- a/internal/policy/diff.go
 +++ b/internal/policy/diff.go
 @@ -16,6 +16,7 @@ import (
- 	"github.com/rhwendt/port49/internal/decision"
- 	"github.com/rhwendt/port49/internal/engine"
- 	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/projection"
+ 	"github.com/blanketfish/port49/internal/decision"
+ 	"github.com/blanketfish/port49/internal/engine"
+ 	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/projection"
  )
  
  // Diff is the effective-permission diff between two versions of a policy
@@ -10639,9 +10639,9 @@ index c56188d..fe4847c 100644
  	"strings"
  	"time"
  
-+	daemonconfig "github.com/rhwendt/port49/internal/config"
- 	"github.com/rhwendt/port49/internal/platform"
- 	"github.com/rhwendt/port49/internal/username"
++	daemonconfig "github.com/blanketfish/port49/internal/config"
+ 	"github.com/blanketfish/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/username"
  )
 @@ -27,6 +28,13 @@ import (
  // device; this reads a file a compliance tool fetched (spec §8,
@@ -10743,10 +10743,10 @@ index a607e68..fc9ed79 100644
 @@ -16,6 +16,7 @@ import (
  	"gopkg.in/yaml.v3"
  
- 	"github.com/rhwendt/port49/internal/admission"
-+	"github.com/rhwendt/port49/internal/config"
- 	"github.com/rhwendt/port49/internal/platform"
- 	"github.com/rhwendt/port49/internal/policy"
+ 	"github.com/blanketfish/port49/internal/admission"
++	"github.com/blanketfish/port49/internal/config"
+ 	"github.com/blanketfish/port49/internal/platform"
+ 	"github.com/blanketfish/port49/internal/policy"
  )
 @@ -142,12 +143,16 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
  	a.register(fs)
@@ -11300,7 +11300,7 @@ index a884283..f744275 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -12,8 +12,8 @@ import (
- 	"github.com/rhwendt/port49/platforms"
+ 	"github.com/blanketfish/port49/platforms"
  )
  
 -// shipped is the default set, value for value: the table plan 4 compiled
@@ -12443,7 +12443,7 @@ index 0000000..caf9597
 +	"testing"
 +	"time"
 +
-+	"github.com/rhwendt/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/decision"
 +)
 +
 +var t0 = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
@@ -12591,8 +12591,8 @@ index 0000000..74a110a
 +	"strings"
 +	"time"
 +
-+	"github.com/rhwendt/port49/internal/decision"
-+	"github.com/rhwendt/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/platform"
 +)
 +
 +// The capabilities of spec §9's vocabulary, as `supports` names them.
@@ -13057,8 +13057,8 @@ index 0000000..2450acd
 +	"text/tabwriter"
 +	"time"
 +
-+	"github.com/rhwendt/port49/internal/capability"
-+	"github.com/rhwendt/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/capability"
++	"github.com/blanketfish/port49/internal/decision"
 +)
 +
 +// devicesCapabilities is `port49 devices capabilities` (spec §9): what each
@@ -13414,11 +13414,11 @@ index 0000000..70aacec
 +	"testing"
 +	"time"
 +
-+	"github.com/rhwendt/port49/internal/admission"
-+	adapter "github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/policy"
-+	"github.com/rhwendt/port49/internal/projection"
-+	"github.com/rhwendt/port49/internal/testpki"
++	"github.com/blanketfish/port49/internal/admission"
++	adapter "github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/policy"
++	"github.com/blanketfish/port49/internal/projection"
++	"github.com/blanketfish/port49/internal/testpki"
 +)
 +
 +// TestProjectionDifferential is spec §8's differential test of decision

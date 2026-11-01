@@ -338,7 +338,7 @@ The owner's rule is to trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1778,8 +1778,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 const docPolicy = "scopes: [{name: all_devices, match: {}}]\n"
@@ -1975,9 +1975,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // DocumentFormat names the document's shape; Open refuses any other.
@@ -2384,9 +2384,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/yamlfault"
 )
 
 // SourceConfig is one entry of sync: (spec §10, "Connectors and sync
@@ -2650,7 +2650,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // maxVerifyKey bounds a verify key's read: a PEM ed25519 public key is 113
@@ -2715,7 +2715,7 @@ func TestAVerifyKeyOthersCouldWriteIsRefused(t *testing.T) {
 ```go
 package main
 
-import "github.com/rhwendt/port49/internal/fence"
+import "github.com/blanketfish/port49/internal/fence"
 
 // maxPolicySize bounds the policy file's read: a policy file is kilobytes,
 // and a link aimed at a multi-gigabyte file must not be read at every poll.
@@ -2861,9 +2861,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // Source is one source of truth the service syncs from (spec §10,
@@ -3001,8 +3001,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 func published(t *testing.T, key ed25519.PrivateKey, seq int64, devices ...string) Published {
@@ -3109,9 +3109,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // Published is one bundle the service published: the sealed bytes, and what
@@ -3366,8 +3366,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 const syncPolicy = `
@@ -3803,8 +3803,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // checkSafety refuses next (spec §10, "Bounded change per sync"): empty, or
@@ -3886,11 +3886,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // Outcomes of a sync.
@@ -4372,8 +4372,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 type apiRig struct {
@@ -4586,7 +4586,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 var errUntrusted = errors.New("no client certificate the trust anchor verified")
@@ -4654,7 +4654,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 // VersionInfo is GET /v1/bundle/version: what a daemon compares with what it
@@ -4905,8 +4905,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 type syncBuffer struct {
@@ -5114,10 +5114,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 func main() {
@@ -5326,7 +5326,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // clientFiles writes a certificate for l and the CA to files, as a deployment
@@ -5431,9 +5431,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const servicePolicy = `
@@ -5560,9 +5560,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // ErrNoBundle is the service answering that it has published none yet.
@@ -5835,7 +5835,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // loadService is the standing sample (config_test.go) with block appended:
@@ -6138,11 +6138,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // fakeService answers from a script; a nil entry fails as a dial does.
@@ -6482,10 +6482,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // fetchClient is what port49d asks the inventory service: the version, and
@@ -6827,13 +6827,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 var _ = engine.HashOf // Task 16's tests use it
@@ -7067,9 +7067,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // received is what the fetcher hands the reloader: a document opened, or one
@@ -7192,9 +7192,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // scriptService answers from fields a test sets, and counts what it was asked.
@@ -7950,13 +7950,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // e2ePolicy is both port49d's policy and the service's copy: they agree.
@@ -8385,8 +8385,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 const (
@@ -8740,9 +8740,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/policy"
 	"gopkg.in/yaml.v3"
 )
 

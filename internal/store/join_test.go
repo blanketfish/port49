@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 var t0 = time.Unix(1_757_041_495, 0)

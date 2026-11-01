@@ -108,7 +108,7 @@ hand to 7e.
     It refreshes nothing: carrying a policy into live contexts is the broker's.
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, no cgo.
+- Go 1.26, module `github.com/blanketfish/port49`, no cgo.
 - `go.etcd.io/etcd/client/v3` v3.6.15: watches (`Watch`, `WithRev`, `WithPrefix`,
   `WithPrevKV` is not used) and one-revision paged reads (`WithRev`). No new dependency.
 - containerlab on beehive for Task 17, with the five images L35 used.
@@ -1139,7 +1139,7 @@ in this plan, and the tests named pin it.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.26+ (etcd's floor, plan 7d), module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.26+ (etcd's floor, plan 7d), module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -2486,7 +2486,7 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // SupersededIsTheLaterAndExpires: a key's superseded instant is the later
@@ -2654,7 +2654,7 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // supersededRec is sp/<nas>/<user>, and meta/superseded_all for every key:
@@ -3666,7 +3666,7 @@ kept as a property of the new rule:
   	"sync"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ErrNotLastWritten is a context that opens at its key but is sealed below
@@ -4201,8 +4201,8 @@ Ruling 3's "every process follows the store's contexts":
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
   )
 
   // A scan reads every live context at one revision; a watch from it brings
@@ -4380,8 +4380,8 @@ Ruling 3's "every process follows the store's contexts":
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/memory"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/memory"
   )
 
   // feedOf is a ContextFeed over a memory store for these tests: a scan of
@@ -4662,7 +4662,7 @@ Ruling 3's "every process follows the store's contexts":
   	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // contextKeyOf is the ContextKey of a c/ key, false for one that does not
@@ -4808,7 +4808,7 @@ Ruling 3's "every process follows the store's contexts":
   	"errors"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // LoadLedger seeds l at a start (plan 7e, Rulings 3, 4): every mark the
@@ -5100,9 +5100,9 @@ Ruling 3's fence (pre-flight C1, the plan's one Critical).
 
   	"github.com/prometheus/client_golang/prometheus"
 
-  	"github.com/rhwendt/port49/internal/store"
-  	"github.com/rhwendt/port49/internal/store/guard"
-  	"github.com/rhwendt/port49/internal/store/memory"
+  	"github.com/blanketfish/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store/guard"
+  	"github.com/blanketfish/port49/internal/store/memory"
   )
 
   // fencedPair is twoProcesses with b's layer fenced, its feed attached at
@@ -5318,7 +5318,7 @@ Ruling 3's fence (pre-flight C1, the plan's one Critical).
   	"fmt"
   	"sync"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ErrFeedBehind is a context read whose record this process's context feed
@@ -6197,7 +6197,7 @@ with the broker's identity. In 7e-2 the runner does.
 
   	clientv3 "go.etcd.io/etcd/client/v3"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ledgerRec is lw/<nas>/<user> (plan 7e, Ruling 4): the highest write
@@ -6882,7 +6882,7 @@ test moves with its code and keeps its package-internal access.
   import (
   	"os"
 
-  	"github.com/rhwendt/port49/internal/port49d"
+  	"github.com/blanketfish/port49/internal/port49d"
   )
 
   func main() { os.Exit(port49d.Main(os.Args[1:])) }
@@ -7908,7 +7908,7 @@ Ruling 11.
   	"context"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // probe pings the store through the daemon's guard every every until ctx
@@ -8695,7 +8695,7 @@ and the offline revocation, each on this task's runner.
   import (
   	"os"
 
-  	"github.com/rhwendt/port49/internal/port49d"
+  	"github.com/blanketfish/port49/internal/port49d"
   )
 
   func main() { os.Exit(port49d.BrokerMain(os.Args[1:])) }

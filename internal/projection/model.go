@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // model is the device's decision under a reply, as spec §8 measured it: a

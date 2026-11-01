@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // seen is what the test server received of one request.

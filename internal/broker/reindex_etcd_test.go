@@ -11,11 +11,11 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/session"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	"github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/session"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	"github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // onEtcd puts f's broker on a member of its own, through the sealing

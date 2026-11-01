@@ -21,9 +21,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/rhwendt/port49"
-Repository = "https://github.com/rhwendt/port49"
-Issues = "https://github.com/rhwendt/port49/issues"
+Homepage = "https://github.com/blanketfish/port49"
+Repository = "https://github.com/blanketfish/port49"
+Issues = "https://github.com/blanketfish/port49/issues"
 
 [project.optional-dependencies]
 netmiko = ["netmiko>=4.7"]

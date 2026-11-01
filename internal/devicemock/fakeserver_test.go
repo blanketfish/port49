@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // fake is a test-only TACACS+ server: it answers each request type with a

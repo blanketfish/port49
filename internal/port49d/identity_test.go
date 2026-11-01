@@ -9,13 +9,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // identityCfg is broker.identity with a human and a machine verifier at

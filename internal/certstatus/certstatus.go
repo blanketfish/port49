@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Verdict is a certificate's status.

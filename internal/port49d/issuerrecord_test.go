@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // memRecorder is an issuerRecorder in memory with etcd's compare-and-swap:

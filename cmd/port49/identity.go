@@ -9,8 +9,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // identityCmd is `port49 identity` (spec §12): what the broker resolves the

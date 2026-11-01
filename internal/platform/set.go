@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/platforms"
+	"github.com/blanketfish/port49/platforms"
 )
 
 // DefaultSet is the newest set this build ships: what `port49 platform`

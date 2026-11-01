@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A directory login end to end on the compose stack (plan 7g, Task 18): the

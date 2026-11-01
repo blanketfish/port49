@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
-	"github.com/rhwendt/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/mfatouch"
 )
 
 // f9Label is libykcs11's label of the device attestation certificate.

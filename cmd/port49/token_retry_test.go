@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // fakeClock is a clock whose sleeps advance it and take no time; slept is

@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/sot"
 )
 
 const (

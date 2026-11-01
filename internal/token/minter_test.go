@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/store/storetest"
-	"github.com/rhwendt/port49/internal/username"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store/storetest"
+	"github.com/blanketfish/port49/internal/username"
 )
 
 // This file is `package token`, and it must stay importable: internal/username,

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // maxExplainCommand bounds a command explain is asked: a line a person

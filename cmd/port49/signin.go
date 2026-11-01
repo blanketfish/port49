@@ -22,11 +22,11 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/mfatouch"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // The directory sign-in's prompts, vars so a test drives them (plan 9e; spec

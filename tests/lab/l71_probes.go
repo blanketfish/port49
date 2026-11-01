@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 var optionWord = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)

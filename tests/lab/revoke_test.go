@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const revokeClaim = "A revocation by principal or by certificate (`port49 revoke` through the broker API under an on-call's api: rights and a press of their " +

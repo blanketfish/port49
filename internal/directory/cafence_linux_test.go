@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // broker.directory.ca_file names what the broker trusts to be the directory (a fake one would see every

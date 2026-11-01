@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // meta/issuer is written only over the revision read: two brokers recording

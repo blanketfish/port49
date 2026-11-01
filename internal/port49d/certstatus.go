@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/certstatus"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/certstatus"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // issuerFileMax bounds an issuer_file's read: one certificate is a few

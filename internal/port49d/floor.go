@@ -6,7 +6,7 @@ import (
 	"io"
 	"strings"
 
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // endpointVersions asks the members their versions; a variable so a test can

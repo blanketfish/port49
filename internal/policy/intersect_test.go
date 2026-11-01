@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // A permit the device refuses in its own parser at the session's level is

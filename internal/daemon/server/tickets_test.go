@@ -2,7 +2,7 @@ package server
 
 import (
 	"crypto/tls"
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 	"io"
 	"net"
 	"sync"
@@ -12,9 +12,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // firstTicket is a client session cache that keeps the first ticket it is

@@ -11,8 +11,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // judgeNow is one read as keep takes it: the record, then the read.

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func freshCredential(t *testing.T) []byte {

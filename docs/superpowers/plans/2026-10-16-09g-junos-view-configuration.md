@@ -41,7 +41,7 @@ the grant's own denies, so the reply is byte for byte the one L68 measured. Ever
 already does the right thing: the deny beneath the bit brings the entry denies, and the model
 predicts `show configuration` runs.
 
-**Tech Stack:** Go 1.26 (module `github.com/rhwendt/port49`), `internal/projection`,
+**Tech Stack:** Go 1.26 (module `github.com/blanketfish/port49`), `internal/projection`,
 `internal/platform`, `internal/policy`, `cmd/port49`; the containerlab Junos lab
 (`tests/lab`, build tag `lab`) on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15.
 
@@ -225,9 +225,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/projection"
+	"github.com/blanketfish/port49/internal/engine"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/projection"
 )
 
 // l68Shipped renders a juniper_junos composition at level on set version, as
@@ -500,7 +500,7 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
+	adapter "github.com/blanketfish/port49/internal/platform"
 )
 
 // TestL68ViewConfigurationCLI, TestL68ViewConfigurationNetconf and
@@ -1637,7 +1637,7 @@ git commit -m "docs: decision 48, set 1.3.0 sends view-configuration with its ot
 - [ ] **Step 1: Write the failing tests**
 
 In `internal/platform/adapter_test.go`, after `shipped120` (:178). The file lacks the `io/fs`
-import, and the test needs it: add it, with `strings` and `github.com/rhwendt/port49/platforms` if
+import, and the test needs it: add it, with `strings` and `github.com/blanketfish/port49/platforms` if
 they are missing too.
 
 ```go
@@ -2026,8 +2026,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 func denyCommands(res Result) string {

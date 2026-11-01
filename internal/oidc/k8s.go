@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/k8sid"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/k8sid"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // K8sBinding is what a verified service account token binds it to (spec

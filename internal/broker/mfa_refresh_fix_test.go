@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // bearerToken is who's ID token (alice or bob) with extra claims over it.

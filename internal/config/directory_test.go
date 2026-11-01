@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func writeTemp(t *testing.T, name string, body []byte) string { return write(t, name, string(body)) }

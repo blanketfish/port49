@@ -10,8 +10,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/secureenclave/secapi"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/secureenclave/secapi"
 )
 
 // Signer is one Secure Enclave key; it implements hwkey.Key. It holds the

@@ -17,11 +17,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/mfatouch"
-	"github.com/rhwendt/port49/internal/normal"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/normal"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Admin calls (spec §5.1.6; plan 12b task 3d): `port49 revoke` and `port49

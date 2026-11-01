@@ -17,12 +17,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/secretref"
-	"github.com/rhwendt/port49/internal/sot"
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/yamlfault"
 )
 
 // SourceConfig is one entry of sync: (spec §10, "Connectors and sync

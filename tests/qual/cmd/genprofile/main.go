@@ -16,7 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 // takes is the -take keys.

@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // shown is a mint response as a failure message may print it: the code is the

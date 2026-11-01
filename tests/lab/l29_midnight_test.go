@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 const l29MidnightClaim = "What a device does when port49d resets an open connection at its first packet past the " +

@@ -5,7 +5,7 @@ package clientkey
 import (
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // HasPKCS11 is whether this build carries the purego backends (the

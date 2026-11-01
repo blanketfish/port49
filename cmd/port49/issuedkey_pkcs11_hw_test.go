@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // tokenKey is a SoftHSM token with a key `%10` on it, as the user made once

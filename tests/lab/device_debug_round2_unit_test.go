@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // The fix round after the step 4b security review (review-step4b.md). Every

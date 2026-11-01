@@ -27,7 +27,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // getuid is os.Getuid, swapped in tests: no second uid exists to own a file.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // The keywords a device's lines type are derived from the lines, not listed:

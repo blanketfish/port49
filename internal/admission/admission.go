@@ -14,7 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/yamlfault"
 )
 
 // Transport is how a device speaks TACACS+ (spec §10: a device record MUST

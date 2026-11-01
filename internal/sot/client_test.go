@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/egress"
+	"github.com/blanketfish/port49/internal/egress"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 const token = "0123456789abcdef0123456789abcdef01234567"

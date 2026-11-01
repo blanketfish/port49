@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	"github.com/rhwendt/port49/internal/store/enrollfile"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	"github.com/blanketfish/port49/internal/store/enrollfile"
 )
 
 type countingCloser struct{ closed int }

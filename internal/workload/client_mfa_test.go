@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/hwfake"
-	"github.com/rhwendt/port49/internal/pivattest"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/hwfake"
+	"github.com/blanketfish/port49/internal/pivattest"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // needsProof answers the page as the broker does under a requirement on

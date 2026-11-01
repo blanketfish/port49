@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // TLS is the RFC 9887 listener's part of Deps (spec §13 decision 50). Serve

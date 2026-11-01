@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/yamlfault"
+	"github.com/blanketfish/port49/internal/yamlfault"
 )
 
 // Removal is what RemoveSubject took out of a policy file.

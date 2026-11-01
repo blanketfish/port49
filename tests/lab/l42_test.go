@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/directory"
 )
 
 const l42Claim = "For alice (alice ∈ g-leaf ∈ g-mid ∈ netops-oncall), carol (∈ netops-oncall directly) and " +

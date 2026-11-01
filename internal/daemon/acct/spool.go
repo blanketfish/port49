@@ -19,9 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 var ErrSpoolFull = errors.New("acct: spool full")

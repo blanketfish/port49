@@ -61,7 +61,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hwkey/secureenclave/secapi"
+	"github.com/blanketfish/port49/internal/hwkey/secureenclave/secapi"
 )
 
 // buildMark tells one build of this program from another: find-rebuilt sets
@@ -69,7 +69,7 @@ import (
 var buildMark = "first"
 
 // spikePackage is this program, which find-rebuilt builds again.
-const spikePackage = "github.com/rhwendt/port49/tests/spike/secureenclave"
+const spikePackage = "github.com/blanketfish/port49/tests/spike/secureenclave"
 
 // lockWait is how long the locked cells wait for the screen to be locked.
 const lockWait = 45 * time.Second

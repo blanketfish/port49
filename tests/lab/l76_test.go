@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // TestL76 measures Nokia SR Linux against port49 (spec §15 L76). It runs only

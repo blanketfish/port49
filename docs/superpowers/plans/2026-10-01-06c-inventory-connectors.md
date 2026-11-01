@@ -282,7 +282,7 @@ The owner's rule is to trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -776,7 +776,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // TLS serves h over TLS with a certificate for 127.0.0.1 from a CA made for
@@ -823,7 +823,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 const token = "0123456789abcdef0123456789abcdef01234567"
@@ -1075,7 +1075,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // maxResponse bounds one answer's body: a GraphQL page of page_size devices
@@ -2428,7 +2428,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 // replay is a client of a sottest.Server for stack with n devices, and the
@@ -2821,7 +2821,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 // L30: next is absolute and followed to null returns every device once, on
@@ -3441,8 +3441,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 // Mapping is how a source's devices become port49's (decision 31): which
@@ -3748,7 +3748,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/sot/sottest"
 )
 
 // source is a Source over a replay of stack, with m as its mapping.
@@ -3942,7 +3942,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // Config is one netbox or nautobot source as port49-inventory.yaml gives it;
@@ -4326,8 +4326,8 @@ func TestNewSourcesBuildsEachConfiguredSource(t *testing.T) {
 }
 ```
 
-  with `"io"`, `"github.com/rhwendt/port49/internal/sot"` and
-  `"github.com/rhwendt/port49/internal/sot/sottest"` imported.
+  with `"io"`, `"github.com/blanketfish/port49/internal/sot"` and
+  `"github.com/blanketfish/port49/internal/sot/sottest"` imported.
 
 - [ ] **Step 2: Run them.** `go test ./internal/inventory/ -run 'Netbox|Secret|Webhook|Spec|NewSources|CannotRun' -count=1`
   Expected: FAIL (`NewSources` takes one argument; `SourceConfig` has no `URL`; …).
@@ -4693,8 +4693,8 @@ func (c Config) WebhookSecrets() map[string][]byte {
 }
 ```
 
-  Add `"os"`, `"sort"`, `"github.com/rhwendt/port49/internal/bundle"` and
-  `"github.com/rhwendt/port49/internal/sot"` to the imports. `Load`'s loop variable `err` is the
+  Add `"os"`, `"sort"`, `"github.com/blanketfish/port49/internal/bundle"` and
+  `"github.com/blanketfish/port49/internal/sot"` to the imports. `Load`'s loop variable `err` is the
   function's; if the compiler says `conn, err = …` shadows nothing, keep it; if it reports `err`
   undeclared in that scope, declare `var err error` before the loop.
 
@@ -4726,7 +4726,7 @@ func NewSources(cfgs []SourceConfig, log io.Writer) ([]Source, error) {
 }
 ```
 
-  with `"io"` and `"github.com/rhwendt/port49/internal/sot"` imported. In
+  with `"io"` and `"github.com/blanketfish/port49/internal/sot"` imported. In
   `cmd/port49-inventory/main.go`, change `newSources(cfg.Sync)` to `newSources(cfg.Sync, stderr)`;
   in `main_test.go`, change the swapped function's signature to
   `func([]inventory.SourceConfig, io.Writer) ([]inventory.Source, error)`.
@@ -5082,7 +5082,7 @@ func (s *Syncer) sayGeneric(res Result) {
 ```
 
   A platform name reaches a line only once `bundle.DeviceProblem` has passed it (printable ASCII, no
-  space), so it is printed as it is. `sync.go` imports `github.com/rhwendt/port49/internal/sot` for
+  space), so it is printed as it is. `sync.go` imports `github.com/blanketfish/port49/internal/sot` for
   `PlatformNameShape` (Task 9 already made `internal/inventory` depend on it).
 
 - [ ] **Step 6: `inventory sync` prints them.** In `cmd/port49/inventory.go`'s `printResult`, in the
@@ -5234,8 +5234,8 @@ key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
 }
 ```
 
-  with `"fmt"`, `"net/netip"`, `"strings"`, `"github.com/rhwendt/port49/internal/admission"` and
-  `"github.com/rhwendt/port49/internal/policy"` imported where the file lacks them.
+  with `"fmt"`, `"net/netip"`, `"strings"`, `"github.com/blanketfish/port49/internal/admission"` and
+  `"github.com/blanketfish/port49/internal/policy"` imported where the file lacks them.
 
 - [ ] **Step 2: Run them.** `go test ./internal/bundle/ ./internal/inventory/ -run 'NoAddress|StripsEveryAddress' -count=1`
   Expected: FAIL (undefined: `Unaddressed`; the strip publishes).
@@ -6243,7 +6243,7 @@ func TestAWebhookTriggersASyncOfItsSource(t *testing.T) {
 ```
 
   with `"bytes"`, `"crypto/hmac"`, `"crypto/sha512"`, `"encoding/hex"` and
-  `"github.com/rhwendt/port49/internal/sot/sottest"` added to its imports.
+  `"github.com/blanketfish/port49/internal/sot/sottest"` added to its imports.
 
 - [ ] **Step 2: Run them.** `go test ./internal/inventory/ ./cmd/port49-inventory/ -run 'Burst|Flood|During|Unknown|Webhook' -count=1`
   Expected: FAIL (undefined: `NewDebouncer`, `webhookSettle`, `onWebhook`).
@@ -6704,8 +6704,8 @@ func TestInventoryExportFromChecksTheSequence(t *testing.T) {
 }
 ```
 
-  with `"github.com/rhwendt/port49/internal/admission"`, `"github.com/rhwendt/port49/internal/bundle"`
-  and `"github.com/rhwendt/port49/internal/keyfile"` imported.
+  with `"github.com/blanketfish/port49/internal/admission"`, `"github.com/blanketfish/port49/internal/bundle"`
+  and `"github.com/blanketfish/port49/internal/keyfile"` imported.
 
 - [ ] **Step 2: Run them.** `go test ./internal/admission/ ./internal/inventory/ ./cmd/port49/ -run 'Encoded|History|Export' -count=1`
   Expected: FAIL (undefined: `EncodeFile`; `/v1/bundle?sequence=1` serves the published bundle; no
@@ -6983,7 +6983,7 @@ func writeNew(path string, body []byte) error {
 }
 ```
 
-  with `"github.com/rhwendt/port49/internal/admission"` imported. In `cmd/port49/main.go`'s usage
+  with `"github.com/blanketfish/port49/internal/admission"` imported. In `cmd/port49/main.go`'s usage
   text, after the `port49 inventory sync …` line, add:
 
 ```
@@ -7066,7 +7066,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 func main() {
@@ -7275,7 +7275,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/sot"
 )
 
 // l32Record is one stack's L32 run: what `next` named through each proxy,
@@ -8036,7 +8036,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // l33Record is one stack's L33 run.

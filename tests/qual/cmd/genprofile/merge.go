@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 // goldenReactions names, per golden scenario, the reactions that explain a

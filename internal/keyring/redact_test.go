@@ -10,8 +10,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/secretref"
-	"github.com/rhwendt/port49/internal/secretref/secretreftest"
+	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref/secretreftest"
 )
 
 // A Version prints no key bytes under any verb or as JSON, in any spelling

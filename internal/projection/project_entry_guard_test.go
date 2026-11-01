@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // carvedInput is a readonly granted `show **` less the denies, on a tree that

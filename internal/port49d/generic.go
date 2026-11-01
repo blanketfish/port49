@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // genericRecorder writes a generic_platform record for each admitted device

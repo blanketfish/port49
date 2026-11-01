@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // maxLogoutBody bounds a logout request: a logout token is a few hundred

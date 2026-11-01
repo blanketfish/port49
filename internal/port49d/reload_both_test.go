@@ -13,8 +13,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/edkey"
 )
 
 // deviceAt is an arista_eos device on TCP at addr, for a document's extra

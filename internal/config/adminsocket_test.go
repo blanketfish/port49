@@ -64,7 +64,7 @@ func TestNoAdminSocketRemains(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "internal", "daemon", "admin")); err == nil {
 		t.Error("internal/daemon/admin is still there")
 	}
-	importLine := `"github.com/rhwendt/port49/internal/` + `daemon/admin"`
+	importLine := `"github.com/blanketfish/port49/internal/` + `daemon/admin"`
 	for _, top := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") {

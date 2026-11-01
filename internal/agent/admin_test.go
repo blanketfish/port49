@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // The agent makes admin calls (spec §5.1.6; plan 12b task 3d): it derives the

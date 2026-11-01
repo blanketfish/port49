@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/brokercrl"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/brokercrl"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // tokenFailure is `port49 token --json`'s stdout on a failure (decision 46

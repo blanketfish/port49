@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/clientkey"
 )
 
 // pinHelp is what Ryan is told before a prompt that wants their PIN.

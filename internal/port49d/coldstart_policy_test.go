@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 // sealedDocOn is sealedDocAt with its n devices on first.0.0.i, so a test can

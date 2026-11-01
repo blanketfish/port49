@@ -28,17 +28,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/pivattest"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/pivattest"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // Yubico's PIV attestation extensions, as pivattest reads them.

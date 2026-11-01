@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/shapes/l84"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/shapes/l84"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 // TestL84Credentials is spec §15 L84 cell (a) and its (c): systemd LoadCredential= against

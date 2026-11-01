@@ -428,7 +428,7 @@ The owner's rule is to trace a mechanism on a bad day first.
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1177,7 +1177,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"strings"
   	"testing"
 
-  	"github.com/rhwendt/port49/internal/fence"
+  	"github.com/blanketfish/port49/internal/fence"
   )
 
   // init runs as the revocations directory's owner, port49d's user, or not
@@ -1551,7 +1551,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"os/user"
   	"strconv"
 
-  	"github.com/rhwendt/port49/internal/fence"
+  	"github.com/blanketfish/port49/internal/fence"
   )
 
   // initOwner refuses `port49d init-revocations` run by anyone but the owner
@@ -1616,7 +1616,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   }
   ```
 
-  Add `flag`, `io` and `github.com/rhwendt/port49/internal/config` to `revocations.go`'s imports.
+  Add `flag`, `io` and `github.com/blanketfish/port49/internal/config` to `revocations.go`'s imports.
 
 - [ ] **Step 5: `main` dispatches it, refuses a stray argument, and the start line.** In
   `cmd/port49d/main.go`:
@@ -1995,9 +1995,9 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/broker/api"
-  	"github.com/rhwendt/port49/internal/decision"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // /v1/identity answers the caller with its subject, its grants, its rights
@@ -2326,8 +2326,8 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"slices"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/broker/api"
-  	"github.com/rhwendt/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/decision"
   )
 
   // identity is GET /v1/identity (design §17): what the policy in force
@@ -2430,7 +2430,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"strings"
   	"testing"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // brokenStore fails every call it is asked, so a test can see that nothing
@@ -2799,7 +2799,7 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
 
   	"github.com/prometheus/client_golang/prometheus/testutil"
 
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // Two principals under one subject share its username, so their tokens
@@ -3239,8 +3239,8 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"fmt"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/decision"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // ownRevokeTries bounds how often a self-revocation reads a context again
@@ -3509,8 +3509,8 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/broker/api"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   func (f *fixture) revokeAs(t *testing.T, email, body string) *httptest.ResponseRecorder {
@@ -3815,10 +3815,10 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"strings"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/broker/api"
-  	"github.com/rhwendt/port49/internal/decision"
-  	"github.com/rhwendt/port49/internal/policy"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/policy"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // maxDeviceUsername bounds a device-facing username a request names: a
@@ -4172,9 +4172,9 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/broker/api"
-  	"github.com/rhwendt/port49/internal/policy"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/policy"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // explainPolicy is testPolicy with an on-call who may explain others,
@@ -4542,10 +4542,10 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"net/http"
   	"strings"
 
-  	"github.com/rhwendt/port49/internal/broker/api"
-  	"github.com/rhwendt/port49/internal/decision"
-  	"github.com/rhwendt/port49/internal/policy"
-  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/blanketfish/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/decision"
+  	"github.com/blanketfish/port49/internal/policy"
+  	"github.com/blanketfish/port49/internal/store"
   )
 
   // maxExplainCommand bounds a command explain is asked: a line a person
@@ -5631,8 +5631,8 @@ Every other `cmd/port49d` test that starts port49d with a broker builds its conf
   	"io"
   	"strings"
 
-  	"github.com/rhwendt/port49/internal/agent"
-  	"github.com/rhwendt/port49/internal/broker/api"
+  	"github.com/blanketfish/port49/internal/agent"
+  	"github.com/blanketfish/port49/internal/broker/api"
   )
 
   // identityCmd is `port49 identity` (spec §12): what the broker resolves the
@@ -6124,7 +6124,7 @@ it as claimed.
   	"testing"
   	"time"
 
-  	"github.com/rhwendt/port49/internal/testpki"
+  	"github.com/blanketfish/port49/internal/testpki"
   )
 
   const (

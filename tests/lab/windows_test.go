@@ -41,8 +41,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The Windows Server AD lab (L44): Windows Server 2025 Standard Evaluation as a

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/issuer"
 )
 
 // The fixed fakes these tests type. A failure names the case, never the value.

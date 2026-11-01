@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // inventory is the devices the policy tests load against: one of each

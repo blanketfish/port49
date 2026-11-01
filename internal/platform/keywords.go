@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/platforms"
+	"github.com/blanketfish/port49/platforms"
 )
 
 // MaxKeywordNodes and MaxKeywordBytes bound a keyword tree: the lab's capture

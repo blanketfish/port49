@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // ownRevokeTries bounds how often a self-revocation reads a context again

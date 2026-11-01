@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // predictInput is a readonly granted `show **` less `show security **`, whose

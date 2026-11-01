@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // selects reports whether the scope selects the device (spec §5.5): every

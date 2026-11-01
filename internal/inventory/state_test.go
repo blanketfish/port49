@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 func published(t *testing.T, key ed25519.PrivateKey, seq int64, devices ...string) Published {

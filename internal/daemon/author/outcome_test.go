@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // A record the sealing layer cannot open is not a store outage, and the

@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // rfcExample is one RFC example: its public key as a JWK and its JWS.

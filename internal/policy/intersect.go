@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // The intersection checks of spec §12: the effective permission set is what

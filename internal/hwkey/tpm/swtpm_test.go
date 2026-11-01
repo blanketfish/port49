@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
 )
 
 func TestATPMKeySignsAndSurvivesAReopen(t *testing.T) {

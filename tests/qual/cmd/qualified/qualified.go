@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/devicemock"
 )
 
 const header = `# Qualified platforms

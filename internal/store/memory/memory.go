@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 type Store struct {

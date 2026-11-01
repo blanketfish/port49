@@ -18,10 +18,10 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const storeClaim = "When port49d's store hangs (etcd cut off from port49d), port49d answers a command FAIL " +

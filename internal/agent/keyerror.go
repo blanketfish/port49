@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // KeyError is a failed use of the session's hardware key: a touch that did

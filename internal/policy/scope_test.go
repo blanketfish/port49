@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 func deviceNamed(t *testing.T, name string) admission.Device {

@@ -12,7 +12,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // An issuer no source covers is said in the words port49 workload keys on to

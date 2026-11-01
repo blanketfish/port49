@@ -15,13 +15,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/mfatouch"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/mfatouch"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // signInFixture makes the sign-in runnable at a terminal against m: a

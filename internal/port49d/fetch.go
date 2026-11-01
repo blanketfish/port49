@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/inventory"
 )
 
 // received is what the fetcher hands the reloader: a document opened, or one

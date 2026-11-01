@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // fakeTPM is a TPM that opens and answers nothing.

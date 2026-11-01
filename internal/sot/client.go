@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/egress"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/egress"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // maxResponse bounds one answer's body: a GraphQL page of page_size devices

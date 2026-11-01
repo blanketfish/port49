@@ -23,7 +23,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // Version is the blob format this package writes and the only one it reads.

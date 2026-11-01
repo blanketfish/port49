@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // labPair is a certificate and its key as bytes, from the lab PKI.

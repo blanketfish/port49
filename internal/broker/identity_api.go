@@ -6,8 +6,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // identity is GET /v1/identity (design §17): what the policy in force

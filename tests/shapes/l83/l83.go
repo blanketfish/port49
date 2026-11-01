@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/tests/shapes/l82"
+	"github.com/blanketfish/port49/tests/shapes/l82"
 )
 
 // The mechanisms.

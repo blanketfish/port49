@@ -14,12 +14,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // silentEndpoint is a host:port that accepts TCP and never speaks: a member

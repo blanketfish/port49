@@ -29,8 +29,8 @@ import (
 	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A simple bind's password and a keytab's bytes never appear in any

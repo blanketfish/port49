@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // lockedBuffer is what the self-test's port49 children write, read after.

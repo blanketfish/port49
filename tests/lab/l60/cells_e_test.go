@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // Cell (e): the unplug. A mint on the held connection, `port49 refresh`

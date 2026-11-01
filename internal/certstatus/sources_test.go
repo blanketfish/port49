@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // renewed is ca's certificate reissued: same name, same key, other serial.

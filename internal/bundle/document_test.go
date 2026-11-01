@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 const docPolicy = "scopes: [{name: all_devices, match: {}}]\n"

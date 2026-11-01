@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // L76 measures Nokia SR Linux against port49 over plain TACACS+ (spec §15).

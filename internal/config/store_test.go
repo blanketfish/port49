@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // storeFiles writes a CA and two identities' files, mode 0600, and

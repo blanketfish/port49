@@ -19,15 +19,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
-	"github.com/rhwendt/port49/internal/hwkey/secureenclave"
-	"github.com/rhwendt/port49/internal/hwkey/tpm"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/hwkey/secureenclave"
+	"github.com/blanketfish/port49/internal/hwkey/tpm"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // The stores a sign-in's key can go into (decision 45 ruling 7).

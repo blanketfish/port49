@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // ReadIDToken checks what a public client checks (decision 43 ruling 6), and

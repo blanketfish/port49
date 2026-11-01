@@ -9,7 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // restoreGuard is port49d's half of the restore witness (plan 7e, Task

@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/spiffe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 type Source string

@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/config"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/config"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // storeRolesCmd is `port49d store-roles [--config FILE] [--broker-config

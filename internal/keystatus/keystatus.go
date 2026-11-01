@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // Device is an inventory device and the key_ref it is assigned.

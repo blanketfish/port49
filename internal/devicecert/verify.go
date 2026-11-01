@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // Status is a verified chain's revocation status.

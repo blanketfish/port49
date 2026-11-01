@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Processes is two store.Store over one keyspace, as two port49-broker

@@ -15,10 +15,10 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/clientkey"
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/clientkey"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
 )
 
 // maxPIN is the longest PIN port49 takes: a token's own limit is lower.

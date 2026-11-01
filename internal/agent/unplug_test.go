@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // dropHeldConnection makes the next ask dial: the broker closes the held

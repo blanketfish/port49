@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/projection"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/projection"
 )
 
 // Diff is the effective-permission diff between two versions of a policy

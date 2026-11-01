@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // tls_listener.key_file is read under the secret-file rule (decision 54 ruling 16): a key others can

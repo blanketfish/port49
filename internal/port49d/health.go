@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
 )
 
 // health is port49d's store health check on etcd (plan 7f; spec §13,

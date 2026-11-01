@@ -17,12 +17,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/session"
-	"github.com/rhwendt/port49/internal/store"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/session"
+	"github.com/blanketfish/port49/internal/store"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
 
 // The decision reads the witness's ModRevision alone: a restored key

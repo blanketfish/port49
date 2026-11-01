@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/bundle"
 )
 
 var errUntrusted = errors.New("no client certificate the trust anchor verified")

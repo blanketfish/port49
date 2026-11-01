@@ -24,13 +24,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/totp"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/totp"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // The directory sign-in's 3am cases, end to end: the real port49 CLI against

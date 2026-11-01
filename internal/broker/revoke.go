@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/k8sid"
-	"github.com/rhwendt/port49/internal/normal"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/spiffe"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/k8sid"
+	"github.com/blanketfish/port49/internal/normal"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // ErrBadRevocation is a revocation that names neither a principal nor a

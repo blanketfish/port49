@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 type entry struct{ mode, owner string }

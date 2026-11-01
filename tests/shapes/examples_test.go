@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // The systemd roots the shipped files name, each moved under a temporary

@@ -18,13 +18,13 @@ import (
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/session"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	"github.com/rhwendt/port49/internal/store/enrollfile"
-	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/store/storetest"
+	"github.com/blanketfish/port49/internal/session"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	"github.com/blanketfish/port49/internal/store/enrollfile"
+	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/store/storetest"
 )
 
 func TestMain(m *testing.M) { os.Exit(etcdtest.Main(m)) }

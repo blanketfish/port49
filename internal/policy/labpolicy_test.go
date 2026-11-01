@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // The lab's policy is loaded by a daemon only inside `make lab`. Loading it here,

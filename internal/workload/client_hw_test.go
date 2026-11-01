@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/hwkey"
-	"github.com/rhwendt/port49/internal/hwkey/hwtest"
-	"github.com/rhwendt/port49/internal/hwkey/pkcs11"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/hwkey/hwtest"
+	"github.com/blanketfish/port49/internal/hwkey/pkcs11"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // SoftHSM2 reads SOFTHSM2_CONF once, at C_Initialize: one configuration and

@@ -15,12 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/sot"
 )
 
 // Outcomes of a sync.

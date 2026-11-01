@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/rhwendt/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/agent"
 )
 
 // The CLI and the agent share one word for a blocked key.

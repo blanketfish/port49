@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/kind/kindtest"
-	"github.com/rhwendt/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/kind/kindtest"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 func sha(path string) string {
@@ -253,7 +253,7 @@ func (s *smoke) example(path string, repl ...string) string {
 	s.t.Helper()
 	body := readFile(s.t, path)
 	body = strings.ReplaceAll(body, "port49-etcd.svc", ns+".svc")
-	body = strings.ReplaceAll(body, "ghcr.io/rhwendt/port49:0.1.0", "port49:dev")
+	body = strings.ReplaceAll(body, "ghcr.io/blanketfish/port49:0.1.0", "port49:dev")
 	body = strings.ReplaceAll(body, "{name: port49-broker}", "{name: "+release+"-broker}")
 	for i := 0; i+1 < len(repl); i += 2 {
 		body = strings.ReplaceAll(body, repl[i], repl[i+1])

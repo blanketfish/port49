@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // L48 (policy engine spec §15): a workload CA's behaviour with port49's

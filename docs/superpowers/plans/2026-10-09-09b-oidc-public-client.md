@@ -153,7 +153,7 @@ What 9b builds:
   L55, and `make lab-oidc-agent` runs L56.
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, **no cgo**, and **no new module in the build graph**.
+- Go 1.26, module `github.com/blanketfish/port49`, **no cgo**, and **no new module in the build graph**.
   - The standard library does the HTTP, the PKCE hash, the loopback listener, the key, the CSR and
     the certificates.
   - `golang.org/x/term` (direct since 9a) reads the paste with echo off.
@@ -601,7 +601,7 @@ closes.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
   module in the build graph**: `go.mod` and `go.sum` are unchanged.
 - snake_case everywhere it is data: `certificate_lifetime`, `issuance`,
   `certificate_lifetime_seconds`, `csr`, `certificate`, `principal`, `serial`, `not_after`,
@@ -2044,8 +2044,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // ReadIDToken checks what a public client checks (decision 43 ruling 6), and
@@ -2152,8 +2152,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 )
 
 // provider is iss as port49-cli's provider, with an authorization server
@@ -2458,8 +2458,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // maxBody bounds a discovery document and a token response.
@@ -3013,7 +3013,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // SignInWait is how long a sign-in waits for the browser, and how old a
@@ -4044,15 +4044,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/certstatus"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/certstatus"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/directory"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // withIssuance gives f's broker an issuing CA (plan 9b) beside withOIDC's
@@ -4339,10 +4339,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // personBearerText answers a person's ID token at a broker that issues
@@ -4415,7 +4415,7 @@ func (b *Broker) issuedLoggedOut(w http.ResponseWriter, r *http.Request, event, 
 
 In `internal/broker/broker.go`:
 
-- Add `"github.com/rhwendt/port49/internal/issuer"` to the imports, and in `Broker`, before the
+- Add `"github.com/blanketfish/port49/internal/issuer"` to the imports, and in `Broker`, before the
   comment that begins `// Workload is the workload certificate verifier`, add:
 
   ```go
@@ -4547,7 +4547,7 @@ In `internal/broker/broker.go`:
 
 In `internal/broker/workload.go`:
 
-- Add `"github.com/rhwendt/port49/internal/oidc"` to the imports, and in `CertCaller`, after
+- Add `"github.com/blanketfish/port49/internal/oidc"` to the imports, and in `CertCaller`, after
   `Leaf   *x509.Certificate`, add:
 
   ```go
@@ -4820,12 +4820,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 func newECKey(t *testing.T) *ecdsa.PrivateKey {
@@ -5280,11 +5280,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // issueFresh is how long after the provider authenticated the person a
@@ -5515,8 +5515,8 @@ the operator notes say every broker on one store configures `issuance` alike.)
 the certificate too, and on a broker that issues it names the shorter path: revoke the sign-in's
 certificates by serial, then lift after `max_token_age`.
 
-- Add `"github.com/rhwendt/port49/internal/issuer"` to the imports, after
-  `"github.com/rhwendt/port49/internal/decision"`.
+- Add `"github.com/blanketfish/port49/internal/issuer"` to the imports, after
+  `"github.com/blanketfish/port49/internal/decision"`.
 - Replace
 
   ```go
@@ -5727,12 +5727,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // stateDir is a broker state directory as port49 keeps one: 0700, whatever
@@ -5952,7 +5952,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A bundle is CAs alone, at most MaxCABundleCerts of them in at most
@@ -6017,7 +6017,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // GET /v1/config carries the CA bundle the broker was given, no field at all
@@ -6063,8 +6063,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The bundle GET /v1/config sends: sent when it holds the server
@@ -6162,7 +6162,7 @@ type Issuance struct {
 
 In `internal/config/identity.go`:
 
-- Add `"github.com/rhwendt/port49/internal/issuer"` to the imports.
+- Add `"github.com/blanketfish/port49/internal/issuer"` to the imports.
 - In `identityYAML`, replace
 
   ```go
@@ -6247,10 +6247,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/keyfile"
 )
 
 // issuerFiles reads the issuing CA's files in dir (spec §13 decision 43
@@ -6746,7 +6746,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // loadCABundle is broker.tls_ca_bundle_file's CAs, PEM, which GET
@@ -7053,10 +7053,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidcclient"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidcclient"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // A browser is launched only where one can be seen (decision 43 ruling 5).
@@ -7229,12 +7229,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/oidc/oidctest"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // oidcLab is a real OIDC-only broker (newLabBrokerWith), issuing when
@@ -7828,13 +7828,13 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/internal/oidcclient"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/oidcclient"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
@@ -8670,8 +8670,8 @@ func newLabBroker(t *testing.T, maxAge time.Duration) *labBroker {
 }
 ```
 
-and add `"github.com/rhwendt/port49/internal/issuer"`,
-`"github.com/rhwendt/port49/internal/oidc"` and `"github.com/rhwendt/port49/internal/oidc/oidctest"`
+and add `"github.com/blanketfish/port49/internal/issuer"`,
+`"github.com/blanketfish/port49/internal/oidc"` and `"github.com/blanketfish/port49/internal/oidc/oidctest"`
 to the imports. In the renamed body, with `iss` not nil the broker is OIDC-only on iss (decision 39),
 issuing with `issue` (decision 43), the seeded context is indexed by principal alone, and the
 listener is wired as port49d wires it:
@@ -8945,7 +8945,7 @@ func TestAConfigAtPlan9asPlaceIsRefused(t *testing.T) {
 }
 ```
 
-In `cmd/port49/config_test.go`, add `"github.com/rhwendt/port49/internal/userconfig"` to the
+In `cmd/port49/config_test.go`, add `"github.com/blanketfish/port49/internal/userconfig"` to the
 imports, after `internal/testpki`. Then replace `TestLoginTakesWhatItLacksFromTheConfigFile` whole,
 from its comment to its closing brace:
 
@@ -9126,9 +9126,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 const bundleBroker = "https://broker.example:8443"
@@ -9387,9 +9387,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 ```
 
@@ -9838,7 +9838,7 @@ with
 	}
 ```
 
-In `cmd/port49/main_test.go`, add `"github.com/rhwendt/port49/internal/userconfig"` to the imports,
+In `cmd/port49/main_test.go`, add `"github.com/blanketfish/port49/internal/userconfig"` to the imports,
 after `internal/token`. After `const runCLIEnv = "PORT49_TEST_RUN_CLI"`, add:
 
 ```go
@@ -10092,8 +10092,8 @@ import (
 	"os"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // keepCABundle keeps the CA bundle the broker sent on the connection the
@@ -10731,8 +10731,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 const l56Claim = "Port49-issued certificates end to end on Keycloak and one device (plan 9b), with the real port49 " +

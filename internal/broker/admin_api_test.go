@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/crypt"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // The admin endpoints (plan 12b, task 3c; spec §2, §5.1.4, §5.1.6): each

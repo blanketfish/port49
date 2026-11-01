@@ -30,11 +30,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/edkey"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/sot/sottest"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/sot/sottest"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 type syncBuffer struct {

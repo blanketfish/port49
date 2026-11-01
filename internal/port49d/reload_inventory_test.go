@@ -14,12 +14,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // An inventory edit is loaded once two reads agree, as a policy edit is, and

@@ -1,4 +1,4 @@
-module github.com/rhwendt/port49
+module github.com/blanketfish/port49
 
 go 1.26
 

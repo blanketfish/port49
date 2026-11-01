@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
-	"github.com/rhwendt/port49/internal/issuer"
-	"github.com/rhwendt/port49/internal/k8sid"
-	"github.com/rhwendt/port49/internal/oidc"
-	"github.com/rhwendt/port49/internal/spiffe"
+	"github.com/blanketfish/port49/internal/issuer"
+	"github.com/blanketfish/port49/internal/k8sid"
+	"github.com/blanketfish/port49/internal/oidc"
+	"github.com/blanketfish/port49/internal/spiffe"
 )
 
 // workloadDirectoryYAML is an x509 machine verifier's directory: (plan 8b;

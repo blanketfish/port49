@@ -242,7 +242,7 @@ None of these blocks a task; each has a recommendation the plan implements as wr
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.22+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.
@@ -1128,8 +1128,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // flakySink refuses every record while down, and records what it took.
@@ -2498,7 +2498,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // program compiles a blob from "permit rule" and "deny rule" lines, one role
@@ -2741,7 +2741,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 // Program is a blob with its terms parsed and its patterns compiled, ready to
@@ -3379,7 +3379,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // inventory is the devices the policy tests load against: one of each
@@ -3745,10 +3745,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/token"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // Env is what a policy is loaded against. The joint checks of spec §6 and §10
@@ -4562,7 +4562,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 func deviceNamed(t *testing.T, name string) admission.Device {
@@ -4730,7 +4730,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // selects reports whether the scope selects the device (spec §5.5): every
@@ -4980,8 +4980,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 var noon = time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
@@ -5237,10 +5237,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // ErrNoGrants is no_grants_matched: no subject lists the principal, or no
@@ -5795,9 +5795,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // spec11Env is the corpus's environment: its own inventory file, and the
@@ -6097,8 +6097,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Finding is something CI reports about a policy that loads: not an error,
@@ -6245,10 +6245,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // CommandRaw is the authorization request a device sends for a typed command
@@ -6443,13 +6443,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // eosBlob is a compiled blob for arista_eos in the shape the broker writes.
@@ -6835,7 +6835,7 @@ index 9f27a7b..c2325c3 100644
 --- a/internal/daemon/author/author.go
 +++ b/internal/daemon/author/author.go
 @@ -18,18 +18,31 @@ import (
- 	"github.com/rhwendt/port49/internal/tacacs/wire"
+ 	"github.com/blanketfish/port49/internal/tacacs/wire"
  )
  
 -// Decision is what an Authorizer returns; the policy engine (plan 4)
@@ -6915,8 +6915,8 @@ index c2115bf..e47830e 100644
 @@ -5,12 +5,14 @@ import (
  	"strings"
  
- 	"github.com/rhwendt/port49/internal/decision"
--	"github.com/rhwendt/port49/internal/store"
+ 	"github.com/blanketfish/port49/internal/decision"
+-	"github.com/blanketfish/port49/internal/store"
  )
  
 -// Lab is the authorizer used before the policy engine exists (plan 4). It
@@ -7058,10 +7058,10 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Engine is the daemon's Authorizer: it answers from the compiled blob a
@@ -7284,9 +7284,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // refusingSink refuses blob records while down and passes everything else.
@@ -7400,15 +7400,15 @@ index e77fa95..6354f8d 100644
 +++ b/internal/broker/fixture_test.go
 @@ -20,15 +20,17 @@ import (
  
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/broker/api"
--	"github.com/rhwendt/port49/internal/broker/policy"
- 	"github.com/rhwendt/port49/internal/daemon/metrics"
- 	"github.com/rhwendt/port49/internal/decision"
-+	"github.com/rhwendt/port49/internal/policy"
- 	"github.com/rhwendt/port49/internal/store/memory"
- 	"github.com/rhwendt/port49/internal/testpki"
- 	"github.com/rhwendt/port49/internal/token"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/broker/api"
+-	"github.com/blanketfish/port49/internal/broker/policy"
+ 	"github.com/blanketfish/port49/internal/daemon/metrics"
+ 	"github.com/blanketfish/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/policy"
+ 	"github.com/blanketfish/port49/internal/store/memory"
+ 	"github.com/blanketfish/port49/internal/testpki"
+ 	"github.com/blanketfish/port49/internal/token"
  )
  
  const testPolicy = `
@@ -7457,9 +7457,9 @@ index 154c94e..6efe116 100644
  	"testing"
  	"time"
  
--	"github.com/rhwendt/port49/internal/broker/policy"
-+	"github.com/rhwendt/port49/internal/policy"
- 	"github.com/rhwendt/port49/internal/testpki"
+-	"github.com/blanketfish/port49/internal/broker/policy"
++	"github.com/blanketfish/port49/internal/policy"
+ 	"github.com/blanketfish/port49/internal/testpki"
  )
  
 @@ -152,6 +152,8 @@ func TestAPrincipalMatchesItsPolicyIdentity(t *testing.T) {
@@ -7492,12 +7492,12 @@ index 0ebd913..88cbe65 100644
  
  	"github.com/prometheus/client_golang/prometheus/testutil"
  
--	"github.com/rhwendt/port49/internal/blob"
- 	"github.com/rhwendt/port49/internal/broker/api"
- 	"github.com/rhwendt/port49/internal/decision"
-+	"github.com/rhwendt/port49/internal/engine"
- 	"github.com/rhwendt/port49/internal/store"
- 	"github.com/rhwendt/port49/internal/token"
+-	"github.com/blanketfish/port49/internal/blob"
+ 	"github.com/blanketfish/port49/internal/broker/api"
+ 	"github.com/blanketfish/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/engine"
+ 	"github.com/blanketfish/port49/internal/store"
+ 	"github.com/blanketfish/port49/internal/token"
  )
 @@ -84,10 +84,10 @@ func TestTheBlobIsWrittenAndEmittedOncePerHash(t *testing.T) {
  	}
@@ -7583,7 +7583,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/admission"
 )
 
 // The lab's policy is loaded by a daemon only inside `make lab`. Loading it here,
@@ -7660,16 +7660,16 @@ index 0a195ce..d34cfd4 100644
 @@ -27,11 +27,11 @@ import (
  	"time"
  
- 	"github.com/rhwendt/port49/internal/admission"
--	"github.com/rhwendt/port49/internal/blob"
- 	"github.com/rhwendt/port49/internal/broker/api"
--	"github.com/rhwendt/port49/internal/broker/policy"
- 	"github.com/rhwendt/port49/internal/daemon/metrics"
- 	"github.com/rhwendt/port49/internal/decision"
-+	"github.com/rhwendt/port49/internal/engine"
-+	"github.com/rhwendt/port49/internal/policy"
- 	"github.com/rhwendt/port49/internal/store"
- 	"github.com/rhwendt/port49/internal/token"
+ 	"github.com/blanketfish/port49/internal/admission"
+-	"github.com/blanketfish/port49/internal/blob"
+ 	"github.com/blanketfish/port49/internal/broker/api"
+-	"github.com/blanketfish/port49/internal/broker/policy"
+ 	"github.com/blanketfish/port49/internal/daemon/metrics"
+ 	"github.com/blanketfish/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/policy"
+ 	"github.com/blanketfish/port49/internal/store"
+ 	"github.com/blanketfish/port49/internal/token"
  )
 @@ -221,10 +221,23 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
  		// device and no platform, which is what tells an operator which.
@@ -7782,20 +7782,20 @@ index 3370855..f3d92dc 100644
  
 @@ -29,7 +30,6 @@ import (
  
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/broker"
--	"github.com/rhwendt/port49/internal/broker/policy"
- 	"github.com/rhwendt/port49/internal/config"
- 	"github.com/rhwendt/port49/internal/daemon/acct"
- 	"github.com/rhwendt/port49/internal/daemon/authen"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/broker"
+-	"github.com/blanketfish/port49/internal/broker/policy"
+ 	"github.com/blanketfish/port49/internal/config"
+ 	"github.com/blanketfish/port49/internal/daemon/acct"
+ 	"github.com/blanketfish/port49/internal/daemon/authen"
 @@ -39,6 +39,7 @@ import (
- 	"github.com/rhwendt/port49/internal/daemon/server"
- 	"github.com/rhwendt/port49/internal/decision"
- 	"github.com/rhwendt/port49/internal/platform"
-+	"github.com/rhwendt/port49/internal/policy"
- 	"github.com/rhwendt/port49/internal/session"
- 	"github.com/rhwendt/port49/internal/store"
- 	"github.com/rhwendt/port49/internal/store/crypt"
+ 	"github.com/blanketfish/port49/internal/daemon/server"
+ 	"github.com/blanketfish/port49/internal/decision"
+ 	"github.com/blanketfish/port49/internal/platform"
++	"github.com/blanketfish/port49/internal/policy"
+ 	"github.com/blanketfish/port49/internal/session"
+ 	"github.com/blanketfish/port49/internal/store"
+ 	"github.com/blanketfish/port49/internal/store/crypt"
 @@ -157,10 +158,22 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
  	if cfg.Broker == nil {
  		return nil, nil
@@ -8191,7 +8191,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 func explained(t *testing.T, p *Policy, subject, principal, device, line string, attrs bool) (Explanation, string) {
@@ -8389,8 +8389,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Explanation is `port49 explain`'s answer (spec §12): one hypothetical
@@ -8630,8 +8630,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // policyFiles are the two files every policy tool reads: the policy and the
@@ -8859,7 +8859,7 @@ index 0e5ed74..0bba01c 100644
 +	"strings"
  	"time"
  
- 	"github.com/rhwendt/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/admission"
 @@ -64,3 +65,81 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
  	e.Render(stdout, *attrs)
  	return 0
@@ -9030,15 +9030,15 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/daemon/authen"
-	"github.com/rhwendt/port49/internal/daemon/author"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/daemon/authen"
+	"github.com/blanketfish/port49/internal/daemon/author"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // daemonLog runs real authorizations through the daemon's handler and the
@@ -9184,8 +9184,8 @@ index aaef5c3..e8b5769 100644
  	"strings"
  	"testing"
 +
-+	"github.com/rhwendt/port49/internal/decision"
-+	"github.com/rhwendt/port49/internal/engine"
++	"github.com/blanketfish/port49/internal/decision"
++	"github.com/blanketfish/port49/internal/engine"
  )
  
  // policyFixture writes a small policy and inventory and returns their paths.
@@ -9268,8 +9268,8 @@ import (
 	"io"
 	"slices"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Status is what one record's replay found.
@@ -9436,9 +9436,9 @@ index 0bba01c..1d8ea45 100644
  	"strings"
  	"time"
  
- 	"github.com/rhwendt/port49/internal/admission"
- 	"github.com/rhwendt/port49/internal/policy"
-+	"github.com/rhwendt/port49/internal/replay"
+ 	"github.com/blanketfish/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/policy"
++	"github.com/blanketfish/port49/internal/replay"
  )
  
  // policyFiles are the two files every policy tool reads: the policy and the
@@ -9697,7 +9697,7 @@ index 1d8ea45..c4ebd15 100644
 +	"text/tabwriter"
  	"time"
  
- 	"github.com/rhwendt/port49/internal/admission"
+ 	"github.com/blanketfish/port49/internal/admission"
 @@ -197,3 +198,60 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
  	}
  	return 0
@@ -11073,7 +11073,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // ShadowedDeny is one deny a subject holds that a permit it also holds
@@ -11386,7 +11386,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/decision"
 )
 
 const diffBase = `
@@ -11708,9 +11708,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // Diff is the effective-permission diff between two versions of a policy

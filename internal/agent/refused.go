@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/rhwendt/port49/internal/brokercrl"
+	"github.com/blanketfish/port49/internal/brokercrl"
 )
 
 // codeBrokerRefused is the socket code for a connection the broker CRL check

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // The sample config is assembled from three pieces rather than written twice,

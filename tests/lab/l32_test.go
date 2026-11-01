@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/sot"
+	"github.com/blanketfish/port49/internal/sot"
 )
 
 // l32Record is one stack's L32 run: what `next` named through each of the

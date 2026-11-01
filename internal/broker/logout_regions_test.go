@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // R26: a logout another region ingested reaches this region: the session's

@@ -13,11 +13,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store/memory"
 )
 
 // failClosedPolicy is a policy on platform set 1.1.0 where subject s is

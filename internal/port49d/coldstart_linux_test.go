@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/fence"
 )
 
 // Ruling 1's second half: the mirror is a shared mount the owner fence

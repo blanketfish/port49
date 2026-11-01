@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // clientFiles writes a certificate for l and the CA to files, as a deployment

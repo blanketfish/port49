@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/keyset"
-	"github.com/rhwendt/port49/internal/keystatus"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/keyset"
+	"github.com/blanketfish/port49/internal/keystatus"
 )
 
 // keysNow is the clock the key commands read a version's state by; tests

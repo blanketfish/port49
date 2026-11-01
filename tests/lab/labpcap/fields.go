@@ -3,7 +3,7 @@ package labpcap
 import (
 	"fmt"
 
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // Field is one variable-length field of one packet body, located within that

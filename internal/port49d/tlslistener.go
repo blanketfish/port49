@@ -21,16 +21,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/certstatus"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/daemon/server"
-	"github.com/rhwendt/port49/internal/devicecert"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/keyfile"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/certstatus"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/daemon/server"
+	"github.com/blanketfish/port49/internal/devicecert"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/keyfile"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // tlsFileMax bounds each of the listener's files: a chain or a CA bundle is

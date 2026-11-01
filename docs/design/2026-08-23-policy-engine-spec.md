@@ -11207,8 +11207,8 @@ shapes; Kubernetes is native and never required.
   darwin/amd64; L63, signing, stays open.
 - **7. Release.** GoReleaser runs on `v*` tags only and makes the archives, packages and
   `SHA256SUMS`, with build provenance from `actions/attest-build-provenance`. The image is
-  `ghcr.io/rhwendt/port49:<version>` for linux/amd64 and linux/arm64, cross-compiled in the build
-  stage (`--platform=$BUILDPLATFORM`); the chart is `oci://ghcr.io/rhwendt/charts/port49` at the
+  `ghcr.io/blanketfish/port49:<version>` for linux/amd64 and linux/arm64, cross-compiled in the build
+  stage (`--platform=$BUILDPLATFORM`); the chart is `oci://ghcr.io/blanketfish/charts/port49` at the
   release version. Build is apart from publish: `build-python` and `build-galaxy` build with
   tools pinned by hash (`packaging/requirements-release.txt`, `--require-hashes`), hold no token
   and hand the result on through `actions/upload-artifact`; `pypi` and `galaxy` only download and

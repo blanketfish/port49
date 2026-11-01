@@ -8,10 +8,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/printsafe"
-	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
 
 // keysDiagnoseCmd is `port49d keys-diagnose --device NAME --capture FILE|-

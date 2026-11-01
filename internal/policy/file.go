@@ -6,8 +6,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/keyset"
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/keyset"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // The policy file's schema (spec §11), snake_case throughout. Every key is

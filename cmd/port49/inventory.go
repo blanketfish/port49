@@ -16,13 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/edkey"
-	"github.com/rhwendt/port49/internal/inventory"
-	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/inventory"
+	"github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 func inventoryCmd(args []string, stdout, stderr io.Writer) int {

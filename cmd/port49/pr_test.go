@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/policy"
 )
 
 // gitRepo is a scratch repository holding the policy fixture, committed on

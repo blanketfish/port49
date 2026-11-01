@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/platform"
 )
 
 // A device-local account named as a username port49 serves on the device is

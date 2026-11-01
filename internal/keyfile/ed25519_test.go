@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/edkey"
 )
 
 func writeKey(t *testing.T, body []byte, mode os.FileMode) string {

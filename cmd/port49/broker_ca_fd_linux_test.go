@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The agent child trusts the CA bytes the login read and passed on its

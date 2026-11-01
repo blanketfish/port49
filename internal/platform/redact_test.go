@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/platforms"
+	"github.com/blanketfish/port49/platforms"
 )
 
 // The built-in table loads, has a default list, and gives Junos its own on

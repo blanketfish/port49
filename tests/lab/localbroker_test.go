@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // localBroker is bin/port49d run with a broker and the workload verifier,

@@ -11,7 +11,7 @@
 #   ExecStartPre= running init-revocations or init-enrollments: those run once, by hand.
 [Unit]
 Description=port49 TACACS+ server
-Documentation=https://github.com/rhwendt/port49
+Documentation=https://github.com/blanketfish/port49
 After=network-online.target
 Wants=network-online.target
 # No start limit: a store that is down at boot would use five starts in under five minutes

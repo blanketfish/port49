@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // Planter is a store a test can write an idempotency record into whole,

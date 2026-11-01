@@ -89,7 +89,7 @@ certificate. 9b and 9c change what the agent holds. 9d changes what the broker r
 - **`tests/lab`:** `l53_l54_test.go` and `l53_unit_test.go`; `make lab-ssh`.
 
 **Tech Stack:**
-- Go 1.26, module `github.com/rhwendt/port49`, **no cgo**, and **no new module in the build
+- Go 1.26, module `github.com/blanketfish/port49`, **no cgo**, and **no new module in the build
   graph**. `golang.org/x/crypto/ssh` is in `golang.org/x/crypto` v0.55.0, already required.
   `golang.org/x/term` v0.45.0 is already in `go.sum` through it, and becomes a direct requirement
   for the askpass's terminal read.
@@ -411,7 +411,7 @@ here is pinned by a test or a lab row.
 
 ## Global Constraints
 
-- Go 1.26+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
+- Go 1.26+, module `github.com/blanketfish/port49`, `gofmt` and `go vet` clean, **no cgo**, **no new
   module in the build graph**. `golang.org/x/term` v0.45.0 moves from indirect to direct with
   `go mod tidy`, and nothing else changes in `go.sum`.
 - snake_case everywhere it is data: `scope`, `after`, `next`, `sweep`, `broker_ca`.
@@ -1182,9 +1182,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/policy"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/store"
 )
 
 // sweepPolicy grants alice on site dc1 alone.
@@ -2419,9 +2419,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 const configBroker = "https://broker.example:8443"
@@ -2552,7 +2552,7 @@ Expected: FAIL: `flag provided but not defined: -config`, exit 2.
 
 - [ ] **Step 8: The CLI reads the file**
 
-In `cmd/port49/main.go`, add `"cmp"` and `"github.com/rhwendt/port49/internal/userconfig"` to the
+In `cmd/port49/main.go`, add `"cmp"` and `"github.com/blanketfish/port49/internal/userconfig"` to the
 imports. Replace `sessionFlags`, `register`, `args` and the first refusal in `config` as follows.
 
 Replace
@@ -2901,7 +2901,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/userconfig"
+	"github.com/blanketfish/port49/internal/userconfig"
 )
 
 // what names the file in a refusal.
@@ -3085,8 +3085,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
 )
 
 // mintFailed says, under cmd's prefix, why a mint through the agent gave no
@@ -3193,8 +3193,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hostkeys"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hostkeys"
 )
 
 func testHostKey(t *testing.T) ssh.PublicKey {
@@ -3383,8 +3383,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/hostkeys"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/hostkeys"
 )
 
 // trustScan reads a device's host key; a test swaps it.
@@ -3815,9 +3815,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hostkeys"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hostkeys"
 )
 
 // sshTestBin is the system's OpenSSH, 8.5 or later, or the test is skipped:
@@ -4324,10 +4324,10 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/rhwendt/port49/internal/agent"
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hostkeys"
-	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hostkeys"
+	"github.com/blanketfish/port49/internal/printsafe"
 )
 
 // askpassEnv names the socket `port49 ssh` answers its token on. ssh runs
@@ -5459,7 +5459,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/rhwendt/port49/internal/hostkeys"
+	"github.com/blanketfish/port49/internal/hostkeys"
 )
 
 // l53Console is, per platform, the console commands that may show the SSH

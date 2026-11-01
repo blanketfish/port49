@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"errors"
-	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/fence"
-	"github.com/rhwendt/port49/internal/store"
-	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/fence"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/memory"
 	"path/filepath"
 )
 

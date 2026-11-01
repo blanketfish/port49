@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/devicemock"
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/testpki"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/devicemock"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/internal/testpki"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // qualUser is the username tests/qual/qual-policy.yaml gives its one subject.

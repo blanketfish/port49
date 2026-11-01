@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/edkey"
+	"github.com/blanketfish/port49/internal/edkey"
 )
 
 // loadService is the standing sample (config_test.go) with block appended:

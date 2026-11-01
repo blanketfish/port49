@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/hwkey"
+	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/hwkey"
 )
 
 // A broker the agent could not reach, or one that answered 503, is its own

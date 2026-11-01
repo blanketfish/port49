@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
-	"github.com/rhwendt/port49/internal/daemon/metrics"
-	"github.com/rhwendt/port49/internal/policy"
-	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/blanketfish/port49/internal/bundle"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/policy"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // judgedReader reads meta/judged (etcd.Store).

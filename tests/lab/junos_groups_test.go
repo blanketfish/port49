@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	adapter "github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/tests/lab/labcreds"
+	adapter "github.com/blanketfish/port49/internal/platform"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
 )
 
 // throwawayCryptHash is a SHA-512 crypt hash of 32 random bytes that are

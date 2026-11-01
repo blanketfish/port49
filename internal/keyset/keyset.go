@@ -12,9 +12,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/keyring"
-	"github.com/rhwendt/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/keyring"
+	"github.com/blanketfish/port49/internal/secretref"
 )
 
 // Version is one version of a key: its number, where its secret is read from,

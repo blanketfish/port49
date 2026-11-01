@@ -17,7 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/blanketfish/port49/internal/config"
 )
 
 // doc is one rendered Kubernetes object, decoded generically.
