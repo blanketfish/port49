@@ -338,7 +338,14 @@ func (a *Agent) AdminPrompt(ctx context.Context, req AdminRequest, prompt func(s
 		return AdminResponse{}, &TouchUnusableError{"no touch_key is configured; add touch_key to your config and run " +
 			"`port49 login` again"}
 	}
-	switch a.touch.State() {
+	// The token is looked for now, with no PIN: State is the state last seen,
+	// and a key pulled since would be found only by the Sign, after the
+	// broker had been asked and had issued its challenge (L86 (d)).
+	state := a.touch.State()
+	if p, ok := a.touch.(hwkey.Prober); ok {
+		state = p.Probe()
+	}
+	switch state {
 	case hwkey.Absent:
 		return AdminResponse{}, a.absentOrLocked(&KeyError{Err: hwkey.ErrKeyAbsent}, true)
 	case hwkey.Locked:
