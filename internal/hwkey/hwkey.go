@@ -41,6 +41,15 @@ type Key interface {
 	Close() error
 }
 
+// Prober is a key that can look for its token now, with no PIN and no login.
+// State is the state last seen, and a token pulled since is seen only when
+// something looks (L86 (d)); Probe looks. A caller about to ask a broker for
+// something the key must then sign probes first, so a key that is out sends
+// nothing.
+type Prober interface {
+	Probe() State
+}
+
 var (
 	ErrKeyAbsent = errors.New("hwkey: the key is not present")
 	ErrLocked    = errors.New("hwkey: the key needs its PIN")
