@@ -1107,6 +1107,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `t.TouchPolicy == TouchAlways`.
 
     `why` is the broker's existing fixed word: `touch_slot_chain`, `session_slot_chain`, `device_mismatch` or `touch_policy`. The broker and `hwkeysetup.Inspect` both call it, and neither repeats a step of it. The only PIN-policy rule is `Verify`'s closed set (1–3), which `VerifyPair` inherits; no new PIN rule is added.
+  - `func ModuleCandidates(root, goos, goarch string) []string` and `func FindModule(root, goos, goarch string, check func(string) error, say func(string)) (string, error)` in `internal/hwkeysetup`. `check` is `userconfig.CheckOwned`; `ErrNoModule` is exit 2.
   - `var SlotIDs = map[string]byte{"9a": 0x01, "9c": 0x02, "9d": 0x03, "9e": 0x04}` in `internal/hwkeysetup`: the PIV slot to libykcs11 `CKA_ID`. 9a, 9c and 9e are measured (`tests/lab/results/L60-ser8.md`, the read-only-session table: `0x01`, `0x02`, `0x04`, and f9 at `0x19`). 9d is the PIV standard's and is unmeasured, and no default uses it.
   - `func SlotURI(module, tokenLabel, slot string) (string, error)` builds `pkcs11:token=<label>;id=%<id>?module-path=<module>` through `pkcs11`'s own encoder (`uri.go`). It is printed only through `MaskSerial`.
   - `var openToken = pkcs11.Open` in `cmd/port49/hwkey.go`, a seam that tests replace with `hwfake`. A test asserts the real call passes a nil PIN.
@@ -1127,7 +1128,20 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 
   - **Decision 55 ruling 16, `port49 hwkey setup`.**
     - **Read-only on the token.** It never generates a key, writes an object, or asks for the PIV management key. Decision 45 ruling 7's "For `pkcs11`, port49 never generates a key or writes an object on the token" stands.
-    - **The module.** It comes from `--module PATH`, checked by `userconfig.CheckOwned` as the agent checks it. Without the flag, it is the `module-path` of an existing `issued_key` or `touch_key`. main has no default module and no system-config module line (checked), and this ruling adds none. With neither, it exits 2, naming `--module`.
+    - **The module** (the lead's ruling, 2026-11-01: a first-time user must not have to find their libykcs11 path). The first source that applies wins:
+      1. `--module PATH`;
+      2. the `module-path` of an existing `issued_key` or `touch_key`;
+      3. a probe of a fixed list of system install paths, in this order:
+         - `/usr/lib/<multiarch>/libykcs11.so.2`, then `/usr/lib/<multiarch>/libykcs11.so` (Debian and Ubuntu; `<multiarch>` from `runtime.GOARCH`: `x86_64-linux-gnu`, `aarch64-linux-gnu`). The L60 and L86 harnesses load `/usr/lib/x86_64-linux-gnu/libykcs11.so` on the SER8 (`tests/lab/l60/harness_test.go`).
+         - `/usr/lib64/libykcs11.so.2`, then `/usr/lib64/libykcs11.so` (Fedora and RHEL);
+         - `/usr/local/lib/libykcs11.so` (Linux), or `/usr/local/lib/libykcs11.dylib` (macOS, Intel Homebrew and Yubico's own installer);
+         - `/opt/homebrew/lib/libykcs11.dylib` (macOS, Apple-silicon Homebrew).
+
+         The implementer verifies each path against the package's published file list before committing: Debian's and Ubuntu's `ykcs11` package, Fedora's `yubico-piv-tool`, Homebrew's `yubico-piv-tool` formula, and Yubico's macOS installer. Each source is recorded in a comment beside its path. A path no package installs is dropped, never guessed.
+      - **The check.** A probed candidate is loaded only if it passes `userconfig.CheckOwned`, the rule the agent applies to a module (`userconfig.go:474`): every link and the file owned by root or the user, with no group or world write. A candidate that fails is skipped, and the skip is said in one line naming the path. An attacker-writable library is code execution.
+      - The first candidate that passes is used, and the run prints it: "module: <path> (found)". Setup writes it into `issued_key`/`touch_key`, so later commands do not probe.
+      - **None found:** exit 2, with "no libykcs11 found; install yubico-piv-tool or pass --module".
+      - main has no default module and no system-config module line (checked), and this ruling adds no config key.
     - **The token.** It lists the tokens the module shows. More than one YubiKey refuses (exit 2) unless `--token <label>` names one. Labels are printed through `MaskSerial`.
     - **The slots.** It reads the slot attestations for 9a (the session key; `--session-slot 9e` for a site that keeps it there, as L86 did) and 9c (the touch key), and the f9 certificate. It finds them by the fixed slot→`CKA_ID` table (`SlotIDs`; measured in L60), and builds each `pkcs11:` URI with the token's label.
     - **The checks** are the broker's own code, the one function `pivattest.VerifyPair` that `verifyTouchMessage` calls (decision 45 ruling 12):
@@ -1206,7 +1220,11 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestSetupWritesBothKeysWhenReady`: a temp config with other keys, a comment, odd indentation, a quoted value and blank lines. After setup, `issued_key` and `touch_key` are set, everything else is byte-identical, and the exit is 0.
     - `TestSetKeysReplacesInPlace`: an existing `touch_key:` line on line 3 is replaced on line 3. The lines before and after it are byte-identical.
     - `TestSetupReportsAnOverlaidKey`: a `touch_key` that comes from the system config through `LoadAll` is reported and not written to the user file.
-    - `TestSetupNeedsAModule`: no `--module` and no existing key URI gives exit 2, naming `--module`. An existing `touch_key`'s `module-path` is used when present.
+    - `TestModuleSourceOrder`: `--module` wins over an existing key's `module-path`, which wins over the probe.
+    - `TestTheProbeOrder`: over a temp root standing in for `/` (the probe list is a function of a root and `GOOS`/`GOARCH`, so tests never read the real `/usr`), with candidates at two listed paths, the earlier one in the list is used and printed as "module: <path> (found)".
+    - `TestAGroupWritableCandidateIsSkipped`: the first candidate is mode 0664 (or sits under a group-writable directory). It is skipped with a line naming it, and the next passing candidate is used.
+    - `TestNoModuleFoundExits2`: no candidate, no flag and no existing key give exit 2 and the exact line "no libykcs11 found; install yubico-piv-tool or pass --module".
+    - `TestSetupWritesTheProbedModule`: after a probed setup, both written URIs carry that `module-path`.
     - `TestTwoTokensNeedTheTokenFlag`: two fakes on one module give exit 2 unless `--token` names one. Neither label's serial appears in the output.
     - `TestAnOpenErrorIsMasked`: an open error naming two tokens' serials prints neither, in the text form or in `--json`'s `why`.
     - `TestTheRealOpenGetsNoPIN`: the `openToken` seam records its PIN argument as nil.
@@ -1225,7 +1243,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 
 - [ ] **Step 3: Run them and see them fail.**
 
-  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch' -count=1`, and the same `-run` over `./internal/pivattest/`. Expected: FAIL to compile.
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule' -count=1`, and the same `-run` over `./internal/pivattest/`. Expected: FAIL to compile.
 
 - [ ] **Step 4: Implement.**
 
