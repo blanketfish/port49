@@ -1082,14 +1082,17 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 - Modify:
   - `cmd/port49/main.go` (a `case "hwkey":` beside `case "keys":`, and the usage text);
   - `internal/userconfig/userconfig.go` (`SetKeys`; no new config key);
-  - `internal/broker/api/api.go` (`Config.HardwareKeyTouch`), `internal/broker/broker.go` (the `/v1/config` builder, ~line 352) and the per-login MFA config that loads `attestation_roots_file` (it keeps the file's PEM beside the parsed `Anchors`), with `internal/broker/broker_test.go`;
+  - `internal/broker/api/api.go` (`Config.HardwareKeyTouch`), `internal/broker/broker.go` (the `/v1/config` builder, ~line 352) serving `Anchors.PEM` (the per-login MFA config's roots, swapped by `SetAttestationRoots`), with `internal/broker/broker_test.go`;
   - `cmd/port49/issue.go` (`fetchBrokerConfig`, reused as it stands: TLS 1.3 to the configured broker CA alone, no proxy);
   - `cmd/port49/mfa.go` (three remedy lines), `cmd/port49/mfa_test.go`, `cmd/port49/mfa_fallback_test.go`;
+  - `internal/pivattest/pivattest.go` and `pivattest_test.go` (`VerifyPair`, extracted; `Anchors.PEM`);
+  - `internal/broker/mfa.go` (`verifyTouchMessage` calls `VerifyPair`), with `internal/broker/mfa_test.go`;
+  - `internal/hwkey/hwfake/hwfake.go` (an `Unlocks() int` counter beside `Signs()`);
   - `Makefile` (`l86-build` also builds the L91 cells).
 
 **Interfaces:**
 - Consumes:
-  - `pivattest.ParseAnchors(b []byte) (Anchors, error)`, `pivattest.Verify(a Anchors, device, slot *x509.Certificate, now time.Time) (Attestation, error)`, `pivattest.TouchAlways`, `Attestation.{Serial, PINPolicy, TouchPolicy, Key}`. These are the broker's checks in `verifyTouchMessage` (`internal/broker/mfa.go`), reused, never copied.
+  - `pivattest.ParseAnchors(b []byte) (Anchors, error)`, `pivattest.Verify(a Anchors, device, slot *x509.Certificate, now time.Time) (Attestation, error)`, `pivattest.TouchAlways`, `Attestation.{Serial, PINPolicy, TouchPolicy, Key}`.
   - `mfatouch.Chain(certs []*x509.Certificate, touch, session crypto.PublicKey) ([]string, error)`.
   - `agent.SameToken(session any, touch hwkey.Key) (ok bool, why string)`.
   - `pkcs11.ParseURI`, `pkcs11.Open` and `(*Signer).Certificates()`, `TokenSerial()`, `ModulePath()`, with the module `userconfig.CheckOwned` accepts: the agent's own.
@@ -1098,6 +1101,15 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `fetchBrokerConfig(ctx, broker string, pool *x509.CertPool, verify func(tls.ConnectionState) error) (api.Config, error)` (`cmd/port49/issue.go`).
   - `hwfake.New(k *ecdsa.PrivateKey, module, serial string) *Key` with `SetCertificates`, and `testpki.NewPIV(now)` with `Slot(pub, touch)` and `Anchors()`.
 - Produces:
+  - `func VerifyPair(a Anchors, device, session, touch *x509.Certificate, now time.Time) (s, t Attestation, why string, err error)` in `internal/pivattest`, extracted from `verifyTouchMessage` (`internal/broker/mfa.go:756`). It holds, in the broker's order:
+    - `Verify` on the touch slot, then the session slot;
+    - the serial equality;
+    - `t.TouchPolicy == TouchAlways`.
+
+    `why` is the broker's existing fixed word: `touch_slot_chain`, `session_slot_chain`, `device_mismatch` or `touch_policy`. The broker and `hwkeysetup.Inspect` both call it, and neither repeats a step of it. The only PIN-policy rule is `Verify`'s closed set (1–3), which `VerifyPair` inherits; no new PIN rule is added.
+  - `var SlotIDs = map[string]byte{"9a": 0x01, "9c": 0x02, "9d": 0x03, "9e": 0x04}` in `internal/hwkeysetup`: the PIV slot to libykcs11 `CKA_ID`. 9a, 9c and 9e are measured (`tests/lab/results/L60-ser8.md`, the read-only-session table: `0x01`, `0x02`, `0x04`, and f9 at `0x19`). 9d is the PIV standard's and is unmeasured, and no default uses it.
+  - `func SlotURI(module, tokenLabel, slot string) (string, error)` builds `pkcs11:token=<label>;id=%<id>?module-path=<module>` through `pkcs11`'s own encoder (`uri.go`). It is printed only through `MaskSerial`.
+  - `var openToken = pkcs11.Open` in `cmd/port49/hwkey.go`, a seam that tests replace with `hwfake`. A test asserts the real call passes a nil PIN.
   - `type Check struct { Name string; OK bool; Why string }`. `Name` is one of `session_slot`, `touch_slot`, `attestation_roots`, `session_attested`, `touch_attested`, `touch_policy`, `pin_policy`, `same_token`, and, for status alone, `config_issued_key`, `config_touch_key`, `issued_certificate`, `certificate_expiry`, `agent`.
   - `type HardwareKeyTouchConfig struct { AttestationRootsPEM string \`json:"attestation_roots_pem"\` }` in `internal/broker/api`, and field `Config.HardwareKeyTouch *HardwareKeyTouchConfig \`json:"hardware_key_touch,omitempty"\``.
   - `type Roots struct { Anchors pivattest.Anchors; Source string }` in `internal/hwkeysetup`. `Source` is `--roots <file>` or `from broker <host>`.
@@ -1105,15 +1117,26 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `type Report struct { Token string; Roots string; Checks []Check; Ready bool }`. `Token` is the token label with the serial masked as `<serial>`, by the rule `tests/lab/l60/harness_test.go`'s `redact` applies, moved into `internal/hwkeysetup` as `MaskSerial(s string) string` and used by both.
   - `func Inspect(k Keys, anchors *pivattest.Anchors, now time.Time) Report`, where `type Keys struct { Session, Touch hwkey.Key }`.
   - `func Advice(r Report, sessionSlot string) []string`: the ykman lines, empty when ready.
-  - `func (f *File) SetKeys(path, issuedKey, touchKey string) (changed bool, err error)` in `userconfig`. It edits only those two keys through a `yaml.v3` node, keeps every other line and comment, and writes atomically with the file's own mode.
+  - `func SetKeys(path, issuedKey, touchKey string) (changed bool, err error)` in `userconfig`. It edits lines, never re-encodes:
+    - it replaces a top-level `issued_key:` or `touch_key:` line in place, or appends one at the end if absent, so every other byte (comments, order, quoting, blank lines) stays identical;
+    - it parses the result with `yaml.v3` only to confirm that it loads and the two keys are top-level;
+    - it writes atomically, with the file's own mode;
+    - a value that arrives from the system config through `LoadAll`'s overlay is reported, never edited.
 
 - [ ] **Step 1: Spec first.**
 
   - **Decision 55 ruling 16, `port49 hwkey setup`.**
     - **Read-only on the token.** It never generates a key, writes an object, or asks for the PIV management key. Decision 45 ruling 7's "For `pkcs11`, port49 never generates a key or writes an object on the token" stands.
-    - It finds the YubiKey through the PKCS#11 module the agent uses.
-    - It reads the slot attestations for 9a (the session key; `--session-slot 9e` for a site that keeps it there, as L86 did) and 9c (the touch key), and the f9 certificate.
-    - It verifies them with the broker's code (decision 45 ruling 12): the chain to the roots; touch policy `0x02` for 9c; a PIN policy `internal/pivattest` accepts; and both slots on one token (`agent.SameToken`, and the two attestations' serials equal).
+    - **The module.** It comes from `--module PATH`, checked by `userconfig.CheckOwned` as the agent checks it. Without the flag, it is the `module-path` of an existing `issued_key` or `touch_key`. main has no default module and no system-config module line (checked), and this ruling adds none. With neither, it exits 2, naming `--module`.
+    - **The token.** It lists the tokens the module shows. More than one YubiKey refuses (exit 2) unless `--token <label>` names one. Labels are printed through `MaskSerial`.
+    - **The slots.** It reads the slot attestations for 9a (the session key; `--session-slot 9e` for a site that keeps it there, as L86 did) and 9c (the touch key), and the f9 certificate. It finds them by the fixed slot→`CKA_ID` table (`SlotIDs`; measured in L60), and builds each `pkcs11:` URI with the token's label.
+    - **The checks** are the broker's own code, the one function `pivattest.VerifyPair` that `verifyTouchMessage` calls (decision 45 ruling 12):
+      - the chain to the roots;
+      - the same device serial on both slots;
+      - touch policy `0x02` (always) for 9c;
+      - and `agent.SameToken`.
+
+      The PIN policy is only `Verify`'s closed set, as at the broker.
     - **The roots are the broker's own** (the lead's ruling, 2026-11-01). A copy held by every user or host would be toil, and it could drift from what the broker checks.
       - When `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file` is loaded, `GET /v1/config` gains `hardware_key_touch: {attestation_roots_pem: "…"}`. These are public certificates, never secrets.
       - The client fetches it as it fetches the rest of `/v1/config`: over TLS, against the configured broker CA (`fetchBrokerConfig`).
@@ -1127,12 +1150,14 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
       - for a slot that has a key but no certificate, `ykman piv certificates generate --subject "CN=port49 <slot>" <slot> port49-<slot>.pub.pem`. libykcs11 lists a slot's key only with a certificate in it (unmeasured: L91 cell c).
 
       No line names a serial, PIN, PUK or management key.
-    - **It never prints a serial.** Every line goes through `MaskSerial`.
+    - **It never prints a serial.** Every line goes through `MaskSerial`, error lines included (a `pkcs11.Open` error can name other tokens) and every `why` in `--json`.
     - **When every check passes,** it writes `issued_key:` (the session slot's `pkcs11:` URI) and `touch_key:` (9c's) to the user's config (`userconfig.Path()`).
       - If both are already present and equal, it changes nothing and says so.
       - If either differs, it shows the old and new values (serial masked) and asks at a terminal. With no terminal it changes nothing and exits 1.
     - **Exit codes:** 0 ready; 1 action needed; 2 error (no module, an unreadable config, a bad flag, no roots, an unreachable broker).
-    - **Where a user meets the missing key,** the remedy names this command. `port49 token`'s touch-only refusal, and the `touch_key_unusable` and idp_mfa-fallback lines, end "run `port49 hwkey setup`" (Step 5a).
+    - **Where a user meets the missing key,** the remedy depends on the agent's reason (Step 5a). The session key is a token key iff the agent's `Status.KeyRef` starts with `pkcs11:`.
+      - **Session key in a TPM or a file:** "hardware_key_touch needs both keys on one YubiKey; this device accepts only it", plus the `port49 hwkey setup` pointer. On a fallback line, that it needs both keys on one YubiKey, and the pointer.
+      - **No token, or no usable touch key, with a token session key:** the `port49 hwkey setup` pointer alone.
     - **A TPM or file session key** (`issued_key_store: tpm` or `file`, or `auto` resolving to either) gets one plain statement: "`hardware_key_touch` needs the session key and the touch key on one YubiKey; this login's session key is not on a token. Your site's other per-login factor is `idp_mfa`." Exit 1.
   - **Decision 55 ruling 17, `port49 hwkey status`.**
     - It is read-only everywhere. It runs ruling 16's checks, and also:
@@ -1141,7 +1166,8 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
       - the certificate's expiry: a FAIL once it has passed, and the time left otherwise;
       - when an agent is running, its view: `touch_key: true`, or `touch_key_unusable: <why>`.
     - It never writes config and never prints a ykman line. Any FAIL names `port49 hwkey setup` as the fix.
-    - It takes its roots as ruling 16 does, and its output starts with the roots line.
+    - It takes its roots, module and token as ruling 16 does, and its output starts with the roots line.
+    - For a session key in a TPM or a file, it exits 1 with ruling 16's statement.
     - **Exit codes:** 0 ready, 1 not ready, 2 error (no roots and an unreachable broker included).
     - `--json` prints `{"token": "...", "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys snake_case. The serial is masked, and neither form holds a secret.
   - **§12:** list both commands with one line each.
@@ -1166,17 +1192,28 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestLoadRootsFromTheBroker`: with no flag, a `fetch` returning `HardwareKeyTouch.AttestationRootsPEM` gives `Source` `from broker <host>`.
     - `TestNoRootsIsAnError`: `fetch` returns a config with no `hardware_key_touch`. The result is `ErrNoRoots`, and the message names `--roots` and the broker setting.
     - `TestAnUnreachableBrokerIsItsOwnError`: `fetch` returns a dial error. The result is `ErrBrokerUnreachable`, with the line telling the user to retry or pass `--roots`.
-  - `internal/broker/broker_test.go`:
-    - `TestConfigServesAttestationRootsOnlyWhenLoaded`: with `hardware_key_touch` configured, `/v1/config` carries `attestation_roots_pem`, byte-equal to the file. Without it, the field is absent.
-    - `TestTheRootsFieldHoldsCertificatesOnly`: every PEM block in it is a `CERTIFICATE`.
     - `TestAMissingSlotAdvisesItsGenerateLine`: no 9c. The line carries `--pin-policy ONCE --touch-policy ALWAYS 9c`.
     - `TestNoAdviceNamesASecretOrSerial`: every `Advice` line, under every fixture, contains no serial (the fake's `12345678`), and no `management`, `PIN`, `PUK` or `--management-key` value.
     - `TestMaskSerialMatchesTheL60Rule`: L60's `TestUnitRedactMasksTheSerial` input gives the same output.
+    - `TestSlotIDsAreL60s`: `SlotIDs` gives 9a `0x01`, 9c `0x02` and 9e `0x04`. `SlotURI` round-trips through `pkcs11.ParseURI` with `id=%01`, the token label and the module.
+  - `internal/pivattest/pivattest_test.go`: `TestVerifyPairWords`. Each refusal (a touch chain to another root, a session chain to another root, two devices, touch cached) returns its fixed word, and a good pair returns none.
+  - `internal/broker/mfa_test.go`: `TestTheBrokerChecksThroughVerifyPair`. A package-level seam `verifyPair = pivattest.VerifyPair` is replaced by a counting stub, and one per-login proof calls it exactly once. The existing touch-proof tests pass unchanged.
+  - `internal/broker/broker_test.go`:
+    - `TestConfigServesAttestationRootsOnlyWhenLoaded`: with `hardware_key_touch` configured, `/v1/config` carries `attestation_roots_pem`: the file's CERTIFICATE blocks re-encoded, and nothing else (a comment line in the file is not served). Without it, the field is absent.
+    - `TestTheRootsFieldHoldsCertificatesOnly`: every PEM block in it is a `CERTIFICATE`.
+    - `TestTheRootsFieldFollowsAReload`: after `SetAttestationRoots` swaps to a second root file, the field serves the new root. The PEM and the `Anchors` swap together.
   - `cmd/port49/hwkey_test.go`:
-    - `TestSetupWritesBothKeysWhenReady`: a temp config with other keys and a comment. After setup, `issued_key` and `touch_key` are set, everything else is byte-identical, and the exit is 0.
+    - `TestSetupWritesBothKeysWhenReady`: a temp config with other keys, a comment, odd indentation, a quoted value and blank lines. After setup, `issued_key` and `touch_key` are set, everything else is byte-identical, and the exit is 0.
+    - `TestSetKeysReplacesInPlace`: an existing `touch_key:` line on line 3 is replaced on line 3. The lines before and after it are byte-identical.
+    - `TestSetupReportsAnOverlaidKey`: a `touch_key` that comes from the system config through `LoadAll` is reported and not written to the user file.
+    - `TestSetupNeedsAModule`: no `--module` and no existing key URI gives exit 2, naming `--module`. An existing `touch_key`'s `module-path` is used when present.
+    - `TestTwoTokensNeedTheTokenFlag`: two fakes on one module give exit 2 unless `--token` names one. Neither label's serial appears in the output.
+    - `TestAnOpenErrorIsMasked`: an open error naming two tokens' serials prints neither, in the text form or in `--json`'s `why`.
+    - `TestTheRealOpenGetsNoPIN`: the `openToken` seam records its PIN argument as nil.
+    - `TestBrokerFetchUsesThePinnedPool`: the `/v1/config` fetch uses `fetchBrokerConfig` with the configured broker CA, and a broker whose certificate is from another CA fails with the unreachable line.
     - `TestSetupChangesNothingWhenTheyMatch`: the file's bytes and mtime are unchanged, and it says so.
     - `TestSetupAsksBeforeChangingADifferentKey`: with no terminal, the exit is 1 and the file is unchanged.
-    - `TestSetupNeverOpensTheTokenForWriting`: the fake records every call. No sign, no `Unlock`, and nothing beyond `Certificates`, `Public`, `TokenSerial` and `ModulePath`.
+    - `TestSetupNeverOpensTheTokenForWriting`: `hwfake`'s `Signs()` and the new `Unlocks()` both read 0 after setup and after status.
     - `TestATPMSessionKeyNamesIdpMFA`: `issued_key_store: tpm`. The statement names `idp_mfa`, and the exit is 1.
     - `TestStatusNeverWrites`: the config is unchanged in every case, and no line contains `ykman`.
     - `TestStatusReadsTheAgent`: a stub agent at a temp socket (as `cmd/port49/nosocket_test.go`'s helpers do) answering `touch_key_unusable: "locked"` makes the `agent` check FAIL with that word.
@@ -1188,13 +1225,16 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 
 - [ ] **Step 3: Run them and see them fail.**
 
-  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField' -count=1`. Expected: FAIL to compile.
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch' -count=1`, and the same `-run` over `./internal/pivattest/`. Expected: FAIL to compile.
 
 - [ ] **Step 4: Implement.**
 
-  - `Inspect` reads `Certificates()` from both keys and takes the device and slot certificates through `mfatouch.Chain`. It runs `pivattest.Verify` on each slot, then the serial comparison and `agent.SameToken`, then `TouchPolicy == pivattest.TouchAlways` for the touch slot.
-  - The broker's checks stay in `verifyTouchMessage`. If a check there and here would read the same bytes two ways, move the shared part into `internal/pivattest` and call it from both.
-  - `cmd/port49/hwkey.go`'s `hwkeyCmd(args []string, stdout, stderr io.Writer) int` dispatches `setup` and `status`. It reads the config with `userconfig.Load`, opens each key without a PIN (`pkcs11.Open` with a nil PIN: attestation objects are public), and closes them before any write.
+  - Extract `pivattest.VerifyPair` from `verifyTouchMessage` first. The broker calls it through a package-level `verifyPair` seam and keeps its own steps (the exporter, the session key equals the client key, the signature) around it.
+  - `Inspect` reads `Certificates()` from both keys, takes the device and slot certificates through `mfatouch.Chain`, and calls `VerifyPair` and `agent.SameToken`. It maps `VerifyPair`'s word to its check name, and repeats none of its steps.
+  - `cmd/port49/hwkey.go`'s `hwkeyCmd(args []string, stdout, stderr io.Writer) int` dispatches `setup` and `status`.
+    - It reads the config with `userconfig.Load`.
+    - It opens each slot through `openToken` with a nil PIN (attestation objects are public; a nil PIN opens the signer Locked with no login), and closes them before any write.
+  - `pivattest.Anchors` gains `PEM []byte`, which `ParseAnchors` sets to the file's CERTIFICATE blocks, re-encoded, and nothing else. `/v1/config` serves `Anchors.PEM`, so `SetAttestationRoots(a *pivattest.Anchors)` (`internal/broker/mfa.go:76`) swaps the served roots and the checked roots in one pointer.
   - `--json` is status's only.
 
 - [ ] **Step 5: Run the tests and see them pass.**
@@ -1205,15 +1245,28 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 - [ ] **Step 5a: Name the command where a user meets the missing key (`cmd/port49/mfa.go`).**
 
   These lines are CLI messages, not §12 warnings or §5.7 reason codes, and no spec passage quotes them. Ruling 16 records the remedy.
+  - **The rule.** The remedy is chosen by the agent's reason. The session key is a token key iff `st.KeyRef` starts with `pkcs11:`.
+    - **A TPM or file session key:** the suffix is "hardware_key_touch needs both keys on one YubiKey; run `port49 hwkey setup` to check yours".
+    - **A token session key** (no token present, or no usable touch key): the suffix is "run `port49 hwkey setup`" alone.
   - Write the failing tests first in `cmd/port49/mfa_test.go` and `cmd/port49/mfa_fallback_test.go`. Each asserts its new text exactly and fails on today's.
-    - `TestTouchOnlyRefusalNamesHwkeySetup` (mfa.go:155–156): the error reads "this device accepts only hardware_key_touch, and the agent has no touch key it can use: set touch_key to a key on your session key's token: run `port49 hwkey setup`, then `port49 login` again".
-    - `TestFallbackLineNamesHwkeySetup` (mfa.go:143): the stderr line reads "port49: <why>; falling back to idp_mfa (a sign-in at your identity provider); to use your security key instead, run `port49 hwkey setup`".
-    - `TestUnusableTouchKeyLineNamesHwkeySetup` (mfa.go:147): the stderr line reads "port49: <touch_key_unusable>; to use your security key, run `port49 hwkey setup`".
-  - Run `go test ./cmd/port49/ -run 'NamesHwkeySetup' -count=1` and see all three FAIL. Change the three strings. Run it again and see them PASS. Then run any existing test that pinned the old wording, updated to the new.
+    - `TestTouchOnlyRefusalNamesHwkeySetup` (mfa.go:155–156), token session key: "this device accepts only hardware_key_touch, and the agent has no touch key it can use: run `port49 hwkey setup`, then `port49 login` again".
+    - `TestTouchOnlyRefusalForATPMKey`, TPM session key: "this device accepts only hardware_key_touch, and hardware_key_touch needs both keys on one YubiKey; your session key is not on one: run `port49 hwkey setup`, then `port49 login` again".
+    - `TestFallbackLineNamesHwkeySetup` (mfa.go:143), token session key: "port49: <why>; falling back to idp_mfa (a sign-in at your identity provider); to use your security key instead, run `port49 hwkey setup`".
+    - `TestFallbackLineForATPMKey` (mfa.go:143), with the "your session key is in the TPM…" `why` of `mfa_test.go:376`: the line ends "; hardware_key_touch needs both keys on one YubiKey; run `port49 hwkey setup` to check yours".
+    - `TestUnusableTouchKeyLineNamesHwkeySetup` (mfa.go:147), token session key: "port49: <touch_key_unusable>; run `port49 hwkey setup`".
+    - `TestUnusableTouchKeyLineForATPMKey` (mfa.go:147), with `SameToken`'s "not on a PKCS#11 token": the line carries the both-keys sentence.
+  - Run `go test ./cmd/port49/ -run 'NamesHwkeySetup|ForATPMKey' -count=1` and see all six FAIL. Change the three call sites. Run it again and see them PASS. Then update any existing test that pinned the old wording.
 
 - [ ] **Step 6: Write the L91 harness and runbook (written for Ryan's run; no agent touches the token).**
 
-  - `tests/lab/l60/l91_test.go` follows `l86_test.go`, under the same build tags. `make l86-build` gains the L91 cells in the same compiled `bin/l86/l60.test`, so Ryan runs this tree's binary. It records each command's stdout and stderr through `redact`, asks Ryan to type `ykman piv info` before and after (b) and to confirm the two listings match, and writes `tests/lab/results/L91-ser8.md`.
+  - `tests/lab/l60/l91_test.go` follows `l86_test.go`, under the same build tags. `make l86-build` gains the L91 cells in the same compiled `bin/l86/l60.test`, so Ryan runs this tree's binary.
+    - It records each command's stdout and stderr through `redact`.
+    - For (b), it asks Ryan to type `ykman piv info` in his own terminal before and after, and to answer whether the two listings match. It records only his yes or no, never the listing.
+    - It writes `tests/lab/results/L91-ser8.md`.
+  - **Occupancy, the sentinel and the watchdog:**
+    - `TestL91` takes `/tmp/port49-lab.lock` itself and holds it to the end, as L86's cells do (`L86-runbook.md`, lines 67–69). "INVALID: the lab is occupied" stops it, and nothing is killed.
+    - It checks the lab's STOP sentinel, `/tmp/port49-STOP-LAB` (`tests/lab/README.md`, line 770), before each cell, and ends the run cleanly if it is present.
+    - The lead runs a background stall watchdog for the whole session, re-armed on wake.
   - `tests/lab/L91-runbook.md` marks every "Ryan types this" step, as `L86-runbook.md` does.
   - The runbook runs `bin/l86/l60.test -test.run '^TestL91$' -test.count=1 -test.v`, anchored. No Makefile target runs it on a token.
   - The run is Ryan's, on the SER8. TODO(L91) stands until his note and the §15 Status exist, as TODO(L86) does.
@@ -1221,7 +1274,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 - [ ] **Step 7: Commit.**
 
   ```bash
-  git add internal/hwkeysetup internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
+  git add internal/hwkeysetup internal/pivattest internal/hwkey/hwfake/hwfake.go internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go internal/broker/mfa_test.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
   git commit -m "feat: port49 hwkey setup and status, read-only on the token, the broker's attestation checks reused"
   ```
 
@@ -1250,7 +1303,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - the Oxidized change;
     - `port49 hwkey setup` and `port49 hwkey status`: read-only on the token, the ykman lines they print, the exit codes, and `--json`.
       - Plan 13's "set up your key" page is `port49 hwkey setup`.
-      - Its risk notes: a lent YubiKey plus its PIN is the user's login and touch, so a key is never shared; and a wrong attestation root, which makes every check pass against the wrong vendor or fail for everyone. The roots come from the broker's `/v1/config`, over TLS to the broker CA, or from `--roots` for offline use. Each run says which.
+      - Its risk notes: a lent YubiKey plus its PIN is the user's login and touch, so a key is never shared; and a wrong attestation root, which makes every check pass against the wrong vendor or fail for everyone. The roots come from the broker's `/v1/config`, over TLS to the broker CA, or from `--roots` for offline use. Each run says which. A third note: with broker-served roots, a compromised broker could change the roots a user's check reads. That broker already makes every verdict, so the check shows nothing a compromised broker could not already decide.
       - L91's state (TODO(L91) until Ryan's run).
   - "Hand-offs":
     - **Pre-beta review:** the load note, the failure matrix and every open row.
