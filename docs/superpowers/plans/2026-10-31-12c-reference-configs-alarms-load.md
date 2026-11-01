@@ -1115,7 +1115,8 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `func SlotURI(module, tokenLabel, slot string) (string, error)` builds `pkcs11:token=<label>;id=%<id>?module-path=<module>` through `pkcs11`'s own encoder (`uri.go`). It is printed only through `MaskSerial`.
   - `var openToken = pkcs11.Open` in `cmd/port49/hwkey.go`, a seam that tests replace with `hwfake`. A test asserts the real call passes a nil PIN.
   - `func Tokens(modulePath string) ([]Token, error)` in `internal/hwkey/pkcs11`, where `type Token struct { Slot uint; Label, MaskedLabel, Model, MaskedSerial string }`.
-    - It is read-only: `C_Initialize`, `C_GetSlotList(true)` and `C_GetTokenInfo` through the existing `(*Module).slotList` and `tokenInfo` (module.go:208, :227), then `C_Finalize`. It opens no session, never calls `C_Login`, and never asks for a PIN.
+    - It is read-only. It takes the module through `Load(path)`, which caches one initialized `*Module` per path for the process (`modules`, module.go:95–103), and calls `C_GetSlotList(true)` and `C_GetTokenInfo` through the existing `(*Module).slotList` and `tokenInfo` (module.go:208, :227).
+    - It never calls `C_Finalize`: that would tear down the cached module under the next `Open` in the same process. It opens no session, never calls `C_Login`, and never asks for a PIN.
     - `Model` is `CK_TOKEN_INFO.model`. `MaskedLabel` and `MaskedSerial` are masked by `hwkeysetup`'s rule; `pkcs11` takes the rule as a moved `MaskSerial` in a leaf package (`internal/hwkey/serialmask`) that both import, so neither imports the other.
     - The raw `Label` exists only to build the `token=` attribute of the URI that setup writes. It is never printed.
   - `var listTokens = pkcs11.Tokens` in `cmd/port49/hwkey.go`: the second seam, beside `openToken`.
@@ -1238,13 +1239,12 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestNoModuleFoundExits2`: no candidate, no flag and no existing key give exit 2 and the exact line "no libykcs11 found; install yubico-piv-tool or pass --module".
     - `TestSetupWritesTheProbedModule`: after a probed setup, both written URIs carry that `module-path`.
     - `TestTwoTokensNeedTheTokenFlag`: through the `listTokens` and `openToken` seams, two fake tokens give exit 2 and a numbered list, and `--token 2` picks the second. Neither label's serial appears in the output.
-  - `internal/hwkey/pkcs11/softhsm_test.go` (the `hwkeys` CI job's build tags), `TestTokensListsWithoutLogin`. Against two SoftHSM tokens, `Tokens` returns both, with `Model` set and the serials masked. `LoginCalls()` is unchanged, and no session opened by it remains. No `C_GenerateKeyPair` or `C_CreateObject` is reachable from `Tokens`: a static test asserts that `tokens.go` references neither function index.
     - `TestAnOpenErrorIsMasked`: an open error naming two tokens' serials prints neither, in the text form or in `--json`'s `why`.
     - `TestTheRealOpenGetsNoPIN`: the `openToken` seam records its PIN argument as nil.
     - `TestBrokerFetchUsesThePinnedPool`: the `/v1/config` fetch uses `fetchBrokerConfig` with the configured broker CA, and a broker whose certificate is from another CA fails with the unreachable line.
     - `TestSetupChangesNothingWhenTheyMatch`: the file's bytes and mtime are unchanged, and it says so.
     - `TestSetupAsksBeforeChangingADifferentKey`: with no terminal, the exit is 1 and the file is unchanged.
-    - `TestSetupNeverOpensTheTokenForWriting`: `hwfake`'s `Signs()` and the new `Unlocks()` both read 0 after setup and after status.
+    - `TestSetupNeverOpensTheTokenForWriting`: `hwfake`'s `Signs()` and the new `Unlocks()` both read 0 after setup and after status. The no-write half is asserted on a real module, in `softhsm_test.go` below.
     - `TestATPMSessionKeyNamesIdpMFA`: `issued_key_store: tpm`. The statement names `idp_mfa`, and the exit is 1.
     - `TestStatusNeverWrites`: the config is unchanged in every case, and no line contains `ykman`.
     - `TestStatusReadsTheAgent`: a stub agent at a temp socket (as `cmd/port49/nosocket_test.go`'s helpers do) answering `touch_key_unusable: "locked"` makes the `agent` check FAIL with that word.
@@ -1253,10 +1253,14 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestStatusJSONIsSnakeCaseAndMasked`: the JSON parses, every key matches `^[a-z_]+$`, and it contains no serial.
     - `TestExitCodes`: 0 for ready, 1 for not ready, and 2 for no module, a bad flag, no roots, or an unreachable broker (a closed port as `--broker`), for both commands.
     - `TestStatusSaysWhichRootsItUsed`: the first line is "roots: --roots <file>" with the flag, and "roots: from broker <host>" without it.
+  - `internal/hwkey/pkcs11/softhsm_test.go` (`//go:build hwkey && hwkey_dlopen`; the `hwkeys` CI job, `make test-hw`), against two SoftHSM tokens:
+    - `TestTokensListsWithoutLogin`: `Tokens` returns both, with `Model` set and the serials masked. `LoginCalls()`, `GenerateKeyPairCalls()` and `CreateObjectCalls()` (the existing process counters in `testhooks.go`) are all unchanged across the call, and no session it opened remains.
+    - `TestOpenAfterTokens`: `Tokens(module)` and then `Open` of a key on that same module, in one process. The `Open` succeeds and signs.
+    - `TestHwkeyPathWritesNothing`: `hwkeysetup`'s read path (`Tokens`, `Open` with a nil PIN, `Certificates`) over a SoftHSM token leaves `GenerateKeyPairCalls()` and `CreateObjectCalls()` unchanged.
 
 - [ ] **Step 3: Run them and see them fail.**
 
-  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule|MissingCandidate|UnsafeFlagModule' -count=1`, and the same `-run` over `./internal/pivattest/` and `./internal/hwkey/serialmask/`. Run `make test-hw` for `TestTokensListsWithoutLogin` (the SoftHSM job's target). Expected: FAIL to compile.
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule|MissingCandidate|UnsafeFlagModule' -count=1`, and the same `-run` over `./internal/pivattest/` and `./internal/hwkey/serialmask/`. Run `make test-hw` for `TestTokensListsWithoutLogin`, `TestOpenAfterTokens` and `TestHwkeyPathWritesNothing` (the SoftHSM job's target). Expected: FAIL to compile.
 
 - [ ] **Step 4: Implement.**
 
