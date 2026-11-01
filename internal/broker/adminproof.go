@@ -200,9 +200,13 @@ func (b *Broker) adminGate(w http.ResponseWriter, r *http.Request, c caller, bod
 				"(broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file); admin operations need them")
 		return false
 	}
-	if c.oidc != nil || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+	// A bearer is an assertion with no sign-in: a certificate this broker
+	// issued carries its sign-in's assertion too (for its logouts), and is a
+	// client certificate that proves like any other.
+	bearer := c.oidc != nil && c.signIn == nil
+	if bearer || r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		why := "no_client_certificate"
-		if c.oidc != nil {
+		if bearer {
 			why = "bearer"
 		}
 		return refuse("", "an admin call is proved by a touch on a connection that presented your client "+
