@@ -11535,6 +11535,28 @@ L89, and each says so. Rows L87–L90 and L39's cells are open.
   clock arms no bound, and the guard lifts only on the purge. Revocations made after the snapshot are lost by any restore,
   and the runbook covers them. The guard's own text is decision 36's (plan 12c Task 9a), and its
   traces are appended here. The alternative (close the listener while guarded) is not built.
+  *Trace, a snapshot 5 minutes old restored with the brokers crash-looping.* The witness's time is
+  about 5m before the restore. port49d's first read finds the drop and guards, the until gauge at
+  about restore + 15m, and its line names the lift time and the escape. Token logins are refused
+  `store_unavailable`, and on IOS XE and on Junos under `tacplus` alone break-glass is refused too.
+  The 10m page fires with the lift time in its summary; the operator waits the remaining ~5
+  minutes or stops port49d at once (the 3am row). At restore + 15m the guard lifts on its own with
+  no broker running, and the line says so. Every token the snapshot held has expired by then on
+  port49d's clock, so a replay finds no live token, and a login needs a fresh mint, which needs a
+  broker. The lift does not by itself let break-glass in on those devices: with port49d up, a
+  password that is no live token is answered FAIL, which they also treat as final, as on any day the
+  brokers are down (design §12, "Broker unavailable"); with the brokers still down, "stop port49d"
+  stays the escape. What the bound changes is that the ERROR state ends, and that a restore from a
+  snapshot older than 20 minutes never enters it. A token the brokers mint once they start is then
+  redeemed at once, with no wait for the purge. *Trace, a wrong clock on port49d.* Behind by d up to
+  5m: the guard lasts d longer in real time, and so would a restored token's life by port49d's
+  judgment, so no replay window opens. Behind by more than 5m: the witness's time is past the
+  allowance, no bound is armed, only the purge lifts the guard (today's behavior, fail closed), and
+  the line says why. Ahead by any amount: the lift comes earlier in real time and port49d takes
+  every restored token as expired earlier by the same amount; a port49d more than 15m ahead refuses
+  every fresh token as expired too, which its logins show at once (unchanged). The residual case is
+  a broker clock off by more than 5m from the runner's while it mints, less the witness's lead (so
+  3m59s at the edge): the NTP requirement of design §13, and the bound's one premise.
 - **Open.** L87, L88, L89, L90 and L39 (b) and (c) are provisional until they close.
 
 ---
