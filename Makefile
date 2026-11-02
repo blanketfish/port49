@@ -12,8 +12,9 @@ build:
 build-client:
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
 
-# L86's binaries, at the fixed paths tests/lab/L86-runbook.md runs: the client and the L86 cells
-# as one compiled test binary, so what Ryan runs is this tree's. Nothing here touches a token.
+# L86's and L91's binaries, at the fixed paths tests/lab/L86-runbook.md and L91-runbook.md run: the
+# client and the L86 and L91 cells as one compiled test binary, so what Ryan runs is this tree's.
+# Nothing here touches a token.
 l86-build:
 	mkdir -p bin/l86
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/l86/port49 ./cmd/port49

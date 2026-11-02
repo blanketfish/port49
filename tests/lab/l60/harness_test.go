@@ -245,7 +245,7 @@ func repoRoot(t *testing.T) string {
 // the lab directory, fresh each run so it is this tree's port49.
 func buildPort49(t *testing.T, h *lab) string {
 	t.Helper()
-	if p := os.Getenv("PORT49_L86_BIN"); p != "" && h.study == "L86" {
+	if p := os.Getenv("PORT49_L86_BIN"); p != "" && (h.study == "L86" || h.study == "L91") {
 		// make l86-build's client, so the run is that build's (tests/lab/L86-runbook.md).
 		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
 			t.Fatalf("PORT49_L86_BIN=%s is not an executable file: run make l86-build", p)
@@ -277,7 +277,7 @@ func (h *lab) step(n, format string, a ...any) {
 
 // obs records one observation: in the test log and in observations.log.
 func (h *lab) obs(field, value string) {
-	if h.study == "L86" {
+	if h.study == "L86" || h.study == "L91" {
 		// An admin call's words never carry a token, a challenge or a signature; a long opaque
 		// run is masked all the same.
 		value = longOpaque.ReplaceAllString(value, "<opaque>")
