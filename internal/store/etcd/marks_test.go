@@ -130,7 +130,7 @@ func TestALiftWhoseLeaseFailsLiftsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { dead.Close() })
-	s.tokLeases = newLeases(dead, s.now, 5*time.Minute)
+	s.tokLeases = newLeases(dead, s.now, 5*time.Minute, 0)
 	lctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	if err := s.DeleteRevocation(lctx, r.Kind, r.Key, store.Lift{At: t0}); !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {

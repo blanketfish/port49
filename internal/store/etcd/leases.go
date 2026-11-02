@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"time"
@@ -24,8 +25,9 @@ const leaseBucket = time.Minute
 // TTL, and nothing revokes it early.
 const maxAttachesPerLease = 100
 
-// grantFallbackTimeout bounds a grant whose first caller carried no deadline.
-const grantFallbackTimeout = 5 * time.Second
+// defaultGrantTimeout is the grant bound when no call timeout is given: etcd's
+// call_timeout ceiling (config.MaxCallTimeout).
+const defaultGrantTimeout = 5 * time.Second
 
 // leases hands out the lease a record is put on. A lease only reclaims:
 // the record's own expiry, read against now, decides whether it is live
@@ -36,7 +38,10 @@ type leases struct {
 	cli   *clientv3.Client
 	now   func() time.Time
 	grace time.Duration
-	mu    sync.Mutex
+	// grantTimeout bounds each grant from the moment it starts: the store's
+	// call_timeout, whatever budget the caller that started it has left.
+	grantTimeout time.Duration
+	mu           sync.Mutex
 	// held is, by bucket end (unix seconds of now's clock), the lease
 	// granted for it and until when it lives on the wall clock.
 	held map[int64]heldLease
@@ -63,8 +68,11 @@ type heldLease struct {
 	until   time.Time // wall clock, no monotonic reading
 }
 
-func newLeases(cli *clientv3.Client, now func() time.Time, grace time.Duration) *leases {
-	return &leases{cli: cli, now: now, grace: grace, held: map[int64]heldLease{}, flight: map[int64]*grantFlight{},
+func newLeases(cli *clientv3.Client, now func() time.Time, grace, grantTimeout time.Duration) *leases {
+	if grantTimeout <= 0 {
+		grantTimeout = defaultGrantTimeout
+	}
+	return &leases{cli: cli, now: now, grace: grace, grantTimeout: grantTimeout, held: map[int64]heldLease{}, flight: map[int64]*grantFlight{},
 		grant: func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) { return cli.Grant(ctx, ttl) }}
 }
 
@@ -103,17 +111,11 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 		if !ok {
 			f = &grantFlight{done: make(chan struct{})}
 			l.flight[key] = f
-			// The grant is the bucket's, not this caller's: it runs on a
-			// context its caller's cancel cannot reach, bounded by the
-			// caller's own deadline (the store's call timeout), so one caller
-			// that gives up does not fail the waiters.
-			gctx := context.WithoutCancel(ctx)
-			cancel := func() {}
-			if dl, has := ctx.Deadline(); has {
-				gctx, cancel = context.WithDeadline(gctx, dl)
-			} else {
-				gctx, cancel = context.WithTimeout(gctx, grantFallbackTimeout)
-			}
+			// The grant is the bucket's, not this caller's: it runs on a context
+			// its caller's cancel and deadline cannot reach, for a full call
+			// timeout from now, so a caller that gives up or has little budget
+			// left does not fail the waiters.
+			gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), l.grantTimeout)
 			go func() {
 				defer cancel()
 				err := l.grantFor(gctx, key, need)
@@ -132,7 +134,13 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		}
+		// A context error is the grant's own (its timeout), not this caller's:
+		// while this caller's ctx is live it looks again and may start the
+		// next grant. Any other error is every waiter's.
 		if f.err != nil {
+			if (errors.Is(f.err, context.DeadlineExceeded) || errors.Is(f.err, context.Canceled)) && ctx.Err() == nil {
+				continue
+			}
 			return 0, f.err
 		}
 	}

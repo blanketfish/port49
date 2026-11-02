@@ -96,7 +96,7 @@ func threeBehindProxies(t *testing.T) (*Store, *etcdtest.Cluster, []*etcdtest.Pr
 		p := etcdtest.NewProxy(t, strings.TrimPrefix(e, "http://"))
 		ps, eps = append(ps, p), append(eps, "http://"+p.Addr())
 	}
-	s, err := Open(Config{Endpoints: eps, Prefix: etcdtest.Prefix()})
+	s, err := Open(Config{Endpoints: eps, Prefix: etcdtest.Prefix(), CallTimeout: 500 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

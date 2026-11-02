@@ -46,6 +46,9 @@ type Config struct {
 	// LeaseGrace is how long past its expiry a record's lease outlives it;
 	// 5m when zero.
 	LeaseGrace time.Duration
+	// CallTimeout bounds each lease grant, from the moment it starts
+	// (stores.*.etcd.call_timeout); 5s when zero.
+	CallTimeout time.Duration
 	// DialTimeout bounds Open's connect; 5s when zero.
 	DialTimeout time.Duration
 	// Logf says what a read skipped, by key alone; log.Printf when nil.
@@ -187,10 +190,10 @@ func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
 		clear: c.TLS == nil}
 	s.ctxKV = sawKV{KV: ctx, saw: s.saw}
-	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace)
+	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace, c.CallTimeout)
 	s.ctxLeases = s.tokLeases
 	if ctx != tok {
-		s.ctxLeases = newLeases(ctx, c.Now, c.LeaseGrace)
+		s.ctxLeases = newLeases(ctx, c.Now, c.LeaseGrace, c.CallTimeout)
 	}
 	// The context client's grants are its responses too. With one client
 	// for both pools the token pool's grants are as well.
