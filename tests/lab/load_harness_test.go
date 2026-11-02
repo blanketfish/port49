@@ -737,11 +737,17 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 		}
 		roots := x509.NewCertPool()
 		roots.AppendCertsFromPEM(caPEM)
-		r.clients = append(r.clients, &http.Client{Timeout: 10 * time.Second, Transport: loadBrokerTransport(&tls.Config{
+		r.clients = append(r.clients, &http.Client{Timeout: loadClientTimeout, Transport: loadBrokerTransport(&tls.Config{
 			Certificates: []tls.Certificate{c}, RootCAs: roots, ServerName: "port49-broker", MinVersion: tls.VersionTLS13})})
 	}
 	return r
 }
+
+// loadClientTimeout is the agent's: its broker client times out at 30 s
+// (internal/agent/agent.go, a.client). On one connection a burst queues, and
+// the timeout includes the queue wait, so a shorter one would fail the harness
+// where the agent would not.
+const loadClientTimeout = 30 * time.Second
 
 // loadBrokerTransport is a machine principal's transport to the broker. The
 // real agent never opens more than one connection to the broker
@@ -778,7 +784,11 @@ func (r *loadRun) startProcs() {
 	r.t.Helper()
 	for _, p := range []*regionProc{r.broker, r.daemon} {
 		p.start(r.t)
-		for _, want := range loadStartLines[p.name] {
+		lines, ok := loadStartLines[p.name]
+		if !ok || len(lines) == 0 {
+			r.t.Fatalf("INVALID: no start lines are known for %q", p.name)
+		}
+		for _, want := range lines {
 			if _, err := p.wait(want, loadStartWait); err != nil {
 				r.t.Fatalf("INVALID: %v\n%s", err, tailOf(p.said(), 2000))
 			}

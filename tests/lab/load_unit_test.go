@@ -460,3 +460,16 @@ func TestLoadMetricsReadsEvictions(t *testing.T) {
 		t.Fatalf("Evicted = %v, want 16", m.Evicted)
 	}
 }
+
+// The harness's broker clients time out as the agent's do (30 s, agent.go), and
+// every process startProcs starts has start lines.
+func TestLoadHarnessMatchesTheAgentAndKnowsEveryProcess(t *testing.T) {
+	if loadClientTimeout != 30*time.Second {
+		t.Fatalf("loadClientTimeout = %v, want 30s", loadClientTimeout)
+	}
+	for _, name := range []string{"port49-broker", "port49d"} {
+		if len(loadStartLines[name]) == 0 {
+			t.Fatalf("no start lines for %q", name)
+		}
+	}
+}

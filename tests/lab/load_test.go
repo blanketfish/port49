@@ -279,7 +279,7 @@ func (r *loadRun) cellFaults(ctx context.Context, c loadCell) loadCell {
 	c.Observed["hang_bound_ms"] = loadMS(loadHangBound)
 	inside := loadFaultInWindow(stopAt, contAt, fleetEnd)
 	c.Observed["fault_inside_run"] = strconv.FormatBool(inside)
-	c.Pass = res.Max <= loadHangBound && swapped && swapObs != nil && inside && ctx.Err() == nil
+	c.Pass = res.Max <= loadHangBound && swapped && swapObs != nil && swapObs["policy_restore"] == "" && inside && ctx.Err() == nil
 	return c
 }
 
@@ -306,17 +306,18 @@ func (r *loadRun) reloadPolicy(ctx context.Context) (map[string]string, bool) {
 	}
 	// Put the original back and wait for that reload too, so a later cell, or a
 	// restart in runLoop, never reads a policy that differs from the stack's.
+	// The swap itself happened, so a failed restore is reported as its own
+	// failure (policy_restore) and the swap stays true.
 	r.daemon.mark()
 	r.broker.mark()
 	start = time.Now()
 	if err := os.WriteFile(r.policyPath, []byte(loadPolicy()), 0o600); err != nil {
 		r.t.Logf("cell d: the policy restore: %v", err)
-		obs["policy_restore"] = "not written"
-		return obs, false
+		obs["policy_restore"] = "failed: not written"
+		return obs, true
 	}
 	if _, ok := r.awaitReloads(ctx, start); !ok {
-		obs["policy_restore"] = "not reloaded"
-		return obs, false
+		obs["policy_restore"] = "failed: not reloaded"
 	}
 	return obs, true
 }
