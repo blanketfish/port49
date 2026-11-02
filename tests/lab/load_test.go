@@ -421,6 +421,10 @@ func (r *loadRun) cellMintBurst(ctx context.Context, c loadCell) loadCell {
 	return c
 }
 
+// loadScrapeFailed is what an eviction key says when its /metrics read failed:
+// never a number that reads as zero.
+const loadScrapeFailed = "scrape_failed"
+
 // loadWorkloadPass is cell e2's verdict: every process exited 0, and there were
 // as many as the cell starts.
 func loadWorkloadPass(codes []int) bool {
@@ -546,15 +550,17 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 	c.Observed["workload_p99_ms"] = loadMS(loadPercentile(took, 99))
 	if haveEv {
 		c.Observed["principal_cap_evicted_delta"] = strconv.FormatFloat(evicted, 'f', 0, 64)
+		c.Observed["principal_cap_evicted_burst_window_s"] = strconv.FormatFloat(burstFor.Seconds(), 'f', 1, 64)
 	} else {
-		c.Observed["principal_cap_evicted_delta"] = "not read"
+		c.Observed["principal_cap_evicted_delta"] = loadScrapeFailed
+		c.Observed["principal_cap_evicted_burst_window_s"] = loadScrapeFailed
 	}
-	c.Observed["principal_cap_evicted_burst_window_s"] = strconv.FormatFloat(burstFor.Seconds(), 'f', 1, 64)
 	if haveFleet {
 		c.Observed["fleet_principal_cap_evicted_delta"] = strconv.FormatFloat(fleetEv, 'f', 0, 64)
 		c.Observed["fleet_window_s"] = strconv.FormatFloat(fleetFor.Seconds(), 'f', 1, 64)
 	} else {
-		c.Observed["fleet_principal_cap_evicted_delta"] = "not read"
+		c.Observed["fleet_principal_cap_evicted_delta"] = loadScrapeFailed
+		c.Observed["fleet_window_s"] = loadScrapeFailed
 	}
 	c.Pass = loadWorkloadPass(codes)
 	return c
