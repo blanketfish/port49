@@ -321,10 +321,11 @@ func TestLoadReapsOnlyTheRecordedEtcd(t *testing.T) {
 		t.Fatal(err)
 	}
 	pidfile := filepath.Join(dir, "session-etcd.pid")
+	dataDir := filepath.Join(dir, "s.etcd")
 	if _, reap, _ := loadStaleSession(pidfile, proc, etcd); reap {
 		t.Fatal("reaped with no pidfile")
 	}
-	os.WriteFile(pidfile, []byte("4242\n"), 0o600)
+	os.WriteFile(pidfile, []byte("4242\n"+dataDir+"\n"), 0o600)
 	if _, reap, why := loadStaleSession(pidfile, proc, etcd); reap || why == "" {
 		t.Fatalf("reaped a PID that is gone: %v %q", reap, why)
 	}
@@ -335,11 +336,18 @@ func TestLoadReapsOnlyTheRecordedEtcd(t *testing.T) {
 	}
 	os.Remove(filepath.Join(proc, "4242", "exe"))
 	os.Symlink(etcd, filepath.Join(proc, "4242", "exe"))
+	// The same binary on another run's data directory (L74, L80, the store
+	// harness) is refused.
+	os.WriteFile(filepath.Join(proc, "4242", "cmdline"), []byte("etcd\x00--data-dir\x00"+filepath.Join(dir, "other.etcd")+"\x00"), 0o600)
+	if _, reap, _ := loadStaleSession(pidfile, proc, etcd); reap {
+		t.Fatal("reaped an etcd on another data directory")
+	}
+	os.WriteFile(filepath.Join(proc, "4242", "cmdline"), []byte("etcd\x00--data-dir\x00"+dataDir+"\x00"), 0o600)
 	if pid, reap, _ := loadStaleSession(pidfile, proc, etcd); !reap || pid != 4242 {
 		t.Fatalf("did not reap the recorded etcd: %d %v", pid, reap)
 	}
 	for _, bad := range []string{"1\n", "0", "abc", "-5"} {
-		os.WriteFile(pidfile, []byte(bad), 0o600)
+		os.WriteFile(pidfile, []byte(bad+"\n"+dataDir), 0o600)
 		if _, reap, _ := loadStaleSession(pidfile, proc, etcd); reap {
 			t.Errorf("reaped on pidfile %q", bad)
 		}

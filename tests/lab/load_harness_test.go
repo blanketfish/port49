@@ -697,7 +697,7 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 	// Record the session etcd's PID where the next run finds it, in case this
 	// one is killed while the cell-d fault has the member stopped.
 	if raw, err := os.ReadFile(r.sess.pidfile()); err == nil {
-		_ = os.WriteFile(loadSessionPidfile(), raw, 0o600)
+		_ = os.WriteFile(loadSessionPidfile(), []byte(strings.TrimSpace(string(raw))+"\n"+r.sess.data+"\n"), 0o600)
 		t.Cleanup(func() { _ = os.Remove(loadSessionPidfile()) })
 	}
 	r.policyPath = r.writeFile("policy.yaml", loadPolicy())
@@ -1134,16 +1134,21 @@ func loadFaultInWindow(stop, cont, end time.Time) bool {
 }
 
 // loadStaleSession decides whether a session etcd that a killed run left (it
-// may be stopped) is to be reaped: pidfile holds a PID, and /proc/<pid>/exe,
-// resolved, is the etcd binary. Anything else is left alone, and why says so.
+// may be stopped) is to be reaped. pidfile holds the PID and, on the next
+// line, the run's own --data-dir. Both must still hold: /proc/<pid>/exe,
+// resolved, is the etcd binary, and /proc/<pid>/cmdline carries that exact
+// --data-dir (other lab harnesses run the same binary). Anything else is left
+// alone, and why says so.
 func loadStaleSession(pidfile, procRoot, wantExe string) (pid int, reap bool, why string) {
 	raw, err := os.ReadFile(pidfile)
 	if err != nil {
 		return 0, false, "no pidfile"
 	}
-	pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 1 {
-		return 0, false, "the pidfile holds no PID"
+	first, dataDir, _ := strings.Cut(strings.TrimSpace(string(raw)), "\n")
+	dataDir = strings.TrimSpace(dataDir)
+	pid, err = strconv.Atoi(strings.TrimSpace(first))
+	if err != nil || pid <= 1 || dataDir == "" {
+		return 0, false, "the pidfile holds no PID and data directory"
 	}
 	exe, err := filepath.EvalSymlinks(filepath.Join(procRoot, strconv.Itoa(pid), "exe"))
 	if err != nil {
@@ -1152,6 +1157,10 @@ func loadStaleSession(pidfile, procRoot, wantExe string) (pid int, reap bool, wh
 	want, err := filepath.EvalSymlinks(wantExe)
 	if err != nil || exe != want {
 		return pid, false, fmt.Sprintf("pid %d no longer runs the etcd binary", pid)
+	}
+	cmdline, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cmdline"))
+	if err != nil || !cmdlineHasArgs(cmdline, "--data-dir", dataDir) {
+		return pid, false, fmt.Sprintf("pid %d runs the etcd binary on another data directory", pid)
 	}
 	return pid, true, ""
 }

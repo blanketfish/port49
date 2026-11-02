@@ -333,7 +333,9 @@ func (r *loadRun) cellMintBurst(ctx context.Context, c loadCell) loadCell {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sleepCtx(ctx, c.Duration/2)
+			if !sleepCtx(ctx, c.Duration/2) {
+				return
+			}
 			var burst sync.WaitGroup
 			for n := range loadMintBurst {
 				burst.Add(1)
