@@ -473,6 +473,11 @@ type Metrics struct {
 	// a broker runner's purge is done; 1 too from a run's start after a
 	// store gone until its first read of the witness.
 	RedemptionRestoreGuarded prometheus.Gauge
+	// port49_redemption_restore_guard_until_timestamp_seconds: while the
+	// guard holds, the Unix time it lifts on its own, every token the
+	// restored snapshot could hold having expired (plan 12c, Task 9a); 0
+	// while it does not hold, or when only a broker runner's purge lifts it.
+	RedemptionRestoreGuardUntil prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -910,6 +915,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
 			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
 				"snapshot, until a broker runner's purge is done."}),
+		RedemptionRestoreGuardUntil: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "port49_redemption_restore_guard_until_timestamp_seconds",
+			Help: "While port49_redemption_restore_guarded is 1: the Unix time the guard lifts on its own, every " +
+				"token the restored snapshot could hold having expired; 0 when only a broker runner's purge lifts it."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -1022,7 +1031,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded, m.RedemptionRestoreGuardUntil,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,

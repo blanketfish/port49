@@ -581,7 +581,7 @@ func TestTheGuardHooksFireAfterTheirWork(t *testing.T) {
 	var atFollow, atPass []string
 	oldF, oldP := guardFollowed, restorePassed
 	guardFollowed = func(g *restoreGuard, rev uint64) {
-		if high, _ := g.recorded(); high < rev {
+		if high, _, _ := g.recorded(); high < rev {
 			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, high))
 		}
 	}

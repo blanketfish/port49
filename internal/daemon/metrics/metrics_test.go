@@ -64,6 +64,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	}
 	m.BrokerMintGateClosed.Set(0)
 	m.RedemptionRestoreGuarded.Set(0)
+	m.RedemptionRestoreGuardUntil.Set(0)
 	m.InventoryReloads.WithLabelValues("applied").Inc()
 	m.InventoryFileRefused.Set(0)
 	m.InventoryFetches.WithLabelValues("unchanged").Inc()
@@ -82,68 +83,69 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 
 	// Expected metric names from brief + ConnectionEvents.
 	expectedMetrics := map[string]bool{
-		"port49_requests_total":                             false,
-		"port49_request_seconds":                            false,
-		"port49_decisions_total":                            false,
-		"port49_unvalidated_packets_total":                  false,
-		"port49_key_validations_total":                      false,
-		"port49_connections":                                false,
-		"port49_connection_events_total":                    false,
-		"port49_authentication_failures_total":              false,
-		"port49_accounting_spool_depth":                     false,
-		"port49_accounting_spool_drops_total":               false,
-		"port49_store_operations_total":                     false,
-		"port49_store_calls_total":                          false,
-		"port49_store_call_seconds":                         false,
-		"port49_store_circuit_open":                         false,
-		"port49_decision_log_write_failures_total":          false,
-		"port49_crypt_open_failures_total":                  false,
-		"port49_store_index_records_undecodable_total":      false,
-		"port49_store_keyspace_held":                        false,
-		"port49_store_feed_up":                              false,
-		"port49_store_feed_rescans_total":                   false,
-		"port49_store_fence_timeouts_total":                 false,
-		"port49_ledger_pending":                             false,
-		"port49_ledger_behind":                              false,
-		"port49_crypt_store_key_unknown":                    false,
-		"port49_store_client_cert_expiry_timestamp_seconds": false,
-		"port49_accounting_attributions_total":              false,
-		"port49_broker_item_errors_total":                   false,
-		"port49_broker_idempotency_refusals_total":          false,
-		"port49_broker_tls_handshake_failures_total":        false,
-		"port49_broker_connection_events_total":             false,
-		"port49_broker_connections":                         false,
-		"port49_blob_cache_lookups_total":                   false,
-		"port49_devices_quarantined":                        false,
-		"port49_devices_generic_platform":                   false,
-		"port49_context_refreshes_total":                    false,
-		"port49_contexts_reindexed_total":                   false,
-		"port49_contexts_reindex_failures_total":            false,
-		"port49_session_refreshes_total":                    false,
-		"port49_tokens_superseded_total":                    false,
-		"port49_ceiling_warnings_total":                     false,
-		"port49_revocations_total":                          false,
-		"port49_revocations_in_force":                       false,
-		"port49_revocations_file_failed":                    false,
-		"port49_cert_status_checks_total":                   false,
-		"port49_crl_loads_total":                            false,
-		"port49_crl_next_update_timestamp_seconds":          false,
-		"port49_cert_status_unavailable_total":              false,
-		"port49_policy_reloads_total":                       false,
-		"port49_policy_file_refused":                        false,
-		"port49_policy_refresh_pending":                     false,
-		"port49_policy_bundle_matches_runner":               false,
-		"port49_broker_mint_gate_closed":                    false,
-		"port49_redemption_restore_guarded":                 false,
-		"port49_inventory_reloads_total":                    false,
-		"port49_inventory_file_refused":                     false,
-		"port49_inventory_snapshot_age_seconds":             false,
-		"port49_inventory_bundle_sequence":                  false,
-		"port49_inventory_persist_failed":                   false,
-		"port49_inventory_bundle_refused":                   false,
-		"port49_inventory_policy_mismatch":                  false,
-		"port49_inventory_mirror_unreadable":                false,
-		"port49_inventory_fetches_total":                    false,
+		"port49_requests_total":                                   false,
+		"port49_request_seconds":                                  false,
+		"port49_decisions_total":                                  false,
+		"port49_unvalidated_packets_total":                        false,
+		"port49_key_validations_total":                            false,
+		"port49_connections":                                      false,
+		"port49_connection_events_total":                          false,
+		"port49_authentication_failures_total":                    false,
+		"port49_accounting_spool_depth":                           false,
+		"port49_accounting_spool_drops_total":                     false,
+		"port49_store_operations_total":                           false,
+		"port49_store_calls_total":                                false,
+		"port49_store_call_seconds":                               false,
+		"port49_store_circuit_open":                               false,
+		"port49_decision_log_write_failures_total":                false,
+		"port49_crypt_open_failures_total":                        false,
+		"port49_store_index_records_undecodable_total":            false,
+		"port49_store_keyspace_held":                              false,
+		"port49_store_feed_up":                                    false,
+		"port49_store_feed_rescans_total":                         false,
+		"port49_store_fence_timeouts_total":                       false,
+		"port49_ledger_pending":                                   false,
+		"port49_ledger_behind":                                    false,
+		"port49_crypt_store_key_unknown":                          false,
+		"port49_store_client_cert_expiry_timestamp_seconds":       false,
+		"port49_accounting_attributions_total":                    false,
+		"port49_broker_item_errors_total":                         false,
+		"port49_broker_idempotency_refusals_total":                false,
+		"port49_broker_tls_handshake_failures_total":              false,
+		"port49_broker_connection_events_total":                   false,
+		"port49_broker_connections":                               false,
+		"port49_blob_cache_lookups_total":                         false,
+		"port49_devices_quarantined":                              false,
+		"port49_devices_generic_platform":                         false,
+		"port49_context_refreshes_total":                          false,
+		"port49_contexts_reindexed_total":                         false,
+		"port49_contexts_reindex_failures_total":                  false,
+		"port49_session_refreshes_total":                          false,
+		"port49_tokens_superseded_total":                          false,
+		"port49_ceiling_warnings_total":                           false,
+		"port49_revocations_total":                                false,
+		"port49_revocations_in_force":                             false,
+		"port49_revocations_file_failed":                          false,
+		"port49_cert_status_checks_total":                         false,
+		"port49_crl_loads_total":                                  false,
+		"port49_crl_next_update_timestamp_seconds":                false,
+		"port49_cert_status_unavailable_total":                    false,
+		"port49_policy_reloads_total":                             false,
+		"port49_policy_file_refused":                              false,
+		"port49_policy_refresh_pending":                           false,
+		"port49_policy_bundle_matches_runner":                     false,
+		"port49_broker_mint_gate_closed":                          false,
+		"port49_redemption_restore_guarded":                       false,
+		"port49_redemption_restore_guard_until_timestamp_seconds": false,
+		"port49_inventory_reloads_total":                          false,
+		"port49_inventory_file_refused":                           false,
+		"port49_inventory_snapshot_age_seconds":                   false,
+		"port49_inventory_bundle_sequence":                        false,
+		"port49_inventory_persist_failed":                         false,
+		"port49_inventory_bundle_refused":                         false,
+		"port49_inventory_policy_mismatch":                        false,
+		"port49_inventory_mirror_unreadable":                      false,
+		"port49_inventory_fetches_total":                          false,
 		// The key-version alert gates on uptime with it (spec §10).
 		"process_start_time_seconds": false,
 	}
@@ -467,4 +469,29 @@ func TestACountRacingASetNeverRecreatesTheNamedSeries(t *testing.T) {
 			}
 		}
 	}
+}
+
+// port49_redemption_restore_guard_until_timestamp_seconds reaches the
+// registry with no labels, and reads 0 until the guard sets it (plan 12c,
+// Task 9a).
+func TestRestoreGuardUntilReachesTheRegistryWithNoLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != "port49_redemption_restore_guard_until_timestamp_seconds" {
+			continue
+		}
+		if len(f.GetMetric()) != 1 || len(f.GetMetric()[0].GetLabel()) != 0 {
+			t.Fatalf("want one series without labels: %v", f.GetMetric())
+		}
+		if v := testutil.ToFloat64(m.RedemptionRestoreGuardUntil); v != 0 {
+			t.Fatalf("starts at %v, want 0", v)
+		}
+		return
+	}
+	t.Fatal("port49_redemption_restore_guard_until_timestamp_seconds is not registered")
 }

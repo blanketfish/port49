@@ -1019,7 +1019,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The restore guard reads the store at once and every second, and
 		// redemptions wait for that first read once a witness was followed
 		// (Task 15d); joined before sts.close too.
-		restored.begin(m.RedemptionRestoreGuarded, m.StoreOps)
+		restored.begin(m.RedemptionRestoreGuarded, m.RedemptionRestoreGuardUntil, m.StoreOps)
 		gctx, stopGuard := context.WithCancel(ctx)
 		guardDone := make(chan struct{})
 		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Stores.Session.Etcd.CallTimeout) }()
