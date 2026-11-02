@@ -25,11 +25,21 @@ account by hand (with a password only you know: no file here holds one), and pas
 | `<MGMT_VRF>` | The management VRF or routing instance (`management`, `mgmt_junos`, `Mgmt-intf`...). |
 | `<BREAKGLASS_USER>` | The local account that works when port49 does not. |
 | `<TLS_PORT>` | port49d's RFC 9887 listener port. Always set it: the defaults differ (below). |
-| `<SERVER_NAME>` | The name the device's certificate carries. |
+| `<SERVER_NAME>` | This device's own name (hostname or FQDN), which its certificate carries. Not port49's hostname. |
 | `<CERT_ID>` | The device certificate's trustpoint or certificate id. |
 
 Pin the source (spec section 10): port49 keys a device by its source address, so it must not
 change with the route.
+
+## Lines the lab never ran
+
+These lines are in the files but no lab run typed them. They stay unmeasured until L88 closes:
+the EOS `vrf` clauses and source pin; the XR `tacacs source-interface ... vrf` and the group
+`vrf`; the Junos `source-address` on servers and accounting destinations; the SR Linux
+`source-address`; the Junos TLS enrolment through the PKI store (L88 h). In the L73 run the lab
+placed Junos's trust files and client key through a lab-only root shell, so the PKI-store method
+is documented but not shown to work. The IOS XE and XR revocation settings are left to you: the
+lab used `revocation-check none` and `crl optional` because its CAs publish no CRL.
 
 ## What is measured
 
@@ -42,7 +52,7 @@ Order is `authentication-order tacplus` alone. With `password` listed a port49 d
 through to the local password (L4, both Junos images).
 
 **The cost, at 3am:** while port49 answers ERROR (its store is failing), an ERROR is final.
-Break-glass waits until go-dark closes the listener, at most 5.5 s at the defaults (L41), then
+Break-glass waits until go-dark closes the listener, about 5.5 s at the defaults, bounded at 10.5 s (L41), then
 logs in. Under the restore guard, it waits until port49d is stopped.
 
 Login classes are not in the file. Run
@@ -57,7 +67,7 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | Dark | Break-glass logs in | L4, L17; under the reference: unmeasured (L88 d) |
 | Second server | Unmeasured (L88 f) | |
 | Key retire / reload | Session survives; next login break-glass | `tests/lab/results/L29-reload-juniper_vjunos-router.md` (23.4); unmeasured on 26.2 (L88 g) |
-| TLS | Port, `trusted-ca-group`, `mutual-authentication certificate-id`, `single-connection`. No port: dials 49. SNI: the literal server address. | `tests/lab/results/L73-juniper_vjunos-router.md` (26.2R1.7; not SRX) |
+| TLS | Enrolment through the PKI store: unmeasured (L88 h). Port, `trusted-ca-group`, `mutual-authentication certificate-id`, `single-connection`. No port: dials 49. SNI: the literal server address. | `tests/lab/results/L73-juniper_vjunos-router.md` (26.2R1.7; not SRX) |
 
 ### Cisco IOS XE
 
@@ -69,7 +79,7 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | Dark | Unmeasured (L88 d) | |
 | Second server | Unmeasured (L88 f) | |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_iosxe.md` (17.13) |
-| TLS | Port 6049 with none set. Two server objects need two distinct addresses (17.18.02 drops a shared one). After a refused handshake the client marks the server dead and answers locally for 57 to 67 s. SNI: none. Sends leaf and intermediate | `tests/lab/results/L73-cisco_iosxe.md` (17.18.02) |
+| TLS | `tls trustpoint server` names the root (L73 ran it). Port 6049 with none set. Two server objects need two distinct addresses (17.18.02 drops a shared one). After a refused handshake the client marks the server dead and answers locally for 57 to 67 s. SNI: none. Sends leaf and intermediate | `tests/lab/results/L73-cisco_iosxe.md` (17.18.02) |
 
 ### Cisco NX-OS
 
@@ -83,7 +93,7 @@ No `deadtime`: `deadtime 1` locks token logins out for its minute after the serv
 | Dark | Unmeasured (L88 d) | |
 | Second server | Unmeasured (L88 f) | |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_nxos.md` (10.4) |
-| TLS | No port: dials 49. RSA key. SNI: none. Sends leaf and intermediate. With `single-connection` the login reused the probe's connection | `tests/lab/results/L73-cisco_nxos.md` (10.6(2)F); per-request commands `tests/lab/results/L80-cisco_nxos.md` |
+| TLS | `tacacs-server secure tls` is required (L73 typed it). 10.6(2)F offered no server-trustpoint keyword, so none is set. No port: dials 49. RSA key. SNI: none. Sends leaf and intermediate. With `single-connection` the login reused the probe's connection | `tests/lab/results/L73-cisco_nxos.md` (10.6(2)F); per-request commands `tests/lab/results/L80-cisco_nxos.md` |
 
 ### Arista EOS
 
@@ -127,7 +137,7 @@ so an operator is read-only here.
 | What | Measured | Note |
 |---|---|---|
 | A deny | Final with `exit-on-reject true`; break-glass is refused while port49 is up and denies it | `tests/lab/results/L76-nokia_srlinux.md` (cells d, l) |
-| port49 stopped | Unmeasured (L87, L88 b) | |
+| port49 stopped | With `exit-on-reject true`, break-glass logged in (53 ms). Under the reference: unmeasured (L88 b) | `tests/lab/results/L76-nokia_srlinux.md` (cell l) |
 | ERROR | Unmeasured (L87 a) | |
 | Dark | Unmeasured (L87 b) | |
 | Second server | Unmeasured (L88 f) | |

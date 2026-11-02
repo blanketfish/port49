@@ -61,6 +61,7 @@ system {
                 tacacs {
                     port 49
                     secret-key <KEY>
+                    # source-address is unmeasured (L88): the lab config set none.
                     source-address <SOURCE_ADDRESS>
                 }
             }
@@ -69,6 +70,7 @@ system {
                 tacacs {
                     port 49
                     secret-key <KEY>
+                    # source-address is unmeasured (L88): the lab config set none.
                     source-address <SOURCE_ADDRESS>
                 }
             }

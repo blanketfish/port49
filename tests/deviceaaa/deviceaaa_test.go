@@ -198,7 +198,7 @@ func TestNoReferenceFallsThroughOnAReject(t *testing.T) {
 					t.Errorf("Junos authentication-order must be tacplus alone: %q", l)
 				}
 			case "cisco_iosxe", "cisco_nxos", "cisco_iosxr", "arista_eos":
-				if strings.HasPrefix(l, "aaa ") && strings.Contains(l, " group ") &&
+				if strings.HasPrefix(l, "aaa ") &&
 					(strings.HasSuffix(l, " none") || strings.Contains(l, " if-authenticated")) {
 					t.Errorf("method list falls through: %q", l)
 				}
@@ -314,20 +314,69 @@ func TestTheSRLinuxReferenceFollowsL76(t *testing.T) {
 	if !strings.Contains(all, "priv-lvl-authorization true") {
 		t.Error("no priv-lvl-authorization true")
 	}
-	roles := regexp.MustCompile(`(?m)^\s*role (p49-\S+) \{$`).FindAllStringSubmatch(all, -1)
-	if len(roles) == 0 {
-		t.Fatal("no mapped roles")
+	for _, role := range []string{"p49-read", "p49-admin"} {
+		body := all[strings.Index(all, "role "+role+" {\n                services"):]
+		if end := strings.Index(body, "tacacs"); end < 0 || !strings.Contains(body[:end], "services [ cli ]") {
+			t.Errorf("role %s lacks services [ cli ] before its tacacs block", role)
+		}
 	}
-	for _, r := range roles {
-		if strings.Contains(all, "tacacs {") {
-			i := strings.Index(all, "role "+r[1]+" {")
-			j := strings.Index(all[i:], "tacacs")
-			if j > 0 && !strings.Contains(all[i:i+j], "services [ cli ]") {
-				t.Errorf("role %s lacks services [ cli ]", r[1])
+	m := regexp.MustCompile(`(?s)authentication-method \[\s*port49\s+local\s*\]`)
+	if !m.MatchString(all) {
+		t.Error("authentication-method is not port49 then local")
+	}
+	if !regexp.MustCompile(`(?s)user <BREAKGLASS_USER> \{\s*role \[\s*p49-admin\s*\]`).MatchString(all) {
+		t.Error("break-glass is not mapped to p49-admin")
+	}
+}
+
+func TestTheEOSTLSGroupMembersNameTLSAndThePort(t *testing.T) {
+	n := 0
+	for _, l := range commands(t, "arista_eos", "tls", ".cfg") {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "server ") {
+			n++
+			if !strings.Contains(l, " tls port <TLS_PORT>") {
+				t.Errorf("EOS TLS member %q lacks tls port (L73: a bare member is plain port 49)", l)
 			}
 		}
 	}
-	if strings.Count(all, "services [ cli ]") < 2 {
-		t.Error("fewer than two roles carry services [ cli ]")
+	if n != 2 {
+		t.Errorf("%d EOS TLS members, want 2", n)
+	}
+}
+
+func TestTheNXOSTLSReferenceTurnsTLSOn(t *testing.T) {
+	if !slices.Contains(commands(t, "cisco_nxos", "tls", ".cfg"), "tacacs-server secure tls") {
+		t.Error("no tacacs-server secure tls (L73 typed it; without it NX-OS speaks plain TACACS+)")
+	}
+}
+
+func TestTheIOSXETLSReferenceNamesAServerTrustpoint(t *testing.T) {
+	all := joined(t, "cisco_iosxe", "tls", ".cfg")
+	if n := strings.Count(all, " tls trustpoint server port49-root"); n != 2 {
+		t.Errorf("%d server trustpoints, want one per object", n)
+	}
+	if !strings.Contains(all, "crypto pki trustpoint port49-root") {
+		t.Error("the root trustpoint is not defined")
+	}
+	if strings.Contains(joined(t, "cisco_nxos", "tls", ".cfg"), "server-trustpoint") {
+		t.Error("NX-OS 10.6(2)F offered no server-trustpoint keyword")
+	}
+}
+
+func TestRenderRefusesUnsafeValues(t *testing.T) {
+	for _, mut := range []func(*Values){
+		func(v *Values) { v.MgmtVRF = "mgmt\nreload" },
+		func(v *Values) { v.Servers[1] = v.Servers[0] },
+		func(v *Values) { v.Servers[0] = "" },
+	} {
+		v := labValues()
+		mut(&v)
+		if _, err := Render("cisco_iosxe", "tcp", v, labKey); err == nil {
+			t.Errorf("rendered %+v", v)
+		}
+	}
+	if _, err := Render("cisco_iosxe", "tcp", labValues(), "k\nreload"); err == nil {
+		t.Error("a key with a line break rendered")
 	}
 }

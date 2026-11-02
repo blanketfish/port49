@@ -11,9 +11,10 @@
 # authentication-order is tacplus ALONE (Ryan, 2026-11-02). With password listed, a
 # port49 deny falls through to a local password (L4, both Junos images), which voids
 # the argument that a denial is final. The cost: while port49 answers ERROR, break-glass
-# waits until go-dark closes the listener (at most 5.5 s at the defaults), then logs in.
+# waits until go-dark closes the listener (about 5.5 s at the defaults, bounded at 10.5 s (L41)), then logs in.
 set system authentication-order tacplus
 #
+# The source-address lines are unmeasured (L88): the lab pinned routing-instance only.
 set system tacplus-server <PORT49_1> secret "<KEY>"
 set system tacplus-server <PORT49_1> routing-instance <MGMT_VRF>
 set system tacplus-server <PORT49_1> source-address <SOURCE_ADDRESS>
@@ -32,4 +33,5 @@ set system accounting destination tacplus server <PORT49_2> source-address <SOUR
 #
 # The break-glass account. Set its password by hand (set system login user
 # <BREAKGLASS_USER> authentication plain-text-password), never in this file.
+# This account cannot log in until you set its password by hand.
 set system login user <BREAKGLASS_USER> class super-user

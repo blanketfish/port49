@@ -23,7 +23,7 @@ type Values struct {
 	MgmtVRF         string   // the management VRF or routing instance TACACS+ runs in
 	BreakGlass      string
 	TLSPort         int
-	ServerName      string // the name the device's certificate carries (subject CN and enrolment)
+	ServerName      string // this device's own name, which its certificate carries (not port49's)
 	CertID          string // the device certificate's trustpoint or certificate id
 }
 
@@ -63,6 +63,18 @@ func Render(platform, transport string, v Values, key string) ([]string, error) 
 	}
 	if len(v.Servers) != 2 {
 		return nil, fmt.Errorf("deviceaaa: %d servers, want 2", len(v.Servers))
+	}
+	if v.Servers[0] == "" || v.Servers[0] == v.Servers[1] {
+		return nil, errors.New("deviceaaa: the two servers must be set and distinct")
+	}
+	for _, f := range []string{v.Servers[0], v.Servers[1], v.SourceInterface, v.SourceAddress, v.MgmtVRF, v.BreakGlass,
+		v.ServerName, v.CertID} {
+		if strings.ContainsAny(f, " \t\r\n<>\"") {
+			return nil, fmt.Errorf("deviceaaa: the value %q is not a single token", f)
+		}
+	}
+	if strings.ContainsAny(key, "\r\n") {
+		return nil, errors.New("deviceaaa: the key holds a line break")
 	}
 	if key == "" && transport == "tcp" {
 		return nil, errors.New("deviceaaa: an empty key")
