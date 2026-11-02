@@ -502,6 +502,7 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if hwkey.IsRef(s.key) {
 		cfg.KeyRef = clientkey.CanonicalRef(s.key)
 	}
+	cfg.KeyStore = clientkey.StoreOf(s.key)
 	return cfg, nil
 }
 

@@ -191,3 +191,29 @@ func TestAWorkloadsChangedConnectionIsTempFail(t *testing.T) {
 		t.Fatalf("a sweep's changed connection: exit %d: %q", code, errb.String())
 	}
 }
+
+// The fallback line points a token user at `port49 hwkey setup`, and a user
+// whose session key is not on a token at the both-keys rule.
+func TestFallbackLineNamesHwkeySetup(t *testing.T) {
+	req := coreRequirement()
+	req.Methods = []string{"hardware_key_touch", "idp_mfa"}
+	sock := statusStub(t, agent.Status{TouchKey: true, TouchKeyState: "absent", SessionKeyStore: "pkcs11"}, req)
+	_, errb := runToken(t, sock, true)
+	const want = "port49: the touch key is not in the machine; falling back to idp_mfa (a sign-in at your identity provider); " +
+		"to use your security key instead, run `port49 hwkey setup`\n"
+	if !strings.Contains(errb, want) {
+		t.Fatalf("stderr %q lacks %q", errb, want)
+	}
+}
+
+func TestFallbackLineForATPMKey(t *testing.T) {
+	req := coreRequirement()
+	req.Methods = []string{"hardware_key_touch", "idp_mfa"}
+	sock := statusStub(t, agent.Status{TouchKey: true, TouchKeyState: "absent", SessionKeyStore: "tpm"}, req)
+	_, errb := runToken(t, sock, true)
+	const want = "falling back to idp_mfa (a sign-in at your identity provider); " +
+		"hardware_key_touch needs both keys on one YubiKey; run `port49 hwkey setup` to check yours\n"
+	if !strings.Contains(errb, want) {
+		t.Fatalf("stderr %q lacks %q", errb, want)
+	}
+}

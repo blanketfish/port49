@@ -140,11 +140,12 @@ func prove(ctx context.Context, socket string, sf *sessionFlags, req api.PerLogi
 			// No fallback to take: the agent's own words (insert your key).
 			return c.ProveTouch(ctx, req.Challenge)
 		}
-		fmt.Fprintf(stderr, "port49: %s; falling back to idp_mfa (a sign-in at your identity provider)\n", why)
+		fmt.Fprintf(stderr, "port49: %s; falling back to idp_mfa (a sign-in at your identity provider)%s\n", why,
+			hwkeyFallbackHint(st))
 		return proveBySignIn(ctx, sf, st, req, stderr)
 	}
 	if touch && st.TouchKeyUnusable != "" {
-		fmt.Fprintf(stderr, "port49: %s\n", printsafe.Line(st.TouchKeyUnusable, 300))
+		fmt.Fprintf(stderr, "port49: %s%s\n", printsafe.Line(st.TouchKeyUnusable, 300), hwkeyUnusableHint(st))
 	}
 	switch {
 	case idp && !stdinIsTerminal():
@@ -152,10 +153,43 @@ func prove(ctx context.Context, socket string, sf *sessionFlags, req api.PerLogi
 	case idp:
 		return proveBySignIn(ctx, sf, st, req, stderr)
 	case touch:
+		if !sessionKeyOnToken(st) {
+			return errors.New("this device accepts only hardware_key_touch, and hardware_key_touch needs both keys on one " +
+				"YubiKey; your session key is not on one: run `port49 hwkey setup`, then `port49 login` again")
+		}
 		return errors.New("this device accepts only hardware_key_touch, and the agent has no touch key it can use: " +
-			"set touch_key to a key on your session key's token, and run `port49 login` again")
+			"run `port49 hwkey setup`, then `port49 login` again")
 	}
 	return fmt.Errorf("this broker verifies none of the methods this device accepts (%s)", methodList(req.Accept))
+}
+
+// sessionKeyOnToken is whether the remedy for a missing touch key is the token
+// user's. It reads the agent's Status.SessionKeyStore, a closed set, and never
+// matches a message; an agent that reports no store is taken as a token's, for
+// `port49 hwkey setup` states the TPM and file case itself.
+func sessionKeyOnToken(st agent.Status) bool {
+	return st.SessionKeyStore == "" || st.SessionKeyStore == "pkcs11"
+}
+
+// bothKeysHint is the rule a TPM, Secure Enclave or file session key breaks,
+// and the command that checks the user's key (decision 55 ruling 16).
+const bothKeysHint = "hardware_key_touch needs both keys on one YubiKey; run `port49 hwkey setup` to check yours"
+
+// hwkeyFallbackHint ends a fallback line (a touch key that cannot be touched
+// now, with idp_mfa taken instead).
+func hwkeyFallbackHint(st agent.Status) string {
+	if !sessionKeyOnToken(st) {
+		return "; " + bothKeysHint
+	}
+	return "; to use your security key instead, run `port49 hwkey setup`"
+}
+
+// hwkeyUnusableHint ends the agent's touch_key_unusable line.
+func hwkeyUnusableHint(st agent.Status) string {
+	if !sessionKeyOnToken(st) {
+		return "; " + bothKeysHint
+	}
+	return "; run `port49 hwkey setup`"
 }
 
 // configFault is a /v1/config error as the proof reports it: an outage, a

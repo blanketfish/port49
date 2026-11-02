@@ -77,3 +77,17 @@ func TestOpenRefusesAnUnknownScheme(t *testing.T) {
 		t.Fatal("a path is not a key reference")
 	}
 }
+
+func TestStoreOfNamesTheStoreNeverTheReference(t *testing.T) {
+	for ref, want := range map[string]string{
+		"pkcs11:token=YubiKey%20PIV%20%2312345678;id=%01": "pkcs11",
+		"tpm:file=/home/u/.port49/k.tpm":                  "tpm",
+		"secure-enclave:label=x":                          "secure_enclave",
+		"/home/u/.port49/key.pem":                         "file",
+		"":                                                "file",
+	} {
+		if got := StoreOf(ref); got != want {
+			t.Errorf("StoreOf(%q) = %q, want %q", ref, got, want)
+		}
+	}
+}
