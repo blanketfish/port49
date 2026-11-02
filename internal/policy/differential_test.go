@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/engine"
 )
 
 // fleetSpec is one random fleet's policy, as data so an edit can change it.
@@ -470,11 +471,39 @@ func checkSeed(t *testing.T, seed uint64, cov *coverage) {
 			}
 		}
 	}
+	// The class itself: every member of a class resolves as its first member
+	// does, for every subject at every instant, but for the name an error
+	// quotes. This is what makes sharing one member's result exact, and it
+	// holds whatever the paths below happen to read.
+	for _, members := range p.deviceClasses(devs) {
+		first := devs[members[0]]
+		for _, i := range members[1:] {
+			for _, at := range instants {
+				for _, n := range names {
+					a, aerr := oracleResolve(p, p.subs[n], first, at)
+					b, berr := oracleResolve(p, p.subs[n], devs[i], at)
+					if aerr != nil || berr != nil {
+						if aerr == nil || berr == nil || strings.ReplaceAll(aerr.Error(), first.Name, "<device>") != strings.ReplaceAll(berr.Error(), devs[i].Name, "<device>") {
+							t.Fatalf("%s: two devices of one class fail differently: %v vs %v", where("class", n, devs[i], at), aerr, berr)
+						}
+						continue
+					}
+					if !reflect.DeepEqual(a, b) {
+						t.Fatalf("%s: two devices of one class resolve differently\n  %+v\n  %+v", where("class", n, devs[i], at), a, b)
+					}
+				}
+			}
+		}
+	}
 	// The quarantine pass, entry order included.
 	oracleQ := oracleQuarantine(p)
 	if !reflect.DeepEqual(p.quarantine, oracleQ) {
 		t.Fatalf("seed %d: quarantine differs\n  got    %s\n  oracle %s", seed, dumpQuarantine(p.quarantine), dumpQuarantine(oracleQ))
 	}
+	// A quarantine is by device name, and the paths below ask it of each
+	// device itself: one injected on a device of a class, as an inventory a
+	// policy was not loaded over would give, must still be that device's alone.
+	injectQuarantine(p, devs, 0)
 	for _, at := range instants {
 		for _, plat := range fleetPlatforms {
 			got, _ := p.ClassAges(plat, 12*time.Hour, at)
@@ -490,6 +519,8 @@ func checkSeed(t *testing.T, seed uint64, cov *coverage) {
 	}
 	after, afterOK := parseFleet(t, afterText, devs)
 	if afterOK {
+		injectQuarantine(after, devs, 1)
+		checkMemoOrder(t, seed, p, after, devs)
 		got := Compare(p, after, noon)
 		want := compareWith(p, after, noon, oracleSides{})
 		if !reflect.DeepEqual(got, want) {
@@ -621,4 +652,112 @@ func FuzzDifferential(f *testing.F) {
 	f.Fuzz(func(t *testing.T, seed uint64) {
 		checkSeed(t, seed, nil)
 	})
+}
+
+// injectQuarantine quarantines, by hand, the member of every second shared
+// class at position pos (and the first member of the others), so a quarantine
+// that is not the class's own is in force.
+func injectQuarantine(p *Policy, devs []admission.Device, pos int) {
+	n := 0
+	for _, members := range p.deviceClasses(devs) {
+		if len(members) < 2 {
+			continue
+		}
+		n++
+		d := devs[members[(n+pos)%2]]
+		q, ok := p.quarantine[d.Name]
+		if !ok {
+			q = &Quarantine{Device: d.Name, Platform: d.Platform}
+			p.quarantine[d.Name] = q
+		}
+		q.Entries = append(q.Entries, QuarantineEntry{Cause: "injected"})
+	}
+}
+
+// sideShape is a side without its memo link and its program, which is
+// compared by its blob.
+func sideShape(s side) (side, engine.Blob) {
+	var blob engine.Blob
+	if s.prog != nil {
+		blob = s.prog.Blob
+	}
+	s.core, s.prog = nil, nil
+	return s, blob
+}
+
+// checkMemoOrder asks the memo for sides and requirements in random orders —
+// runs of one subject and instant over random devices, and fully random —
+// against both policies, and compares each answer with the oracle's.
+func checkMemoOrder(t *testing.T, seed uint64, before, after *Policy, devs []admission.Device) {
+	t.Helper()
+	r := rand.New(rand.NewPCG(seed, seed+2))
+	memo := newMemoSides(devs)
+	subjects := sortedKeys(before.subs)
+	for n := range after.subs {
+		if !slices.Contains(subjects, n) {
+			subjects = append(subjects, n)
+		}
+	}
+	instants := append(instantsOf(before), instantsOf(after)...)
+	for batch := range 120 {
+		subject, at := subjects[r.IntN(len(subjects))], instants[r.IntN(len(instants))]
+		for range 25 {
+			p := before
+			if chance(r, 50) {
+				p = after
+			}
+			if batch%4 == 3 {
+				subject, at = subjects[r.IntN(len(subjects))], instants[r.IntN(len(instants))]
+			}
+			i := r.IntN(len(devs))
+			got, gotBlob := sideShape(memo.side(p, subject, i, devs[i], at))
+			want, wantBlob := sideShape(oracleSide(p, subject, devs[i], at))
+			sameError(t, fmt.Sprintf("seed %d: side error of %s on %s", seed, subject, devs[i].Name[:min(len(devs[i].Name), 12)]), got.err, want.err)
+			got.err, want.err = nil, nil
+			if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(gotBlob, wantBlob) {
+				t.Fatalf("seed %d: memo side of %s on %s at %s differs\n  got    %+v\n  oracle %+v", seed, subject,
+					devs[i].Name[:min(len(devs[i].Name), 12)], at, got, want)
+			}
+			gm, gok := memo.mfaAt(p, subject, i, devs[i], at)
+			wm, wok := oracleMFAAt(p, subject, devs[i], at)
+			if gok != wok || !reflect.DeepEqual(gm, wm) {
+				t.Fatalf("seed %d: memo mfaAt of %s on %s at %s differs", seed, subject, devs[i].Name[:min(len(devs[i].Name), 12)], at)
+			}
+		}
+	}
+}
+
+// A class's requirements are worked out once and handed to every device of it:
+// each device's list is its own, so a caller that edits one changes no other.
+func TestMFARequirementsOfOneClassShareNothing(t *testing.T) {
+	text, devs := variedFleet(200, true)
+	p := benchParse(t, text, devs)
+	got := p.MFARequirements(noon)
+	if len(got) < 2 {
+		t.Fatalf("only %d devices are held to a requirement", len(got))
+	}
+	want := p.MFARequirements(noon)
+	for i := range got[0].Requirements {
+		r := &got[0].Requirements[i]
+		for j := range r.Accept {
+			r.Accept[j] = "tampered"
+		}
+		for j := range r.Levels {
+			for k := range r.Levels[j].Accept {
+				r.Levels[j].Accept[k] = "tampered"
+			}
+		}
+	}
+	got[0].Requirements[0].ReuseFrom = "tampered"
+	if again := p.MFARequirements(noon); !reflect.DeepEqual(again, want) {
+		t.Fatal("editing one device's requirements changed what the next call returns")
+	}
+	for _, d := range got[1:] {
+		if reflect.DeepEqual(d.Requirements, got[0].Requirements) {
+			continue
+		}
+		if slices.ContainsFunc(d.Requirements, func(r MFARequirement) bool { return r.ReuseFrom == "tampered" || slices.Contains(r.Accept, "tampered") }) {
+			t.Fatalf("editing %s's requirements changed %s's", got[0].Device, d.Device)
+		}
+	}
 }
