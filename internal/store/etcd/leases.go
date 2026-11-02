@@ -39,6 +39,18 @@ type leases struct {
 	held map[int64]heldLease
 	// saw, when set, sees each grant's revision (Store.Seen).
 	saw func(rev int64)
+	// grant makes a lease; the client's Grant, but for a test's.
+	grant func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error)
+	// flight is, by bucket end, the grant in flight for it: callers that
+	// find the bucket's lease full or gone wait on it and never grant their
+	// own (a slow etcd would otherwise turn each rollover into a herd).
+	flight map[int64]*grantFlight
+}
+
+// grantFlight is one grant in flight: done closes when it ends, err says how.
+type grantFlight struct {
+	done chan struct{}
+	err  error
 }
 
 type heldLease struct {
@@ -49,7 +61,8 @@ type heldLease struct {
 }
 
 func newLeases(cli *clientv3.Client, now func() time.Time, grace time.Duration) *leases {
-	return &leases{cli: cli, now: now, grace: grace, held: map[int64]heldLease{}}
+	return &leases{cli: cli, now: now, grace: grace, held: map[int64]heldLease{}, flight: map[int64]*grantFlight{},
+		grant: func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) { return cli.Grant(ctx, ttl) }}
 }
 
 // wall is the wall clock with its monotonic reading stripped. The
@@ -73,19 +86,50 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 	if need < l.grace {
 		need = l.grace
 	}
-	w := wall()
-	l.mu.Lock()
-	if h, ok := l.held[end.Unix()]; ok && !h.until.Before(w.Add(need)) && w.Sub(h.granted) < leaseBucket && h.attach < maxAttachesPerLease {
-		h.attach++
-		l.held[end.Unix()] = h
+	key := end.Unix()
+	for {
+		w := wall()
+		l.mu.Lock()
+		if h, ok := l.held[key]; ok && !h.until.Before(w.Add(need)) && w.Sub(h.granted) < leaseBucket && h.attach < maxAttachesPerLease {
+			h.attach++
+			l.held[key] = h
+			l.mu.Unlock()
+			return h.id, nil
+		}
+		if f, ok := l.flight[key]; ok {
+			// A grant for this bucket is under way: wait for it, never grant
+			// a second. Its error is ours; its lease is looked for again.
+			l.mu.Unlock()
+			select {
+			case <-f.done:
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
+			if f.err != nil {
+				return 0, f.err
+			}
+			continue
+		}
+		f := &grantFlight{done: make(chan struct{})}
+		l.flight[key] = f
 		l.mu.Unlock()
-		return h.id, nil
+		id, err := l.grantFor(ctx, key, need)
+		l.mu.Lock()
+		delete(l.flight, key)
+		l.mu.Unlock()
+		f.err = err
+		close(f.done)
+		return id, err
 	}
-	l.mu.Unlock()
+}
+
+// grantFor grants the lease for the bucket at key and caches it, one attach
+// taken by the caller.
+func (l *leases) grantFor(ctx context.Context, key int64, need time.Duration) (clientv3.LeaseID, error) {
 	// A bucket's worth more, so records of the same bucket put later still
 	// fit on it.
 	ttl := int64(math.Ceil((need + leaseBucket).Seconds()))
-	resp, err := l.cli.Grant(ctx, ttl)
+	resp, err := l.grant(ctx, ttl)
 	if err != nil {
 		return 0, err
 	}
@@ -94,8 +138,8 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	w = wall()
-	l.held[end.Unix()] = heldLease{id: resp.ID, attach: 1, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
+	w := wall()
+	l.held[key] = heldLease{id: resp.ID, attach: 1, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
 	for b, h := range l.held {
 		if h.until.Before(w) || w.Sub(h.granted) >= leaseBucket {
 			delete(l.held, b)
