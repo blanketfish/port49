@@ -413,3 +413,15 @@ func TestAReasonFromOutsideIsMasked(t *testing.T) {
 		}
 	}
 }
+
+// On macOS nothing is probed (no confirmed path), so the refusal says to pass --module first and
+// does not send a Mac user who has yubico-piv-tool installed to install it.
+func TestTheNoModuleLineSaysPassModuleOnAMac(t *testing.T) {
+	mac := NoModuleMessage("darwin")
+	if !strings.HasPrefix(mac, "no libykcs11 is probed on macOS: pass --module PATH") || strings.Contains(mac, "install yubico-piv-tool") {
+		t.Errorf("%q", mac)
+	}
+	if got := NoModuleMessage("linux"); got != ErrNoModule.Error() {
+		t.Errorf("linux: %q", got)
+	}
+}

@@ -269,7 +269,11 @@ func (h *hwkeyRun) findModule(flagPath string) (string, int) {
 	p, err := hwkeysetup.FindModule(moduleRoot, runtime.GOOS, runtime.GOARCH, userconfig.CheckOwned,
 		func(s string) { fmt.Fprintf(h.stderr, "port49: %s\n", s) })
 	if err != nil {
-		fmt.Fprintf(h.stderr, "port49: %v\n", err)
+		msg := err.Error()
+		if errors.Is(err, hwkeysetup.ErrNoModule) {
+			msg = hwkeysetup.NoModuleMessage(runtime.GOOS)
+		}
+		fmt.Fprintf(h.stderr, "port49: %s\n", msg)
 		return "", 2
 	}
 	fmt.Fprintf(h.info, "module: %s (found)\n", p)

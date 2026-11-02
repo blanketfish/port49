@@ -364,6 +364,17 @@ func hostOf(broker string) string {
 // ErrNoModule is no libykcs11 anywhere setup looks (exit 2).
 var ErrNoModule = errors.New("no libykcs11 found; install yubico-piv-tool or pass --module")
 
+// NoModuleMessage is the line printed when no module is found. On macOS no path is probed (none is
+// confirmed: Homebrew's formula names no libykcs11 file, and its prefix is group-writable, which
+// userconfig.CheckOwned refuses), so it says to pass --module and does not tell a Mac user who has
+// yubico-piv-tool to install it.
+func NoModuleMessage(goos string) string {
+	if goos == "darwin" {
+		return "no libykcs11 is probed on macOS: pass --module PATH, the libykcs11.dylib of your yubico-piv-tool install"
+	}
+	return ErrNoModule.Error()
+}
+
 // ModuleCandidates are the system paths a libykcs11 is probed at, in order,
 // under root (a stand-in for "/" in tests). Each path is one a package's
 // published file list shows (checked 2026-11-02); a path no package is known to
@@ -377,9 +388,12 @@ var ErrNoModule = errors.New("no libykcs11 found; install yubico-piv-tool or pas
 //   - Fedora and RHEL, package yubico-piv-tool (packages.fedoraproject.org, rawhide):
 //     /usr/lib64/libykcs11.so.2. The unversioned libykcs11.so is not in that
 //     package's list, so it is not probed.
-//   - macOS: none. Homebrew's formula page and Yubico's documentation name no
-//     libykcs11.dylib path and no Intel bottle, so a Mac passes --module. No
-//     Linux /usr/local/lib path either: only a source build puts one there.
+//   - macOS: none (re-checked 2026-11-02, fix round 1). The ykcs11 CMake install rules put
+//     the shared library in the install lib dir under the name libykcs11, but Homebrew's
+//     formula page and API list no installed file and no Intel bottle, so the file name at
+//     Homebrew's prefix is not shown by a package. A Homebrew prefix is also group-writable
+//     (admin group), which userconfig.CheckOwned refuses. A Mac passes --module. No Linux
+//     /usr/local/lib path either: only a source build puts one there.
 func ModuleCandidates(root, goos, goarch string) []string {
 	var rel []string
 	switch goos {
