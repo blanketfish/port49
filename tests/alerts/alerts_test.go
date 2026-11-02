@@ -1,0 +1,225 @@
+package alerts
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+type rule struct {
+	Alert       string            `yaml:"alert"`
+	Expr        string            `yaml:"expr"`
+	For         string            `yaml:"for"`
+	Labels      map[string]string `yaml:"labels"`
+	Annotations map[string]string `yaml:"annotations"`
+}
+
+type group struct {
+	Name  string `yaml:"name"`
+	Rules []rule `yaml:"rules"`
+}
+
+func read(t *testing.T, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func loadRules(t *testing.T) []group {
+	t.Helper()
+	var f struct {
+		Groups []group `yaml:"groups"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/alerts/port49.rules.yaml")), &f); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Groups) == 0 {
+		t.Fatal("deploy/alerts/port49.rules.yaml holds no groups")
+	}
+	return f.Groups
+}
+
+func allRules(t *testing.T) []rule {
+	var out []rule
+	for _, g := range loadRules(t) {
+		out = append(out, g.Rules...)
+	}
+	return out
+}
+
+// Every port49_ name in an expression is one port49 registers (the etcd group's etcd_ names are etcd's).
+func TestEveryAlertNamesARegisteredMetric(t *testing.T) {
+	names, err := RegisteredNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	have := map[string]bool{}
+	for _, n := range names {
+		have[n] = true
+	}
+	tok := regexp.MustCompile(`port49_[a-z0-9_]+`)
+	for _, r := range allRules(t) {
+		found := tok.FindAllString(r.Expr, -1)
+		if strings.HasPrefix(r.Alert, "port49_") && len(found) == 0 {
+			t.Errorf("%s: its expression names no port49 metric: %s", r.Alert, r.Expr)
+		}
+		for _, n := range found {
+			base := n
+			if !have[base] {
+				for _, suf := range []string{"_bucket", "_sum", "_count"} {
+					if s := strings.TrimSuffix(n, suf); s != n && have[s] {
+						base = s
+					}
+				}
+			}
+			if !have[base] {
+				t.Errorf("%s: %s is not a registered metric", r.Alert, n)
+			}
+		}
+	}
+}
+
+func TestEveryAlertIsSnakeCaseAndHasASeverity(t *testing.T) {
+	name := regexp.MustCompile(`^(port49|etcd)_[a-z0-9_]+$`)
+	seen := map[string]bool{}
+	for _, r := range allRules(t) {
+		if !name.MatchString(r.Alert) {
+			t.Errorf("alert %q is not snake_case under port49_ or etcd_", r.Alert)
+		}
+		if seen[r.Alert] {
+			t.Errorf("alert %s is defined twice", r.Alert)
+		}
+		seen[r.Alert] = true
+		if s := r.Labels["severity"]; s != "page" && s != "ticket" {
+			t.Errorf("%s: severity %q, want page or ticket", r.Alert, s)
+		}
+		sum := r.Annotations["summary"]
+		if sum == "" {
+			t.Errorf("%s: no summary", r.Alert)
+		}
+		for _, l := range deviceLabels {
+			if strings.Contains(sum, "$labels."+l) {
+				t.Errorf("%s: the summary names the device label %s", r.Alert, l)
+			}
+		}
+		for k := range r.Labels {
+			if k != "severity" {
+				t.Errorf("%s: label %s: only severity is set by a rule", r.Alert, k)
+			}
+		}
+	}
+}
+
+// deviceLabels are labels that would name a device or a person. source is not one: on the inventory
+// metrics it is the connector, a bounded set.
+var deviceLabels = []string{"device", "nas", "name", "address", "principal", "subject", "username"}
+
+func TestNoAlertAggregatesByADeviceLabel(t *testing.T) {
+	clause := regexp.MustCompile(`\b(?:by|without|on|ignoring|group_left|group_right)\s*\(([^)]*)\)`)
+	matcher := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*(?:=~|!~|!=|=)\s*"`)
+	for _, r := range allRules(t) {
+		var used []string
+		for _, m := range clause.FindAllStringSubmatch(r.Expr, -1) {
+			for _, l := range strings.Split(m[1], ",") {
+				used = append(used, strings.TrimSpace(l))
+			}
+		}
+		for _, m := range matcher.FindAllStringSubmatch(r.Expr, -1) {
+			used = append(used, m[1])
+		}
+		for _, l := range used {
+			if slices.Contains(deviceLabels, l) {
+				t.Errorf("%s: its expression names the device label %q: %s", r.Alert, l, r.Expr)
+			}
+		}
+	}
+}
+
+// RegisteredNames sees a vector with no child, and reads the name out of Desc.String().
+func TestRegisteredNamesParsesDescString(t *testing.T) {
+	names, err := RegisteredNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(names, "port49_connections_shed_total") {
+		t.Errorf("port49_connections_shed_total, a vector with no child at construction, is missing from %d names", len(names))
+	}
+	if !slices.Contains(names, "port49_inventory_syncs_total") {
+		t.Error("the inventory constructor's metrics are missing")
+	}
+}
+
+var readmeRow = regexp.MustCompile("^\\|.*\\| `([a-z0-9_]+)` \\| (?:page|ticket) \\|")
+
+func TestEveryReadmeRowHasARuleAndEveryRuleARow(t *testing.T) {
+	var rows, rules []string
+	for _, l := range strings.Split(read(t, "deploy/alerts/README.md"), "\n") {
+		if m := readmeRow.FindStringSubmatch(l); m != nil {
+			rows = append(rows, m[1])
+		}
+	}
+	for _, r := range allRules(t) {
+		rules = append(rules, r.Alert)
+	}
+	sort.Strings(rows)
+	sort.Strings(rules)
+	if !slices.Equal(rows, rules) {
+		t.Errorf("the README table and the rules differ.\nREADME only: %v\nrules only: %v", minus(rows, rules), minus(rules, rows))
+	}
+}
+
+func minus(a, b []string) []string {
+	var out []string
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// Helm cannot read outside the chart, so the chart carries a copy, and it is the same bytes.
+func TestTheChartCarriesTheSameRules(t *testing.T) {
+	if read(t, "deploy/helm/port49/files/port49.rules.yaml") != read(t, "deploy/alerts/port49.rules.yaml") {
+		t.Error("deploy/helm/port49/files/port49.rules.yaml differs from deploy/alerts/port49.rules.yaml: copy it over")
+	}
+}
+
+// promtool checks the cases (make alerts-check); this pins that none is missing.
+func TestEveryAlertHasAPromtoolCase(t *testing.T) {
+	var f struct {
+		Tests []struct {
+			Alerts []struct {
+				Alertname string `yaml:"alertname"`
+				Exp       []any  `yaml:"exp_alerts"`
+			} `yaml:"alert_rule_test"`
+		} `yaml:"tests"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/alerts/port49.rules.test.yaml")), &f); err != nil {
+		t.Fatal(err)
+	}
+	fires, quiet := map[string]bool{}, map[string]bool{}
+	for _, tc := range f.Tests {
+		for _, a := range tc.Alerts {
+			if len(a.Exp) > 0 {
+				fires[a.Alertname] = true
+			} else {
+				quiet[a.Alertname] = true
+			}
+		}
+	}
+	for _, r := range allRules(t) {
+		if !fires[r.Alert] || !quiet[r.Alert] {
+			t.Errorf("%s: promtool case where it fires: %v, where it stays quiet: %v", r.Alert, fires[r.Alert], quiet[r.Alert])
+		}
+	}
+}

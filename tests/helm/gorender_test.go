@@ -26,6 +26,14 @@ import (
 
 const chartDir = "../../deploy/helm/port49"
 
+// chartFiles is .Files: Get reads a file of the chart, as Helm's does.
+type chartFiles struct{}
+
+func (chartFiles) Get(name string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(chartDir, filepath.FromSlash(name)))
+	return string(b), err
+}
+
 // mergeInto copies src into dst: maps merge, everything else (lists included) is replaced, as
 // Helm merges a values file over the chart's defaults.
 func mergeInto(dst, src map[string]any) map[string]any {
@@ -106,6 +114,7 @@ func goRenderErr(t *testing.T, valuesFiles ...string) ([]doc, error) {
 		"Release":  map[string]any{"Name": "t", "Namespace": "port49", "Service": "Helm"},
 		"Chart":    map[string]any{"Name": chart["name"], "Version": chart["version"], "AppVersion": chart["appVersion"]},
 		"Template": map[string]any{"BasePath": "port49/templates"},
+		"Files":    chartFiles{},
 	}
 	root := template.New("port49").Option("missingkey=error")
 	root.Funcs(template.FuncMap{

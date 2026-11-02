@@ -86,6 +86,13 @@ autoscaling:
   maxReplicas: 6
   averageConnections: 500
 
+# The alert rules (files/port49.rules.yaml, a copy of deploy/alerts/port49.rules.yaml) as a
+# Prometheus Operator PrometheusRule. Off: it needs the operator's CRD. labels are the ones your
+# Prometheus selects rules on.
+prometheusRule:
+  enabled: false
+  labels: {}
+
 issuerDiscovery:
   enabled: false
 

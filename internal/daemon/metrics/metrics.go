@@ -352,6 +352,10 @@ type Metrics struct {
 	// issuing CA in use expires; 0 when none is loaded. Where issuance is
 	// configured, alert on 0, and on it within 90 days.
 	IssuingCANotAfter prometheus.Gauge
+	// port49_issuing_ca_configured: 1 on a broker whose
+	// broker.identity.issuance is set, 0 otherwise, so the alert on the CA
+	// gauge's 0 needs no hand-set scrape label.
+	IssuingCAConfigured prometheus.Gauge
 	// port49_directory_queries_total{server, outcome}: directory queries by
 	// server (host:port) and outcome: ok, fault (the server's), error (the
 	// query's answer), refused (the dial or bind was refused, no fault).
@@ -862,6 +866,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			[]string{"outcome"}),
 		IssuingCANotAfter: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_not_after_timestamp_seconds",
 			Help: "The Unix time the issuing CA in use expires; 0 when none is loaded."}),
+		IssuingCAConfigured: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_configured",
+			Help: "1 when this broker is configured to issue certificates; alert on port49_issuing_ca_not_after_timestamp_seconds == 0 where this is 1."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
 			Help: "Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
 			[]string{"server", "outcome"}),
@@ -1040,7 +1046,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
-		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter)
+		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter, m.IssuingCAConfigured)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)

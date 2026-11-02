@@ -478,3 +478,33 @@ func TestTheNotesGiveTheRunnableCopyIssuerLineOnlyWithIssuance(t *testing.T) {
 		t.Error("the copy-issuer line is printed whether or not issuance is on")
 	}
 }
+
+// No PrometheusRule renders by default; with prometheusRule.enabled one does, holding the alert
+// file's groups, and the labels the operator's Prometheus selects on (plan 12c, Task 5).
+func TestPrometheusRuleIsOffByDefault(t *testing.T) {
+	for _, d := range render(t, goRender, "") {
+		if kindOf(d) == "PrometheusRule" {
+			t.Fatalf("a PrometheusRule renders by default: %v", nameOf(d))
+		}
+	}
+	docs := render(t, goRender, "prometheusRule: {enabled: true, labels: {release: kube-prometheus}}\n")
+	r := one(t, docs, "PrometheusRule", "t")
+	if str(at(r, "metadata", "labels", "release")) != "kube-prometheus" {
+		t.Errorf("the rule's labels: %v", at(r, "metadata", "labels"))
+	}
+	var want struct {
+		Groups []any `yaml:"groups"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/alerts/port49.rules.yaml")), &want); err != nil {
+		t.Fatal(err)
+	}
+	got := list(at(r, "spec", "groups"))
+	if len(want.Groups) == 0 || len(got) != len(want.Groups) {
+		t.Fatalf("the rule holds %d groups, the file %d", len(got), len(want.Groups))
+	}
+	for i := range got {
+		if str(at(got[i], "name")) != str(at(want.Groups[i], "name")) || len(list(at(got[i], "rules"))) != len(list(at(want.Groups[i], "rules"))) {
+			t.Errorf("group %d differs from the file's", i)
+		}
+	}
+}

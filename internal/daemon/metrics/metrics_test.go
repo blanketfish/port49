@@ -495,3 +495,27 @@ func TestRestoreGuardUntilReachesTheRegistryWithNoLabels(t *testing.T) {
 	}
 	t.Fatal("port49_redemption_restore_guard_until_timestamp_seconds is not registered")
 }
+
+// port49_issuing_ca_configured reaches the registry with no labels and reads
+// 0 until a broker with issuance sets it (plan 12c, Task 5).
+func TestIssuingCAConfiguredReachesTheRegistryAtZero(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != "port49_issuing_ca_configured" {
+			continue
+		}
+		if len(f.GetMetric()) != 1 || len(f.GetMetric()[0].GetLabel()) != 0 {
+			t.Fatalf("want one series without labels: %v", f.GetMetric())
+		}
+		if v := testutil.ToFloat64(m.IssuingCAConfigured); v != 0 {
+			t.Fatalf("starts at %v, want 0", v)
+		}
+		return
+	}
+	t.Fatal("port49_issuing_ca_configured is not registered")
+}

@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -495,6 +495,25 @@ bin/helm: bin/helm-$(HELM_VERSION)
 
 helm-test: bin/helm-$(HELM_VERSION)
 	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
+
+# The alert rules' checks (plan 12c, Task 5). promtool is pinned by sha256 (the digest is the one in the
+# release's sha256sums.txt). `make alerts-check` syntax-checks the rules, then runs their unit tests;
+# tests/alerts checks them against the metrics port49 registers, in `make test`.
+PROMTOOL_VERSION ?= 3.5.0
+PROMTOOL_SHA256_LINUX_AMD64 = e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
+
+bin/promtool-$(PROMTOOL_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install promtool $(PROMTOOL_VERSION) yourself and put it at bin/promtool-$(PROMTOOL_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/prometheus.tar.gz https://github.com/prometheus/prometheus/releases/download/v$(PROMTOOL_VERSION)/prometheus-$(PROMTOOL_VERSION).linux-amd64.tar.gz
+	echo "$(PROMTOOL_SHA256_LINUX_AMD64)  bin/prometheus.tar.gz" | sha256sum -c -
+	tar -xzf bin/prometheus.tar.gz -C bin --strip-components=1 prometheus-$(PROMTOOL_VERSION).linux-amd64/promtool
+	mv bin/promtool bin/promtool-$(PROMTOOL_VERSION)
+	rm bin/prometheus.tar.gz
+
+alerts-check: bin/promtool-$(PROMTOOL_VERSION)
+	bin/promtool-$(PROMTOOL_VERSION) check rules deploy/alerts/port49.rules.yaml
+	bin/promtool-$(PROMTOOL_VERSION) test rules deploy/alerts/port49.rules.test.yaml
 
 # The container and cluster smokes run with enough privilege to escape to the host if their contents are
 # hostile, so they refuse to start on a host with a TPM (/dev/tpm0, /dev/tpmrm0) or a Yubico hidraw device,
