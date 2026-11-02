@@ -1263,6 +1263,9 @@ func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 			r.sayf("%s\n", n)
 		}
 	}
+	if r.metrics != nil {
+		r.metrics.SetSingleDeviceKeyRefs(policySingleDeviceKeyRefs(pol))
+	}
 	r.rereadKeyFiles("reload")
 	assigned := func(device string) string {
 		a, _ := pol.Admitted(device)

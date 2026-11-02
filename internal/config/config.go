@@ -1129,10 +1129,10 @@ func load(path string, role Role) (Config, error) {
 		if d.EffectiveTransport() == admission.TransportTLS {
 			continue // its pin is ignored, as with a broker (decision 50 rulings 3, 18)
 		}
-		if d.KeyRef != "" && !admission.KeyRefShape.MatchString(d.KeyRef) {
+		if d.KeyRef != "" && admission.KeyRefRefusal(d.KeyRef) != "" {
 			// Not printed: a pin that is not a name may be a secret.
-			return Config{}, fmt.Errorf("config: device %q pins a key_ref that is not a valid key_ref name (%s)",
-				d.Name, admission.KeyRefShapeRule)
+			return Config{}, fmt.Errorf("config: device %q pins a key_ref that is not a valid key_ref name (%s) "+
+				"or is the reserved name %s", d.Name, admission.KeyRefShapeRule, admission.ReservedKeyRef)
 		}
 		if d.KeyRef != "" {
 			if _, ok := c.Keys[d.KeyRef]; !ok {

@@ -346,3 +346,67 @@ func TestTLSHandshakeSeriesExistFromTheStart(t *testing.T) {
 		t.Fatalf("%d outcome series before any handshake, want 14", n)
 	}
 }
+
+func TestASingleDeviceKeyRefIsNotALabel(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	m.SetSingleDeviceKeyRefs(map[string]bool{"r1_pin": true})
+	if k, v := m.KeyLabels("r1_pin", 3); k != SingleDeviceKeyRef || v != AnyVersion {
+		t.Fatalf("KeyLabels(r1_pin, 3) = (%q, %q)", k, v)
+	}
+	m.WatchKeys(func() []KeySample {
+		return []KeySample{{KeyRef: "r1_pin", Version: 3, Devices: 1, RetireAt: now.Add(time.Hour)}}
+	}, func() time.Time { return now })
+	ref, ver := m.KeyLabels("r1_pin", 3)
+	m.KeyValidations.WithLabelValues(ref, ver, "validated").Inc()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		for _, s := range mf.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if strings.Contains(l.GetValue(), "r1_pin") {
+					t.Fatalf("%s has a label naming the pin: %s", mf.GetName(), l.GetValue())
+				}
+			}
+		}
+	}
+}
+
+func TestTwoDevicesKeepTheirKeyRef(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	m.SetSingleDeviceKeyRefs(map[string]bool{"r1_pin": true})
+	if k, v := m.KeyLabels("core", 2); k != "core" || v != "2" {
+		t.Fatalf("KeyLabels(core, 2) = (%q, %q)", k, v)
+	}
+}
+
+// A single-device key that no device presents does not count, and the least
+// retirement among those that do is the one reported.
+func TestTheSingleDeviceRetirementIsTheLeastPresented(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	m.SetSingleDeviceKeyRefs(map[string]bool{"a_pin": true, "b_pin": true, "c_pin": true})
+	m.WatchKeys(func() []KeySample {
+		return []KeySample{
+			{KeyRef: "a_pin", Version: 1, Devices: 1, RetireAt: now.Add(10 * 24 * time.Hour)},
+			{KeyRef: "b_pin", Version: 1, Devices: 0, RetireAt: now.Add(24 * time.Hour)},
+			{KeyRef: "c_pin", Version: 2, Devices: 1},
+		}
+	}, func() time.Time { return now })
+	want := `
+# HELP port49_key_retirement_seconds Seconds until a key version's retire_after passes; negative once it has.
+# TYPE port49_key_retirement_seconds gauge
+port49_key_retirement_seconds{key_ref="single_device",version="any"} 864000
+# HELP port49_key_version_devices Devices whose latest validated connection since start used this key version.
+# TYPE port49_key_version_devices gauge
+port49_key_version_devices{key_ref="single_device",version="any"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "port49_key_version_devices",
+		"port49_key_retirement_seconds"); err != nil {
+		t.Fatal(err)
+	}
+}

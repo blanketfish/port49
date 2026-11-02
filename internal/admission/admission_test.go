@@ -492,3 +492,11 @@ func TestASecondInventoryDocumentIsRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestKeyRefRefusal(t *testing.T) {
+	for ref, refused := range map[string]bool{"core": false, "single_device": true, "Core": true, "": true, "single_devices": false} {
+		if got := KeyRefRefusal(ref) != ""; got != refused {
+			t.Errorf("KeyRefRefusal(%q) refused=%v, want %v", ref, got, refused)
+		}
+	}
+}

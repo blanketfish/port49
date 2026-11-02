@@ -1299,6 +1299,26 @@ func TestAValidatedExchangeNamesItsKey(t *testing.T) {
 	}
 }
 
+// A key one device holds is counted under single_device/any, never under a
+// label that names it (ruling 4).
+func TestAValidationOfASingleDeviceKeyIsNotLabelledByIt(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, nil)
+	ts.metrics.SetSingleDeviceKeyRefs(map[string]bool{"prod_key": true})
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	c.recv(t)
+	if !waitFor(t, func() bool {
+		return testutil.ToFloat64(ts.metrics.KeyValidations.WithLabelValues("single_device", "any", "validated")) == 1
+	}) {
+		t.Fatal("the validation was not counted under single_device/any")
+	}
+	if n := testutil.ToFloat64(ts.metrics.KeyValidations.WithLabelValues("prod_key", "2", "validated")); n != 0 {
+		t.Fatalf("prod_key v2 validated %v times: the label names the key", n)
+	}
+}
+
 // A device admission refuses — no key group admits it, two tie, or its
 // key_ref is one port49d holds no key for — is closed after the header, at
 // once, with nothing decrypted and no strike, and recorded apart from both

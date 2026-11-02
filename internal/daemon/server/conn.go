@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -505,14 +504,13 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 				// It would have validated under a version the reload took out
 				// of service: port49d's change, not the device's. As a withdrawal
 				// mid-connection: the record, the count, a reset, no strike.
-				s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(w.Version),
-					string(keyring.DiagMatchesRetired)).Inc()
+				s.keyValidation(w.Version, keyring.DiagMatchesRetired)
 				s.unvalidated(h, obf, keyring.DiagMatchesRetired, w.Version)
 				s.reset()
 				return nil, false
 			}
 		}
-		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
+		s.keyValidation(r.Version, r.Diagnosis)
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
 			// more: no admission, no reply. The strike is counted, and the next
@@ -541,8 +539,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		// refreshes its snapshot"). The device is still admitted, so there is
 		// no decline window either: its next connection is served, on the new
 		// version or struck then for the old one.
-		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(s.version),
-			string(keyring.DiagMatchesRetired)).Inc()
+		s.keyValidation(s.version, keyring.DiagMatchesRetired)
 		s.unvalidated(h, obf, keyring.DiagMatchesRetired, s.version)
 		s.reset()
 		return nil, false
@@ -552,8 +549,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		// retire_after; this packet is not trial-decrypted, since nothing it
 		// could say would change the answer (spec §10). It is closed as a
 		// first-packet miss is: struck, and reset at once.
-		s.d.Metrics.KeyValidations.WithLabelValues(s.dev.KeyRef, strconv.Itoa(s.version),
-			string(keyring.DiagMatchesRetired)).Inc()
+		s.keyValidation(s.version, keyring.DiagMatchesRetired)
 		s.keyMiss(h, obf, keyring.DiagMatchesRetired, s.version)
 		return nil, false
 	}
@@ -768,4 +764,12 @@ func (s *conn) closeTLSAtShutdown(tc *tls.Conn) {
 		_ = s.raw.Close()
 		<-closed
 	}
+}
+
+// keyValidation counts one key validation outcome under the labels
+// Metrics.KeyLabels gives the device's key_ref: a key one device holds is
+// never a label.
+func (s *conn) keyValidation(version int, outcome keyring.Diagnosis) {
+	ref, ver := s.d.Metrics.KeyLabels(s.dev.KeyRef, version)
+	s.d.Metrics.KeyValidations.WithLabelValues(ref, ver, string(outcome)).Inc()
 }

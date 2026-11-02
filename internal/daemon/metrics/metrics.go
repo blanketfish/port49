@@ -10,6 +10,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
+	"github.com/blanketfish/port49/internal/admission"
 	"github.com/blanketfish/port49/internal/devicecert"
 	"github.com/blanketfish/port49/internal/store/guard"
 )
@@ -535,6 +536,29 @@ type Metrics struct {
 	InventoryFetches *prometheus.CounterVec
 	inventoryAge     atomic.Pointer[func() float64]
 	keys             atomic.Pointer[keyWatch]
+	singleDevice     atomic.Pointer[map[string]bool]
+}
+
+// What the key series carry in place of a key_ref only one device holds, and
+// in place of the version: a label that named the key would name the device
+// (no device identity in metric labels). admission.ReservedKeyRef is the same
+// name, so no real key collides with it.
+const (
+	SingleDeviceKeyRef = admission.ReservedKeyRef
+	AnyVersion         = "any"
+)
+
+// SetSingleDeviceKeyRefs sets which key_refs exactly one device holds; the
+// key series report those under SingleDeviceKeyRef and AnyVersion.
+func (m *Metrics) SetSingleDeviceKeyRefs(refs map[string]bool) { m.singleDevice.Store(&refs) }
+
+// KeyLabels is the key_ref and version labels for ref at version: the pair
+// itself, or (SingleDeviceKeyRef, AnyVersion) when one device holds ref.
+func (m *Metrics) KeyLabels(ref string, version int) (keyRef, ver string) {
+	if s := m.singleDevice.Load(); s != nil && (*s)[ref] {
+		return SingleDeviceKeyRef, AnyVersion
+	}
+	return ref, strconv.Itoa(version)
 }
 
 // KeySample is one key version at a scrape: how many devices' latest
@@ -569,12 +593,33 @@ func (k keyCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	now := w.now()
+	// The single-device versions are one series: the devices on those that
+	// retire, and the soonest retirement among those a device presents.
+	var single, soonest *time.Time
+	var singleDevices int
 	for _, s := range w.sample() {
+		if set := k.m.singleDevice.Load(); set != nil && (*set)[s.KeyRef] {
+			if s.RetireAt.IsZero() {
+				continue
+			}
+			single = &s.RetireAt
+			singleDevices += s.Devices
+			if s.Devices > 0 && (soonest == nil || s.RetireAt.Before(*soonest)) {
+				soonest = &s.RetireAt
+			}
+			continue
+		}
 		v := strconv.Itoa(s.Version)
 		ch <- prometheus.MustNewConstMetric(k.devices, prometheus.GaugeValue, float64(s.Devices), s.KeyRef, v)
 		if !s.RetireAt.IsZero() {
 			ch <- prometheus.MustNewConstMetric(k.retires, prometheus.GaugeValue, s.RetireAt.Sub(now).Seconds(), s.KeyRef, v)
 		}
+	}
+	if single != nil {
+		ch <- prometheus.MustNewConstMetric(k.devices, prometheus.GaugeValue, float64(singleDevices), SingleDeviceKeyRef, AnyVersion)
+	}
+	if soonest != nil {
+		ch <- prometheus.MustNewConstMetric(k.retires, prometheus.GaugeValue, soonest.Sub(now).Seconds(), SingleDeviceKeyRef, AnyVersion)
 	}
 }
 

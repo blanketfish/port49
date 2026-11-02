@@ -1289,6 +1289,13 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	keysFor, allKeys := keysOf(cfg, dk)
 	seen := &keyring.Seen{}
+	// A key_ref one device holds is never a metric label; the reloader sets
+	// it again at each swap.
+	if live != nil {
+		m.SetSingleDeviceKeyRefs(policySingleDeviceKeyRefs(live.Load()))
+	} else {
+		m.SetSingleDeviceKeyRefs(indexSingleDeviceKeyRefs(cfg))
+	}
 	m.WatchKeys(func() []metrics.KeySample {
 		var out []metrics.KeySample
 		sets := allKeys()

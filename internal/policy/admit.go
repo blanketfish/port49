@@ -42,9 +42,9 @@ func (p *Policy) buildKeyGroups(f file) error {
 		if g.KeyRef == "" {
 			return fmt.Errorf("%s: key_ref is required: every group names the key it admits", at)
 		}
-		if !admission.KeyRefShape.MatchString(g.KeyRef) {
-			return fmt.Errorf("%s: key_ref is not a valid key_ref name (%s): it names the key, never holds it",
-				at, admission.KeyRefShapeRule)
+		if admission.KeyRefRefusal(g.KeyRef) != "" {
+			return fmt.Errorf("%s: key_ref is not a valid key_ref name (%s) or is the reserved name %s: "+
+				"it names the key, never holds it", at, admission.KeyRefShapeRule, admission.ReservedKeyRef)
 		}
 		kg := admission.KeyGroup{Name: g.Match.Name, Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
 		// Not quoted: a value that is no name is not echoed. 253 is the
