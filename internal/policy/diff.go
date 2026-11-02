@@ -255,19 +255,25 @@ type SessionCeilingChange struct {
 	At         time.Time
 	Old, New   string
 	Lengthened bool
+	// DependsOnDefault is whether either side leaves a role's ceiling to
+	// port49d's default, which the diff cannot see.
+	DependsOnDefault bool
 }
 
-// lengthens is whether now may outlast was, given that the default is unknown.
+// lengthens is whether now may outlast was, given that the default is
+// unknown: where the outcome depends on it, the answer is yes.
 func (now SessionAge) lengthens(was SessionAge) bool {
 	switch {
 	case now.Never:
 		return !was.Never
+	case was.Never:
+		return false
 	case now.Least == 0:
 		return true // the default
-	case was.Least == 0:
-		return false // from never, or from the default, which a role's own or the default bounds
+	case !now.Unset && was.Unset:
+		return true // a role's own age replaces the default
 	}
-	return now.Least > was.Least
+	return was.Least != 0 && now.Least > was.Least
 }
 
 // LevelChange is a privilege change (spec §6, §12): the level the roles
@@ -758,7 +764,7 @@ func (c *comparison) ceiling(subject string, devices []string, at time.Time, was
 		}
 	}
 	c.d.SessionCeilings = append(c.d.SessionCeilings, SessionCeilingChange{Subject: subject, Devices: slices.Clone(devices),
-		At: at, Old: old, New: now, Lengthened: is.lengthens(was)})
+		At: at, Old: old, New: now, Lengthened: is.lengthens(was), DependsOnDefault: was.Unset || is.Unset})
 }
 
 // group compares one subject on devices that hold the same blobs.

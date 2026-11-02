@@ -664,6 +664,8 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		switch {
 		case sc.Lengthened && sc.New == "default":
 			tail = " (may lengthen: to session.max_session_age_default)"
+		case sc.Lengthened && sc.DependsOnDefault:
+			tail = " (may lengthen: depends on session.max_session_age_default)"
 		case sc.Lengthened:
 			tail = " (lengthened: live sessions keep the shorter ceiling until they refresh, decision 33)"
 		}

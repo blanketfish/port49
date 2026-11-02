@@ -1380,3 +1380,42 @@ func TestSessionAgeString(t *testing.T) {
 		}
 	}
 }
+
+// The diff cannot see port49d's default, so a move whose outcome depends on it
+// is flagged as a possible lengthening.
+func TestCeilingLengtheningCountsTheDefault(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		was, now SessionAge
+		want     bool
+	}{
+		{"default to a finite age", SessionAge{Unset: true}, SessionAge{Least: 8 * time.Hour}, true},
+		{"default to a finite age or the default", SessionAge{Unset: true}, SessionAge{Least: time.Hour, Unset: true}, false},
+		{"a bound role gains a finite age", SessionAge{Least: 8 * time.Hour, Unset: true}, SessionAge{Least: 4 * time.Hour}, true},
+		{"mixed composition raised", SessionAge{Least: 8 * time.Hour, Unset: true}, SessionAge{Least: 12 * time.Hour, Unset: true}, true},
+		{"mixed composition lowered", SessionAge{Least: 8 * time.Hour, Unset: true}, SessionAge{Least: time.Hour, Unset: true}, false},
+		{"never to finite", SessionAge{Never: true}, SessionAge{Least: time.Hour}, false},
+		{"never to default", SessionAge{Never: true}, SessionAge{Unset: true}, false},
+		{"finite to never", SessionAge{Least: time.Hour}, SessionAge{Never: true}, true},
+	} {
+		if got := tt.now.lengthens(tt.was); got != tt.want {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// One role names an age and the other none: the composition takes the least of
+// the one age and the default, so setting the other to 4h may lengthen it.
+func TestAMixedCeilingMayLengthen(t *testing.T) {
+	mixed := strings.Replace(diffBase, "permit: [show **]}", "permit: [show **], max_session_age: 8h}", 1)
+	set := strings.Replace(mixed, "deny: [show chassis **]}", "deny: [show chassis **], max_session_age: 4h}", 1)
+	d := Compare(mustParse(t, mixed), mustParse(t, set), noon)
+	if len(d.SessionCeilings) != 1 || !d.SessionCeilings[0].Lengthened || !d.SessionCeilings[0].DependsOnDefault {
+		t.Fatalf("%+v", d.SessionCeilings)
+	}
+	lowered := strings.Replace(mixed, "max_session_age: 8h", "max_session_age: 2h", 1)
+	d = Compare(mustParse(t, mixed), mustParse(t, lowered), noon)
+	if len(d.SessionCeilings) != 1 || d.SessionCeilings[0].Lengthened {
+		t.Fatalf("lowering: %+v", d.SessionCeilings)
+	}
+}
