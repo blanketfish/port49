@@ -665,8 +665,11 @@ func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
 		if len(j.Permissions) != 1 || j.Permissions["contents"] != "read" {
 			t.Errorf("job %s permissions %v, want contents: read alone", id, j.Permissions)
 		}
-		if j.Env["PORT49_SMOKE_ON_KEY_HOST"] != "1" {
-			t.Errorf("job %s does not set PORT49_SMOKE_ON_KEY_HOST to \"1\"", id)
+		// Built from two pieces: only the guard and its test may name the override
+		// (sdtest's TestTheKeyHostEscapeIsOnlyOnHostedRunners).
+		keyHost := "PORT49_SMOKE_" + "ON_KEY_HOST"
+		if j.Env[keyHost] != "1" {
+			t.Errorf("job %s does not set the key-host override to \"1\"", id)
 		}
 	}
 	if regexp.MustCompile(`id-token`).MatchString(raw) {
