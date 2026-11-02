@@ -19,6 +19,12 @@ import (
 	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
+// l84DiskFloorMB is L84's own free-disk floor on /, not L66's 66 GiB (a hosted runner has about 14 GiB free).
+// Measured from what the cells hold: port49:dev 120 MB, port49-setup:dev 74 MB and etcd 92 MB (docker images),
+// the Debian systemd image of tests/systemd (about 120 MB base plus the packages), three small etcd volumes, and
+// the build's dist/. About 1 GB at peak; 4 GiB leaves headroom. There is no env override.
+const l84DiskFloorMB = 4096
+
 // TestL84 measures spec §15 L84 on the lab host: host credential mechanisms against
 // fence.ReadSecret. Cells (b) and (c) for Compose run here, on deploy/compose with the local
 // port49:dev and port49-setup:dev images (nothing is pulled or built); cell (a) and (c) for
@@ -29,12 +35,6 @@ import (
 // Logs are read only through tests/qual/secret-filter.sh. Keys are random per run, written to
 // 0700 temp directories, never printed; the compose project is port49l84, taken down with its
 // volumes on every exit.
-// l84DiskFloorMB is L84's own free-disk floor on /, not L66's 66 GiB (a hosted runner has about 14 GiB free).
-// Measured from what the cells hold: port49:dev 120 MB, port49-setup:dev 74 MB and etcd 92 MB (docker images),
-// the Debian systemd image of tests/systemd (about 120 MB base plus the packages), three small etcd volumes, and
-// the build's dist/. About 1 GB at peak; 4 GiB leaves headroom. There is no env override.
-const l84DiskFloorMB = 4096
-
 func TestL84(t *testing.T) {
 	if os.Getenv("PORT49_LAB_L84") != "1" {
 		t.Skip("PORT49_LAB_L84=1 runs L84 (make lab-l84); `make lab` does not")

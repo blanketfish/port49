@@ -708,7 +708,7 @@ func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
 	merge := at(`make lab-l84 L84_NOTE="\$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker\.md" A_CELLS=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
 	if img >= 0 && setup >= 0 && pull >= 0 && tag >= 0 && sys >= 0 && merge >= 0 {
 		if tag < pull || max(img, setup, tag) > sys || sys > merge {
-			t.Errorf("order is image %d, setup %d, pull %d, systemd %d, merge %d; want the three images, then the systemd cells, then lab-l84", img, setup, pull, sys, merge)
+			t.Errorf("order is image %d, setup %d, pull %d, tag %d, systemd %d, merge %d; want the three images (pull before tag), then the systemd cells, then lab-l84", img, setup, pull, tag, sys, merge)
 		}
 	}
 	// the note is written where the artifact picks it up (an absolute path: go test runs in tests/lab)
@@ -717,8 +717,18 @@ func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !regexp.MustCompile(`(?m)^L84_NOTE \?= \$\(CURDIR\)/tests/lab/results/L84-systemd-docker\.md$`).Match(mk) ||
-		!regexp.MustCompile(`(?m)^\tPORT49_L84_NOTE=\$\(L84_NOTE\) `).Match(mk) {
+		!regexp.MustCompile(`(?m)^\tPORT49_L84_NOTE=\$\(abspath \$\(L84_NOTE\)\) `).Match(mk) {
 		t.Error("the Makefile does not make the L84 note path overridable with ?= and pass it as PORT49_L84_NOTE")
+	}
+	// go test runs in tests/lab and tests/systemd, so a relative path would land in the wrong directory
+	for _, want := range []string{
+		`PORT49_L84_NOTE=$(abspath $(L84_NOTE))`,
+		`PORT49_L84_A_CELLS=$(abspath $(A_CELLS))`,
+		`PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT))`,
+	} {
+		if !strings.Contains(string(mk), want) {
+			t.Errorf("the Makefile does not pass %s", want)
+		}
 	}
 	if !strings.Contains(raw, "path: bin/lab-out/l84") {
 		t.Error("the artifact is not bin/lab-out/l84")

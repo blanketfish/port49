@@ -262,12 +262,13 @@ lab-l80:
 # A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
 # Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
 L84_NOTE ?= $(CURDIR)/tests/lab/results/L84-systemd-docker.md
+# go test runs in the package's directory, so the three paths are made absolute.
 lab-l84:
-	PORT49_L84_NOTE=$(L84_NOTE) $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
+	PORT49_L84_NOTE=$(abspath $(L84_NOTE)) $(if $(A_CELLS),PORT49_L84_A_CELLS=$(abspath $(A_CELLS))) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
 
 lab-l84-systemd: smoke-keyhost packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
-	rc=0; PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
+	rc=0; PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT)) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
