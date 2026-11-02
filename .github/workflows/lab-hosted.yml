@@ -1,0 +1,47 @@
+# Lab entry L84's systemd cells, run on a GitHub-hosted runner (plan 12c, Task 14). The cells run
+# systemd in a privileged container, so the key-host guard refuses on a machine that holds a TPM or a
+# security key (tests/shapes/shapetest/keyhost.go). A hosted runner is ephemeral and holds nobody's
+# key, so only the job's env overrides it. The label keeps a measurement from running on every push:
+# the job runs only on a pull request that carries `lab-hosted`, never on a push.
+#
+# TestL84 builds and pulls nothing (it refuses INVALID without its images), and a fresh runner has
+# none, so the job builds port49:dev and port49-setup:dev and pulls etcd by digest first, as lab-l82
+# does for the first two.
+#
+# The harness writes its evidence to bin/lab-out/l84 and the artifact uploads it, always: a failed run
+# is evidence too. The artifact will be public with the repository, so the harness writes only stat
+# lines, delays, PASS or FAIL and versions, and the job log goes through tests/qual/secret-filter.sh.
+name: lab-hosted
+on:
+  pull_request:
+    types: [labeled, synchronize]
+permissions: {contents: read}
+jobs:
+  l84:
+    # Adding some other label to a labelled pull request does not start a run.
+    if: contains(github.event.pull_request.labels.*.name, 'lab-hosted') && (github.event.action == 'synchronize' || github.event.label.name == 'lab-hosted')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PORT49_SMOKE_ON_KEY_HOST: "1"
+    permissions: {contents: read}
+    # bash with pipefail: the filter's pipe below must not hide make's exit status
+    defaults: {run: {shell: bash}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with: {go-version-file: go.mod}
+      - run: make image
+      - run: docker build --target setup -t port49-setup:dev .
+      - run: docker pull gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
+      - run: mkdir -p bin/lab-out/l84
+      - run: make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
+      - run: make lab-l84 A_CELLS=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
+      - if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: lab-l84
+          path: bin/lab-out/l84
+          retention-days: 30
+          if-no-files-found: warn

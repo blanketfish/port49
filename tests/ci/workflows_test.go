@@ -637,3 +637,77 @@ func TestTheChartJobAttestsThePushedDigest(t *testing.T) {
 		}
 	}
 }
+
+// lab-hosted.yml runs L84's systemd cells on a hosted runner (plan 12c, Task 14). It is opt-in by label,
+// holds no id-token, and builds the three images TestL84 refuses to run without (it pulls and builds
+// nothing itself), the etcd one by digest.
+func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
+	f, raw := load(t, "../../.github/workflows/lab-hosted.yml")
+	var on struct {
+		PullRequest struct {
+			Types []string `yaml:"types"`
+		} `yaml:"pull_request"`
+	}
+	if err := f.On.Decode(&on); err != nil {
+		t.Fatalf("triggers are not a mapping with pull_request alone (never a push): %v", err)
+	}
+	if strings.Join(on.PullRequest.Types, ",") != "labeled,synchronize" {
+		t.Errorf("pull_request types %v, want labeled and synchronize", on.PullRequest.Types)
+	}
+	if v, ok := f.Permissions["contents"]; !ok || v != "read" || len(f.Permissions) != 1 {
+		t.Errorf("workflow permissions %v, want contents: read alone", f.Permissions)
+	}
+	if len(f.Jobs) != 1 {
+		t.Fatalf("%d jobs, want one", len(f.Jobs))
+	}
+	for id, j := range f.Jobs {
+		if len(j.Permissions) != 1 || j.Permissions["contents"] != "read" {
+			t.Errorf("job %s permissions %v, want contents: read alone", id, j.Permissions)
+		}
+		if j.Env["PORT49_SMOKE_ON_KEY_HOST"] != "1" {
+			t.Errorf("job %s does not set PORT49_SMOKE_ON_KEY_HOST to \"1\"", id)
+		}
+	}
+	if regexp.MustCompile(`id-token`).MatchString(raw) {
+		t.Error("lab-hosted.yml mentions id-token")
+	}
+	for _, want := range []string{
+		"contains(github.event.pull_request.labels.*.name, 'lab-hosted')",
+		"github.event.label.name == 'lab-hosted'",
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("the job's if lacks %q", want)
+		}
+	}
+	// the order matters: the images exist before TestL84 looks for them
+	var runs []string
+	for _, j := range f.Jobs {
+		for _, s := range j.Steps {
+			if s.Run != "" {
+				runs = append(runs, s.Run)
+			}
+		}
+	}
+	at := func(re string) int {
+		for i, r := range runs {
+			if regexp.MustCompile(re).MatchString(r) {
+				return i
+			}
+		}
+		t.Errorf("no run step matches %s", re)
+		return -1
+	}
+	img := at(`(?m)^make image\b`)
+	setup := at(`docker build --target setup -t port49-setup:dev \.`)
+	pull := at(`docker pull gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64}\b`)
+	sys := at(`make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	merge := at(`make lab-l84 A_CELLS=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	if img >= 0 && setup >= 0 && pull >= 0 && sys >= 0 && merge >= 0 {
+		if max(img, setup, pull) > sys || sys > merge {
+			t.Errorf("order is image %d, setup %d, pull %d, systemd %d, merge %d; want the three images, then the systemd cells, then lab-l84", img, setup, pull, sys, merge)
+		}
+	}
+	if !strings.Contains(raw, "path: bin/lab-out/l84") {
+		t.Error("the artifact is not bin/lab-out/l84")
+	}
+}
