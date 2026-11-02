@@ -11400,8 +11400,9 @@ shapes; Kubernetes is native and never required.
   (L82 and L83 are closed, ruling 12's L85 too), and ruling 9's Services claim on L39 (b).
 
 **55. Reference device configuration, alarms, load and the failure matrix (plan 12c; Ryan, the
-team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands; none is
-provisional. Rows L87–L90 and L39's cells are open, and the rulings that rest on them say so.
+team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. Rulings 2,
+14 and 15 are Ryan's and none is provisional; rulings 3, 5, 9 and 10 are provisional on L87, L39, L90 and
+L89, and each says so. Rows L87–L90 and L39's cells are open.
 
 - **1. The Junos and NX-OS "ERROR disagreement" is two method lists and two questions, not a
   contradiction.** On Junos, `tests/lab/results/L73-juniper_vjunos-router.md` cell (i) ran
@@ -11515,9 +11516,16 @@ provisional. Rows L87–L90 and L39's cells are open, and the rulings that rest 
   `store_unavailable`; L4, L35). `port49_redemption_restore_guarded == 1` for 10m pages, and the 3am
   table of `deploy/failure-matrix.md` carries that row. In addition the guard lifts on its own at the
   earlier of the purge (as before) and the restored `meta/witness`'s time + `policy.MaxTokenTTL` (15m)
-  + 5m, read against port49d's own clock; the premise is broker-to-broker clock skew plus the
-  witness's lead over the last mint within that 5m. A witness with no time, or one port49d cannot
-  use, keeps the guard until the purge. Revocations made after the snapshot are lost by any restore,
+  + 5m, read against port49d's own clock. port49d's own clock error cancels, because the lift time
+  and a restored token's expiry are both broker-stamped times compared with its clock. The premise is
+  that broker-to-broker clock skew plus the witness's lead over the last mint (at most 61 s) stays
+  within the 5m, so the tolerated broker skew is 5m less 61 s. 5m is the largest clock disagreement
+  port49 tolerates anywhere: `broker.identity.clock_skew`'s ceiling (decision 39 ruling 5, "`clock_skew`
+  60s (0s–5m)"; `internal/config/identity.go:643`), the lead an inventory document's `published_at`
+  may have over port49d's clock (§10, "How a daemon refreshes its snapshot"), and OCSP's and CRLs'
+  `ThisUpdate` future skew (`internal/certstatus/ocsp.go:70`, `crl.go:55`). Fail closed: a witness
+  that is absent, whose body has no usable `at`, or whose `at` is more than 5m ahead of port49d's
+  clock arms no bound, and the guard lifts only on the purge. Revocations made after the snapshot are lost by any restore,
   and the runbook covers them. The guard's own text is decision 36's (plan 12c Task 9a), and its
   traces are appended here. The alternative (close the listener while guarded) is not built.
 - **Open.** L87, L88, L89, L90 and L39 (b) and (c) are provisional until they close.
