@@ -376,6 +376,11 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 	}
 	c.BrokerCABundle, c.BrokerCABundleRefused = string(b.CABundle), b.CABundleRefused
 	c.PerLoginMFA = b.mfaConfig()
+	// The roots served are the roots checked: one pointer, swapped together
+	// by SetAttestationRoots (decision 55 ruling 16).
+	if v := b.perLoginMFA(); v != nil && v.Anchors != nil && v.Anchors.Roots != nil {
+		c.HardwareKeyTouch = &api.HardwareKeyTouchConfig{AttestationRootsPEM: string(v.Anchors.PEM)}
+	}
 	writeJSON(w, http.StatusOK, c)
 }
 

@@ -65,6 +65,10 @@ type Anchors struct {
 	// NumRoots counts the self-signed certificates in Roots, so a reload can say how many
 	// roots are in force now and how many were.
 	NumRoots int
+	// PEM is the file's CERTIFICATE blocks, re-encoded, and nothing else (a
+	// comment in the file is not in it): the public text a broker serves so
+	// `port49 hwkey` checks a user's key against the roots the broker uses.
+	PEM []byte
 }
 
 // ParseAnchors reads every PEM certificate in b. Text outside the PEM blocks
@@ -76,6 +80,7 @@ type Anchors struct {
 func ParseAnchors(b []byte) (Anchors, error) {
 	a := Anchors{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
 	roots, blocks := 0, 0
+	var pemOut []byte
 	// A file saved with a UTF-8 byte order mark would hide its first BEGIN
 	// line from pem.Decode, and that block would be dropped without a word.
 	b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
@@ -87,6 +92,9 @@ func ParseAnchors(b []byte) (Anchors, error) {
 			break
 		}
 		blocks++
+		if blk.Type == "CERTIFICATE" {
+			pemOut = append(pemOut, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: blk.Bytes})...)
+		}
 		if blk.Type != "CERTIFICATE" {
 			return Anchors{}, fmt.Errorf("pivattest: anchors hold a %q block, not a certificate", blk.Type)
 		}
@@ -112,6 +120,7 @@ func ParseAnchors(b []byte) (Anchors, error) {
 		return Anchors{}, errors.New("pivattest: anchors hold no self-signed root certificate")
 	}
 	a.NumRoots = roots
+	a.PEM = pemOut
 	return a, nil
 }
 
@@ -161,6 +170,49 @@ func Verify(a Anchors, device, slot *x509.Certificate, now time.Time) (Attestati
 		return Attestation{}, err
 	}
 	return Attestation{Key: slot.PublicKey, Serial: serial, PINPolicy: pin, TouchPolicy: touch, Device: device}, nil
+}
+
+// VerifyPair is the check a per-login touch proof and an admin call's touch both
+// make of the pair of slots a security key proves from (decision 45 ruling 12;
+// decision 55 ruling 16): the touch slot's attestation verifies, then the
+// session slot's, against the anchors through the one device certificate; both
+// name the same device serial; and the touch key's policy is always-touch. The
+// broker and `port49 hwkey` call it and repeat none of it. A refusal returns
+// the broker's fixed word, safe in a record, and the error that holds the
+// detail: touch_slot_chain, session_slot_chain, device_mismatch or
+// touch_policy. The only PIN-policy rule is Verify's closed set.
+func VerifyPair(a Anchors, device, session, touch *x509.Certificate, now time.Time) (s, t Attestation, why string, err error) {
+	t, err = Verify(a, device, touch, now)
+	if err != nil {
+		return Attestation{}, Attestation{}, "touch_slot_chain", err
+	}
+	s, err = Verify(a, device, session, now)
+	if err != nil {
+		return Attestation{}, Attestation{}, "session_slot_chain", err
+	}
+	// Both slots verified against the one device certificate, so what can
+	// differ is the serial each slot certificate names.
+	if t.Serial != s.Serial {
+		return s, t, "device_mismatch", errors.New("pivattest: the touch key and the session key are not attested by the same device")
+	}
+	if t.TouchPolicy != TouchAlways {
+		return s, t, "touch_policy", fmt.Errorf("pivattest: the touch key's attestation must carry touch policy always (it says %s)",
+			TouchPolicyName(t.TouchPolicy))
+	}
+	return s, t, "", nil
+}
+
+// TouchPolicyName is a touch policy byte in words.
+func TouchPolicyName(b byte) string {
+	switch b {
+	case TouchNever:
+		return "never"
+	case TouchCached:
+		return "cached"
+	case TouchAlways:
+		return "always"
+	}
+	return fmt.Sprintf("%#02x", b)
 }
 
 // extension returns the value of the one extension with oid; absent or

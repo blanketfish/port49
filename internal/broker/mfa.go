@@ -731,7 +731,9 @@ func parseTouch(req api.MFAProofRequest) (*touchProof, string) {
 	return &touchProof{sig: sig, touch: certs[0], device: certs[1], sessnl: certs[2]}, ""
 }
 
-var touchPolicyNames = map[byte]string{pivattest.TouchNever: "never", pivattest.TouchCached: "cached", pivattest.TouchAlways: "always"}
+// verifyPair is the attestation check both a per-login proof and an admin call's
+// touch make; a test replaces it with a counting stub.
+var verifyPair = pivattest.VerifyPair
 
 // verifyTouch judges a per-login touch proof against the held connection
 // (decision 45 ruling 12), "" when it holds: the touch key signed this
@@ -768,22 +770,18 @@ func (b *Broker) verifyTouchMessage(r *http.Request, p *touchProof, label string
 		return "no attestation roots are configured", "touch_slot_chain"
 	}
 	anchors := *v.Anchors
-	ta, err := pivattest.Verify(anchors, p.device, p.touch, now)
-	if err != nil {
-		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "touch_slot_chain"
-	}
-	sa, err := pivattest.Verify(anchors, p.device, p.sessnl, now)
-	if err != nil {
-		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), "session_slot_chain"
-	}
-	// Both slots verified against the one device certificate in the proof,
-	// so what can differ is the serial each slot certificate names.
-	if ta.Serial != sa.Serial {
-		return "the touch key and the session key are not attested by the same device", "device_mismatch"
-	}
-	if ta.TouchPolicy != pivattest.TouchAlways {
+	sa, ta, w, err := verifyPair(anchors, p.device, p.sessnl, p.touch, now)
+	switch w {
+	case "":
+	case "touch_slot_chain":
+		return "the touch slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), w
+	case "session_slot_chain":
+		return "the session slot's attestation does not verify: " + printsafe.Line(err.Error(), 300), w
+	case "device_mismatch":
+		return "the touch key and the session key are not attested by the same device", w
+	default: // touch_policy
 		return fmt.Sprintf("the touch key's attestation must carry touch policy always (it says %s)",
-			touchPolicyNames[ta.TouchPolicy]), "touch_policy"
+			pivattest.TouchPolicyName(ta.TouchPolicy)), w
 	}
 	eq, ok := sa.Key.(interface{ Equal(crypto.PublicKey) bool })
 	if !ok || !eq.Equal(r.TLS.PeerCertificates[0].PublicKey) {
