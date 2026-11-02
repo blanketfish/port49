@@ -115,3 +115,30 @@ func contains(lines []string, want string) bool {
 	}
 	return false
 }
+
+// A quarantined device mints nothing, so its would-be sessions land in no
+// class and it never fails the export or the check for the rest of the fleet
+// (ShadowedDenies, lint and intersect skip it the same way).
+func TestAQuarantinedDeviceLandsNoSessionAndFailsNothing(t *testing.T) {
+	body := strings.Replace(classAgesBody, "roles:\n", "roles:\n  - {name: risky, privilege: admin, permit: [\"**\"], max_session_age: 5m}\n", 1)
+	body = strings.Replace(body, "scopes:\n", "scopes:\n  - {name: lab, match: {site: lab}}\n", 1)
+	body = strings.Replace(body, "subjects:\n", "subjects:\n  - {name: s_risky, identity: [\"user:risky@example.com\"], username: risky, token_ttl: 60s}\n", 1)
+	body += "  - {subject: s_risky, scope: lab, roles: [risky], max_privilege: operator}\n"
+	p := parseProjected(t, platform.BitDeliveryLocalUserName, body)
+	if _, q := p.Quarantined("srx-lab-01", noon); !q {
+		t.Fatal("the fixture does not quarantine srx-lab-01")
+	}
+	ages, err := p.ClassAges("juniper_junos", 12*time.Hour, noon)
+	if err != nil {
+		t.Fatalf("a quarantined device failed ClassAges: %v", err)
+	}
+	want := classAges(t, platform.BitDeliveryLocalUserName, classAgesBody)
+	if len(ages.ByClass) != len(want.ByClass) {
+		t.Fatalf("ByClass = %v, want %v", ages.ByClass, want.ByClass)
+	}
+	for class, age := range want.ByClass {
+		if ages.ByClass[class] != age {
+			t.Errorf("%s = %v, want %v: the quarantined device's sessions counted", class, ages.ByClass[class], age)
+		}
+	}
+}

@@ -1,8 +1,6 @@
 package policy
 
 import (
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/blanketfish/port49/internal/platform"
@@ -23,15 +21,16 @@ func (p *Policy) ClassAges(platformName string, def time.Duration, now time.Time
 		if d.Platform != platformName {
 			continue
 		}
+		// A quarantined device mints nothing (spec §10), and any other
+		// resolve error is a quarantine cause (checkDevices), so a refused
+		// session lands in no class: skipped as ShadowedDenies, lint and
+		// intersect skip it, never an error that fails the fleet.
+		if _, q := p.Quarantined(d.Name, now); q {
+			continue
+		}
 		for _, name := range sortedKeys(p.subs) {
 			res, err := p.resolve(p.subs[name], d, now)
-			if errors.Is(err, ErrNoGrants) {
-				continue
-			}
-			if err != nil {
-				return platform.ClassAges{}, fmt.Errorf("subject %s on device %s: %w", name, d.Name, err)
-			}
-			if res.Projection == nil {
+			if err != nil || res.Projection == nil {
 				continue
 			}
 			class := res.Projection.Template

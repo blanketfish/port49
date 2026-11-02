@@ -573,6 +573,8 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 	var each []string
 	for _, class := range classes {
 		switch got, ok := ages.ByClass[class]; {
+		case p == nil:
+			each = append(each, fmt.Sprintf("%s %s", class, ages.Default))
 		case ok && got == 0:
 			each = append(each, class+" never (every session in it is never: no idle-timeout line)")
 		case ok:
@@ -582,8 +584,16 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 				ages.Default))
 		}
 	}
+	says := fmt.Sprintf("each class's session ceiling in whole minutes (%s)", strings.Join(each, "; "))
 	shared := ""
-	if d.BitDelivery != platform.BitDeliveryLocalUserName {
+	switch {
+	case p == nil:
+		says = fmt.Sprintf("session.max_session_age_default in whole minutes for every class (%s)",
+			strings.Join(each, "; "))
+		shared = " No policy was read (no --policy), so every class carries the default; `port49 devices " +
+			"check-config` holds each class to the policy's roles, so this reference fails it on every device " +
+			"where a role is shorter: rerun with --policy."
+	case d.BitDelivery != platform.BitDeliveryLocalUserName:
 		shared = " Every " + platformName + " session lands in " + platform.RemoteClass + ", so this is the least " +
 			"ceiling of any role on any " + platformName + " device."
 	}
@@ -593,9 +603,9 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 		"still applies to the loaded class, a deactivated ancestor leaves the loaded lines inactive, and a protected "+
 		"one fails the load. `port49 devices check-config --config` on a whole `show configuration | display set` "+
 		"capture is what proves the device carries the template and nothing more. idle-timeout is "+
-		"each class's session ceiling in whole minutes (%s): a session-only device never asks port49 again after "+
+		"%s: a session-only device never asks port49 again after "+
 		"login, so this timer is what ends a session there (decision 21, decision 55 ruling 14).%s\n", platformName,
-		setName, strings.Join(each, "; "), shared)
+		setName, says, shared)
 	held := 0
 	for i, line := range lines {
 		if i < len(d.DeviceConfig) && hidden[i] || strings.Contains(line, platform.Redacted) {
