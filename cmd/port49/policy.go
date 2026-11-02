@@ -659,6 +659,17 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
 			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
 	}
+	for _, sc := range d.SessionCeilings {
+		tail := ""
+		switch {
+		case sc.Lengthened && sc.New == "default":
+			tail = " (may lengthen: to session.max_session_age_default)"
+		case sc.Lengthened:
+			tail = " (lengthened: live sessions keep the shorter ceiling until they refresh, decision 33)"
+		}
+		fmt.Fprintf(stdout, "session ceiling: %s on %d devices: %s -> %s%s%s\n", sc.Subject, len(sc.Devices), sc.Old, sc.New,
+			from(sc.At), tail)
+	}
 	// A change to what a login is asked for (spec §5.1.5): a weakening no
 	// session test asserts fails like a privilege raise, a tightening only
 	// prints (decision 45 ruling 24).

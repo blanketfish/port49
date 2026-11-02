@@ -76,6 +76,21 @@ type SessionAge struct {
 	Never bool
 }
 
+// String is the ceiling as the diff reports it, port49d's default being
+// unknown there: never, a duration, default (every role names none), or the
+// least duration or the default, whichever is less.
+func (a SessionAge) String() string {
+	switch {
+	case a.Never:
+		return "never"
+	case a.Least == 0:
+		return "default"
+	case a.Unset:
+		return a.Least.String() + " or the default, whichever is less"
+	}
+	return a.Least.String()
+}
+
 // Of is the ceiling given port49d's default: the least across the roles, a
 // role declaring none taking def; zero, never, only when every role says
 // never.

@@ -34,6 +34,9 @@ type Diff struct {
 	Changes []Change
 	Access  []AccessChange
 	Levels  []LevelChange
+	// SessionCeilings are the changes to a subject's max_session_age; a
+	// ceiling is not a gate (spec §12), so none fails the diff.
+	SessionCeilings []SessionCeilingChange
 	// MFA are the changes to a subject's effective per-login requirement
 	// (spec §5.1.5, §12); a weakening no session test asserts fails the gate
 	// as a privilege raise does (decision 45 ruling 24).
@@ -241,6 +244,32 @@ type AccessChange struct {
 	Gained  bool
 }
 
+// SessionCeilingChange is a change to the session ceiling the roles composing
+// for a subject declare (spec §5.6): Old and New are SessionAge.String.
+// Lengthened is true when the new ceiling may outlast the old; the diff loads
+// no port49d.yaml, so a move toward the default counts as a possible
+// lengthening.
+type SessionCeilingChange struct {
+	Subject    string
+	Devices    []string
+	At         time.Time
+	Old, New   string
+	Lengthened bool
+}
+
+// lengthens is whether now may outlast was, given that the default is unknown.
+func (now SessionAge) lengthens(was SessionAge) bool {
+	switch {
+	case now.Never:
+		return !was.Never
+	case now.Least == 0:
+		return true // the default
+	case was.Least == 0:
+		return false // from never, or from the default, which a role's own or the default bounds
+	}
+	return now.Least > was.Least
+}
+
 // LevelChange is a privilege change (spec §6, §12): the level the roles
 // compose to, the ceiling the grants do, the device privilege the session
 // lands at, or the subject's enable.
@@ -348,6 +377,7 @@ type side struct {
 	refused, refusedDetail string
 	err                    error
 	priv                   privilege
+	age                    SessionAge
 }
 
 // privilege is what one side gives the device and what port49 enforces there
@@ -407,7 +437,7 @@ func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
 	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
 		priv.device = strconv.Itoa(int(n))
 	}
-	return side{prog: prog, res: res, hash: hash, priv: priv}
+	return side{prog: prog, res: res, hash: hash, priv: priv, age: res.SessionAge}
 }
 
 // decide is the side's answer to one command vector, each argument sent as
@@ -675,7 +705,7 @@ func (c *comparison) at(at time.Time) {
 			// and the subject's, not only the blob's, so they are part of
 			// what makes two devices alike.
 			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.priv.key() + "|" +
-				is.hash + "|" + is.priv.key()
+				was.age.String() + "|" + is.hash + "|" + is.priv.key() + "|" + is.age.String()
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
 				order = append(order, key)
@@ -713,6 +743,24 @@ func currentEntries(p *Policy, device string, at time.Time) []QuarantineEntry {
 	return out
 }
 
+// ceiling records a changed session ceiling, one entry per subject and move
+// however many groups of devices hold it.
+func (c *comparison) ceiling(subject string, devices []string, at time.Time, was, is SessionAge) {
+	old, now := was.String(), is.String()
+	on := strings.Join(devices, ",")
+	if !c.once("ceiling", subject, on, old, now) {
+		return
+	}
+	for i, e := range c.d.SessionCeilings {
+		if e.Subject == subject && e.At.Equal(at) && e.Old == old && e.New == now {
+			c.d.SessionCeilings[i].Devices = append(e.Devices, devices...)
+			return
+		}
+	}
+	c.d.SessionCeilings = append(c.d.SessionCeilings, SessionCeilingChange{Subject: subject, Devices: slices.Clone(devices),
+		At: at, Old: old, New: now, Lengthened: is.lengthens(was)})
+}
+
 // group compares one subject on devices that hold the same blobs.
 func (c *comparison) group(subject string, devices []string, was, is side, at time.Time) {
 	on := strings.Join(devices, ",")
@@ -746,6 +794,9 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
 			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
 			was.priv, is.priv, wr.Projection, ir.Projection))
+	}
+	if was.age != is.age {
+		c.ceiling(subject, devices, at, was.age, is.age)
 	}
 	if pc, ok := projectionChange(wr.Projection, ir.Projection, c.patterns, c.secrets); ok && c.once("projection",
 		subject, on, pc.OldShape, pc.NewShape, strings.Join(pc.OldBits, " "), strings.Join(pc.NewBits, " "),
