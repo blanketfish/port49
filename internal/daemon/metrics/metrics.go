@@ -470,13 +470,15 @@ type Metrics struct {
 	// port49_redemption_restore_guarded: 1 while this port49d refuses every
 	// token redemption store_unavailable, having found meta/witness below
 	// the highest it followed (an etcd restore; plan 7e, Task 15d), until
-	// a broker runner's purge is done; 1 too from a run's start after a
+	// a broker runner's purge is done or every token the restored store holds
+	// has expired (plan 12c, Task 9a); 1 too from a run's start after a
 	// store gone until its first read of the witness.
 	RedemptionRestoreGuarded prometheus.Gauge
 	// port49_redemption_restore_guard_until_timestamp_seconds: while the
-	// guard holds, the Unix time it lifts on its own, every token the
-	// restored snapshot could hold having expired (plan 12c, Task 9a); 0
-	// while it does not hold, or when only a broker runner's purge lifts it.
+	// guard holds, the Unix time it lifts on its own: the largest expiry among
+	// the token records, read again on every guarded read, so it only rises
+	// (plan 12c, Task 9a); 0 while it does not hold, or when only a broker
+	// runner's purge lifts it.
 	RedemptionRestoreGuardUntil prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
@@ -914,11 +916,12 @@ func New(reg prometheus.Registerer) *Metrics {
 				"runner that judges this broker's bundle."}),
 		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
 			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
-				"snapshot, until a broker runner's purge is done."}),
+				"snapshot, until a broker runner's purge is done or every token the store holds has expired."}),
 		RedemptionRestoreGuardUntil: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "port49_redemption_restore_guard_until_timestamp_seconds",
-			Help: "While port49_redemption_restore_guarded is 1: the Unix time the guard lifts on its own, every " +
-				"token the restored snapshot could hold having expired; 0 when only a broker runner's purge lifts it."}),
+			Help: "While port49_redemption_restore_guarded is 1: the Unix time the guard lifts on its own, the " +
+				"largest expiry among the token records, which a token minted meanwhile moves later and which may " +
+				"be in the past while the store's reads fail; 0 when only a broker runner's purge lifts it."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,14 +11,20 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/store"
 	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
 )
 
 // judgeNow is one read as keep takes it: the record, then the read.
 func judgeNow(g *restoreGuard, r etcdstore.RestoreRead, err error) {
+	judgeScan(g, r, err, scanResult{})
+}
+
+// judgeScan is judgeNow with the scan of the token family the read called for.
+func judgeScan(g *restoreGuard, r etcdstore.RestoreRead, err error, sc scanResult) {
 	high, seen, guardHigh := g.recorded()
-	g.judge(r, err, high, seen, guardHigh)
+	g.judge(r, err, high, seen, guardHigh, sc)
 }
 
 // The guard's states (Task 15d): it enters when a read shows the witness
@@ -118,7 +123,7 @@ func TestAWitnessFollowedDuringTheGuardsReadIsNoDrop(t *testing.T) {
 	g.Saw(100)
 	high, seen, guardHigh := g.recorded()
 	g.Saw(160) // the runner's next witness, followed while the read was in flight
-	g.judge(etcdstore.RestoreRead{Witness: 100, Header: 150}, nil, high, seen, guardHigh)
+	g.judge(etcdstore.RestoreRead{Witness: 100, Header: 150}, nil, high, seen, guardHigh, scanResult{})
 	if !g.Allows() {
 		t.Fatalf("a routine witness write guarded port49d: %q", out.String())
 	}
@@ -160,14 +165,14 @@ func TestAPassTakesTheRecordBeforeItReads(t *testing.T) {
 	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		g.Saw(160) // the runner's next witness, followed while the read is in flight
 		return etcdstore.RestoreRead{Witness: 100, Header: 150}, nil
-	})
+	}, nil)
 	if !g.Allows() {
 		t.Fatalf("a routine witness write followed during a read guarded port49d: %q", out.String())
 	}
 	// A real drop is still caught by the same pass.
 	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 40, Header: 200}, nil
-	})
+	}, nil)
 	if g.Allows() {
 		t.Fatal("a pass that read the witness below the record did not guard")
 	}
@@ -223,205 +228,217 @@ func TestTheGuardsReadsAreCountedByOutcome(t *testing.T) {
 	}
 }
 
-// The time bound (plan 12c, Task 9a): the guard lifts on its own once every
-// token the snapshot could hold has expired, at the restored witness's time
-// plus token_ttl's ceiling plus 5m, on port49d's clock.
+// The time bound (plan 12c, Task 9a): the guard lifts on its own once port49d's
+// clock passes the largest ExpiresAt among the token records, scanned at the
+// drop and again on every guarded read, judged as redemption judges a token.
 
 var guardClock = time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
 
-// boundGuard is a begun guard on a test clock that followed witness 20, with
-// both gauges.
-func boundGuard(t *testing.T) (g *restoreGuard, now *time.Time, out *bytes.Buffer, guarded, until prometheus.Gauge) {
+// boundGuard is a begun guard on a test clock that followed witness 20.
+type bound struct {
+	g      *restoreGuard
+	now    time.Time
+	out    *bytes.Buffer
+	guard  prometheus.Gauge
+	until  prometheus.Gauge
+	header uint64
+}
+
+func newBound(t *testing.T) *bound {
 	t.Helper()
-	out = &bytes.Buffer{}
-	clock := guardClock
-	guarded = prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"})
-	until = prometheus.NewGauge(prometheus.GaugeOpts{Name: "u"})
-	g = newRestoreGuard(out)
-	g.now = func() time.Time { return clock }
-	g.begin(guarded, until, nil)
-	g.Saw(20)
-	return g, &clock, out, guarded, until
+	b := &bound{now: guardClock, out: &bytes.Buffer{}, header: 30,
+		guard: prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"}),
+		until: prometheus.NewGauge(prometheus.GaugeOpts{Name: "u"})}
+	b.g = newRestoreGuard(b.out)
+	b.g.now = func() time.Time { return b.now }
+	b.g.begin(b.guard, b.until, nil)
+	b.g.Saw(20)
+	return b
 }
 
-// The guard's clock is the pointer the test steps.
-func setNow(g *restoreGuard, now *time.Time) { g.now = func() time.Time { return *now } }
-
-func TestAnOldWitnessLiftsNoGuard(t *testing.T) {
-	g, now, out, guarded, until := boundGuard(t)
-	setNow(g, now)
-	at := now.Add(-21 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30, WitnessAt: at}, nil)
-	if !g.Allows() || testutil.ToFloat64(guarded) != 0 || testutil.ToFloat64(until) != 0 ||
-		!strings.Contains(out.String(), "more than 20m0s ago") {
-		t.Fatalf("an old snapshot guarded, or was not said: %v %q", g.Allows(), out.String())
-	}
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 31, WitnessAt: at}, nil)
-	if !g.Allows() || strings.Count(out.String(), "port49d: store: meta/witness") != 1 {
-		t.Fatalf("the next read at the same witness tripped again: %q", out.String())
-	}
+// read is one judged read at the witness w and the latest expiry latest, as a
+// scan of the token family answers; the header rises with each.
+func (b *bound) read(w, purged uint64, latest time.Time) {
+	b.header++
+	judgeScan(b.g, etcdstore.RestoreRead{Witness: w, Purged: purged, Header: b.header}, nil,
+		scanResult{ran: true, max: latest})
 }
 
-func TestARecentWitnessGuardsUntilItsTimeAndTheBound(t *testing.T) {
-	g, now, out, guarded, until := boundGuard(t)
-	setNow(g, now)
-	at := now.Add(-5 * time.Minute)
-	lift := at.Add(20 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30, WitnessAt: at}, nil)
-	if g.Allows() || testutil.ToFloat64(guarded) != 1 || testutil.ToFloat64(until) != float64(lift.Unix()) {
-		t.Fatalf("a recent snapshot did not guard to its bound: %q", out.String())
+func (b *bound) readSc(w uint64, sc scanResult) {
+	b.header++
+	judgeScan(b.g, etcdstore.RestoreRead{Witness: w, Header: b.header}, nil, sc)
+}
+
+func (b *bound) gauges() (guard, until float64) {
+	return testutil.ToFloat64(b.guard), testutil.ToFloat64(b.until)
+}
+
+// A quiet store's witness can be hours older than the snapshot's last mint, so
+// the bound is the tokens' own: the guard holds until the latest ExpiresAt, to
+// the second, whatever the witness says (review C1).
+func TestAQuietStoreRestoreStaysGuardedUntilTheLastTokenExpires(t *testing.T) {
+	b := newBound(t)
+	latest := b.now.Add(9 * time.Minute)
+	b.read(12, 0, latest)
+	if g, u := b.gauges(); b.g.Allows() || g != 1 || u != float64(latest.Unix()) {
+		t.Fatalf("not guarded to the latest expiry: %v %v %q", g, u, b.out.String())
 	}
-	*now = lift.Add(-time.Second)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 31, WitnessAt: at}, nil)
-	if g.Allows() {
-		t.Fatal("lifted a second before the bound")
+	b.now = latest.Add(-time.Second)
+	b.read(12, 0, latest)
+	if b.g.Allows() {
+		t.Fatal("lifted a second before the latest expiry")
 	}
-	*now = lift
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 32, WitnessAt: at}, nil)
-	if !g.Allows() || testutil.ToFloat64(guarded) != 0 || testutil.ToFloat64(until) != 0 ||
-		!strings.Contains(out.String(), "every token the restored snapshot could hold has now expired") {
-		t.Fatalf("not lifted at the bound: %v %q", g.Allows(), out.String())
-	}
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 33, WitnessAt: at}, nil)
-	if !g.Allows() {
-		t.Fatal("the witness after the lift guarded again")
+	b.now = latest
+	b.read(12, 0, latest)
+	if g, u := b.gauges(); !b.g.Allows() || g != 0 || u != 0 || !strings.Contains(b.out.String(), "has now expired") {
+		t.Fatalf("not lifted at the latest expiry: %v %v %q", g, u, b.out.String())
 	}
 }
 
-func TestAPurgeBeforeTheBoundLifts(t *testing.T) {
-	g, now, out, guarded, until := boundGuard(t)
-	setNow(g, now)
-	at := now.Add(-5 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30, WitnessAt: at}, nil)
-	*now = at.Add(6 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 40, Purged: 39, Header: 41, WitnessAt: at}, nil)
-	if !g.Allows() || testutil.ToFloat64(guarded) != 0 || testutil.ToFloat64(until) != 0 ||
-		!strings.Contains(out.String(), "the broker runner's purge after the restore is done") {
-		t.Fatalf("a purge did not lift: %q", out.String())
-	}
-}
-
-func TestAWitnessWithNoUsableTimeGuardsUntilThePurge(t *testing.T) {
-	cases := map[string]etcdstore.RestoreRead{
-		"the witness absent":     {Header: 30},
-		"no time in the witness": {Witness: 12, Header: 30},
-		"a time ahead":           {Witness: 12, Header: 30, WitnessAt: guardClock.Add(5*time.Minute + time.Second)},
-	}
-	for name, r := range cases {
+// A scan that finds every token already expired guards nothing, said once; the
+// floor still refuses them (the next test).
+func TestAScanThatProvesEveryTokenExpiredGuardsNothing(t *testing.T) {
+	for name, latest := range map[string]time.Time{"none": {}, "all expired": guardClock.Add(-time.Second),
+		"expiring now": guardClock} {
 		t.Run(name, func(t *testing.T) {
-			g, now, out, guarded, until := boundGuard(t)
-			setNow(g, now)
-			judgeNow(g, r, nil)
-			if g.Allows() || testutil.ToFloat64(guarded) != 1 || testutil.ToFloat64(until) != 0 ||
-				!strings.Contains(out.String(), "only the purge lifts it") {
-				t.Fatalf("no bound should be armed: %q", out.String())
+			b := newBound(t)
+			b.read(12, 0, latest)
+			if !b.g.Allows() {
+				t.Fatalf("guarded for a read: %q", b.out.String())
 			}
-			*now = now.Add(24 * time.Hour)
-			r.Header = 31
-			judgeNow(g, r, nil)
-			if g.Allows() || testutil.ToFloat64(guarded) != 1 || testutil.ToFloat64(until) != 0 {
-				t.Fatal("a day later it lifted without a purge")
-			}
-			r.Header, r.Purged = 40, 39
-			judgeNow(g, r, nil)
-			if !g.Allows() || testutil.ToFloat64(guarded) != 0 {
-				t.Fatal("a purge after the drop did not lift it")
+			b.read(12, 0, latest)
+			if g, u := b.gauges(); !b.g.Allows() || g != 0 || u != 0 || strings.Count(b.out.String(), "meta/witness is at revision 12") != 1 {
+				t.Fatalf("guarded, or said more than once: %q", b.out.String())
 			}
 		})
 	}
 }
 
-// A port49d 3m behind the runner, within the allowance: it lifts at the
-// witness's time + 20m on its own clock, which is 23m of its time.
-func TestPort49dsClockBehind(t *testing.T) {
-	g, now, _, _, until := boundGuard(t)
-	setNow(g, now)
-	at := now.Add(3 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30, WitnessAt: at}, nil)
-	if g.Allows() || testutil.ToFloat64(until) != float64(at.Add(20*time.Minute).Unix()) {
-		t.Fatal("not guarded to at + 20m")
+// A newer restore while guarded brings tokens that expire later: a re-scan
+// raises the bound, it never lowers it (review C2).
+func TestANewerRestoreWhileGuardedExtendsTheBound(t *testing.T) {
+	b := newBound(t)
+	first, second := b.now.Add(5*time.Minute), b.now.Add(14*time.Minute)
+	b.read(12, 0, first)
+	b.read(15, 0, second) // the snapshot restored over it, its witness above the first's
+	if _, u := b.gauges(); u != float64(second.Unix()) {
+		t.Fatalf("the bound did not rise: %v", u)
 	}
-	*now = guardClock.Add(23*time.Minute - time.Second)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 31, WitnessAt: at}, nil)
-	if g.Allows() {
-		t.Fatal("lifted before 23m of its own time")
+	b.now = first.Add(time.Second)
+	b.read(15, 0, second)
+	if b.g.Allows() {
+		t.Fatal("lifted at the first snapshot's bound")
 	}
-	*now = guardClock.Add(23 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 32, WitnessAt: at}, nil)
-	if !g.Allows() {
-		t.Fatal("not lifted at 23m of its own time")
+	b.read(15, 0, first) // a scan that shows less never lowers it
+	if _, u := b.gauges(); u != float64(second.Unix()) {
+		t.Fatalf("a smaller scan lowered the bound: %v", u)
 	}
-}
-
-// Over port49d's clock offset against the runner and a minting broker's
-// offset against the runner: a token minted 61 s after the witness's time,
-// at token_ttl 15m, is never redeemable (ExpiresAt after port49d's now, the
-// check liveTokens makes) while the guard allows it. The 5m allowance is the
-// broker skew plus the witness's lead, so 3m59s of skew is the edge.
-func TestTheGuardOutlastsEveryRestoredTokenOnPort49dsClock(t *testing.T) {
-	const lead = 61 * time.Second
-	for _, p := range []time.Duration{-10 * time.Minute, -3 * time.Minute, 0, 3 * time.Minute, 10 * time.Minute} {
-		for _, m := range []time.Duration{-3 * time.Minute, 0, 3 * time.Minute, 4*time.Minute - time.Second} {
-			t.Run(fmt.Sprintf("p=%v,m=%v", p, m), func(t *testing.T) {
-				g, now, _, _, until := boundGuard(t)
-				setNow(g, now)
-				// The restore lands as the snapshot's last mint is done, on
-				// port49d's clock p ahead of the runner's.
-				at := now.Add(-lead - p)
-				expires := at.Add(lead + m + 15*time.Minute)
-				start := *now
-				aheadPast := at.After(start.Add(5 * time.Minute))
-				for step := time.Duration(0); step <= 30*time.Minute; step += time.Second {
-					*now = start.Add(step)
-					judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30 + uint64(step/time.Second), WitnessAt: at}, nil)
-					if g.Allows() && expires.After(*now) {
-						t.Fatalf("redeemable token at +%v with the guard open", step)
-					}
-					if aheadPast && (g.Allows() || testutil.ToFloat64(until) != 0) {
-						t.Fatalf("a witness ahead past the allowance armed a bound at +%v", step)
-					}
-				}
-				if !aheadPast && !g.Allows() {
-					t.Fatal("a usable witness left the guard up 30m on")
-				}
-			})
-		}
+	b.now = second
+	b.read(15, 0, second)
+	if !b.g.Allows() {
+		t.Fatal("not lifted at the second bound")
 	}
 }
 
-func TestASecondRestoreWhileGuardedRetakesTheBound(t *testing.T) {
-	g, now, _, _, until := boundGuard(t)
-	setNow(g, now)
-	g.Saw(12)
-	at1 := now.Add(-2 * time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30, WitnessAt: at1}, nil)
-	if g.Allows() {
-		t.Fatal("not guarded by the first drop")
+// After a time lift the pre-restore record stays, so a later restore is still
+// told: a read below it with live tokens guards again (review C2, variant).
+func TestARestoreAfterATimeLiftIsDetected(t *testing.T) {
+	b := newBound(t)
+	first := b.now.Add(5 * time.Minute)
+	b.read(12, 0, first)
+	b.now = first
+	b.read(12, 0, first)
+	if !b.g.Allows() {
+		t.Fatal("not lifted")
 	}
-	at2 := now.Add(-time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 8, Header: 35, WitnessAt: at2}, nil)
-	if g.Allows() || testutil.ToFloat64(until) != float64(at2.Add(20*time.Minute).Unix()) {
-		t.Fatalf("the bound was not retaken from the second snapshot")
+	second := b.now.Add(10 * time.Minute)
+	b.read(15, 0, second) // a newer snapshot restored: its witness is above the first's, below the old 20
+	if b.g.Allows() {
+		t.Fatalf("a restore after a time lift was not guarded: %q", b.out.String())
 	}
-	judgeNow(g, etcdstore.RestoreRead{Witness: 9, Purged: 35, Header: 36, WitnessAt: at2}, nil)
-	if g.Allows() {
-		t.Fatal("a purge at the second drop's header lifted it")
+	if _, u := b.gauges(); u != float64(second.Unix()) {
+		t.Fatalf("the bound is %v", u)
 	}
-	judgeNow(g, etcdstore.RestoreRead{Witness: 9, Purged: 37, Header: 38, WitnessAt: at2}, nil)
-	if !g.Allows() {
-		t.Fatal("a purge after the second drop did not lift it")
+	b.now = second
+	b.read(15, 0, second)
+	if !b.g.Allows() {
+		t.Fatal("not lifted at the second bound")
+	}
+}
+
+// Once lifted, a token expiring at or before the bound stays refused, whatever
+// port49d's clock then says, until a purge (review C3).
+func TestAClockStepBackAfterALiftStillRefusesARestoredToken(t *testing.T) {
+	b := newBound(t)
+	latest := b.now.Add(5 * time.Minute)
+	b.read(12, 0, latest)
+	b.now = latest.Add(time.Second)
+	b.read(12, 0, latest)
+	if !b.g.Allows() || !b.g.RedeemFloor().Equal(latest) {
+		t.Fatalf("lifted %v with floor %v, want %v", b.g.Allows(), b.g.RedeemFloor(), latest)
+	}
+	// NTP steps port49d back 8m: a token expiring at the bound is live on its
+	// clock again, and the floor still refuses it. The witness caught up, so no
+	// re-scan is called for.
+	b.now = latest.Add(-8 * time.Minute)
+	b.read(40, 0, latest)
+	if !b.g.RedeemFloor().Equal(latest) {
+		t.Fatalf("the floor moved: %v", b.g.RedeemFloor())
+	}
+	if exp := latest; !(exp.After(b.now) && !exp.After(b.g.RedeemFloor())) {
+		t.Fatal("the restored token is neither live on the stepped clock nor under the floor")
+	}
+	b.read(41, 50, time.Time{}) // a purge after the drop clears it
+	if !b.g.RedeemFloor().IsZero() {
+		t.Fatalf("a purge left the floor %v", b.g.RedeemFloor())
+	}
+}
+
+// Every way the bound cannot be trusted leaves only the purge: the gauge reads
+// 0, a day later it holds, and a purge lifts it.
+func TestABoundThatCannotBeTrustedGuardsUntilThePurge(t *testing.T) {
+	cases := map[string]scanResult{
+		"the scan failed":          {ran: true, err: errors.New("down")},
+		"a record does not decode": {ran: true, err: etcdstore.ErrTokenRecord},
+		"no scan taken":            {},
+		"an expiry far ahead":      {ran: true, max: guardClock.Add(policy.MaxTokenTTL + restoreSkew + time.Second)},
+	}
+	for name, sc := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := newBound(t)
+			b.readSc(12, sc)
+			if g, u := b.gauges(); b.g.Allows() || g != 1 || u != 0 || !strings.Contains(b.out.String(), "only the purge lifts it") {
+				t.Fatalf("no bound should be armed: %q", b.out.String())
+			}
+			b.now = b.now.Add(24 * time.Hour)
+			b.readSc(12, scanResult{ran: true, max: b.now.Add(-time.Hour)}) // a later good scan arms nothing
+			if g, u := b.gauges(); b.g.Allows() || g != 1 || u != 0 {
+				t.Fatal("a day later it lifted without a purge")
+			}
+			b.read(40, b.header, time.Time{})
+			if !b.g.Allows() {
+				t.Fatal("a purge after the drop did not lift it")
+			}
+		})
+	}
+	// Exactly token_ttl + 5m ahead is trusted.
+	b := newBound(t)
+	edge := b.now.Add(policy.MaxTokenTTL + restoreSkew)
+	b.read(12, 0, edge)
+	if _, u := b.gauges(); b.g.Allows() || u != float64(edge.Unix()) {
+		t.Fatalf("the edge expiry was not trusted: %v", u)
 	}
 }
 
 // A witness followed while a read is in flight is newer than the read, not a
 // second restore: it must not move dropAt past the runner's one purge (F2).
 func TestAWitnessFollowedDuringAGuardedReadIsNoSecondRestore(t *testing.T) {
-	g, now, _, _, _ := boundGuard(t)
-	setNow(g, now)
+	g := newRestoreGuard(&bytes.Buffer{})
+	g.Saw(20)
 	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30}, nil) // guarded, purge-only
 	high, seen, guardHigh := g.recorded()
 	g.Saw(50) // followed while the next read is in flight
-	g.judge(etcdstore.RestoreRead{Witness: 31, Header: 40}, nil, high, seen, guardHigh)
+	g.judge(etcdstore.RestoreRead{Witness: 31, Header: 40}, nil, high, seen, guardHigh, scanResult{})
 	if g.Allows() {
 		t.Fatal("lifted by a plain witness")
 	}
@@ -432,17 +449,38 @@ func TestAWitnessFollowedDuringAGuardedReadIsNoSecondRestore(t *testing.T) {
 }
 
 func TestTheGuardLineSaysWhenItLifts(t *testing.T) {
-	g, now, out, _, _ := boundGuard(t)
-	setNow(g, now)
-	at := now.Add(-time.Minute)
-	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30, WitnessAt: at}, nil)
-	line := out.String()
-	for _, want := range []string{at.Add(20 * time.Minute).UTC().Format(time.RFC3339), "15m0s", "5m0s"} {
-		if !strings.Contains(line, want) {
-			t.Errorf("the line lacks %q: %q", want, line)
-		}
+	b := newBound(t)
+	latest := b.now.Add(7 * time.Minute)
+	b.read(12, 0, latest)
+	line := b.out.String()
+	if !strings.Contains(line, latest.UTC().Format(time.RFC3339)) || strings.Contains(line, `{"`) || strings.Contains(line, `"who"`) {
+		t.Fatalf("the line lacks the lift time, or holds a body: %q", line)
 	}
-	if strings.Contains(line, `{"`) || strings.Contains(line, `"who"`) {
-		t.Errorf("the line holds a witness body: %q", line)
+}
+
+// pass scans the token family only when the read calls for it, and judges what
+// it answered: a drop with a live token guards to its expiry, and a scan that
+// fails guards to the purge.
+func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
+	b := newBound(t)
+	latest := b.now.Add(3 * time.Minute)
+	scans := 0
+	read := func(context.Context) (etcdstore.RestoreRead, error) {
+		return etcdstore.RestoreRead{Witness: 12, Header: 99}, nil
+	}
+	b.g.pass(context.Background(), time.Second, read, func(context.Context) (time.Time, error) { scans++; return latest, nil })
+	if scans != 1 || b.g.Allows() {
+		t.Fatalf("scans %d, allows %v", scans, b.g.Allows())
+	}
+	if _, u := b.gauges(); u != float64(latest.Unix()) {
+		t.Fatalf("the bound %v", u)
+	}
+	noDrop := newRestoreGuard(&bytes.Buffer{})
+	noDrop.Saw(5)
+	noDrop.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+		return etcdstore.RestoreRead{Witness: 5, Header: 9}, nil
+	}, func(context.Context) (time.Time, error) { scans++; return latest, nil })
+	if scans != 1 {
+		t.Fatal("scanned with nothing restored")
 	}
 }

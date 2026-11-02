@@ -549,13 +549,9 @@ func (s *Store) PutPurged(ctx context.Context, who string, over uint64) (uint64,
 
 // RestoreRead is meta/witness's and meta/purged's ModRevisions, 0 for one
 // absent, and the revision etcd answered at, read at one revision (Task
-// 15d). WitnessAt is the time meta/witness's body holds, read in the same
-// transaction: zero when the witness is absent, its body does not decode as
-// {"at": <RFC 3339>}, or at is zero (plan 12c, Task 9a). The body holds no
-// secret, but it is never logged whole.
+// 15d).
 type RestoreRead struct {
 	Witness, Purged, Header uint64
-	WitnessAt               time.Time
 }
 
 // RestoreRead reads meta/witness and meta/purged in one transaction, as
@@ -574,14 +570,6 @@ func (s *Store) RestoreRead(ctx context.Context) (RestoreRead, error) {
 		return 0
 	}
 	r.Witness, r.Purged = at(0), at(1)
-	if kvs := resp.Responses[0].GetResponseRange().GetKvs(); len(kvs) > 0 {
-		var body struct {
-			At time.Time `json:"at"`
-		}
-		if json.Unmarshal(kvs[0].Value, &body) == nil {
-			r.WitnessAt = body.At
-		}
-	}
 	return r, nil
 }
 

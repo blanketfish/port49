@@ -3220,3 +3220,35 @@ func TestATLSPeersDeviceBlock(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 }
+
+// A token expiring at or before the redeem floor is refused store_unavailable,
+// as the restore guard refuses: a clock stepped back after the guard lifted on
+// its own cannot make a restored token redeemable (plan 12c, Task 9a). The
+// token is not consumed.
+func TestATokenAtOrBelowTheRedeemFloorIsRefused(t *testing.T) {
+	login := func(f *fixture) wire.AuthenReply {
+		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+			PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+			Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+		return reply
+	}
+	f := setup(t)
+	expires := f.now.Add(15 * time.Minute) // the fixture's token
+	f.h.WithRedeemFloor(func() time.Time { return expires })
+	if reply := login(f); reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
+		t.Fatalf("a token at the floor: %+v %v", reply, f.records(t))
+	}
+	if cands, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(cands) != 1 {
+		t.Fatal("a refused token was consumed")
+	}
+	f = setup(t)
+	f.h.WithRedeemFloor(func() time.Time { return expires.Add(-time.Second) })
+	if reply := login(f); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("a token above the floor: %+v", reply)
+	}
+	f = setup(t)
+	f.h.WithRedeemFloor(func() time.Time { return time.Time{} })
+	if reply := login(f); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("no floor: %+v", reply)
+	}
+}

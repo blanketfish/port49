@@ -679,33 +679,6 @@ func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
 	}
 }
 
-// A restore read carries the time the witness's body holds, the bound of
-// port49d's restore guard (plan 12c, Task 9a); a body that does not decode,
-// or has no time, is a zero time and no error.
-func TestARestoreReadSaysTheWitnessTime(t *testing.T) {
-	ctx := context.Background()
-	at := time.Date(2026, 11, 2, 9, 30, 0, 0, time.UTC)
-	s := onShared(t, func() time.Time { return at })
-	if r, err := s.RestoreRead(ctx); err != nil || !r.WitnessAt.IsZero() {
-		t.Fatalf("no witness yet: %+v %v", r, err)
-	}
-	if w, err := s.PutWitness(ctx, "runner-a", 0); err != nil || w == 0 {
-		t.Fatalf("%d %v", w, err)
-	}
-	if r, err := s.RestoreRead(ctx); err != nil || !r.WitnessAt.Equal(at) {
-		t.Fatalf("the witness time: %+v %v, want %v", r, err, at)
-	}
-	for name, body := range map[string]string{"not json": "not json", "no at": `{"who":"x"}`,
-		"a zero at": `{"who":"x","at":"0001-01-01T00:00:00Z"}`} {
-		if _, err := s.ctx.Put(ctx, s.k.meta("witness"), body); err != nil {
-			t.Fatal(err)
-		}
-		if r, err := s.RestoreRead(ctx); err != nil || !r.WitnessAt.IsZero() || r.Witness == 0 {
-			t.Fatalf("%s: %+v %v", name, r, err)
-		}
-	}
-}
-
 // ClusterID is the cluster's id from a read's header: the same through any
 // client of one cluster (plan 11a, R28).
 func TestClusterIDIsTheClusters(t *testing.T) {
