@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -863,4 +864,111 @@ func WritePrivateAll(files ...PrivateFile) error {
 		}
 	}
 	return nil
+}
+
+// SetKeys sets the top-level issued_key and touch_key of the config file at
+// path to the two key references, changed reporting whether the file's bytes
+// differ. It edits lines and never re-encodes: a top-level `issued_key:` or
+// `touch_key:` line is replaced where it stands, or one is appended at the end
+// if absent, so every other byte (comments, order, quoting, blank lines) stays.
+// The result is parsed only to confirm it loads and the two keys are top-level
+// with the values given; if not, nothing is written. It writes atomically with
+// the file's own mode (0600 for a new file). A value that arrives from the
+// system config through LoadAll's overlay is not this file's: the caller
+// reports it and does not call SetKeys for it.
+func SetKeys(path, issuedKey, touchKey string) (changed bool, err error) {
+	if issuedKey == "" || touchKey == "" {
+		return false, errors.New("userconfig: SetKeys sets both issued_key and touch_key")
+	}
+	const what = "port49 config file"
+	raw, err := readPrivate(path, maxFile, what, false)
+	exists := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	want := map[string]string{"issued_key": issuedKey, "touch_key": touchKey}
+	out := setTopLevel(string(raw), want)
+	if out == string(raw) {
+		return false, nil
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		return false, fmt.Errorf("%s would not load after the edit (%v); it was not written", path, err)
+	}
+	for k, v := range want {
+		if got, _ := doc[k].(string); got != v {
+			return false, fmt.Errorf("%s: %s is not a plain top-level line this edit can replace; set it by hand", path, k)
+		}
+	}
+	if !exists {
+		return true, WritePrivate(path, []byte(out), what)
+	}
+	return true, replaceFile(path, []byte(out), what)
+}
+
+// setTopLevel replaces each key's top-level line in s, or appends one.
+func setTopLevel(s string, want map[string]string) string {
+	lines := strings.SplitAfter(s, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	done := map[string]bool{}
+	for i, l := range lines {
+		for k, v := range want {
+			if done[k] || !strings.HasPrefix(l, k+":") {
+				continue
+			}
+			eol := l[len(strings.TrimRight(l, "\r\n")):]
+			lines[i] = k + ": " + strconv.Quote(v) + eol
+			done[k] = true
+		}
+	}
+	for _, k := range []string{"issued_key", "touch_key"} {
+		if done[k] {
+			continue
+		}
+		if n := len(lines); n > 0 && !strings.HasSuffix(lines[n-1], "\n") {
+			lines[n-1] += "\n"
+		}
+		lines = append(lines, k+": "+strconv.Quote(want[k])+"\n")
+	}
+	return strings.Join(lines, "")
+}
+
+// replaceFile replaces the existing file at path with data, through a
+// temporary in its directory renamed over it, with the file's own mode.
+func replaceFile(path string, data []byte, what string) error {
+	dirPart, base, err := splitPath(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
+	}
+	dir, err := resolveOwned(dirPart, false, what)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Lstat(joinPath(dir, base))
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "."+base+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // after the rename there is nothing at tmp
+	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), joinPath(dir, base))
 }
