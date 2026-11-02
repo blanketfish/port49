@@ -24,6 +24,9 @@ const leaseBucket = time.Minute
 // TTL, and nothing revokes it early.
 const maxAttachesPerLease = 100
 
+// grantFallbackTimeout bounds a grant whose first caller carried no deadline.
+const grantFallbackTimeout = 5 * time.Second
+
 // leases hands out the lease a record is put on. A lease only reclaims:
 // the record's own expiry, read against now, decides whether it is live
 // (plan 7d, Ruling 3). So a lease is always the bucket ending at least
@@ -96,42 +99,54 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 			l.mu.Unlock()
 			return h.id, nil
 		}
-		if f, ok := l.flight[key]; ok {
-			// A grant for this bucket is under way: wait for it, never grant
-			// a second. Its error is ours; its lease is looked for again.
-			l.mu.Unlock()
-			select {
-			case <-f.done:
-			case <-ctx.Done():
-				return 0, ctx.Err()
+		f, ok := l.flight[key]
+		if !ok {
+			f = &grantFlight{done: make(chan struct{})}
+			l.flight[key] = f
+			// The grant is the bucket's, not this caller's: it runs on a
+			// context its caller's cancel cannot reach, bounded by the
+			// caller's own deadline (the store's call timeout), so one caller
+			// that gives up does not fail the waiters.
+			gctx := context.WithoutCancel(ctx)
+			cancel := func() {}
+			if dl, has := ctx.Deadline(); has {
+				gctx, cancel = context.WithDeadline(gctx, dl)
+			} else {
+				gctx, cancel = context.WithTimeout(gctx, grantFallbackTimeout)
 			}
-			if f.err != nil {
-				return 0, f.err
-			}
-			continue
+			go func() {
+				defer cancel()
+				err := l.grantFor(gctx, key, need)
+				l.mu.Lock()
+				delete(l.flight, key)
+				l.mu.Unlock()
+				f.err = err
+				close(f.done)
+			}()
 		}
-		f := &grantFlight{done: make(chan struct{})}
-		l.flight[key] = f
 		l.mu.Unlock()
-		id, err := l.grantFor(ctx, key, need)
-		l.mu.Lock()
-		delete(l.flight, key)
-		l.mu.Unlock()
-		f.err = err
-		close(f.done)
-		return id, err
+		// Whoever started it, a caller waits on the grant under its own ctx,
+		// then looks for the lease again. A failed grant is every waiter's error.
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		if f.err != nil {
+			return 0, f.err
+		}
 	}
 }
 
-// grantFor grants the lease for the bucket at key and caches it, one attach
-// taken by the caller.
-func (l *leases) grantFor(ctx context.Context, key int64, need time.Duration) (clientv3.LeaseID, error) {
+// grantFor grants the lease for the bucket at key and caches it with no
+// attach taken: every caller, the one that started it too, takes its own.
+func (l *leases) grantFor(ctx context.Context, key int64, need time.Duration) error {
 	// A bucket's worth more, so records of the same bucket put later still
 	// fit on it.
 	ttl := int64(math.Ceil((need + leaseBucket).Seconds()))
 	resp, err := l.grant(ctx, ttl)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if l.saw != nil {
 		l.saw(resp.ResponseHeader.GetRevision())
@@ -139,13 +154,13 @@ func (l *leases) grantFor(ctx context.Context, key int64, need time.Duration) (c
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	w := wall()
-	l.held[key] = heldLease{id: resp.ID, attach: 1, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
+	l.held[key] = heldLease{id: resp.ID, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
 	for b, h := range l.held {
 		if h.until.Before(w) || w.Sub(h.granted) >= leaseBucket {
 			delete(l.held, b)
 		}
 	}
-	return resp.ID, nil
+	return nil
 }
 
 // Reset forgets every lease, after etcd said it no longer knows one.

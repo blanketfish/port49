@@ -58,6 +58,9 @@ func (c *countingGrants) wrap(l *leases, hold time.Duration) {
 	l.grant = func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) {
 		c.n.Add(1)
 		time.Sleep(hold)
+		if err := ctx.Err(); err != nil {
+			return nil, err // as the client's Grant answers a cancelled call
+		}
 		if c.fail.Load() {
 			return nil, errors.New("etcd is down")
 		}
@@ -140,5 +143,46 @@ func TestAFailedGrantFailsItsWaitersAndTheNextCallerTriesAgain(t *testing.T) {
 	c.fail.Store(false)
 	if id, err := l.For(ctx, exp); err != nil || id == 0 || c.n.Load() != 2 {
 		t.Fatalf("the next caller: lease %v, %d grants, %v", id, c.n.Load(), err)
+	}
+}
+
+// One caller that gives up mid-grant does not fail the others: the grant runs on
+// a context its caller's cancel cannot reach, so the waiters still get the lease.
+func TestACallerThatCancelsMidGrantDoesNotFailTheWaiters(t *testing.T) {
+	l := newLeases(etcdtest.Client(t), func() time.Time { return t0 }, 5*time.Minute)
+	var c countingGrants
+	c.wrap(l, 300*time.Millisecond)
+	exp := t0.Add(10 * time.Minute)
+	gctx, cancel := context.WithCancel(context.Background())
+	granter := make(chan error, 1)
+	go func() {
+		_, err := l.For(gctx, exp)
+		granter <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // the granter's grant is under way
+	const waiters = 5
+	ids := make([]clientv3.LeaseID, waiters)
+	errs := make([]error, waiters)
+	var wg sync.WaitGroup
+	for i := range waiters {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids[i], errs[i] = l.For(context.Background(), exp)
+		}()
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel() // the granter gives up mid-grant
+	wg.Wait()
+	if err := <-granter; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the granter that cancelled: %v, want context.Canceled", err)
+	}
+	for i := range waiters {
+		if errs[i] != nil || ids[i] == 0 || ids[i] != ids[0] {
+			t.Fatalf("waiter %d: lease %v, %v; want the one lease", i, ids[i], errs[i])
+		}
+	}
+	if n := c.n.Load(); n != 1 {
+		t.Fatalf("%d grants, want 1", n)
 	}
 }
