@@ -128,9 +128,16 @@ type Policy struct {
 	subs    map[string]*Subject
 	byID    map[string]string // identity → subject
 	grants  []*Grant
-	tests   []Test
-	acked   []Acknowledgment
-	env     Env
+	// grantsOf is each subject's grants as indexes into grants, ascending
+	// (file order), and scopeNames the scopes' names sorted: both built once
+	// at load and never mutated, so compose reads a subject's grants and the
+	// scopes in order without scanning or sorting every grant and scope for
+	// every device.
+	grantsOf   map[string][]int
+	scopeNames []string
+	tests      []Test
+	acked      []Acknowledgment
+	env        Env
 	// quarantine is every device a joint check failed on, by name (Task 10).
 	quarantine map[string]*Quarantine
 	// devIndex is the inventory by name, filled first thing in Parse, so
@@ -1420,6 +1427,7 @@ func (p *Policy) buildScopes(f file) error {
 		}
 		p.scopes[s.Name] = sc
 	}
+	p.scopeNames = sortedKeys(p.scopes)
 	return nil
 }
 
@@ -1588,6 +1596,7 @@ func parseExpires(s string) (time.Time, error) {
 }
 
 func (p *Policy) buildGrants(f file) error {
+	p.grantsOf = map[string][]int{}
 	seen := map[string]int{} // subject, scope and sorted roles → first row
 	for i, g := range f.Grants {
 		// Grants have no name, and an index alone means counting rows by hand
@@ -1658,6 +1667,7 @@ func (p *Policy) buildGrants(f file) error {
 		if err := p.checkAttributes(g.Attributes); err != nil {
 			return fmt.Errorf("%s: %w", row, err)
 		}
+		p.grantsOf[g.Subject] = append(p.grantsOf[g.Subject], len(p.grants))
 		p.grants = append(p.grants, grant)
 	}
 	return nil

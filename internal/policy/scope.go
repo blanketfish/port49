@@ -139,10 +139,8 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) composition {
 	sub := subs[0]
 	c := composition{subject: sub, attached: map[string][]string{}}
-	for _, g := range p.grants {
-		if !slices.ContainsFunc(subs, func(s *Subject) bool { return s.Name == g.Subject }) {
-			continue
-		}
+	for _, i := range p.grantIndexes(subs) {
+		g := p.grants[i]
 		if !g.Expires.IsZero() && !now.IsZero() && !now.Before(g.Expires) {
 			continue
 		}
@@ -203,12 +201,7 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	if c.ceiling != "" && p.levelIndex(held) > p.levelIndex(c.ceiling) {
 		c.ceiling = held
 	}
-	names := make([]string, 0, len(p.scopes))
-	for name := range p.scopes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range p.scopeNames {
 		s := p.scopes[name]
 		ok, byIncomparable := s.selects(d)
 		if !ok {
@@ -231,6 +224,22 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	}
 	sort.Strings(c.roles)
 	return c
+}
+
+// grantIndexes are the indexes into p.grants of every grant of any of subs, in
+// file order, each once: a subject listed twice must not double its grants.
+// One subject's list is the stored one, which a caller must not change; several
+// are merged into a fresh slice (their file order is the sort of the indexes).
+func (p *Policy) grantIndexes(subs []*Subject) []int {
+	if len(subs) == 1 {
+		return p.grantsOf[subs[0].Name]
+	}
+	var idx []int
+	for _, s := range subs {
+		idx = append(idx, p.grantsOf[s.Name]...)
+	}
+	slices.Sort(idx)
+	return slices.Compact(idx)
 }
 
 // signature is everything compose and resolve read of a device, as one key:

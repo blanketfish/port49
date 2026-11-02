@@ -960,8 +960,9 @@ func failClosed(groups []*projectionGroup) []FailClosed {
 func (p *Policy) subjectInstants(sub *Subject, now time.Time) ([]time.Time, map[time.Time]string) {
 	instants := []time.Time{now}
 	lapsing := map[time.Time]string{}
-	for _, g := range p.grants {
-		if g.Subject != sub.Name || !g.Expires.After(now) {
+	for _, i := range p.grantsOf[sub.Name] {
+		g := p.grants[i]
+		if !g.Expires.After(now) {
 			continue
 		}
 		if _, ok := lapsing[g.Expires]; ok {
