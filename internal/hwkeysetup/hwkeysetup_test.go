@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -365,11 +366,15 @@ func TestTheProbeOrderAndTheCheck(t *testing.T) {
 	if ErrNoModule.Error() != "no libykcs11 found; install yubico-piv-tool or pass --module" {
 		t.Fatalf("%q", ErrNoModule)
 	}
-	// macOS lists Homebrew and the installer's paths, and no Linux path.
-	for _, p := range ModuleCandidates("", "darwin", "arm64") {
-		if !strings.HasSuffix(p, ".dylib") {
-			t.Errorf("darwin candidate %q", p)
-		}
+	// Only paths a package's published file list shows (2026-11-02): Debian and Ubuntu's ykcs11,
+	// Fedora's yubico-piv-tool. No macOS path is listed: neither Homebrew's formula nor Yubico's
+	// installer could be confirmed to install a libykcs11.dylib at a fixed path, so a Mac passes --module.
+	want := []string{"/usr/lib/x86_64-linux-gnu/libykcs11.so.2", "/usr/lib/x86_64-linux-gnu/libykcs11.so", "/usr/lib64/libykcs11.so.2"}
+	if got := ModuleCandidates("", "linux", "amd64"); !slices.Equal(got, want) {
+		t.Errorf("linux/amd64 candidates %q, want %q", got, want)
+	}
+	if got := ModuleCandidates("", "darwin", "arm64"); len(got) != 0 {
+		t.Errorf("darwin candidates %q: none is confirmed", got)
 	}
 	for _, p := range ModuleCandidates("", "linux", "amd64") {
 		if strings.Contains(p, "/usr/local/") {

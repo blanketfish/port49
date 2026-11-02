@@ -11596,9 +11596,9 @@ L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01).
     applies wins: (1) `--module PATH`; (2) the `module-path` of an existing `issued_key` or `touch_key`;
     (3) a probe of a fixed list of system install paths, in order: `/usr/lib/<multiarch>/libykcs11.so.2`,
     then `.../libykcs11.so` (Debian and Ubuntu; `<multiarch>` is `x86_64-linux-gnu` or
-    `aarch64-linux-gnu` from `runtime.GOARCH`); `/usr/lib64/libykcs11.so.2`, then `.../libykcs11.so`
-    (Fedora and RHEL); `/usr/local/lib/libykcs11.dylib` (macOS, Intel Homebrew and Yubico's installer);
-    `/opt/homebrew/lib/libykcs11.dylib` (macOS, Apple-silicon Homebrew). No Linux `/usr/local/lib` path:
+    `aarch64-linux-gnu` from `runtime.GOARCH`); `/usr/lib64/libykcs11.so.2` (Fedora and RHEL). Each is a
+    path a package's published file list shows (2026-11-02). No macOS path is probed, because none could be
+    confirmed (a Mac passes `--module`), and no Linux `/usr/local/lib` path:
     only a source build puts one there. A module is loaded only if it passes `userconfig.CheckOwned`, the
     rule the agent applies: every link and the file owned by root or the user, with no group or world
     write, because an attacker-writable library is code execution. A `--module` or an existing key's

@@ -365,19 +365,21 @@ func hostOf(broker string) string {
 var ErrNoModule = errors.New("no libykcs11 found; install yubico-piv-tool or pass --module")
 
 // ModuleCandidates are the system paths a libykcs11 is probed at, in order,
-// under root (a stand-in for "/" in tests). Each path is one a package
-// installs; a path no package installs is not listed.
+// under root (a stand-in for "/" in tests). Each path is one a package's
+// published file list shows (checked 2026-11-02); a path no package is known to
+// install is not listed.
 //
-//   - Debian and Ubuntu, package ykcs11: /usr/lib/<multiarch>/libykcs11.so.2
-//     and libykcs11.so (<multiarch> is x86_64-linux-gnu or aarch64-linux-gnu).
-//     The L60 and L86 harnesses load /usr/lib/x86_64-linux-gnu/libykcs11.so
-//     on the SER8.
-//   - Fedora and RHEL, package yubico-piv-tool: /usr/lib64/libykcs11.so.2
-//     and libykcs11.so.
-//   - macOS, Intel Homebrew's yubico-piv-tool and Yubico's own installer:
-//     /usr/local/lib/libykcs11.dylib. No Linux /usr/local/lib path: only a
-//     source build puts one there.
-//   - macOS, Apple-silicon Homebrew: /opt/homebrew/lib/libykcs11.dylib.
+//   - Debian and Ubuntu, package ykcs11 (packages.debian.org file list, amd64):
+//     /usr/lib/<multiarch>/libykcs11.so.2 and libykcs11.so, <multiarch> being
+//     x86_64-linux-gnu or aarch64-linux-gnu. The arm64 list was not fetched; it
+//     is the same package under the multiarch directory. The L60 and L86
+//     harnesses load /usr/lib/x86_64-linux-gnu/libykcs11.so on the SER8.
+//   - Fedora and RHEL, package yubico-piv-tool (packages.fedoraproject.org, rawhide):
+//     /usr/lib64/libykcs11.so.2. The unversioned libykcs11.so is not in that
+//     package's list, so it is not probed.
+//   - macOS: none. Homebrew's formula page and Yubico's documentation name no
+//     libykcs11.dylib path and no Intel bottle, so a Mac passes --module. No
+//     Linux /usr/local/lib path either: only a source build puts one there.
 func ModuleCandidates(root, goos, goarch string) []string {
 	var rel []string
 	switch goos {
@@ -385,9 +387,7 @@ func ModuleCandidates(root, goos, goarch string) []string {
 		if multi := map[string]string{"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}[goarch]; multi != "" {
 			rel = append(rel, "usr/lib/"+multi+"/libykcs11.so.2", "usr/lib/"+multi+"/libykcs11.so")
 		}
-		rel = append(rel, "usr/lib64/libykcs11.so.2", "usr/lib64/libykcs11.so")
-	case "darwin":
-		rel = append(rel, "usr/local/lib/libykcs11.dylib", "opt/homebrew/lib/libykcs11.dylib")
+		rel = append(rel, "usr/lib64/libykcs11.so.2")
 	}
 	out := make([]string, len(rel))
 	for i, p := range rel {
