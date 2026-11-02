@@ -283,13 +283,44 @@ func (r *loadRun) reloadPolicy(ctx context.Context) (map[string]string, bool) {
 	r.reloads++
 	r.daemon.mark()
 	r.broker.mark()
-	body := strings.Replace(loadPolicy(), "username: human000, token_ttl: 900s",
-		"username: human000, token_ttl: "+strconv.Itoa(900+r.reloads)+"s", 1)
 	start := time.Now()
-	if err := os.WriteFile(r.policyPath, []byte(body), 0o600); err != nil {
+	if err := os.WriteFile(r.policyPath, []byte(loadEditedPolicy(r.reloads)), 0o600); err != nil {
 		r.t.Logf("cell d: the policy edit: %v", err)
 		return map[string]string{"policy_edit": "not written"}, false
 	}
+	obs, ok := r.awaitReloads(ctx, start)
+	if !ok {
+		return obs, false
+	}
+	// Put the original back and wait for that reload too, so a later cell, or a
+	// restart in runLoop, never reads a policy that differs from the stack's.
+	r.daemon.mark()
+	r.broker.mark()
+	start = time.Now()
+	if err := os.WriteFile(r.policyPath, []byte(loadPolicy()), 0o600); err != nil {
+		r.t.Logf("cell d: the policy restore: %v", err)
+		obs["policy_restore"] = "not written"
+		return obs, false
+	}
+	if _, ok := r.awaitReloads(ctx, start); !ok {
+		obs["policy_restore"] = "not reloaded"
+		return obs, false
+	}
+	return obs, true
+}
+
+// loadEditedPolicy is the load policy with one person's token_ttl edited, so the
+// bundle really changes. It edits downward: MaxTokenTTL (900s) is the ceiling,
+// and a value above it is refused by both processes.
+func loadEditedPolicy(reloads int) string {
+	return strings.Replace(loadPolicy(), "username: human000, token_ttl: 900s",
+		"username: human000, token_ttl: "+strconv.Itoa(900-reloads)+"s", 1)
+}
+
+// awaitReloads waits for port49d and the broker each to say "policy reloaded"
+// after their marks, answering the seconds each took, or the processes that
+// never did.
+func (r *loadRun) awaitReloads(ctx context.Context, start time.Time) (map[string]string, bool) {
 	wait := func(p *regionProc) func() (time.Duration, error) {
 		return func() (time.Duration, error) {
 			for !strings.Contains(p.said(), "policy reloaded (") {

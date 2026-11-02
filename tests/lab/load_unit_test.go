@@ -372,3 +372,50 @@ func TestLoadNetemWillNotTouchAQdiscItDidNotInstall(t *testing.T) {
 		}
 	}
 }
+
+// Cell d's policy edit is one the real loader accepts, every reload: an edit
+// above MaxTokenTTL was refused by both processes in load run 1.
+func TestLoadPolicyEditIsAccepted(t *testing.T) {
+	t.Setenv("PORT49_KEY_LOAD", "not-a-real-key-0123456789")
+	dev := []admission.Device{{Name: "load-00000", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.1.1")}}}
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	for reloads := 1; reloads <= 5; reloads++ {
+		body := loadEditedPolicy(reloads)
+		if body == loadPolicy() {
+			t.Fatalf("reload %d: the edit changed nothing", reloads)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := policy.Load(path, policy.Env{Now: time.Now(), Devices: dev}); err != nil {
+			t.Fatalf("reload %d: the loader refused the edit: %v", reloads, err)
+		}
+	}
+}
+
+// The burst cell models the client that ships, which holds one connection to the
+// broker (internal/agent/agent.go, MaxConnsPerHost: 1); more would be evicted
+// by the broker's per-principal cap.
+func TestLoadBrokerTransportHoldsOneConnection(t *testing.T) {
+	if got := loadBrokerTransport(nil).MaxConnsPerHost; got != 1 {
+		t.Fatalf("MaxConnsPerHost = %d, want 1", got)
+	}
+}
+
+// The broker is not ready at "listening on": it refuses mints with 503 until it
+// logs "policy: mints open".
+func TestLoadWaitsForTheBrokersMintGate(t *testing.T) {
+	var want string
+	for _, l := range loadStartLines["port49-broker"] {
+		if strings.Contains(l, "mints open") {
+			want = l
+		}
+	}
+	if want == "" {
+		t.Fatalf("the broker's start lines %v do not wait for its mint gate", loadStartLines["port49-broker"])
+	}
+	src, err := os.ReadFile("../../internal/port49d/policyskew.go")
+	if err != nil || !strings.Contains(string(src), want) {
+		t.Fatalf("policyskew.go does not log %q: %v", want, err)
+	}
+}

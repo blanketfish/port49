@@ -733,12 +733,21 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 		}
 		roots := x509.NewCertPool()
 		roots.AppendCertsFromPEM(caPEM)
-		r.clients = append(r.clients, &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
-			MaxIdleConnsPerHost: 64,
-			TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{c}, RootCAs: roots, ServerName: "port49-broker",
-				MinVersion: tls.VersionTLS13}}})
+		r.clients = append(r.clients, &http.Client{Timeout: 10 * time.Second, Transport: loadBrokerTransport(&tls.Config{
+			Certificates: []tls.Certificate{c}, RootCAs: roots, ServerName: "port49-broker", MinVersion: tls.VersionTLS13})})
 	}
 	return r
+}
+
+// loadBrokerTransport is a machine principal's transport to the broker. The
+// real agent never opens more than one connection to the broker
+// (internal/agent/agent.go, MaxConnsPerHost: 1), so a burst of forks queues on
+// that one connection; the broker's per-principal cap (max_conns_per_principal,
+// spec §13 decision 53 ruling 8) evicts the oldest of a fifth. A transport
+// without the limit would open one connection a concurrent mint and have the
+// broker evict most of them, which the shipped client never does.
+func loadBrokerTransport(tlsConf *tls.Config) *http.Transport {
+	return &http.Transport{MaxConnsPerHost: 1, MaxIdleConnsPerHost: 1, TLSClientConfig: tlsConf}
 }
 
 func atoiPort(s string) int { n, _ := strconv.Atoi(s); return n }
@@ -751,13 +760,24 @@ func (r *loadRun) dirEndpoints() string {
 	return strings.Join(eps, ",")
 }
 
+// loadStartLines are the lines a process says before the load may start, by
+// regionProc name. The broker listens before it opens mints: until it logs
+// "policy: mints open" (internal/port49d/policyskew.go) it refuses every mint
+// with 503.
+var loadStartLines = map[string][]string{
+	"port49-broker": {"listening on", "policy: mints open"},
+	"port49d":       {"listening on"},
+}
+
 // startProcs starts the broker, then the daemon, and waits until each listens.
 func (r *loadRun) startProcs() {
 	r.t.Helper()
 	for _, p := range []*regionProc{r.broker, r.daemon} {
 		p.start(r.t)
-		if _, err := p.wait("listening on", loadStartWait); err != nil {
-			r.t.Fatalf("INVALID: %v\n%s", err, tailOf(p.said(), 2000))
+		for _, want := range loadStartLines[p.name] {
+			if _, err := p.wait(want, loadStartWait); err != nil {
+				r.t.Fatalf("INVALID: %v\n%s", err, tailOf(p.said(), 2000))
+			}
 		}
 	}
 }
