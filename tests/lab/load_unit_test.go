@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,14 +24,14 @@ import (
 // TestLoadCellSelection pins PORT49_LAB_LOAD_CELLS: empty runs every cell, a
 // list runs those in the harness's order, an unknown or repeated ID is refused.
 func TestLoadCellSelection(t *testing.T) {
-	all := []string{"a", "b", "c", "d", "e", "f"}
+	all := []string{"a", "b", "c", "d", "e", "e2", "f"}
 	for in, want := range map[string][]string{
-		"":            all,
-		"  ":          all,
-		"a":           {"a"},
-		"c,a":         {"a", "c"},
-		" b , f ":     {"b", "f"},
-		"a,b,c,d,e,f": all,
+		"":               all,
+		"  ":             all,
+		"a":              {"a"},
+		"c,a":            {"a", "c"},
+		" b , f ":        {"b", "f"},
+		"a,b,c,d,e,e2,f": all,
 	} {
 		got, err := parseLoadCells(in)
 		if err != nil || strings.Join(got, ",") != strings.Join(want, ",") {
@@ -417,5 +418,45 @@ func TestLoadWaitsForTheBrokersMintGate(t *testing.T) {
 	src, err := os.ReadFile("../../internal/port49d/policyskew.go")
 	if err != nil || !strings.Contains(string(src), want) {
 		t.Fatalf("policyskew.go does not log %q: %v", want, err)
+	}
+}
+
+// Cell e2 is 20 real workload processes under one principal, run after cell e
+// and before f; it passes iff all 20 exit 0.
+func TestLoadWorkloadBurstShape(t *testing.T) {
+	if loadWorkloadBurst != 20 || loadWorkloadPrincipal != 0 {
+		t.Fatalf("burst %d under principal %d, want 20 under 0", loadWorkloadBurst, loadWorkloadPrincipal)
+	}
+	i, j, k := slices.Index(loadCellIDs, "e"), slices.Index(loadCellIDs, "e2"), slices.Index(loadCellIDs, "f")
+	if i < 0 || j != i+1 || k != j+1 {
+		t.Fatalf("cells %v: e2 does not run between e and f", loadCellIDs)
+	}
+	if err := validateLoadCell(loadCell{ID: "e2", Rate: loadRate, Duration: loadMinDuration}); err != nil {
+		t.Fatal(err)
+	}
+	zeros := make([]int, loadWorkloadBurst)
+	if !loadWorkloadPass(zeros) {
+		t.Fatal("20 exits of 0 did not pass")
+	}
+	one := slices.Clone(zeros)
+	one[7] = 75
+	if loadWorkloadPass(one) {
+		t.Fatal("a run with an exit 75 passed")
+	}
+	if loadWorkloadPass(zeros[:19]) {
+		t.Fatal("19 processes passed")
+	}
+	args := loadWorkloadArgs("127.0.0.1:18443", "ca.pem", "c.pem", "k.pem", []string{"d1", "d2"})
+	if got := strings.Join(args, " "); got != "workload token --broker https://127.0.0.1:18443 --broker-ca ca.pem --cert c.pem --key k.pem d1 d2" {
+		t.Fatalf("args %q", got)
+	}
+}
+
+// The evicted-connections counter is read from the broker's metrics.
+func TestLoadMetricsReadsEvictions(t *testing.T) {
+	m := parseLoadMetrics("port49_broker_connection_events_total{event=\"principal_cap_evicted\"} 16\n" +
+		"port49_broker_connection_events_total{event=\"other\"} 3\n")
+	if m.Evicted != 16 {
+		t.Fatalf("Evicted = %v, want 16", m.Evicted)
 	}
 }

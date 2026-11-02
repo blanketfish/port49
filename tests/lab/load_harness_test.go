@@ -68,7 +68,7 @@ const (
 var loadDirectoryClientPorts = []string{"12379", "12389", "12399"}
 
 // loadCellIDs are the cells in the order they run.
-var loadCellIDs = []string{"a", "b", "c", "d", "e", "f"}
+var loadCellIDs = []string{"a", "b", "c", "d", "e", "e2", "f"}
 
 // loadCell is one cell's result: what was driven, whether it passed, and what
 // was observed, as text a note can print.
@@ -353,6 +353,7 @@ type loadMetrics struct {
 	Connections float64 // port49_connections, over every state
 	SpoolDepth  float64
 	SpoolDrops  float64 // port49_accounting_spool_drops_total, over every stage
+	Evicted     float64 // port49_broker_connection_events_total{event="principal_cap_evicted"}
 	buckets     map[float64]float64
 }
 
@@ -378,6 +379,8 @@ func parseLoadMetrics(text string) loadMetrics {
 			m.Connections += v
 		case name == "port49_accounting_spool_depth":
 			m.SpoolDepth = v
+		case strings.HasPrefix(name, "port49_broker_connection_events_total{") && strings.Contains(name, `event="principal_cap_evicted"`):
+			m.Evicted += v
 		case strings.HasPrefix(name, "port49_accounting_spool_drops_total"):
 			m.SpoolDrops += v
 		case strings.HasPrefix(name, "port49_store_call_seconds_bucket"):
@@ -529,6 +532,7 @@ type loadRun struct {
 	daemon     *regionProc
 	port49d    string
 	brokerBin  string
+	port49Bin  string // the CLI, built from the branch beside the daemon
 	encKey     string
 	tacacsKey  string
 	envFile    string
@@ -659,7 +663,7 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 	if out, err := regionBuildCmd(root, bins).CombinedOutput(); err != nil {
 		t.Fatalf("INVALID: building the binaries: %v\n%s", err, out)
 	}
-	r.port49d, r.brokerBin = filepath.Join(bins, "port49d"), filepath.Join(bins, "port49-broker")
+	r.port49d, r.brokerBin, r.port49Bin = filepath.Join(bins, "port49d"), filepath.Join(bins, "port49-broker"), filepath.Join(bins, "port49")
 	r.encKey, r.tacacsKey = randomHex(t, 16), randomHex(t, 12)
 	r.envFile = filepath.Join(dir, "run.env")
 	if err := writeEnvFile(r.envFile, [2]string{"LOAD_ENC_KEY", r.encKey}, [2]string{"PORT49_KEY_LOAD", r.tacacsKey}); err != nil {

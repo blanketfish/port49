@@ -4,10 +4,12 @@ package lab
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/devicemock"
+	"github.com/blanketfish/port49/internal/testpki"
 )
 
 // The ceiling cell c stops at, and the gate it applies (ruling F7): the
@@ -29,6 +32,11 @@ const (
 	loadHangBound   = 10 * time.Second
 	loadMintBurst   = 20 // cell e's concurrent batch mints
 	loadBatchSize   = 100
+
+	// Cell e2: concurrent `port49 workload token` processes under one principal.
+	loadWorkloadBurst     = 20
+	loadWorkloadPrincipal = 0
+	loadWorkloadDeadline  = 4 * time.Minute // past the client's own 2 minute retry deadline
 )
 
 // TestLoad runs the load cells (a to f) at the design §5 rate, one at a time,
@@ -44,12 +52,13 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("INVALID: %v", err)
 	}
 	plan := map[string]loadCell{
-		"a": {ID: "a", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
-		"b": {ID: "b", Transport: "tls", Rate: loadRate, Duration: loadMinDuration},
-		"c": {ID: "c", Transport: "tcp", Rate: loadRate, Duration: loadStepDuration},
-		"d": {ID: "d", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
-		"e": {ID: "e", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
-		"f": {ID: "f", Transport: "tcp", Rate: loadRate, Duration: loadNetemRun},
+		"a":  {ID: "a", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
+		"b":  {ID: "b", Transport: "tls", Rate: loadRate, Duration: loadMinDuration},
+		"c":  {ID: "c", Transport: "tcp", Rate: loadRate, Duration: loadStepDuration},
+		"d":  {ID: "d", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
+		"e":  {ID: "e", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
+		"e2": {ID: "e2", Transport: "tcp", Rate: loadRate, Duration: loadMinDuration},
+		"f":  {ID: "f", Transport: "tcp", Rate: loadRate, Duration: loadNetemRun},
 	}
 	for _, id := range ids {
 		if err := validateLoadCell(plan[id]); err != nil {
@@ -101,6 +110,9 @@ func TestLoad(t *testing.T) {
 		case "e":
 			r.useTransport("tcp")
 			c = r.cellMintBurst(ctx, c)
+		case "e2":
+			r.useTransport("tcp")
+			c = r.cellWorkloadBurst(ctx, c)
 		case "f":
 			r.useTransport("tcp")
 			c = r.cellNetem(ctx, c)
@@ -405,6 +417,125 @@ func (r *loadRun) cellMintBurst(ctx context.Context, c loadCell) loadCell {
 	c.Observed["burst_p99_ms"] = loadMS(loadPercentile(took, 99))
 	c.Observed["burst_errors"] = strconv.Itoa(errs)
 	c.Pass = errs == 0 && len(took) == loadMintBurst
+	return c
+}
+
+// loadWorkloadPass is cell e2's verdict: every process exited 0, and there were
+// as many as the cell starts.
+func loadWorkloadPass(codes []int) bool {
+	if len(codes) != loadWorkloadBurst {
+		return false
+	}
+	for _, c := range codes {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// loadWorkloadArgs is one burst process's command line: `port49 workload token`
+// over the principal's certificate, naming the devices. The tokens go to
+// nowhere: the harness never reads them, and its stdout is not captured.
+func loadWorkloadArgs(broker, ca, cert, key string, devices []string) []string {
+	return append([]string{"workload", "token", "--broker", "https://" + broker, "--broker-ca", ca,
+		"--cert", cert, "--key", key}, devices...)
+}
+
+// cellWorkloadBurst is cell e2: 20 concurrent real `port49 workload token`
+// processes under one principal, halfway through the design rate's run. Each
+// process is its own client with its own broker connection, as the Ansible
+// collection's workload mode forks them, so the broker's per-principal
+// connection cap (spec §13 decision 53 ruling 8) can evict. It measures; PASS
+// iff all 20 exit 0. Recorded: the exit codes, p50 and p99 of the processes'
+// wall time, and the broker's principal_cap_evicted delta.
+func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
+	cert, key := testpki.LabClientFiles(loadPrincipalEmail(loadWorkloadPrincipal))
+	keyBytes, err := os.ReadFile(filepath.Join(r.pki.lab, key))
+	if err != nil {
+		r.t.Fatalf("INVALID: %v", err)
+	}
+	keyPath := filepath.Join(r.dir, "e2-key.pem") // the client wants a key only its owner reads
+	if err := os.WriteFile(keyPath, keyBytes, 0o600); err != nil {
+		r.t.Fatalf("INVALID: %v", err)
+	}
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		took    []time.Duration
+		codes   []int
+		evicted float64
+		haveEv  bool
+	)
+	c, _ = r.measure(c, func() devicemock.FleetResult {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if !sleepCtx(ctx, c.Duration/2) {
+				return
+			}
+			before, berr := loadScrape(loadBrokerMetrics)
+			var burst sync.WaitGroup
+			for n := range loadWorkloadBurst {
+				burst.Add(1)
+				go func() {
+					defer burst.Done()
+					var devs []string
+					for i := range loadBatchSize {
+						devs = append(devs, loadDeviceName((n*loadBatchSize+i)%loadDevices))
+					}
+					pctx, cancel := context.WithTimeout(ctx, loadWorkloadDeadline)
+					defer cancel()
+					cmd := exec.CommandContext(pctx, r.port49Bin, loadWorkloadArgs(loadBrokerAddr,
+						filepath.Join(r.pki.lab, testpki.LabCA), filepath.Join(r.pki.lab, cert), keyPath, devs)...)
+					start := time.Now()
+					code := 0
+					if err := cmd.Run(); err != nil {
+						code = -1 // did not start, or killed at the deadline
+						var ee *exec.ExitError
+						if errors.As(err, &ee) && ee.ExitCode() >= 0 {
+							code = ee.ExitCode()
+						}
+					}
+					d := time.Since(start)
+					mu.Lock()
+					defer mu.Unlock()
+					took = append(took, d)
+					codes = append(codes, code)
+				}()
+			}
+			burst.Wait()
+			if after, aerr := loadScrape(loadBrokerMetrics); berr == nil && aerr == nil {
+				evicted, haveEv = after.Evicted-before.Evicted, true
+			}
+		}()
+		return r.fleet(ctx, c.Transport, c.Rate, c.Duration, false)
+	})
+	wg.Wait()
+	slices.Sort(took)
+	slices.Sort(codes)
+	zero := 0
+	var bad []string
+	for _, code := range codes {
+		if code == 0 {
+			zero++
+		} else {
+			bad = append(bad, strconv.Itoa(code))
+		}
+	}
+	c.Observed["workload_processes"] = strconv.Itoa(loadWorkloadBurst)
+	c.Observed["workload_devices_each"] = strconv.Itoa(loadBatchSize)
+	c.Observed["workload_exit_0"] = strconv.Itoa(zero)
+	c.Observed["workload_not_exit_0"] = strconv.Itoa(len(codes) - zero)
+	c.Observed["workload_exit_codes_not_0"] = strings.Join(bad, ",")
+	c.Observed["workload_p50_ms"] = loadMS(loadPercentile(took, 50))
+	c.Observed["workload_p99_ms"] = loadMS(loadPercentile(took, 99))
+	if haveEv {
+		c.Observed["principal_cap_evicted_delta"] = strconv.FormatFloat(evicted, 'f', 0, 64)
+	} else {
+		c.Observed["principal_cap_evicted_delta"] = "not read"
+	}
+	c.Pass = loadWorkloadPass(codes)
 	return c
 }
 
