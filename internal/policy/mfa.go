@@ -614,9 +614,9 @@ func (c *comparison) mfa(subject string, at time.Time) {
 	}
 	var order []string
 	groups := map[string]*group{}
-	for _, dev := range c.after.Devices() {
-		was, wasOK := c.before.mfaAt(subject, dev, at)
-		is, isOK := c.after.mfaAt(subject, dev, at)
+	for i, dev := range c.after.Devices() {
+		was, wasOK := c.sides.mfaAt(c.before, subject, i, dev, at)
+		is, isOK := c.sides.mfaAt(c.after, subject, i, dev, at)
 		if !wasOK || !isOK || reflect.DeepEqual(was, is) {
 			continue
 		}

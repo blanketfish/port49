@@ -467,6 +467,31 @@ func (s side) decide(vector []string) engine.Outcome {
 // same inventory; after's is the one walked. A change is reported once, at
 // the first instant it holds.
 func Compare(before, after *Policy, now time.Time) Diff {
+	return compareWith(before, after, now, directSides{})
+}
+
+// sideSource answers what Compare asks of one policy about one subject on
+// the i'th device of the inventory it walks, at one instant: the side, and
+// the per_login_mfa requirement. directSides resolves each device itself.
+type sideSource interface {
+	side(p *Policy, subject string, i int, d admission.Device, at time.Time) side
+	mfaAt(p *Policy, subject string, i int, d admission.Device, at time.Time) (MFARequirement, bool)
+}
+
+// directSides is the per-device answer: one resolve per subject, device and
+// instant.
+type directSides struct{}
+
+func (directSides) side(p *Policy, subject string, _ int, d admission.Device, at time.Time) side {
+	return p.side(subject, d, at)
+}
+
+func (directSides) mfaAt(p *Policy, subject string, _ int, d admission.Device, at time.Time) (MFARequirement, bool) {
+	return p.mfaAt(subject, d, at)
+}
+
+// compareWith is Compare with its per-device answers from src.
+func compareWith(before, after *Policy, now time.Time, src sideSource) Diff {
 	instants := before.expiryInstants(now)
 	for _, at := range after.expiryInstants(now) {
 		if !slices.ContainsFunc(instants, at.Equal) {
@@ -474,7 +499,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		}
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
-	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
+	c := comparison{before: before, after: after, sides: src, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
 		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...),
 		patterns: slices.Concat(before.Redactions(), after.Redactions())}
 	for k := range after.sessionAcks(before, instants) {
@@ -614,6 +639,7 @@ func sortedRights(list []string) []string {
 // comparison is one Compare in progress.
 type comparison struct {
 	before, after *Policy
+	sides         sideSource
 	acks          map[string]bool
 	// seen holds what has been reported, so an instant repeats nothing an
 	// earlier one found.
@@ -686,8 +712,8 @@ func (c *comparison) at(at time.Time) {
 		var order []string
 		groups := map[string]*group{}
 		refusals := map[string][]string{}
-		for _, dev := range c.after.Devices() {
-			was, is := c.before.side(subject, dev, at), c.after.side(subject, dev, at)
+		for i, dev := range c.after.Devices() {
+			was, is := c.sides.side(c.before, subject, i, dev, at), c.sides.side(c.after, subject, i, dev, at)
 			if is.refused != "" && is.refused != was.refused {
 				refusals[is.refused+"\x00"+is.refusedDetail] = append(refusals[is.refused+"\x00"+is.refusedDetail], dev.Name)
 			}
