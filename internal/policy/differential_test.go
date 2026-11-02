@@ -26,12 +26,13 @@ import (
 
 // fleetSpec is one random fleet's policy, as data so an edit can change it.
 type fleetSpec struct {
-	custom   bool // privilege_levels adds netops under operator
-	defMFA   string
-	scopes   []scopeSpec
-	roles    []roleSpec
-	subjects []subjectSpec
-	grants   []grantSpec
+	custom    bool // privilege_levels adds netops under operator
+	defMFA    string
+	scopes    []scopeSpec
+	roles     []roleSpec
+	subjects  []subjectSpec
+	grants    []grantSpec
+	keyGroups []string
 }
 
 type scopeSpec struct {
@@ -91,6 +92,9 @@ func randomDevices(r *rand.Rand) []admission.Device {
 		}
 		// None of these is read by a composition: they vary within a class.
 		d.Addresses = []netip.Addr{netip.AddrFrom4([4]byte{10, 0, byte(i / 250), byte(1 + i%250)})}
+		if chance(r, 20) {
+			d.Addresses = []netip.Addr{netip.AddrFrom4([4]byte{192, 0, 2, byte(1 + i)})}
+		}
 		if chance(r, 30) {
 			d.KeyRef = pick(r, "k1", "k2")
 		}
@@ -133,6 +137,17 @@ func randomSpec(r *rand.Rand) fleetSpec {
 		{name: "pinned", match: "{name: [dev-03, dev-07, dev-11]}", onMissing: "exclude"},
 		{name: "pinned_one", match: "{name: dev-05}", onMissing: "exclude"},
 		{name: "eos_site", match: "{platform: arista_eos, site: dc1}", onMissing: "include"},
+	}
+	// The key groups admit some devices and not others, by address, attribute
+	// or name, so devices of one class differ in admission (not an input of
+	// a composition, and so never of a class).
+	s.keyGroups = []string{pick(r, "{match: {cidr: 10.0.0.0/8}, key_ref: k1}", "{match: {cidr: 10.0.0.0/25}, key_ref: k1}",
+		"{match: {cidr: 10.0.0.64/26}, key_ref: k2}")}
+	for _, kg := range []string{"{match: {attributes: {site: dc1}}, key_ref: k2}", "{match: {name: dev-03}, key_ref: k1}",
+		"{match: {name: dev-08}, key_ref: k2}", "{match: {cidr: 192.0.2.0/24}, key_ref: k1}"} {
+		if chance(r, 40) {
+			s.keyGroups = append(s.keyGroups, kg)
+		}
 	}
 	s.scopes = []scopeSpec{{name: "all_devices", match: "{}"}}
 	for _, i := range r.Perm(len(pool))[:3+r.IntN(4)] {
@@ -277,7 +292,10 @@ func (s fleetSpec) render() string {
 		b.WriteString("}\n")
 	}
 	b.WriteString("keys:\n  k1: {current: {version: 1, secret_ref: env:PORT49_KEY_DIFF}}\n  k2: {current: {version: 1, secret_ref: env:PORT49_KEY_DIFF}}\n")
-	b.WriteString("key_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k1}\n")
+	b.WriteString("key_groups:\n")
+	for _, kg := range s.keyGroups {
+		fmt.Fprintf(&b, "  - %s\n", kg)
+	}
 	return b.String()
 }
 
@@ -295,8 +313,9 @@ func quoteAll(xs []string) string {
 func (s fleetSpec) edit(r *rand.Rand) fleetSpec {
 	e := s
 	e.scopes, e.roles, e.grants = slices.Clone(s.scopes), slices.Clone(s.roles), slices.Clone(s.grants)
+	e.keyGroups = slices.Clone(s.keyGroups)
 	for range 1 + r.IntN(3) {
-		switch r.IntN(6) {
+		switch r.IntN(7) {
 		case 0:
 			i := r.IntN(len(e.roles))
 			e.roles[i].permit = slices.Clone(e.roles[i].permit)
@@ -322,6 +341,8 @@ func (s fleetSpec) edit(r *rand.Rand) fleetSpec {
 		case 4:
 			i := r.IntN(len(e.roles))
 			e.roles[i].age = pick(r, "", "1h", "never", "8h")
+		case 6:
+			e.keyGroups = append(e.keyGroups, "{match: {name: dev-05}, key_ref: k2}")
 		case 5:
 			i := r.IntN(len(e.roles))
 			e.roles[i].mfa = pick(r, "", "{accept: [idp_mfa]}", "{accept: [hardware_key_touch, idp_mfa], reuse_for: 5m}")
@@ -357,7 +378,7 @@ type coverage struct {
 	parsed, seeds                                             int
 	sharedClass, mfaClassQuarantine, plainQuarantine          int
 	lapsing, noGrants, projected, longRefusal, tie, splitting int
-	longRefusalElsewhere                                      int
+	longRefusalElsewhere, admissionRefused                    int
 }
 
 func (c *coverage) add(f func(*coverage)) {
@@ -368,16 +389,16 @@ func (c *coverage) add(f func(*coverage)) {
 
 func (c *coverage) String() string {
 	return fmt.Sprintf("seeds=%d parsed=%d shared_class=%d mfa_class_quarantine=%d plain_quarantine=%d lapsing=%d "+
-		"no_grants=%d projected=%d long_name_refusal=%d (elsewhere=%d) r18_tie=%d class_split=%d", c.seeds, c.parsed,
+		"no_grants=%d projected=%d long_name_refusal=%d (elsewhere=%d) r18_tie=%d class_split=%d admission_refused=%d", c.seeds, c.parsed,
 		c.sharedClass, c.mfaClassQuarantine, c.plainQuarantine, c.lapsing, c.noGrants, c.projected, c.longRefusal,
-		c.longRefusalElsewhere, c.tie, c.splitting)
+		c.longRefusalElsewhere, c.tie, c.splitting, c.admissionRefused)
 }
 
 func (c *coverage) problems() []string {
 	var out []string
 	for name, n := range map[string]int{"shared_class": c.sharedClass, "mfa_class_quarantine": c.mfaClassQuarantine,
 		"plain_quarantine": c.plainQuarantine, "lapsing": c.lapsing, "no_grants": c.noGrants, "projected": c.projected,
-		"long_name_refusal": c.longRefusal, "r18_tie": c.tie, "class_split": c.splitting} {
+		"long_name_refusal": c.longRefusal, "admission_refused": c.admissionRefused, "r18_tie": c.tie, "class_split": c.splitting} {
 		if n == 0 {
 			out = append(out, name+" never happened")
 		}
@@ -463,6 +484,8 @@ func checkSeed(t *testing.T, seed uint64, cov *coverage) {
 						switch {
 						case errors.Is(werr, ErrNoGrants):
 							c.noGrants++
+						case errors.Is(werr, ErrDeviceRefused):
+							c.admissionRefused++
 						case want.Projection != nil:
 							c.projected++
 						}
@@ -729,6 +752,7 @@ func checkMemoOrder(t *testing.T, seed uint64, before, after *Policy, devs []adm
 
 // A class's requirements are worked out once and handed to every device of it:
 // each device's list is its own, so a caller that edits one changes no other.
+// No two devices share a backing array, at any depth.
 func TestMFARequirementsOfOneClassShareNothing(t *testing.T) {
 	text, devs := variedFleet(200, true)
 	p := benchParse(t, text, devs)
@@ -736,28 +760,31 @@ func TestMFARequirementsOfOneClassShareNothing(t *testing.T) {
 	if len(got) < 2 {
 		t.Fatalf("only %d devices are held to a requirement", len(got))
 	}
-	want := p.MFARequirements(noon)
-	for i := range got[0].Requirements {
-		r := &got[0].Requirements[i]
-		for j := range r.Accept {
-			r.Accept[j] = "tampered"
+	owner := map[any]string{}
+	claim := func(device string, ptr any) {
+		if other, shared := owner[ptr]; shared {
+			t.Fatalf("%s and %s share a backing array", device, other)
 		}
-		for j := range r.Levels {
-			for k := range r.Levels[j].Accept {
-				r.Levels[j].Accept[k] = "tampered"
+		owner[ptr] = device
+	}
+	for _, d := range got {
+		if len(d.Requirements) == 0 {
+			t.Fatalf("%s is listed with no requirement", d.Device)
+		}
+		claim(d.Device, &d.Requirements[0])
+		for i := range d.Requirements {
+			r := &d.Requirements[i]
+			if len(r.Accept) > 0 {
+				claim(d.Device, &r.Accept[0])
 			}
-		}
-	}
-	got[0].Requirements[0].ReuseFrom = "tampered"
-	if again := p.MFARequirements(noon); !reflect.DeepEqual(again, want) {
-		t.Fatal("editing one device's requirements changed what the next call returns")
-	}
-	for _, d := range got[1:] {
-		if reflect.DeepEqual(d.Requirements, got[0].Requirements) {
-			continue
-		}
-		if slices.ContainsFunc(d.Requirements, func(r MFARequirement) bool { return r.ReuseFrom == "tampered" || slices.Contains(r.Accept, "tampered") }) {
-			t.Fatalf("editing %s's requirements changed %s's", got[0].Device, d.Device)
+			if len(r.Levels) > 0 {
+				claim(d.Device, &r.Levels[0])
+			}
+			for j := range r.Levels {
+				if len(r.Levels[j].Accept) > 0 {
+					claim(d.Device, &r.Levels[j].Accept[0])
+				}
+			}
 		}
 	}
 }
