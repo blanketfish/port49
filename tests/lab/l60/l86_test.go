@@ -374,7 +374,7 @@ func (h *lab) l86Guard(exit func(int), deadline time.Time) {
 		case <-done:
 			return
 		}
-		h.say("\n  %s cell %s: %s; cleaning up (agents by pid, the terminal, Keycloak, the lab lock) and stopping", h.study, h.cell, why)
+		h.say("\n  %s cell %s: %s; cleaning up (agents by pid, the terminal, the lab lock, and Keycloak where the cell started it) and stopping", h.study, h.cell, why)
 		h.stopAllAgents()
 		h.restoreTTY()
 		h.mu.Lock()

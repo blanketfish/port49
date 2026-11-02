@@ -16,7 +16,7 @@ serial is masked).
 | Cell | Check | PASS iff |
 |---|---|---|
 | (a) | `status` before setup, with no `issued_key` or `touch_key` in the config | exit 1; the config checks FAIL and the slot checks pass; no PIN asked; no serial printed |
-| (b) | `setup` | exit 0; only `issued_key` and `touch_key` change in the config; `ykman piv info` (you type it) reads the same before and after |
+| (b) | `setup` | exit 0; only `issued_key` and `touch_key` change in the config; the `sha256sum` of `ykman piv info` (you type it) is the same before and after |
 | (c) | whether libykcs11 lists a slot's key with no certificate in it | an observation; "no such slot" if your token has none |
 | (d) | `status` after setup, with an agent logged in | exit 0 and the agent check reads `touch_key: true` |
 | (e) | `status --json` | the keys are snake_case; neither the serial nor a PIN appears |
@@ -62,17 +62,15 @@ serial is masked).
    ```
 
    - **(a)** nothing to do; it prints the status output.
-   - **(b)** it stops twice and asks you to run `ykman piv info` in **another terminal**. **Ryan types this**
-     (before `setup`, then after it):
+   - **(b)** it stops twice and asks you to run `ykman piv info | sha256sum` in **another terminal**, before
+     `setup` and again after it. **Ryan types this** (the output holds the serial, so it is piped into
+     `sha256sum` and never written to a file or pasted anywhere; note only the hash):
 
      ```
-     ykman piv info > /tmp/l91-before.txt
-     ykman piv info > /tmp/l91-after.txt && cmp /tmp/l91-before.txt /tmp/l91-after.txt && echo SAME
-     rm /tmp/l91-before.txt /tmp/l91-after.txt
+     ykman piv info | sha256sum
      ```
 
-     Answer "Did cmp print nothing and your terminal say SAME?" with `1` or `0`. The harness records only that
-     number, never the listings.
+     Answer "Are the two hashes identical?" with `1` or `0`. The harness records only that number.
    - **(c)** it asks whether slot 9e holds a key but no certificate. Answer `0` if you do not know.
    - **(d)** it logs in with the token's keys: type your PIN at port49's own `PIN for ...:` prompt, then answer
      "How many times did port49 ask for the PIN?" with the true number. `status` then reads the agent.
@@ -102,3 +100,4 @@ serial is masked).
 7. **Hand the note back:** tell the lead the path `tests/lab/results/L91-ser8.md` (it holds observations and
    verdicts only: no PIN, no token, no serial). The lead edits spec §15's row; cell (b)'s `ykman` answer is your
    own yes or no.
+

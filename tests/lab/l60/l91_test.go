@@ -11,7 +11,7 @@
 //	(a) status before setup: exit 1, the config checks FAIL, the slot checks pass,
 //	    no PIN asked, no serial printed
 //	(b) setup: exit 0, only issued_key and touch_key change, and Ryan's own
-//	    `ykman piv info` reads the same before and after (their yes or no only)
+//	    `ykman piv info` reads the same before and after by sha256sum (their yes or no only)
 //	(c) whether libykcs11 lists a slot's key with no certificate in it: an
 //	    observation, "no such slot" when the token has none
 //	(d) status after setup with an agent logged in: exit 0 and touch_key: true
@@ -46,6 +46,13 @@ const (
 	l91ResultsNote  = "tests/lab/results/L91-ser8.md"
 	l91SlotChecks   = "session_slot touch_slot attestation_roots session_attested touch_attested touch_policy same_token"
 	l91ConfigChecks = "config_issued_key config_touch_key"
+)
+
+// What Ryan types around setup. `ykman piv info` holds the serial, so its output is never written to a
+// file: it goes into sha256sum, and Ryan compares the two hashes by eye.
+const (
+	l91StepBefore = "In ANOTHER terminal, Ryan types this: ykman piv info | sha256sum    (note the hash; do not paste it anywhere), then press Enter here"
+	l91StepAfter  = "In the same terminal, Ryan types this: ykman piv info | sha256sum    (the same command again) and compares its hash with the first"
 )
 
 // stopRequested is whether the lab's STOP sentinel is there (tests/lab/README.md):
@@ -212,12 +219,24 @@ func (h *lab) l91Versions() error {
 // is what a person would read.
 func (h *lab) hwkey(field string, extra []string, args ...string) result {
 	h.t.Helper()
-	if m := os.Getenv(envModule); m != "" {
-		args = append(args, "--module", m)
-	}
-	r := h.port49(runOpts{detached: true}, append(append([]string{"hwkey"}, args...), extra...)...)
+	r := h.port49(runOpts{detached: true}, l91Args(args, extra, os.Getenv(envModule), h.noAgent)...)
 	h.obsResult(field, r)
 	return r
+}
+
+// l91Args are `port49 hwkey`'s arguments, pinned to an agent socket: the cell's
+// own when args name one (onSock), else noAgent, a path where no agent runs. XDG_RUNTIME_DIR
+// is the child's too, so without this a cell would read Ryan's running agent.
+func l91Args(args, extra []string, module, noAgent string) []string {
+	out := append([]string{"hwkey"}, args...)
+	if module != "" {
+		out = append(out, "--module", module)
+	}
+	out = append(out, extra...)
+	if _, sock := splitSock(out); sock == "" {
+		out = append(out, onSock(noAgent))
+	}
+	return out
 }
 
 // cellVerdict records a cell's result and fails the test on a FAIL.
@@ -246,6 +265,7 @@ func TestL91(t *testing.T) {
 	h := newStudyLab(t, "L91", "all", true)
 	h.needPKCS11()
 	h.labLock(t, "TestL91")
+	h.noAgent = socketIn(t)
 	dl, _ := t.Deadline()
 	h.l86Guard(os.Exit, dl)
 	if err := h.l91Versions(); err != nil {
@@ -277,12 +297,12 @@ func TestL91(t *testing.T) {
 		return
 	}
 	before, _ := os.ReadFile(cfgPath)
-	h.step("2", "In ANOTHER terminal, Ryan types this: ykman piv info > /tmp/l91-before.txt   (do not paste it anywhere), then press Enter here")
+	h.step("2", "%s", l91StepBefore)
 	h.waitEnter("ykman piv info saved", handDeadline)
 	rb := h.hwkey("b_setup", nil, "setup")
 	after, _ := os.ReadFile(cfgPath)
-	h.step("3", "In ANOTHER terminal, Ryan types this: ykman piv info > /tmp/l91-after.txt && cmp /tmp/l91-before.txt /tmp/l91-after.txt && echo SAME ; then rm /tmp/l91-before.txt /tmp/l91-after.txt")
-	same := h.askInt("Did cmp print nothing and your terminal say SAME? 1 = yes, 0 = no")
+	h.step("3", "%s", l91StepAfter)
+	same := h.askInt("Are the two hashes identical? 1 = yes, 0 = no")
 	h.obs("b_ykman_piv_info_same", strconv.Itoa(same))
 	h.cellVerdict("b", l91VerdictB(rb, string(before), string(after), same))
 

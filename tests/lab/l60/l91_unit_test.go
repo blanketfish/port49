@@ -124,3 +124,36 @@ func TestTheStopSentinelEndsTheRun(t *testing.T) {
 		t.Fatal("the sentinel is there, and it does not stop")
 	}
 }
+
+// Every hwkey call is pinned to an agent socket: a cell that names none gets the
+// run's own, where no agent runs, so it never reads Ryan's running agent (whose
+// TPM session would take setup and status down their TPM branch).
+func TestEveryHwkeyCallPinsItsAgentSocket(t *testing.T) {
+	args := l91Args([]string{"status"}, nil, "", "/run/own/agent.sock")
+	if _, sock := splitSock(args); sock != "/run/own/agent.sock" {
+		t.Errorf("no pinned socket in %q", args)
+	}
+	args = l91Args([]string{"status", onSock("/run/cell-d.sock")}, nil, "/m/libykcs11.so", "/run/own/agent.sock")
+	if rest, sock := splitSock(args); sock != "/run/cell-d.sock" || !strings.Contains(strings.Join(rest, " "), "--module /m/libykcs11.so") {
+		t.Errorf("the cell's own socket or the module is lost: %q", args)
+	}
+}
+
+// `ykman piv info` holds the token's serial: neither the runbook nor the harness has Ryan write
+// it to a file (/tmp is shared). They compare it by sha256sum alone.
+func TestNoYkmanOutputIsWrittenToAFile(t *testing.T) {
+	book, err := os.ReadFile("../L91-runbook.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]string{"the runbook": string(book), "the before step": l91StepBefore, "the after step": l91StepAfter} {
+		for _, bad := range []string{"piv info >", "piv info |tee", "piv info | tee", "/tmp/l91", "cmp "} {
+			if strings.Contains(s, bad) {
+				t.Errorf("%s has %q: ykman output goes to sha256sum, never to a file", name, bad)
+			}
+		}
+		if !strings.Contains(s, "ykman piv info | sha256sum") {
+			t.Errorf("%s does not compare by `ykman piv info | sha256sum`", name)
+		}
+	}
+}

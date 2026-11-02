@@ -129,6 +129,7 @@ type lab struct {
 	mu      sync.Mutex
 	agents  map[string]int // socket -> agent pid
 	obsFile *os.File
+	noAgent string     // L91: an agent socket path where no agent runs (l91Args)
 	broker  *labBroker // the cell's broker, whose refresh pacing a refresh steps past
 	// onKill is what a killed cell also undoes (the lab lock, Keycloak): the
 	// signal guard (l86Guard) runs it after the agents and the terminal.

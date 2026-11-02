@@ -102,3 +102,16 @@ func TestSetKeysRefusesAFileItWouldBreak(t *testing.T) {
 		t.Fatalf("a refused edit wrote: %q", got)
 	}
 }
+
+// A hand-written line that already holds the wanted value, in any YAML spelling
+// (plain, single-quoted, with a comment), is left byte-identical: setup says it
+// changed nothing, and it did not.
+func TestSetKeysLeavesAMatchingHandWrittenLineAlone(t *testing.T) {
+	body := "broker: x\nissued_key: '" + issuedRef + "'   # mine\ntouch_key:   \"" + touchRef + "\"\n"
+	p := writeConf(t, body, 0o600)
+	changed, err := SetKeys(p, issuedRef, touchRef)
+	after, _ := os.ReadFile(p)
+	if err != nil || changed || string(after) != body {
+		t.Fatalf("changed=%v err=%v\n%s", changed, err, after)
+	}
+}

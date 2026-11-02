@@ -918,9 +918,14 @@ func setTopLevel(s string, want map[string]string) string {
 			if done[k] || !strings.HasPrefix(l, k+":") {
 				continue
 			}
+			done[k] = true
+			// A line that already holds the value, in any YAML spelling, stays as written.
+			var have map[string]any
+			if yaml.Unmarshal([]byte(l), &have) == nil && have[k] == v {
+				continue
+			}
 			eol := l[len(strings.TrimRight(l, "\r\n")):]
 			lines[i] = k + ": " + strconv.Quote(v) + eol
-			done[k] = true
 		}
 	}
 	for _, k := range []string{"issued_key", "touch_key"} {

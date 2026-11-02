@@ -228,6 +228,10 @@ func TestSetupAsksBeforeChangingADifferentKey(t *testing.T) {
 	if code != 1 || l.config() != before || !strings.Contains(out, "pkcs11:token=other") {
 		t.Fatalf("no terminal: exit %d, file changed=%v\n%s", code, l.config() != before, out)
 	}
+	noSerial(t, out) // the new value carries %23<serial>
+	if !strings.Contains(out, "%23<serial>") {
+		t.Errorf("the new value is not shown masked:\n%s", out)
+	}
 	withTerminal(t, true)
 	saved := hwkeyStdin
 	hwkeyStdin = strings.NewReader("n\n")
