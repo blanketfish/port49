@@ -8138,6 +8138,13 @@ which each see one branch, cannot see. Its findings are fixed before plan 13, so
 describe reviewed behavior and no flaw it finds goes public. Order: 12b, lab L86, 12c, this
 review, 13, then the `v0.1.0` beta.
 
+The review also hunts for **mechanisms a simpler fact already makes moot**: for each guard,
+refusal or wait, ask what it protects against, whether something else in the system (an expiry,
+a signature, a bound) already rules that out, and what it costs an operator at 3am. Ryan,
+2026-11-02, after the restore guard: it locked IOS XE out until a purge to stop replay of
+restored tokens, though every restored token is dead within the max `token_ttl` (15m) of the
+snapshot. Plan 12c bounds the guard by the restore witness's time.
+
 ## Plan 13 — User and admin documentation
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
