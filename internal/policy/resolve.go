@@ -591,20 +591,55 @@ func (p *Policy) checkDevices() {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	for _, d := range p.env.Devices {
-		for _, name := range sortedKeys(p.subs) {
-			entries := p.checkDevice(p.subs[name], d, now)
+	// A subject's composition, and so its failures, depend on a device only
+	// through its class (scope.go, deviceClass): each subject is checked once
+	// per class, on its first device, and every other member takes the same
+	// entries. The one text that names the device, the per_login_mfa
+	// refusal, is checked on its own device (quotesDevice).
+	devs := p.env.Devices
+	classes := p.deviceClasses(devs)
+	found := make([][]QuarantineEntry, len(devs))
+	for _, name := range sortedKeys(p.subs) {
+		sub := p.subs[name]
+		instants, lapsing := p.subjectInstants(sub, now)
+		for _, members := range classes {
+			entries := p.checkDeviceOver(sub, devs[members[0]], instants, lapsing)
 			if len(entries) == 0 {
 				continue
 			}
-			q, ok := p.quarantine[d.Name]
-			if !ok {
-				q = &Quarantine{Device: d.Name, Platform: d.Platform}
-				p.quarantine[d.Name] = q
+			quotes := quotesDevice(entries)
+			for k, i := range members {
+				own := entries
+				if quotes && k > 0 {
+					own = p.checkDeviceOver(sub, devs[i], instants, lapsing)
+				}
+				found[i] = append(found[i], own...)
 			}
-			q.Entries = append(q.Entries, entries...)
 		}
 	}
+	// In inventory order, each device's entries by subject name: the order a
+	// check of every subject on every device, device by device, would give,
+	// even with two devices of one name.
+	for i, d := range devs {
+		if len(found[i]) == 0 {
+			continue
+		}
+		q, ok := p.quarantine[d.Name]
+		if !ok {
+			q = &Quarantine{Device: d.Name, Platform: d.Platform}
+			p.quarantine[d.Name] = q
+		}
+		q.Entries = append(q.Entries, found[i]...)
+	}
+}
+
+// quotesDevice reports whether any entry's cause names the device it was found
+// on, and so is the device's own text, never a class's. The only cause in
+// resolve's tree that does is per_login_mfa's refusal, which resolve wraps as
+// "(on %s)" with the device's name and checkDeviceAt marks MFA; the joint
+// checks name the platform, never the device.
+func quotesDevice(entries []QuarantineEntry) bool {
+	return slices.ContainsFunc(entries, func(e QuarantineEntry) bool { return e.MFA })
 }
 
 // checkDevice is one subject's joint checks on one device, at now and at
@@ -612,6 +647,12 @@ func (p *Policy) checkDevices() {
 // holds over; none is none failed.
 func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []QuarantineEntry {
 	instants, lapsing := p.subjectInstants(sub, now)
+	return p.checkDeviceOver(sub, d, instants, lapsing)
+}
+
+// checkDeviceOver is checkDevice over the instants subjectInstants gave for sub.
+func (p *Policy) checkDeviceOver(sub *Subject, d admission.Device, instants []time.Time,
+	lapsing map[time.Time]string) []QuarantineEntry {
 	var out []QuarantineEntry
 	open := false // whether the last entry is still failing
 	for _, at := range instants {

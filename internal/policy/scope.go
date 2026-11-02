@@ -242,29 +242,60 @@ func (p *Policy) grantIndexes(subs []*Subject) []int {
 	return slices.Compact(idx)
 }
 
-// signature is everything compose and resolve read of a device, as one key:
-// its platform, whose adapter compiles and projects the composition, and for
-// every scope whether it selects the device and whether only by a version it
-// could not compare. compose reads the device's name and attributes only
-// through selects. Two devices with one signature resolve alike for every
-// subject at every moment, but for the name an error quotes, which a reader
-// that groups by signature must not read. scopes is every scope's name,
-// sorted (sortedKeys).
-func (p *Policy) signature(d admission.Device, scopes []string) string {
-	var b strings.Builder
-	b.WriteString(d.Platform)
-	b.WriteByte(0)
-	for _, name := range scopes {
+// deviceClass is everything compose and resolve read of a device, as one
+// comparable key: its platform, whose adapter compiles and projects the
+// composition, and one mark per scope, in Policy.scopeNames order: '-' the
+// scope does not select the device, '?' it selects it only by a version it
+// could not compare, '+' it selects it. compose reads the device's name and
+// attributes only through selects. Two devices in one class resolve alike for
+// every subject at every moment, but for the name an error quotes (the
+// per_login_mfa refusal, resolve.go's "(on %s)") and the name a mint's
+// {device} placeholder fills, which a reader that shares a class's result
+// must not take from a representative (the 12c Task 6b brief's input
+// inventory, R6 and R14).
+type deviceClass struct{ platform, marks string }
+
+// String is the class as signature writes it.
+func (c deviceClass) String() string { return c.platform + "\x00" + c.marks }
+
+// classOf is d's class over scopes, every scope's name, sorted (sortedKeys).
+func (p *Policy) classOf(d admission.Device, scopes []string) deviceClass {
+	marks := make([]byte, len(scopes))
+	for i, name := range scopes {
 		switch ok, byIncomparable := p.scopes[name].selects(d); {
 		case !ok:
-			b.WriteByte('-')
+			marks[i] = '-'
 		case byIncomparable:
-			b.WriteByte('?')
+			marks[i] = '?'
 		default:
-			b.WriteByte('+')
+			marks[i] = '+'
 		}
 	}
-	return b.String()
+	return deviceClass{platform: d.Platform, marks: string(marks)}
+}
+
+// signature is d's class as a string, for readers that group by it
+// (projectionGroupsBy).
+func (p *Policy) signature(d admission.Device, scopes []string) string {
+	return p.classOf(d, scopes).String()
+}
+
+// deviceClasses groups devs by class: the indexes of each class, classes in
+// order of first appearance and indexes ascending.
+func (p *Policy) deviceClasses(devs []admission.Device) [][]int {
+	var classes [][]int
+	at := map[deviceClass]int{}
+	for i, d := range devs {
+		c := p.classOf(d, p.scopeNames)
+		k, ok := at[c]
+		if !ok {
+			k = len(classes)
+			at[c] = k
+			classes = append(classes, nil)
+		}
+		classes[k] = append(classes[k], i)
+	}
+	return classes
 }
 
 // granting is the subjects of subs, in order, with at least one grant in the
