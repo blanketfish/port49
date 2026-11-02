@@ -542,6 +542,10 @@ type loadRun struct {
 	tlsOnce sync.Once
 	tlsMat  []*devicemock.TLSMaterial
 
+	abortMu   sync.Mutex
+	aborts    []loadAbort
+	abortOnce sync.Once
+
 	mu        sync.Mutex
 	mints     []time.Duration
 	mintErrs  int
@@ -674,6 +678,7 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 	}
 	r.sess = &regionEtcd{name: "s", bin: bin, client: "127.0.0.1:12479", peer: "127.0.0.1:12480", cluster: "s=http://127.0.0.1:12480",
 		data: filepath.Join(dir, "s.etcd"), log: filepath.Join(dir, "s.log"), pki: r.pki}
+	loadReapStaleSession(t, bin)
 	all := append(slices.Clone(r.dirMembers), r.sess)
 	for _, e := range all {
 		e.start(t)
@@ -689,6 +694,12 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 		}
 	}
 
+	// Record the session etcd's PID where the next run finds it, in case this
+	// one is killed while the cell-d fault has the member stopped.
+	if raw, err := os.ReadFile(r.sess.pidfile()); err == nil {
+		_ = os.WriteFile(loadSessionPidfile(), raw, 0o600)
+		t.Cleanup(func() { _ = os.Remove(loadSessionPidfile()) })
+	}
 	r.policyPath = r.writeFile("policy.yaml", loadPolicy())
 	r.writeFile("inventory-tcp.yaml", loadInventory(devices, "tcp"))
 	r.writeFile("inventory-tls.yaml", loadInventory(devices, "tls"))
@@ -957,39 +968,62 @@ func (r *loadRun) loadNetemOn() (undo func()) {
 	}
 	var once sync.Once
 	undo = func() { once.Do(func() { _ = sudoRun(loadNetem(false), true) }) }
-	r.onAbort(undo)
+	r.onAbort(1, undo)
 	return undo
 }
 
-// onAbort runs undo at t's cleanup, on SIGINT or SIGTERM, and 30 s before the
-// test binary's -timeout would panic (a panic runs no cleanup): so a netem
-// qdisc or a stopped etcd is not left behind by an aborted run. undo must be
-// safe to call twice.
-func (r *loadRun) onAbort(undo func()) {
-	r.t.Cleanup(undo)
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	var timer *time.Timer
-	if dl, ok := r.t.Deadline(); ok {
-		timer = time.AfterFunc(time.Until(dl)-30*time.Second, undo)
-	}
-	stop := make(chan struct{})
-	go func() {
-		select {
-		case s := <-sig:
-			undo()
-			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
-			_ = syscall.Kill(os.Getpid(), s.(syscall.Signal))
-		case <-stop:
+// onAbort registers undo, which must be safe to call twice, to run at t's
+// cleanup, on SIGINT or SIGTERM, and 30 s before the test binary's -timeout
+// would panic (a panic runs no cleanup), so a netem qdisc or a stopped etcd is
+// not left behind by an aborted run. One handler runs every undo in order
+// (lowest first: netem 1, then the continue 2) and only then re-raises the
+// signal, so no undo races another to the exit.
+func (r *loadRun) onAbort(order int, undo func()) {
+	r.abortMu.Lock()
+	defer r.abortMu.Unlock()
+	r.aborts = append(r.aborts, loadAbort{order, undo})
+	slices.SortStableFunc(r.aborts, func(a, b loadAbort) int { return a.order - b.order })
+	r.t.Cleanup(r.runAborts)
+	r.abortOnce.Do(func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		var timer *time.Timer
+		if dl, ok := r.t.Deadline(); ok {
+			timer = time.AfterFunc(time.Until(dl)-30*time.Second, r.runAborts)
 		}
-	}()
-	r.t.Cleanup(func() {
-		signal.Stop(sig)
-		close(stop)
-		if timer != nil {
-			timer.Stop()
-		}
+		stop := make(chan struct{})
+		go func() {
+			select {
+			case s := <-sig:
+				r.runAborts()
+				signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+				_ = syscall.Kill(os.Getpid(), s.(syscall.Signal))
+			case <-stop:
+			}
+		}()
+		r.t.Cleanup(func() {
+			signal.Stop(sig)
+			close(stop)
+			if timer != nil {
+				timer.Stop()
+			}
+		})
 	})
+}
+
+type loadAbort struct {
+	order int
+	undo  func()
+}
+
+// runAborts runs every registered undo, in order.
+func (r *loadRun) runAborts() {
+	r.abortMu.Lock()
+	aborts := slices.Clone(r.aborts)
+	r.abortMu.Unlock()
+	for _, a := range aborts {
+		a.undo()
+	}
 }
 
 // loadStopOnSentinel is ctx, cancelled within every of check's polls that
@@ -1063,10 +1097,13 @@ func loadAwaitSwaps(waits map[string]func() (time.Duration, error)) (obs map[str
 	return obs, ok
 }
 
-// loadNetemPlan reads `tc qdisc show dev lo`: remove is whether it holds the
-// prio qdisc an earlier run of this harness left (handle 1:), which the
-// pre-clean may delete; any other root qdisc is somebody else's, an error.
+// loadNetemPlan reads `tc qdisc show dev lo`: remove is whether it holds what
+// an earlier run of this harness left, the prio qdisc (handle 1:) with its
+// netem child (30: on parent 1:3, the loadNetemDelay), which the pre-clean may
+// delete. Any other root qdisc, or a prio 1: without that child, is somebody
+// else's: an error.
 func loadNetemPlan(show string) (remove bool, err error) {
+	var prio, child bool
 	for _, l := range strings.Split(show, "\n") {
 		f := strings.Fields(l)
 		if len(f) < 3 || f[0] != "qdisc" {
@@ -1074,11 +1111,72 @@ func loadNetemPlan(show string) (remove bool, err error) {
 		}
 		switch {
 		case f[1] == "prio" && f[2] == "1:":
-			remove = true
+			prio = true
+		case f[1] == "netem" && f[2] == "30:" && slices.Contains(f, "1:3") && slices.Contains(f, "delay") && slices.Contains(f, loadNetemDelay):
+			child = true
 		case f[1] == "noqueue" || slices.Contains(f, "parent"):
 		default:
 			return false, fmt.Errorf("lo has a root qdisc this harness did not install (%s %s); refusing to replace it", f[1], f[2])
 		}
 	}
-	return remove, nil
+	if prio && !child {
+		return false, errors.New("lo has a prio 1: qdisc without this harness's netem child; refusing to remove it")
+	}
+	return prio, nil
+}
+
+// loadFaultInWindow is whether cell d's fault, the session store stopped at
+// stop and continued at cont, fell wholly inside the fleet's run, which ended
+// at end. A fault that never happened, never ended or ended after the fleet
+// measured nothing.
+func loadFaultInWindow(stop, cont, end time.Time) bool {
+	return !stop.IsZero() && !cont.IsZero() && cont.Before(end)
+}
+
+// loadStaleSession decides whether a session etcd that a killed run left (it
+// may be stopped) is to be reaped: pidfile holds a PID, and /proc/<pid>/exe,
+// resolved, is the etcd binary. Anything else is left alone, and why says so.
+func loadStaleSession(pidfile, procRoot, wantExe string) (pid int, reap bool, why string) {
+	raw, err := os.ReadFile(pidfile)
+	if err != nil {
+		return 0, false, "no pidfile"
+	}
+	pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 1 {
+		return 0, false, "the pidfile holds no PID"
+	}
+	exe, err := filepath.EvalSymlinks(filepath.Join(procRoot, strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return pid, false, fmt.Sprintf("pid %d is gone", pid)
+	}
+	want, err := filepath.EvalSymlinks(wantExe)
+	if err != nil || exe != want {
+		return pid, false, fmt.Sprintf("pid %d no longer runs the etcd binary", pid)
+	}
+	return pid, true, ""
+}
+
+// loadSessionPidfile is where the harness records the session etcd it starts,
+// outside the run's own directory, so a run that was killed leaves it for the
+// next run to find.
+func loadSessionPidfile() string {
+	dir := filepath.Join(os.TempDir(), "port49-load")
+	_ = os.MkdirAll(dir, 0o700)
+	return filepath.Join(dir, "session-etcd.pid")
+}
+
+// loadReapStaleSession continues and kills the session etcd a killed run left,
+// by the PID recorded for it and only while it still runs the etcd binary.
+func loadReapStaleSession(t testing.TB, etcdBin string) {
+	t.Helper()
+	pidfile := loadSessionPidfile()
+	pid, reap, why := loadStaleSession(pidfile, "/proc", filepath.Join(etcdBin, "etcd"))
+	if reap {
+		t.Logf("reaping the session etcd an earlier run left (pid %d)", pid)
+		_ = syscall.Kill(pid, syscall.SIGCONT)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	} else if why != "no pidfile" {
+		t.Logf("the earlier run's session etcd record is stale: %s", why)
+	}
+	_ = os.Remove(pidfile)
 }

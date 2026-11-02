@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -285,6 +287,65 @@ func TestLoadReloadMustBeConfirmedByEveryProcess(t *testing.T) {
 	}
 }
 
+// Cell d's fault counts only when all of it fell inside the fleet's run.
+func TestLoadFaultMustFallInsideTheRun(t *testing.T) {
+	t0 := time.Now()
+	at := func(d time.Duration) time.Time { return t0.Add(d) }
+	end := at(10 * time.Minute)
+	for name, c := range map[string]struct {
+		stop, cont time.Time
+		want       bool
+	}{
+		"inside":                 {at(400 * time.Second), at(420 * time.Second), true},
+		"never stopped":          {time.Time{}, time.Time{}, false},
+		"stopped, never resumed": {at(400 * time.Second), time.Time{}, false},
+		"after the fleet ended":  {at(11 * time.Minute), at(11*time.Minute + 20*time.Second), false},
+		"resumed after the end":  {at(595 * time.Second), at(615 * time.Second), false},
+	} {
+		if got := loadFaultInWindow(c.stop, c.cont, end); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// A session etcd left stopped by a killed run is reaped by the PID the run
+// recorded, only while /proc says that PID still runs the etcd binary.
+func TestLoadReapsOnlyTheRecordedEtcd(t *testing.T) {
+	proc, dir := t.TempDir(), t.TempDir()
+	etcd := filepath.Join(dir, "etcd")
+	if err := os.WriteFile(etcd, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other")
+	if err := os.WriteFile(other, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pidfile := filepath.Join(dir, "session-etcd.pid")
+	if _, reap, _ := loadStaleSession(pidfile, proc, etcd); reap {
+		t.Fatal("reaped with no pidfile")
+	}
+	os.WriteFile(pidfile, []byte("4242\n"), 0o600)
+	if _, reap, why := loadStaleSession(pidfile, proc, etcd); reap || why == "" {
+		t.Fatalf("reaped a PID that is gone: %v %q", reap, why)
+	}
+	os.MkdirAll(filepath.Join(proc, "4242"), 0o755)
+	os.Symlink(other, filepath.Join(proc, "4242", "exe"))
+	if _, reap, _ := loadStaleSession(pidfile, proc, etcd); reap {
+		t.Fatal("reaped a PID that now runs another program")
+	}
+	os.Remove(filepath.Join(proc, "4242", "exe"))
+	os.Symlink(etcd, filepath.Join(proc, "4242", "exe"))
+	if pid, reap, _ := loadStaleSession(pidfile, proc, etcd); !reap || pid != 4242 {
+		t.Fatalf("did not reap the recorded etcd: %d %v", pid, reap)
+	}
+	for _, bad := range []string{"1\n", "0", "abc", "-5"} {
+		os.WriteFile(pidfile, []byte(bad), 0o600)
+		if _, reap, _ := loadStaleSession(pidfile, proc, etcd); reap {
+			t.Errorf("reaped on pidfile %q", bad)
+		}
+	}
+}
+
 func TestLoadNetemWillNotTouchAQdiscItDidNotInstall(t *testing.T) {
 	for show, want := range map[string]struct {
 		remove bool
@@ -292,6 +353,8 @@ func TestLoadNetemWillNotTouchAQdiscItDidNotInstall(t *testing.T) {
 	}{
 		"qdisc noqueue 0: root refcnt 2\n": {false, false},
 		"qdisc prio 1: root refcnt 2 bands 3 priomap 1 1 1\nqdisc netem 30: parent 1:3 limit 1000 delay 40ms\n": {true, false},
+		"qdisc prio 1: root refcnt 2 bands 3 priomap 1 1 1\n":                                                   {false, true},
+		"qdisc prio 1: root refcnt 2 bands 3 priomap 1 1 1\nqdisc netem 30: parent 1:3 limit 1000 delay 5ms\n":  {false, true},
 		"qdisc fq_codel 0: root refcnt 2 limit 10240p\n":                                                        {false, true},
 		"": {false, false},
 	} {

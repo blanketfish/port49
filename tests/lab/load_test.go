@@ -213,42 +213,61 @@ func (r *loadRun) cellAccounting(ctx context.Context, c loadCell) loadCell {
 	return c
 }
 
-// cellFaults is cell d: the design rate with a policy reload a third of the
+// cellFaults is cell d: the design rate with a policy edit a third of the
 // way in and a session-store fault (the member stopped, then continued, 20 s)
-// at two thirds, the shape of 11b's. PASS iff no play hangs past 10 s (a
-// play's time includes its mint, so the broker is covered too) and port49d
-// and the broker each said the reload swapped; the seconds each took are
-// recorded.
+// at two thirds of the run, both scheduled from the cell's start and each
+// checking ctx, so a STOP ends them. The swap is awaited concurrently with the
+// fault. PASS iff no play hangs past 10 s (a play's time includes its mint, so
+// the broker is covered too), port49d and the broker each said the edit swapped
+// (the seconds each took are recorded), and the fault fell wholly inside the
+// fleet's run.
 func (r *loadRun) cellFaults(ctx context.Context, c loadCell) loadCell {
 	var (
-		wg       sync.WaitGroup
-		swapObs  map[string]string
-		swapped  bool
-		sessArgs = []string{"--data-dir", r.sess.data}
+		wg             sync.WaitGroup
+		swapObs        map[string]string
+		swapped        bool
+		stopAt, contAt time.Time
+		fleetEnd       time.Time
+		sessArgs       = []string{"--data-dir", r.sess.data}
 	)
 	cont := func() { _ = loadSignal(r.sess.pidfile(), sessArgs, syscall.SIGCONT) }
-	r.onAbort(cont)
+	r.onAbort(2, cont)
 	c, res := r.measure(c, func() devicemock.FleetResult {
-		wg.Add(1)
-		go func() {
+		t0 := time.Now()
+		wg.Add(2)
+		go func() { // the edit, and the wait for each process's swap
 			defer wg.Done()
-			sleepCtx(ctx, c.Duration/3)
-			swapObs, swapped = r.reloadPolicy()
-			sleepCtx(ctx, c.Duration/3-5*time.Second)
+			if !sleepUntil(ctx, t0.Add(c.Duration/3)) {
+				return
+			}
+			swapObs, swapped = r.reloadPolicy(ctx)
+		}()
+		go func() { // the fault, whatever the reload is doing
+			defer wg.Done()
+			if !sleepUntil(ctx, t0.Add(2*c.Duration/3)) {
+				return
+			}
 			if why := loadSignal(r.sess.pidfile(), sessArgs, syscall.SIGSTOP); why != "" {
 				r.t.Logf("cell d: the session store was not stopped: %s", why)
 				return
 			}
+			stopAt = time.Now()
 			sleepCtx(ctx, 20*time.Second)
 			cont()
+			contAt = time.Now()
 		}()
-		return r.fleet(ctx, c.Transport, c.Rate, c.Duration, false)
+		res := r.fleet(ctx, c.Transport, c.Rate, c.Duration, false)
+		fleetEnd = time.Now()
+		return res
 	})
 	wg.Wait()
+	cont() // whatever happened above, the member runs again
 	maps.Copy(c.Observed, swapObs)
 	c.Observed["fault"] = "policy edit at one third; session store stopped 20s at two thirds"
 	c.Observed["hang_bound_ms"] = loadMS(loadHangBound)
-	c.Pass = res.Max <= loadHangBound && swapped && swapObs != nil
+	inside := loadFaultInWindow(stopAt, contAt, fleetEnd)
+	c.Observed["fault_inside_run"] = strconv.FormatBool(inside)
+	c.Pass = res.Max <= loadHangBound && swapped && swapObs != nil && inside && ctx.Err() == nil
 	return c
 }
 
@@ -258,8 +277,9 @@ const loadSwapWait = 6 * time.Minute
 
 // reloadPolicy edits the policy (one person's token_ttl, so the bundle really
 // changes) and waits for port49d and the broker each to say "policy reloaded",
-// answering the seconds each took, or the processes that never did.
-func (r *loadRun) reloadPolicy() (map[string]string, bool) {
+// answering the seconds each took, or the processes that never did. It gives up
+// when ctx ends.
+func (r *loadRun) reloadPolicy(ctx context.Context) (map[string]string, bool) {
 	r.reloads++
 	r.daemon.mark()
 	r.broker.mark()
@@ -272,8 +292,13 @@ func (r *loadRun) reloadPolicy() (map[string]string, bool) {
 	}
 	wait := func(p *regionProc) func() (time.Duration, error) {
 		return func() (time.Duration, error) {
-			if _, err := p.wait("policy reloaded (", loadSwapWait); err != nil {
-				return 0, err
+			for !strings.Contains(p.said(), "policy reloaded (") {
+				if time.Since(start) > loadSwapWait {
+					return 0, fmt.Errorf("%s did not say it reloaded within %v", p.name, loadSwapWait)
+				}
+				if !sleepCtx(ctx, 250*time.Millisecond) {
+					return 0, ctx.Err()
+				}
 			}
 			return time.Since(start), nil
 		}
@@ -281,12 +306,18 @@ func (r *loadRun) reloadPolicy() (map[string]string, bool) {
 	return loadAwaitSwaps(map[string]func() (time.Duration, error){"port49d": wait(r.daemon), "port49_broker": wait(r.broker)})
 }
 
-func sleepCtx(ctx context.Context, d time.Duration) {
+// sleepCtx sleeps d and reports whether it slept it all: false when ctx ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
 	select {
 	case <-time.After(d):
+		return ctx.Err() == nil
 	case <-ctx.Done():
+		return false
 	}
 }
+
+// sleepUntil is sleepCtx to the instant at.
+func sleepUntil(ctx context.Context, at time.Time) bool { return sleepCtx(ctx, time.Until(at)) }
 
 // cellMintBurst is cell e: 20 concurrent batch mints (100 devices each) from
 // one principal, halfway through the design rate's run. PASS iff none errors;
