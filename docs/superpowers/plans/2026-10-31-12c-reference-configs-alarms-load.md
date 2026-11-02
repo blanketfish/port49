@@ -9,6 +9,7 @@
 - the failure matrix of design §12 and §14 as a test;
 - the lab rows 12b handed on (L39 (b) and (c), L84's systemd cells), and four new ones: L87 (SR Linux on an ERROR), L88 (the reference configurations), L89 (Velero) and L90 (Oxidized host keys);
 - three code items carried here: the Junos `idle-timeout` per class, `policy diff` reporting a changed session ceiling, and the `key_ref` label bounded;
+- the restore guard's time bound (Ryan, 2026-11-02): port49d's guard also lifts once every token the snapshot could hold has expired;
 - `port49 hwkey setup` and `port49 hwkey status` (Ryan, 2026-11-01): a read-only check of the user's security key, and a guide for it, with lab row L91 for Ryan's run on the SER8.
 
 **Architecture:**
@@ -46,11 +47,11 @@
   - "Pre-beta review".
 - The inventory, `.superpowers/sdd/plan12-inputs.md`: themes C, D and F, and the 2026-10-26 additions at its end.
 
-## Decisions for Ryan
+## Decisions for Ryan (ruled 2026-11-02)
 
-Each has a recommendation. The plan is written to the recommendation; where Ryan rules otherwise, the named task changes as its last line says.
+Ryan ruled all three on 2026-11-02: Decision 1 and Decision 3 as recommended, and Decision 2 with a new ruling, a time-bounded restore guard (Task 9a). The plan is written to those rulings. Each decision's recommendation and alternative stay below as the record of what was weighed.
 
-1. **The Junos `idle-timeout` per class** (roadmap 12c entry, "pending a ruling"; plan 7b pre-flight M11).
+1. **The Junos `idle-timeout` per class** (roadmap 12c entry, "pending a ruling"; plan 7b pre-flight M11). **Ruled: the recommendation**, the least ceiling per class (Task 2). The alternative is not built.
    - Today every reference class carries `session.max_session_age_default` (`internal/platform/classes.go`, `ReferenceClasses`). Decision 21 says the class timer is rendered "from `max_session_age`", which spec §5.6 makes per role.
    - A class is shared: every session the policy lands at that level's template on a Junos device uses it. So "per role" has to become "per class".
    - **Recommended:** each class gets the least ceiling among the sessions the policy lands in it on that platform's devices. Each session's ceiling is the least across its own roles, with `session.max_session_age_default` for a role that names none (`SessionAge.Of`).
@@ -66,7 +67,12 @@ Each has a recommendation. The plan is written to the recommendation; where Ryan
    - **Recommended:** keep the ERROR. Page on `port49_redemption_restore_guarded == 1` for 10m (Task 5). Put a row in the 3am table of `deploy/failure-matrix.md` (Task 9) that names the escape, "stop port49d", so the lockout is bounded by an operator action.
    - **Why:** closing the listener for the guard would hand every open session's commands to local authorization for the whole purge. That is measured: L41 saw them run under local authorization on EOS, NX-OS and both Junos images, and refused on IOS XE. It is a wider exposure than a break-glass delay that the brokers' start or one operator command ends.
    - **Alternative:** close the listener while guarded, as go-dark does. That is a code change for a later plan, not this one.
-3. **Junos's reference `authentication-order`** (moved here from the plan's rulings; the lab has run `[ tacplus password ]` since plan 1).
+   - **Ruled (Ryan, 2026-11-02): the recommendation, plus a time bound.** The ERROR, the 10m page and the 3am "stop port49d" row all stand. In addition, port49d's guard lifts on its own once every token the snapshot could hold has expired, so a restore from an hours-old snapshot has no guard at all. Task 9a builds it:
+     - The guard ends at the earlier of `meta/purged` (as today) and the restored `meta/witness`'s time + `policy.MaxTokenTTL` (15m) + 5m, read against port49d's own clock.
+     - A witness with no time, or a time port49d cannot use, keeps the guard until the purge.
+     - What it does not cover is stated in Task 9a: revocations made after the snapshot are lost by any restore, and the runbook covers them.
+     - The alternative (close the listener) is not built.
+3. **Junos's reference `authentication-order`** (moved here from the plan's rulings; the lab has run `[ tacplus password ]` since plan 1). **Ruled: the recommendation**, `tacplus` alone (Task 10). The alternative is not built.
    - **Recommended: `authentication-order tacplus` alone.**
      - With `password` listed, a port49 FAIL falls through to the local password (L4, both Junos images, `tests/lab/results/L4-juniper_*.md`), so a person port49 denies gets in with a local account. That voids spec §5.6's security argument and design §12's "the reference configuration is what disables fall-through on FAIL".
      - With `tacplus` alone, an ERROR is final (`L4-error-juniper_*.md`) until go-dark closes the listener (≤ 5.5 s at the defaults, L41). After that the server is unreachable, and break-glass logs in under either order (L4, L17).
@@ -86,7 +92,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
    - On **Junos**, `tests/lab/results/L73-juniper_vjunos-router.md` cell (i) ran `authentication-order [ tacplus password ]`, which falls through on ERROR, and on FAIL too (L4). `L4-error-juniper_*.md` ran `tacplus` alone, where ERROR is final.
    - On **NX-OS**, `L73-cisco_nxos.md` cell (i) recorded the break-glass *login* (`aaa authentication login default group port49 local`) landing in 5.2 s. `L4-error-cisco_nxos.md` and design §12 record that the commands that follow are refused by port49's authorization `FAIL store_unavailable`.
    - Both readings stand. Task 1 adds one sentence to design §12 saying so, citing all four notes. L88's cell (c) measures login and a command under the reference method list on every platform.
-2. **Junos's reference order** is Decision for Ryan 3. The plan is written to its recommendation, `tacplus` alone, and its README carries the 5.5 s window. If Ryan rules `[ tacplus password ]`, Task 10's `TestNoReferenceFallsThroughOnAReject` drops its Junos case. The Junos README section then states the fall-through and the no-shared-local-account rule, and L88 cell (a) is recorded as the measured FAIL it will be.
+2. **Junos's reference order** is Decision 3, ruled 2026-11-02: `tacplus` alone, and its README carries the 5.5 s window. Task 10's `TestNoReferenceFallsThroughOnAReject` keeps its Junos case.
 3. **SR Linux ships `exit-on-reject true`.** Without it, a port49 deny falls through to `local` (L76 cell d, measured 1.2 s), which voids §5.6's argument. L87 measures what an ERROR does under it, and its cell (a) decides the 3am line (the break-glass account waits for go-dark, or it does not).
    - This holds only if L87 (b) passes: break-glass logs in once port49d is dark. If (b) FAILs, break-glass would be locked out for the whole store outage, and the plan STOPS for the lead before the SR Linux reference ships. That keeps the roadmap's "the reference config waits on the measurement" (L76 carry).
    - The reference keeps `priv-lvl-authorization true` and `services [ cli ]` on every mapped role (L76).
@@ -110,7 +116,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
    - **`limits.max_connections`'s sizing** (12a) stands if the target run's peak `port49_connections` is under a quarter of the cap sized from `LimitNOFILE=65536` (12b's units). Otherwise the units' `LimitNOFILE=` rises.
    - **The chart's `autoscaling.averageConnections`** becomes half the peak `port49_connections` per replica measured at target, rounded to the nearest 50.
    - **`stores.session.etcd.call_timeout` (500 ms), `stores.session.etcd.bulk_timeout` (30 s) and `stores.session.packet_deadline` (2 s)** stand if the store call p99 at target is under a fifth of `call_timeout`. Otherwise STOP for the lead.
-   - **`stores.directory.etcd.call_timeout`'s guidance** is at least four times the measured cross-region round trip, written in `deploy/examples/stores/multi-region/README.md`.
+   - **`stores.directory.etcd.call_timeout`'s guidance** is at least four times the measured cross-region round trip, written in `deploy/examples/stores/README.md`, beside its `multi-region/` row (the directory has no README of its own).
 8. **A key version retired under an open connection, per platform** (2026-10-26 addition).
    - L29 measured the device's side of the reset a reload sends on vEOS, the N9Kv, the C8000V and vJunos-router. 12a made a retiring reload send that same reset with no strike, so for those four L29 is the answer, and the reference README cites it.
    - L88 cell (g) measures it on the platforms L29 did not cover: XRd, SR Linux, and the RFC 9887 listener on each TLS image.
@@ -138,7 +144,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
 
 ## Global Constraints
 
-- **Toolchain.** Go 1.26+, module `github.com/rhwendt/port49`. Code is `gofmt` and `go vet` clean, with no cgo and no new module. Linux-only test code goes in `_linux.go` files or behind a build tag.
+- **Toolchain.** Go 1.26+, module `github.com/blanketfish/port49`. Code is `gofmt` and `go vet` clean, with no cgo and no new module. Linux-only test code goes in `_linux.go` files or behind a build tag.
 - **snake_case** for every data key, metric, label, alert name and alert label: `key_ref="single_device"`, `version="any"`, `severity`, `prometheusRule` (a Helm value: chart interface, camelCase as 12b ruled).
 - **Reason codes** come only from spec §5.7, and **warnings** only from spec §12. This plan adds neither. A CLI line that is not a warning (the export's header comment) is not a §12 warning.
 - **Metrics:** no device identity in any label (ruling 4). No rule groups `by` a device, name, address or principal.
@@ -149,7 +155,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
   - a failure dump goes through `tests/qual/secret-filter.sh`;
   - a test that asserts a secret is absent checks before printing.
 - **Files never read** by an agent or a harness log: `realm.json`, `*.env`, `*-key.pem`, `*.keytab`, `router.db`, `/tmp/port49-lab-tokens.jsonl` and `tests/lab/logs/**`. Every recursive grep excludes them.
-- **Hardware.** Agents never touch a real YubiKey or TPM, and never run `ykman`, `tpm2_*` or `pkcs11-tool`. Every harness that writes a client config pins `issued_key_store: file`, except L91's, which Ryan runs on his own token (Task 18). Unit tests use `hwfake` and `testpki.NewPIV`.
+- **Hardware.** Agents never touch a real YubiKey or TPM, and never run `ykman`, `tpm2_*` or `pkcs11-tool`. The L91 raw captures in `~/.cache/port49-l91-raw` hold the token's serial: only Task 18 Step 1a's program reads them, run once by the lead, and no agent prints, copies or commits them. Every harness that writes a client config pins `issued_key_store: file`, except L91's, which Ryan runs on his own token (Task 18). Unit tests use `hwfake` and `testpki.NewPIV`.
 - **Lab tasks** (11, 12, 13, 14, 15, 16, and Task 7's run):
   - Single occupant: take `/tmp/port49-lab.lock` (`labOccupyForRun`). A kind or CI cell runs on a hosted runner instead.
   - Run a background stall watchdog for the whole run, re-armed on wake. An idle "waiting" notice proves nothing.
@@ -180,6 +186,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
    - Task 6's `TestRateModeIsOpenLoop` asserts plays start on schedule while earlier plays are still stalled;
    - Task 7's run is 10 minutes at 170 logins/s, and `TestLoad` refuses a run shorter than that.
 5. **A Junos class that idles longer than a role allows**, or a `never` that renders as `idle-timeout 0`, or a fleet of devices flagged when a grant expires. *Pinned:* Task 2's `TestAClassTakesTheLeastCeilingLandingInIt`, `TestTheDefaultDeliveryLandsEverySessionInRemote`, `TestANeverClassWritesNoIdleTimeout`, `TestCheckConfigHoldsTheSameClassAges` and `TestAnExpiredGrantDoesNotFlagTheFleet`.
+6. **A restore guard that lifts while a restored token is still live.** *Pinned:* Task 9a's `TestTheGuardOutlastsEveryRestoredTokenOnPort49dsClock` over port49d and broker clock offsets, `TestAWitnessWithNoUsableTimeGuardsUntilThePurge` for every fail-closed case, and `TestASecondRestoreWhileGuardedRetakesTheBound`.
 
 ---
 
@@ -196,6 +203,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
 | `tests/lab/results/load-<host>.md`, the defaults ruling 7 names | the load run and its sizing | 7 |
 | `internal/daemon/acct/spool.go` | group commit, gated on Task 7 | 8 |
 | `tests/compose/failmatrix_test.go`, `tests/compose/matrix_evidence_test.go`, `deploy/failure-matrix.md`, `Makefile`, `.github/workflows/compose.yml` | the failure matrix | 9 |
+| `internal/store/etcd/meta.go`, `internal/port49d/restoreguard.go`, `internal/port49d/main.go`, `internal/daemon/metrics/metrics.go`, the spec's decision 36 and §5.7, the design's §13 and §15 | the restore guard's time bound | 9a |
 | `deploy/device-aaa/`, `tests/deviceaaa/` | the reference configurations | 10 |
 | `tests/lab/l87_test.go`, `tests/lab/l87_unit_test.go`, `tests/lab/results/L87-nokia_srlinux.md` | lab row L87 | 11 |
 | `tests/lab/l88_harness_test.go`, `tests/lab/l88_test.go`, `tests/lab/l88_unit_test.go`, `tests/lab/results/L88-*.md` | lab row L88 | 12 |
@@ -207,7 +215,7 @@ This plan's rulings, made from the spec. Task 1 writes them into the spec as dec
 | `docs/design/2026-08-23-policy-engine-spec.md`, `cmd/port49/hwkey.go`, `cmd/port49/mfa.go`, `internal/hwkeysetup/`, `internal/userconfig/userconfig.go`, `tests/lab/l60/l91_test.go`, `tests/lab/L91-runbook.md` | `port49 hwkey setup` and `port49 hwkey status`; lab row L91 | 18 |
 | `docs/superpowers/plans/README.md` | As built, operator notes, hand-offs | 19 |
 
-Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmarks `ClassAges`), then 7, 8, 9, 10. Next 11 must land before 12, because L87 decides SR Linux's 3am line. Then 13–18 in any order, and 19 last.
+Order: 1, then 2–6 and 9a in any order, except that 2 lands before 6 (Task 6 benchmarks `ClassAges`) and 9a before 5 (Task 5's guard alert names 9a's gauge). Then 7, 8, 9 (whose `restore_guarded` subtest asserts 9a's gauge), 10. Next 11 must land before 12, because L87 decides SR Linux's 3am line. Then 13–18 in any order, and 19 last.
 
 ---
 
@@ -221,7 +229,7 @@ Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmark
 
 - [ ] **Step 1: Write decision 55, "Reference device configuration, alarms, load and the failure matrix (plan 12c)".**
 
-  - Rulings 1 and 3–13 as this plan states them, one paragraph each. Ruling 2 and rulings 14 and 15 are Decisions for Ryan 3 (Junos's order), 1 (the class `idle-timeout`) and 2 (the restore guard's ERROR), as Ryan rules them. Until he does, each is written with the recommendation and marked provisional.
+  - Rulings 1 and 3–13 as this plan states them, one paragraph each. Ruling 2 and rulings 14 and 15 are Decisions for Ryan 3 (Junos's order), 1 (the class `idle-timeout`) and 2 (the restore guard's ERROR), as Ryan ruled them on 2026-11-02: `tacplus` alone, the least ceiling per class, and the ERROR kept with the 10m page, the 3am "stop port49d" row and the guard's time bound (Task 9a, which writes the decision 36 edit). None is provisional.
   - Its "Open" line names rows L87–L90 and L39, provisional until they close.
   - Decision 21 gains one sentence: "As built (plan 12c): the export renders each class's `idle-timeout` from the least ceiling among the sessions the policy lands in it, and writes none for a class whose every session is `never`; under `user_permissions` delivery every session lands in `p49-remote`, so that is one fleet-wide minimum (decision 55 ruling 14)."
   - The three passages that say every class carries `session.max_session_age_default`, "at least one", are rewritten to ruling 14's rule, the `never` case included:
@@ -260,7 +268,7 @@ Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmark
 
 ---
 
-### Task 2: The Junos `idle-timeout` per class (Decision for Ryan 1)
+### Task 2: The Junos `idle-timeout` per class (Decision 1, ruled 2026-11-02)
 
 **Files:**
 - Modify: `internal/platform/classes.go` (`ReferenceClasses`, `templates`, `template.lines`, `TemplateDrift`)
@@ -329,9 +337,6 @@ Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmark
   git add internal/platform/classes.go internal/platform/classes_test.go internal/policy/classages.go internal/policy/classages_test.go cmd/port49/platform.go cmd/port49/devices.go cmd/port49/platform_test.go cmd/port49/devices_test.go
   git commit -m "feat: the Junos reference classes take the least session ceiling landing in each"
   ```
-
-  If Ryan rules the alternative, this task keeps `ClassAges{Default: age}` everywhere, keeps only `TestANeverClassWritesNoIdleTimeout` (a policy whose every role is `never` writes no line), and `explain` says the class timer is the default.
-
 ---
 
 ### Task 3: `policy diff` reports a changed session ceiling
@@ -468,7 +473,7 @@ Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmark
     - the global cap: `increase(port49_connections_shed_total{reason="global_cap"}[5m]) > 0` (page), and `port49_connections / port49_connections_max > 0.8` for 10m (ticket) (12a hand-off);
     - `port49_key_secret_files_changed > 0` for 10m (ticket; 12b);
     - `port49_issuing_ca_not_after_timestamp_seconds == 0 and on(instance) port49_issuing_ca_configured == 1` for 5m (page), and `port49_issuing_ca_not_after_timestamp_seconds - time() < 90 * 86400 and on(instance) port49_issuing_ca_configured == 1` (ticket) (12b; the metric's help text). The broker exports whether issuance is configured, so the page needs no hand-set scrape label;
-    - `port49_redemption_restore_guarded == 1` for 10m (page; Decision 2), whose summary names the escape: stop port49d;
+    - `port49_redemption_restore_guarded == 1` for 10m (page; Decision 2), whose summary names the escape, stop port49d, and the time the guard lifts on its own, `{{ with query "max(port49_redemption_restore_guard_until_timestamp_seconds)" }}…{{ end }}` (Task 9a), with "0: only a purge lifts it" when the bound is unknown. The query is an aggregate, so it names no device;
     - `increase(port49_admin_touch_total{outcome="refused"}[10m]) > 0` (page; 12b);
     - `port49_policy_fail_closed_compositions > 0` (ticket; 11b);
     - the stores (11a): `port49_store_directory_reachable == 0` for 1m; `time() - port49_store_directory_confirmed_timestamp_seconds > 60`; `port49_store_logouts_pending > 0` for 5m; `port49_store_feed_up{feed="marks"} == 0`;
@@ -594,7 +599,7 @@ Order: 1, then 2–6 in any order except that 2 lands before 6 (Task 6 benchmark
 - Modify, as the gates decide:
   - `deploy/systemd/port49d.service` (`LimitNOFILE=`);
   - `deploy/helm/port49/values.yaml` (`autoscaling.averageConnections`);
-  - `deploy/examples/stores/multi-region/README.md` (the directory `call_timeout` guidance);
+  - `deploy/examples/stores/README.md` (the directory `call_timeout` guidance, beside the `multi-region/` row);
   - the matching tests in `tests/shapes/units_test.go` and `tests/helm/static_test.go`.
 
 - [ ] **Step 1: Run the load.**
@@ -668,7 +673,7 @@ Run this task only if Task 7's gate says to. Otherwise skip to Task 9; the gate 
 
 ---
 
-### Task 9: The failure matrix (ruling 11; Decision for Ryan 2)
+### Task 9: The failure matrix (ruling 11; Decision 2, ruled 2026-11-02)
 
 **Files:**
 - Create: `tests/compose/failmatrix_test.go` (`//go:build compose && failmatrix`), `tests/compose/matrix_evidence_test.go` (`//go:build compose`), `deploy/failure-matrix.md`
@@ -715,6 +720,7 @@ The matrix has its own build tag, so `make compose-smoke` (`go test -tags compos
     6. Assert `port49_redemption_restore_guarded == 1` on port49d, and that a token login is refused.
     7. The brokers' `state_dir` witness (`witness.json`) sees the restore, and the runner's purge then runs. Assert the gauge returns to 0 within `hold_ttl` × 2 and a fresh login passes.
     8. Assert the 3am escape: with the guard still at 1 (repeat steps 1–5 with the brokers stopped), `docker compose stop port49d` leaves the device's connection refused at once.
+    9. Assert the time bound is armed: in step 6, `port49_redemption_restore_guard_until_timestamp_seconds` is non-zero and within 15m + 5m + 60 s of the snapshot's time (Task 9a). The lift itself is not waited out on compose: Task 9a's unit tests pin it with an injected clock.
   - Every subtest's failure dump goes through `shapetest.Filtered`.
 
 - [ ] **Step 2: Write `deploy/failure-matrix.md`.**
@@ -730,7 +736,7 @@ The matrix has its own build tag, so `make compose-smoke` (`go test -tags compos
   - A 3am table leads the file. It carries:
     - the IOS XE ERROR warning, and Junos's per Decision 3;
     - SR Linux's per L87 (filled in Task 11);
-    - the restore guard (Decision 2): "token logins and, on IOS XE, break-glass are refused until the brokers purge; if the brokers cannot start, stop port49d: devices then find the connection refused and fall to their local method", and its page.
+    - the restore guard (Decision 2, ruled 2026-11-02; Task 9a): "token logins are refused (an ERROR, which IOS XE and Junos under `tacplus` alone treat as final, so break-glass is refused too) until the brokers purge, or until every token the snapshot could hold has expired: the restored witness's time + 15m + 5m, which port49d's guard line and `port49_redemption_restore_guard_until_timestamp_seconds` give. That is at most 20m after the snapshot, so an older snapshot is never guarded. While the brokers are down, break-glass on those devices is refused by port49d's FAIL even after the guard lifts. If the brokers cannot start, stop port49d: devices then find the connection refused and fall to their local method", and its page.
   - `tests/compose/matrix_evidence_test.go`, `TestEveryMatrixRowHasEvidence`: it parses design §12's table's first column, and asserts each row appears in `deploy/failure-matrix.md` with a non-empty evidence cell that names a subtest, a `Test…` function or an `L<N>`. Write it first and see it fail.
 
 - [ ] **Step 3: Run it.**
@@ -744,6 +750,125 @@ The matrix has its own build tag, so `make compose-smoke` (`go test -tags compos
   ```bash
   git add tests/compose/failmatrix_test.go tests/compose/matrix_evidence_test.go deploy/failure-matrix.md Makefile .github/workflows/compose.yml
   git commit -m "test: the design 12 failure matrix on the compose stack, and its operator table"
+  ```
+
+---
+
+### Task 9a: The restore guard lifts once every restored token has expired (Decision 2, ruled 2026-11-02)
+
+Today port49d's restore guard (spec decision 36, "The restore witness"; plan 7e Task 15d; `internal/port49d/restoreguard.go`) lifts only on a `meta/purged` written after the read that found the drop. If the brokers cannot start, it never lifts, and on IOS XE and on Junos under `tacplus` alone break-glass is refused with it. Ryan's ruling adds a second way out: the guard lifts once every token the snapshot could hold has expired.
+
+**Why the bound holds.**
+- Every token record carries `ExpiresAt`, stamped by the minting broker's clock (`internal/token/minter.go`, `expires := mintedAt.Add(ttl)`). The ttl is clamped to the subject's `token_ttl`, which the policy load holds to at most `policy.MaxTokenTTL` (900 s, `internal/policy/load.go:303`).
+- Redemption refuses an expired record, judged on port49d's own clock (`internal/store/etcd/tokens.go`, `liveTokens` and `TokenIDs`; spec decision 35, "Expiry. Each record carries its own expiry and is read against port49d's clock").
+- A restore brings back only tokens minted before the snapshot. The restored `meta/witness` carries the runner's time `at` (`PutWitness`, `internal/store/etcd/meta.go`). The runner rewrites it within `witnessEvery` (1 s) of any write while it runs (`internal/port49d/runner.go`, `witnessPass`). So the snapshot's last mint is at most about a second after the witness's `at`, two if a broker was killed (design §13, restore runbook step 3), and at most `hold_ttl`'s ceiling (60 s) plus a second across a runner's loss, until a takeover rewrites it.
+- So the guard lifts at the earlier of (a) a `meta/purged` written after the drop, as today, and (b) **`at` + `policy.MaxTokenTTL` (15m) + 5m**, read against port49d's clock.
+
+**The allowance, 5m.**
+- port49d's own clock error cancels. The lift time and the restored tokens' expiry are both broker-stamped times that port49d compares with its own clock. A port49d whose clock is behind keeps the guard longer, and it would also take a restored token as live for longer, by the same amount. A port49d ahead does both earlier. So the bound has no window on either side.
+- The skew that matters is broker to broker: the runner that stamped `at` against the replica that stamped `ExpiresAt`, plus the witness's lead over the last mint (≤ 61 s, above).
+- No existing check compares broker and port49d clocks directly. The brokers' clocks must be kept in sync (design §13, "Keep every broker host's clock synchronised (NTP)").
+- 5 minutes is the largest clock disagreement port49 tolerates anywhere:
+  - `broker.identity.clock_skew`'s ceiling (spec decision 39 ruling 5, "`clock_skew` 60s (0s–5m)"; `internal/config/identity.go:643`);
+  - the lead an inventory document's `published_at` may have over port49d's clock (spec §10, "How a daemon refreshes its snapshot");
+  - OCSP's and CRLs' `ThisUpdate` future skew (`internal/certstatus/ocsp.go:70`, `crl.go:55`).
+- So the bound is `restoreBound = policy.MaxTokenTTL + restoreSkew`, with `restoreSkew = 5 * time.Minute`: 20 minutes.
+
+**Fail closed.** The time bound is armed only from a witness time port49d can use. In each of these cases the guard lifts only on the purge, as today, and its line says why:
+- the witness is absent at the drop (`RestoreRead.Witness == 0`): a snapshot from before any witness;
+- its body is not JSON, has no `at`, or has a zero `at` (`RestoreRead.WitnessAt` is zero);
+- its `at` is more than `restoreSkew` ahead of port49d's clock. That is a runner's clock too far ahead, or port49d's too far behind. From port49d the two cannot be told apart, and either breaks the bound's premise.
+
+A failed read changes nothing, as today: redemptions are refused until a read answers.
+
+**What it does not cover.** A restore loses every revocation and mark made after the snapshot, and every context written since. The guard is only about single-use tokens being redeemed twice. The runbook's steps (design §13, "A restore rolls the marks back too", and the put-back from `broker.state_dir/marks.json`) cover the rest, and this task changes none of them. A port49d started after the restore has followed nothing and still cannot tell (unchanged).
+
+**Files:**
+- Modify: `internal/store/etcd/meta.go` (`RestoreRead`, `(*Store).RestoreRead`), with `internal/store/etcd/meta_test.go`.
+- Modify: `internal/port49d/restoreguard.go` (`restoreGuard`, `newRestoreGuard`, `begin`, `judge`, `setGauge`, the guard's lines), with `internal/port49d/restoreguard_test.go`.
+- Modify: `internal/port49d/main.go` (:1022, `restored.begin`).
+- Modify: `internal/daemon/metrics/metrics.go` (a gauge beside `RedemptionRestoreGuarded` at :473 and :834, added to the collector list at :949), with `internal/daemon/metrics/metrics_test.go`.
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md`:
+  - decision 36, "The restore witness" (around line 8051);
+  - §5.7's `store_unavailable` row, its `redeem` clause ("until a broker runner's purge is done").
+- Modify: `docs/design/2026-08-21-port49-design.md`:
+  - §13, the restore runbook's step 3 ("If the token delete is skipped, …");
+  - §15, the metric list (around line 1948) and the `port49_redemption_restore_guarded` alarm line (around line 1986).
+
+**Interfaces:**
+- `RestoreRead` gains `WitnessAt time.Time`: the `at` of `meta/witness`'s body, read in the same transaction. It is zero when the witness is absent, its body does not decode as `{"at": <RFC 3339>}`, or `at` is zero. The body holds no secret (the runner's name and the time). It is never logged whole, and a body that does not decode is said by its key alone.
+- In `internal/port49d/restoreguard.go`:
+  - `const restoreSkew = 5 * time.Minute`;
+  - `const restoreBound = policy.MaxTokenTTL + restoreSkew`;
+  - `func restoreLift(at, now time.Time) (lift time.Time, why string)`. It returns `at.Add(restoreBound)`, or a zero `lift` with `why`, either "meta/witness carries no time" or "meta/witness's time <at> is more than 5m0s ahead of this port49d's clock".
+  - `restoreGuard` gains `now func() time.Time` (`time.Now` from `newRestoreGuard`; tests set it), `liftAt time.Time` (zero: only a purge lifts), `guardHigh uint64` (the highest witness read or followed since the drop), and `until prometheus.Gauge`.
+  - `func (g *restoreGuard) begin(gauge, until prometheus.Gauge, ops *prometheus.CounterVec)`.
+- `RedemptionRestoreGuardUntil prometheus.Gauge`, registered as `port49_redemption_restore_guard_until_timestamp_seconds`. While guarded with a time bound it reads the Unix time the guard lifts. It reads 0 while not guarded, or when only a purge lifts it. Help: "While port49_redemption_restore_guarded is 1: the Unix time the guard lifts on its own, every token the restored snapshot could hold having expired; 0 when only a broker runner's purge lifts it." It has no labels.
+
+**`judge`, in order** (`g.mu` held, after a read that answered):
+1. **Guarded, and `r.Purged > g.dropAt`:** lift, as today.
+2. **Guarded, and `r.Witness < g.guardHigh`:** a second restore under the guard. Re-arm: `dropAt = r.Header`, `guardHigh = r.Witness`, and `liftAt` from this read's `WitnessAt` alone, because the store now holds only this snapshot's tokens. If that lift has passed already, lift as in step 4 of the drop below.
+3. **Guarded, `liftAt` non-zero and `!g.now().Before(liftAt)`:** lift. Take the store's witness as the record, as the purge case does (`g.high, g.seen = r.Witness, r.Witness > 0`). Say: "port49d: store: every token the restored snapshot could hold has now expired (its witness's time <at> + 15m0s token_ttl ceiling + 5m0s for the brokers' clocks); token redemptions are served again".
+4. **Guarded otherwise:** `g.high = max(g.high, r.Witness)`, `g.guardHigh = max(g.guardHigh, r.Witness)`.
+5. **The drop** (`seen && r.Witness < high`, as today): compute `restoreLift(r.WitnessAt, g.now())`.
+   - **A lift that has already passed** (an old snapshot): no guard. Take the store's witness as the record, keep the gauge at 0, and say the drop once: "port49d: store: meta/witness is <at>, below the <high> this port49d followed: the store was restored from a snapshot whose witness is from <time>, more than 20m0s ago, so every token it could hold has expired; token redemptions are served. A broker runner still purges; follow the restore runbook (design §13) for the marks and revocations the snapshot lost".
+   - **Otherwise** guard, as today (`guarded`, `dropAt = r.Header`, `guardHigh = r.Witness`, `liftAt = lift`). Today's line keeps its escape text. Its "until a broker runner's purge is done" becomes "until a broker runner's purge is done or, at the latest, <liftAt, RFC 3339 UTC>, when every token the snapshot could hold has expired", or, with no lift, "until a broker runner's purge is done (<why>, so only the purge lifts it)".
+6. `r.Witness > g.high`: as today.
+
+`Saw` also raises `guardHigh` while guarded. `setGauge` sets `until` to `liftAt.Unix()` while guarded with a lift, and to 0 otherwise.
+
+- [ ] **Step 1: Spec first.**
+
+  - **Decision 36, "The restore witness":** replace "refuses every token redemption `store_unavailable` until a runner, once a purge of every unspent token is done, writes `meta/purged` (plan 7e Task 15d)." with:
+
+    > refuses every token redemption `store_unavailable` until the first of two: a runner, once a purge of every unspent token is done, writes `meta/purged` (plan 7e Task 15d); or every token the snapshot could hold has expired, which port49d takes as the restored witness's time plus `token_ttl`'s ceiling (15m) plus 5m for the brokers' clocks, on its own clock (decision 55 ruling 15, plan 12c). A token's expiry is judged on port49d's clock too, so port49d's own clock error moves both together. A witness with no time, or one more than 5m ahead of port49d's clock, arms no time bound: only the purge lifts it. A restore from a snapshot more than 20 minutes old is not guarded. The guard is about single-use tokens alone: the revocations, marks and contexts a restore loses are the runbook's (design document §13).
+
+  - **§5.7 `store_unavailable`, the `redeem` clause:** "until a broker runner's purge is done (decision 36, the restore guard)" becomes "until a broker runner's purge is done or every token the snapshot could hold has expired (decision 36, the restore guard)".
+  - **Design §13, restore runbook step 3:** after "until a runner's purge writes `meta/purged`", add ", or until the restored witness's time plus 20 minutes has passed on its clock (a snapshot older than that is not guarded)".
+  - **Design §15:**
+    - add `port49_redemption_restore_guard_until_timestamp_seconds` to the plan 7e metric line;
+    - the alarm line gains ", and lifts on its own at `port49_redemption_restore_guard_until_timestamp_seconds` when that is not 0".
+  - **Decision 55 ruling 15** (Task 1 writes it) states this task's rule, the 5m allowance with its three citations, and the fail-closed cases.
+  - Commit: `docs: the restore guard lifts once every token the snapshot could hold has expired (decision 36, decision 55 ruling 15)`.
+
+- [ ] **Step 2: Write the failing tests.**
+
+  `internal/port49d/restoreguard_test.go`, each with `g.now` set to a test clock, and `judgeNow` as it stands:
+  - `TestAnOldWitnessLiftsNoGuard`: a drop read with `WitnessAt = now - 21m`. `Allows()` is true, both gauges read 0, the line says "more than 20m0s ago", and the next read at the same witness does not trip again.
+  - `TestARecentWitnessGuardsUntilItsTimeAndTheBound`: `WitnessAt = now - 5m`. Guarded, with the until gauge at `(at + 20m).Unix()`. At `at + 20m - 1s` it is still guarded. At `at + 20m` it is lifted, with the "has now expired" line, and both gauges read 0.
+  - `TestAPurgeBeforeTheBoundLifts`: the same recent witness, and a read with `Purged > dropAt` at `at + 6m`. It lifts with today's line, and the until gauge reads 0.
+  - `TestAWitnessWithNoUsableTimeGuardsUntilThePurge`, one subtest per case: the witness absent after one was seen; `WitnessAt` zero (the store maps a body that does not decode, or one with no `at`, to zero); `WitnessAt = now + 5m + 1s`. In each, with the clock moved on 24h, it is still guarded, the until gauge reads 0, and the line says "only the purge lifts it". A purge after the drop lifts it.
+  - `TestPort49dsClockBehind`: `WitnessAt = now + 3m`, port49d 3m behind the runner, within the allowance. Guarded, and lifted at `at + 20m` on port49d's clock: 23m of its time.
+  - `TestTheGuardOutlastsEveryRestoredTokenOnPort49dsClock`: a property table over port49d clock offsets {−10m, −3m, 0, +3m, +10m} against the runner, and a minting broker's offset {−4m, 0, +4m} against the runner, with a token minted 61 s after the witness's `at` at `token_ttl` 15m (its `ExpiresAt` on the minting broker's clock). Step port49d's clock in 1 s steps from the drop to 30m past it. At no step is `Allows()` true while `ExpiresAt.After(port49dNow)`, the check `liveTokens` makes. Offsets that put `at` more than 5m ahead of port49d's clock take the purge-only branch, and the test asserts that branch for them.
+  - `TestASecondRestoreWhileGuardedRetakesTheBound`: guarded from witness revision 12 with `at = now - 2m`. A read showing revision 8 with `at = now - 1m` re-arms: `dropAt` is that read's header, the lift is `now - 1m + 20m`, and a `meta/purged` at or below the new header does not lift it.
+  - `TestTheGuardLineSaysWhenItLifts`: the guard line carries the lift time in RFC 3339 UTC and the words "15m0s" and "5m0s". It holds no witness body and no token.
+  - The existing guard tests pass unchanged. Their reads carry no `WitnessAt`, so they take the purge-only branch, which is today's behavior.
+
+  `internal/store/etcd/meta_test.go`, `TestARestoreReadSaysTheWitnessTime`: after `PutWitness` under a fixed `s.now`, `RestoreRead().WitnessAt` equals it. A witness key put raw as `not json`, and as `{"who":"x"}`, each give a zero `WitnessAt` and no error.
+
+  `internal/daemon/metrics/metrics_test.go`: `port49_redemption_restore_guard_until_timestamp_seconds` is registered, with no labels.
+
+- [ ] **Step 3: Run them and see them fail.**
+
+  `go test ./internal/port49d/ ./internal/store/etcd/ ./internal/daemon/metrics/ -run 'OldWitness|RecentWitness|PurgeBeforeTheBound|NoUsableTime|ClockBehind|OutlastsEveryRestoredToken|SecondRestore|SaysWhenItLifts|WitnessTime|RestoreGuardUntil' -count=1`. Expected: FAIL to compile (`WitnessAt`, `restoreLift` undefined).
+
+- [ ] **Step 4: Implement** `judge` in the order above, `RestoreRead`'s decode, the gauge, and `main.go`'s `begin` call. Then rewrite the comment on `restoreGuard` and on `judge`: "Only a meta/purged … lifts it" becomes the two ways out.
+
+- [ ] **Step 5: Run the tests and see them pass.** Run the Step 3 command, then `go test ./internal/port49d/ -run 'Restore|Guard|Witness' -count=1` (the existing guard, runner and witness tests), then `make test && make vet`. Expected: PASS.
+
+- [ ] **Step 6: Trace it on a bad day,** and write both traces into decision 55 ruling 15 and the README's operator notes (Task 19):
+  - **A snapshot 5 minutes old, restored with the brokers crash-looping** (12a's "behind a promotion"). The witness's `at` is about 5m before the restore. port49d's first read after the restore finds the drop and guards, with the until gauge at about restore + 15m. Its line names the lift time and the escape. Token logins are refused `store_unavailable`, and on IOS XE and Junos under `tacplus` alone break-glass is refused too. The 10m page fires, with the lift time in its summary. The operator either waits the remaining ~5 minutes or stops port49d at once (the 3am row). At restore + 15m the guard lifts on its own, with no broker running, and the line says so. Every token the snapshot held has expired by then on port49d's own clock, so a replay finds no live token, and a login needs a fresh mint, which needs a broker. The lift does not by itself let break-glass in on IOS XE or Junos: with port49d up, a password that is no live token is answered FAIL, which those devices also treat as final, as on any day the brokers are down (design §12, "Broker unavailable"). With the brokers still down, "stop port49d" stays the escape, and the 3am row says so. What the bound changes is that the ERROR state ends, and that a restore from a snapshot older than 20 minutes never enters it. A token the brokers mint once they start is then redeemed at once, with no wait for the purge.
+  - **A wrong clock on port49d.**
+    - Behind by d ≤ 5m: the guard lasts d longer in real time, and so would a restored token's life by port49d's judgment. No replay window opens.
+    - Behind by more than 5m: the witness's `at` is in port49d's future past the allowance, so no time bound is armed. Only the purge lifts the guard, which is today's behavior and fails closed. The line says why.
+    - Ahead by any amount: the lift comes earlier in real time, and port49d takes every restored token as expired earlier by the same amount. No window opens. A port49d more than 15m ahead refuses every fresh token as expired too, which its logins show at once (unchanged).
+    - The residual case is a *broker* clock off by more than 5m from the runner's while it mints. That is the NTP requirement of design §13, and this task states it as the bound's one premise.
+
+- [ ] **Step 7: Commit.**
+
+  ```bash
+  git add internal/store/etcd/meta.go internal/store/etcd/meta_test.go internal/port49d/restoreguard.go internal/port49d/restoreguard_test.go internal/port49d/main.go internal/daemon/metrics/metrics.go internal/daemon/metrics/metrics_test.go
+  git commit -m "feat: port49d's restore guard lifts once every token the snapshot could hold has expired"
   ```
 
 ---
@@ -1078,7 +1203,9 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `internal/hwkeysetup/advice.go`: the ykman lines;
   - `internal/hwkeysetup/hwkeysetup_test.go`;
   - `cmd/port49/hwkey.go`, `cmd/port49/hwkey_test.go`;
-  - `tests/lab/l60/l91_test.go` (under `l86_test.go`'s build tags, beside L60 and L86), `tests/lab/L91-runbook.md`.
+  - `tests/lab/l60/l91_test.go` (no build tag of its own, as `l86_test.go` has none; `make l86-build` compiles the package), `tests/lab/L91-runbook.md`;
+  - `tests/lab/l91fixture/main.go` and `main_test.go`: the program that derives the L91 fixtures with the serial masked (Step 1a);
+  - `internal/hwkeysetup/testdata/l91/`: `tokens.masked.txt`, `objects.masked.txt` and `shape.json`, the derived fixtures, and `internal/hwkeysetup/l91fixture_test.go`.
 - Modify:
   - `cmd/port49/main.go` (a `case "hwkey":` beside `case "keys":`, and the usage text);
   - `internal/userconfig/userconfig.go` (`SetKeys`; no new config key);
@@ -1086,7 +1213,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   - `cmd/port49/issue.go` (`fetchBrokerConfig`, reused as it stands: TLS 1.3 to the configured broker CA alone, no proxy);
   - `cmd/port49/mfa.go` (three remedy lines), `cmd/port49/mfa_test.go`, `cmd/port49/mfa_fallback_test.go`;
   - `internal/pivattest/pivattest.go` and `pivattest_test.go` (`VerifyPair`, extracted; `Anchors.PEM`);
-  - `internal/broker/mfa.go` (`verifyTouchMessage` calls `VerifyPair`), with `internal/broker/mfa_test.go`;
+  - `internal/broker/mfa.go` (`verifyTouchMessage` calls `VerifyPair`), with `internal/broker/mfa_test.go`. Since PR #38, `verifyTouchMessage` (mfa.go:756) has two callers, the per-login proof (mfa.go:740) and the admin call's touch (`internal/broker/adminproof.go:269`), so both go through `VerifyPair`;
   - `internal/hwkey/hwfake/hwfake.go` (an `Unlocks() int` counter beside `Signs()`);
   - `internal/hwkey/pkcs11/tokens.go` (new: `Tokens`) and `internal/hwkey/pkcs11/softhsm_test.go`;
   - `internal/hwkey/serialmask/serialmask.go` and its test (new: `MaskSerial`, moved from L60's `redact`, imported by `hwkeysetup`, `pkcs11` and the L60 harness);
@@ -1147,7 +1274,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
          - `/opt/homebrew/lib/libykcs11.dylib` (macOS, Apple-silicon Homebrew).
 
          The implementer verifies each path against the package's published file list before committing: Debian's and Ubuntu's `ykcs11` package, Fedora's `yubico-piv-tool`, Homebrew's `yubico-piv-tool` formula, and Yubico's macOS installer. Each source is recorded in a comment beside its path. A path no package installs is dropped, never guessed.
-      - **The check, for all three sources.** A module is loaded only if it passes `userconfig.CheckOwned`, the rule the agent applies to a module (`userconfig.go:474`): every link and the file owned by root or the user, with no group or world write. An attacker-writable library is code execution.
+      - **The check, for all three sources.** A module is loaded only if it passes `userconfig.CheckOwned`, the rule the agent applies to a module (`userconfig.go:477`): every link and the file owned by root or the user, with no group or world write. An attacker-writable library is code execution.
         - A `--module` or an existing key's `module-path` that fails is refused (exit 2), naming the path and the rule, before anything loads.
         - A probed candidate is first `stat`ed. A path that does not exist is passed over silently. One that exists and fails the check is skipped, with one line naming it.
       - The first candidate that passes is used, and the run prints it: "module: <path> (found)". Setup writes it into `issued_key`/`touch_key`, so later commands do not probe.
@@ -1201,13 +1328,43 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 
     | ID | Claim to measure | What rests on it | Platforms |
     |---|---|---|---|
-    | **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan present; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 |
+    | **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan at the SER8, where he is away long-term from 2026-11-02; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 |
 
   - Commit: `docs: decision 55 rulings 16 and 17, port49 hwkey setup and status, and lab row L91`.
 
+- [ ] **Step 1a: Derive the L91 fixtures from the raw token facts, with the serial masked (Ryan, 2026-11-02).**
+
+  Ryan is away from the SER8 long-term, so L91 cannot run on the real token. He captured raw token facts to `~/.cache/port49-l91-raw` on beehive: `attest-9a.pem`, `attest-9c.pem`, `attest-9e.pem` and `attest-f9.pem` (the slot attestations and the device's attestation certificate), `piv-info.txt`, `tokens.txt` (`pkcs11-tool -L`) and `objects.txt` (`pkcs11-tool -O`).
+  - **These files hold the token's serial.** No agent prints, copies or commits them, or reads their contents into a note, a log, a commit, a test message or this plan. The raw directory stays outside the repository.
+  - `piv-info.txt` is not used: no port49 code reads ykman's output.
+
+  First move L60's `redact` into `internal/hwkey/serialmask` as `MaskSerial`, test-first (`TestMaskSerialMatchesTheL60Rule`, below). The program uses it, and `tests/lab/l60/harness_test.go`'s `redact` calls it from then on.
+
+  **The program, `tests/lab/l91fixture/main.go`.**
+  - The lead runs it once, on beehive: `go run ./tests/lab/l91fixture -raw ~/.cache/port49-l91-raw -out internal/hwkeysetup/testdata/l91`.
+  - It takes the serial from `attest-9a.pem`'s YubiKey serial extension (OID `1.3.6.1.4.1.41482.3.7`), and holds it in memory only.
+  - It masks every form of the serial to `<serial>`: decimal; hex, upper and lower case, bare and zero-padded to 8 digits; and the libykcs11 label form, through `serialmask.MaskSerial`.
+  - It writes three files:
+    - `tokens.masked.txt` and `objects.masked.txt`: the two pkcs11-tool listings, masked;
+    - `shape.json`: for each of 9a, 9c, 9e and f9, the subject and issuer DNs (masked), the sorted extension OIDs, the PIN-policy and touch-policy bytes, the firmware-version bytes, the key algorithm and curve, and the validity's length. It holds no certificate, no public key, no signature and no dates, because each of those identifies the token too.
+  - Before it writes anything, it checks every output for every serial form. On a hit it writes nothing and exits 1 with "a serial form survived masking in <file>", never the value.
+  - It prints only file names and byte counts.
+  - `main_test.go` runs it on testpki-made inputs with a known fake serial planted in every form. It asserts that no form survives, and that a masking miss (a form left out of the list) refuses to write. It never reads the raw directory.
+  - `main_test.go` also holds `TestL91FixturesHoldNoSerial`: no file under `internal/hwkeysetup/testdata/l91` holds a run of 7 or more decimal digits, a `#` followed by digits in a token label, or a `Serial` field that is not `<serial>`.
+
+  **The tests that use the fixtures** are written in Step 2, failing first, in `internal/hwkeysetup/l91fixture_test.go`:
+  - `TestMaskSerialOnTheL91Label`: the masked label line from `tokens.masked.txt`, with `<serial>` replaced by the fake's `12345678`, masks back to the same line.
+  - `TestSlotIDsMatchTheL91Objects`: the `ID:` of each certificate object in `objects.masked.txt`, matched by its libykcs11 label, equals `SlotIDs` for 9a, 9c and 9e. If the listing shows 9d, its ID is checked too. The `SlotIDs` comment then cites the capture, still not a lab measurement.
+  - `TestTestPKIMatchesTheL91Shape`: `testpki.NewPIV`'s device and slot certificates carry the extension OIDs, key algorithm, curve and DN form that `shape.json` records. Where they differ, `internal/testpki/piv.go` is changed to match, test-first. Step 2's fixtures are then the real token's shape.
+  - `TestTheL91SlotPoliciesAreTheFixtures`: the PIN-policy and touch-policy bytes `shape.json` records for 9a and 9c are the ones `TestAGoodTokenIsReady` builds. If they differ, the fixture follows the token, and the difference is a line in the commit message.
+
+  If the program fails its own check, STOP for the lead. The fixtures are then made from testpki alone, `shape.json` is not committed, and `TestTestPKIMatchesTheL91Shape` is dropped. The task says so in its commit.
+
+  Commit `internal/hwkey/serialmask`, `tests/lab/l60/harness_test.go`, the program, its test and the fixtures, once `make leaks`, `TestL91FixturesHoldNoSerial` and `make test && make vet` pass: `test: L91 fixtures derived from the SER8 token's facts, the serial masked`.
+
 - [ ] **Step 2: Write the failing tests.**
 
-  Each fixture builds keys with `testpki.NewPIV(now)` and `hwfake.New`, with the slot certificates set through `SetCertificates`. The fixtures use no real token and run no ykman.
+  Each fixture builds keys with `testpki.NewPIV(now)` and `hwfake.New`, with the slot certificates set through `SetCertificates`. Their shape is pinned to the real token's by Step 1a. The fixtures use no real token and run no ykman.
   - `internal/hwkeysetup/hwkeysetup_test.go`:
     - `TestAGoodTokenIsReady`: 9a with touch never and 9c with touch always, on one device. Every check passes.
     - `TestATouchKeyWithoutAlwaysIsNotReady`: 9c attested with `TouchCached`. `touch_policy` fails, and `Advice` holds the 9c generate line with `--touch-policy ALWAYS`.
@@ -1222,7 +1379,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - `TestMaskSerialMatchesTheL60Rule`: L60's `TestUnitRedactMasksTheSerial` input gives the same output.
     - `TestSlotIDsAreL60s`: `SlotIDs` gives 9a `0x01`, 9c `0x02` and 9e `0x04`. `SlotURI` round-trips through `pkcs11.ParseURI` with `id=%01`, the token label and the module.
   - `internal/pivattest/pivattest_test.go`: `TestVerifyPairWords`. Each refusal (a touch chain to another root, a session chain to another root, two devices, touch cached) returns its fixed word, and a good pair returns none.
-  - `internal/broker/mfa_test.go`: `TestTheBrokerChecksThroughVerifyPair`. A package-level seam `verifyPair = pivattest.VerifyPair` is replaced by a counting stub, and one per-login proof calls it exactly once. The existing touch-proof tests pass unchanged.
+  - `internal/broker/mfa_test.go`: `TestTheBrokerChecksThroughVerifyPair`. A package-level seam `verifyPair = pivattest.VerifyPair` is replaced by a counting stub. One per-login proof calls it exactly once, and so does one admin call's touch (`adminproof.go`'s path, PR #38). The existing touch-proof and admin-proof tests pass unchanged.
   - `internal/broker/broker_test.go`:
     - `TestConfigServesAttestationRootsOnlyWhenLoaded`: with `hardware_key_touch` configured, `/v1/config` carries `attestation_roots_pem`: the file's CERTIFICATE blocks re-encoded, and nothing else (a comment line in the file is not served). Without it, the field is absent.
     - `TestTheRootsFieldHoldsCertificatesOnly`: every PEM block in it is a `CERTIFICATE`.
@@ -1260,7 +1417,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
 
 - [ ] **Step 3: Run them and see them fail.**
 
-  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule|MissingCandidate|UnsafeFlagModule' -count=1`, and the same `-run` over `./internal/pivattest/` and `./internal/hwkey/serialmask/`. Run `make test-hw` for `TestTokensListsWithoutLogin`, `TestOpenAfterTokens` and `TestHwkeyPathWritesNothing` (the SoftHSM job's target). Expected: FAIL to compile.
+  `go test ./internal/hwkeysetup/ ./cmd/port49/ ./internal/broker/ -run 'Ready|Touch|Tokens|Root|Slot|Advice|MaskSerial|Setup|SetKeys|Status|TPMSession|ExitCodes|LoadRoots|Unreachable|AttestationRoots|RootsField|VerifyPair|OpenError|RealOpen|BrokerFetch|ModuleSource|ProbeOrder|GroupWritableCandidate|NoModuleFound|ProbedModule|MissingCandidate|UnsafeFlagModule|L91' -count=1`, and the same `-run` over `./internal/pivattest/` and `./internal/hwkey/serialmask/`. Run `make test-hw` for `TestTokensListsWithoutLogin`, `TestOpenAfterTokens` and `TestHwkeyPathWritesNothing` (the SoftHSM job's target). Expected: FAIL to compile.
 
 - [ ] **Step 4: Implement.**
 
@@ -1304,12 +1461,12 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - The lead runs a background stall watchdog for the whole session, re-armed on wake.
   - `tests/lab/L91-runbook.md` marks every "Ryan types this" step, as `L86-runbook.md` does.
   - The runbook runs `bin/l86/l60.test -test.run '^TestL91$' -test.count=1 -test.v`, anchored. No Makefile target runs it on a token.
-  - The run is Ryan's, on the SER8. TODO(L91) stands until his note and the §15 Status exist, as TODO(L86) does.
+  - The run is Ryan's, on the SER8. He is away from it long-term (2026-11-02), so this plan ships the harness and runbook, and L91 stays **open, "needs Ryan at the SER8"**. TODO(L91) stands until his note and the §15 Status exist. The Step 1a fixtures are the token's captured facts, not a measurement of `hwkey`, and they close no cell.
 
 - [ ] **Step 7: Commit.**
 
   ```bash
-  git add internal/hwkeysetup internal/pivattest internal/hwkey/hwfake/hwfake.go internal/hwkey/serialmask internal/hwkey/pkcs11/tokens.go internal/hwkey/pkcs11/softhsm_test.go tests/lab/l60/harness_test.go internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go internal/broker/mfa_test.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
+  git add internal/hwkeysetup internal/testpki/piv.go internal/pivattest internal/hwkey/hwfake/hwfake.go internal/hwkey/serialmask internal/hwkey/pkcs11/tokens.go internal/hwkey/pkcs11/softhsm_test.go tests/lab/l60/harness_test.go internal/broker/api/api.go internal/broker/broker.go internal/broker/broker_test.go internal/broker/mfa.go internal/broker/mfa_test.go cmd/port49/hwkey.go cmd/port49/hwkey_test.go cmd/port49/main.go cmd/port49/mfa.go cmd/port49/mfa_test.go cmd/port49/mfa_fallback_test.go internal/userconfig/userconfig.go tests/lab/l60/l91_test.go tests/lab/L91-runbook.md Makefile
   git commit -m "feat: port49 hwkey setup and status, read-only on the token, the broker's attestation checks reused"
   ```
 
@@ -1334,6 +1491,7 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
     - the alert file and the chart's `prometheusRule`;
     - the load numbers and the host they came from;
     - the failure matrix's table;
+    - the restore guard: it lifts at a runner's purge or at the restored witness's time + 20m, whichever comes first, and `port49_redemption_restore_guard_until_timestamp_seconds` says when. A snapshot older than 20m is not guarded. A witness with no usable time leaves only the purge. A restore still loses the revocations and marks made after the snapshot (the runbook). Task 9a's two bad-day traces go here;
     - whether Velero and `LoadCredential=` are named;
     - the Oxidized change;
     - `port49 hwkey setup` and `port49 hwkey status`: read-only on the token, the ykman lines they print, the exit codes, and `--json`.
@@ -1352,3 +1510,24 @@ A per-user check and guide for the security key that `hardware_key_touch` needs 
   git add docs/superpowers/plans/README.md
   git commit -m "docs: plan 12c as built, its operator notes and hand-offs"
   ```
+
+---
+
+## Self-review (2026-11-02, after Ryan's rulings)
+
+- **Rulings folded in.** Decisions 1 and 3 are ruled as recommended. Their "if Ryan rules otherwise" branches are gone from Tasks 1, 2 and the rulings list. Decision 2 is ruled with a time bound, which is Task 9a. Task 1 writes decision 55 rulings 2, 14 and 15 as ruled, and none is provisional.
+- **Rebased onto main at `edeee2c3`** (the blanketfish move `c56ea3b6`, L86 closed by PR #38). The module path in the Global Constraints now reads `github.com/blanketfish/port49`. The plan names no `ghcr.io` image, and historical branch names are unchanged.
+- **Paths and signatures checked against main.** Every path the plan names either exists or is listed under Create. Fixed:
+  - `userconfig.CheckOwned` is at `:477`, not `:474`;
+  - `verifyTouchMessage` (mfa.go:756) has a second caller since PR #38, the admin call's touch (`adminproof.go:269`), and Task 18's `TestTheBrokerChecksThroughVerifyPair` now covers both;
+  - `l86_test.go` has no build tag, so `l91_test.go` takes none;
+  - `deploy/examples/stores/multi-region/` has no README, so Task 7's guidance goes in `deploy/examples/stores/README.md`.
+  
+  PR #38's other changes (`internal/agent/admin.go`, `internal/oidcclient/login.go`, `internal/hwkey/hwfake`, `tests/lab/l60`) leave every signature Task 18 consumes as it was. `hwfake` still has no `Unlocks`, so Task 18 still adds it.
+- **The guard's bound (Task 9a), as ruled here:**
+  - **The allowance.** No existing check compares broker and port49d clocks, contrary to the brief's expectation. The bound does not need one, because port49d judges both the lift and the restored tokens' expiry on its own clock. The 5m allowance is for broker-to-broker skew and the witness's lead over the last mint. It is cited to the largest skew port49 tolerates elsewhere (`clock_skew`'s 5m ceiling, the inventory's 5m `published_at` lead, OCSP/CRL `ThisUpdate`).
+  - **The premise.** The bound's one premise is the brokers' NTP requirement (design §13). It is stated as such, not hidden.
+  - **Second restore.** A second restore while guarded re-arms the bound from the new witness (`guardHigh`). Without that, the first snapshot's lift time could release the second snapshot's tokens.
+  - **Break-glass.** The lift does not let break-glass in on IOS XE or Junos while the brokers are down, because port49d's FAIL is final there too. The 3am row says so, and "stop port49d" stays the escape.
+- **L91.** It stays open, "needs Ryan at the SER8". Task 18 Step 1a derives masked fixtures from the raw captures, through a program that holds the serial in memory, masks every form of it, refuses to write on a miss, and prints only names and byte counts. `piv-info.txt` is not used. The plan quotes nothing from the raw files.
+- **Not re-reviewed by a subagent** (the brief said to dispatch none). The pre-flight and the Task 18 re-reviews before this pass stand. Task 9a is new and gets its review in execution, per task.
