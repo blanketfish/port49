@@ -25,7 +25,8 @@ func (p *Policy) ClassAges(platformName string, def time.Duration, now time.Time
 	// depend on order and gains nothing from a repeat. So a device class
 	// is resolved on its first device that is not quarantined, and its other
 	// members add nothing.
-	for _, members := range p.deviceClasses(devs) {
+	classes, marks := p.deviceClassMarks(devs)
+	for ci, members := range classes {
 		if devs[members[0]].Platform != platformName {
 			continue
 		}
@@ -45,7 +46,7 @@ func (p *Policy) ClassAges(platformName string, def time.Duration, now time.Time
 		}
 		d := devs[rep]
 		for _, name := range subjects {
-			res, err := p.resolve(p.subs[name], d, now)
+			res, err := p.resolveMarked(p.subs[name], d, now, marks[ci])
 			if err != nil || res.Projection == nil {
 				continue
 			}

@@ -135,6 +135,7 @@ type Policy struct {
 	// every device.
 	grantsOf   map[string][]int
 	scopeNames []string
+	scopeIdx   map[string]int // scope name → place in scopeNames
 	tests      []Test
 	acked      []Acknowledgment
 	env        Env
@@ -1428,6 +1429,10 @@ func (p *Policy) buildScopes(f file) error {
 		p.scopes[s.Name] = sc
 	}
 	p.scopeNames = sortedKeys(p.scopes)
+	p.scopeIdx = make(map[string]int, len(p.scopeNames))
+	for i, name := range p.scopeNames {
+		p.scopeIdx[name] = i
+	}
 	return nil
 }
 

@@ -372,11 +372,16 @@ func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
 // mfaAt is the requirement subject holds on d at at, false where it holds no
 // grant there or the composition has none (a quarantine says so).
 func (p *Policy) mfaAt(subject string, d admission.Device, at time.Time) (MFARequirement, bool) {
+	return p.mfaAtMarked(subject, d, at, "")
+}
+
+// mfaAtMarked is mfaAt with d's class marks when known (composeMarked).
+func (p *Policy) mfaAtMarked(subject string, d admission.Device, at time.Time, marks string) (MFARequirement, bool) {
 	sub, ok := p.subs[subject]
 	if !ok {
 		return MFARequirement{}, false
 	}
-	c := p.compose(sub, d, at)
+	c := p.composeMarked([]*Subject{sub}, d, at, marks)
 	if len(c.grants) == 0 {
 		return MFARequirement{}, false
 	}
@@ -401,10 +406,11 @@ func (p *Policy) MFARequirements(at time.Time) []DeviceMFA {
 	// mfaAt reads the device only through its class (scope.go, deviceClass):
 	// the requirements are worked out once per class, on its first device.
 	held := make([][]MFARequirement, len(devs))
-	for _, members := range p.deviceClasses(devs) {
+	classes, marks := p.deviceClassMarks(devs)
+	for ci, members := range classes {
 		var reqs []MFARequirement
 		for _, s := range subjects {
-			r, ok := p.mfaAt(s, devs[members[0]], at)
+			r, ok := p.mfaAtMarked(s, devs[members[0]], at, marks[ci])
 			if !ok || !r.Required() || slices.ContainsFunc(reqs, func(o MFARequirement) bool { return reflect.DeepEqual(o, r) }) {
 				continue
 			}

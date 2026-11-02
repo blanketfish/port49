@@ -1493,6 +1493,7 @@ func newMemoSides(devs []admission.Device) *memoSides {
 // keeps: a new subject or instant starts afresh.
 type policyMemo struct {
 	classOf []int
+	marks   []string // each class's marks (deviceClass.marks)
 	cores   struct {
 		subject string
 		at      time.Time
@@ -1521,7 +1522,9 @@ func (m *memoSides) state(p *Policy, i int, d admission.Device) (*policyMemo, bo
 	st, ok := m.states[p]
 	if !ok {
 		st = &policyMemo{classOf: make([]int, len(m.devs))}
-		for k, members := range p.deviceClasses(m.devs) {
+		classes, marks := p.deviceClassMarks(m.devs)
+		st.marks = marks
+		for k, members := range classes {
 			for _, j := range members {
 				st.classOf[j] = k
 			}
@@ -1550,7 +1553,7 @@ func (m *memoSides) side(p *Policy, subject string, i int, d admission.Device, a
 	}
 	core, ok := c.byClass[st.classOf[i]]
 	if !ok {
-		core = p.sideCoreOf(sub, d, at)
+		core = p.sideCoreOf(sub, d, at, st.marks[st.classOf[i]])
 		c.byClass[st.classOf[i]] = core
 	}
 	switch {
@@ -1578,8 +1581,8 @@ func (m *memoSides) side(p *Policy, subject string, i int, d admission.Device, a
 }
 
 // sideCoreOf resolves sub on d, the first device of its class that asked.
-func (p *Policy) sideCoreOf(sub *Subject, d admission.Device, at time.Time) *sideCore {
-	res, err := p.resolve(sub, d, at)
+func (p *Policy) sideCoreOf(sub *Subject, d admission.Device, at time.Time, marks string) *sideCore {
+	res, err := p.resolveMarked(sub, d, at, marks)
 	core := &sideCore{res: res}
 	switch {
 	case errors.Is(err, ErrNoGrants):
@@ -1632,7 +1635,7 @@ func (m *memoSides) mfaAt(p *Policy, subject string, i int, d admission.Device, 
 	}
 	e, ok := c.byClass[st.classOf[i]]
 	if !ok {
-		e.req, e.ok = p.mfaAt(subject, d, at)
+		e.req, e.ok = p.mfaAtMarked(subject, d, at, st.marks[st.classOf[i]])
 		c.byClass[st.classOf[i]] = e
 	}
 	return e.req, e.ok

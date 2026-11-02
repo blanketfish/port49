@@ -132,11 +132,37 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 	return p.composeAll([]*Subject{sub}, d, now)
 }
 
+// composeMarkedFor is compose with the device's class marks.
+func (p *Policy) composeMarkedFor(sub *Subject, d admission.Device, now time.Time, marks string) composition {
+	return p.composeMarked([]*Subject{sub}, d, now, marks)
+}
+
 // composeAll is compose for every subject a principal matches (plan 7g,
 // Ruling 5): the grants of any of subs, composed as one. Every subject a human
 // principal matches is in the humans domain, so subs[0]'s domain is the one
 // attached roles read.
 func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) composition {
+	return p.composeMarked(subs, d, now, "")
+}
+
+// composeMarked is composeAll with d's class marks (deviceClass.marks, over
+// p.scopeNames) when the caller has them: a scope's selection is then read
+// from them instead of from d, which is what makes composing for a fleet of
+// one-device scopes cost its selected scopes and not all of them. marks ""
+// selects live. Marks must be those of d's class under this policy.
+func (p *Policy) composeMarked(subs []*Subject, d admission.Device, now time.Time, marks string) composition {
+	selected := func(name string) (ok, byIncomparable bool) {
+		if marks == "" {
+			return p.scopes[name].selects(d)
+		}
+		switch marks[p.scopeIdx[name]] {
+		case '+':
+			return true, false
+		case '?':
+			return true, true
+		}
+		return false, false
+	}
 	sub := subs[0]
 	c := composition{subject: sub, attached: map[string][]string{}}
 	for _, i := range p.grantIndexes(subs) {
@@ -144,7 +170,7 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 		if !g.Expires.IsZero() && !now.IsZero() && !now.Before(g.Expires) {
 			continue
 		}
-		if ok, _ := p.scopes[g.Scope].selects(d); ok {
+		if ok, _ := selected(g.Scope); ok {
 			c.grants = append(c.grants, g)
 		}
 	}
@@ -201,9 +227,14 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	if c.ceiling != "" && p.levelIndex(held) > p.levelIndex(c.ceiling) {
 		c.ceiling = held
 	}
-	for _, name := range p.scopeNames {
+	for i, name := range p.scopeNames {
+		// Marks say '-' without a map lookup: with thousands of scopes a
+		// device is selected by a few.
+		if marks != "" && marks[i] == '-' {
+			continue
+		}
 		s := p.scopes[name]
-		ok, byIncomparable := s.selects(d)
+		ok, byIncomparable := selected(name)
 		if !ok {
 			continue
 		}
@@ -283,7 +314,14 @@ func (p *Policy) signature(d admission.Device, scopes []string) string {
 // deviceClasses groups devs by class: the indexes of each class, classes in
 // order of first appearance and indexes ascending.
 func (p *Policy) deviceClasses(devs []admission.Device) [][]int {
+	classes, _ := p.deviceClassMarks(devs)
+	return classes
+}
+
+// deviceClassMarks is deviceClasses with each class's marks, for compose.
+func (p *Policy) deviceClassMarks(devs []admission.Device) ([][]int, []string) {
 	var classes [][]int
+	var marks []string
 	at := map[deviceClass]int{}
 	for i, d := range devs {
 		c := p.classOf(d, p.scopeNames)
@@ -292,10 +330,11 @@ func (p *Policy) deviceClasses(devs []admission.Device) [][]int {
 			k = len(classes)
 			at[c] = k
 			classes = append(classes, nil)
+			marks = append(marks, c.marks)
 		}
 		classes[k] = append(classes[k], i)
 	}
-	return classes
+	return classes, marks
 }
 
 // granting is the subjects of subs, in order, with at least one grant in the
