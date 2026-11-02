@@ -645,7 +645,9 @@ func (c *comparison) mfa(subject string, at time.Time) {
 		}
 		key := fmt.Sprintf("%+v|%+v", was, is)
 		if _, ok := groups[key]; !ok {
-			groups[key] = &group{was: was, is: is}
+			// The requirements come from a memo that hands one class's to all its
+			// devices: a change keeps its own copies.
+			groups[key] = &group{was: cloneRequirements([]MFARequirement{was})[0], is: cloneRequirements([]MFARequirement{is})[0]}
 			order = append(order, key)
 		}
 		groups[key].devices = append(groups[key].devices, dev.Name)

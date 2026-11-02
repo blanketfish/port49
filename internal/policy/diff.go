@@ -384,6 +384,18 @@ type side struct {
 	err                    error
 	priv                   privilege
 	age                    SessionAge
+	// core is the memoized answer this side was made from, nil where the
+	// side was resolved on its own device.
+	core *sideCore
+}
+
+// part is what makes two sides alike in a group's key: the blob, what port49
+// enforces and the session ceiling.
+func (s side) part() string {
+	if s.core != nil && s.core.keyPart != "" {
+		return s.core.keyPart
+	}
+	return s.hash + "|" + s.priv.key() + "|" + s.age.String()
 }
 
 // privilege is what one side gives the device and what port49 enforces there
@@ -467,27 +479,15 @@ func (s side) decide(vector []string) engine.Outcome {
 // same inventory; after's is the one walked. A change is reported once, at
 // the first instant it holds.
 func Compare(before, after *Policy, now time.Time) Diff {
-	return compareWith(before, after, now, directSides{})
+	return compareWith(before, after, now, newMemoSides(after.Devices()))
 }
 
 // sideSource answers what Compare asks of one policy about one subject on
 // the i'th device of the inventory it walks, at one instant: the side, and
-// the per_login_mfa requirement. directSides resolves each device itself.
+// the per_login_mfa requirement. memoSides resolves once per device class.
 type sideSource interface {
 	side(p *Policy, subject string, i int, d admission.Device, at time.Time) side
 	mfaAt(p *Policy, subject string, i int, d admission.Device, at time.Time) (MFARequirement, bool)
-}
-
-// directSides is the per-device answer: one resolve per subject, device and
-// instant.
-type directSides struct{}
-
-func (directSides) side(p *Policy, subject string, _ int, d admission.Device, at time.Time) side {
-	return p.side(subject, d, at)
-}
-
-func (directSides) mfaAt(p *Policy, subject string, _ int, d admission.Device, at time.Time) (MFARequirement, bool) {
-	return p.mfaAt(subject, d, at)
 }
 
 // compareWith is Compare with its per-device answers from src.
@@ -736,8 +736,7 @@ func (c *comparison) at(at time.Time) {
 			// The ceiling, the device privilege and enable are the grants'
 			// and the subject's, not only the blob's, so they are part of
 			// what makes two devices alike.
-			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.priv.key() + "|" +
-				was.age.String() + "|" + is.hash + "|" + is.priv.key() + "|" + is.age.String()
+			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.part() + "|" + is.part()
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
 				order = append(order, key)
@@ -1444,4 +1443,197 @@ func canonical(v any) string {
 		return "unrenderable: " + err.Error()
 	}
 	return string(b)
+}
+
+// sideCore is what side computes that depends only on the policy, the
+// subject, the device's class and the instant: the resolution and everything
+// derived from it. The parts that read the device's own name stay per device
+// (memoSides.side): the refusal text of a per_login_mfa error (R6 of the 12c
+// Task 6b brief), a mint refusal where the reply carries {device} (R14), and
+// the quarantine (R12).
+type sideCore struct {
+	res       Resolution
+	err       error
+	noGrants  bool
+	encodeErr error
+	// readsDevice is whether the mint check's result can depend on the
+	// device's name: a session attribute carries the {device} placeholder, the
+	// only one SessionAttributes fills from the device.
+	readsDevice bool
+	// refusal is the mint refusal on the first device this core was made for,
+	// valid for every device of the class only when !readsDevice.
+	refusal, refusalDetail string
+	// built is whether the hash, program and privilege below are made: they
+	// are made when a device first passes the mint check.
+	built      bool
+	hash       string
+	hashErr    error
+	prog       *engine.Program
+	compileErr error
+	priv       privilege
+	age        SessionAge
+	keyPart    string
+}
+
+// memoSides is the sideSource that resolves once per subject, device class
+// and instant. It is made for one Compare: devs is the inventory Compare
+// walks, and every index it is asked for is a position in it. A policy has its
+// own state, so before and after never share an entry.
+type memoSides struct {
+	devs   []admission.Device
+	states map[*Policy]*policyMemo
+}
+
+func newMemoSides(devs []admission.Device) *memoSides {
+	return &memoSides{devs: devs, states: map[*Policy]*policyMemo{}}
+}
+
+// policyMemo is one policy's memo. Compare walks an instant, then a subject,
+// then the devices, so the cores of one subject at one instant are all it
+// keeps: a new subject or instant starts afresh.
+type policyMemo struct {
+	classOf []int
+	cores   struct {
+		subject string
+		at      time.Time
+		valid   bool
+		byClass map[int]*sideCore
+	}
+	mfas struct {
+		subject string
+		at      time.Time
+		valid   bool
+		byClass map[int]mfaEntry
+	}
+}
+
+type mfaEntry struct {
+	req MFARequirement
+	ok  bool
+}
+
+// state is p's memo, with the class of every device made on first use. ok is
+// false where i is not a position of d in the inventory.
+func (m *memoSides) state(p *Policy, i int, d admission.Device) (*policyMemo, bool) {
+	if i < 0 || i >= len(m.devs) || m.devs[i].Name != d.Name {
+		return nil, false
+	}
+	st, ok := m.states[p]
+	if !ok {
+		st = &policyMemo{classOf: make([]int, len(m.devs))}
+		for k, members := range p.deviceClasses(m.devs) {
+			for _, j := range members {
+				st.classOf[j] = k
+			}
+		}
+		m.states[p] = st
+	}
+	return st, true
+}
+
+func (m *memoSides) side(p *Policy, subject string, i int, d admission.Device, at time.Time) side {
+	st, ok := m.state(p, i, d)
+	if !ok {
+		return p.side(subject, d, at)
+	}
+	// R12: the quarantine is the device's own, asked before any memo.
+	if _, ok := p.Quarantined(d.Name, at); ok {
+		return side{quarantined: true}
+	}
+	sub, ok := p.subs[subject]
+	if !ok {
+		return side{}
+	}
+	c := &st.cores
+	if !c.valid || c.subject != subject || !c.at.Equal(at) {
+		c.subject, c.at, c.valid, c.byClass = subject, at, true, map[int]*sideCore{}
+	}
+	core, ok := c.byClass[st.classOf[i]]
+	if !ok {
+		core = p.sideCoreOf(sub, d, at)
+		c.byClass[st.classOf[i]] = core
+	}
+	switch {
+	case core.noGrants:
+		return side{}
+	case core.err != nil:
+		// An error may quote this device's name (R6): it is this device's own.
+		return p.side(subject, d, at)
+	}
+	code, detail := core.refusal, core.refusalDetail
+	if core.readsDevice {
+		code, detail = mintCheckEncoded(core.res, sub.Identity, d.Name, core.encodeErr)
+	}
+	if code != "" {
+		return side{refused: code, refusedDetail: detail}
+	}
+	core.build(p, d)
+	switch {
+	case core.hashErr != nil:
+		return side{err: core.hashErr}
+	case core.compileErr != nil:
+		return side{err: core.compileErr}
+	}
+	return side{prog: core.prog, res: core.res, hash: core.hash, priv: core.priv, age: core.age, core: core}
+}
+
+// sideCoreOf resolves sub on d, the first device of its class that asked.
+func (p *Policy) sideCoreOf(sub *Subject, d admission.Device, at time.Time) *sideCore {
+	res, err := p.resolve(sub, d, at)
+	core := &sideCore{res: res}
+	switch {
+	case errors.Is(err, ErrNoGrants):
+		core.noGrants = true
+	case err != nil:
+		core.err = err
+	default:
+		core.encodeErr = encodeErrOf(res.Blob)
+		core.readsDevice = slices.ContainsFunc(res.Blob.Attributes, func(a string) bool { return strings.Contains(a, "{device}") })
+		if !core.readsDevice {
+			core.refusal, core.refusalDetail = mintCheckEncoded(res, sub.Identity, d.Name, core.encodeErr)
+		}
+	}
+	return core
+}
+
+// build makes what a side holds past the mint check, once, from the first
+// device that passes it: its class shares the platform they read.
+func (c *sideCore) build(p *Policy, d admission.Device) {
+	if c.built {
+		return
+	}
+	c.built = true
+	res := c.res
+	unbundled := res.Blob
+	unbundled.Bundle = "diff"
+	if _, c.hash, c.hashErr = engine.Encode(unbundled); c.hashErr != nil {
+		return
+	}
+	if c.prog, c.compileErr = engine.Compile(res.Blob); c.compileErr != nil {
+		return
+	}
+	c.priv = privilege{level: res.Level, ceiling: res.Ceiling, hasMax: res.HasCeiling, max: res.MaxPrivilege,
+		device: NoCeiling, enable: res.Enable, reply: strings.Join(sessionReply(res), replySep), platform: d.Platform}
+	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
+		c.priv.device = strconv.Itoa(int(n))
+	}
+	c.age = res.SessionAge
+	c.keyPart = c.hash + "|" + c.priv.key() + "|" + c.age.String()
+}
+
+func (m *memoSides) mfaAt(p *Policy, subject string, i int, d admission.Device, at time.Time) (MFARequirement, bool) {
+	st, ok := m.state(p, i, d)
+	if !ok {
+		return p.mfaAt(subject, d, at)
+	}
+	c := &st.mfas
+	if !c.valid || c.subject != subject || !c.at.Equal(at) {
+		c.subject, c.at, c.valid, c.byClass = subject, at, true, map[int]mfaEntry{}
+	}
+	e, ok := c.byClass[st.classOf[i]]
+	if !ok {
+		e.req, e.ok = p.mfaAt(subject, d, at)
+		c.byClass[st.classOf[i]] = e
+	}
+	return e.req, e.ok
 }
