@@ -397,18 +397,41 @@ type DeviceMFA struct {
 // swap (decision 45 ruling 18).
 func (p *Policy) MFARequirements(at time.Time) []DeviceMFA {
 	subjects := sortedKeys(p.subs)
-	var out []DeviceMFA
-	for _, d := range p.Devices() {
+	devs := p.Devices()
+	// mfaAt reads the device only through its class (scope.go, deviceClass):
+	// the requirements are worked out once per class, on its first device.
+	held := make([][]MFARequirement, len(devs))
+	for _, members := range p.deviceClasses(devs) {
 		var reqs []MFARequirement
 		for _, s := range subjects {
-			r, ok := p.mfaAt(s, d, at)
+			r, ok := p.mfaAt(s, devs[members[0]], at)
 			if !ok || !r.Required() || slices.ContainsFunc(reqs, func(o MFARequirement) bool { return reflect.DeepEqual(o, r) }) {
 				continue
 			}
 			reqs = append(reqs, r)
 		}
-		if len(reqs) > 0 {
-			out = append(out, DeviceMFA{Device: d.Name, Requirements: reqs})
+		for _, i := range members {
+			held[i] = reqs
+		}
+	}
+	var out []DeviceMFA
+	for i, d := range devs {
+		if len(held[i]) > 0 {
+			out = append(out, DeviceMFA{Device: d.Name, Requirements: cloneRequirements(held[i])})
+		}
+	}
+	return out
+}
+
+// cloneRequirements is reqs with nothing shared: a caller that sorts one
+// device's list or edits a method list must not change another's.
+func cloneRequirements(reqs []MFARequirement) []MFARequirement {
+	out := slices.Clone(reqs)
+	for i := range out {
+		out[i].Accept = slices.Clone(out[i].Accept)
+		out[i].Levels = slices.Clone(out[i].Levels)
+		for j := range out[i].Levels {
+			out[i].Levels[j].Accept = slices.Clone(out[i].Levels[j].Accept)
 		}
 	}
 	return out

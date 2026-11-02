@@ -17,18 +17,34 @@ import (
 // nothing has no class to land in.
 func (p *Policy) ClassAges(platformName string, def time.Duration, now time.Time) (platform.ClassAges, error) {
 	ages := platform.ClassAges{Default: def, ByClass: map[string]time.Duration{}}
-	for _, d := range p.Devices() {
-		if d.Platform != platformName {
+	subjects := sortedKeys(p.subs)
+	devs := p.Devices()
+	// A subject lands in the same template class, at the same age, on every
+	// device of one device class (scope.go, deviceClass), and a class takes
+	// the least positive age among its sessions, else 0: a fold that does not
+	// depend on order and gains nothing from a repeat. So a device class
+	// is resolved on its first device that is not quarantined, and its other
+	// members add nothing.
+	for _, members := range p.deviceClasses(devs) {
+		if devs[members[0]].Platform != platformName {
 			continue
 		}
-		// A quarantined device mints nothing (spec §10), and any other
-		// resolve error is a quarantine cause (checkDevices), so a refused
-		// session lands in no class: skipped as ShadowedDenies, lint and
-		// intersect skip it, never an error that fails the fleet.
-		if _, q := p.Quarantined(d.Name, now); q {
+		rep := -1
+		for _, i := range members {
+			// A quarantined device mints nothing (spec §10), and any other
+			// resolve error is a quarantine cause (checkDevices), so a refused
+			// session lands in no class: skipped as ShadowedDenies, lint and
+			// intersect skip it, never an error that fails the fleet.
+			if _, q := p.Quarantined(devs[i].Name, now); !q {
+				rep = i
+				break
+			}
+		}
+		if rep < 0 {
 			continue
 		}
-		for _, name := range sortedKeys(p.subs) {
+		d := devs[rep]
+		for _, name := range subjects {
 			res, err := p.resolve(p.subs[name], d, now)
 			if err != nil || res.Projection == nil {
 				continue
