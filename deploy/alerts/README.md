@@ -19,7 +19,11 @@ No expression names a device, and none groups by one: the series carry no device
 
 Each row is a statement from the design or the roadmap and the rule that answers it. The thresholds
 that follow a default (`hold_ttl` 60s, `close_after` 5, `refresh_interval` 10m, `jwks_max_age` 24h,
-`expiry_warning_fraction` 0.33) are those defaults: edit the rule if you set another.
+`expiry_warning_fraction` 0.33, `staleness_ceiling` 4h) are those defaults: edit the rule if you set another.
+**Edit in the safe direction.** A setting lowered below the default can silence its alarm: with
+`close_after: 3` the page on `port49_store_health_failures >= 5` never fires, and with
+`jwks_max_age: 6h` the 12h keys rule fires after tokens are already refused. Recompute each such
+threshold when you change the setting it follows.
 
 | Statement | Alert | Severity | for | Why this threshold |
 |---|---|---|---|---|
@@ -38,15 +42,15 @@ that follow a default (`hold_ttl` 60s, `close_after` 5, `refresh_interval` 10m, 
 | design §15: "`port49_policy_bundle_matches_runner` 0 on a broker for longer than twice `broker.policy_watch_interval`" | `port49_policy_bundle_mismatch` | ticket | 5m | Five minutes outlasts twice the watch interval and the settle delay at their defaults; raise it if the intervals are raised. |
 | design §15: "`port49_broker_mint_gate_closed` at 1 for a minute" | `port49_broker_mint_gate_closed` | ticket | 1m | The gate is closed from a start until a takeover is seen, so a minute is where a restart ends and a fault begins; a ticket, since other replicas keep minting. |
 | roadmap, plan 11a hand-off: "`port49_store_directory_reachable == 0` for 1m" | `port49_store_directory_unreachable` | page | 1m | A cut region keeps logging devices in on stale marks, so one minute is a real partition. |
-| roadmap, plan 11a hand-off: "`time() - port49_store_directory_confirmed_timestamp_seconds > 60`" | `port49_store_directory_stale` | ticket | 1m | The gauge is 0 on a process with no directory store, so a 0 never fires; port49_store_directory_unreachable covers one that never confirmed. |
+| roadmap, plan 11a hand-off: "`time() - port49_store_directory_confirmed_timestamp_seconds > 60`" | `port49_store_directory_stale` | ticket | 1m | The series exists only under etcd, at 0 until the first confirmation, so a 0 is skipped here: port49_store_directory_unreachable and port49_store_feed_down cover a process that never confirmed. |
 | roadmap, plan 11a hand-off: "`port49_store_logouts_pending > 0` for 5m" | `port49_store_logouts_pending` | ticket | 5m | A cut region holds logouts the others have not seen; five minutes is longer than a blip. |
 | roadmap, plan 11a hand-off; design §15: "`port49_store_feed_up{feed="marks"} == 0`; `port49_store_feed_up{feed}` 0 for longer than `hold_ttl`" | `port49_store_marks_feed_down` | page | 1m | Revocation rides this feed; a minute is `hold_ttl` at its default. |
-| design §15: "`port49_store_feed_up{feed}` 0 for longer than `hold_ttl`" | `port49_store_contexts_feed_down` | ticket | 1m | A minute is `hold_ttl` at its default. |
+| design §15: "`port49_store_feed_up{feed}` 0 for longer than `hold_ttl`" | `port49_store_feed_down` | ticket | 1m | A minute is `hold_ttl` at its default. Every feed but marks, which pages, so a feed added later is covered. |
 | design §15: "a circuit open" | `port49_store_circuit_open` | ticket | 1m | A pool open for hold_ttl closes the listeners; a minute is the early warning. |
 | design §15: "any increase of `port49_contexts_reindexed_total`" | `port49_contexts_reindexed` | ticket | none | No benign path deletes an index record. |
 | design §15: "any increase of `port49_contexts_reindex_failures_total`" | `port49_contexts_reindex_failures` | ticket | none | Each failure leaves a context for the next pass; a mis-set key repeats it. |
 | design §15: "any increase of `port49_store_calls_total{outcome="refused"}`" | `port49_store_calls_refused` | page | none | A refused call is a role or credential fault that retries cannot fix. |
-| design §15: "the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice `hold_ttl`" | `port49_store_keyspace_unheld` | ticket | 2m | Two minutes is twice hold_ttl at its default; the sum is over every scraped process, and port49d reports 0, so only a sum of 0 means no replica holds it. |
+| design §15: "the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice `hold_ttl`" | `port49_store_keyspace_unheld` | ticket | 2m | Two minutes is twice hold_ttl at its default. The series exists only on a process that runs a keyspace runner, so the memory backend, with none, raises nothing; the sum is over every runner-capable replica. |
 | design §15: "a store client certificate within 30 days of expiry" | `port49_store_client_cert_expiring` | ticket | none | Thirty days is the stated lead time. |
 | design §15: "`port49_crypt_store_key_unknown` at 1" | `port49_crypt_store_key_unknown` | page | none | Records written under the missing key cannot open; fix the key and start again. |
 | design §15: "any increase of `port49_crypt_open_failures_total{record="token"}`" | `port49_crypt_token_open_failures` | ticket | none | The counter is the only witness; the token is dropped from its candidates with no error. |
@@ -67,11 +71,12 @@ that follow a default (`hold_ttl` 60s, `close_after` 5, `refresh_interval` 10m, 
 | roadmap, plan 9a hand-off to plan 12: "logouts `store_error\|partial`" | `port49_oidc_logouts_failing` | ticket | none | Each is a logout the store did not take whole. |
 | roadmap, plan 9a hand-off to plan 12: "tokens `unavailable`" | `port49_oidc_tokens_unavailable` | ticket | none | The identity provider is unreachable and the held keys have expired. |
 | roadmap, plan 9 hand-off to plan 12: "`increase(port49_workload_certificates_renewal_late_total[1h]) > 0` (summed over replicas)" | `port49_workload_certificates_renewal_late` | ticket | none | Each replica counts a certificate once per 24h, so any increase of the sum is a late renewer. |
-| roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`" | `port49_directory_refresh_stale` | ticket | none | 600 is refresh_interval at its default (10m); set 3x yours. A 0 (no refresh yet, or none configured) never fires; port49_directory_server_down covers an unreachable directory. |
+| roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`" | `port49_directory_refresh_stale` | ticket | none | 600 is refresh_interval at its default (10m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). |
+| spec, Reason codes (l.2715): "Alert at half the ceiling, `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`" | `port49_directory_refresh_half_ceiling` | page | none | 7200 is half the default ceiling; set half yours. Same shape as port49_directory_refresh_stale. A page: at the ceiling sessions are denied. |
 | roadmap, plan 8 directory: "`port49_directory_lookups_total{outcome="ambiguous"}` increasing" | `port49_directory_lookups_ambiguous` | ticket | none | Each is a user refused; the directory holds two entries for one name. |
 | roadmap, plan 8 directory: "`port49_directory_server_up == 0` for a while" | `port49_directory_server_down` | ticket | 10m | Ten minutes: one server down is a degraded pool, not an outage. |
 | roadmap, plan 8 directory: "`port49_directory_group_names_ambiguous > 0`" | `port49_directory_group_names_ambiguous` | ticket | 5m | A gauge over the last hour; the grants naming those groups are not given. |
-| spec §13 decision 47 D7: "`port49_directory_enrollment_store_ok == 0 or absent()`" | `port49_directory_enrollment_store_lost` | page | 2m | Not `or absent()`: the gauge exists only with a directory_password verifier, so on any other broker absent() fires forever. A broker that never reached the store is caught by the sign-in refusals. |
+| spec §13 decision 47 D7; metric help: "`port49_directory_enrollment_store_ok == 0 or absent()`" | `port49_directory_enrollment_store_lost` | page | 2m | The gauge is absent until the store first answers, and a broker that has never reached it is the case to catch. `port49_directory_password_configured` is 1 only on a broker with the verifier, so a broker without one never matches the absent arm. |
 | design §15: "an accounting spool dropping records" | `port49_accounting_spool_drops` | page | none | Accounting records are an audit trail; no drop is acceptable. |
 | design §9 decision log: "complete, never sampled" | `port49_decision_log_write_failures` | page | none | The log is the audit trail; a refused write counts per attempt. |
 | spec §13 inventory service: "retain the previous one and alarm" | `port49_inventory_sync_failing` | ticket | 10m | Syncs repeat; ten minutes is several failed ones. |
@@ -79,6 +84,15 @@ that follow a default (`hold_ttl` 60s, `close_after` 5, `refresh_interval` 10m, 
 | spec §13 inventory service: "the fleet refuses, retains the last good snapshot, and alarms" | `port49_inventory_bundle_refused` | ticket | 5m | The old bundle serves, so a ticket; five minutes outlasts a rollout. |
 | spec §13 inventory service: "mirror behind" | `port49_inventory_mirror_behind` | ticket | 10m | A write is quick; ten minutes behind is a mirror that fails. |
 | spec §13 inventory service: "persist failed" | `port49_inventory_persist_failed` | ticket | 5m | The state directory is full or unwritable. |
+| spec, How a daemon refreshes its snapshot (l.5846, 5932): "Staleness is a metric and an alarm — `port49_inventory_snapshot_age_seconds` — never a fail-closed" | `port49_inventory_snapshot_stale` | ticket | 5m | 86400 is a day; set your sync cadence times a few. The NaN arm (no snapshot yet) is the spec's own expression. Gated on port49_connections_max > 0, which only a port49d with a TACACS+ listener sets: a broker registers the gauge and reads NaN forever. |
+| spec, Annotating login context (l.3218; l.2308): "`foreign` is the series to alert on ... It is not rate-limited: a burst of `foreign` is itself the signal" | `port49_accounting_foreign` | page | none | Any foreign record is the detection the spec names for a local login the policy did not see; it pages. |
+| spec, Events (l.2527): "`port49_devices_generic_platform` is its alarm, naming no device" | `port49_devices_generic_platform` | ticket | 5m | A standing condition of the inventory, not an incident; the start line names the platforms and counts. |
+| spec §13 (l.7426): "a hash mismatch is said and alarmed (`port49_inventory_policy_mismatch`)" | `port49_inventory_policy_mismatch` | ticket | 5m | Five minutes outlasts a policy rollout reaching both. |
+| spec, Policy reload (l.875): "it is counted `failed` in `port49_context_refreshes_total`, which is its alarm" | `port49_context_refreshes_failed` | ticket | none | Each failure is one context left on an older policy or revoked. |
+| spec, Events (l.2494): "`port49_inventory_changes_total{kind}` is its alarm" | `port49_inventory_privilege_changes` | ticket | none | Every kind but transport_changed, which has its own alert. A device_added during onboarding raises it too: expected, and it is the only place a new capture target shows. |
+| spec, Reason codes (l.2721): "`per_login_mfa_refused` MUST be alertable on its own: a run of them is someone trying another token or another person's sign-in" | `port49_per_login_mfa_refused` | page | none | More than two in ten minutes is a run; a mistyped touch is one. |
+| metric help; spec §13 decision 47 D5: "alert on a rise of `throttled`" | `port49_sign_ins_throttled` | ticket | none | A throttle needs failures_per_* failed attempts: a guessing run, or one user's stale password on a script. |
+| metric help; spec §13 decision 47 D7: "alert on ... any `enrollment_store_lost`" | `port49_sign_ins_enrollment_store_lost` | page | none | Any one is an operator or user refused; the gauge alert above covers a store that is lost with no sign-in in flight. |
 | roadmap, plan 12c etcd rules: "`etcd_server_has_leader == 0` (page)" | `etcd_no_leader` | page | 1m | A minute rides out an election. |
 | roadmap, plan 12c etcd rules: "`etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8` (ticket)" | `etcd_db_nearly_full` | ticket | 10m | Defragment or compact before the quota: ten minutes is not a spike. |
 | roadmap, plan 12c etcd rules: "`increase(etcd_server_leader_changes_seen_total[1h]) > 3` (ticket)" | `etcd_leader_changes` | ticket | none | Occasional changes are rollouts; four in an hour is a fault. |
@@ -104,15 +118,36 @@ the close. `port49_store_health_failures_close` pages once the listeners are clo
 held by the process, not the run, so the page stays raised through the whole outage and resolves
 when the listeners reopen.
 
+**Series that exist only where the thing does.** `port49_store_directory_reachable`,
+`port49_store_directory_confirmed_timestamp_seconds`, `port49_store_keyspace_held` and
+`port49_directory_refresh_last_complete_timestamp_seconds` are created by the code that starts what
+they watch (the etcd store, the keyspace runner, the scheduled refresh), at 0. On the memory backend,
+the default, they do not exist, so no alert on `== 0` or on age has a series to fire on. Where a gauge
+cannot work that way, a `*_configured` gauge says whether to expect it: `port49_issuing_ca_configured`,
+`port49_directory_password_configured`.
+
 **Where the rules differ from the statement they answer.**
-- `port49_oidc_keys_stale` and `port49_directory_enrollment_store_lost` drop the statement's
-  `or absent()`. Both series exist only where the feature is configured, so `absent()` fires forever
-  on every deployment without it. The enrollment store that never answers shows as sign-in
-  refusals, not as a gauge.
+- `port49_oidc_keys_stale` drops the statement's `or absent()`: every configured issuer's series is
+  created at 0, so an issuer that never fetched already shows `time() - 0`, and the series is absent
+  only where OIDC is not configured, where `absent()` would fire forever.
+- `port49_directory_enrollment_store_lost` keeps it, as `port49_directory_password_configured == 1
+  unless on(instance) port49_directory_enrollment_store_ok`: the gauge is absent until the store
+  first answers, and a broker that never reached it is the case to catch.
 - `port49_issuing_ca_expiring` also requires the CA gauge above 0, so the page for a missing CA is
   not doubled by a ticket for a CA "expiring" in 1970.
-- `port49_store_directory_stale` and `port49_directory_refresh_stale` require their timestamp above
-  0: it is 0 where there is no directory store or no refresh yet, and `time() - 0` would fire on
-  every such process.
-- `port49_store_keyspace_unheld` sums over every scraped process: port49d reports 0, so the sum is 0
-  only when no broker replica holds the keyspace.
+- `port49_store_directory_stale` requires its timestamp above 0 (a process that has not yet confirmed
+  is `port49_store_directory_unreachable` and `port49_store_feed_down`).
+- `port49_directory_refresh_stale` and `port49_directory_refresh_half_ceiling` take the freshest
+  refresh across all runner-capable replicas, so a replica that lost the hold, whose gauge stops
+  moving, does not alarm; and they require the newest such process to have been up as long as the
+  threshold, so a restart is quiet but a restart in the middle of a directory outage (the gauge reads 0
+  until a pass completes) still fires.
+- `port49_inventory_snapshot_stale` is the spec's expression with its NaN arm, gated on
+  `port49_connections_max > 0`, which only a port49d with a listener sets: a broker registers the
+  gauge and reads NaN for good.
+- `port49_store_keyspace_unheld` sums over the processes that run a keyspace runner.
+- The key-retirement rules leave out the spec's uptime gate (spec, key rotation: line 5578). That only makes them
+  fire more. A restart blanks `port49_key_version_devices` (it counts devices whose latest validated
+  connection since start used the version), so a rule that resolves after a restart is not evidence
+  the devices have moved: read the decision log.
+- `enrolled` sign-ins outside a rollout are not alerted: "outside a rollout" is yours to define.

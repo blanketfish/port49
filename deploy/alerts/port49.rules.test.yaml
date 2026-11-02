@@ -145,7 +145,7 @@ tests:
   - interval: 1m
     input_series:
       - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x40"}
-      - {series: "port49_redemption_restore_guard_until_timestamp_seconds", values: "0+0x40"}
+      - {series: "port49_redemption_restore_guard_until_timestamp_seconds{instance=\"a\"}", values: "0+0x40"}
     alert_rule_test:
       - eval_time: 15m
         alertname: port49_redemption_restore_guarded
@@ -156,7 +156,7 @@ tests:
   - interval: 1m
     input_series:
       - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x40"}
-      - {series: "port49_redemption_restore_guard_until_timestamp_seconds", values: "5000+0x40"}
+      - {series: "port49_redemption_restore_guard_until_timestamp_seconds{instance=\"a\"}", values: "5000+0x40"}
     alert_rule_test:
       - eval_time: 15m
         alertname: port49_redemption_restore_guarded
@@ -297,6 +297,13 @@ tests:
       - eval_time: 6m
         alertname: port49_store_directory_unreachable
         exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_connections_max{instance=\"a\"}", values: "100+0x30"}
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: port49_store_directory_unreachable
+        exp_alerts: []
   # port49_store_directory_stale
   - interval: 1m
     input_series:
@@ -351,23 +358,44 @@ tests:
       - eval_time: 6m
         alertname: port49_store_marks_feed_down
         exp_alerts: []
-  # port49_store_contexts_feed_down
+  # port49_store_feed_down
   - interval: 1m
     input_series:
       - {series: "port49_store_feed_up{instance=\"a\",feed=\"contexts\"}", values: "0+0x30"}
     alert_rule_test:
       - eval_time: 6m
-        alertname: port49_store_contexts_feed_down
+        alertname: port49_store_feed_down
         exp_alerts:
           - exp_labels: {instance: "a", feed: "contexts", severity: "ticket"}
             exp_annotations:
-              summary: "The contexts feed is down: this process misses other replicas' logins and the ledger cannot follow them."
+              summary: "A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed."
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_feed_up{instance=\"a\",feed=\"pins\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: port49_store_feed_down
+        exp_alerts:
+          - exp_labels: {instance: "a", feed: "pins", severity: "ticket"}
+            exp_annotations:
+              summary: "A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed."
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_feed_up{instance=\"a\",feed=\"logouts\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: port49_store_feed_down
+        exp_alerts:
+          - exp_labels: {instance: "a", feed: "logouts", severity: "ticket"}
+            exp_annotations:
+              summary: "A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed."
   - interval: 1m
     input_series:
       - {series: "port49_store_feed_up{instance=\"a\",feed=\"contexts\"}", values: "1+0x30"}
+      - {series: "port49_store_feed_up{instance=\"a\",feed=\"marks\"}", values: "0+0x30"}
     alert_rule_test:
       - eval_time: 6m
-        alertname: port49_store_contexts_feed_down
+        alertname: port49_store_feed_down
         exp_alerts: []
   # port49_store_circuit_open
   - interval: 1m
@@ -457,6 +485,13 @@ tests:
     input_series:
       - {series: "port49_store_keyspace_held{instance=\"a\"}", values: "0+0x30"}
       - {series: "port49_store_keyspace_held{instance=\"b\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: port49_store_keyspace_unheld
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_connections_max{instance=\"a\"}", values: "100+0x30"}
     alert_rule_test:
       - eval_time: 7m
         alertname: port49_store_keyspace_unheld
@@ -825,19 +860,70 @@ tests:
   - interval: 1m
     input_series:
       - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "100+0x60"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x60"}
     alert_rule_test:
       - eval_time: 45m
         alertname: port49_directory_refresh_stale
         exp_alerts:
-          - exp_labels: {instance: "a", severity: "ticket"}
+          - exp_labels: {severity: "ticket"}
             exp_annotations:
-              summary: "The last scheduled directory refresh that verified every principal finished over three refresh intervals ago."
+              summary: "No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling."
   - interval: 1m
     input_series:
-      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+60x60"}
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+0x60"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x60"}
     alert_rule_test:
       - eval_time: 45m
         alertname: port49_directory_refresh_stale
+        exp_alerts:
+          - exp_labels: {severity: "ticket"}
+            exp_annotations:
+              summary: "No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling."
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+60x60"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x60"}
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: port49_directory_refresh_stale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+0x60"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "2400+0x60"}
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: port49_directory_refresh_stale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "100+0x60"}
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"b\"}", values: "0+60x60"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x60"}
+      - {series: "process_start_time_seconds{instance=\"b\"}", values: "0+0x60"}
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: port49_directory_refresh_stale
+        exp_alerts: []
+  # port49_directory_refresh_half_ceiling
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "100+0x300"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x300"}
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: port49_directory_refresh_half_ceiling
+        exp_alerts:
+          - exp_labels: {severity: "page"}
+            exp_annotations:
+              summary: "No directory refresh has verified every principal for half of session.staleness_ceiling (4h at its default); at the ceiling every live session denies context_stale. Escapes: session.staleness_ceiling: 0s with a port49d restart, or stop port49d so break-glass applies."
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_refresh_last_complete_timestamp_seconds{instance=\"a\"}", values: "0+60x300"}
+      - {series: "process_start_time_seconds{instance=\"a\"}", values: "0+0x300"}
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: port49_directory_refresh_half_ceiling
         exp_alerts: []
   # port49_directory_lookups_ambiguous
   - interval: 1m
@@ -903,10 +989,28 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", severity: "page"}
             exp_annotations:
-              summary: "The broker's password enrollment store is lost or not initialised; password sign-in is refused."
+              summary: "The broker's password enrollment store is lost, not initialised, or was never reached; password sign-in is refused."
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_password_configured{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: port49_directory_enrollment_store_lost
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "page"}
+            exp_annotations:
+              summary: "The broker's password enrollment store is lost, not initialised, or was never reached; password sign-in is refused."
   - interval: 1m
     input_series:
       - {series: "port49_directory_enrollment_store_ok{instance=\"a\"}", values: "1+0x30"}
+      - {series: "port49_directory_password_configured{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: port49_directory_enrollment_store_lost
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_directory_password_configured{instance=\"a\"}", values: "0+0x30"}
     alert_rule_test:
       - eval_time: 7m
         alertname: port49_directory_enrollment_store_lost
@@ -1036,6 +1140,189 @@ tests:
     alert_rule_test:
       - eval_time: 10m
         alertname: port49_inventory_persist_failed
+        exp_alerts: []
+  # port49_inventory_snapshot_stale
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_snapshot_age_seconds{instance=\"a\"}", values: "100000+0x30"}
+      - {series: "port49_connections_max{instance=\"a\"}", values: "100+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_snapshot_stale
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "The inventory snapshot in force was last confirmed over a day ago, or there is none; the fleet still authenticates on it, and nothing fails closed."
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_snapshot_age_seconds{instance=\"a\"}", values: "NaN+0x30"}
+      - {series: "port49_connections_max{instance=\"a\"}", values: "100+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_snapshot_stale
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "The inventory snapshot in force was last confirmed over a day ago, or there is none; the fleet still authenticates on it, and nothing fails closed."
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_snapshot_age_seconds{instance=\"a\"}", values: "60+0x30"}
+      - {series: "port49_connections_max{instance=\"a\"}", values: "100+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_snapshot_stale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_snapshot_age_seconds{instance=\"a\"}", values: "NaN+0x30"}
+      - {series: "port49_connections_max{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_snapshot_stale
+        exp_alerts: []
+  # port49_accounting_foreign
+  - interval: 1m
+    input_series:
+      - {series: "port49_accounting_attributions_total{instance=\"a\",attribution=\"foreign\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_accounting_foreign
+        exp_alerts:
+          - exp_labels: {instance: "a", attribution: "foreign", severity: "page"}
+            exp_annotations:
+              summary: "Accounting records arrived for a session port49 never saw begin: a local fallback or console login on a device, or a device bypassing port49."
+  - interval: 1m
+    input_series:
+      - {series: "port49_accounting_attributions_total{instance=\"a\",attribution=\"foreign\"}", values: "2+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_accounting_foreign
+        exp_alerts: []
+  # port49_devices_generic_platform
+  - interval: 1m
+    input_series:
+      - {series: "port49_devices_generic_platform{instance=\"a\"}", values: "3+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_devices_generic_platform
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "Admitted devices are served by the generic adapter: their platform has no adapter, and their commands are judged without its knowledge."
+  - interval: 1m
+    input_series:
+      - {series: "port49_devices_generic_platform{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_devices_generic_platform
+        exp_alerts: []
+  # port49_inventory_policy_mismatch
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_policy_mismatch{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_policy_mismatch
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "The inventory service built the bundle in force against a policy other than port49d's own; port49d applies the inventory against its own policy."
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_policy_mismatch{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_inventory_policy_mismatch
+        exp_alerts: []
+  # port49_context_refreshes_failed
+  - interval: 1m
+    input_series:
+      - {series: "port49_context_refreshes_total{instance=\"a\",outcome=\"failed\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_context_refreshes_failed
+        exp_alerts:
+          - exp_labels: {instance: "a", outcome: "failed", severity: "ticket"}
+            exp_annotations:
+              summary: "A policy refresh could not carry a login context onto the policy in force: a context revoked for a compile fault, or one that would not open."
+  - interval: 1m
+    input_series:
+      - {series: "port49_context_refreshes_total{instance=\"a\",outcome=\"failed\"}", values: "2+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_context_refreshes_failed
+        exp_alerts: []
+  # port49_inventory_privilege_changes
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"key_ref_changed\"}", values: "0+1x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts:
+          - exp_labels: {instance: "a", kind: "key_ref_changed", severity: "ticket"}
+            exp_annotations:
+              summary: "A source-of-truth edit moved privilege: a device changed key, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"key_ref_changed\"}", values: "2+0x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts: []
+  # port49_per_login_mfa_refused
+  - interval: 1m
+    input_series:
+      - {series: "port49_per_login_mfa_total{instance=\"a\",method=\"hardware_key_touch\",outcome=\"refused\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_per_login_mfa_refused
+        exp_alerts:
+          - exp_labels: {instance: "a", method: "hardware_key_touch", outcome: "refused", severity: "page"}
+            exp_annotations:
+              summary: "A run of per-login MFA proofs did not verify: someone is trying another token or another person's sign-in."
+  - interval: 1m
+    input_series:
+      - {series: "port49_per_login_mfa_total{instance=\"a\",method=\"hardware_key_touch\",outcome=\"refused\"}", values: "2+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_per_login_mfa_refused
+        exp_alerts: []
+  # port49_sign_ins_throttled
+  - interval: 1m
+    input_series:
+      - {series: "port49_sign_ins_total{instance=\"a\",outcome=\"throttled\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_sign_ins_throttled
+        exp_alerts:
+          - exp_labels: {instance: "a", outcome: "throttled", severity: "ticket"}
+            exp_annotations:
+              summary: "Directory-password sign-ins are being throttled: failed attempts passed failures_per_principal or failures_per_source."
+  - interval: 1m
+    input_series:
+      - {series: "port49_sign_ins_total{instance=\"a\",outcome=\"throttled\"}", values: "2+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_sign_ins_throttled
+        exp_alerts: []
+  # port49_sign_ins_enrollment_store_lost
+  - interval: 1m
+    input_series:
+      - {series: "port49_sign_ins_total{instance=\"a\",outcome=\"enrollment_store_lost\"}", values: "0+1x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_sign_ins_enrollment_store_lost
+        exp_alerts:
+          - exp_labels: {instance: "a", outcome: "enrollment_store_lost", severity: "page"}
+            exp_annotations:
+              summary: "A password sign-in was refused because the enrollment store is lost."
+  - interval: 1m
+    input_series:
+      - {series: "port49_sign_ins_total{instance=\"a\",outcome=\"enrollment_store_lost\"}", values: "2+0x30"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_sign_ins_enrollment_store_lost
         exp_alerts: []
   # etcd_no_leader
   - interval: 1m

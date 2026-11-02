@@ -107,7 +107,12 @@ func oldText(age time.Duration, ok bool) string {
 }
 
 // tellFresh has fresh tell m's two directory gauges (plan 11a, R17).
+//
+// The two series exist from here on and at 0, and only under etcd (where this is called): on the
+// memory backend there is no store to reach, so there is no series for an alert on 0 to page on.
 func tellFresh(fresh *store.Freshness, m *metrics.Metrics) {
-	fresh.Tell(func(at time.Time) { m.StoreDirectoryConfirmed.Set(float64(at.Unix())) },
-		func(r bool) { m.StoreDirectoryReachable.Set(b2f(r)) })
+	m.StoreDirectoryConfirmed.WithLabelValues()
+	m.StoreDirectoryReachable.WithLabelValues()
+	fresh.Tell(func(at time.Time) { m.StoreDirectoryConfirmed.WithLabelValues().Set(float64(at.Unix())) },
+		func(r bool) { m.StoreDirectoryReachable.WithLabelValues().Set(b2f(r)) })
 }

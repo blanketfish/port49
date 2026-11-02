@@ -128,7 +128,7 @@ type Metrics struct {
 	// StoreKeyspaceHeld is 1 while this port49d holds its keyspace on etcd
 	// (plan 7d): 0 while it waits for another or for the store, and alarmed
 	// when port49d runs with it 0.
-	StoreKeyspaceHeld prometheus.Gauge
+	StoreKeyspaceHeld *prometheus.GaugeVec
 	// StoreFeedUp is 1 while a feed's watch runs (plan 7e): feed is
 	// "contexts" or "marks". 0 for longer than hold_ttl is an alarm: this
 	// process's ledger or marks are not following the store.
@@ -172,11 +172,11 @@ type Metrics struct {
 	StoreCertExpiry *prometheus.GaugeVec
 	// StoreDirectoryReachable is 1 while this process's reads of the
 	// directory store answer, 0 while they do not (plan 11a; decision 51).
-	StoreDirectoryReachable prometheus.Gauge
+	StoreDirectoryReachable *prometheus.GaugeVec
 	// StoreDirectoryConfirmed is when this process last confirmed its copy
 	// of the directory store, in Unix seconds: a read answered while its
 	// marks feed ran. An alert subtracts it from now.
-	StoreDirectoryConfirmed prometheus.Gauge
+	StoreDirectoryConfirmed *prometheus.GaugeVec
 	// StoreLogoutsPending is how many back-channel logouts this region
 	// accepted while the directory store did not answer and has not yet
 	// forwarded to it (plan 11a, R26 as amended). No label.
@@ -356,6 +356,10 @@ type Metrics struct {
 	// broker.identity.issuance is set, 0 otherwise, so the alert on the CA
 	// gauge's 0 needs no hand-set scrape label.
 	IssuingCAConfigured prometheus.Gauge
+	// port49_directory_password_configured: 1 on a broker with a
+	// directory_password verifier, 0 otherwise: the enrollment store gauge is
+	// absent until the store first answers, and this says whether it should exist.
+	DirectoryPasswordConfigured prometheus.Gauge
 	// port49_directory_queries_total{server, outcome}: directory queries by
 	// server (host:port) and outcome: ok, fault (the server's), error (the
 	// query's answer), refused (the dial or bind was refused, no fault).
@@ -395,7 +399,7 @@ type Metrics struct {
 	// port49_directory_refresh_last_complete_timestamp_seconds: the Unix
 	// time of the last scheduled refresh that verified every principal, 0
 	// before one has. No labels: no principal or device.
-	DirectoryRefreshLastComplete prometheus.Gauge
+	DirectoryRefreshLastComplete *prometheus.GaugeVec
 	// port49_oidc_keys_last_success_timestamp_seconds{issuer}: the Unix
 	// time the keys held were fetched: 0 from the key set's creation until
 	// a fetch or a restore, and after a restore the kept set's fetched_at,
@@ -764,8 +768,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		IndexRecordsUndecodable: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "port49_store_index_records_undecodable_total",
 			Help: "etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted."}),
-		StoreKeyspaceHeld: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
-			Help: "1 while this port49d holds its keyspace on etcd."}),
+		StoreKeyspaceHeld: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
+			Help: "1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend)."}, nil),
 		StoreFeedUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_up",
 			Help: "1 while a feed's watch on the store runs, by feed (contexts or marks)."}, []string{"feed"}),
 		StoreFeedRescans: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_feed_rescans_total",
@@ -790,11 +794,11 @@ func New(reg prometheus.Registerer) *Metrics {
 		StoreCertExpiry: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_store_client_cert_expiry_timestamp_seconds",
 			Help: "When each component's etcd client certificate expires, in Unix seconds."}, []string{"component"}),
-		StoreDirectoryReachable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_directory_reachable",
-			Help: "1 while this process's reads of the directory store answer."}),
-		StoreDirectoryConfirmed: prometheus.NewGauge(prometheus.GaugeOpts{
+		StoreDirectoryReachable: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_directory_reachable",
+			Help: "1 while this process's reads of the directory store answer; absent on the memory backend, which has no store to reach."}, nil),
+		StoreDirectoryConfirmed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_store_directory_confirmed_timestamp_seconds",
-			Help: "When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds."}),
+			Help: "When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds; 0 before one has, absent on the memory backend."}, nil),
 		StoreLogoutsPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_logouts_pending",
 			Help: "Back-channel logouts accepted while the directory store did not answer and not yet forwarded to it."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
@@ -866,6 +870,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			[]string{"outcome"}),
 		IssuingCANotAfter: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_not_after_timestamp_seconds",
 			Help: "The Unix time the issuing CA in use expires; 0 when none is loaded."}),
+		DirectoryPasswordConfigured: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_password_configured",
+			Help: "1 when this broker has a directory_password verifier; alert on port49_directory_enrollment_store_ok being 0 or absent where this is 1."}),
 		IssuingCAConfigured: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_configured",
 			Help: "1 when this broker is configured to issue certificates; alert on port49_issuing_ca_not_after_timestamp_seconds == 0 where this is 1."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
@@ -886,8 +892,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "People and workloads together that the last pre-warm pass verified and stored."}),
 		DirectoryPrewarmLastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_last_success_timestamp_seconds",
 			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
-		DirectoryRefreshLastComplete: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
-			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has."}),
+		DirectoryRefreshLastComplete: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
+			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has, absent where no scheduled refresh runs."}, nil),
 		OIDCKeysLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_oidc_keys_last_success_timestamp_seconds",
 			Help: "Unix time the OIDC or cluster issuer's held keys were fetched (restored included), 0 before any."}, []string{"issuer"}),
@@ -1046,7 +1052,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
-		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter, m.IssuingCAConfigured)
+		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter, m.IssuingCAConfigured, m.DirectoryPasswordConfigured)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)

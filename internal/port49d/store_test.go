@@ -573,9 +573,9 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 		!strings.Contains(string(resp.Kvs[0].Value), `"enc0"`) {
 		t.Fatalf("meta/ after the split daemon's start: %v %v", resp, err)
 	}
-	if testutil.ToFloat64(m.StoreKeyspaceHeld) != 0 || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 ||
+	if testutil.CollectAndCount(m.StoreKeyspaceHeld) != 0 || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 ||
 		!strings.Contains(out.String(), `whose current key is "enc0"`) {
-		t.Fatalf("held %v, key unknown %v:\n%s", testutil.ToFloat64(m.StoreKeyspaceHeld),
+		t.Fatalf("held series %v, key unknown %v:\n%s", testutil.CollectAndCount(m.StoreKeyspaceHeld),
 			testutil.ToFloat64(m.CryptStoreKeyUnknown), out.String())
 	}
 	if !marks.Holds(store.RevocationPrincipal, "user:alice@example.com") ||

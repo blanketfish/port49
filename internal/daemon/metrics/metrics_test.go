@@ -57,6 +57,10 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.CertStatusUnavailable.WithLabelValues("broker").Inc()
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
+	m.StoreKeyspaceHeld.WithLabelValues().Set(1)
+	m.StoreDirectoryReachable.WithLabelValues().Set(1)
+	m.StoreDirectoryConfirmed.WithLabelValues().Set(1)
+	m.DirectoryRefreshLastComplete.WithLabelValues().Set(1)
 	m.SetPolicyFailClosed(0)
 	m.PolicyRefreshPending.Set(0)
 	if v := testutil.ToFloat64(m.PolicyBundleMatchesRunner); v != 1 {
@@ -518,4 +522,29 @@ func TestIssuingCAConfiguredReachesTheRegistryAtZero(t *testing.T) {
 		return
 	}
 	t.Fatal("port49_issuing_ca_configured is not registered")
+}
+
+// The gauges an alert reads as "0 is a fault" exist only where the thing they watch does, so a
+// process without it (the memory backend; no scheduled refresh) has no series to read 0 and page
+// on (plan 12c, Task 5 fix 1, C1/I2). Each is created by the code that starts what it watches.
+func TestEtcdOnlyGaugesHaveNoSeriesUntilSet(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	for name, c := range map[string]prometheus.Collector{
+		"port49_store_directory_reachable":                         m.StoreDirectoryReachable,
+		"port49_store_directory_confirmed_timestamp_seconds":       m.StoreDirectoryConfirmed,
+		"port49_store_keyspace_held":                               m.StoreKeyspaceHeld,
+		"port49_directory_refresh_last_complete_timestamp_seconds": m.DirectoryRefreshLastComplete,
+	} {
+		if n := testutil.CollectAndCount(c); n != 0 {
+			t.Errorf("%s has %d series at construction, want none", name, n)
+		}
+	}
+}
+
+// port49_directory_password_configured is 0 until a broker with a directory_password verifier sets it.
+func TestDirectoryPasswordConfiguredStartsAtZero(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	if v := testutil.ToFloat64(m.DirectoryPasswordConfigured); v != 0 {
+		t.Fatalf("starts at %v, want 0", v)
+	}
 }

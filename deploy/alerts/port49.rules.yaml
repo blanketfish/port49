@@ -53,7 +53,7 @@ groups:
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: "port49d refuses every token redemption: it found its store restored from a snapshot. {{ with query \"max(port49_redemption_restore_guard_until_timestamp_seconds)\" }}{{ if gt (. | first | value) 0.0 }}The guard lifts on its own at {{ . | first | value | humanizeTimestamp }} unless new tokens are minted, or at the runner's purge. {{ else }}Its bound is unknown: only the runner's purge lifts it. {{ end }}{{ end }}To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
+          summary: "port49d refuses every token redemption: it found its store restored from a snapshot. {{ with query (printf \"max(port49_redemption_restore_guard_until_timestamp_seconds{instance=%q})\" $labels.instance) }}{{ if gt (. | first | value) 0.0 }}The guard lifts on its own at {{ . | first | value | humanizeTimestamp }} unless new tokens are minted, or at the runner's purge. {{ else }}Its bound is unknown: only the runner's purge lifts it. {{ end }}{{ end }}To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
       - alert: port49_admin_touch_refused
         expr: "increase(port49_admin_touch_total{outcome=\"refused\"}[10m]) > 0"
         labels: {severity: page}
@@ -88,6 +88,22 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "A broker mints nothing: its mint gate has been closed for over a minute; the store does not answer, or no runner judges its bundle."
+      - alert: port49_devices_generic_platform
+        expr: "port49_devices_generic_platform > 0"
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Admitted devices are served by the generic adapter: their platform has no adapter, and their commands are judged without its knowledge."
+      - alert: port49_context_refreshes_failed
+        expr: "increase(port49_context_refreshes_total{outcome=\"failed\"}[10m]) > 0"
+        labels: {severity: ticket}
+        annotations:
+          summary: "A policy refresh could not carry a login context onto the policy in force: a context revoked for a compile fault, or one that would not open."
+      - alert: port49_per_login_mfa_refused
+        expr: "increase(port49_per_login_mfa_total{outcome=\"refused\"}[10m]) > 2"
+        labels: {severity: page}
+        annotations:
+          summary: "A run of per-login MFA proofs did not verify: someone is trying another token or another person's sign-in."
   - name: port49_store
     rules:
       - alert: port49_store_directory_unreachable
@@ -114,12 +130,12 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "The marks feed is down: revocation marks written elsewhere do not reach this process."
-      - alert: port49_store_contexts_feed_down
-        expr: "port49_store_feed_up{feed=\"contexts\"} == 0"
+      - alert: port49_store_feed_down
+        expr: "port49_store_feed_up{feed!=\"marks\"} == 0"
         for: 1m
         labels: {severity: ticket}
         annotations:
-          summary: "The contexts feed is down: this process misses other replicas' logins and the ledger cannot follow them."
+          summary: "A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed."
       - alert: port49_store_circuit_open
         expr: "port49_store_circuit_open == 1"
         for: 1m
@@ -258,10 +274,15 @@ groups:
   - name: port49_directory
     rules:
       - alert: port49_directory_refresh_stale
-        expr: "(time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 * 600) and on(instance) port49_directory_refresh_last_complete_timestamp_seconds > 0"
+        expr: "(time() - max(port49_directory_refresh_last_complete_timestamp_seconds) > 3 * 600) and on() (time() - max(process_start_time_seconds and on(instance) port49_directory_refresh_last_complete_timestamp_seconds) > 3 * 600)"
         labels: {severity: ticket}
         annotations:
-          summary: "The last scheduled directory refresh that verified every principal finished over three refresh intervals ago."
+          summary: "No scheduled directory refresh has verified every principal for over three refresh intervals; contexts keep their last verification and will deny context_stale at the ceiling."
+      - alert: port49_directory_refresh_half_ceiling
+        expr: "(time() - max(port49_directory_refresh_last_complete_timestamp_seconds) > 2 * 3600) and on() (time() - max(process_start_time_seconds and on(instance) port49_directory_refresh_last_complete_timestamp_seconds) > 2 * 3600)"
+        labels: {severity: page}
+        annotations:
+          summary: "No directory refresh has verified every principal for half of session.staleness_ceiling (4h at its default); at the ceiling every live session denies context_stale. Escapes: session.staleness_ceiling: 0s with a port49d restart, or stop port49d so break-glass applies."
       - alert: port49_directory_lookups_ambiguous
         expr: "increase(port49_directory_lookups_total{outcome=\"ambiguous\"}[10m]) > 0"
         labels: {severity: ticket}
@@ -280,11 +301,21 @@ groups:
         annotations:
           summary: "Group names match no one because two groups under groups_base_dn share them."
       - alert: port49_directory_enrollment_store_lost
-        expr: "port49_directory_enrollment_store_ok == 0"
+        expr: "port49_directory_enrollment_store_ok == 0 or (port49_directory_password_configured == 1 unless on(instance) port49_directory_enrollment_store_ok)"
         for: 2m
         labels: {severity: page}
         annotations:
-          summary: "The broker's password enrollment store is lost or not initialised; password sign-in is refused."
+          summary: "The broker's password enrollment store is lost, not initialised, or was never reached; password sign-in is refused."
+      - alert: port49_sign_ins_throttled
+        expr: "increase(port49_sign_ins_total{outcome=\"throttled\"}[10m]) > 0"
+        labels: {severity: ticket}
+        annotations:
+          summary: "Directory-password sign-ins are being throttled: failed attempts passed failures_per_principal or failures_per_source."
+      - alert: port49_sign_ins_enrollment_store_lost
+        expr: "increase(port49_sign_ins_total{outcome=\"enrollment_store_lost\"}[10m]) > 0"
+        labels: {severity: page}
+        annotations:
+          summary: "A password sign-in was refused because the enrollment store is lost."
   - name: port49_accounting
     rules:
       - alert: port49_accounting_spool_drops
@@ -297,6 +328,11 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "The decision log sink refused writes; decisions are not being recorded."
+      - alert: port49_accounting_foreign
+        expr: "increase(port49_accounting_attributions_total{attribution=\"foreign\"}[10m]) > 0"
+        labels: {severity: page}
+        annotations:
+          summary: "Accounting records arrived for a session port49 never saw begin: a local fallback or console login on a device, or a device bypassing port49."
   - name: port49_inventory
     rules:
       - alert: port49_inventory_sync_failing
@@ -329,6 +365,23 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "The inventory document in force could not be written to inventory.service.state_dir; a restart would start without it."
+      - alert: port49_inventory_snapshot_stale
+        expr: "(port49_inventory_snapshot_age_seconds > 86400 or port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds) and on(instance) port49_connections_max > 0"
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The inventory snapshot in force was last confirmed over a day ago, or there is none; the fleet still authenticates on it, and nothing fails closed."
+      - alert: port49_inventory_policy_mismatch
+        expr: "port49_inventory_policy_mismatch == 1"
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The inventory service built the bundle in force against a policy other than port49d's own; port49d applies the inventory against its own policy."
+      - alert: port49_inventory_privilege_changes
+        expr: "increase(port49_inventory_changes_total{kind=~\"key_ref_changed|admission_changed|address_added|scope_joined|scope_left|device_added\"}[1h]) > 0"
+        labels: {severity: ticket}
+        annotations:
+          summary: "A source-of-truth edit moved privilege: a device changed key, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
   - name: etcd
     rules:
       - alert: etcd_no_leader

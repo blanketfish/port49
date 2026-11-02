@@ -146,6 +146,8 @@ func (r *runner) whole(ctx context.Context, priors []broker.Prior) (broker.Refre
 // run holds and runs until ctx ends.
 func (r *runner) run(ctx context.Context) {
 	e := r.cfg.Stores.Session.Etcd
+	// The series exists once a runner does, at 0 until the hold is taken.
+	r.m.StoreKeyspaceHeld.WithLabelValues().Set(0)
 	for ctx.Err() == nil {
 		lost, release, err := r.raw.Hold(ctx, e.HoldTTL, r.who, func(holder string) {
 			if r.held != "" && holder == r.held {
@@ -168,7 +170,7 @@ func (r *runner) run(ctx context.Context) {
 			continue
 		}
 		r.held = r.who
-		r.m.StoreKeyspaceHeld.Set(1)
+		r.m.StoreKeyspaceHeld.WithLabelValues().Set(1)
 		fmt.Fprintf(stderr, "port49-broker: runner: took keyspace %s (%s): this replica runs the start, the sweep "+
 			"and the policy refresh\n", e.Prefix, lineHolder(r.who))
 		dctx, stop := context.WithCancel(ctx)
@@ -187,7 +189,7 @@ func (r *runner) run(ctx context.Context) {
 		}
 		stop()
 		<-done
-		r.m.StoreKeyspaceHeld.Set(0)
+		r.m.StoreKeyspaceHeld.WithLabelValues().Set(0)
 		// The keeper reports (0, false) as it stops; set them here too, for
 		// a takeover that failed before the keeper started (pre-flight I11).
 		r.m.LedgerPending.Set(0)

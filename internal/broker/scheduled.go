@@ -39,6 +39,9 @@ import (
 func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 	var rep RefreshReport
 	rep.At = b.Now()
+	// The series exists from the first pass, at 0 until one verifies every principal, so an alert
+	// on its age sees a runner whose passes never complete; a process that runs no pass has none.
+	b.Metrics.DirectoryRefreshLastComplete.WithLabelValues()
 	var first error // the first principal the directory failed for in a way that is no outage and no refusal
 	judge := passJudge{
 		member: func(ctx context.Context, principal string) (policy.Member, time.Time, error) {
@@ -106,7 +109,7 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 		err = fmt.Errorf("the scheduled refresh: %w", first)
 	}
 	if rep.UnverifiedPrincipals == 0 && err == nil {
-		b.Metrics.DirectoryRefreshLastComplete.Set(float64(rep.At.Unix()))
+		b.Metrics.DirectoryRefreshLastComplete.WithLabelValues().Set(float64(rep.At.Unix()))
 	}
 	if rep.UnverifiedPrincipals > 0 {
 		b.sayOnce("refresh-unverified", time.Hour, "broker: refresh: the directory did not answer for %d principals; "+
