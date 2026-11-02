@@ -298,7 +298,7 @@ func TestL91(t *testing.T) {
 	}
 	before, _ := os.ReadFile(cfgPath)
 	h.step("2", "%s", l91StepBefore)
-	h.waitEnter("ykman piv info saved", handDeadline)
+	h.waitEnter("the first `ykman piv info | sha256sum` hash is noted", handDeadline)
 	rb := h.hwkey("b_setup", nil, "setup")
 	after, _ := os.ReadFile(cfgPath)
 	h.step("3", "%s", l91StepAfter)

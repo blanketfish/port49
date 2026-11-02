@@ -11600,7 +11600,7 @@ L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01).
     path a package's published file list shows (2026-11-02). No macOS path is probed, because none could be
     confirmed (Homebrew's formula names no libykcs11 file, and its group-writable prefix fails `CheckOwned`): a Mac
     passes `--module`, and its "none found" line says "no libykcs11 is probed on macOS: pass --module PATH",
-    not "install yubico-piv-tool", and no Linux `/usr/local/lib` path:
+    not "install yubico-piv-tool". No Linux `/usr/local/lib` path is probed either:
     only a source build puts one there. A module is loaded only if it passes `userconfig.CheckOwned`, the
     rule the agent applies: every link and the file owned by root or the user, with no group or world
     write, because an attacker-writable library is code execution. A `--module` or an existing key's

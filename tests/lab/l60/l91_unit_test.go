@@ -24,7 +24,7 @@ FAIL  config_touch_key: not set: run ` + "`port49 hwkey setup`" + `
 ok    issued_certificate: no certificate yet
 ok    certificate_expiry: no certificate yet
 ok    agent: no agent running
-not ready: run ` + "`port49 hwkey status`" + `
+not ready: run ` + "`port49 hwkey setup`" + `
 `
 
 func TestL91VerdictAWantsExit1ConfigFailsAndSlotChecksPass(t *testing.T) {
