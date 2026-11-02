@@ -50,7 +50,7 @@ threshold when you change the setting it follows.
 | design §15: "any increase of `port49_contexts_reindexed_total`" | `port49_contexts_reindexed` | ticket | none | No benign path deletes an index record. |
 | design §15: "any increase of `port49_contexts_reindex_failures_total`" | `port49_contexts_reindex_failures` | ticket | none | Each failure leaves a context for the next pass; a mis-set key repeats it. |
 | design §15: "any increase of `port49_store_calls_total{outcome="refused"}`" | `port49_store_calls_refused` | page | none | A refused call is a role or credential fault that retries cannot fix. |
-| design §15: "the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice `hold_ttl`" | `port49_store_keyspace_unheld` | ticket | 2m | Two minutes is twice hold_ttl at its default. The series exists only on a process that runs a keyspace runner, so the memory backend, with none, raises nothing; the sum is over every runner-capable replica. |
+| design §15: "the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice `hold_ttl`" | `port49_store_keyspace_unheld` | ticket | 2m | Two minutes is twice hold_ttl at its default. The series exists only on a process that runs a keyspace runner, so the memory backend, with none, raises nothing. The second arm covers every broker gone (a crashed fleet exports no 0): series seen in the last day and none now, so it fires for a day after the brokers vanish, then stops. |
 | design §15: "a store client certificate within 30 days of expiry" | `port49_store_client_cert_expiring` | ticket | none | Thirty days is the stated lead time. |
 | design §15: "`port49_crypt_store_key_unknown` at 1" | `port49_crypt_store_key_unknown` | page | none | Records written under the missing key cannot open; fix the key and start again. |
 | design §15: "any increase of `port49_crypt_open_failures_total{record="token"}`" | `port49_crypt_token_open_failures` | ticket | none | The counter is the only witness; the token is dropped from its candidates with no error. |
@@ -71,8 +71,8 @@ threshold when you change the setting it follows.
 | roadmap, plan 9a hand-off to plan 12: "logouts `store_error\|partial`" | `port49_oidc_logouts_failing` | ticket | none | Each is a logout the store did not take whole. |
 | roadmap, plan 9a hand-off to plan 12: "tokens `unavailable`" | `port49_oidc_tokens_unavailable` | ticket | none | The identity provider is unreachable and the held keys have expired. |
 | roadmap, plan 9 hand-off to plan 12: "`increase(port49_workload_certificates_renewal_late_total[1h]) > 0` (summed over replicas)" | `port49_workload_certificates_renewal_late` | ticket | none | Each replica counts a certificate once per 24h, so any increase of the sum is a late renewer. |
-| roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`" | `port49_directory_refresh_stale` | ticket | none | 600 is refresh_interval at its default (10m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). |
-| spec, Reason codes (l.2715): "Alert at half the ceiling, `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`" | `port49_directory_refresh_half_ceiling` | page | none | 7200 is half the default ceiling; set half yours. Same shape as port49_directory_refresh_stale. A page: at the ceiling sessions are denied. |
+| roadmap, plan 8 directory: "`time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`" | `port49_directory_refresh_stale` | ticket | 15m | 600 is refresh_interval at its default (10m); set 3x yours. The freshest refresh anywhere, so a runner that lost the hold does not alarm on its old value; and only once the newest process with the series is also that old, so a restart does not, but a restart in the middle of an outage does (the gauge reads 0 until a pass completes). 15 minutes covers a failover: the new runner's series sits at 0 until its first pass completes. last_over_time keeps the rule firing for a day after every broker is gone. |
+| spec, Reason codes (l.2715): "Alert at half the ceiling, `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`" | `port49_directory_refresh_half_ceiling` | page | 15m | 7200 is half the default ceiling; set half yours. Same shape and 15m `for:` as port49_directory_refresh_stale. A page: at the ceiling sessions are denied. |
 | roadmap, plan 8 directory: "`port49_directory_lookups_total{outcome="ambiguous"}` increasing" | `port49_directory_lookups_ambiguous` | ticket | none | Each is a user refused; the directory holds two entries for one name. |
 | roadmap, plan 8 directory: "`port49_directory_server_up == 0` for a while" | `port49_directory_server_down` | ticket | 10m | Ten minutes: one server down is a degraded pool, not an outage. |
 | roadmap, plan 8 directory: "`port49_directory_group_names_ambiguous > 0`" | `port49_directory_group_names_ambiguous` | ticket | 5m | A gauge over the last hour; the grants naming those groups are not given. |
@@ -84,7 +84,7 @@ threshold when you change the setting it follows.
 | spec §13 inventory service: "the fleet refuses, retains the last good snapshot, and alarms" | `port49_inventory_bundle_refused` | ticket | 5m | The old bundle serves, so a ticket; five minutes outlasts a rollout. |
 | spec §13 inventory service: "mirror behind" | `port49_inventory_mirror_behind` | ticket | 10m | A write is quick; ten minutes behind is a mirror that fails. |
 | spec §13 inventory service: "persist failed" | `port49_inventory_persist_failed` | ticket | 5m | The state directory is full or unwritable. |
-| spec, How a daemon refreshes its snapshot (l.5846, 5932): "Staleness is a metric and an alarm — `port49_inventory_snapshot_age_seconds` — never a fail-closed" | `port49_inventory_snapshot_stale` | ticket | 5m | 86400 is a day; set your sync cadence times a few. The NaN arm (no snapshot yet) is the spec's own expression. Gated on port49_connections_max > 0, which only a port49d with a TACACS+ listener sets: a broker registers the gauge and reads NaN forever. |
+| spec, How a daemon refreshes its snapshot (l.5846, 5932): "Staleness is a metric and an alarm — `port49_inventory_snapshot_age_seconds` — never a fail-closed" | `port49_inventory_snapshot_stale` | ticket | 5m | 86400 is a day; set your sync cadence times a few. The NaN arm (no snapshot yet) is the spec's own expression. Not gated: a process that never watches the inventory reads 0, and one that waits for its first snapshot reads NaN from before its listener opens, which is the case the NaN arm is for. |
 | spec, Annotating login context (l.3218; l.2308): "`foreign` is the series to alert on ... It is not rate-limited: a burst of `foreign` is itself the signal" | `port49_accounting_foreign` | page | none | Any foreign record is the detection the spec names for a local login the policy did not see; it pages. |
 | spec, Events (l.2527): "`port49_devices_generic_platform` is its alarm, naming no device" | `port49_devices_generic_platform` | ticket | 5m | A standing condition of the inventory, not an incident; the start line names the platforms and counts. |
 | spec §13 (l.7426): "a hash mismatch is said and alarmed (`port49_inventory_policy_mismatch`)" | `port49_inventory_policy_mismatch` | ticket | 5m | Five minutes outlasts a policy rollout reaching both. |
@@ -141,11 +141,15 @@ cannot work that way, a `*_configured` gauge says whether to expect it: `port49_
   refresh across all runner-capable replicas, so a replica that lost the hold, whose gauge stops
   moving, does not alarm; and they require the newest such process to have been up as long as the
   threshold, so a restart is quiet but a restart in the middle of a directory outage (the gauge reads 0
-  until a pass completes) still fires.
-- `port49_inventory_snapshot_stale` is the spec's expression with its NaN arm, gated on
-  `port49_connections_max > 0`, which only a port49d with a listener sets: a broker registers the
-  gauge and reads NaN for good.
-- `port49_store_keyspace_unheld` sums over the processes that run a keyspace runner.
+  until a pass completes) still fires. Both wait 15 minutes (`for:`), which covers a runner failover:
+  the new runner's series sits at 0 until its first pass completes. They read `last_over_time(...[1d])`,
+  so they keep firing for a day after every broker is gone, when no series is left to read.
+- `port49_inventory_snapshot_stale` is the spec's expression with its NaN arm and no gate: a process
+  that never watches the inventory reads 0, and one waiting for its first snapshot reads NaN before
+  its listener opens, which is the case the NaN arm exists for.
+- `port49_store_keyspace_unheld` sums over the processes that run a keyspace runner, and fires for a
+  day after the last one disappears (a crashed fleet exports no 0): `count(last_over_time(...[1d]))
+  unless count(...)`. A memory-backend install never had the series, so it never fires.
 - The key-retirement rules leave out the spec's uptime gate (spec, key rotation: line 5578). That only makes them
   fire more. A restart blanks `port49_key_version_devices` (it counts devices whose latest validated
   connection since start used the version), so a rule that resolves after a restart is not evidence
