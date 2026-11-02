@@ -28,6 +28,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -48,6 +49,7 @@ import (
 
 	"github.com/blanketfish/port49/internal/agent"
 	"github.com/blanketfish/port49/internal/hwkey/serialmask"
+	"github.com/blanketfish/port49/internal/hwkeysetup"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -73,11 +75,14 @@ const (
 
 const defaultModule = "/usr/lib/x86_64-linux-gnu/libykcs11.so"
 
-// The PIV slots' CKA_IDs under libykcs11 (L60-ser8.md, cell (c)).
-const (
-	slot9a = "01" // PIN once, touch never: the session key
-	slot9c = "02" // PIN once, touch always: the touch key
+// The PIV slots' CKA_IDs under libykcs11 (L60-ser8.md, cell (c)), from the
+// one table port49 hwkey uses.
+var (
+	slot9a = slotID("9a") // PIN once, touch never: the session key
+	slot9c = slotID("9c") // PIN once, touch always: the touch key
 )
+
+func slotID(slot string) string { return hex.EncodeToString([]byte{hwkeysetup.SlotIDs[slot]}) }
 
 // labEmail is the identity the lab certificates carry and the policy grants.
 const labEmail = "alice@example.com"
