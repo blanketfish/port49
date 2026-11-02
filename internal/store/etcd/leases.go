@@ -14,6 +14,16 @@ import (
 // one a minute of expiries, not one a record (design D1's cost).
 const leaseBucket = time.Minute
 
+// maxAttachesPerLease is how many records ride one lease before the next
+// For grants a fresh lease for the same bucket. etcd checks put permission
+// for every key already on a lease, on each put that names it, whenever the
+// caller is not root (apply_auth.go, checkLeasePutsKeys), so a put's cost
+// grows with the keys already attached. At 170 logins/s one lease a minute
+// saturated etcd's apply loop; 100 a lease took the mint's p50 from 540 ms
+// to 2 ms (plan 12c load run 1). A replaced lease still expires on its own
+// TTL, and nothing revokes it early.
+const maxAttachesPerLease = 100
+
 // leases hands out the lease a record is put on. A lease only reclaims:
 // the record's own expiry, read against now, decides whether it is live
 // (plan 7d, Ruling 3). So a lease is always the bucket ending at least
@@ -33,6 +43,7 @@ type leases struct {
 
 type heldLease struct {
 	id      clientv3.LeaseID
+	attach  int       // records handed this lease, capped at maxAttachesPerLease
 	granted time.Time // wall clock, no monotonic reading
 	until   time.Time // wall clock, no monotonic reading
 }
@@ -64,7 +75,9 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 	}
 	w := wall()
 	l.mu.Lock()
-	if h, ok := l.held[end.Unix()]; ok && !h.until.Before(w.Add(need)) && w.Sub(h.granted) < leaseBucket {
+	if h, ok := l.held[end.Unix()]; ok && !h.until.Before(w.Add(need)) && w.Sub(h.granted) < leaseBucket && h.attach < maxAttachesPerLease {
+		h.attach++
+		l.held[end.Unix()] = h
 		l.mu.Unlock()
 		return h.id, nil
 	}
@@ -82,7 +95,7 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	w = wall()
-	l.held[end.Unix()] = heldLease{id: resp.ID, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
+	l.held[end.Unix()] = heldLease{id: resp.ID, attach: 1, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
 	for b, h := range l.held {
 		if h.until.Before(w) || w.Sub(h.granted) >= leaseBucket {
 			delete(l.held, b)
