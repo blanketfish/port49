@@ -42,10 +42,10 @@ import (
 // On a projected platform it also reads the configuration, as
 // platform.ConfigCapture prints it, groups' statements expanded where they
 // land, against the reference `platform export --classes` writes, whose
-// idle-timeout comes from --config's port49d.yaml, which is then required:
+// idle-timeouts come from the policy's roles and --config's port49d.yaml, which is then required:
 // every reference line the device lacks, and every line under a template
 // class or user the reference does not write and that is not harmless
-// (templateCheck; plan 5b pre-flight I8; decision 44 rulings 7 and 9). A
+// (checkRun.templateCheck; plan 5b pre-flight I8; decision 44 rulings 7 and 9). A
 // class carrying more than the reference is every subject at that template
 // running more than port49 proved, so it fails, as does a capture it cannot
 // read or one taken without `display inheritance`. A management service
@@ -62,8 +62,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	var files policyFiles
 	files.register(fs)
 	device := fs.String("device", "", "the device the configuration is from, by its inventory name")
-	cfgPath := fs.String("config", "", "port49d.yaml, whose session.max_session_age_default is the template "+
-		"classes' idle-timeout (required on a projected platform; under --batch, ignored by the others)")
+	cfgPath := fs.String("config", "", "port49d.yaml, whose session.max_session_age_default is the idle-timeout of a "+
+		"template class whose roles name no max_session_age; the policy's roles set the rest (required on a projected platform; under --batch, ignored by the others)")
 	batch := fs.Bool("batch", false, "check each CONFIGFILE against the inventory device its file name names, "+
 		"as it is or less its last extension (srx-01.conf is srx-01): the CI form")
 	if err := fs.Parse(args); err != nil {
@@ -83,7 +83,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	out.learn(p)
 	errOut.learn(p)
-	c := checkRun{p: p, files: files, cfgPath: *cfgPath, batch: *batch, stdout: stdout, stderr: stderr}
+	c := checkRun{p: p, files: files, cfgPath: *cfgPath, batch: *batch, stdout: stdout, stderr: stderr,
+		ages: map[string]platform.ClassAges{}}
 	if !*batch {
 		return c.one(*device, fs.Arg(0))
 	}
@@ -137,6 +138,41 @@ type checkRun struct {
 	cfgPath        string
 	batch          bool // --config is the run's, so a device that projects nothing ignores it
 	stdout, stderr io.Writer
+	// ages caches each platform's class ages for the run: they are the fleet's
+	// policy read once, not per capture. onClassAges, when set, is called for
+	// each platform computed, for a test to count.
+	ages        map[string]platform.ClassAges
+	onClassAges func(platformName string)
+}
+
+// classAges is platformName's template class ages, computed once per run: the
+// default is cfgPath's session.max_session_age_default, decoded as strictly
+// as the daemon decodes it with no key or secret resolved (config.
+// MaxSessionAge; spec §13, decision 21), and each class takes the least
+// ceiling of the sessions the policy lands in it (decision 55 ruling 14).
+func (c checkRun) classAges(platformName string) (platform.ClassAges, error) {
+	if ages, ok := c.ages[platformName]; ok {
+		return ages, nil
+	}
+	raw, err := os.ReadFile(c.cfgPath)
+	if err != nil {
+		return platform.ClassAges{}, err
+	}
+	def, err := daemonconfig.MaxSessionAge(raw)
+	if err != nil {
+		return platform.ClassAges{}, fmt.Errorf("%s: %w", c.cfgPath, err)
+	}
+	if c.onClassAges != nil {
+		c.onClassAges(platformName)
+	}
+	ages, err := c.p.ClassAges(platformName, def, time.Now())
+	if err != nil {
+		return platform.ClassAges{}, fmt.Errorf("%s: %w", c.cfgPath, err)
+	}
+	if c.ages != nil {
+		c.ages[platformName] = ages
+	}
+	return ages, nil
 }
 
 // one checks file as device's configuration and prints its findings: 0 clean,
@@ -175,8 +211,8 @@ func (c checkRun) one(device, file string) int {
 	switch {
 	case dialect.Projected() && c.cfgPath == "":
 		fmt.Fprintf(stderr, "%s %s projects the policy into its session reply, so its "+
-			"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
-			"session.max_session_age_default: pass --config\n", who, d.Platform)
+			"template classes are checked against the reference, whose idle-timeouts come from the policy's roles, with port49d.yaml's "+
+			"session.max_session_age_default for a role that names none: pass --config\n", who, d.Platform)
 		return 2
 	case !dialect.Projected() && c.cfgPath != "" && !c.batch:
 		fmt.Fprint(stderr, usage)
@@ -206,7 +242,7 @@ func (c checkRun) one(device, file string) int {
 	var templateMissing []string
 	var drift, services []platform.ConfigFinding
 	if dialect.Projected() {
-		if templateMissing, drift, err = templateCheck(dialect, c.cfgPath, file, config); err != nil {
+		if templateMissing, drift, err = c.templateCheck(dialect, d.Platform, file, config); err != nil {
 			// The error leads with the file (or port49d.yaml), so it takes
 			// no file prefix of its own.
 			fmt.Fprintln(stderr, "port49 devices check-config:", err)
@@ -299,23 +335,18 @@ func (c checkRun) one(device, file string) int {
 }
 
 // templateCheck is check-config's reading of a projected platform's
-// configuration against the reference (platform.TemplateDrift), at the
-// idle-timeout cfgPath's session.max_session_age_default gives: the reference
-// lines the device lacks, and the lines under a template it does not write.
-// The file is decoded as strictly as the daemon decodes it and no key or
-// secret is resolved, so none is needed (config.MaxSessionAge; spec §13,
-// decision 21). Anything it cannot read is an error, never a clean device.
-func templateCheck(dialect platform.Dialect, cfgPath, configName string, config []byte) ([]string,
+// configuration against the reference (platform.TemplateDrift), at the class
+// ages the run computed for the platform (classAges): the reference lines the
+// device lacks, and the lines under a template it does not write. A device
+// idle-timeout at or below a class's rendered one passes. Anything it cannot
+// read is an error, never a clean device.
+func (c checkRun) templateCheck(dialect platform.Dialect, platformName, configName string, config []byte) ([]string,
 	[]platform.ConfigFinding, error) {
-	raw, err := os.ReadFile(cfgPath)
+	ages, err := c.classAges(platformName)
 	if err != nil {
 		return nil, nil, err
 	}
-	age, err := daemonconfig.MaxSessionAge(raw)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s: %w", cfgPath, err)
-	}
-	missing, drift, err := platform.TemplateDrift(config, dialect, age)
+	missing, drift, err := platform.TemplateDrift(config, dialect, ages)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", configName, err)
 	}

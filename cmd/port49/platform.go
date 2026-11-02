@@ -145,8 +145,8 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	dir := fs.String("dir", "", "the directory --all writes to")
 	classes := fs.Bool("classes", false, "a projected platform's reference device configuration, as set lines "+
 		"(export only)")
-	cfgPath := fs.String("config", "", "port49d.yaml: its session.max_session_age_default is the classes' "+
-		"idle-timeout (with --classes)")
+	cfgPath := fs.String("config", "", "port49d.yaml: its session.max_session_age_default is the idle-timeout of a class whose "+
+		"roles name no max_session_age; the policy's roles set the rest (with --classes)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -523,8 +523,10 @@ func sortedNames(set map[string]platform.Dialect) []string {
 // exportClasses prints a projected platform's reference device configuration
 // (spec §8): the configuration its replies rest on, the bitless `remote`
 // template, and each level's template and class where the adapter sends one,
-// every class carrying idle-timeout from port49d.yaml's
-// session.max_session_age_default (spec §5.6; §13 decision 21). Loading it
+// every class carrying idle-timeout from the least ceiling of
+// the sessions the policy lands in it, port49d.yaml's
+// session.max_session_age_default standing in for a role that names none
+// (spec §5.6; §13 decision 21, decision 55 ruling 14). Loading it
 // clears what is written under each template, and not what reaches one from
 // outside — a group applied from above, a deactivated or protected ancestor
 // (platform.ReferenceClasses) — so the header says check-config is what
@@ -551,7 +553,14 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 		fmt.Fprintf(stderr, "%s: %s: %v\n", name, cfgPath, err)
 		return 1
 	}
-	lines, err := platform.ReferenceClasses(d, age)
+	ages := platform.ClassAges{Default: age}
+	if p != nil {
+		if ages, err = p.ClassAges(platformName, age, time.Now()); err != nil {
+			fmt.Fprintf(stderr, "%s: %s: %v\n", name, platformName, err)
+			return 1
+		}
+	}
+	lines, err := platform.ReferenceClasses(d, ages)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", name, platformName, err)
 		return 1
@@ -560,14 +569,33 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 	if p != nil {
 		setName = p.PlatformSet()
 	}
+	classes, _ := platform.ClassNames(d, ages)
+	var each []string
+	for _, class := range classes {
+		switch got, ok := ages.ByClass[class]; {
+		case ok && got == 0:
+			each = append(each, class+" never (every session in it is never: no idle-timeout line)")
+		case ok:
+			each = append(each, fmt.Sprintf("%s %s (least ceiling landing in it)", class, got))
+		default:
+			each = append(each, fmt.Sprintf("%s %s (session.max_session_age_default: no session lands in it)", class,
+				ages.Default))
+		}
+	}
+	shared := ""
+	if d.BitDelivery != platform.BitDeliveryLocalUserName {
+		shared = " Every " + platformName + " session lands in " + platform.RemoteClass + ", so this is the least " +
+			"ceiling of any role on any " + platformName + " device."
+	}
 	fmt.Fprintf(stdout, "# %s: reference configuration, platform set %s (spec §8). Load it with `load set "+
 		"terminal`: each template class and user is deleted before it is set, which clears what was written under "+
 		"one. It does not clear what reaches a template from outside it: a configuration group applied from above "+
 		"still applies to the loaded class, a deactivated ancestor leaves the loaded lines inactive, and a protected "+
 		"one fails the load. `port49 devices check-config --config` on a whole `show configuration | display set` "+
 		"capture is what proves the device carries the template and nothing more. idle-timeout is "+
-		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
-		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)
+		"each class's session ceiling in whole minutes (%s): a session-only device never asks port49 again after "+
+		"login, so this timer is what ends a session there (decision 21, decision 55 ruling 14).%s\n", platformName,
+		setName, strings.Join(each, "; "), shared)
 	held := 0
 	for i, line := range lines {
 		if i < len(d.DeviceConfig) && hidden[i] || strings.Contains(line, platform.Redacted) {

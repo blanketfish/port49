@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +20,29 @@ var lockTemplates = false
 
 // lockLine is the line that locks a template user's local login.
 const lockLine = `authentication encrypted-password "*"`
+
+// ClassAges is the session ceiling each template class carries as its
+// idle-timeout (spec §5.6, §8; decision 55 ruling 14). ByClass holds the least
+// positive ceiling among the sessions landing in a class on the platform's
+// devices; a zero is a class whose every session is `never`, which gets no
+// idle-timeout line. A class absent from ByClass has no session landing in it
+// and takes Default, which must be positive.
+type ClassAges struct {
+	Default time.Duration
+	ByClass map[string]time.Duration
+}
+
+// of is the class's ceiling: its entry, else Default.
+func (a ClassAges) of(class string) time.Duration {
+	if age, ok := a.ByClass[class]; ok {
+		return age
+	}
+	return a.Default
+}
+
+// idleMinutes is an idle-timeout in whole minutes rounded down and at least
+// one.
+func idleMinutes(age time.Duration) int64 { return max(int64(age/time.Minute), 1) }
 
 // ReferenceClasses is the device configuration a projected platform's
 // replies rest on, as `set` lines (spec §8, "publish the reference class per
@@ -38,19 +62,33 @@ const lockLine = `authentication encrypted-password "*"`
 // `port49 devices check-config`, is what proves a device carries the
 // template and nothing more (task 13 review I3). No template user is one that
 // can log in locally (lockTemplates). Every class carries `idle-timeout` from
-// maxSessionAge, in whole minutes rounded down and at least one: a
-// session-only device never asks port49 again after login, so the class's
-// own timer is the one limit that ends a session there (spec §5.6; §13
-// decision 21).
-func ReferenceClasses(d Dialect, maxSessionAge time.Duration) ([]string, error) {
-	ts, err := templates(d, maxSessionAge)
+// ages, in whole minutes rounded down and at least one, except a class whose
+// ceiling is zero (every session in it `never`): a session-only device never
+// asks port49 again after login, so the class's own timer is the one limit
+// that ends a session there (spec §5.6; §13 decision 21, decision 55 ruling
+// 14).
+func ReferenceClasses(d Dialect, ages ClassAges) ([]string, error) {
+	ts, err := templates(d, ages)
 	if err != nil {
 		return nil, err
 	}
 	out := slices.Clone(d.DeviceConfig)
 	for _, t := range ts {
 		out = append(out, "delete system login class "+t.class)
-		out = append(out, t.lines(maxSessionAge)...)
+		out = append(out, t.lines(ages.of(t.class))...)
+	}
+	return out, nil
+}
+
+// ClassNames is the template classes ReferenceClasses writes, in its order.
+func ClassNames(d Dialect, ages ClassAges) ([]string, error) {
+	ts, err := templates(d, ages)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, t := range ts {
+		out = append(out, t.class)
 	}
 	return out, nil
 }
@@ -71,13 +109,18 @@ type template struct {
 // which would give the fallback `remote` user a level's bits (L18), or one
 // two levels share with different bits, which one class cannot carry (spec
 // §8, local_user_names; task 13 review I1).
-func templates(d Dialect, maxSessionAge time.Duration) ([]template, error) {
+func templates(d Dialect, ages ClassAges) ([]template, error) {
 	if !d.Projected() {
 		return nil, errors.New("the platform projects nothing, so it has no reference classes; its device_config " +
 			"is what `platform show` prints")
 	}
-	if maxSessionAge <= 0 {
+	if ages.Default <= 0 {
 		return nil, errors.New("max_session_age must be positive: it is the classes' idle-timeout")
+	}
+	for class, age := range ages.ByClass {
+		if age < 0 {
+			return nil, fmt.Errorf("the age of class %s is negative", class)
+		}
 	}
 	out := []template{{user: remoteUser, class: RemoteClass}}
 	if d.BitDelivery != BitDeliveryLocalUserName {
@@ -106,18 +149,20 @@ func templates(d Dialect, maxSessionAge time.Duration) ([]template, error) {
 }
 
 // lines is the template's class and user as set lines, with the user's
-// delete between them.
-func (t template) lines(maxSessionAge time.Duration) []string {
-	// Unbounded above: Junos's largest idle-timeout is unmeasured, and a
-	// reference it refuses fails the load where the operator sees it (task
-	// 13 review M5; open for the lab).
-	minutes := max(int64(maxSessionAge/time.Minute), 1)
+// delete between them. An age of zero is a class every session in which is
+// `never`: it gets no idle-timeout line.
+func (t template) lines(age time.Duration) []string {
 	var out []string
 	for _, b := range t.bits {
 		out = append(out, fmt.Sprintf("set system login class %s permissions %s", t.class, b))
 	}
-	out = append(out, fmt.Sprintf("set system login class %s idle-timeout %d", t.class, minutes),
-		"delete system login user "+t.user, fmt.Sprintf("set system login user %s class %s", t.user, t.class))
+	if age != 0 {
+		// Unbounded above: Junos's largest idle-timeout is unmeasured, and a
+		// reference it refuses fails the load where the operator sees it
+		// (task 13 review M5; open for the lab).
+		out = append(out, fmt.Sprintf("set system login class %s idle-timeout %d", t.class, idleMinutes(age)))
+	}
+	out = append(out, "delete system login user "+t.user, fmt.Sprintf("set system login user %s class %s", t.user, t.class))
 	if lockTemplates {
 		out = append(out, fmt.Sprintf("set system login user %s %s", t.user, lockLine))
 	}
@@ -170,19 +215,33 @@ const templateDriftSays = "a line under a port49 template the reference does not
 // where it lacks the top-level `set version` line a whole display set
 // prints, since a capture of a subtree, `show configuration system login`,
 // leaves a deactivate outside it unread (task 13a review I4).
-func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missing []string, extra []ConfigFinding,
+func TemplateDrift(config []byte, d Dialect, ages ClassAges) (missing []string, extra []ConfigFinding,
 	err error) {
-	ts, err := templates(d, maxSessionAge)
+	ts, err := templates(d, ages)
 	if err != nil {
 		return nil, nil, err
 	}
 	var want []string
 	var paths [][]string
+	// idle is each class's rendered idle-timeout line and minutes. A device
+	// value at or below the minutes carries the line (decision 55 ruling 14):
+	// a shorter timer ends a session sooner than port49 proved, so only a
+	// longer or missing one is drift. A class with no entry here is a `never`
+	// class, which any value passes.
+	type idleLine struct {
+		line    string
+		minutes int64
+	}
+	idle := map[string]idleLine{}
 	for _, t := range ts {
-		want = append(want, slices.DeleteFunc(t.lines(maxSessionAge), func(l string) bool {
+		want = append(want, slices.DeleteFunc(t.lines(ages.of(t.class)), func(l string) bool {
 			return strings.HasPrefix(l, "delete ")
 		})...)
 		paths = append(paths, t.paths()...)
+		if age := ages.of(t.class); age != 0 {
+			idle[t.class] = idleLine{fmt.Sprintf("set system login class %s idle-timeout %d", t.class, idleMinutes(age)),
+				idleMinutes(age)}
+		}
 	}
 	carried := map[string]bool{}
 	setForm, curly, version := false, false, false
@@ -211,6 +270,17 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 			carried[line] = true
 			if len(words) == 3 && strings.EqualFold(strings.Trim(words[1], `"`), "version") {
 				version = true
+			}
+			if len(words) == 7 {
+				path, _ := located(words[1:])
+				if len(path) == 6 && path[0] == "system" && path[1] == "login" && path[2] == "class" &&
+					path[4] == "idle-timeout" {
+					if il, ok := idle[path[3]]; ok {
+						if n, perr := strconv.ParseInt(path[5], 10, 64); perr == nil && n >= 1 && n <= il.minutes {
+							carried[il.line] = true
+						}
+					}
+				}
 			}
 			if slices.Contains(want, line) || uidLine.MatchString(line) {
 				return
@@ -311,7 +381,7 @@ func hasPrefix(path, prefix []string, wildcards bool) bool {
 }
 
 // harmlessTemplateStatements change nothing a session runs: a class's
-// idle-timeout (the reference writes one; another value is the reference's
+// idle-timeout (the reference writes one; a value above it is the reference's
 // line missing), login banner and alarms, and a user's full name. Under a
 // template they pass, written there or expanded from a group (spec §12;
 // decision 44 ruling 7). Every other statement the reference does not write

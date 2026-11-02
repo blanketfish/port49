@@ -235,7 +235,7 @@ func TestL57JunosGroups(t *testing.T) {
 		if !ok {
 			t.Fatal("no set 1.1.0")
 		}
-		reference, err := adapter.ReferenceClasses(set["juniper_junos"], 12*time.Hour)
+		reference, err := adapter.ReferenceClasses(set["juniper_junos"], adapter.ClassAges{Default: 12 * time.Hour})
 		if err != nil {
 			t.Fatal(err)
 		}

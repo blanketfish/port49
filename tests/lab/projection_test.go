@@ -305,7 +305,7 @@ func (l *lab) projectionSet(t *testing.T, v string) {
 	if !ok || !set["juniper_junos"].Projected() {
 		t.Fatalf("set %s does not project juniper_junos (plan 5b, Task 14)", v)
 	}
-	reference, err := adapter.ReferenceClasses(set["juniper_junos"], 12*time.Hour)
+	reference, err := adapter.ReferenceClasses(set["juniper_junos"], adapter.ClassAges{Default: 12 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1088,3 +1088,40 @@ func TestPlatformUpgradeTo130PreviewsReachDenyOverflow(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// The export's header says each class's age and where it came from.
+func TestExportSaysEachClassAge(t *testing.T) {
+	pol, inv, cfg := ageFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d\n%s", code, errb.String())
+	}
+	header := strings.SplitN(out.String(), "\n", 2)[0]
+	for _, want := range []string{"p49-remote 1h0m0s (least ceiling landing in it)",
+		"Every juniper_junos session lands in p49-remote, so this is the least ceiling of any role on any " +
+			"juniper_junos device"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("header lacks %q:\n%s", want, header)
+		}
+	}
+	// Every role never: the class gets no line, and the header says never.
+	body, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	never := strings.NewReplacer("max_session_age: 1h", "max_session_age: never",
+		"max_session_age: 30m", "max_session_age: never",
+		`{name: interfaces, privilege: readonly,`, `{name: interfaces, max_session_age: never, privilege: readonly,`)
+	if err := os.WriteFile(pol, []byte(never.Replace(string(body))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &out, &errb); code != 0 {
+		t.Fatalf("never: code %d\n%s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "p49-remote never") || strings.Contains(out.String(), "p49-remote idle-timeout") {
+		t.Errorf("never:\n%s", out.String())
+	}
+}
