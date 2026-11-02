@@ -549,8 +549,15 @@ const (
 )
 
 // SetSingleDeviceKeyRefs sets which key_refs exactly one device holds; the
-// key series report those under SingleDeviceKeyRef and AnyVersion.
-func (m *Metrics) SetSingleDeviceKeyRefs(refs map[string]bool) { m.singleDevice.Store(&refs) }
+// key series report those under SingleDeviceKeyRef and AnyVersion. A counter
+// series already created under such a key_ref named it while two devices held
+// it, so each is deleted once the set is stored (new increments use KeyLabels).
+func (m *Metrics) SetSingleDeviceKeyRefs(refs map[string]bool) {
+	m.singleDevice.Store(&refs)
+	for r := range refs {
+		m.KeyValidations.DeletePartialMatch(prometheus.Labels{"key_ref": r})
+	}
+}
 
 // KeyLabels is the key_ref and version labels for ref at version: the pair
 // itself, or (SingleDeviceKeyRef, AnyVersion) when one device holds ref.
@@ -597,8 +604,9 @@ func (k keyCollector) Collect(ch chan<- prometheus.Metric) {
 	// retire, and the soonest retirement among those a device presents.
 	var single, soonest *time.Time
 	var singleDevices int
+	set := k.m.singleDevice.Load() // once: one scrape sees one set
 	for _, s := range w.sample() {
-		if set := k.m.singleDevice.Load(); set != nil && (*set)[s.KeyRef] {
+		if set != nil && (*set)[s.KeyRef] {
 			if s.RetireAt.IsZero() {
 				continue
 			}

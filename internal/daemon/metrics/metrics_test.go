@@ -410,3 +410,31 @@ port49_key_version_devices{key_ref="single_device",version="any"} 1
 		t.Fatal(err)
 	}
 }
+
+// A series counted while two devices held the key names it once one does, so
+// setting it single-device takes the series out.
+func TestSettingAKeySingleDeviceDropsItsNamedSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	m.KeyValidations.WithLabelValues("edge", "3", "validated").Inc()
+	m.KeyValidations.WithLabelValues("core", "2", "validated").Inc()
+	m.SetSingleDeviceKeyRefs(map[string]bool{"edge": true})
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var core bool
+	for _, mf := range mfs {
+		for _, s := range mf.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if l.GetValue() == "edge" {
+					t.Fatalf("%s still has a series labelled edge", mf.GetName())
+				}
+				core = core || l.GetValue() == "core"
+			}
+		}
+	}
+	if !core {
+		t.Fatal("core's series was dropped with edge's")
+	}
+}
