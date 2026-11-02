@@ -47,6 +47,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/hwkey/serialmask"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -303,17 +304,10 @@ func oneLine(s string) string {
 // longOpaque is a run that can only be a token, a hash or a signature.
 var longOpaque = regexp.MustCompile(`[A-Za-z0-9+_=-]{40,}`)
 
-var (
-	serialHash  = regexp.MustCompile(`(#|%23)\d+`)
-	serialWords = regexp.MustCompile(`(?i)(serial[^0-9\n]{0,4})\d+`)
-)
-
 // redact masks a device serial: libykcs11's token label carries it
-// ("YubiKey PIV #<serial>"), and the results note keeps it out.
-func redact(s string) string {
-	s = serialHash.ReplaceAllString(s, "${1}<serial>")
-	return serialWords.ReplaceAllString(s, "${1}<serial>")
-}
+// ("YubiKey PIV #<serial>"), and the results note keeps it out. The rule is
+// serialmask's, shared with port49 hwkey.
+func redact(s string) string { return serialmask.MaskSerial(s) }
 
 // readLine reads one line Ryan types, within d. A terminal that takes no
 // deadline is read with none.

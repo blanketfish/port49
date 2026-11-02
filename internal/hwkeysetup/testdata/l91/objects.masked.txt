@@ -1,0 +1,84 @@
+Data object 0
+  label:          'X.509 Certificate for PIV Authentication'
+  application:    'X.509 Certificate for PIV Authentication'
+  app_id:         2.16.840.1.101.3.7.2.1.1
+  flags:          <empty>
+  uri:            pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;object=X.509%20Certificate%20for%20PIV%20Authentication;type=data
+Data object 24
+  label:          'X.509 Certificate for PIV Attestation'
+  application:    'X.509 Certificate for PIV Attestation'
+  app_id:         1.3.6.1.4.1.41482.3
+  flags:          <empty>
+  uri:            pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;object=X.509%20Certificate%20for%20PIV%20Attestation;type=data
+Data object 26
+  label:          'Card Holder Unique Identifier'
+  application:    'Card Holder Unique Identifier'
+  app_id:         2.16.840.1.101.3.7.2.48.0
+  flags:          <empty>
+  uri:            pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;object=Card%20Holder%20Unique%20Identifier;type=data
+Data object 31
+  label:          'Discovery Object'
+  application:    'Discovery Object'
+  app_id:         2.16.840.1.101.3.7.2.96.80
+  flags:          <empty>
+  uri:            pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;object=Discovery%20Object;type=data
+Certificate Object; type = X.509 cert
+  label:      X.509 Certificate for PIV Authentication
+  subject:    DN: CN=alice@example.com
+  serial:     <serial>
+  ID:         01
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%01;object=X.509%20Certificate%20for%20PIV%20Authentication;type=cert
+Certificate Object; type = X.509 cert
+  label:      X.509 Certificate for PIV Attestation
+  subject:    DN: CN=Yubico PIV Attestation
+  serial:     <serial>
+  ID:         19
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%19;object=X.509%20Certificate%20for%20PIV%20Attestation;type=cert
+Certificate Object; type = X.509 cert
+  label:      X.509 Certificate for PIV Attestation 9a
+  subject:    DN: CN=YubiKey PIV Attestation 9a
+  serial:     <serial>
+  ID:         01
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%01;object=X.509%20Certificate%20for%20PIV%20Attestation%209a;type=cert
+Certificate Object; type = X.509 cert
+  label:      X.509 Certificate for PIV Attestation 9c
+  subject:    DN: CN=YubiKey PIV Attestation 9c
+  serial:     <serial>
+  ID:         02
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%02;object=X.509%20Certificate%20for%20PIV%20Attestation%209c;type=cert
+Certificate Object; type = X.509 cert
+  label:      X.509 Certificate for PIV Attestation 9e
+  subject:    DN: CN=YubiKey PIV Attestation 9e
+  serial:     <serial>
+  ID:         04
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%04;object=X.509%20Certificate%20for%20PIV%20Attestation%209e;type=cert
+Public Key Object; EC  EC_POINT 256 bits
+  EC_POINT:   <point>
+  EC_PARAMS:  06082a8648ce3d030107 ("prime256v1" OID:"1.2.840.10045.3.1.7")
+  label:      Public key for PIV Authentication
+  ID:         01
+  Usage:      encrypt, verify
+  Access:     local
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%01;object=Public%20key%20for%20PIV%20Authentication;type=public
+Public Key Object; EC  EC_POINT 256 bits
+  EC_POINT:   <point>
+  EC_PARAMS:  06082a8648ce3d030107 ("prime256v1" OID:"1.2.840.10045.3.1.7")
+  label:      Public key for Digital Signature
+  ID:         02
+  Usage:      encrypt, verify
+  Access:     local
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%02;object=Public%20key%20for%20Digital%20Signature;type=public
+Public Key Object; EC  EC_POINT 256 bits
+  EC_POINT:   <point>
+  EC_PARAMS:  06082a8648ce3d030107 ("prime256v1" OID:"1.2.840.10045.3.1.7")
+  label:      Public key for Card Authentication
+  ID:         04
+  Usage:      encrypt, verify
+  Access:     local
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%04;object=Public%20key%20for%20Card%20Authentication;type=public
+Public Key Object; RSA 2048 bits
+  label:      Public key for PIV Attestation
+  ID:         19
+  Usage:      encrypt, verify
+  Access:     none
+  uri:        pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV%20%23<serial>;id=%19;object=Public%20key%20for%20PIV%20Attestation;type=public
