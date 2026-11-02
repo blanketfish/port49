@@ -174,7 +174,11 @@ type regionPKI struct {
 	lab                                       string
 }
 
-func newRegionPKI(t *testing.T) *regionPKI {
+func newRegionPKI(t *testing.T) *regionPKI { return newRegionPKIFor(t, []string{regionOncall}) }
+
+// newRegionPKIFor is newRegionPKI with the lab client certificates of others
+// (testpki.LabClientFiles) beside alice's: the load run's machine principals.
+func newRegionPKIFor(t *testing.T, others []string) *regionPKI {
 	t.Helper()
 	p := &regionPKI{dir: t.TempDir(), lab: t.TempDir()}
 	now := time.Now()
@@ -216,7 +220,7 @@ func newRegionPKI(t *testing.T) *regionPKI {
 	for i := 1; i <= 3; i++ {
 		brokerIPs = append(brokerIPs, net.ParseIP(regionIP(i)))
 	}
-	if err := testpki.WriteLabAt(p.lab, "alice@example.com", []string{regionOncall}, brokerIPs, now); err != nil {
+	if err := testpki.WriteLabAt(p.lab, "alice@example.com", others, brokerIPs, now); err != nil {
 		t.Fatal(err)
 	}
 	return p

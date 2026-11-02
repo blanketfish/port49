@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -225,6 +225,12 @@ lab-directory:
 # PORT49_LAB_ETCD_BIN (etcd v3.6.15) and the L67 directory containers' images.
 lab-regions:
 	go test -tags lab ./tests/lab/ -run '^TestRegions$$' -count=1 -timeout 120m -v
+
+# The load harness (plan 12c): the design 5 rate against port49d and port49-broker on
+# a three-member etcd, up to 150 minutes. PORT49_LAB_LOAD_CELLS=a,c runs only those cells.
+lab-load:
+	PORT49_LAB_LOAD=1 PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) PORT49_LAB_LOAD_CELLS=$(PORT49_LAB_LOAD_CELLS) \
+		go test -tags lab ./tests/lab/ -run '^TestLoad$$' -count=1 -v -timeout 150m
 
 # The closed lab entries, rerun under the lab lock and diffed against their notes
 # (plan 11b). Beehive only. LAB_REGRESS_ARGS passes -only=<ids> or -dry-run.

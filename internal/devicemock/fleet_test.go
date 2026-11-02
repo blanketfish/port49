@@ -73,3 +73,43 @@ func TestFleetStopsStartingPlaysOnceItsContextEnds(t *testing.T) {
 		t.Fatalf("%d plays started on a cancelled context", res.Plays)
 	}
 }
+
+func TestRateModeIsOpenLoop(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen = []uint8{wire.AuthenStatusPass}
+	f.authenRepeat = true
+	f.authorArgs = [][]byte{[]byte("local-user-name=p49-ro")}
+	f.delay = 2 * time.Second // every play stalls; a closed loop would start only a few
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	done := make(chan FleetResult, 1)
+	t0 := time.Now()
+	go func() {
+		done <- Fleet{Profile: p, N: 10, Rate: 100, Duration: time.Second, Scenario: "token_login"}.Run(t.Context(),
+			func(int) Target { return Target{Addr: f.ln.Addr().String(), Transport: "tcp", Key: f.key, Scale: 1} },
+			func(int) Login { return Login{User: "q", Credential: freshCredential(t)} })
+	}()
+	time.Sleep(1100*time.Millisecond - time.Since(t0))
+	if n := f.conns.Load(); n < 98 || n > 102 {
+		t.Fatalf("%d plays started within 1.1s, want 100 +/- 2", n)
+	}
+	res := <-done
+	if res.Late != 0 {
+		t.Fatalf("Late = %d, want 0", res.Late)
+	}
+}
+
+func TestStepLatenciesAreReported(t *testing.T) {
+	f := newFake(t, []byte("fresh-key"))
+	f.authen = []uint8{wire.AuthenStatusPass}
+	f.authenRepeat = true
+	f.authorArgs = [][]byte{[]byte("local-user-name=p49-ro")}
+	f.delay = time.Millisecond
+	p, _ := Load("testdata/profiles/fixture_plain.yaml", root)
+	res := Fleet{Profile: p, N: 20, Concurrency: 4, Scenario: "token_login"}.Run(t.Context(),
+		func(int) Target { return Target{Addr: f.ln.Addr().String(), Transport: "tcp", Key: f.key, Scale: 1} },
+		func(int) Login { return Login{User: "q", Credential: freshCredential(t)} })
+	p99, p50 := res.StepP99["authorize_session"], res.StepP50["authorize_session"]
+	if p99 < time.Millisecond || p99 >= 50*time.Millisecond || p50 < time.Millisecond || p50 > p99 {
+		t.Fatalf("authorize_session p50 %s p99 %s, want 1ms <= p50 <= p99 < 50ms; %+v", p50, p99, res)
+	}
+}
