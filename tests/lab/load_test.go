@@ -467,15 +467,28 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 		codes   []int
 		evicted float64
 		haveEv  bool
+		// The fleet's own evictions: the counter has no principal label, by rule,
+		// so the burst window's delta holds the fleet's too. The window before
+		// the burst has the fleet alone; its delta and length are recorded
+		// beside the burst window's so e2's share can be read off.
+		fleetEv            float64
+		haveFleet          bool
+		fleetFor, burstFor time.Duration
 	)
 	c, _ = r.measure(c, func() devicemock.FleetResult {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			first, ferr := loadScrape(loadBrokerMetrics)
+			firstAt := time.Now()
 			if !sleepCtx(ctx, c.Duration/2) {
 				return
 			}
 			before, berr := loadScrape(loadBrokerMetrics)
+			burstAt := time.Now()
+			if ferr == nil && berr == nil {
+				fleetEv, haveFleet, fleetFor = before.Evicted-first.Evicted, true, burstAt.Sub(firstAt)
+			}
 			var burst sync.WaitGroup
 			for n := range loadWorkloadBurst {
 				burst.Add(1)
@@ -507,7 +520,7 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 			}
 			burst.Wait()
 			if after, aerr := loadScrape(loadBrokerMetrics); berr == nil && aerr == nil {
-				evicted, haveEv = after.Evicted-before.Evicted, true
+				evicted, haveEv, burstFor = after.Evicted-before.Evicted, true, time.Since(burstAt)
 			}
 		}()
 		return r.fleet(ctx, c.Transport, c.Rate, c.Duration, false)
@@ -535,6 +548,13 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 		c.Observed["principal_cap_evicted_delta"] = strconv.FormatFloat(evicted, 'f', 0, 64)
 	} else {
 		c.Observed["principal_cap_evicted_delta"] = "not read"
+	}
+	c.Observed["principal_cap_evicted_burst_window_s"] = strconv.FormatFloat(burstFor.Seconds(), 'f', 1, 64)
+	if haveFleet {
+		c.Observed["fleet_principal_cap_evicted_delta"] = strconv.FormatFloat(fleetEv, 'f', 0, 64)
+		c.Observed["fleet_window_s"] = strconv.FormatFloat(fleetFor.Seconds(), 'f', 1, 64)
+	} else {
+		c.Observed["fleet_principal_cap_evicted_delta"] = "not read"
 	}
 	c.Pass = loadWorkloadPass(codes)
 	return c
