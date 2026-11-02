@@ -1,0 +1,35 @@
+# port49 reference AAA configuration: Junos, TACACS+ over TCP (RFC 8907).
+#
+# Replace each angle-bracket placeholder before you load this (load set terminal).
+# README.md in this directory says what each one is and what was measured.
+#
+# The login classes and the remote template user are NOT in this file. They come from
+# the policy: run port49 platform export --classes --config port49d.yaml juniper_junos
+# and load its output after this file. Each class's idle-timeout is the least ceiling
+# of the sessions landing in it.
+#
+# authentication-order is tacplus ALONE (Ryan, 2026-11-02). With password listed, a
+# port49 deny falls through to a local password (L4, both Junos images), which voids
+# the argument that a denial is final. The cost: while port49 answers ERROR, break-glass
+# waits until go-dark closes the listener (at most 5.5 s at the defaults), then logs in.
+set system authentication-order tacplus
+#
+set system tacplus-server <PORT49_1> secret "<KEY>"
+set system tacplus-server <PORT49_1> routing-instance <MGMT_VRF>
+set system tacplus-server <PORT49_1> source-address <SOURCE_ADDRESS>
+set system tacplus-server <PORT49_2> secret "<KEY>"
+set system tacplus-server <PORT49_2> routing-instance <MGMT_VRF>
+set system tacplus-server <PORT49_2> source-address <SOURCE_ADDRESS>
+#
+# Accounting: the destination needs the routing instance too, or the records never leave.
+set system accounting events [ login change-log interactive-commands ]
+set system accounting destination tacplus server <PORT49_1> secret "<KEY>"
+set system accounting destination tacplus server <PORT49_1> routing-instance <MGMT_VRF>
+set system accounting destination tacplus server <PORT49_1> source-address <SOURCE_ADDRESS>
+set system accounting destination tacplus server <PORT49_2> secret "<KEY>"
+set system accounting destination tacplus server <PORT49_2> routing-instance <MGMT_VRF>
+set system accounting destination tacplus server <PORT49_2> source-address <SOURCE_ADDRESS>
+#
+# The break-glass account. Set its password by hand (set system login user
+# <BREAKGLASS_USER> authentication plain-text-password), never in this file.
+set system login user <BREAKGLASS_USER> class super-user
