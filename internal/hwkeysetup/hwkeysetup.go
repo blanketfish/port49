@@ -98,6 +98,16 @@ func (r Report) Failed(name string) bool {
 	return false
 }
 
+// Append adds checks to the report (status's, beyond ruling 16's), masked, and
+// recomputes Ready.
+func (r *Report) Append(checks ...Check) {
+	for _, c := range checks {
+		c.Why = serialmask.MaskSerial(c.Why)
+		r.Checks = append(r.Checks, c)
+	}
+	*r = finish(*r)
+}
+
 // Keys is what Inspect looks at: the keys opened in the session and touch
 // slots (nil when the slot holds none, with the reason in SessionWhy or
 // TouchWhy) and where the roots came from, for a message that names them.

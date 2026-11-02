@@ -245,6 +245,14 @@ type brokerDownError struct{ err error }
 func (e *brokerDownError) Error() string { return e.err.Error() }
 func (e *brokerDownError) Unwrap() error { return e.err }
 
+// brokerCertError is a broker whose certificate does not verify against the
+// configured broker CA: reachable, and not trusted. `port49 hwkey` tells it
+// from an outage (pre-flight F21).
+type brokerCertError struct{ err error }
+
+func (e *brokerCertError) Error() string { return e.err.Error() }
+func (e *brokerCertError) Unwrap() error { return e.err }
+
 // startIssued starts the agent on the issued certificate and its key, as
 // --cert and --key would (ruling 7). A held one the agent could not connect
 // with, still there, is said: the broker's clock may be past its end.
@@ -731,8 +739,8 @@ func fetchBrokerConfig(ctx context.Context, broker string, pool *x509.CertPool,
 		}
 		var cv *tls.CertificateVerificationError
 		if errors.As(err, &cv) {
-			return api.Config{}, fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
-				"CA (--broker-ca) is the CA that issued it%s", broker, cv.Err, agent.RotatedCA(cv.Err, bundleKept(broker)))
+			return api.Config{}, &brokerCertError{fmt.Errorf("the broker's certificate at %s does not verify (%v); check that the broker "+
+				"CA (--broker-ca) is the CA that issued it%s", broker, cv.Err, agent.RotatedCA(cv.Err, bundleKept(broker)))}
 		}
 		return api.Config{}, &brokerDownError{fmt.Errorf("the broker at %s is unreachable: %w", broker, err)}
 	}
