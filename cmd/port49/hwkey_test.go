@@ -435,6 +435,11 @@ func TestATPMSessionKeyNamesIdpMFA(t *testing.T) {
 		if code != 1 || !strings.Contains(out, "`idp_mfa`") || !strings.Contains(out, "not on a token") || l.listed != 0 {
 			t.Errorf("%s: exit %d, listed %d\n%s", cmd, code, l.listed, out)
 		}
+		// one plain statement: no ykman line (it would replace a key in a slot the user did not mean) and no
+		// pointer to setup, which refuses this case too
+		if strings.Contains(out, "ykman") || strings.Contains(out, "hwkey setup") || strings.Contains(out, "FAIL") {
+			t.Errorf("%s printed more than the statement:\n%s", cmd, out)
+		}
 	}
 }
 
@@ -726,5 +731,40 @@ func TestAModuleErrorIsMasked(t *testing.T) {
 	code, out, errb := hwRun("status", "--roots", l.roots())
 	if code != 2 || strings.Contains(out+errb, "12345678") || strings.Contains(out+errb, "87654321") {
 		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+}
+
+// closeProbe records the config's text at the moment its key is closed.
+type closeProbe struct {
+	*hwfake.Key
+	atClose func()
+}
+
+func (c closeProbe) Close() error { c.atClose(); return c.Key.Close() }
+
+// Setup closes the token's keys before it writes the config (the brief's order):
+// when the first key is closed the file still holds no issued_key.
+func TestSetupClosesTheKeysBeforeTheConfigWrite(t *testing.T) {
+	l := newHWLab(t, pivattest.TouchAlways)
+	l.writeConfig("broker: https://b.example:8443\n")
+	var atClose []string
+	inner := openToken
+	openToken = func(u pkcs11.URI, pin []byte) (hwkey.Key, error) {
+		k, err := inner(u, pin)
+		if err != nil {
+			return nil, err
+		}
+		return closeProbe{k.(*hwfake.Key), func() { atClose = append(atClose, l.config()) }}, nil
+	}
+	if code, out, errb := hwRun("setup", "--roots", l.roots()); code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errb)
+	}
+	if len(atClose) != 2 {
+		t.Fatalf("%d keys closed, want 2", len(atClose))
+	}
+	for i, c := range atClose {
+		if strings.Contains(c, "issued_key") {
+			t.Errorf("key %d was closed after the config was written", i)
+		}
 	}
 }

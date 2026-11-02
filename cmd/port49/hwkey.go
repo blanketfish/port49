@@ -103,7 +103,13 @@ func hwkeyCmd(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if store == "tpm" || store == "file" || store == "secure_enclave" {
-		return h.finish(hwkeysetup.Report{Checks: []hwkeysetup.Check{{Name: hwkeysetup.CheckSessionSlot, Why: notOnAToken}}})
+		// One plain statement and exit 1: no advice (setup would generate over a slot the user did not
+		// mean) and no pointer to setup, which refuses this case too.
+		if h.json {
+			return h.finish(hwkeysetup.Report{Checks: []hwkeysetup.Check{{Name: hwkeysetup.CheckSessionSlot, Why: notOnAToken}}})
+		}
+		fmt.Fprintln(stdout, notOnAToken)
+		return 1
 	}
 
 	// The roots come first, and the output starts with them.
@@ -154,11 +160,13 @@ func hwkeyCmd(args []string, stdout, stderr io.Writer) int {
 
 	keys := hwkeysetup.Keys{SessionSlot: h.slot, RootsFrom: roots.Source}
 	var closers []hwkey.Key
-	defer func() {
+	closeKeys := func() {
 		for _, k := range closers {
 			_ = k.Close()
 		}
-	}()
+		closers = nil
+	}
+	defer closeKeys()
 	open := func(slot string) (hwkey.Key, string) {
 		u, err := hwkeysetup.SlotURI(path, tok.Label, slot)
 		if err != nil {
@@ -185,6 +193,7 @@ func hwkeyCmd(args []string, stdout, stderr io.Writer) int {
 	if !setup {
 		h.statusChecks(&report)
 	}
+	closeKeys() // before setup writes the config
 	return h.finish(report)
 }
 

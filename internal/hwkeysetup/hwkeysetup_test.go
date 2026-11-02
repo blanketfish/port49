@@ -205,6 +205,21 @@ func TestAMissingSlotAdvisesItsGenerateLine(t *testing.T) {
 	if !found {
 		t.Fatalf("%q", Advice(r, "9a"))
 	}
+	// The certificate alternative comes before the generate line: generating over a key replaces it,
+	// and libykcs11 may show a key with no certificate as an empty slot (L91 cell c, unmeasured).
+	var lines = Advice(r, "9a")
+	cert, gen := -1, -1
+	for i, l := range lines {
+		if strings.Contains(l, "certificates generate") && strings.Contains(l, " 9c ") {
+			cert = i
+		}
+		if strings.Contains(l, "keys generate") && strings.Contains(l, " 9c ") {
+			gen = i
+		}
+	}
+	if cert < 0 || gen < 0 || cert > gen {
+		t.Errorf("the certificate line is at %d and the destructive generate line at %d:\n%s", cert, gen, strings.Join(lines, "\n"))
+	}
 	// A site that keeps the session key in 9e is told 9e.
 	k = tok.keys()
 	k.Session = nil
