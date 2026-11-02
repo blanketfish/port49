@@ -64,7 +64,7 @@ func Render(platform, transport string, v Values, key string) ([]string, error) 
 	if len(v.Servers) != 2 {
 		return nil, fmt.Errorf("deviceaaa: %d servers, want 2", len(v.Servers))
 	}
-	if v.Servers[0] == "" || v.Servers[0] == v.Servers[1] {
+	if v.Servers[0] == "" || v.Servers[1] == "" || v.Servers[0] == v.Servers[1] {
 		return nil, errors.New("deviceaaa: the two servers must be set and distinct")
 	}
 	for _, f := range []string{v.Servers[0], v.Servers[1], v.SourceInterface, v.SourceAddress, v.MgmtVRF, v.BreakGlass,
@@ -73,8 +73,8 @@ func Render(platform, transport string, v Values, key string) ([]string, error) 
 			return nil, fmt.Errorf("deviceaaa: the value %q is not a single token", f)
 		}
 	}
-	if strings.ContainsAny(key, "\r\n") {
-		return nil, errors.New("deviceaaa: the key holds a line break")
+	if strings.ContainsAny(key, "\r\n\"") {
+		return nil, errors.New("deviceaaa: the key holds a line break or a double quote")
 	}
 	if key == "" && transport == "tcp" {
 		return nil, errors.New("deviceaaa: an empty key")

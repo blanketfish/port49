@@ -315,8 +315,8 @@ func TestTheSRLinuxReferenceFollowsL76(t *testing.T) {
 		t.Error("no priv-lvl-authorization true")
 	}
 	for _, role := range []string{"p49-read", "p49-admin"} {
-		body := all[strings.Index(all, "role "+role+" {\n                services"):]
-		if end := strings.Index(body, "tacacs"); end < 0 || !strings.Contains(body[:end], "services [ cli ]") {
+		m := regexp.MustCompile(`(?s)role ` + role + ` \{\s*services \[ cli \]\s*tacacs \{`).MatchString(all)
+		if !m {
 			t.Errorf("role %s lacks services [ cli ] before its tacacs block", role)
 		}
 	}
@@ -335,13 +335,19 @@ func TestTheEOSTLSGroupMembersNameTLSAndThePort(t *testing.T) {
 		l = strings.TrimSpace(l)
 		if strings.HasPrefix(l, "server ") {
 			n++
-			if !strings.Contains(l, " tls port <TLS_PORT>") {
+			if !regexp.MustCompile(`^server <PORT49_[12]> tls .*port <TLS_PORT>$`).MatchString(l) {
 				t.Errorf("EOS TLS member %q lacks tls port (L73: a bare member is plain port 49)", l)
 			}
 		}
 	}
 	if n != 2 {
 		t.Errorf("%d EOS TLS members, want 2", n)
+	}
+	// The hosts take tls straight after the address, the order the L73 help showed.
+	for _, l := range commands(t, "arista_eos", "tls", ".cfg") {
+		if strings.HasPrefix(l, "tacacs-server host ") && !regexp.MustCompile(`^tacacs-server host <PORT49_[12]> tls `).MatchString(l) {
+			t.Errorf("EOS TLS host %q: tls must follow the address", l)
+		}
 	}
 }
 
@@ -359,8 +365,21 @@ func TestTheIOSXETLSReferenceNamesAServerTrustpoint(t *testing.T) {
 	if !strings.Contains(all, "crypto pki trustpoint port49-root") {
 		t.Error("the root trustpoint is not defined")
 	}
+	if !strings.Contains(all, " chain-validation continue port49-root") {
+		t.Error("the device trustpoint is not linked to the root (L73: chain-validation continue)")
+	}
+	if strings.Contains(all, "timeout") {
+		t.Error("a TLS object carries a timeout the lab never ran")
+	}
 	if strings.Contains(joined(t, "cisco_nxos", "tls", ".cfg"), "server-trustpoint") {
 		t.Error("NX-OS 10.6(2)F offered no server-trustpoint keyword")
+	}
+}
+
+func TestTheXRTLSReferenceKeepsTheRootOnItsOwnTrustpoint(t *testing.T) {
+	all := joined(t, "cisco_iosxr", "tls", ".cfg")
+	if !strings.Contains(all, "crypto ca trustpoint port49-root") {
+		t.Error("no separate root trustpoint (L73 authenticated the root apart from the intermediate)")
 	}
 }
 
@@ -369,12 +388,16 @@ func TestRenderRefusesUnsafeValues(t *testing.T) {
 		func(v *Values) { v.MgmtVRF = "mgmt\nreload" },
 		func(v *Values) { v.Servers[1] = v.Servers[0] },
 		func(v *Values) { v.Servers[0] = "" },
+		func(v *Values) { v.Servers[1] = "" },
 	} {
 		v := labValues()
 		mut(&v)
 		if _, err := Render("cisco_iosxe", "tcp", v, labKey); err == nil {
 			t.Errorf("rendered %+v", v)
 		}
+	}
+	if _, err := Render("juniper_junos", "tcp", labValues(), `k"x`); err == nil {
+		t.Error("a key with a double quote rendered")
 	}
 	if _, err := Render("cisco_iosxe", "tcp", labValues(), "k\nreload"); err == nil {
 		t.Error("a key with a line break rendered")
