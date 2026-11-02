@@ -6615,6 +6615,13 @@ printed, since it is most likely a secret pasted there, and neither command prin
 port49d.yaml parse error's text, only its line and a fixed category. A secret that is all
 lowercase hex and 64 characters or fewer passes the shape.
 
+**`port49 hwkey setup` and `port49 hwkey status`** check the user's YubiKey for `hardware_key_touch` (§13
+decision 55 rulings 16 and 17). `setup` reads the token (never writes it), runs the broker's own attestation
+checks against the broker's roots, prints the ykman commands for anything missing, and writes `issued_key`
+and `touch_key` to the user's config when all pass. `status` is the same checks plus the config, the issued
+certificate, its expiry and the agent's view, and writes nothing (`--json` is its alone). Exit 0 ready, 1
+not ready, 2 error.
+
 **`port49 revoke (--principal <principal> | --cert <file> | --cert-issuer <dn> --cert-serial
 <hex>) [--lift]`** and **`port49 revoke --list`** send the revocation, the lift or the list to the
 broker through the operator's own agent (`POST /v1/tokens/revoke`, `POST /v1/revocations/lift`,
@@ -8564,7 +8571,7 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   Task 11. A broker that issues certificates takes a person's ID token at `POST /v1/certificate`
   alone (decision 43 ruling 13, as amended by decision 45 ruling 20), so there a person refreshes by a key signature.
 - **16. `/v1/config`** lists `methods` and, per human OIDC verifier, `{issuer, client_id,
-  scopes}`. Task 10. Plan 9b adds `issuance` (decision 43 ruling 18).
+  scopes}. Task 10. Plan 9b adds `issuance` (decision 43 ruling 18); plan 12c adds `hardware_key_touch.attestation_roots_pem` (decision 55 ruling 16).
 - **17. The metrics.** `port49_oidc_tokens_total{issuer,outcome}`,
   `port49_oidc_keys_last_success_timestamp_seconds{issuer}`,
   `port49_oidc_keys_fetch_failures_total{issuer}`, `port49_oidc_logouts_total{outcome}`; no
@@ -11414,7 +11421,7 @@ shapes; Kubernetes is native and never required.
 **55. Reference device configuration, alarms, load and the failure matrix (plan 12c; Ryan, the
 team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. Rulings 2,
 14 and 15 are Ryan's and none is provisional; rulings 3, 5, 9 and 10 are provisional on L87, L39, L90 and
-L89, and each says so. Rows L87–L90 and L39's cells are open.
+L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01). Rows L87–L91 and L39's cells are open.
 
 - **1. The Junos and NX-OS "ERROR disagreement" is two method lists and two questions, not a
   contradiction.** On Junos, `tests/lab/results/L73-juniper_vjunos-router.md` cell (i) ran
@@ -11578,7 +11585,100 @@ L89, and each says so. Rows L87–L90 and L39's cells are open.
   token is live on its clock again: the redeem floor refuses every token expiring at or before the
   lifted bound, and the next read's scan, if the witness is below the record, guards again until
   that expiry. A minting broker's clock needs no premise, its stamp being the one compared.
-- **Open.** L87, L88, L89, L90 and L39 (b) and (c) are provisional until they close.
+- **16. `port49 hwkey setup` checks a user's security key and writes `issued_key` and `touch_key` (the lead and Ryan, 2026-11-01).**
+  Each user needs one YubiKey with a session key in slot 9a and a touch key in 9c, the pair
+  `hardware_key_touch` proves from (decision 45 ruling 12). The command is `hwkey` because `port49 keys
+  status` already names TACACS+ shared keys.
+  - **Read-only on the token.** It never generates a key, writes an object, or asks for the PIV management
+    key. Decision 45 ruling 7's "For `pkcs11`, port49 never generates a key or writes an object on the
+    token" stands. It opens each slot with no PIN: attestation objects are public, and a PIN is never asked.
+  - **The module.** A first-time user must not have to find their libykcs11 path. The first source that
+    applies wins: (1) `--module PATH`; (2) the `module-path` of an existing `issued_key` or `touch_key`;
+    (3) a probe of a fixed list of system install paths, in order: `/usr/lib/<multiarch>/libykcs11.so.2`,
+    then `.../libykcs11.so` (Debian and Ubuntu; `<multiarch>` is `x86_64-linux-gnu` or
+    `aarch64-linux-gnu` from `runtime.GOARCH`); `/usr/lib64/libykcs11.so.2`, then `.../libykcs11.so`
+    (Fedora and RHEL); `/usr/local/lib/libykcs11.dylib` (macOS, Intel Homebrew and Yubico's installer);
+    `/opt/homebrew/lib/libykcs11.dylib` (macOS, Apple-silicon Homebrew). No Linux `/usr/local/lib` path:
+    only a source build puts one there. A module is loaded only if it passes `userconfig.CheckOwned`, the
+    rule the agent applies: every link and the file owned by root or the user, with no group or world
+    write, because an attacker-writable library is code execution. A `--module` or an existing key's
+    `module-path` that fails is refused (exit 2), naming the path and the rule, before anything loads. A
+    probed candidate that does not exist is passed over silently; one that exists and fails the check is
+    skipped, with one line naming it. The first that passes is used and printed as `module: <path>
+    (found)`, and setup writes it into `issued_key` and `touch_key`, so later commands do not probe. None
+    found: exit 2, "no libykcs11 found; install yubico-piv-tool or pass --module". This adds no config key.
+  - **The token.** `pkcs11.Tokens` lists the tokens the module shows, never logging in. More than one
+    refuses (exit 2) and prints the list: number, model and masked label. `--token <n>` picks one by that
+    number, so the user never needs the serial.
+  - **The slots.** It reads the attestations of 9a (the session key; `--session-slot 9e` for a site that
+    keeps it there, as L86 did) and 9c (the touch key), and the f9 device certificate. It finds them by the
+    fixed slot-to-`CKA_ID` table (`hwkeysetup.SlotIDs`; 9a `0x01`, 9c `0x02`, 9e `0x04` measured in L60,
+    9d `0x03` the PIV standard's and unmeasured, used by no default) and builds each `pkcs11:` URI with the
+    token's label.
+  - **The checks are the broker's own code**: `pivattest.VerifyPair`, which `verifyTouchMessage` calls for
+    a per-login proof and for an admin call's touch. It holds the chain of both slots to the roots, the
+    same device serial, and touch policy always for 9c, and it returns the broker's fixed words
+    (`touch_slot_chain`, `session_slot_chain`, `device_mismatch`, `touch_policy`). `agent.SameToken` adds
+    that both keys are on one token. The only PIN-policy rule is `Verify`'s closed set (1 to 3), which
+    `VerifyPair` inherits; no PIN rule is added, so there is no `pin_policy` check. The closed set of
+    check names is `session_slot`, `touch_slot`, `attestation_roots`, `session_attested`,
+    `touch_attested`, `touch_policy`, `same_token`, and, for status alone, `config_issued_key`,
+    `config_touch_key`, `issued_certificate`, `certificate_expiry`, `agent`.
+  - **The roots are the broker's own.** A copy held by every user or host would be toil and could drift
+    from what the broker checks. When `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file`
+    is loaded, `GET /v1/config` gains `hardware_key_touch: {attestation_roots_pem: "..."}`: the file's
+    CERTIFICATE blocks re-encoded, public certificates and nothing else. The client fetches it as it
+    fetches the rest of `/v1/config`, over TLS 1.3 against the configured broker CA (no proxy). Precedence:
+    `--roots FILE` first, for offline use, then the broker. There is no config key for roots. `--broker
+    URL` names the broker to fetch from (default: the config's `broker`). With no roots from either, the
+    command says so and exits 2. An unreachable broker gets its own line, exit 2: "port49: the broker
+    <host> is unreachable, so the attestation roots could not be fetched: retry, or pass --roots FILE". A
+    broker whose certificate is not from the configured broker CA is a trust failure, not an outage: it
+    gets a distinct line, "port49: the broker <host> did not present a certificate from the configured
+    broker CA, so the attestation roots were not fetched: check broker_ca, or pass --roots FILE", exit 2.
+    Each run says which roots it used: `roots: from broker <host>` or `roots: --roots <file>`.
+  - **For anything missing or wrong** it prints the exact commands to run; ykman, not port49, asks for the
+    management key: `ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a
+    port49-9a.pub.pem`; the same with `--touch-policy ALWAYS 9c port49-9c.pub.pem`; and, for a slot that
+    has a key but no certificate, `ykman piv certificates generate --subject "CN=port49 <slot>" <slot>
+    port49-<slot>.pub.pem` (libykcs11 lists a slot's key only with a certificate in it: unmeasured, L91
+    cell c). No line names a serial, PIN, PUK or management key.
+  - **It never prints a serial.** Every line goes through `serialmask.MaskSerial` (L60's rule, moved into
+    `internal/hwkey/serialmask`), error lines included (a `pkcs11.Open` error can name other tokens), and
+    every `why` in `--json`.
+  - **When every check passes** it writes `issued_key:` (the session slot's URI) and `touch_key:` (9c's) to
+    the user's config (`userconfig.Path()`), by line edit: a top-level line is replaced in place or
+    appended, every other byte stays, the write is atomic with the file's own mode. If both are present
+    and equal it changes nothing and says so. If either differs it shows the old and new values (serial
+    masked) and asks at a terminal; with no terminal it changes nothing and exits 1. A value that arrives
+    from the system config is reported, never edited.
+  - **Exit codes:** 0 ready; 1 action needed; 2 error (no module, an unreadable config, a bad flag, no
+    roots, an unreachable broker or a broker from another CA).
+  - **Where a user meets the missing key**, the remedy depends on the agent's reason. The agent reports
+    `Status.session_key_store`, a closed set (`file`, `tpm`, `pkcs11`, `secure_enclave`, the
+    `issued_key_store` values, never a reference or URI, so it can carry no serial), and the remedy is
+    chosen by it and never by matching a message. A session key in the TPM, the Secure Enclave or a file:
+    "hardware_key_touch needs both keys on one YubiKey; this device accepts only it", with the
+    `port49 hwkey setup` pointer; on a fallback line, that it needs both keys on one YubiKey and the
+    pointer. A token session key with no token present or no usable touch key: the pointer alone.
+  - **A TPM or file session key** (`issued_key_store: tpm` or `file`, or `auto` resolving to either) gets
+    one plain statement: "`hardware_key_touch` needs the session key and the touch key on one YubiKey;
+    this login's session key is not on a token. Your site's other per-login factor is `idp_mfa`." Exit 1.
+  - *Trace, the operator at 3am.* The broker is down and a user's key is not set up: `hwkey setup`
+    cannot fetch roots, says the broker is unreachable and that `--roots FILE` works offline, and exits 2
+    having changed nothing; the token was never written.
+- **17. `port49 hwkey status` is the read-only view (the lead and Ryan, 2026-11-01).** It runs ruling 16's
+  checks and also: the config's `issued_key` and `touch_key` name those slots; the issued certificate
+  (`userconfig.IssuedTokenPaths(broker, issued_key)`) holds the session slot's public key, or there is none
+  yet; the certificate's expiry (a FAIL once passed, the time left otherwise); and, when an agent is
+  running, its view (`touch_key: true`, or `touch_key_unusable: <why>`). It never writes config and never
+  prints a ykman line; any FAIL names `port49 hwkey setup` as the fix. It takes its roots, module, token
+  and `--broker` as ruling 16 does, and its output starts with the roots line. For a session key in a TPM
+  or a file it exits 1 with ruling 16's statement. Exit codes: 0 ready, 1 not ready, 2 error (no roots and
+  an unreachable broker or another CA's included). `--json` is status's only form and prints `{"token": "...",
+  "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys
+  snake_case, the serial masked, no secret.
+- **Open.** L87, L88, L89, L90, L91 and L39 (b) and (c) are provisional until they close.
 
 ---
 
@@ -12378,6 +12478,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L88** | Each platform under port49's reference AAA configuration (`deploy/device-aaa/`), loaded as shipped. (a) A user port49 denies who has a local account with the same password: PASS iff refused, with no fall-through. (b) port49d stopped (connections refused): PASS iff break-glass logs in within 10 s (recorded). The bound is fixed, because a refused connection is not L13's reply timeout; L4 and L41 measured 0.3 s to 5.2 s. (c) port49 answering ERROR: break-glass login and one command, recorded. (d) port49d dark (listener closed by its health checks, on etcd): PASS iff break-glass logs in and runs a command. (e) A token login, one permitted and one denied command: PASS iff the permit runs, the deny is refused, and accounting START and STOP arrive. (f) The first server refusing (reset at Accept), the second answering: PASS iff a token login succeeds through the second (time recorded). (g) A reload retiring the open connection's key version, single-connection on: what the in-flight and the next command do (observation; L29's question for the platforms L29 did not measure). (h) For each TLS image, (a)–(g) over RFC 9887 under the TLS reference. (i) Junos only: the largest `idle-timeout` the commit accepts, by bisection. | Design §12 "port49 MUST ship tested reference AAA configuration per platform"; design §14's device fallback assertion; decision 55 rulings 1, 2, 3, 8 and 14 | vEOS 4.31.2F, cEOS 4.36.3M (TLS), C8000V 17.13.01a and 17.18.02 (TLS), N9Kv 10.4(2)F and 10.6(2)F (TLS), vJunos-router 23.4R2-S2.1 and 26.2R1.7 (TLS), vSRX 21.4R3.15, XRd 26.1.1 (both), SR Linux 26.7.2 | open |
 | **L89** | Velero file-system backup (node agent) of a chart release's PVCs, on kind with an S3-compatible store in the cluster. The backup holds `issuing-ca.key`; the repository password is set from a Secret. (a) Back up both StatefulSets, delete the namespace, and restore: the owner, group and mode of `state/`, `issuing-ca.key` and the spool directory. PASS iff both StatefulSets become ready with no fence refusal and the broker prints the CA fingerprint it printed before. (b) After the restore, a mint and a login. PASS iff both succeed. | Whether the chart README may name Velero (decision 55 ruling 10; 12b pre-flight M10) | kind; Velero, node agent and object-store versions recorded | open |
 | **L90** | Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `secure: true` with no `known_hosts` entry: what Oxidized does. (b) `secure: true` with a changed key: PASS iff refused. (c) `secure: true` after ruling 9's `ssh … accept-new … PreferredAuthentications=none … exit` line wrote the entry: PASS iff the backup runs. (d) Any Oxidized input or `vars` setting that maps to net-ssh's `verify_host_key: :accept_new`: PASS iff an unknown key is saved and a changed key refused. | `examples/oxidized` (decision 55 ruling 9; plan 9d carry) | Oxidized (version recorded), vEOS 4.31.2F | open |
+| **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan at the SER8, where he is away long-term from 2026-11-02; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 | open |
 
 Every cell of L82–L85 carries its own PASS condition, so a row closes when every cell has a PASS or a FAIL. A FAIL is a measured answer, not an open row. A README names a mechanism only where every one of its cells is PASS.
 
