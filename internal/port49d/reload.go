@@ -1250,7 +1250,7 @@ func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 	// policy admits under a key it makes single-device must not create a
 	// series named for it. One labelled early is merely aggregated early.
 	if r.metrics != nil {
-		r.metrics.SetSingleDeviceKeyRefs(policySingleDeviceKeyRefs(pol))
+		r.metrics.SetSingleDeviceKeyRefs(swapSingleDeviceKeyRefs(old, pol))
 	}
 	r.keys.put(r.keys.union(kb))
 	if r.keysPut != nil {

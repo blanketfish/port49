@@ -770,6 +770,5 @@ func (s *conn) closeTLSAtShutdown(tc *tls.Conn) {
 // Metrics.KeyLabels gives the device's key_ref: a key one device holds is
 // never a label.
 func (s *conn) keyValidation(version int, outcome keyring.Diagnosis) {
-	ref, ver := s.d.Metrics.KeyLabels(s.dev.KeyRef, version)
-	s.d.Metrics.KeyValidations.WithLabelValues(ref, ver, string(outcome)).Inc()
+	s.d.Metrics.CountKeyValidation(s.dev.KeyRef, version, string(outcome))
 }

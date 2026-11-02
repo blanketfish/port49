@@ -438,3 +438,33 @@ func TestSettingAKeySingleDeviceDropsItsNamedSeries(t *testing.T) {
 		t.Fatal("core's series was dropped with edge's")
 	}
 }
+
+// A count that chose its labels under the old set lands before a new set's
+// delete, never after it: the series must not come back under the key's name.
+func TestACountRacingASetNeverRecreatesTheNamedSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	done := make(chan struct{})
+	m.afterKeyLabels = func() {
+		go func() {
+			m.SetSingleDeviceKeyRefs(map[string]bool{"edge": true})
+			close(done)
+		}()
+		time.Sleep(50 * time.Millisecond) // the set has had every chance to run
+	}
+	m.CountKeyValidation("edge", 3, "validated")
+	<-done
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		for _, s := range mf.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if l.GetValue() == "edge" {
+					t.Fatalf("%s has a series labelled edge", mf.GetName())
+				}
+			}
+		}
+	}
+}

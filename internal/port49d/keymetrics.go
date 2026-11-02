@@ -24,15 +24,43 @@ func singleDeviceKeyRefs(keyRefs []string) map[string]bool {
 	return out
 }
 
-// policySingleDeviceKeyRefs is singleDeviceKeyRefs over the devices pol admits.
-func policySingleDeviceKeyRefs(pol *policy.Policy) map[string]bool {
+// policyKeyRefs is the key_ref of each device pol admits, one per device.
+func policyKeyRefs(pol *policy.Policy) []string {
 	var refs []string
 	for _, d := range pol.Devices() {
 		if a, ok := pol.Admitted(d.Name); ok && a.Refused == "" {
 			refs = append(refs, a.KeyRef)
 		}
 	}
-	return singleDeviceKeyRefs(refs)
+	return refs
+}
+
+// policySingleDeviceKeyRefs is singleDeviceKeyRefs over the devices pol admits.
+func policySingleDeviceKeyRefs(pol *policy.Policy) map[string]bool {
+	return singleDeviceKeyRefs(policyKeyRefs(pol))
+}
+
+// swapSingleDeviceKeyRefs is the set a swap from old to pol puts in force:
+// pol's single-device key_refs, and every key_ref old held that pol gives
+// fewer than two devices (none included). A packet admitted under old and
+// counted after the set is stored may still carry such a key_ref, and
+// naming it would name the one device that held it. Too wide only aggregates;
+// too narrow leaks. old is nil at a start.
+func swapSingleDeviceKeyRefs(old, pol *policy.Policy) map[string]bool {
+	out := policySingleDeviceKeyRefs(pol)
+	if old == nil {
+		return out
+	}
+	held := map[string]int{}
+	for _, r := range policyKeyRefs(pol) {
+		held[r]++
+	}
+	for _, r := range policyKeyRefs(old) {
+		if r != "" && held[r] < 2 {
+			out[r] = true
+		}
+	}
+	return out
 }
 
 // indexSingleDeviceKeyRefs is singleDeviceKeyRefs over the admission index

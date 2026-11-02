@@ -4,6 +4,7 @@ package metrics
 
 import (
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -537,6 +538,14 @@ type Metrics struct {
 	inventoryAge     atomic.Pointer[func() float64]
 	keys             atomic.Pointer[keyWatch]
 	singleDevice     atomic.Pointer[map[string]bool]
+	// keyMu holds a key validation's label choice and its increment together
+	// (read), apart from a new set's store and its series delete (write): a
+	// count that read the old set must land before the delete, or it recreates
+	// the series the delete took out.
+	keyMu sync.RWMutex
+	// afterKeyLabels is a test hook, run between the label choice and the
+	// increment.
+	afterKeyLabels func()
 }
 
 // What the key series carry in place of a key_ref only one device holds, and
@@ -553,10 +562,24 @@ const (
 // series already created under such a key_ref named it while two devices held
 // it, so each is deleted once the set is stored (new increments use KeyLabels).
 func (m *Metrics) SetSingleDeviceKeyRefs(refs map[string]bool) {
+	m.keyMu.Lock()
+	defer m.keyMu.Unlock()
 	m.singleDevice.Store(&refs)
 	for r := range refs {
 		m.KeyValidations.DeletePartialMatch(prometheus.Labels{"key_ref": r})
 	}
+}
+
+// CountKeyValidation counts one outcome for ref at version under KeyLabels'
+// labels. The label choice and the increment are one step against a new set.
+func (m *Metrics) CountKeyValidation(ref string, version int, outcome string) {
+	m.keyMu.RLock()
+	defer m.keyMu.RUnlock()
+	k, v := m.KeyLabels(ref, version)
+	if m.afterKeyLabels != nil {
+		m.afterKeyLabels()
+	}
+	m.KeyValidations.WithLabelValues(k, v, outcome).Inc()
 }
 
 // KeyLabels is the key_ref and version labels for ref at version: the pair
