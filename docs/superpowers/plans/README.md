@@ -357,8 +357,8 @@ failure matrix on the compose stack, the Junos `idle-timeout` per class, `policy
 lab rows L39 (b, c), L84's systemd cells and L87–L90. Its three decisions were ruled by Ryan 2026-11-02 (the plan's "Decisions for Ryan"). Revised 2026-10-31
 after its pre-flight (I1–I13 and M1–M22 applied). Amended 2026-11-01 (Ryan): Task 18 adds `port49 hwkey setup` and `port49 hwkey status`
 and lab row L91; nineteen tasks. Ruled 2026-11-02 (Ryan): the least ceiling per Junos class; `authentication-order tacplus` alone; the restore guard's
-ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the restored witness's time +
-15m + 5m on port49d's clock; fail closed on a witness with no usable time); L91 stays open "needs Ryan at the SER8", and Task 18 tests
+ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the largest `ExpiresAt` among the token records on port49d's
+clock; fail closed on a scan that fails, a bad record or an expiry far ahead); L91 stays open "needs Ryan at the SER8", and Task 18 tests
 from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish).
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
@@ -8157,7 +8157,7 @@ refusal or wait, ask what it protects against, whether something else in the sys
 a signature, a bound) already rules that out, and what it costs an operator at 3am. Ryan,
 2026-11-02, after the restore guard: it locked IOS XE out until a purge to stop replay of
 restored tokens, though every restored token is dead within the max `token_ttl` (15m) of the
-snapshot. Plan 12c bounds the guard by the restore witness's time.
+snapshot. Plan 12c bounds the guard by the token records' latest expiry.
 
 ## Plan 13 — User and admin documentation
 

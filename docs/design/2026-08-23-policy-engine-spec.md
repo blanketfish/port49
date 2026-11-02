@@ -2659,7 +2659,7 @@ refused request named; any other path is recorded `mint`.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done or every token the snapshot could hold has expired (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d does this itself while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd it checks the store every `stores.session.etcd.health.interval` (or `stores.directory.…` when `stores.session` is omitted), and after `close_after` consecutive failed checks it closes every listener and resets held connections, idle or loaded. It is dark within `close_after` × `interval` + `call_timeout` of the store stopping: 5.5s at the defaults, measured at 4.8–5.5s on five images (§15 L41, `tests/lab/results/L41-*.md`). It opens the listeners again after `open_after` consecutive checks pass (§13, decision 37). Losing its hold on the store, or a token or context pool's circuit staying open or every call on one being refused for `hold_ttl`, remains the backstop (decision 35). Before dark, a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done or every token the store holds has expired (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d does this itself while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd it checks the store every `stores.session.etcd.health.interval` (or `stores.directory.…` when `stores.session` is omitted), and after `close_after` consecutive failed checks it closes every listener and resets held connections, idle or loaded. It is dark within `close_after` × `interval` + `call_timeout` of the store stopping: 5.5s at the defaults, measured at 4.8–5.5s on five images (§15 L41, `tests/lab/results/L41-*.md`). It opens the listeners again after `open_after` consecutive checks pass (§13, decision 37). Losing its hold on the store, or a token or context pool's circuit staying open or every call on one being refused for `hold_ttl`, remains the backstop (decision 35). Before dark, a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -8071,14 +8071,19 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   and so does port49d's own guard: a port49d that finds the witness below what it followed
   refuses every token redemption `store_unavailable` until the first of two: a runner, once a
   purge of every unspent token is done, writes `meta/purged` (plan 7e Task 15d); or every token
-  the snapshot could hold has expired, which port49d takes as the restored witness's time plus
-  `token_ttl`'s ceiling (15m) plus 5m for the brokers' clocks, on its own clock (decision 55
-  ruling 15, plan 12c). A token's expiry is judged on port49d's clock too, so port49d's own
-  clock error moves both together. A witness with no time, or one more than 5m ahead of
-  port49d's clock, arms no time bound: only the purge lifts it. A restore from a snapshot more
-  than 20 minutes old is not guarded. The guard is about single-use tokens alone: the
+  the store holds has expired, which port49d takes as its own clock passing the largest
+  `ExpiresAt` among the `v1/t/` records, scanned at the drop and again on every guarded read
+  (the bound only rises: a newer restore, or a token minted meanwhile, moves it later), and judged
+  as redemption judges a token's expiry (decision 55 ruling 15, plan 12c). So the bound needs no
+  witness time and no clock-skew allowance: both sides are the brokers' stamps against port49d's
+  clock, whose own error moves them together. A scan that fails, a record that does not decode, or a
+  latest expiry more than `token_ttl`'s ceiling (15m) plus 5m ahead of port49d's clock arms no
+  bound: only the purge lifts it. After a lift on its own, a token expiring at or before the bound
+  stays refused (`store_unavailable`) until a purge, so a clock stepped back revives none; and the
+  record of the witness is kept as it was, so a later restore is told. A restore whose records are
+  all expired is not guarded. The guard is about single-use tokens alone: the
   revocations, marks and contexts a restore loses are the runbook's (design document §13). A port49d started after the
-  restore has followed nothing and cannot tell. It takes the store's witness as its record only once the purge is done. A
+  restore has followed nothing and cannot tell. It takes the store's witness as its record only once the purge is done (on a lift of its own it keeps the pre-restore record). A
   replica with no record says it cannot tell, and goes by `meta/judged`; a snapshot taken
   within about a second of the last witness recorded is not caught.
 - **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
@@ -11522,41 +11527,57 @@ L89, and each says so. Rows L87–L90 and L39's cells are open.
   port49d**: each device then finds the connection refused and falls to its local method (§5.7
   `store_unavailable`; L4, L35). `port49_redemption_restore_guarded == 1` for 10m pages, and the 3am
   table of `deploy/failure-matrix.md` carries that row. In addition the guard lifts on its own at the
-  earlier of the purge (as before) and the restored `meta/witness`'s time + `policy.MaxTokenTTL` (15m)
-  + 5m, read against port49d's own clock. port49d's own clock error cancels, because the lift time
-  and a restored token's expiry are both broker-stamped times compared with its clock. The premise is
-  that broker-to-broker clock skew plus the witness's lead over the last mint (at most 61 s) stays
-  within the 5m, so the tolerated broker skew is 5m less 61 s. 5m is the largest clock disagreement
-  port49 tolerates anywhere: `broker.identity.clock_skew`'s ceiling (decision 39 ruling 5, "`clock_skew`
-  60s (0s–5m)"; `internal/config/identity.go:643`), the lead an inventory document's `published_at`
-  may have over port49d's clock (§10, "How a daemon refreshes its snapshot"), and OCSP's and CRLs'
-  `ThisUpdate` future skew (`internal/certstatus/ocsp.go:70`, `crl.go:55`). Fail closed: a witness
-  that is absent, whose body has no usable `at`, or whose `at` is more than 5m ahead of port49d's
-  clock arms no bound, and the guard lifts only on the purge. Revocations made after the snapshot are lost by any restore,
-  and the runbook covers them. The guard's own text is decision 36's (plan 12c Task 9a), and its
-  traces are appended here. The alternative (close the listener while guarded) is not built.
-  *Trace, a snapshot 5 minutes old restored with the brokers crash-looping.* The witness's time is
-  about 5m before the restore. port49d's first read finds the drop and guards, the until gauge at
-  about restore + 15m, and its line names the lift time and the escape. Token logins are refused
+  earlier of the purge (as before) and the largest `ExpiresAt` among the `v1/t/` records, read
+  against port49d's own clock exactly as redemption reads a token's expiry (`liveTokens`). The
+  records are scanned at the drop and again on every guarded read, and the bound only rises. It
+  replaced a bound taken from the restored `meta/witness`'s time + 15m + 5m, whose premise failed:
+  the runner rewrites the witness only when the store has moved (`witnessPass`, "a quiet store
+  writes nothing"), so its time can be hours older than the snapshot's last mint, and a newer
+  restore under the guard, or a clock stepped back, kept the shorter bound (reviewed 2026-11-02).
+  The tokens' own expiry needs no premise about the witness's lead or the brokers' skew, and
+  port49d's own clock error cancels, because both the lift time and a restored token's expiry are
+  broker stamps compared with its clock. Fail closed, the guard lifting only on the purge and the
+  gauge reading 0: the scan fails, a record does not decode, or the latest expiry is more than
+  `policy.MaxTokenTTL` (15m) + 5m ahead of port49d's clock, which is a broker clock or port49d's
+  too far off to wait on (5m is the largest clock disagreement port49 tolerates anywhere:
+  `broker.identity.clock_skew`'s ceiling, decision 39 ruling 5, `internal/config/identity.go:643`;
+  an inventory's `published_at` lead, §10; OCSP's and CRLs' `ThisUpdate`,
+  `internal/certstatus/ocsp.go:70`, `crl.go:55`). A scan that finds every token already expired
+  guards nothing, and says so once. After a lift on its own, a token expiring at or before the
+  bound stays refused until a purge (the redeem floor, `store_unavailable`, no new reason), and
+  port49d keeps the pre-restore witness record, so a later restore whose tokens are still live
+  guards again. The cost: while brokers keep minting and no purge lands, the bound keeps rising and
+  only the purge (or stopping port49d) lifts it, which is the guard as it was before this ruling; a
+  token from a broker whose clock runs far behind may be refused once. Revocations made after the
+  snapshot are lost by any restore, and the runbook covers them. The guard's own text is decision
+  36's (plan 12c Task 9a). The alternative (close the listener while guarded) is not built.
+  *Trace, a snapshot 5 minutes old restored with the brokers crash-looping.* The snapshot's latest
+  token expires about 10 minutes after the restore (a mint just before the snapshot, 15m ttl).
+  port49d's first read after the restore finds the drop, scans, and guards, the until gauge at that
+  expiry, and its line names the lift time and the escape. Token logins are refused
   `store_unavailable`, and on IOS XE and on Junos under `tacplus` alone break-glass is refused too.
-  The 10m page fires with the lift time in its summary; the operator waits the remaining ~5
-  minutes or stops port49d at once (the 3am row). At restore + 15m the guard lifts on its own with
-  no broker running, and the line says so. Every token the snapshot held has expired by then on
+  The 10m page fires with the lift time in its summary; the operator waits the remaining minutes or
+  stops port49d at once (the 3am row). At the latest expiry the guard lifts on its own with no
+  broker running, and the line says so. Every token the snapshot held has expired by then on
   port49d's clock, so a replay finds no live token, and a login needs a fresh mint, which needs a
   broker. The lift does not by itself let break-glass in on those devices: with port49d up, a
   password that is no live token is answered FAIL, which they also treat as final, as on any day the
   brokers are down (design §12, "Broker unavailable"); with the brokers still down, "stop port49d"
-  stays the escape. What the bound changes is that the ERROR state ends, and that a restore from a
-  snapshot older than 20 minutes never enters it. A token the brokers mint once they start is then
-  redeemed at once, with no wait for the purge. *Trace, a wrong clock on port49d.* Behind by d up to
-  5m: the guard lasts d longer in real time, and so would a restored token's life by port49d's
-  judgment, so no replay window opens. Behind by more than 5m: the witness's time is past the
-  allowance, no bound is armed, only the purge lifts the guard (today's behavior, fail closed), and
-  the line says why. Ahead by any amount: the lift comes earlier in real time and port49d takes
-  every restored token as expired earlier by the same amount; a port49d more than 15m ahead refuses
-  every fresh token as expired too, which its logins show at once (unchanged). The residual case is
-  a broker clock off by more than 5m from the runner's while it mints, less the witness's lead (so
-  3m59s at the edge): the NTP requirement of design §13, and the bound's one premise.
+  stays the escape. What the bound changes is that the ERROR state ends, and that a restore whose
+  tokens have all expired never enters it. *Trace, a quiet store.* The witness was last written at
+  02:00, a token minted at 03:00, and the snapshot taken at 03:00:00.4: the witness is an hour old
+  and the token is live until 03:15. A witness-time bound would have lifted at 02:20 and left a
+  10-minute replay window; the scan reads 03:15, and the guard holds to it. *Trace, a wrong clock on
+  port49d.* Behind by d: the guard lasts d longer in real time, and so would a restored token's life
+  by port49d's judgment, so no replay window opens. Behind so far that the latest expiry is more
+  than 20m ahead of its clock: no bound is armed, only the purge lifts the guard, and the line says
+  why. Ahead by any amount: the lift comes earlier in real time, and port49d takes every restored
+  token as expired earlier by the same amount; a port49d more than 15m ahead refuses every fresh
+  token as expired too, which its logins show at once (unchanged). *Trace, the clock stepped back
+  after a lift.* port49d, 8m ahead, lifts 8m early in real time; NTP steps it back, and a restored
+  token is live on its clock again: the redeem floor refuses every token expiring at or before the
+  lifted bound, and the next read's scan, if the witness is below the record, guards again until
+  that expiry. A minting broker's clock needs no premise, its stamp being the one compared.
 - **Open.** L87, L88, L89, L90 and L39 (b) and (c) are provisional until they close.
 
 ---
