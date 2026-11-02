@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -36,6 +37,11 @@ import (
 // three-member directory etcd and a session etcd, all on this host's loopback,
 // driven open loop by devicemock's Fleet at the design §5 rate. TestLoad runs
 // it (Task 7); nothing here runs unless PORT49_LAB_LOAD=1.
+// loadStartWait is how long a process has to say "listening on": one
+// policy.Parse at fleet size is about 70 s on the lab CPU (BenchmarkParseFleet),
+// and a start runs it.
+const loadStartWait = 6 * time.Minute
+
 const (
 	loadPrincipals = 50
 	loadHumans     = 450
@@ -194,7 +200,8 @@ func loadNetem(up bool) [][]string {
 		return [][]string{{"tc", "qdisc", "del", "dev", "lo", "root"}}
 	}
 	cmds := [][]string{
-		{"tc", "qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio"},
+		{"tc", "qdisc", "add", "dev", "lo", "root", "handle", "1:", "prio", "bands", "3",
+			"priomap", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1", "1"},
 		{"tc", "qdisc", "add", "dev", "lo", "parent", "1:3", "handle", "30:", "netem", "delay", loadNetemDelay},
 	}
 	for _, port := range loadDirectoryClientPorts {
@@ -257,10 +264,19 @@ type hostFacts struct {
 	RAMMB  int
 	Disk   string
 	Kernel string
+	Host   string
+	Commit string // the tree the harness ran from, +dirty when it had changes
 }
 
 func readHostFacts(dir string) hostFacts {
 	h := hostFacts{Cores: runtime.NumCPU()}
+	h.Host, _ = os.Hostname()
+	if out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); err == nil {
+		h.Commit = strings.TrimSpace(string(out))
+		if st, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=no").Output(); err == nil && len(strings.TrimSpace(string(st))) > 0 {
+			h.Commit += "+dirty"
+		}
+	}
 	if raw, err := os.ReadFile("/proc/cpuinfo"); err == nil {
 		for _, l := range strings.Split(string(raw), "\n") {
 			if k, v, ok := strings.Cut(l, ":"); ok && strings.TrimSpace(k) == "model name" {
@@ -293,8 +309,8 @@ func readHostFacts(dir string) hostFacts {
 func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Load at the design rate\n\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
-		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n\n",
-		time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel,
+		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n\n",
+		time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
 		loadDevices, loadPrincipals, loadHumans)
 	for _, c := range cells {
 		verdict := "PASS"
@@ -729,7 +745,7 @@ func (r *loadRun) startProcs() {
 	r.t.Helper()
 	for _, p := range []*regionProc{r.broker, r.daemon} {
 		p.start(r.t)
-		if _, err := p.wait("listening on", 120*time.Second); err != nil {
+		if _, err := p.wait("listening on", loadStartWait); err != nil {
 			r.t.Fatalf("INVALID: %v\n%s", err, tailOf(p.said(), 2000))
 		}
 	}
@@ -924,13 +940,145 @@ func (r *loadRun) usage() map[string][2]float64 {
 // remove it; the removal is also run at t's cleanup.
 func (r *loadRun) loadNetemOn() (undo func()) {
 	r.t.Helper()
-	_ = sudoRun(loadNetem(false), true) // an earlier run's
+	show, err := exec.Command("tc", "qdisc", "show", "dev", "lo").Output()
+	if err != nil {
+		r.t.Fatalf("INVALID: tc qdisc show dev lo: %v", err)
+	}
+	stale, err := loadNetemPlan(string(show))
+	if err != nil {
+		r.t.Fatalf("INVALID: %v", err)
+	}
+	if stale {
+		_ = sudoRun(loadNetem(false), true) // an earlier run's, left by a timeout or a kill
+	}
 	if err := sudoRun(loadNetem(true), false); err != nil {
 		_ = sudoRun(loadNetem(false), true)
 		r.t.Fatalf("INVALID: netem on the directory's client ports: %v", err)
 	}
 	var once sync.Once
 	undo = func() { once.Do(func() { _ = sudoRun(loadNetem(false), true) }) }
-	r.t.Cleanup(undo)
+	r.onAbort(undo)
 	return undo
+}
+
+// onAbort runs undo at t's cleanup, on SIGINT or SIGTERM, and 30 s before the
+// test binary's -timeout would panic (a panic runs no cleanup): so a netem
+// qdisc or a stopped etcd is not left behind by an aborted run. undo must be
+// safe to call twice.
+func (r *loadRun) onAbort(undo func()) {
+	r.t.Cleanup(undo)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	var timer *time.Timer
+	if dl, ok := r.t.Deadline(); ok {
+		timer = time.AfterFunc(time.Until(dl)-30*time.Second, undo)
+	}
+	stop := make(chan struct{})
+	go func() {
+		select {
+		case s := <-sig:
+			undo()
+			signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+			_ = syscall.Kill(os.Getpid(), s.(syscall.Signal))
+		case <-stop:
+		}
+	}()
+	r.t.Cleanup(func() {
+		signal.Stop(sig)
+		close(stop)
+		if timer != nil {
+			timer.Stop()
+		}
+	})
+}
+
+// loadStopOnSentinel is ctx, cancelled within every of check's polls that
+// fails: the lab's STOP sentinel or its disk floor (labGuardAt). stopped ends
+// the poller and answers the error that cancelled the run, nil when none did.
+func loadStopOnSentinel(ctx context.Context, check func() error, every time.Duration) (context.Context, func() error) {
+	ctx, cancel := context.WithCancel(ctx)
+	var (
+		mu       sync.Mutex
+		why      error
+		stop     = make(chan struct{})
+		done     = make(chan struct{})
+		stopOnce sync.Once
+	)
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(every)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if err := check(); err != nil {
+					mu.Lock()
+					why = err
+					mu.Unlock()
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() error {
+		stopOnce.Do(func() { close(stop) })
+		<-done
+		cancel()
+		mu.Lock()
+		defer mu.Unlock()
+		return why
+	}
+}
+
+// loadAwaitSwaps waits, for each named process at once, for the swap it
+// should say, and answers what each took in seconds, or "no swap seen". ok is
+// whether every process swapped.
+func loadAwaitSwaps(waits map[string]func() (time.Duration, error)) (obs map[string]string, ok bool) {
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
+	obs, ok = map[string]string{}, true
+	for name, wait := range waits {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d, err := wait()
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				obs[name+"_reload"] = "no swap seen"
+				ok = false
+				return
+			}
+			obs[name+"_reload_seconds"] = strconv.FormatFloat(d.Seconds(), 'f', 1, 64)
+		}()
+	}
+	wg.Wait()
+	return obs, ok
+}
+
+// loadNetemPlan reads `tc qdisc show dev lo`: remove is whether it holds the
+// prio qdisc an earlier run of this harness left (handle 1:), which the
+// pre-clean may delete; any other root qdisc is somebody else's, an error.
+func loadNetemPlan(show string) (remove bool, err error) {
+	for _, l := range strings.Split(show, "\n") {
+		f := strings.Fields(l)
+		if len(f) < 3 || f[0] != "qdisc" {
+			continue
+		}
+		switch {
+		case f[1] == "prio" && f[2] == "1:":
+			remove = true
+		case f[1] == "noqueue" || slices.Contains(f, "parent"):
+		default:
+			return false, fmt.Errorf("lo has a root qdisc this harness did not install (%s %s); refusing to replace it", f[1], f[2])
+		}
+	}
+	return remove, nil
 }

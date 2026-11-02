@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -73,8 +74,12 @@ func TestLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := loadStack(t, 3, loadDevices)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// The STOP sentinel and the disk floor are polled every second, so every
+	// cell stops driving within about a second of either, not at its end.
+	ctx, stopped := loadStopOnSentinel(context.Background(), func() error {
+		return labGuardAt(l66StopSentinel, "/", l66DiskFloorMB)
+	}, time.Second)
+	defer stopped()
 
 	var cells []loadCell
 	for _, id := range ids {
@@ -104,11 +109,15 @@ func TestLoad(t *testing.T) {
 		cells = append(cells, c)
 	}
 
-	note, err := loadNote(cells, readHostFacts(r.dir))
+	if err := stopped(); err != nil {
+		t.Fatalf("INVALID: the run was stopped (%v); no note written for a partial run", err)
+	}
+	host := readHostFacts(r.dir)
+	note, err := loadNote(cells, host)
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	path := filepath.Join(root, "tests", "lab", "results", "LOAD-"+time.Now().UTC().Format("2006-01-02")+".md")
+	path := filepath.Join(root, "tests", "lab", "results", "load-"+host.Host+".md")
 	if err := os.WriteFile(path, []byte(note), 0o644); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
@@ -206,41 +215,70 @@ func (r *loadRun) cellAccounting(ctx context.Context, c loadCell) loadCell {
 
 // cellFaults is cell d: the design rate with a policy reload a third of the
 // way in and a session-store fault (the member stopped, then continued, 20 s)
-// at two thirds, the shape of 11b's. PASS iff no play hangs past 10 s.
+// at two thirds, the shape of 11b's. PASS iff no play hangs past 10 s (a
+// play's time includes its mint, so the broker is covered too) and port49d
+// and the broker each said the reload swapped; the seconds each took are
+// recorded.
 func (r *loadRun) cellFaults(ctx context.Context, c loadCell) loadCell {
-	var wg sync.WaitGroup
+	var (
+		wg       sync.WaitGroup
+		swapObs  map[string]string
+		swapped  bool
+		sessArgs = []string{"--data-dir", r.sess.data}
+	)
+	cont := func() { _ = loadSignal(r.sess.pidfile(), sessArgs, syscall.SIGCONT) }
+	r.onAbort(cont)
 	c, res := r.measure(c, func() devicemock.FleetResult {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sleepCtx(ctx, c.Duration/3)
-			r.reloadPolicy()
+			swapObs, swapped = r.reloadPolicy()
 			sleepCtx(ctx, c.Duration/3-5*time.Second)
-			why := loadSignal(r.sess.pidfile(), []string{"--data-dir", r.sess.data}, syscall.SIGSTOP)
-			if why != "" {
+			if why := loadSignal(r.sess.pidfile(), sessArgs, syscall.SIGSTOP); why != "" {
 				r.t.Logf("cell d: the session store was not stopped: %s", why)
 				return
 			}
 			sleepCtx(ctx, 20*time.Second)
-			_ = loadSignal(r.sess.pidfile(), []string{"--data-dir", r.sess.data}, syscall.SIGCONT)
+			cont()
 		}()
 		return r.fleet(ctx, c.Transport, c.Rate, c.Duration, false)
 	})
 	wg.Wait()
-	c.Observed["fault"] = "policy reload at one third; session store stopped 20s at two thirds"
+	maps.Copy(c.Observed, swapObs)
+	c.Observed["fault"] = "policy edit at one third; session store stopped 20s at two thirds"
 	c.Observed["hang_bound_ms"] = loadMS(loadHangBound)
-	c.Pass = res.Max <= loadHangBound
+	c.Pass = res.Max <= loadHangBound && swapped && swapObs != nil
 	return c
 }
 
-// reloadPolicy rewrites the policy file with a trailing comment, which the
-// daemon's and the broker's 5 s watch loads as a new bundle.
-func (r *loadRun) reloadPolicy() {
+// loadSwapWait bounds how long a process has to say it swapped: two parses at
+// fleet size (loadBoth) with room.
+const loadSwapWait = 6 * time.Minute
+
+// reloadPolicy edits the policy (one person's token_ttl, so the bundle really
+// changes) and waits for port49d and the broker each to say "policy reloaded",
+// answering the seconds each took, or the processes that never did.
+func (r *loadRun) reloadPolicy() (map[string]string, bool) {
 	r.reloads++
-	body := loadPolicy() + "# reload " + strconv.Itoa(r.reloads) + "\n"
+	r.daemon.mark()
+	r.broker.mark()
+	body := strings.Replace(loadPolicy(), "username: human000, token_ttl: 900s",
+		"username: human000, token_ttl: "+strconv.Itoa(900+r.reloads)+"s", 1)
+	start := time.Now()
 	if err := os.WriteFile(r.policyPath, []byte(body), 0o600); err != nil {
-		r.t.Logf("cell d: the reload: %v", err)
+		r.t.Logf("cell d: the policy edit: %v", err)
+		return map[string]string{"policy_edit": "not written"}, false
 	}
+	wait := func(p *regionProc) func() (time.Duration, error) {
+		return func() (time.Duration, error) {
+			if _, err := p.wait("policy reloaded (", loadSwapWait); err != nil {
+				return 0, err
+			}
+			return time.Since(start), nil
+		}
+	}
+	return loadAwaitSwaps(map[string]func() (time.Duration, error){"port49d": wait(r.daemon), "port49_broker": wait(r.broker)})
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {

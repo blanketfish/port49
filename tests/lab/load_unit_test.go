@@ -3,8 +3,11 @@
 package lab
 
 import (
+	"context"
+	"errors"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -182,6 +185,9 @@ func TestLoadNetemTouchesOnlyTheDirectoryPorts(t *testing.T) {
 			t.Errorf("no filter for client port %s:\n%s", port, joined)
 		}
 	}
+	if !strings.Contains(joined, "priomap 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1") {
+		t.Errorf("the prio priomap must send ordinary traffic to band 2, not through netem:\n%s", joined)
+	}
 	if !strings.Contains(joined, "netem delay 40ms") || strings.Contains(joined, "root netem") {
 		t.Errorf("netem must hang off a band, not the whole of lo:\n%s", joined)
 	}
@@ -231,5 +237,67 @@ func TestLoadProfileLoads(t *testing.T) {
 	}
 	if strings.Join(acct, ",") != "account_start,account_stop" {
 		t.Fatalf("acct steps %v", acct)
+	}
+}
+
+// A run's STOP sentinel cancels the load within a poll, wherever a cell is.
+func TestLoadStopsWhenTheSentinelAppears(t *testing.T) {
+	var polls atomic.Int32
+	check := func() error {
+		if polls.Add(1) > 3 {
+			return errors.New("the lab STOP sentinel exists")
+		}
+		return nil
+	}
+	ctx, stopped := loadStopOnSentinel(context.Background(), check, 10*time.Millisecond)
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the load ran on past the sentinel")
+	}
+	if err := stopped(); err == nil || !strings.Contains(err.Error(), "STOP") {
+		t.Fatalf("stopped() = %v, want the guard's error", err)
+	}
+
+	// With the sentinel absent the context lives until stopped() is called, and
+	// stopped() reports no error.
+	ctx, stopped = loadStopOnSentinel(context.Background(), func() error { return nil }, 10*time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatalf("cancelled with no sentinel: %v", ctx.Err())
+	}
+	if err := stopped(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Cell d passes only when every process confirms the swap.
+func TestLoadReloadMustBeConfirmedByEveryProcess(t *testing.T) {
+	ok := func() (time.Duration, error) { return 72 * time.Second, nil }
+	missing := func() (time.Duration, error) { return 0, errors.New("did not say it") }
+	obs, all := loadAwaitSwaps(map[string]func() (time.Duration, error){"port49d": ok, "port49_broker": ok})
+	if !all || obs["port49d_reload_seconds"] != "72.0" || obs["port49_broker_reload_seconds"] != "72.0" {
+		t.Fatalf("%v %v", obs, all)
+	}
+	obs, all = loadAwaitSwaps(map[string]func() (time.Duration, error){"port49d": ok, "port49_broker": missing})
+	if all || obs["port49_broker_reload"] != "no swap seen" || obs["port49d_reload_seconds"] != "72.0" {
+		t.Fatalf("a missing swap passed: %v %v", obs, all)
+	}
+}
+
+func TestLoadNetemWillNotTouchAQdiscItDidNotInstall(t *testing.T) {
+	for show, want := range map[string]struct {
+		remove bool
+		err    bool
+	}{
+		"qdisc noqueue 0: root refcnt 2\n": {false, false},
+		"qdisc prio 1: root refcnt 2 bands 3 priomap 1 1 1\nqdisc netem 30: parent 1:3 limit 1000 delay 40ms\n": {true, false},
+		"qdisc fq_codel 0: root refcnt 2 limit 10240p\n":                                                        {false, true},
+		"": {false, false},
+	} {
+		remove, err := loadNetemPlan(show)
+		if remove != want.remove || (err != nil) != want.err {
+			t.Errorf("%q: remove %v err %v", show, remove, err)
+		}
 	}
 }

@@ -120,20 +120,19 @@ func BenchmarkCompareFleet(b *testing.B) {
 	}
 }
 
-// BenchmarkInventoryOnlyRefresh is the broker's refresh when only the
-// inventory changed (the plan 6a carry): the same policy text over an
-// inventory with one device moved, compared with the one in force.
-func BenchmarkInventoryOnlyRefresh(b *testing.B) {
-	text := benchPolicyText("**")
-	devs := benchFleet(benchDevices)
-	before := benchParse(b, text, devs)
-	moved := append([]admission.Device(nil), devs...)
-	moved[0].Addresses = []netip.Addr{netip.MustParseAddr("127.9.9.9")}
+// BenchmarkParseFleet is policy.Parse at the design's size: every daemon
+// start, policy reload and inventory-only reload runs it (bundle.Parse is
+// this plus the inventory's validation), and the broker runs it at its own
+// reloads.
+func BenchmarkParseFleet(b *testing.B) {
+	text, devs := []byte(benchPolicyText("**")), benchFleet(benchDevices)
+	b.Setenv("PORT49_KEY_LOAD", "not-a-real-key-0123456789")
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		after := benchParse(b, text, moved)
-		Compare(before, after, noon)
+		if _, err := Parse(text, Env{Now: noon, Devices: devs}); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
