@@ -261,8 +261,9 @@ lab-l80:
 # cells on the local images (nothing is pulled or built) and writes the note from the cells; with
 # A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
 # Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
+L84_NOTE ?= $(CURDIR)/tests/lab/results/L84-systemd-docker.md
 lab-l84:
-	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
+	PORT49_L84_NOTE=$(L84_NOTE) $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
 
 lab-l84-systemd: smoke-keyhost packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }

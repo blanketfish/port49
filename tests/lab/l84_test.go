@@ -29,11 +29,17 @@ import (
 // Logs are read only through tests/qual/secret-filter.sh. Keys are random per run, written to
 // 0700 temp directories, never printed; the compose project is port49l84, taken down with its
 // volumes on every exit.
+// l84DiskFloorMB is L84's own free-disk floor on /, not L66's 66 GiB (a hosted runner has about 14 GiB free).
+// Measured from what the cells hold: port49:dev 120 MB, port49-setup:dev 74 MB and etcd 92 MB (docker images),
+// the Debian systemd image of tests/systemd (about 120 MB base plus the packages), three small etcd volumes, and
+// the build's dist/. About 1 GB at peak; 4 GiB leaves headroom. There is no env override.
+const l84DiskFloorMB = 4096
+
 func TestL84(t *testing.T) {
 	if os.Getenv("PORT49_LAB_L84") != "1" {
 		t.Skip("PORT49_LAB_L84=1 runs L84 (make lab-l84); `make lab` does not")
 	}
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+	if err := labGuardAt(l66StopSentinel, "/", l84DiskFloorMB); err != nil {
 		t.Fatal(err)
 	}
 	if err := labOccupyForRun(labLockPath, fmt.Sprintf("TestL84 pid %d", os.Getpid())); err != nil {
@@ -267,7 +273,7 @@ func (s *l84Stack) hostSecret(dir, name string, body []byte, owner, mode string)
 
 func (s *l84Stack) guard() {
 	s.t.Helper()
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+	if err := labGuardAt(l66StopSentinel, "/", l84DiskFloorMB); err != nil {
 		s.t.Fatal(err)
 	}
 }

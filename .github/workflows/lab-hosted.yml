@@ -18,6 +18,7 @@ on:
 permissions: {contents: read}
 jobs:
   l84:
+    # synchronize as lab-kind.yml has it: a push to a labelled pull request re-runs the job
     # Adding some other label to a labelled pull request does not start a run.
     if: contains(github.event.pull_request.labels.*.name, 'lab-hosted') && (github.event.action == 'synchronize' || github.event.label.name == 'lab-hosted')
     runs-on: ubuntu-24.04
@@ -32,12 +33,15 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with: {go-version-file: go.mod}
+      # the three image steps are unfiltered: they print only Docker build and pull progress, never harness output
       - run: make image
       - run: docker build --target setup -t port49-setup:dev .
+      # pulling by digest may leave no tag on the runner's image store, and TestL84 inspects the tag
       - run: docker pull gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
+      - run: docker tag gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1 gcr.io/etcd-development/etcd:v3.6.15
       - run: mkdir -p bin/lab-out/l84
       - run: make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
-      - run: make lab-l84 A_CELLS=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
+      - run: make lab-l84 L84_NOTE="$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker.md" A_CELLS=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
       - if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

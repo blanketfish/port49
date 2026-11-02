@@ -26,6 +26,7 @@ type step struct {
 }
 
 type job struct {
+	If          string            `yaml:"if"`
 	Env         map[string]string `yaml:"env"`
 	Needs       any               `yaml:"needs"`
 	Environment any               `yaml:"environment"`
@@ -671,12 +672,14 @@ func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
 	if regexp.MustCompile(`id-token`).MatchString(raw) {
 		t.Error("lab-hosted.yml mentions id-token")
 	}
-	for _, want := range []string{
-		"contains(github.event.pull_request.labels.*.name, 'lab-hosted')",
-		"github.event.label.name == 'lab-hosted'",
-	} {
-		if !strings.Contains(raw, want) {
-			t.Errorf("the job's if lacks %q", want)
+	for id, j := range f.Jobs {
+		for _, want := range []string{
+			"contains(github.event.pull_request.labels.*.name, 'lab-hosted')",
+			"github.event.label.name == 'lab-hosted'",
+		} {
+			if !strings.Contains(j.If, want) {
+				t.Errorf("job %s: its if lacks %q: %q", id, want, j.If)
+			}
 		}
 	}
 	// the order matters: the images exist before TestL84 looks for them
@@ -700,12 +703,22 @@ func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
 	img := at(`(?m)^make image\b`)
 	setup := at(`docker build --target setup -t port49-setup:dev \.`)
 	pull := at(`docker pull gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64}\b`)
+	tag := at(`docker tag gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64} gcr\.io/etcd-development/etcd:v3\.6\.15$`)
 	sys := at(`make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
-	merge := at(`make lab-l84 A_CELLS=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
-	if img >= 0 && setup >= 0 && pull >= 0 && sys >= 0 && merge >= 0 {
-		if max(img, setup, pull) > sys || sys > merge {
+	merge := at(`make lab-l84 L84_NOTE="\$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker\.md" A_CELLS=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	if img >= 0 && setup >= 0 && pull >= 0 && tag >= 0 && sys >= 0 && merge >= 0 {
+		if tag < pull || max(img, setup, tag) > sys || sys > merge {
 			t.Errorf("order is image %d, setup %d, pull %d, systemd %d, merge %d; want the three images, then the systemd cells, then lab-l84", img, setup, pull, sys, merge)
 		}
+	}
+	// the note is written where the artifact picks it up (an absolute path: go test runs in tests/lab)
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^L84_NOTE \?= \$\(CURDIR\)/tests/lab/results/L84-systemd-docker\.md$`).Match(mk) ||
+		!regexp.MustCompile(`(?m)^\tPORT49_L84_NOTE=\$\(L84_NOTE\) `).Match(mk) {
+		t.Error("the Makefile does not make the L84 note path overridable with ?= and pass it as PORT49_L84_NOTE")
 	}
 	if !strings.Contains(raw, "path: bin/lab-out/l84") {
 		t.Error("the artifact is not bin/lab-out/l84")
