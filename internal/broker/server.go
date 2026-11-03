@@ -300,7 +300,13 @@ var readTimeout = 30 * time.Second
 var writeTimeout = 15 * time.Second
 
 // boundWrites gives each response's write a deadline of writeTimeout from
-// its first byte, and a later write the same one again.
+// its first byte, and a later write the same one again. The deadline is per
+// Write, so it is the total bound only because every broker response is a
+// single Write; a handler that streams in many writes would need a total
+// bound of its own. Flush is passed through (answerRefusal flushes its answer
+// before the revocation closes the connection) and Unwrap reaches the real
+// writer for http.ResponseController; no other optional interface is asserted
+// on a broker response writer.
 func boundWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(&boundedWriter{ResponseWriter: w, rc: http.NewResponseController(w)}, r)
@@ -322,6 +328,11 @@ func (b *boundedWriter) WriteHeader(code int) {
 func (b *boundedWriter) Write(p []byte) (int, error) {
 	b.bound()
 	return b.ResponseWriter.Write(p)
+}
+
+func (b *boundedWriter) Flush() {
+	b.bound()
+	_ = b.rc.Flush()
 }
 
 func (b *boundedWriter) Unwrap() http.ResponseWriter { return b.ResponseWriter }

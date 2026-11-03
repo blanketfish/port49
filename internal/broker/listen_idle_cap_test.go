@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -288,5 +289,19 @@ func TestAStalledResponseStopsBeingBusyWithinTheWriteBound(t *testing.T) {
 			t.Fatal("the principal was still refused after the write bound")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// answerRefusal flushes its answer before it queues the revocation that closes
+// the connection; the write bound's wrapper must pass the flush through.
+func TestTheWriteBoundPassesTheRefusalsFlush(t *testing.T) {
+	f := newFixture(t, 8)
+	rec := httptest.NewRecorder()
+	h := boundWrites(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.b.answerRefusal(w, r, &BindRefusal{Status: http.StatusUnauthorized, Error: "credential_revoked"})
+	}))
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/tokens", nil))
+	if !rec.Flushed || rec.Code != http.StatusUnauthorized {
+		t.Fatalf("flushed %v, status %d", rec.Flushed, rec.Code)
 	}
 }
