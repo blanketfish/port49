@@ -270,9 +270,8 @@ func TestARevocationMidBatchDeletesEveryDevice(t *testing.T) {
 		answered <- f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "01B")
 	}()
 	<-p.entered
-	if f.live(t, "leaf1") != 1 {
-		t.Fatal("leaf1 must be minted before nx1's pause")
-	}
+	// A batch's devices mint concurrently, so leaf1 may still be writing.
+	eventually(t, "leaf1 minted while nx1 is paused", func() bool { return f.live(t, "leaf1") == 1 })
 	f.revokeAndSweep(t, "user:alice@example.com")
 	close(p.gate)
 	if w := <-answered; w.Code != http.StatusUnauthorized || strings.Contains(w.Body.String(), `"login"`) {

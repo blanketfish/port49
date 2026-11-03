@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/blanketfish/port49/internal/decision"
@@ -47,6 +49,7 @@ type Reservation struct {
 	// Mint replays it, unless a policy change or a revocation deleted its
 	// tokens since.
 	Found    map[string]store.Idempotency
+	mu       sync.Mutex // a batch's devices mint from several goroutines
 	reserved []string
 }
 
@@ -240,7 +243,7 @@ func (m *Minter) Reserve(ctx context.Context, principal, key string, devices []s
 			m.giveBack(ctx, principal, res)
 			return nil, fmt.Errorf("token: reserving the idempotency key: %w", err)
 		case ok:
-			res.reserved = append(res.reserved, device)
+			res.reserved = append(res.reserved, device) // not yet shared
 		case cur.BodyHash != bodyHash:
 			m.giveBack(ctx, principal, res)
 			return nil, ErrIdempotencyConflict
@@ -317,7 +320,10 @@ func (m *Minter) Release(ctx context.Context, principal string, res *Reservation
 	if res == nil {
 		return
 	}
-	for _, device := range res.reserved {
+	res.mu.Lock()
+	reserved := slices.Clone(res.reserved)
+	res.mu.Unlock()
+	for _, device := range reserved {
 		_ = m.store.ReleaseIdempotency(ctx, principal, idemScope(res.Key, device), res.Holder)
 	}
 }
@@ -451,7 +457,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		}
 		if expect != res.Holder {
 			// Taken over: give it back with the rest if this mint fails.
+			res.mu.Lock()
 			res.reserved = append(res.reserved, r.Device)
+			res.mu.Unlock()
 		}
 	}
 

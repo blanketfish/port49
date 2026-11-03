@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blanketfish/port49/internal/broker/api"
@@ -284,6 +285,9 @@ type provedChallenge struct {
 // session hash, the proof its named challenge took, and the one challenge
 // the request issues, lazily, for the first item that needs it.
 type mfaRequest struct {
+	// mu serializes judging, which issues the request's one challenge: a
+	// batch's devices are judged from several goroutines.
+	mu          sync.Mutex
 	agentSHA256 string
 	proved      *provedChallenge
 	// takeErr is the named challenge's proved record failing to be read: an
