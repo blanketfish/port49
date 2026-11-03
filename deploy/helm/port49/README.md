@@ -29,6 +29,11 @@ an empty Secret name. List every member: a client given one URL has no failover.
 create or run etcd for you; `examples/etcd/` is a three-member example, and the kind smoke runs it with
 its init Job.
 
+**etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes.
+
 Two server groups (for example a lab and production) are two releases in two namespaces with their
 own Secrets and their own etcd; they share nothing.
 

@@ -349,6 +349,13 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `docker compose logs port49d` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the container restarts | `docker compose logs port49d` | nothing: it retries; start etcd |
 
+## etcd's disk
+
+**etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes.
+
 ## Backups
 
 Each etcd data volume and `broker-state` (design §13's runbook).

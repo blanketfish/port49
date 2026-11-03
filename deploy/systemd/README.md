@@ -268,7 +268,14 @@ The two examples in `examples/` are for your etcd hosts. The three `etcd-N.yaml`
 `auto-compaction-mode: periodic`, `auto-compaction-retention: "10m"` and an 8 GiB quota, with TLS
 and client-certificate auth. Install etcd 3.6.15 or later at `/usr/local/bin/etcd`, create the user
 (`sysusers-etcd.conf`) and its data directory (`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700; it also makes `/etc/etcd/pki` for the certificates), copy `etcd@.service`, and `systemctl enable --now etcd@etcd-1` on the first host, and so
-on. Then apply the roles once per cluster:
+on.
+
+**etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes.
+
+Then apply the roles once per cluster:
 
 ```sh
 port49d store-roles --config /etc/port49/port49d.yaml --broker-config /etc/port49/port49-broker.yaml
