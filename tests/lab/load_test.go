@@ -200,7 +200,7 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
 	c.Observed["mint_errors"] = strconv.Itoa(mints.Errs)
 	addSamplerObserved(c.Observed, dsam, bsam)
-	c.daemonStore = dsam.last.Sub(dsam.first)
+	c.daemonStore, c.daemonScrapes = dsam.last.Sub(dsam.first), dsam.ok
 	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
 		const mb = 1 << 20
 		c.Observed["etcd_session_revisions_per_min"] = loadRevisionsPerMin(walBefore.Revision, m.Revision, time.Since(cellStart))
@@ -223,9 +223,7 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	for name, after := range r.usage() {
 		c.Observed["cpu_seconds_"+name] = strconv.FormatFloat(after[0]-before[name][0], 'f', 1, 64)
 	}
-	for name, kb := range peakRSS { // this cell's peak, not the process's lifetime VmHWM
-		c.Observed["peak_rss_mb_"+name] = num(float64(kb) / 1024)
-	}
+	addRSSObserved(c.Observed, peakRSS) // this cell's peak, not the process's lifetime VmHWM
 	return c, res
 }
 
@@ -652,5 +650,8 @@ func (r *loadRun) cellNetem(ctx context.Context, c loadCell) loadCell {
 // past the last bucket is a lower bound and fails.
 func loadNetemPass(errs int, c loadCell) bool {
 	m := c.daemonStore
+	if c.daemonScrapes < 2 {
+		return false // no delta was measured: unread is not fast
+	}
 	return errs == 0 && !m.PastLastBucket(0.99) && m.Quantile(0.99) < loadCallTimeout
 }

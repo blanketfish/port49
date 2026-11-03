@@ -591,7 +591,7 @@ func TestAMintFaultItemKeepsItsErrorCode(t *testing.T) {
 func TestCellFFailsOnAP99PastTheCallTimeout(t *testing.T) {
 	cell := func(buckets map[float64]float64) loadCell {
 		m := loadMetrics{buckets: buckets}
-		return loadCell{daemonStore: m, Observed: map[string]string{"daemon_store_call_p99_ms": m.QuantileLabel(0.99)}}
+		return loadCell{daemonStore: m, daemonScrapes: 2, Observed: map[string]string{"daemon_store_call_p99_ms": m.QuantileLabel(0.99)}}
 	}
 	fast := cell(map[float64]float64{0.005: 100, 0.25: 100, 1: 100, math.Inf(1): 100})
 	if !loadNetemPass(0, fast) {
@@ -607,6 +607,44 @@ func TestCellFFailsOnAP99PastTheCallTimeout(t *testing.T) {
 	inf := cell(map[float64]float64{0.005: 1, 0.25: 1, 1: 1, math.Inf(1): 100})
 	if loadNetemPass(0, inf) {
 		t.Error("a p99 past the last bucket passed the cell")
+	}
+	for _, n := range []int{0, 1} {
+		unread := fast
+		unread.daemonScrapes = n
+		if loadNetemPass(0, unread) {
+			t.Errorf("a cell with %d daemon scrapes passed on a delta nobody measured", n)
+		}
+	}
+}
+
+// One scrape is a point, not a change: the deltas read scrape_failed, the
+// peaks (which one scrape gives) read their value.
+func TestASamplerWithOneScrapeHasNoDeltas(t *testing.T) {
+	s := &loadSampler{ok: 1, peakConns: 3, peakDepth: 2}
+	obs := map[string]string{}
+	addSamplerObserved(obs, s, s)
+	if obs["spool_drops_during"] != loadScrapeFailed || obs["daemon_store_call_p99_ms"] != loadScrapeFailed ||
+		obs["broker_store_call_p99_ms"] != loadScrapeFailed {
+		t.Errorf("a delta from one scrape: %v", obs)
+	}
+	if obs["peak_port49_connections"] != "3" || obs["peak_spool_depth"] != "2" {
+		t.Errorf("the peaks of one scrape: %v", obs)
+	}
+}
+
+// A process whose RSS could not be read in the cell reads scrape_failed.
+func TestAnUnreadableRSSReadsScrapeFailed(t *testing.T) {
+	read := func(pf string) (int, error) {
+		if pf == "bad" {
+			return 0, errors.New("gone")
+		}
+		return 2048, nil
+	}
+	s := startLoadRSSSampler(map[string]string{"port49d": "ok", "etcd_session": "bad"}, read, time.Millisecond)
+	obs := map[string]string{}
+	addRSSObserved(obs, s.finish())
+	if obs["peak_rss_mb_port49d"] != "2" || obs["peak_rss_mb_etcd_session"] != loadScrapeFailed {
+		t.Fatalf("%v", obs)
 	}
 }
 

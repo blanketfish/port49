@@ -88,6 +88,10 @@ type loadCell struct {
 	// daemonStore is the daemon's store-call histogram over the cell: what a
 	// verdict gate reads, never the note's label text for it.
 	daemonStore loadMetrics
+	// daemonScrapes is how many of the daemon sampler's scrapes answered. A
+	// delta needs two: with fewer, daemonStore is empty or zero, not measured,
+	// and no gate may pass on it.
+	daemonScrapes int
 }
 
 // parseLoadCells is PORT49_LAB_LOAD_CELLS: comma-separated cell IDs, empty for
@@ -749,14 +753,32 @@ func (s *loadRSSSampler) sample() {
 }
 
 // finish samples once more, so the cell's last moment counts, and returns the
-// peaks in kB by process.
+// peaks in kB by process; -1 for a process whose RSS was never read.
 func (s *loadRSSSampler) finish() map[string]int {
 	close(s.stop)
 	<-s.done
 	s.sample()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return maps.Clone(s.peakKB)
+	out := maps.Clone(s.peakKB)
+	for name := range s.pids {
+		if _, ok := out[name]; !ok {
+			out[name] = -1
+		}
+	}
+	return out
+}
+
+// addRSSObserved records each process's cell peak in MB; a process whose RSS
+// could not be read reads scrape_failed, never a missing key.
+func addRSSObserved(obs map[string]string, peaks map[string]int) {
+	for name, kb := range peaks {
+		if kb < 0 {
+			obs["peak_rss_mb_"+name] = loadScrapeFailed
+			continue
+		}
+		obs["peak_rss_mb_"+name] = strconv.FormatFloat(float64(kb)/1024, 'f', 0, 64)
+	}
 }
 
 // loadProcRSS is a process's resident set in kB now, by the PID in its pidfile.
@@ -782,17 +804,23 @@ func loadProcRSS(pidfile string) (int, error) {
 // the 0 of an unread peak.
 func addSamplerObserved(obs map[string]string, dsam, bsam *loadSampler) {
 	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
-	if dsam.ok == 0 {
-		for _, k := range []string{"peak_port49_connections", "peak_spool_depth", "spool_drops_during", "daemon_store_call_p99_ms"} {
-			obs[k] = loadScrapeFailed
-		}
-	} else {
+	// A peak needs one scrape; a delta (drops, a histogram's p99) needs two,
+	// since one scrape is a point, not a change.
+	for _, k := range []string{"peak_port49_connections", "peak_spool_depth"} {
+		obs[k] = loadScrapeFailed
+	}
+	for _, k := range []string{"spool_drops_during", "daemon_store_call_p99_ms"} {
+		obs[k] = loadScrapeFailed
+	}
+	if dsam.ok >= 1 {
 		obs["peak_port49_connections"] = num(dsam.peakConns)
 		obs["peak_spool_depth"] = num(dsam.peakDepth)
+	}
+	if dsam.ok >= 2 {
 		obs["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
 		obs["daemon_store_call_p99_ms"] = dsam.last.Sub(dsam.first).QuantileLabel(0.99)
 	}
-	if bsam.ok == 0 {
+	if bsam.ok < 2 {
 		obs["broker_store_call_p99_ms"] = loadScrapeFailed
 	} else {
 		obs["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
