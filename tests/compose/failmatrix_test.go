@@ -113,16 +113,67 @@ func listening(addr string) bool {
 func (m matrix) restore() {
 	t := m.s.t
 	t.Helper()
-	m.s.try("unpause", "etcd-1", "etcd-2", "etcd-3", "port49d", "port49-broker") // an error is a container not paused
+	// One service at a time: compose stops at the first container that is not
+	// paused ("is not paused"), and would leave the rest paused.
+	for _, svc := range []string{"etcd-1", "etcd-2", "etcd-3", "port49d", "port49-broker"} {
+		m.s.try("unpause", svc)
+	}
 	m.s.run("start", "etcd-1", "etcd-2", "etcd-3", "port49-broker", "port49d")
 	m.s.ready(daemonMetrics)
 	m.s.ready(brokerMetrics)
-	shapetest.WaitFor(t, "port49d listening", time.Minute, func() bool { return listening(tacacsAddr) })
+	shapetest.WaitFor(t, "port49d listening", 2*time.Minute, func() bool { return listening(tacacsAddr) })
+	// Healthy means the store answers port49d's checks, not only that the
+	// processes are up: the next subtest starts from a working store.
+	shapetest.WaitFor(t, "port49_store_health_failures back at 0", time.Minute, func() bool {
+		return m.gauge(daemonMetrics, "port49_store_health_failures") == 0
+	})
 }
 
+// dump logs the tail of both processes' stderr through the filter.
+func (m matrix) dump() {
+	out, _ := m.s.try("logs", "--no-color", "--tail", "40", "port49d", "port49-broker")
+	m.s.t.Logf("port49d and port49-broker, last 40 lines each:\n%s", shapetest.Filtered(m.root, out))
+}
+
+// gauge reads an unlabelled gauge, retrying for 30s: port49d starts its run
+// again in-process after a store gone, and its metrics listener is closed and
+// bound afresh meanwhile (internal/port49d/main.go, runLoop), so a scrape in
+// that window is reset or refused.
 func (m matrix) gauge(addr, name string) float64 {
 	m.s.t.Helper()
-	return shapetest.Gauge(m.s.t, addr, name)
+	var last error
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		v, found, err := scrape(addr, name)
+		if err == nil && found {
+			return v
+		}
+		last = err
+		if err == nil {
+			last = fmt.Errorf("no sample %s", name)
+		}
+	}
+	m.s.t.Fatalf("metrics at %s: %v (for 30s)", addr, last)
+	return 0
+}
+
+// scrape reads one unlabelled or fully written sample from addr's /metrics.
+func scrape(addr, sample string) (v float64, found bool, err error) {
+	resp, err := http.Get("http://" + addr + "/metrics")
+	if err != nil {
+		return 0, false, err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if x, ok := strings.CutPrefix(line, sample+" "); ok {
+			v, err = strconv.ParseFloat(strings.TrimSpace(x), 64)
+			return v, err == nil, err
+		}
+	}
+	return 0, false, nil
 }
 
 // tlsDial is a TLS connection to addr that checks nothing about the server: a
@@ -136,19 +187,32 @@ func TestFailureMatrix(t *testing.T) {
 	m := composeUp(t)
 	run := func(name string, f func(m matrix)) {
 		t.Run(name, func(t *testing.T) {
-			defer m.with(t).restore()
-			f(m.with(t))
+			sm := m.with(t)
+			// Registered first, so it runs last: after the subtest's own cleanups
+			// and before the next subtest starts.
+			t.Cleanup(sm.restore)
+			t.Cleanup(func() {
+				if t.Failed() {
+					sm.dump()
+				}
+			})
+			f(sm)
 		})
 	}
 	// dark is a store row: while port49d still listens, a token login is
 	// answered ERROR store_unavailable and a command of an open session is
 	// answered cmdStatus, never PASS (design §12; spec §5.7). An unanswered
 	// connection is allowed only once the listener has closed.
-	dark := func(name string, cmdStatus uint8, down, up func(m matrix)) {
+	dark := func(name string, cmdStatus uint8, listenBound time.Duration, down, up func(m matrix)) {
 		run(name, func(m matrix) {
 			t := m.s.t
 			if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
 				t.Fatalf("login before the store went dark: status %d", st)
+			}
+			// The session's own authorization (priv 1) raises the context to the
+			// role's level; a command at 15 before it is privilege_exceeded.
+			if !m.dev.Permits("alice") {
+				t.Fatal("the session authorization before the store went dark was refused")
 			}
 			tok := m.mint()
 			down(m)
@@ -172,17 +236,21 @@ func TestFailureMatrix(t *testing.T) {
 				return m.gauge(daemonMetrics, "port49_store_health_failures") >= closeAfter
 			})
 			up(m)
-			shapetest.WaitFor(t, "the listener open again", openAfter*healthInterval+2*time.Second+callTimeout,
-				func() bool { return listening(tacacsAddr) })
+			shapetest.WaitFor(t, "the listener open again", listenBound, func() bool { return listening(tacacsAddr) })
 			next := m.mint()
 			shapetest.WaitFor(t, "a login", 10*time.Second, func() bool { return m.passes(next) })
 		})
 	}
-	dark("store_hangs", wire.AuthorStatusError,
+	// store_hangs: the brief's bound, open_after passes plus 2s. store_stopped
+	// adds the members' own start and election, which the pause does not have.
+	// It kills the members rather than stopping them: etcd's graceful stop took
+	// 7s or more in CI, so port49d had closed its listener before `stop` returned
+	// and the statuses of the 5.5s window could not be probed.
+	dark("store_hangs", wire.AuthorStatusError, openAfter*healthInterval+2*time.Second+callTimeout,
 		func(m matrix) { m.s.run("pause", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("unpause", "etcd-2", "etcd-3") })
-	dark("store_stopped", wire.AuthorStatusFail,
-		func(m matrix) { m.s.run("stop", "etcd-1", "etcd-2", "etcd-3") },
+	dark("store_stopped", wire.AuthorStatusFail, 30*time.Second,
+		func(m matrix) { m.s.run("kill", "etcd-1", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("start", "etcd-1", "etcd-2", "etcd-3") })
 
 	run("one_member_dark", func(m matrix) {
@@ -210,6 +278,9 @@ func TestFailureMatrix(t *testing.T) {
 		t := m.s.t
 		if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
 			t.Fatalf("login before the stop: status %d", st)
+		}
+		if !m.dev.Permits("alice") {
+			t.Fatal("the session authorization before the stop was refused")
 		}
 		held := m.mint()
 		m.s.run("stop", "port49-broker")
@@ -262,8 +333,8 @@ func TestFailureMatrix(t *testing.T) {
 		if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
 			t.Fatalf("login before the restart: status %d", st)
 		}
-		if !m.dev.Permits("alice", "show", "version") {
-			t.Fatal("a command before the restart was refused")
+		if !m.dev.Permits("alice") || !m.dev.Permits("alice", "show", "version") {
+			t.Fatal("the session or a command before the restart was refused")
 		}
 		before := lastCtxID(m.s.run("logs", "--no-color", "port49d"))
 		held := m.mint()
@@ -341,27 +412,19 @@ func refusedAtOnce(t *testing.T, when string) {
 	}
 }
 
-// counter reads one sample of a labelled counter, 0 when it has none yet.
+// counter reads one sample of a labelled counter, 0 when it has none yet,
+// retrying for 30s a scrape that port49d's in-process restart refused.
 func counter(t *testing.T, addr, sample string) float64 {
 	t.Helper()
-	resp, err := http.Get("http://" + addr + "/metrics")
-	if err != nil {
-		t.Fatalf("metrics at %s: %v", addr, err)
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(line, sample+" "); ok {
-			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-			if err != nil {
-				t.Fatalf("%s: %v", sample, err)
-			}
-			return f
+	var last error
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		v, _, err := scrape(addr, sample)
+		if err == nil {
+			return v
 		}
+		last = err
 	}
+	t.Fatalf("metrics at %s: %v (for 30s)", addr, last)
 	return 0
 }
 
