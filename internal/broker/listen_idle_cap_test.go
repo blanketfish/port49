@@ -15,9 +15,11 @@ import (
 )
 
 // busy opens a connection presenting cert and starts a request whose body it does not
-// send, so the broker has a request in flight on it. finish completes the
+// send, so the broker has a request in flight on it, and wants the broker to
+// count exactly active connections busy once it has: every busy one so far,
+// this one included. finish completes the
 // request and wants its answer.
-func busy(t *testing.T, f *fixture, bl *Listener, addr string, cert tls.Certificate) (c *tls.Conn, finish func()) {
+func busy(t *testing.T, f *fixture, bl *Listener, addr string, cert tls.Certificate, active int) (c *tls.Conn, finish func()) {
 	t.Helper()
 	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: f.ca.Pool(),
 		MinVersion: tls.VersionTLS13})
@@ -31,11 +33,9 @@ func busy(t *testing.T, f *fixture, bl *Listener, addr string, cert tls.Certific
 	}
 	// The connection is busy from bind, so activeHeld rising is no sign of the
 	// request, and may already have risen before this helper looked. Wait for
-	// the handler to see the request, then require a busy connection.
+	// the handler to see the request, then require every busy connection marked.
 	eventually(t, "a request in flight", func() bool { return requestsSeen(bl).Load() > before })
-	if activeHeld(bl) == 0 {
-		t.Fatal("a request is in flight on a connection the broker counts idle")
-	}
+	eventually(t, "every busy connection counted active", func() bool { return activeHeld(bl) == active })
 	br := bufio.NewReader(c)
 	return c, func() {
 		t.Helper()
@@ -79,7 +79,7 @@ func TestACapOfBusyConnectionsRefusesTheNewOne(t *testing.T) {
 	addr, bl := serveThrough(t, f, lim, nil)
 	var finish []func()
 	for i := 0; i < 4; i++ {
-		_, fin := busy(t, f, bl, addr, f.alice)
+		_, fin := busy(t, f, bl, addr, f.alice, i+1)
 		finish = append(finish, fin)
 	}
 	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
@@ -116,11 +116,11 @@ func TestTheCapClosesTheIdleConnectionAndNoBusyOne(t *testing.T) {
 	lim.MaxPerPrincipal = 4
 	addr, bl := serveThrough(t, f, lim, nil)
 	var finish []func()
-	_, fin := busy(t, f, bl, addr, f.alice) // the oldest, and busy
+	_, fin := busy(t, f, bl, addr, f.alice, 1) // the oldest, and busy
 	finish = append(finish, fin)
 	idle, _ := held(t, f, addr, f.alice)
 	for i := 0; i < 2; i++ {
-		_, fin := busy(t, f, bl, addr, f.alice)
+		_, fin := busy(t, f, bl, addr, f.alice, i+2)
 		finish = append(finish, fin)
 	}
 	fifth, br := held(t, f, addr, f.alice)
@@ -189,7 +189,7 @@ func TestACapRefusedConnectionStaysPendingUntilItCloses(t *testing.T) {
 	lim.MaxPerPrincipal = 4
 	addr, bl := serveThrough(t, f, lim, nil)
 	for i := 0; i < 4; i++ {
-		busy(t, f, bl, addr, f.alice)
+		busy(t, f, bl, addr, f.alice, i+1)
 	}
 	var refused []*tls.Conn
 	for i := 0; i < 3; i++ {
