@@ -15,7 +15,7 @@ regions. The lab's regions have a round trip of 40 ms (L74 measured an average o
 `tests/lab/results/L74-regions.md`), so four times that is 160 ms; the 500 ms in `multi-region/`
 covers a round trip up to 125 ms. Cell f passes at a 40 ms injected delay with the session etcd and
 the accounting spool in RAM (`tests/lab/results/load-beehive-ram.md`). Provisional on the beta
-datacenter-disk pass, like every default sized from the load run.
+GCP pass (n2-standard-16, pd-ssd), like every default sized from the load run.
 
 Both name every member's URL, never a load balancer or a VIP. Every `secret_ref` is a `file:`.
 Replace the `example.com` names and PKI paths; run `port49d store-roles` once per cluster (the
