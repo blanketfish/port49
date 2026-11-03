@@ -616,6 +616,14 @@ func restoreGuarded(m matrix) {
 	exec.Command("docker", "volume", "rm", "-f", snapVolume).Run()
 	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", snapVolume).Run() })
 	const guarded, until = "port49_redemption_restore_guarded", "port49_redemption_restore_guard_until_timestamp_seconds"
+	// The runner rewrites meta/witness once a second, and only when the store
+	// moved (witnessPass). A restore is seen only if the witness it brings back
+	// is older than the one port49d followed, so the stack is given three
+	// passes after the login that moves it: a stop inside the first second
+	// leaves the snapshot's witness current, and the guard rightly sees no
+	// restore (runner.go keepWitness: "about the most of a snapshot's lead over
+	// the last witness that the check cannot see").
+	witnessMovesPast := func() { time.Sleep(3 * time.Second) }
 
 	// Steps 1-3: a token minted before the snapshot and redeemed after it is
 	// the replay a restore brings back.
@@ -624,6 +632,7 @@ func restoreGuarded(m matrix) {
 	if !m.passes(replay) {
 		t.Fatal("the login that moves the store past the snapshot did not pass")
 	}
+	witnessMovesPast()
 	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
 	// Steps 4-5.
 	m.restoreMembers()
@@ -651,6 +660,7 @@ func restoreGuarded(m matrix) {
 	if !m.passes(again) {
 		t.Fatal("the login after the second snapshot did not pass")
 	}
+	witnessMovesPast()
 	m.s.run("stop", "port49-broker")
 	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
 	m.restoreMembers()
