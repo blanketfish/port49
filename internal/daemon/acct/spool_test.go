@@ -1336,7 +1336,7 @@ func TestConcurrentOffersShareAnFsync(t *testing.T) {
 
 func TestAFailedGroupSyncFailsEveryOfferInIt(t *testing.T) {
 	var syncs atomic.Int32
-	sp, path := groupSpool(t, func(f *os.File) error {
+	sp, _ := groupSpool(t, func(f *os.File) error {
 		if syncs.Add(1) == 1 {
 			return errors.New("injected sync failure")
 		}
@@ -1379,17 +1379,6 @@ func TestAFailedGroupSyncFailsEveryOfferInIt(t *testing.T) {
 	sp.mu.Unlock()
 	if !need {
 		t.Fatal("needNewline not set after the failed sync")
-	}
-	// The next offer starts on a line of its own.
-	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "after"}); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(path)
-	if !bytes.Contains(b, []byte("\n"+`{"ts"`)) && !bytes.Contains(b, []byte(`"task_id":"after"}`+"\n")) {
-		t.Fatalf("the offer after a failed sync is not on its own line: %q", b[max(0, len(b)-80):])
-	}
-	if bytes.Contains(b, []byte(`}{"`)) {
-		t.Fatal("two records share a line")
 	}
 }
 

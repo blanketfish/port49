@@ -324,9 +324,9 @@ func readBoundedLine(br *bufio.Reader) (line []byte, read int64, oversized bool,
 // synced together by the next one (group commit, load run 2: an fsync per
 // record capped accounting at the disk's fsync rate); each still returns only
 // after a sync that covers its line, and a failed batch fails every offer in
-// it. If this write created the file, it also syncs the parent directory so the new directory entry survives a crash (a data
-// fsync alone does not guarantee the file is findable after one). It
-// returns nil only once every one of those durable writes has succeeded;
+// it. If this write created the file, it also syncs the parent directory so
+// the new directory entry survives a crash (a data fsync alone does not
+// guarantee the file is findable after one). It returns nil only once every one of those durable writes has succeeded;
 // any error along the way counts a drop and returns ErrSpoolFull.
 //
 // A record is never appended to a line that may be incomplete. If the file
@@ -409,9 +409,10 @@ func (s *Spool) lead(self *offerWaiter) error {
 
 // writeBatch appends the batch's lines in one write and syncs once; a
 // failure at any step fails every offer in it. A short write can leave the
-// batch's earlier complete lines in the file while every offer gets
-// ErrSpoolFull: the drain forwards them and the devices retransmit, so a
-// record can arrive twice (accounting is at-least-once). See Offer.
+// batch's earlier complete lines in the file, and a sync that fails after a
+// full write leaves all of them, while every offer gets ErrSpoolFull: the
+// drain forwards the lines and the devices retransmit, so a record can arrive
+// twice, up to a batch of them (accounting is at-least-once). See Offer.
 func (s *Spool) writeBatch(batch []*offerWaiter) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
