@@ -291,16 +291,36 @@ type hostFacts struct {
 	// etcd's data was under /dev/shm. SessionStorage is the line the note
 	// carries, so a reader cannot take a RAM run for a disk run.
 	DiskModel, SessionStorage string
+	// SpoolStorage is the drive under port49d's accounting spool, in a disk
+	// run: an accounting ack waits on its fsync. Empty in a RAM run, whose
+	// SessionStorage covers both.
+	SpoolStorage string
 	// DiskDeclared is PORT49_LAB_LOAD_DISK_DECLARED: what the operator says
 	// the disk is, for one the host cannot name.
 	DiskDeclared string
 	InRAM        bool
 }
 
-// loadEtcdInRAM is PORT49_LAB_LOAD_ETCD_IN_RAM=1 (lab-only): the session
-// etcd's data-dir goes under /dev/shm and the note says so. The directory
-// etcds stay on the run directory's disk.
-func loadEtcdInRAM() bool { return os.Getenv("PORT49_LAB_LOAD_ETCD_IN_RAM") == "1" }
+// loadInRAM is PORT49_LAB_LOAD_IN_RAM=1 (lab-only): both fsync paths, the
+// session etcd's data-dir and port49d's accounting spool, go under /dev/shm and
+// the note says so. The directory etcds stay on the run directory's disk.
+func loadInRAM() bool { return os.Getenv("PORT49_LAB_LOAD_IN_RAM") == "1" }
+
+// loadSpoolRAMBytes is the room the accounting spool is given in /dev/shm
+// beside the session etcd's quota: the daemon drains it, so it stays small.
+const loadSpoolRAMBytes = 1 << 30
+
+// loadRAMNeed is the free /dev/shm a RAM run needs.
+func loadRAMNeed(quota uint64) uint64 { return quota + loadSpoolRAMBytes }
+
+// loadSpoolPath is port49d's accounting spool: in the run directory, or with
+// inRAM beside the session etcd's data under /dev/shm (sessData's directory).
+func loadSpoolPath(run, sessData string, inRAM bool) string {
+	if inRAM {
+		return filepath.Join(filepath.Dir(sessData), "acct.jsonl")
+	}
+	return filepath.Join(run, "acct.jsonl")
+}
 
 // loadDiskDeclared validates PORT49_LAB_LOAD_DISK_DECLARED: free text of at
 // most 64 printable characters.
@@ -328,7 +348,7 @@ func loadNoteName(host string, inRAM bool) string {
 // loadStorageFact is the note's session_etcd_storage.
 func loadStorageFact(inRAM bool, h hostFacts) string {
 	if inRAM {
-		return "ram (/dev/shm): not a deployable shape; port49's own ceiling"
+		return "ram (/dev/shm): session etcd data and the accounting spool; not a deployable shape; port49's own ceiling"
 	}
 	model, fs := h.DiskModel, h.RunDirFS
 	if model == "" {
@@ -350,7 +370,8 @@ func loadWALMean(inRAM bool, mean string) string {
 }
 
 // loadSessionDataDir is the session etcd's --data-dir: under the run directory,
-// or with inRAM in a 0700 directory of its own under shm. The caller removes
+// or with inRAM in a 0700 directory of its own under shm, which also holds the
+// accounting spool (loadSpoolPath). The caller removes
 // the directory above the returned path at cleanup.
 func loadSessionDataDir(run, shm string, inRAM bool) (string, error) {
 	if !inRAM {
@@ -413,10 +434,10 @@ func loadDiskModel(sys string, major, minor uint32) string {
 }
 
 // loadShmCheck refuses a RAM run whose /dev/shm cannot hold it: a session
-// etcd directory an earlier run left (killed before its cleanup; kept as
+// etcd and spool directory an earlier run left (killed before its cleanup; kept as
 // evidence, never removed here), or less free space than the quota. free
 // reports a directory's free bytes.
-func loadShmCheck(shm string, quota uint64, free func(string) (uint64, error)) error {
+func loadShmCheck(shm string, need uint64, free func(string) (uint64, error)) error {
 	left, _ := filepath.Glob(filepath.Join(shm, "p49load-s*"))
 	if len(left) > 0 {
 		return fmt.Errorf("%s holds the session etcd's data of an earlier run (it holds RAM until removed): remove it, then run again", strings.Join(left, ", "))
@@ -425,8 +446,8 @@ func loadShmCheck(shm string, quota uint64, free func(string) (uint64, error)) e
 	if err != nil {
 		return fmt.Errorf("the free space of %s is unreadable: %w", shm, err)
 	}
-	if n < quota {
-		return fmt.Errorf("%s has %d MB free; a RAM run needs the session etcd's quota, %d MB, free", shm, n>>20, quota>>20)
+	if n < need {
+		return fmt.Errorf("%s has %d MB free; a RAM run needs the session etcd's quota and room for the accounting spool, %d MB, free", shm, n>>20, need>>20)
 	}
 	return nil
 }
@@ -528,15 +549,18 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	var b strings.Builder
 	title := "# Load at the design rate"
 	if host.InRAM {
-		title += " (session etcd in RAM)"
+		title += " (session etcd and accounting spool in RAM)"
 	}
 	declared := ""
 	if host.DiskDeclared != "" {
 		declared = "- **session_etcd_disk_declared:** " + host.DiskDeclared + " (declared by the operator, not read from the host)\n"
 	}
+	if host.SpoolStorage != "" {
+		declared += "- **accounting_spool_storage:** " + host.SpoolStorage + "\n"
+	}
 	cellTag := ""
 	if host.InRAM {
-		cellTag = " (etcd in RAM)"
+		cellTag = " (etcd and spool in RAM)"
 	}
 	fmt.Fprintf(&b, title+"\n\n- **session_etcd_storage:** %s\n%s- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
 		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n"+
@@ -1105,7 +1129,8 @@ type loadRun struct {
 	tacacsKey    string
 	envFile      string
 	diskDeclared string // PORT49_LAB_LOAD_DISK_DECLARED, validated at the stack's start
-	inRAM        bool   // PORT49_LAB_LOAD_ETCD_IN_RAM: the session etcd's data is under /dev/shm
+	inRAM        bool   // PORT49_LAB_LOAD_IN_RAM: the session etcd's data and the accounting spool are under /dev/shm
+	spoolPath    string // port49d's accounting spool
 	devices      int
 	profile      *devicemock.Profile
 	clients      []*http.Client // one per machine principal
@@ -1167,7 +1192,7 @@ policy: {file: %s, watch_interval: 5s}
 encryption:
   current: {id: load, secret_ref: env:LOAD_ENC_KEY}
 accounting: {spool_path: %s}
-`, loadTCPAddr, loadDaemonMetrics, inv, r.policyPath, filepath.Join(r.dir, "acct.jsonl"))
+`, loadTCPAddr, loadDaemonMetrics, inv, r.policyPath, r.spoolPath)
 	if transport == "tls" {
 		y += fmt.Sprintf("tls_listener:\n  listen: %q\n  cert_file: %s\n  key_file: %s\n  client_ca_file: %s\n"+
 			"  server_names: [%s]\n  handshake_timeout: 10s\n  session_ticket_lifetime: 0s\n  state_dir: %s\n"+
@@ -1271,13 +1296,13 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 			client: fmt.Sprintf("127.0.0.1:%d", port), peer: fmt.Sprintf("127.0.0.1:%d", port+1), cluster: strings.Join(initial, ","),
 			data: filepath.Join(dir, fmt.Sprintf("d%d.etcd", i+1)), log: filepath.Join(dir, fmt.Sprintf("d%d.log", i+1)), pki: r.pki})
 	}
-	r.inRAM = loadEtcdInRAM()
+	r.inRAM = loadInRAM()
 	if r.diskDeclared, err = loadDiskDeclared(os.Getenv("PORT49_LAB_LOAD_DISK_DECLARED")); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
 	if r.inRAM {
 		quota, _ := strconv.ParseUint(etcdQuotaBackendBytes, 10, 64)
-		if err := loadShmCheck("/dev/shm", quota, loadFreeBytes); err != nil {
+		if err := loadShmCheck("/dev/shm", loadRAMNeed(quota), loadFreeBytes); err != nil {
 			t.Fatalf("INVALID: %v", err)
 		}
 	}
@@ -1285,9 +1310,12 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 	if err != nil {
 		t.Fatalf("INVALID: the session etcd's data directory: %v", err)
 	}
+	r.spoolPath = loadSpoolPath(dir, sessData, r.inRAM)
 	if r.inRAM { // removed with the run directory, and kept by the same switch
 		shm := filepath.Dir(sessData)
-		t.Cleanup(func() { t.Log("session etcd data in RAM: " + loadCleanRunDir(shm, os.Getenv("PORT49_LAB_LOAD_KEEP"))) })
+		t.Cleanup(func() {
+			t.Log("session etcd data and accounting spool in RAM: " + loadCleanRunDir(shm, os.Getenv("PORT49_LAB_LOAD_KEEP")))
+		})
 	}
 	r.sess = &regionEtcd{name: "s", bin: bin, client: "127.0.0.1:12479", peer: "127.0.0.1:12480", metrics: loadSessionMetrics, cluster: "s=http://127.0.0.1:12480",
 		data: sessData, log: filepath.Join(dir, "s.log"), pki: r.pki}
@@ -1669,6 +1697,10 @@ func (r *loadRun) hostFacts() hostFacts {
 	h := readHostFacts(r.dir)
 	h.InRAM = r.inRAM
 	h.SessionStorage = loadStorageFact(r.inRAM, h)
+	if !r.inRAM { // read as the etcd's is, for the spool's own directory
+		sp := readHostFacts(filepath.Dir(r.spoolPath))
+		h.SpoolStorage = loadStorageFact(false, sp)
+	}
 	h.DiskDeclared = r.diskDeclared
 	return h
 }

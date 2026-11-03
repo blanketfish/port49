@@ -1014,7 +1014,7 @@ func TestTheDiskModelIsReadThroughADeviceMapper(t *testing.T) {
 }
 
 func TestTheStorageFactNamesWhatTheSessionEtcdRunsOn(t *testing.T) {
-	if got := loadStorageFact(true, hostFacts{}); got != "ram (/dev/shm): not a deployable shape; port49's own ceiling" {
+	if got := loadStorageFact(true, hostFacts{}); got != "ram (/dev/shm): session etcd data and the accounting spool; not a deployable shape; port49's own ceiling" {
 		t.Fatalf("%q", got)
 	}
 	if got := loadStorageFact(false, hostFacts{DiskModel: "CT1000P3PSSD8", RunDirFS: "ext4"}); got != "CT1000P3PSSD8, ext4" {
@@ -1033,8 +1033,8 @@ func TestTheNoteSaysWhichStorageItMeasured(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(ram, "\n")
-	if !strings.Contains(lines[0], "etcd in RAM") || !strings.Contains(lines[2], "session_etcd_storage") ||
-		!strings.Contains(lines[2], "not a deployable shape") {
+	if !strings.Contains(lines[0], "in RAM") || !strings.Contains(lines[2], "session_etcd_storage") ||
+		!strings.Contains(lines[2], "session etcd data and the accounting spool; not a deployable shape; port49's own ceiling") {
 		t.Fatalf("the head of a RAM note:\n%s", strings.Join(lines[:4], "\n"))
 	}
 	disk, err := loadNote(nil, hostFacts{SessionStorage: "CT1000P3PSSD8, ext4"})
@@ -1042,7 +1042,7 @@ func TestTheNoteSaysWhichStorageItMeasured(t *testing.T) {
 		t.Fatal(err)
 	}
 	dl := strings.Split(disk, "\n")
-	if strings.Contains(dl[0], "RAM") || !strings.Contains(dl[2], "CT1000P3PSSD8, ext4") {
+	if strings.Contains(dl[0], "RAM") || strings.Contains(disk, "accounting_spool_storage") || !strings.Contains(dl[2], "CT1000P3PSSD8, ext4") {
 		t.Fatalf("the head of a disk note:\n%s", strings.Join(dl[:4], "\n"))
 	}
 	if got := loadWALMean(true, "4.20"); got != "n/a (ram)" {
@@ -1146,7 +1146,7 @@ func TestTheDiskModelSaysWhenSeveralDevicesBackIt(t *testing.T) {
 func TestACellHeadingCarriesTheRAMLabelAndRestartsNeedTwoScrapes(t *testing.T) {
 	note, err := loadNote([]loadCell{{ID: "a", Transport: "tcp", Observed: map[string]string{}}},
 		hostFacts{InRAM: true, SessionStorage: "ram"})
-	if err != nil || !strings.Contains(note, "## Cell a (etcd in RAM)") {
+	if err != nil || !strings.Contains(note, "## Cell a (etcd and spool in RAM)") {
 		t.Fatalf("%v\n%s", err, note)
 	}
 	obs := map[string]string{}
@@ -1197,5 +1197,47 @@ port49_broker_connection_events_total{event="source_cap_refused"} 100
 `)
 	if m.Evicted != 3 || m.Refused != 7 {
 		t.Fatalf("evicted %v refused %v, want 3 and 7", m.Evicted, m.Refused)
+	}
+}
+
+// A disk run names the drive under the accounting spool too, read as the etcd's
+// is: its fsync is what an accounting ack waits on.
+func TestADiskNoteNamesTheAccountingSpoolStorage(t *testing.T) {
+	note, err := loadNote(nil, hostFacts{SessionStorage: "A, ext4", SpoolStorage: "A, ext4"})
+	if err != nil || !strings.Contains(note, "- **accounting_spool_storage:** A, ext4\n") {
+		t.Fatalf("%v\n%s", err, note)
+	}
+}
+
+// PORT49_LAB_LOAD_IN_RAM replaces PORT49_LAB_LOAD_ETCD_IN_RAM outright: the old
+// name is no longer read.
+func TestTheRAMSwitchIsRenamedWithNoAlias(t *testing.T) {
+	t.Setenv("PORT49_LAB_LOAD_ETCD_IN_RAM", "1")
+	t.Setenv("PORT49_LAB_LOAD_IN_RAM", "")
+	if loadInRAM() {
+		t.Fatal("the old switch still turns the RAM run on")
+	}
+	t.Setenv("PORT49_LAB_LOAD_IN_RAM", "1")
+	if !loadInRAM() {
+		t.Fatal("PORT49_LAB_LOAD_IN_RAM=1 did not")
+	}
+}
+
+// Both fsync paths go to RAM: the accounting spool is beside the session etcd's
+// data under the same 0700 directory, and on disk it stays in the run directory.
+func TestTheRAMRunPutsTheAccountingSpoolInTheSameDirectory(t *testing.T) {
+	run, shm := t.TempDir(), t.TempDir()
+	data, err := loadSessionDataDir(run, shm, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loadSpoolPath(run, data, true); filepath.Dir(got) != filepath.Dir(data) || filepath.Base(got) != "acct.jsonl" {
+		t.Fatalf("ram spool %q, data %q", got, data)
+	}
+	if got := loadSpoolPath(run, "", false); got != filepath.Join(run, "acct.jsonl") {
+		t.Fatalf("disk spool %q", got)
+	}
+	if loadRAMNeed(8<<30) <= 8<<30 {
+		t.Fatal("the free-space check leaves no room for the spool")
 	}
 }
