@@ -234,10 +234,11 @@ lab-regions:
 # the real-disk run (load-<host>.md, whose note names the drive) never overwrite each other. A cloud
 # disk's model line names its bus, not its volume type (pd-ssd and pd-balanced read alike): say the
 # volume type in PORT49_LAB_LOAD_DISK_DECLARED (free text, 64 printable characters; the note carries it as
-# declared by the operator, not read from the host). A RAM run needs 8 GiB free in /dev/shm and no p49load-s* left there.
+# declared by the operator, not read from the host; make passes it through the environment untouched, never
+# through the recipe's shell). A RAM run needs 8 GiB free in /dev/shm and no p49load-s* left there.
 lab-load:
 	PORT49_LAB_LOAD=1 PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) PORT49_LAB_LOAD_CELLS=$(PORT49_LAB_LOAD_CELLS) \
-		PORT49_LAB_LOAD_ETCD_IN_RAM=$(PORT49_LAB_LOAD_ETCD_IN_RAM) PORT49_LAB_LOAD_DISK_DECLARED="$(PORT49_LAB_LOAD_DISK_DECLARED)" \
+		PORT49_LAB_LOAD_ETCD_IN_RAM=$(PORT49_LAB_LOAD_ETCD_IN_RAM) \
 		go test -tags lab ./tests/lab/ -run '^TestLoad$$' -count=1 -v -timeout 150m
 
 # The closed lab entries, rerun under the lab lock and diffed against their notes
