@@ -288,3 +288,40 @@ func ReadAnchor(path string) (*x509.Certificate, error) {
 // readTimeout is Server's ReadTimeout, swapped in tests. A mint request is a
 // few hundred bytes; thirty seconds is generous for one.
 var readTimeout = 30 * time.Second
+
+// writeTimeout bounds one response write, swapped in tests. A response is a
+// few kilobytes, so this is generous; it exists for a peer that vanished
+// mid-answer, whose connection would otherwise count as busy to the principal
+// cap until TCP gave up (about 15 minutes), and four of them would refuse
+// their owner (decision 32). It is set per response, at its first byte, and
+// not as the server's WriteTimeout: that one starts when the request is read
+// and would have to outlast the longest handler (a mint's 10 s hold, an
+// import's long body read, admin_api.go).
+var writeTimeout = 15 * time.Second
+
+// boundWrites gives each response's write a deadline of writeTimeout from
+// its first byte, and a later write the same one again.
+func boundWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&boundedWriter{ResponseWriter: w, rc: http.NewResponseController(w)}, r)
+	})
+}
+
+type boundedWriter struct {
+	http.ResponseWriter
+	rc *http.ResponseController
+}
+
+func (b *boundedWriter) bound() { _ = b.rc.SetWriteDeadline(time.Now().Add(writeTimeout)) }
+
+func (b *boundedWriter) WriteHeader(code int) {
+	b.bound()
+	b.ResponseWriter.WriteHeader(code)
+}
+
+func (b *boundedWriter) Write(p []byte) (int, error) {
+	b.bound()
+	return b.ResponseWriter.Write(p)
+}
+
+func (b *boundedWriter) Unwrap() http.ResponseWriter { return b.ResponseWriter }

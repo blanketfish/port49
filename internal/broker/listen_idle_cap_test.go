@@ -3,7 +3,9 @@ package broker
 import (
 	"bufio"
 	"crypto/tls"
+	"github.com/blanketfish/port49/internal/testpki"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -219,4 +221,72 @@ func TestAJustBoundConnectionIsNotEvicted(t *testing.T) {
 	}
 	ask(t, fresh, bufio.NewReader(fresh)) // the just-bound connection still serves
 	ask(t, third, tbr)
+}
+
+// A peer that stops reading mid-response stops counting as busy once the
+// response write's deadline passes, and its principal is served again rather
+// than refused until TCP gives up.
+func TestAStalledResponseStopsBeingBusyWithinTheWriteBound(t *testing.T) {
+	prev := writeTimeout
+	writeTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { writeTimeout = prev })
+	f := newFixture(t, 8)
+	lim := DefaultListenerLimits
+	lim.MaxPerPrincipal = 1
+	big := make([]byte, 1<<20)
+	srvCert, err := f.ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: f.now.Add(-time.Hour), NotAfter: f.now.Add(48 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Handler = boundWrites(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/big" {
+			for i := 0; i < 256; i++ { // 256 MiB: more than any socket buffer holds
+				if _, err := w.Write(big); err != nil {
+					return
+				}
+			}
+		}
+	}))
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bl := NewListener(Limit(raw, MaxConns), srv.TLSConfig, lim, f.b.Metrics, f.b.Now, func(string, ...any) {})
+	go func() { _ = srv.Serve(bl) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	addr := raw.Addr().String()
+
+	stalled, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
+		MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stalled.Close()
+	_, _ = io.WriteString(stalled, "GET /big HTTP/1.1\r\nHost: broker\r\n\r\n") // and never reads
+	eventually(t, "the stalled response in flight", func() bool { return activeHeld(bl) == 1 })
+	// The write fails 300 ms in; crypto/tls then spends up to 5 s on its
+	// close_notify before the connection is gone.
+	served := func() bool {
+		c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
+			MinVersion: tls.VersionTLS13})
+		if err != nil {
+			return false
+		}
+		defer c.Close()
+		_, _ = io.WriteString(c, "GET /small HTTP/1.1\r\nHost: broker\r\n\r\n")
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		return err == nil && resp.StatusCode == http.StatusOK
+	}
+	for end := time.Now().Add(9 * time.Second); !served(); {
+		if time.Now().After(end) {
+			t.Fatal("the principal was still refused after the write bound")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

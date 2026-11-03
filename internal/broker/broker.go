@@ -276,7 +276,7 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/explain", b.explain)
 	mux.HandleFunc("GET /healthz", b.healthz)
 	mux.HandleFunc("GET /readyz", b.readyz)
-	return announceCloseWithoutCertificate(mux)
+	return boundWrites(announceCloseWithoutCertificate(mux))
 }
 
 // announceCloseWithoutCertificate says Connection: close on every answer to a
