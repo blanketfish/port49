@@ -2,10 +2,12 @@ package broker
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanketfish/port49/internal/admission"
 	"github.com/blanketfish/port49/internal/policy"
@@ -29,12 +31,17 @@ grants:
 // token on every one of n extra devices, and the two the fixture names.
 func twoPrincipalsOn(t *testing.T, n int) (*fixture, []string) {
 	t.Helper()
+	return twoPrincipalsOnPolicy(t, n, twoPrincipalPolicy)
+}
+
+func twoPrincipalsOnPolicy(t *testing.T, n int, policyText string) (*fixture, []string) {
+	t.Helper()
 	var extra []admission.Device
 	for i := range n {
 		extra = append(extra, admission.Device{Name: fmt.Sprintf("sw%02d", i), Platform: "cisco_nxos",
 			Addresses: []netip.Addr{netip.MustParseAddr(fmt.Sprintf("172.100.101.%d", i+1))}})
 	}
-	f := newFixtureWith(t, 8, twoPrincipalPolicy, extra...)
+	f := newFixtureWith(t, 8, policyText, extra...)
 	bob := f.client(t, "bob@example.com", f.now.Add(24*3600e9))
 	names := []string{"leaf1", "nx1"}
 	for _, d := range extra {
@@ -102,5 +109,51 @@ func TestTheSupersedeMemoIsBoundedByTheDeviceCount(t *testing.T) {
 	}
 	if peak == 0 || peak > len(names) {
 		t.Fatalf("the memo peaked at %d entries over %d devices", peak, len(names))
+	}
+}
+
+// Two answers that differ in their body alone, a role's permit list, are
+// not kept as one: the digest tells them apart, as the body did.
+func TestABodyOnlyChangeSupersedesAndLeavesTheRestAlone(t *testing.T) {
+	const split = `
+scopes:
+  - {name: all_devices, match: {}}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: alice_role, privilege: admin, permit: ["**"]}
+subjects:
+  - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s}
+  - {name: neteng, identity: ["user:bob@example.com"], username: bob, enable: token, token_ttl: 60s}
+grants:
+  - {subject: netops, scope: all_devices, roles: [alice_role], max_privilege: admin}
+  - {subject: neteng, scope: all_devices, roles: [network_admin], max_privilege: admin}
+`
+	f, names := twoPrincipalsOnPolicy(t, 6, split)
+	narrowed := strings.Replace(split, `{name: alice_role, privilege: admin, permit: ["**"]}`,
+		`{name: alice_role, privilege: admin, permit: ["show **"]}`, 1)
+	rep, err := f.b.Refresh(context.Background(), f.reloadTwo(t, narrowed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.TokenKeys != len(names) {
+		t.Fatalf("%d keys superseded, want %d: %+v", rep.TokenKeys, len(names), rep)
+	}
+	for _, name := range names {
+		if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: name, Username: "alice"}); len(toks) != 0 {
+			t.Fatalf("alice's token on %s stands after her blob changed", name)
+		}
+		if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: name, Username: "bob"}); len(toks) != 1 {
+			t.Fatalf("bob's token on %s: %d standing", name, len(toks))
+		}
+	}
+}
+
+// keeps tells two bodies apart by their digests.
+func TestKeepsComparesTheBodyDigest(t *testing.T) {
+	a := minted{username: "a", ttl: time.Minute, body: sha256.Sum256([]byte("one"))}
+	b := a
+	b.body = sha256.Sum256([]byte("two"))
+	if !a.keeps(a) || a.keeps(b) {
+		t.Fatal("keeps must keep an equal body and supersede a different one")
 	}
 }

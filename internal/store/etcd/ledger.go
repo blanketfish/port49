@@ -243,6 +243,10 @@ func (s *Store) writeLedger(ctx context.Context, ws []ledgerWrite) ([]string, er
 	}
 }
 
-// ledgerBatch is how many marks one transaction carries: etcd's default
-// --max-txn-ops is 128, and chunked keeps to maxTxnOps.
-const ledgerBatch = maxTxnOps
+// ledgerBatch is how many marks one transaction carries. etcd checks a
+// nested transaction against --max-txn-ops (default 128) less the outer's
+// ops (v3rpc checkTxnRequest), and each mark's nested transaction is one
+// compare and one put, so 64 outer ops leave room for it. It must stay at
+// or below 64 whatever maxTxnOps becomes; raising it for chunked's sake
+// would make every ledger write fail with too many operations.
+const ledgerBatch = 64

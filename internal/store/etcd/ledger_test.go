@@ -255,9 +255,22 @@ func TestALedgerWriteBatchesItsMarks(t *testing.T) {
 }
 
 // A mark whose compare is lost is read and written again alone: its batch's
-// other marks land once, in the first transaction, and the loser ends at its
-// own, which is above the competing writer's.
+// other marks land once, in the first transaction, and the loser ends at the
+// higher of its own sequence and the competing writer's, whichever way the
+// competing write lands.
 func TestALostLedgerCompareRetriesOnlyThatMark(t *testing.T) {
+	// The competing write lands below the batch's mark (5), then above it.
+	for _, tc := range []struct {
+		name        string
+		competitor  uint64
+		wantAtEnd   uint64
+		wantRewrite bool
+	}{{"below", 3, 5, true}, {"above", 99, 99, false}} {
+		t.Run(tc.name, func(t *testing.T) { lostLedgerCompare(t, tc.competitor, tc.wantAtEnd, tc.wantRewrite) })
+	}
+}
+
+func lostLedgerCompare(t *testing.T, competitor, loserEnds uint64, rewritten bool) {
 	ctx := context.Background()
 	s := onShared(t, time.Now)
 	c := &countKV{KV: s.ctxKV}
@@ -278,7 +291,7 @@ func TestALostLedgerCompareRetriesOnlyThatMark(t *testing.T) {
 		c.mu.Lock()
 		c.beforeTxn = nil
 		c.mu.Unlock()
-		if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: loser, Seq: 3}}); err != nil {
+		if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: loser, Seq: competitor}}); err != nil {
 			t.Error(err)
 		}
 	}
@@ -296,6 +309,9 @@ func TestALostLedgerCompareRetriesOnlyThatMark(t *testing.T) {
 			if o.Key == m.Key {
 				want = uint64(i + 1)
 			}
+		}
+		if m.Key == loser {
+			want = loserEnds
 		}
 		if m.Seq != want {
 			t.Fatalf("%v is at %d, want %d", m.Key, m.Seq, want)
@@ -315,8 +331,11 @@ func TestALostLedgerCompareRetriesOnlyThatMark(t *testing.T) {
 			t.Fatalf("mark %d was written again: revision %d, not %d", i, revOf(m.Key), first)
 		}
 	}
-	if revOf(loser) <= first {
+	if rewritten && revOf(loser) <= first {
 		t.Fatalf("the loser was not written after the batch")
+	}
+	if !rewritten && revOf(loser) >= first {
+		t.Fatalf("a record already above the mark was written over")
 	}
 	// The batch's read and write, the competing writer's own read and write
 	// (counted, since it runs through the same KV), and the loser's retry.
