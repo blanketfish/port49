@@ -1422,10 +1422,17 @@ func TestTheBlobBumpMemoryIsBounded(t *testing.T) {
 func TestADenialDoesNotBumpTheBlob(t *testing.T) {
 	f := newAuthorFixture(t)
 	f.put(t, store.Context{LastTouchedAt: f.now})
+	// The put rounded the blob's expiry up to a minute boundary, so a bump at
+	// the same instant would look the same: let ten minutes pass first, so a
+	// bump would move the expiry by more than the rounding.
+	*f.clock = f.now.Add(10 * time.Minute)
 	if resp, _ := f.authorize(t, "cmd=reload"); resp.Status != wire.AuthorStatusFail {
 		t.Fatalf("%+v", resp)
 	}
-	if f.blobLiveAt(t, f.now.Add(time.Hour+time.Second)) {
+	if !f.blobLiveAt(t, f.now.Add(time.Hour-time.Second)) {
+		t.Fatal("the blob died before the expiry it was put with")
+	}
+	if f.blobLiveAt(t, f.now.Add(time.Hour+time.Minute+time.Second)) {
 		t.Fatal("a denial bumped the blob")
 	}
 }
