@@ -1,0 +1,379 @@
+//go:build lab
+
+package lab
+
+import (
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"os/exec"
+	"slices"
+	"strings"
+	"time"
+
+	"golang.org/x/crypto/scrypt"
+
+	"github.com/blanketfish/port49/tests/deviceaaa"
+)
+
+// L88 loads the shipped reference AAA configurations (deploy/device-aaa) onto each lab
+// image and measures each cell of spec section 15's L88 row under them. The files are
+// rendered by tests/deviceaaa, the package its unit tests run, and pushed unchanged.
+
+// l88Refs maps a lab platform's name to the reference file's platform.
+var l88Refs = map[string]string{
+	"arista_eos": "arista_eos", "arista_ceos": "arista_eos",
+	"cisco_iosxe": "cisco_iosxe", "cisco_nxos": "cisco_nxos", "cisco_xrd": "cisco_iosxr",
+	"juniper_vjunos-router": "juniper_junos", "juniper_vsrx": "juniper_junos",
+	"nokia_srlinux": "nokia_srlinux",
+}
+
+// l88Servers are the reference's two servers: port49d is on the first; the second is a
+// bridge address where nothing listens, so a connection to it is refused at once.
+var l88Servers = []string{"172.100.100.1", "172.100.100.2"}
+
+// l88TLSImages are the images with an RFC 9887 client (cell h).
+var l88TLSImages = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true, "xrd261": true}
+
+// l88L29 are the rows whose reload behaviour L29 measured, so cell g skips them.
+var l88L29 = map[string]bool{"eos": true, "vjunos": true, "nxos": true, "iosxe": true}
+
+func l88HasTLS(sel string) bool { return l88TLSImages[sel] }
+
+// l88Cells is the cells one pass runs. tls is the RFC 9887 pass cell h names: (a)-(g)
+// over TLS, so it lists no h and no i. The plain pass of a TLS image ends in h.
+func l88Cells(sel string, tls bool) []string {
+	cells := []string{"a", "b", "c", "d", "e", "f"}
+	if tls || !l88L29[sel] {
+		cells = append(cells, "g")
+	}
+	if !tls && l88HasTLS(sel) {
+		cells = append(cells, "h")
+	}
+	if !tls && strings.HasPrefix(l88PlatformOf(sel), "juniper_") {
+		cells = append(cells, "i")
+	}
+	return cells
+}
+
+func l88PlatformOf(sel string) string {
+	for _, p := range platforms {
+		if p.sel == sel {
+			return p.name
+		}
+	}
+	return ""
+}
+
+// l88Values are the lab's values for p's placeholders.
+func l88Values(p platform, servers []string) deviceaaa.Values {
+	v := deviceaaa.Values{Servers: servers, BreakGlass: breakglassUser, TLSPort: 300,
+		ServerName: p.node, CertID: "port49-device", SourceAddress: p.addr}
+	switch p.name {
+	case "arista_eos", "arista_ceos":
+		v.MgmtVRF, v.SourceInterface = "default", "Management1"
+		if p.name == "arista_ceos" {
+			v.SourceInterface = "Management0"
+		}
+	case "cisco_iosxe":
+		v.MgmtVRF, v.SourceInterface = "clab-mgmt", "GigabitEthernet1"
+	case "cisco_nxos":
+		v.MgmtVRF, v.SourceInterface = "management", "mgmt0"
+	case "cisco_xrd":
+		v.MgmtVRF, v.SourceInterface = "default", "MgmtEth0/RP0/CPU0/0"
+	case "nokia_srlinux":
+		v.MgmtVRF = "mgmt"
+	default:
+		v.MgmtVRF = "mgmt_junos"
+	}
+	return v
+}
+
+// l88ApplyWith renders the shipped file for p and hands its lines, unchanged, to push.
+func l88ApplyWith(p platform, transport string, servers []string, push func(lines []string) error) error {
+	ref, ok := l88Refs[p.name]
+	if !ok {
+		return fmt.Errorf("no reference configuration for %s", p.name)
+	}
+	lines, err := deviceaaa.Render(ref, transport, l88Values(p, servers), labKeyDefault)
+	if err != nil {
+		return err
+	}
+	return push(lines)
+}
+
+// l88Opener is the break-glass CLI of p.
+func l88Opener(p platform) func(*lab) (*cliConn, error) {
+	switch p.name {
+	case "arista_eos":
+		return func(l *lab) (*cliConn, error) { return l.eosCLI(breakglassUser, breakglassPassword) }
+	case "juniper_vsrx":
+		return func(l *lab) (*cliConn, error) { return l.junosCLI(breakglassUser, breakglassPassword) }
+	}
+	return l73Opener(p.name)
+}
+
+func l88Junos(p platform) bool { return strings.HasPrefix(p.name, "juniper_") }
+
+// l88Family is the family l73's line runners know, "" for vEOS.
+func l88Family(p platform) string { return l73Dialects[p.name].Family }
+
+// l88Push types lines on the device over c and reads them back.
+func l88Push(p platform, c *cliConn, lines []string) error {
+	if l88Junos(p) {
+		if _, err := junosConfigure(c, lines...); err != nil {
+			c.sendExpect("rollback 0", 60*time.Second, junosCfgPrompt)
+			c.sendExpect("exit configuration-mode", 60*time.Second, junosOpPrompt)
+			return err
+		}
+		return junosVerifyApplied(c, lines)
+	}
+	if _, err := l73CiscoRun(c, l73Lines(lines...), nil, false, l73ExtraMarks(l88Family(p))...); err != nil {
+		return err
+	}
+	shown, err := c.sendExpect("show running-config", 60*time.Second, c.prompt)
+	if err != nil {
+		return err
+	}
+	if missing := l88Missing(lines, shown); len(missing) > 0 {
+		return fmt.Errorf("the device lacks %d line(s) that were typed: %s", len(missing), strings.Join(missing, "; "))
+	}
+	return nil
+}
+
+// l88Missing names the lines (trimmed, blanks squeezed) the running configuration does
+// not hold. A line carrying the key is skipped: the device shows it hashed.
+//
+// EOS shows the default VRF by leaving the clause out, so ` vrf default` is dropped from
+// both sides: the lab's vEOS and cEOS manage in the default VRF. A default `privilege 1` is
+// not shown either.
+func l88Missing(lines []string, shown string) []string {
+	norm := func(s string) string {
+		s = strings.ReplaceAll(strings.Join(strings.Fields(s), " "), " vrf default", "")
+		return strings.ReplaceAll(s, " privilege 1 ", " ") // the default level is not shown
+	}
+	have := map[string]bool{}
+	for _, ln := range strings.Split(strings.ReplaceAll(shown, "\r", ""), "\n") {
+		have[norm(ln)] = true
+	}
+	var missing []string
+	for _, ln := range lines {
+		n := norm(ln)
+		if n == "" || strings.Contains(ln, labKeyDefault) || have[n] {
+			continue
+		}
+		missing = append(missing, n)
+	}
+	return missing
+}
+
+// l88Apply pushes the reference for transport over the break-glass session, with port49d
+// stopped (the device takes the local password only then), and starts port49d again.
+func l88Apply(l *lab, transport string) error {
+	return l88ApplyServers(l, transport, l88Servers)
+}
+
+func l88ApplyServers(l *lab, transport string, servers []string) error {
+	return l88Admin(l, func(c *cliConn) error {
+		return l88ApplyWith(l.p, transport, servers, func(lines []string) error { return l88Push(l.p, c, lines) })
+	})
+}
+
+// l88Admin opens the break-glass CLI with port49d stopped, runs fn, and restarts port49d.
+func l88Admin(l *lab, fn func(c *cliConn) error) error {
+	open := l88Opener(l.p)
+	if open == nil {
+		return fmt.Errorf("no break-glass CLI for %s", l.p.name)
+	}
+	if err := l.stopDaemon(); err != nil {
+		return err
+	}
+	c, err := open(l)
+	var fnErr error
+	if err == nil {
+		fnErr = fn(c)
+		c.Close()
+	}
+	base, cerr := l.configPath()
+	if cerr == nil {
+		cerr = l.startDaemonWith(base, true)
+	}
+	return errors.Join(err, fnErr, cerr)
+}
+
+// l88Clear is the lines that take the lab startup config's own TACACS+ servers off before
+// the reference goes on: they would otherwise list the same address twice (IOS XE drops
+// the second object). They are lab scaffolding and are not the shipped file.
+func l88Clear(p platform) []string {
+	switch p.name {
+	case "arista_eos", "arista_ceos":
+		return []string{"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1"}
+	case "cisco_iosxe":
+		return []string{"aaa group server tacacs+ port49", "no server name port49-host", "exit", "no tacacs server port49-host"}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// The local account of cell a, and its password
+// ---------------------------------------------------------------------------
+
+const l88DenyUser = "l88deny"
+
+// l88PasswordHash is the platform's hashed form of pw: Junos encrypted-password, EOS
+// secret sha512, IOS XE secret 9, NX-OS password 5, XR secret 10, SR Linux's hashed
+// password. The password is never an argument.
+func l88PasswordHash(name, pw string) (string, error) {
+	switch name {
+	case "cisco_nxos":
+		cmd := exec.Command("openssl", "passwd", "-1", "-stdin")
+		cmd.Stdin = strings.NewReader(pw)
+		out, err := cmd.Output()
+		if err != nil {
+			return "", errors.New("openssl passwd -1 failed")
+		}
+		return strings.TrimSpace(string(out)), nil
+	case "cisco_iosxe":
+		return l88Type9(pw)
+	}
+	return l73RootHash(pw)
+}
+
+// l88Type9 is Cisco's scrypt hash (`secret 9`): N 16384, r 1, p 1, a 14-character salt,
+// the 32-byte result in Cisco's base64 alphabet.
+func l88Type9(pw string) (string, error) {
+	const alpha = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	raw := make([]byte, 14)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	salt := make([]byte, 14)
+	for i, b := range raw {
+		salt[i] = alpha[int(b)%len(alpha)]
+	}
+	key, err := scrypt.Key([]byte(pw), salt, 16384, 1, 1, 32)
+	if err != nil {
+		return "", err
+	}
+	var enc []byte
+	for i := 0; i < len(key); i += 3 {
+		var v uint32
+		n := 0
+		for j := 0; j < 3 && i+j < len(key); j++ {
+			v |= uint32(key[i+j]) << (8 * (2 - j))
+			n++
+		}
+		for k := 0; k < n+1; k++ {
+			enc = append(enc, alpha[(v>>(6*(3-k)))&63])
+		}
+	}
+	return "$9$" + string(salt) + "$" + string(enc), nil
+}
+
+// l88LocalAccount is the lines that add and remove cell a's local account. The hash is
+// the only secret, and the delete lines carry none.
+func l88LocalAccount(name, user, hash string) (add, del []string) {
+	switch name {
+	case "juniper_vjunos-router", "juniper_vsrx", "juniper_vjunos-switch":
+		return []string{`set system login user ` + user + ` class read-only authentication encrypted-password "` + hash + `"`},
+			[]string{"delete system login user " + user}
+	case "arista_eos", "arista_ceos":
+		return []string{"username " + user + " privilege 1 secret sha512 " + hash}, []string{"no username " + user}
+	case "cisco_iosxe":
+		return []string{"username " + user + " privilege 1 secret 9 " + hash}, []string{"no username " + user}
+	case "cisco_nxos":
+		return []string{"username " + user + " password 5 " + hash + " role network-operator"}, []string{"no username " + user}
+	case "cisco_xrd":
+		return []string{"username " + user + " group root-lr secret 10 " + hash}, []string{"no username " + user}
+	}
+	return nil, nil
+}
+
+// l88Shape is a hash's first characters, for a failure message.
+func l88Shape(h string) string {
+	if len(h) > 4 {
+		return h[:4] + "..."
+	}
+	return h
+}
+
+// ---------------------------------------------------------------------------
+// The decision log
+// ---------------------------------------------------------------------------
+
+// l88AccountCounts is the accounting START and STOP records user's session reached
+// port49 with.
+func l88AccountCounts(recs []map[string]any, user string) (starts, stops int) {
+	for _, r := range recs {
+		if str(r, "event") != "account" {
+			continue
+		}
+		if u := str(r, "username"); u != user && str(sub(r, "session"), "username") != user && str(r, "user") != user {
+			continue
+		}
+		switch str(r, "flags") {
+		case "start":
+			starts++
+		case "stop":
+			stops++
+		}
+	}
+	return starts, stops
+}
+
+// ---------------------------------------------------------------------------
+// The note
+// ---------------------------------------------------------------------------
+
+type l88Cell struct{ id, verdict, observation, evidence string }
+
+// l88Note collects the cells and writes one results note. Every string passes through
+// l73MaskAll with the run's secrets when it is rendered, and render refuses a note that
+// still holds the password.
+type l88Note struct {
+	p         platform
+	transport string
+	secrets   []string
+	cells     []l88Cell
+	facts     []string
+	raw       string // text added after masking: only the unit test uses it
+}
+
+func newL88Note(p platform, transport string, secrets ...string) *l88Note {
+	return &l88Note{p: p, transport: transport, secrets: append(slices.Clone(secrets), labKeyDefault, breakglassPassword)}
+}
+
+func (n *l88Note) cell(id, verdict, observation, evidence string) {
+	n.cells = append(n.cells, l88Cell{id, verdict, observation, evidence})
+}
+
+func (n *l88Note) fact(f string) { n.facts = append(n.facts, f) }
+
+// mask is s with every secret of the run replaced.
+func (n *l88Note) mask(s string) string { return hideKeys(l73MaskAll(s, n.secrets...)) }
+
+func (n *l88Note) render() (string, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# L88: the reference AAA configuration on %s\n\n", n.p.version)
+	fmt.Fprintf(&b, "Platform: %s. Image: %s. Transport: %s. Measured %s by TestL88.\n\n", n.p.name, n.p.version, n.transport,
+		time.Now().UTC().Format("2006-01-02"))
+	for _, f := range n.facts {
+		b.WriteString("- " + n.mask(f) + "\n")
+	}
+	b.WriteString("\n| Cell | Verdict | Observation |\n|---|---|---|\n")
+	for _, c := range n.cells {
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", c.id, c.verdict, strings.ReplaceAll(n.mask(c.observation), "\n", " "))
+	}
+	for _, c := range n.cells {
+		if c.evidence != "" {
+			fmt.Fprintf(&b, "\n### Cell %s evidence\n\n```\n%s\n```\n", c.id, n.mask(c.evidence))
+		}
+	}
+	out := b.String() + n.raw
+	for _, s := range n.secrets {
+		if s != "" && strings.Contains(out, s) {
+			return "", errors.New("the L88 note still holds a secret after masking; it is not written")
+		}
+	}
+	return out, nil
+}

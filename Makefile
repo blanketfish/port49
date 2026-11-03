@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l88
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -273,6 +273,12 @@ lab-l80:
 # Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
 L84_NOTE ?= $(CURDIR)/tests/lab/results/L84-systemd-docker.md
 # go test runs in the package's directory, so the three paths are made absolute.
+# L88 (plan 12c, Task 12): the reference AAA configurations on the lab images. One image per run:
+#   make lab-l88 PLATFORM=eos
+lab-l88:
+	@test -n "$(PLATFORM)" || { echo "usage: make lab-l88 PLATFORM=<PORT49_LAB_PLATFORMS selector>"; exit 2; }
+	PORT49_LAB_PLATFORMS=$(PLATFORM) go test -tags lab ./tests/lab/ -run '^TestL88$$' -count=1 -v -timeout 300m
+
 lab-l84:
 	PORT49_L84_NOTE=$(abspath $(L84_NOTE)) $(if $(A_CELLS),PORT49_L84_A_CELLS=$(abspath $(A_CELLS))) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
 
