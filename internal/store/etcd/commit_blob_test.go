@@ -47,7 +47,7 @@ func TestASecondPutBlobInsideTheBucketWritesNothing(t *testing.T) {
 // (load run 2: half of them failed at 500 ms on a shared CAS).
 func TestFiftyConcurrentPutBlobsOnOneHashFinishInTime(t *testing.T) {
 	t.Parallel()
-	s := onShared(t, time.Now)
+	s := onShared(t, func() time.Time { return t0 }) // fixed, so no bucket boundary falls inside the run
 	var wg sync.WaitGroup
 	errs := make(chan error, 50)
 	for range 50 {
@@ -76,18 +76,26 @@ func TestFiftyConcurrentPutBlobsOnOneHashFinishInTime(t *testing.T) {
 	}
 }
 
-// The backoff never sleeps past casBackoffMax, at any round.
-func TestCasBackoffNeverSleepsPastItsMax(t *testing.T) {
+// The backoff delay never passes casBackoffMax, is never zero, and grows to it.
+func TestCasBackoffDelayIsBoundedAndGrows(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct{ round, n int }{{6, 30}, {7, 10}, {20, 10}} {
-		for range c.n {
-			ctx, cancel := context.WithTimeout(context.Background(), casBackoffMax+5*time.Millisecond)
-			err := casBackoff(ctx, c.round)
-			cancel()
-			if err != nil {
-				t.Fatalf("round %d slept past %v: %v", c.round, casBackoffMax, err)
+	for round := 1; round <= 40; round++ {
+		for range 200 {
+			d := casBackoffDelay(round)
+			if d <= 0 || d > casBackoffMax {
+				t.Fatalf("round %d: delay %v outside (0, %v]", round, d, casBackoffMax)
 			}
 		}
+	}
+	if d := casBackoffDelay(1); d > 2*time.Millisecond {
+		t.Fatalf("round 1: %v, want at most 2ms", d)
+	}
+	reached := false
+	for range 500 {
+		reached = reached || casBackoffDelay(20) > casBackoffMax*3/4
+	}
+	if !reached {
+		t.Fatal("the delay never grew toward casBackoffMax")
 	}
 }
 
