@@ -17,6 +17,9 @@
 # exists, so create the group first.
 #
 # authentication-order is tacplus alone, as in juniper_junos.set.
+# `set` on a list adds to it: delete first, or a device already holding [ tacplus password ] keeps
+# password (L88 a, vJunos 23.4R2-S2.1).
+delete system authentication-order
 set system authentication-order tacplus
 #
 set security pki trusted-ca-group port49 ca-profiles port49-root

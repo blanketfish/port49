@@ -194,7 +194,8 @@ func TestNoReferenceFallsThroughOnAReject(t *testing.T) {
 			l = strings.TrimSpace(l)
 			switch name {
 			case "juniper_junos":
-				if strings.Contains(l, "authentication-order") && l != "set system authentication-order tacplus" {
+				if strings.Contains(l, "authentication-order") && l != "set system authentication-order tacplus" &&
+					l != "delete system authentication-order" {
 					t.Errorf("Junos authentication-order must be tacplus alone: %q", l)
 				}
 			case "cisco_iosxe", "cisco_nxos", "cisco_iosxr", "arista_eos":
@@ -401,5 +402,24 @@ func TestRenderRefusesUnsafeValues(t *testing.T) {
 	}
 	if _, err := Render("cisco_iosxe", "tcp", labValues(), "k\nreload"); err == nil {
 		t.Error("a key with a line break rendered")
+	}
+}
+
+// `set` on a Junos list adds to what is there, so a device already holding
+// `authentication-order [ tacplus password ]` keeps password (L88 a, vJunos 23.4R2-S2.1: the
+// local password was taken after a port49 deny). The file deletes the statement first.
+func TestJunosDeletesAnExistingAuthenticationOrderFirst(t *testing.T) {
+	for _, transport := range []string{"tcp", "tls"} {
+		ext := ".set"
+		lines := commands(t, "juniper_junos", transport, ext)
+		at := -1
+		for i, l := range lines {
+			if strings.TrimSpace(l) == "set system authentication-order tacplus" {
+				at = i
+			}
+		}
+		if at < 1 || strings.TrimSpace(lines[at-1]) != "delete system authentication-order" {
+			t.Errorf("%s: the line before `set system authentication-order tacplus` is not `delete system authentication-order`", transport)
+		}
 	}
 }

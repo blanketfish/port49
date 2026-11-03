@@ -12,6 +12,9 @@
 # port49 deny falls through to a local password (L4, both Junos images), which voids
 # the argument that a denial is final. The cost: while port49 answers ERROR, break-glass
 # waits until go-dark closes the listener (about 5.5 s at the defaults, bounded at 10.5 s (L41)), then logs in.
+# `set` on a list adds to it: delete first, or a device already holding [ tacplus password ] keeps
+# password (L88 a, vJunos 23.4R2-S2.1).
+delete system authentication-order
 set system authentication-order tacplus
 #
 # The source-address lines are unmeasured (L88): the lab pinned routing-instance only.
