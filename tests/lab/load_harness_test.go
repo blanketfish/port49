@@ -348,6 +348,10 @@ func loadSessionDataDir(run, shm string, inRAM bool) (string, error) {
 	return filepath.Join(d, "s.etcd"), nil
 }
 
+// A cloud disk's model line names its bus, not its volume type (GCE reads
+// "PersistentDisk" or "nvme_card-pd" for pd-ssd and pd-balanced alike): a cloud
+// run's note must record the volume type by hand.
+//
 // loadDiskModel is the model of the drive behind the block device major:minor,
 // read from sys (/sys): a partition is resolved to its disk, a device-mapper
 // device to its first slave. "unknown" when sys cannot say.
@@ -356,6 +360,7 @@ func loadDiskModel(sys string, major, minor uint32) string {
 	if err != nil {
 		return "unknown"
 	}
+	more := 0
 	for range 8 {
 		if _, err := os.Stat(filepath.Join(p, "partition")); err == nil {
 			p = filepath.Dir(p)
@@ -366,16 +371,52 @@ func loadDiskModel(sys string, major, minor uint32) string {
 			if err != nil {
 				return "unknown"
 			}
+			// An LV across drives or an md RAID: the first is named, and the
+			// rest are counted, so one drive is not taken for the only one.
+			if len(ents) > 1 {
+				more = len(ents) - 1
+			}
 			p = next
 			continue
 		}
 		break
 	}
 	raw, err := os.ReadFile(filepath.Join(p, "device", "model"))
-	if m := strings.TrimSpace(string(raw)); err == nil && m != "" {
-		return m
+	m := strings.TrimSpace(string(raw))
+	if err != nil || m == "" {
+		return "unknown"
 	}
-	return "unknown"
+	if more > 0 {
+		return fmt.Sprintf("%s (+%d more)", m, more)
+	}
+	return m
+}
+
+// loadShmCheck refuses a RAM run whose /dev/shm cannot hold it: a session
+// etcd directory an earlier run left (killed before its cleanup; kept as
+// evidence, never removed here), or less free space than the quota. free
+// reports a directory's free bytes.
+func loadShmCheck(shm string, quota uint64, free func(string) (uint64, error)) error {
+	left, _ := filepath.Glob(filepath.Join(shm, "p49load-s*"))
+	if len(left) > 0 {
+		return fmt.Errorf("%s holds the session etcd's data of an earlier run (it holds RAM until removed): remove it, then run again", strings.Join(left, ", "))
+	}
+	n, err := free(shm)
+	if err != nil {
+		return fmt.Errorf("the free space of %s is unreadable: %w", shm, err)
+	}
+	if n < quota {
+		return fmt.Errorf("%s has %d MB free; a RAM run needs the session etcd's quota, %d MB, free", shm, n>>20, quota>>20)
+	}
+	return nil
+}
+
+func loadFreeBytes(dir string) (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	return st.Bavail * uint64(st.Bsize), nil
 }
 
 func readHostFacts(dir string) hostFacts {
@@ -469,6 +510,10 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	if host.InRAM {
 		title += " (session etcd in RAM)"
 	}
+	cellTag := ""
+	if host.InRAM {
+		cellTag = " (etcd in RAM)"
+	}
 	fmt.Fprintf(&b, title+"\n\n- **session_etcd_storage:** %s\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
 		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n"+
 		"- **run_dir_fs:** %s\n- **etcd_session_wal_fsync_mean_ms:** %s\n\n"+
@@ -486,7 +531,7 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 		if c.Invalid != "" {
 			verdict = "**INVALID**"
 		}
-		fmt.Fprintf(&b, "## Cell %s\n\n- **Transport:** %s\n- **Rate:** %.0f per second\n- **Duration:** %s\n- **Verdict:** %s\n",
+		fmt.Fprintf(&b, "## Cell %s"+cellTag+"\n\n- **Transport:** %s\n- **Rate:** %.0f per second\n- **Duration:** %s\n- **Verdict:** %s\n",
 			c.ID, c.Transport, c.Rate, c.Duration.Round(time.Second), verdict)
 		if c.Invalid != "" {
 			fmt.Fprintf(&b, "- **Reason:** %s\n", loadInvalidReason(c.Invalid))
@@ -960,7 +1005,7 @@ func addSamplerObserved(obs map[string]string, dsam, bsam *loadSampler) {
 	for _, k := range []string{"peak_port49_connections", "peak_spool_depth"} {
 		obs[k] = loadScrapeFailed
 	}
-	for _, k := range []string{"spool_drops_during", "daemon_store_call_p99_ms"} {
+	for _, k := range []string{"spool_drops_during", "daemon_store_call_p99_ms", "daemon_run_restarts"} {
 		obs[k] = loadScrapeFailed
 	}
 	if dsam.ok >= 1 {
@@ -1199,13 +1244,19 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 			data: filepath.Join(dir, fmt.Sprintf("d%d.etcd", i+1)), log: filepath.Join(dir, fmt.Sprintf("d%d.log", i+1)), pki: r.pki})
 	}
 	r.inRAM = loadEtcdInRAM()
+	if r.inRAM {
+		quota, _ := strconv.ParseUint(etcdQuotaBackendBytes, 10, 64)
+		if err := loadShmCheck("/dev/shm", quota, loadFreeBytes); err != nil {
+			t.Fatalf("INVALID: %v", err)
+		}
+	}
 	sessData, err := loadSessionDataDir(dir, "/dev/shm", r.inRAM)
 	if err != nil {
 		t.Fatalf("INVALID: the session etcd's data directory: %v", err)
 	}
 	if r.inRAM { // removed with the run directory, and kept by the same switch
 		shm := filepath.Dir(sessData)
-		t.Cleanup(func() { t.Log(loadCleanRunDir(shm, os.Getenv("PORT49_LAB_LOAD_KEEP"))) })
+		t.Cleanup(func() { t.Log("session etcd data in RAM: " + loadCleanRunDir(shm, os.Getenv("PORT49_LAB_LOAD_KEEP"))) })
 	}
 	r.sess = &regionEtcd{name: "s", bin: bin, client: "127.0.0.1:12479", peer: "127.0.0.1:12480", metrics: loadSessionMetrics, cluster: "s=http://127.0.0.1:12480",
 		data: sessData, log: filepath.Join(dir, "s.log"), pki: r.pki}

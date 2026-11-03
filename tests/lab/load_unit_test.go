@@ -1084,3 +1084,74 @@ func TestOnlyTheSessionEtcdDataGoesToRAM(t *testing.T) {
 		t.Fatal("the shm directory outlived cleanup")
 	}
 }
+
+// A RAM run killed before its cleanup leaves the session etcd's data in
+// /dev/shm; the next RAM run is INVALID and names it, and does not remove it
+// (a kept directory is evidence).
+func TestARamRunRefusesALeftoverSessionDirectory(t *testing.T) {
+	shm := t.TempDir()
+	free := func(string) (uint64, error) { return 16 << 30, nil }
+	if err := loadShmCheck(shm, 8<<30, free); err != nil {
+		t.Fatalf("an empty shm: %v", err)
+	}
+	left := filepath.Join(shm, "p49load-s123")
+	if err := os.Mkdir(left, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := loadShmCheck(shm, 8<<30, free)
+	if err == nil || !strings.Contains(err.Error(), left) || !strings.Contains(err.Error(), "remove") {
+		t.Fatalf("a leftover directory: %v", err)
+	}
+	if _, serr := os.Stat(left); serr != nil {
+		t.Fatal("the check removed the evidence")
+	}
+}
+
+// Too little free RAM for the quota is INVALID before the run, not an ENOSPC mid-cell.
+func TestARamRunNeedsTheQuotaFree(t *testing.T) {
+	short := func(string) (uint64, error) { return 4 << 30, nil }
+	err := loadShmCheck(t.TempDir(), 8<<30, short)
+	if err == nil || !strings.Contains(err.Error(), "free") {
+		t.Fatalf("%v", err)
+	}
+	broken := func(string) (uint64, error) { return 0, errors.New("statfs failed") }
+	if err := loadShmCheck(t.TempDir(), 8<<30, broken); err == nil {
+		t.Fatal("an unreadable /dev/shm passed")
+	}
+}
+
+// An LV across two drives, or an md RAID, does not name one drive as the only one.
+func TestTheDiskModelSaysWhenSeveralDevicesBackIt(t *testing.T) {
+	sys, _, _ := fakeSys(t, "CT1000P3PSSD8")
+	dm := filepath.Join(sys, "devices", "virtual", "block", "dm-1")
+	if err := os.MkdirAll(filepath.Join(dm, "slaves"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	part := filepath.Join(sys, "devices", "pci0", "nvme", "nvme0", "nvme0n1", "nvme0n1p2")
+	for _, n := range []string{"a", "b"} {
+		if err := os.Symlink(part, filepath.Join(dm, "slaves", n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(dm, filepath.Join(sys, "dev", "block", "253:1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadDiskModel(sys, 253, 1); got != "CT1000P3PSSD8 (+1 more)" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// A cell quoted alone keeps its label; and a sampler with under two scrapes
+// reads daemon_run_restarts scrape_failed.
+func TestACellHeadingCarriesTheRAMLabelAndRestartsNeedTwoScrapes(t *testing.T) {
+	note, err := loadNote([]loadCell{{ID: "a", Transport: "tcp", Observed: map[string]string{}}},
+		hostFacts{InRAM: true, SessionStorage: "ram"})
+	if err != nil || !strings.Contains(note, "## Cell a (etcd in RAM)") {
+		t.Fatalf("%v\n%s", err, note)
+	}
+	obs := map[string]string{}
+	addSamplerObserved(obs, &loadSampler{ok: 1}, &loadSampler{ok: 1})
+	if obs["daemon_run_restarts"] != loadScrapeFailed {
+		t.Fatalf("%q", obs["daemon_run_restarts"])
+	}
+}

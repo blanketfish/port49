@@ -231,7 +231,9 @@ lab-regions:
 # a three-member etcd, up to 150 minutes. PORT49_LAB_LOAD_CELLS=a,c runs only those cells.
 # PORT49_LAB_LOAD_ETCD_IN_RAM=1 (lab-only) puts only the session etcd's data under /dev/shm: port49's own
 # ceiling, not a deployable shape. The note says so and is written to load-<host>-ram.md, so the RAM run and
-# the real-disk run (load-<host>.md, whose note names the drive) never overwrite each other.
+# the real-disk run (load-<host>.md, whose note names the drive) never overwrite each other. A cloud
+# disk's model line names its bus, not its volume type (pd-ssd and pd-balanced read alike): record the
+# volume type in the note by hand. A RAM run needs 8 GiB free in /dev/shm and no p49load-s* left there.
 lab-load:
 	PORT49_LAB_LOAD=1 PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) PORT49_LAB_LOAD_CELLS=$(PORT49_LAB_LOAD_CELLS) \
 		PORT49_LAB_LOAD_ETCD_IN_RAM=$(PORT49_LAB_LOAD_ETCD_IN_RAM) \
