@@ -992,9 +992,9 @@ func (s *Store) PutBlob(_ context.Context, hash string, body []byte, ttl time.Du
 	if existing, ok := s.blobs[hash]; ok && existing.exp.After(s.now()) && !existing.exp.Before(want) {
 		return nil
 	}
-	exp := want.Truncate(time.Minute)
+	exp := want.Truncate(store.BlobBucket)
 	if exp.Before(want) {
-		exp = exp.Add(time.Minute)
+		exp = exp.Add(store.BlobBucket)
 	}
 	s.blobs[hash] = blobEntry{body: bytes.Clone(body), exp: exp}
 	s.writes++

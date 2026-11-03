@@ -66,6 +66,36 @@ func TestFiftyConcurrentPutBlobsOnOneHashFinishInTime(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// The losers re-read and skip: one write lands, not fifty.
+	resp, err := s.ctxKV.Get(context.Background(), s.k.blob("hot"))
+	if err != nil || len(resp.Kvs) != 1 {
+		t.Fatal(err)
+	}
+	if v := resp.Kvs[0].Version; v != 1 {
+		t.Fatalf("the blob was written %d times by 50 puts", v)
+	}
+}
+
+// The backoff never sleeps past casBackoffMax, at any round.
+func TestCasBackoffNeverSleepsPastItsMax(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ round, n int }{{6, 30}, {7, 10}, {20, 10}} {
+		for range c.n {
+			ctx, cancel := context.WithTimeout(context.Background(), casBackoffMax+5*time.Millisecond)
+			err := casBackoff(ctx, c.round)
+			cancel()
+			if err != nil {
+				t.Fatalf("round %d slept past %v: %v", c.round, casBackoffMax, err)
+			}
+		}
+	}
+}
+
+// memory's blob bucket is the lease bucket the etcd store rounds to.
+func TestTheBlobBucketIsTheLeaseBucket(t *testing.T) {
+	if store.BlobBucket != leaseBucket {
+		t.Fatalf("store.BlobBucket %v, leaseBucket %v", store.BlobBucket, leaseBucket)
+	}
 }
 
 // conflictKV is a KV whose every transaction loses its compare.

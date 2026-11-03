@@ -1243,6 +1243,10 @@ const SupersededFor = 20 * time.Minute
 // store's pins (plan 11a, R13). Any other ttl is a lease, as before.
 const NoExpiry time.Duration = -1
 
+// BlobBucket is the width a stored blob's expiry is rounded up to: the etcd
+// store's lease bucket, which the memory store matches.
+const BlobBucket = time.Minute
+
 // ErrForgotten is GetMembership's answer for a principal a forget left a
 // tombstone for (plan 11a, R13). It is an ErrNotFound, so every caller that
 // reads "no record" still does; the directory router tells it from a record

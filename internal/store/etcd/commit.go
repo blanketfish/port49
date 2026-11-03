@@ -145,14 +145,11 @@ func casAs[R any](ctx context.Context, cli clientv3.KV, ls *leases, key, what st
 // casBackoffMax bounds the wait between a lost compare and the next read.
 const casBackoffMax = 50 * time.Millisecond
 
-// casBackoff sleeps a jittered time that doubles from 1 ms to casBackoffMax
-// with each lost round, so writers of one hot key spread out instead of
-// spinning on each other. It ends early with ctx's error.
+// casBackoff sleeps a jittered time whose base doubles from 2 ms (the first
+// lost round is round 1) up to casBackoffMax, so writers of one hot key
+// spread out instead of spinning on each other. It ends early with ctx's error.
 func casBackoff(ctx context.Context, round int) error {
-	d := casBackoffMax
-	if round < 7 {
-		d = time.Millisecond << round
-	}
+	d := min(time.Millisecond<<min(round, 6), casBackoffMax)
 	d = d/2 + rand.N(d/2+1)
 	t := time.NewTimer(d)
 	defer t.Stop()
