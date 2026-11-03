@@ -189,13 +189,6 @@ type Metrics struct {
 	// device-local account sharing a port49 username. The label is the
 	// attribution only; the device and the user are on the log record.
 	Attributions *prometheus.CounterVec
-	// port49_accounting_annotations_dropped_total: context annotations the
-	// accounting path did not write because its bounded queue was full, the
-	// store being slow or down. Advisory state (spec §5.8): the record itself
-	// is durable and the device was answered; a drop only leaves a context's
-	// discriminator set or accounting state behind. No labels: no device and
-	// no user.
-	AnnotationDrops prometheus.Counter
 	// port49_broker_item_errors_total{error}: mint items the broker could not
 	// decide, by the API error code on the item — "device_unconfigured" (an
 	// inventory device with no platform), "broker_error" (a policy that
@@ -810,8 +803,6 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Back-channel logouts accepted while the directory store did not answer and not yet forwarded to it."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
-		AnnotationDrops: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_accounting_annotations_dropped_total",
-			Help: "Context annotations accounting dropped because its bounded queue was full."}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
 		BrokerIdempotency: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_idempotency_refusals_total",
@@ -1049,7 +1040,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.AnnotationDrops, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

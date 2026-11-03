@@ -62,7 +62,7 @@ func acct(flags uint8, user, port string, args ...string) wire.AcctRequest {
 
 func TestCommandStopIsResolvedAndCRStripped(t *testing.T) {
 	h, _, out, stop := setup(t)
-	reply := h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0",
+	reply := h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0",
 		"task_id=43", "service=shell", "cmd=show", "cmd-arg=running-config", "cmd-arg=<cr>", "start_time=1757041502", "stop_time=1757041502"))
 	stop()
 	if reply.Status != wire.AcctStatusSuccess {
@@ -94,7 +94,7 @@ func TestCommandStopIsResolvedAndCRStripped(t *testing.T) {
 
 func TestUnattributedIsRecordedNotDiscarded(t *testing.T) {
 	h, _, out, stop := setup(t)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "bob", "vty0", "task_id=9", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "bob", "vty0", "task_id=9", "service=shell", "cmd="))
 	stop()
 	var m map[string]any
 	json.Unmarshal([]byte(strings.TrimSpace(out.String())), &m)
@@ -115,7 +115,7 @@ func TestSpoolFailureAnswersErrorAndCountsIt(t *testing.T) {
 	sp := brokenSpool(filepath.Join(t.TempDir(), "absent", "o.jsonl"), m)
 	h := New(st, sp, m, time.Now, nil)
 
-	reply := h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=1", "service=shell", "cmd="))
+	reply := h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=1", "service=shell", "cmd="))
 	if reply.Status != wire.AcctStatusError {
 		t.Fatalf("want AcctStatusError when the spool write fails, got %+v", reply)
 	}
@@ -129,7 +129,7 @@ func TestSpoolFailureAnswersErrorAndCountsIt(t *testing.T) {
 
 func TestWatchdogIsRecorded(t *testing.T) {
 	h, _, out, stop := setup(t)
-	reply := h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagWatchdog, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	reply := h.Handle(context.Background(), peer, acct(wire.AcctFlagWatchdog, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 	stop()
 	if reply.Status != wire.AcctStatusSuccess || !strings.Contains(out.String(), `"flags":"watchdog"`) {
 		t.Fatalf("%+v %s", reply, out.String())
@@ -184,7 +184,7 @@ func TestExecStartAddsTheDiscriminatorAndClearsClosing(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com",
 		AccountingState: store.AccountingStateClosing})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 	stop()
 	c := ctxOf(t, st)
 	if !hasDisc(c, "42") || c.AccountingState != store.AccountingStateOpen {
@@ -200,7 +200,7 @@ func TestTheStoredDiscriminatorIsHashedNotTheValue(t *testing.T) {
 	h, st, _, stop := setup(t)
 	nxos := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "cisco_nxos"}
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), nxos, acct(wire.AcctFlagStart, "alice", "0", "task_id=172.100.100.1@pts/3", "service=none"))
+	h.Handle(context.Background(), nxos, acct(wire.AcctFlagStart, "alice", "0", "task_id=172.100.100.1@pts/3", "service=none"))
 	stop()
 	c := ctxOf(t, st)
 	if !hasDisc(c, "172.100.100.1@pts/3") {
@@ -222,7 +222,7 @@ func TestTheStoredDiscriminatorIsHashedNotTheValue(t *testing.T) {
 func TestJunosBindsSessionPIDNotTaskID(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "0", "task_id=1", "session_pid=14656", "service=shell", "cmd=login"))
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "0", "task_id=1", "session_pid=14656", "service=shell", "cmd=login"))
 	stop()
 	c := ctxOf(t, st)
 	if !hasDisc(c, "14656") || hasDisc(c, "1") {
@@ -240,7 +240,7 @@ func TestJunosBindsSessionPIDNotTaskID(t *testing.T) {
 func TestJunosSessionPIDArrivesWithSpacesAroundTheEquals(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "0", "task_id=1", "session_pid = 31050", "service=shell", "cmd=login"))
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "0", "task_id=1", "session_pid = 31050", "service=shell", "cmd=login"))
 	stop()
 	if c := ctxOf(t, st); !hasDisc(c, "31050") {
 		t.Fatalf("the spaced AV pair Junos actually sends was not read: %+v", c)
@@ -253,7 +253,7 @@ func TestJunosSessionPIDArrivesWithSpacesAroundTheEquals(t *testing.T) {
 // loses the join, and `elapsed_time = 20` becomes 0 with no error.
 func TestEveryAVPairTheReaderConsumesIsTrimmed(t *testing.T) {
 	h, _, out, stop := setup(t)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0",
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0",
 		"task_id = 7", "service=shell", "cmd = ", "start_time = 100", "stop_time = 120", "elapsed_time = 20"))
 	stop()
 	var m map[string]any
@@ -274,7 +274,7 @@ func TestEveryAVPairTheReaderConsumesIsTrimmed(t *testing.T) {
 func TestASpacedEmptyCmdIsStillAnExecRecord(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id = 42", "service=shell", "cmd = "))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id = 42", "service=shell", "cmd = "))
 	stop()
 	if c := ctxOf(t, st); !hasDisc(c, "42") {
 		t.Fatalf("a spaced cmd made the exec record look like a command record: %+v", c)
@@ -286,11 +286,11 @@ func TestASpacedEmptyCmdIsStillAnExecRecord(t *testing.T) {
 func TestJunosExecStopIsLogoutAndCommandRecordsAreNot(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("28913")}})
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=2", "session_pid = 28913", "service=shell", "cmd=show version", "cmd-arg=<cr>"))
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=2", "session_pid = 28913", "service=shell", "cmd=show version", "cmd-arg=<cr>"))
 	if c := ctxOf(t, st); c.AccountingState != "" {
 		t.Fatalf("a per-command record must not annotate: %+v", c)
 	}
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=1", "session_pid = 28913", "service=shell", "cmd=logout", "elapsed_time=0"))
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=1", "session_pid = 28913", "service=shell", "cmd=logout", "elapsed_time=0"))
 	stop()
 	if c := ctxOf(t, st); c.AccountingState != store.AccountingStateClosing {
 		t.Fatalf("%+v", c)
@@ -304,7 +304,7 @@ func TestExecStopSetsClosingOnAMatchWithAnyMemberOfTheSet(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{
 		store.HashDiscriminator("42"), store.HashDiscriminator("43")}})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=43", "service=shell", "cmd=", "elapsed_time=10"))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=43", "service=shell", "cmd=", "elapsed_time=10"))
 	stop()
 	c := ctxOf(t, st)
 	if c.AccountingState != store.AccountingStateClosing {
@@ -320,7 +320,7 @@ func TestExecStopSetsClosingOnAMatchWithAnyMemberOfTheSet(t *testing.T) {
 func TestExecStopWithAnEmptySetMatchesOnUsername(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=7", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=7", "service=shell", "cmd="))
 	stop()
 	if c := ctxOf(t, st); c.AccountingState != store.AccountingStateClosing {
 		t.Fatalf("stop-only accounting and a lost START take the username branch: %+v", c)
@@ -333,7 +333,7 @@ func TestExecStopWithAnEmptySetMatchesOnUsername(t *testing.T) {
 func TestAnEmptySetIsNeverForeign(t *testing.T) {
 	h, st, out, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=7", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=7", "service=shell", "cmd="))
 	stop()
 	if strings.Contains(out.String(), `"attribution":"foreign"`) {
 		t.Fatalf("%s", out.String())
@@ -347,7 +347,7 @@ func TestAnEmptySetIsNeverForeign(t *testing.T) {
 func TestExecStopOutsideANonEmptySetIsForeign(t *testing.T) {
 	h, st, out, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("42")}})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=99", "service=shell", "cmd=", "elapsed_time=10"))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=99", "service=shell", "cmd=", "elapsed_time=10"))
 	stop()
 	if !strings.Contains(out.String(), `"attribution":"foreign"`) {
 		t.Fatalf("foreign session not flagged: %s", out.String())
@@ -381,8 +381,8 @@ func TestAWatchdogCanBeForeignAndAnnotatesNothing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h, st, out, stop := setup(t)
 			putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("42")}})
-			h.handleAndFlush(context.Background(), peer, acct(tt.flags, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
-			h.handleAndFlush(context.Background(), peer, acct(tt.flags, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+			h.Handle(context.Background(), peer, acct(tt.flags, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
+			h.Handle(context.Background(), peer, acct(tt.flags, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 			stop()
 			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 			if len(lines) != 2 {
@@ -433,8 +433,8 @@ func TestStartWatchdogIsALegalFlagCombinationOnTheWire(t *testing.T) {
 func TestASecondConcurrentSessionIsResolvedNotForeign(t *testing.T) {
 	h, st, out, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "0", "task_id=1", "session_pid = 31048", "service=shell", "cmd=login"))
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "1", "task_id=1", "session_pid = 31050", "service=shell", "cmd=login"))
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "0", "task_id=1", "session_pid = 31048", "service=shell", "cmd=login"))
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStart, "alice", "1", "task_id=1", "session_pid = 31050", "service=shell", "cmd=login"))
 	stop()
 	if strings.Contains(out.String(), `"attribution":"foreign"`) {
 		t.Fatalf("an operator's second window must not page: %s", out.String())
@@ -462,7 +462,7 @@ func TestARetransmittedStartIsNotForeignAndAddsNoSlot(t *testing.T) {
 	h, st, out, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("42")},
 		AccountingState: store.AccountingStateClosing})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 	stop()
 	if strings.Contains(out.String(), `"attribution":"foreign"`) {
 		t.Fatalf("a repeat of this session's own START must not be foreign: %s", out.String())
@@ -480,7 +480,7 @@ func TestTheNinthConcurrentSessionEvictsTheFirst(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
 	for i := 0; i < store.MaxSessionDiscriminators+1; i++ {
-		h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0",
+		h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0",
 			fmt.Sprintf("task_id=%d", i), "service=shell", "cmd="))
 	}
 	stop()
@@ -502,7 +502,7 @@ func TestTheNinthConcurrentSessionEvictsTheFirst(t *testing.T) {
 func TestDeclaredSystemUserIsSystemNotForeign(t *testing.T) {
 	h, _, out, stop := setup(t)
 	sys := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "test_system_users"}
-	h.handleAndFlush(context.Background(), sys, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd=show version"))
+	h.Handle(context.Background(), sys, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd=show version"))
 	stop()
 	if !strings.Contains(out.String(), `"attribution":"system"`) || strings.Contains(out.String(), `"attribution":"foreign"`) {
 		t.Fatalf("%s", out.String())
@@ -530,7 +530,7 @@ func TestJunosRootRecordsFromTheCaptureAreSystem(t *testing.T) {
 		acct(wire.AcctFlagStop, "root", "non-tty", "task_id=2", "service=shell", "session_pid = 28771", "cmd=set alarm yellow alarm-id 0small-msg", "cmd-arg=<cr>"),
 		acct(wire.AcctFlagStop, "root", "non-tty", "task_id=1", "service=shell", "session_pid = 28771", "elapsed_time=0", "cmd=logout"),
 	} {
-		h.handleAndFlush(context.Background(), junos, r)
+		h.Handle(context.Background(), junos, r)
 	}
 	cancel()
 	<-done
@@ -550,7 +550,7 @@ func TestJunosRootRecordsFromTheCaptureAreSystem(t *testing.T) {
 // unattributed: the table is per platform, and only juniper_junos has a row.
 func TestSystemUserIsPerPlatform(t *testing.T) {
 	h, _, out, stop := setup(t)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd=show version"))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd=show version"))
 	stop()
 	if !strings.Contains(out.String(), `"attribution":"unattributed"`) {
 		t.Fatalf("%s", out.String())
@@ -559,7 +559,7 @@ func TestSystemUserIsPerPlatform(t *testing.T) {
 
 func TestUnknownUserIsUnattributedNotSystem(t *testing.T) {
 	h, _, out, stop := setup(t)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "mallory", "vty0", "task_id=9", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "mallory", "vty0", "task_id=9", "service=shell", "cmd="))
 	stop()
 	if !strings.Contains(out.String(), `"attribution":"unattributed"`) {
 		t.Fatalf("%s", out.String())
@@ -569,7 +569,7 @@ func TestUnknownUserIsUnattributedNotSystem(t *testing.T) {
 func TestCommandRecordsDoNotAnnotate(t *testing.T) {
 	h, st, _, stop := setup(t)
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=43", "service=shell", "cmd=show", "cmd-arg=version"))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=43", "service=shell", "cmd=show", "cmd-arg=version"))
 	stop()
 	if c := ctxOf(t, st); len(c.SessionDiscriminators) != 0 || c.AccountingState != "" {
 		t.Fatalf("%+v", c)
@@ -581,8 +581,8 @@ func TestCommandRecordsDoNotAnnotate(t *testing.T) {
 // it was, including a context under another username.
 func TestAnnotationNeverCreatesOrDeletesAContext(t *testing.T) {
 	h, st, _, stop := setup(t)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "mallory", "vty0", "task_id=9", "service=shell", "cmd="))
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=9", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "mallory", "vty0", "task_id=9", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=9", "service=shell", "cmd="))
 	stop()
 	if _, err := st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "mallory"}); err == nil {
 		t.Fatal("accounting created a context for a user it could not attribute")
@@ -613,7 +613,7 @@ func TestAnnotationDoesNotExtendTheIdleTTL(t *testing.T) {
 
 	stamped := now
 	now = now.Add(30 * time.Second)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 	cancel()
 	<-done
 
@@ -636,11 +636,11 @@ func TestUnmodeledPlatformBindsNothingAndStillClosesOnUsername(t *testing.T) {
 	h, st, _, stop := setup(t)
 	odd := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "meinberg_lantime"}
 	putCtx(t, st, store.Context{CtxID: "ctx1"})
-	h.handleAndFlush(context.Background(), odd, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), odd, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 	if c := ctxOf(t, st); len(c.SessionDiscriminators) != 0 {
 		t.Fatalf("nothing measured says what separates sessions here: %+v", c)
 	}
-	h.handleAndFlush(context.Background(), odd, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), odd, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
 	stop()
 	if c := ctxOf(t, st); c.AccountingState != store.AccountingStateClosing {
 		t.Fatalf("%+v", c)
@@ -656,10 +656,10 @@ func TestEveryAttributionIsCounted(t *testing.T) {
 	sys := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "test_system_users"}
 	putCtx(t, st, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com",
 		SessionDiscriminators: []string{store.HashDiscriminator("42")}})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=7", "service=shell", "cmd="))
-	h.handleAndFlush(context.Background(), sys, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=7", "service=shell", "cmd="))
+	h.Handle(context.Background(), sys, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd="))
 	stop()
 	for _, a := range []string{"resolved", "foreign", "unattributed", "system"} {
 		if got := testutil.ToFloat64(h.metrics.Attributions.WithLabelValues(a)); got != 1 {
@@ -674,7 +674,7 @@ func TestARefusedRecordIsNotCounted(t *testing.T) {
 	st := memory.New(time.Now)
 	m := metrics.New(prometheus.NewRegistry())
 	h := New(st, brokenSpool(filepath.Join(t.TempDir(), "absent", "o.jsonl"), m), m, time.Now, nil)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=1", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=1", "service=shell", "cmd="))
 	if got := testutil.ToFloat64(m.Attributions.WithLabelValues("unattributed")); got != 0 {
 		t.Fatalf("a refused record was counted: %v", got)
 	}
@@ -689,7 +689,7 @@ func TestARefusedRecordIsNotCounted(t *testing.T) {
 func TestASystemRecordCarriesItsPort(t *testing.T) {
 	h, _, out, stop := setup(t)
 	sys := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "test_system_users"}
-	h.handleAndFlush(context.Background(), sys, acct(wire.AcctFlagStart, "root", "ttyd0", "task_id=1", "service=shell", "cmd="))
+	h.Handle(context.Background(), sys, acct(wire.AcctFlagStart, "root", "ttyd0", "task_id=1", "service=shell", "cmd="))
 	stop()
 	var m map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &m); err != nil {
@@ -706,10 +706,10 @@ func TestASystemRecordCarriesItsPort(t *testing.T) {
 // read from the record as sent.
 func TestAccountingNeverWritesASecret(t *testing.T) {
 	h, _, out, stop := setup(t)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=44", "service=shell",
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=44", "service=shell",
 		"cmd=enable", "cmd-arg=secret", "cmd-arg=0", "cmd-arg=Hunter2", "cmd-arg=<cr>"))
 	junos := authen.Peer{NAS: "srx-01", NASAddr: "10.20.0.8", Platform: "juniper_junos"}
-	h.handleAndFlush(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=2", "service=shell",
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=2", "service=shell",
 		"session_pid = 31050", `cmd=set system root-authentication encrypted-password "$6$abc" <cr>`))
 	stop()
 	if strings.Contains(out.String(), "Hunter2") || strings.Contains(out.String(), "$6$abc") {
@@ -740,12 +740,12 @@ func TestTheSpoolFileNeverHoldsASecret(t *testing.T) {
 	}
 	// No Run: nothing drains, so every record stays in the file.
 	h := New(memory.New(time.Now), sp, metrics.New(prometheus.NewRegistry()), time.Now, nil)
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=45", "service=shell",
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=45", "service=shell",
 		"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2", "cmd-arg=<cr>"))
 	h.WithRedactor(func(string) []platform.Redaction {
 		return []platform.Redaction{{Match: []string{"**"}, After: "psk"}}
 	})
-	h.handleAndFlush(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=46", "service=shell",
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=46", "service=shell",
 		"cmd=crypto", "cmd-arg=psk", "cmd-arg=s3cret", "cmd-arg=<cr>"))
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -763,85 +763,10 @@ func TestAVariantsLogoutIsAnExecRecord(t *testing.T) {
 	h, st, _, stop := setup(t)
 	variant := authen.Peer{NAS: "leaf-01", NASAddr: "10.0.0.1", Platform: "srx_variant", WirePlatform: "juniper_junos"}
 	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("28913")}})
-	h.handleAndFlush(context.Background(), variant, acct(wire.AcctFlagStop, "alice", "0", "task_id=1", "session_pid = 28913",
+	h.Handle(context.Background(), variant, acct(wire.AcctFlagStop, "alice", "0", "task_id=1", "session_pid = 28913",
 		"service=shell", "cmd=logout", "elapsed_time=0"))
 	stop()
 	if c := ctxOf(t, st); c.AccountingState != store.AccountingStateClosing {
 		t.Fatalf("the variant's logout did not close the session: %+v", c)
 	}
-}
-
-// blockingStore holds every AnnotateContext until release is closed.
-type blockingStore struct {
-	store.Store
-	release chan struct{}
-	entered chan struct{}
-}
-
-func (b blockingStore) AnnotateContext(ctx context.Context, k store.ContextKey, d, s string) error {
-	select {
-	case b.entered <- struct{}{}:
-	default:
-	}
-	select {
-	case <-b.release:
-	case <-ctx.Done():
-	}
-	return b.Store.AnnotateContext(ctx, k, d, s)
-}
-
-func startReq() wire.AcctRequest {
-	return acct(wire.AcctFlagStart, "alice", "ssh", "task_id=1", "service=shell", "cmd=")
-}
-
-// The annotation is advisory and must not stand between a device and its reply
-// (spec §5.8): a store that never answers the annotation does not delay it.
-func TestTheReplyDoesNotWaitForTheAnnotation(t *testing.T) {
-	h, st, _, stop := setup(t)
-	defer stop()
-	b := blockingStore{Store: st, release: make(chan struct{}), entered: make(chan struct{}, 1)}
-	h.store = b
-	defer close(b.release)
-	done := make(chan wire.AcctReply, 1)
-	go func() { done <- h.Handle(context.Background(), peer, startReq()) }()
-	select {
-	case r := <-done:
-		if r.Status != wire.AcctStatusSuccess {
-			t.Fatalf("status %d", r.Status)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Handle waited for a blocked AnnotateContext")
-	}
-}
-
-// A full queue drops and counts, and never blocks the reply.
-func TestAFullAnnotationQueueDropsAndCounts(t *testing.T) {
-	h, st, _, stop := setup(t)
-	defer stop()
-	b := blockingStore{Store: st, release: make(chan struct{}), entered: make(chan struct{}, 1)}
-	h.store = b
-	defer close(b.release)
-	const sent = annotateQueue + 40 // one key, so one shard, well inside annotateTimeout
-	for i := 0; i < sent; i++ {
-		done := make(chan struct{})
-		go func() { h.Handle(context.Background(), peer, startReq()); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("Handle %d blocked behind a full annotation queue", i)
-		}
-	}
-	// Same key, so one shard: its worker holds one, its queue holds annotateQueue.
-	dropped := testutil.ToFloat64(h.metrics.AnnotationDrops)
-	if want := float64(sent - annotateQueue - 1); dropped != want {
-		t.Fatalf("dropped %v annotations, want %v", dropped, want)
-	}
-}
-
-// handleAndFlush is Handle, then the wait for its annotation: the tests below
-// read the context the annotation wrote.
-func (h *Handler) handleAndFlush(ctx context.Context, p authen.Peer, r wire.AcctRequest) wire.AcctReply {
-	reply := h.Handle(ctx, p, r)
-	h.Flush()
-	return reply
 }

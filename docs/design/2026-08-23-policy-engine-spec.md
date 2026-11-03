@@ -3220,15 +3220,6 @@ label is the attribution alone — no device and no user; the decision record ca
 rate-limited: a burst of `foreign` is itself the signal. A record the spool refused is not counted,
 because the device was answered ERROR and will send it again.
 
-The annotation is written after the reply, not before it. The record is durable in the spool
-when the device is answered, and the annotation is advisory, so a store that is slow or down
-delays no reply. Annotations go to a bounded set of workers, one per shard of the context key so
-a START and the STOP after it are written in order; a full shard drops the newest annotation
-and counts it in `port49_accounting_annotations_dropped_total` (no labels: no device, no user).
-A drop leaves a context's discriminator set or accounting state behind, which no decision
-reads (§5.6 row 6 reclaims the state), so it is a signal that the store is struggling, not a
-loss of accounting.
-
 Two earlier readings of this paragraph are superseded. It first said "an exec START whose `user`
 does not match the bound username", which under the `(nas, username)` key (§13, decision 15) is
 unreachable: a START naming another user addresses another key, finds no context, and is
