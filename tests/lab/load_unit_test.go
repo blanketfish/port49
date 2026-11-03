@@ -1155,3 +1155,36 @@ func TestACellHeadingCarriesTheRAMLabelAndRestartsNeedTwoScrapes(t *testing.T) {
 		t.Fatalf("%q", obs["daemon_run_restarts"])
 	}
 }
+
+// PORT49_LAB_LOAD_DISK_DECLARED is the operator's word for a disk the host
+// cannot name (a cloud volume type): free text of at most 64 printable
+// characters, written under session_etcd_storage when set and absent when not.
+func TestTheDeclaredDiskLine(t *testing.T) {
+	note, err := loadNote(nil, hostFacts{SessionStorage: "PersistentDisk, ext4", DiskDeclared: "GCE pd-ssd, 500 GB"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(note, "\n")
+	want := "- **session_etcd_disk_declared:** GCE pd-ssd, 500 GB (declared by the operator, not read from the host)"
+	if lines[3] != want {
+		t.Fatalf("line 4 %q, want %q", lines[3], want)
+	}
+	plain, err := loadNote(nil, hostFacts{SessionStorage: "x"})
+	if err != nil || strings.Contains(plain, "disk_declared") {
+		t.Fatalf("an unset declaration left a line: %v", err)
+	}
+	for in, ok := range map[string]bool{
+		"":                      true,
+		"GCE pd-balanced":       true,
+		strings.Repeat("a", 64): true,
+		strings.Repeat("a", 65): false,
+		"two\nlines":            false,
+		"tab\there":             false,
+		"bell\a":                false,
+	} {
+		_, err := loadDiskDeclared(in)
+		if (err == nil) != ok {
+			t.Errorf("%q: err %v, want ok=%v", in, err, ok)
+		}
+	}
+}

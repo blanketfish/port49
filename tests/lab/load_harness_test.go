@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/blanketfish/port49/internal/broker/api"
 	"github.com/blanketfish/port49/internal/devicemock"
@@ -289,13 +291,30 @@ type hostFacts struct {
 	// etcd's data was under /dev/shm. SessionStorage is the line the note
 	// carries, so a reader cannot take a RAM run for a disk run.
 	DiskModel, SessionStorage string
-	InRAM                     bool
+	// DiskDeclared is PORT49_LAB_LOAD_DISK_DECLARED: what the operator says
+	// the disk is, for one the host cannot name.
+	DiskDeclared string
+	InRAM        bool
 }
 
 // loadEtcdInRAM is PORT49_LAB_LOAD_ETCD_IN_RAM=1 (lab-only): the session
 // etcd's data-dir goes under /dev/shm and the note says so. The directory
 // etcds stay on the run directory's disk.
 func loadEtcdInRAM() bool { return os.Getenv("PORT49_LAB_LOAD_ETCD_IN_RAM") == "1" }
+
+// loadDiskDeclared validates PORT49_LAB_LOAD_DISK_DECLARED: free text of at
+// most 64 printable characters.
+func loadDiskDeclared(v string) (string, error) {
+	if utf8.RuneCountInString(v) > 64 {
+		return "", errors.New("PORT49_LAB_LOAD_DISK_DECLARED is longer than 64 characters")
+	}
+	for _, r := range v {
+		if !unicode.IsPrint(r) {
+			return "", errors.New("PORT49_LAB_LOAD_DISK_DECLARED holds a character that does not print")
+		}
+	}
+	return v, nil
+}
 
 // loadNoteName is the note's file name: the RAM run and the disk run never
 // overwrite each other.
@@ -350,7 +369,8 @@ func loadSessionDataDir(run, shm string, inRAM bool) (string, error) {
 
 // A cloud disk's model line names its bus, not its volume type (GCE reads
 // "PersistentDisk" or "nvme_card-pd" for pd-ssd and pd-balanced alike): a cloud
-// run's note must record the volume type by hand.
+// run states the type in PORT49_LAB_LOAD_DISK_DECLARED, which the note carries
+// as declared by the operator.
 //
 // loadDiskModel is the model of the drive behind the block device major:minor,
 // read from sys (/sys): a partition is resolved to its disk, a device-mapper
@@ -510,18 +530,22 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	if host.InRAM {
 		title += " (session etcd in RAM)"
 	}
+	declared := ""
+	if host.DiskDeclared != "" {
+		declared = "- **session_etcd_disk_declared:** " + host.DiskDeclared + " (declared by the operator, not read from the host)\n"
+	}
 	cellTag := ""
 	if host.InRAM {
 		cellTag = " (etcd in RAM)"
 	}
-	fmt.Fprintf(&b, title+"\n\n- **session_etcd_storage:** %s\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
+	fmt.Fprintf(&b, title+"\n\n- **session_etcd_storage:** %s\n%s- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
 		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n"+
 		"- **run_dir_fs:** %s\n- **etcd_session_wal_fsync_mean_ms:** %s\n\n"+
 		"Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total size, which the quota counts) "+
 		"with 8589934592 bytes (8192 MB). `etcd_session_db_growth_mb_per_min` is the in-use size's change and is "+
 		"understated when `etcd_session_compacted_during_cell` is true (a compaction freed space in the cell); "+
 		"`etcd_session_revisions_per_min` is the write rate compaction cannot hide.\n\n",
-		host.SessionStorage, time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
+		host.SessionStorage, declared, time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
 		loadDevices, loadPrincipals, loadHumans, host.RunDirFS, host.WALFsyncMeanMS)
 	for _, c := range cells {
 		verdict := "PASS"
@@ -550,7 +574,7 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	if loadNamesCredential(b.String()) {
 		return "", errors.New("the load note was not written: it names a credential")
 	}
-	for _, v := range []string{host.CPU, host.Disk, host.Kernel} {
+	for _, v := range []string{host.CPU, host.Disk, host.Kernel, host.DiskDeclared} {
 		if loadLongRun.MatchString(v) {
 			return "", errors.New("the load note was not written: a host fact could hold a credential")
 		}
@@ -1063,26 +1087,27 @@ func loadProcUsage(pidfile string) (cpu float64, peakKB int, err error) {
 // loadRun is the stack: the etcd members, the broker and the daemon, the lab
 // PKI, and the mint clients.
 type loadRun struct {
-	t          *testing.T
-	dir        string
-	pki        *regionPKI
-	etcdBin    string
-	dirMembers []*regionEtcd
-	sess       *regionEtcd
-	broker     *regionProc
-	daemon     *regionProc
-	port49d    string
-	brokerBin  string
-	port49Bin  string // the CLI, built from the branch beside the daemon
-	encKey     string
-	tacacsKey  string
-	envFile    string
-	inRAM      bool // PORT49_LAB_LOAD_ETCD_IN_RAM: the session etcd's data is under /dev/shm
-	devices    int
-	profile    *devicemock.Profile
-	clients    []*http.Client // one per machine principal
-	policyPath string
-	reloads    int
+	t            *testing.T
+	dir          string
+	pki          *regionPKI
+	etcdBin      string
+	dirMembers   []*regionEtcd
+	sess         *regionEtcd
+	broker       *regionProc
+	daemon       *regionProc
+	port49d      string
+	brokerBin    string
+	port49Bin    string // the CLI, built from the branch beside the daemon
+	encKey       string
+	tacacsKey    string
+	envFile      string
+	diskDeclared string // PORT49_LAB_LOAD_DISK_DECLARED, validated at the stack's start
+	inRAM        bool   // PORT49_LAB_LOAD_ETCD_IN_RAM: the session etcd's data is under /dev/shm
+	devices      int
+	profile      *devicemock.Profile
+	clients      []*http.Client // one per machine principal
+	policyPath   string
+	reloads      int
 
 	// The device PKI of the TLS cells, built when first used.
 	tlsOnce sync.Once
@@ -1244,6 +1269,9 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 			data: filepath.Join(dir, fmt.Sprintf("d%d.etcd", i+1)), log: filepath.Join(dir, fmt.Sprintf("d%d.log", i+1)), pki: r.pki})
 	}
 	r.inRAM = loadEtcdInRAM()
+	if r.diskDeclared, err = loadDiskDeclared(os.Getenv("PORT49_LAB_LOAD_DISK_DECLARED")); err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
 	if r.inRAM {
 		quota, _ := strconv.ParseUint(etcdQuotaBackendBytes, 10, 64)
 		if err := loadShmCheck("/dev/shm", quota, loadFreeBytes); err != nil {
@@ -1638,6 +1666,7 @@ func (r *loadRun) hostFacts() hostFacts {
 	h := readHostFacts(r.dir)
 	h.InRAM = r.inRAM
 	h.SessionStorage = loadStorageFact(r.inRAM, h)
+	h.DiskDeclared = r.diskDeclared
 	return h
 }
 
