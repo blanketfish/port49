@@ -423,3 +423,34 @@ func TestJunosDeletesAnExistingAuthenticationOrderFirst(t *testing.T) {
 		}
 	}
 }
+
+// XR reserves the name "default": a group's `vrf default` commits as a semantic error and the
+// whole commit reverts (L88, XRd 26.1.1, `show configuration failed`). The file ships both
+// forms: the group's vrf line carries a render directive that drops it for the default VRF.
+func TestTheXRGroupVRFIsForANamedVRFOnly(t *testing.T) {
+	has := func(lines []string, want string) bool {
+		for _, l := range lines {
+			if l == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, vrf := range []string{"default", "mgmt"} {
+		v := labValues()
+		v.MgmtVRF = vrf
+		lines, err := Render("cisco_iosxr", "tcp", v, "k")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !has(lines, "tacacs source-interface Loopback0 vrf "+vrf) {
+			t.Errorf("%s: the source pin lost its vrf: %v", vrf, lines)
+		}
+		if got, want := has(lines, " vrf "+vrf), vrf != "default"; got != want {
+			t.Errorf("%s: the group's vrf line present = %v, want %v", vrf, got, want)
+		}
+	}
+	if !strings.Contains(raw(t, "cisco_iosxr", "tcp", ".cfg"), "reserves \"default\"") {
+		t.Error("the XR file does not say XR reserves \"default\" for a group's vrf")
+	}
+}

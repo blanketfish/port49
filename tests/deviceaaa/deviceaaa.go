@@ -39,6 +39,10 @@ func Placeholders() []string {
 		"<BREAKGLASS_USER>", "<TLS_PORT>", "<SERVER_NAME>", "<CERT_ID>"}
 }
 
+// omitWhenDefaultVRF is a comment line that tells Render to drop the command line after it
+// when the management VRF is "default": the form a device managing in the default VRF uses.
+const omitWhenDefaultVRF = "!render: omit when the management vrf is default"
+
 var leftover = regexp.MustCompile(`<[^<>\s]*>`)
 
 // Render reads deploy/device-aaa/<platform>[-tls].<ext> and returns its command lines with
@@ -89,8 +93,17 @@ func Render(platform, transport string, v Values, key string) ([]string, error) 
 		"<MGMT_VRF>", v.MgmtVRF, "<BREAKGLASS_USER>", v.BreakGlass,
 		"<TLS_PORT>", strconv.Itoa(v.TLSPort), "<SERVER_NAME>", v.ServerName, "<CERT_ID>", v.CertID)
 	var out []string
+	omitNext := false
 	for _, l := range strings.Split(string(body), "\n") {
+		if t := strings.TrimSpace(l); t == omitWhenDefaultVRF {
+			omitNext = v.MgmtVRF == "default"
+			continue
+		}
 		if t := strings.TrimSpace(l); t == "" || strings.HasPrefix(t, "!") || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if omitNext {
+			omitNext = false
 			continue
 		}
 		if strings.Contains(l, "<TLS_PORT>") && v.TLSPort == 0 {
