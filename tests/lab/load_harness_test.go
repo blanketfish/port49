@@ -683,6 +683,27 @@ type loadSampler struct {
 	first, last          loadMetrics
 	got                  bool
 	ok                   int // scrapes that answered; none means every peak below is unread, not zero
+	restarts             int // scrapes that saw a counter fall: the process's registry started over
+	acc                  loadMetrics
+}
+
+// increaseSince is m's counters (the drops and the store-call histogram) less
+// those of the scrape before it, a series that fell counting from zero, and
+// whether any fell.
+func (m loadMetrics) increaseSince(prev loadMetrics) (inc loadMetrics, reset bool) {
+	step := func(cur, before float64) float64 {
+		if cur < before {
+			reset = true
+			return cur
+		}
+		return cur - before
+	}
+	inc.SpoolDrops = step(m.SpoolDrops, prev.SpoolDrops)
+	inc.buckets = map[float64]float64{}
+	for le, v := range m.buckets {
+		inc.buckets[le] = step(v, prev.buckets[le])
+	}
+	return inc, reset
 }
 
 func startLoadSampler(addr string) *loadSampler {
@@ -693,13 +714,7 @@ func startLoadSampler(addr string) *loadSampler {
 		defer tick.Stop()
 		for {
 			if m, err := loadScrape(addr); err == nil {
-				if !s.got {
-					s.first, s.got = m, true
-				}
-				s.last = m
-				s.ok++
-				s.peakConns = math.Max(s.peakConns, m.Connections)
-				s.peakDepth = math.Max(s.peakDepth, m.SpoolDepth)
+				s.observe(m)
 			}
 			select {
 			case <-s.stop:
@@ -709,6 +724,39 @@ func startLoadSampler(addr string) *loadSampler {
 		}
 	}()
 	return s
+}
+
+// observe takes one answered scrape.
+func (s *loadSampler) observe(m loadMetrics) {
+	if !s.got {
+		s.first, s.got = m, true
+		s.acc = loadMetrics{buckets: map[float64]float64{}}
+	} else {
+		inc, reset := m.increaseSince(s.last)
+		s.acc.SpoolDrops += inc.SpoolDrops
+		for le, v := range inc.buckets {
+			s.acc.buckets[le] += v
+		}
+		if reset {
+			s.restarts++
+		}
+	}
+	s.last = m
+	s.ok++
+	s.peakConns = math.Max(s.peakConns, m.Connections)
+	s.peakDepth = math.Max(s.peakDepth, m.SpoolDepth)
+}
+
+// delta is the counters' and histogram's change over the cell.
+// It is the sum of the positive increases between consecutive scrapes, as
+// Prometheus's increase() is: port49d starts its registry over at every run, so
+// last less first goes negative across a restart. A series that fell is read as
+// having started over, and its new value is its increase.
+func (s *loadSampler) delta() loadMetrics {
+	if !s.got {
+		return loadMetrics{buckets: map[float64]float64{}}
+	}
+	return s.acc
 }
 
 // loadRSSSampler keeps each process's peak resident set (VmRSS) over one
@@ -817,13 +865,14 @@ func addSamplerObserved(obs map[string]string, dsam, bsam *loadSampler) {
 		obs["peak_spool_depth"] = num(dsam.peakDepth)
 	}
 	if dsam.ok >= 2 {
-		obs["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
-		obs["daemon_store_call_p99_ms"] = dsam.last.Sub(dsam.first).QuantileLabel(0.99)
+		obs["spool_drops_during"] = num(dsam.delta().SpoolDrops)
+		obs["daemon_store_call_p99_ms"] = dsam.delta().QuantileLabel(0.99)
+		obs["daemon_run_restarts"] = strconv.Itoa(dsam.restarts)
 	}
 	if bsam.ok < 2 {
 		obs["broker_store_call_p99_ms"] = loadScrapeFailed
 	} else {
-		obs["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
+		obs["broker_store_call_p99_ms"] = bsam.delta().QuantileLabel(0.99)
 	}
 }
 

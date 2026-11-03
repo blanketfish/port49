@@ -915,3 +915,47 @@ etcd_server_slow_apply_total 7
 		t.Fatalf("backend commit p99 %q", got)
 	}
 }
+
+func storeCalls(le005, le1, inf, drops float64) loadMetrics {
+	return loadMetrics{SpoolDrops: drops, buckets: map[float64]float64{0.005: le005, 1: le1, math.Inf(1): inf}}
+}
+
+// port49d starts its registry over at every run, so a delta of the last scrape
+// less the first goes negative across a restart. The sum of the positive
+// increases (Prometheus increase()) does not, and a reset is counted.
+func TestDeltasSurviveARegistryReset(t *testing.T) {
+	s := &loadSampler{}
+	s.observe(storeCalls(10, 10, 10, 1)) // baseline
+	s.observe(storeCalls(30, 30, 30, 3)) // +20 calls, +2 drops
+	s.observe(storeCalls(4, 5, 5, 0))    // the run restarted: 5 calls and no drops since
+	s.observe(storeCalls(9, 12, 12, 1))  // +7 calls, +1 drop
+	d := s.delta()
+	if got := d.buckets[math.Inf(1)]; got != 32 {
+		t.Errorf("store calls over the cell: %v, want 20+5+7 = 32", got)
+	}
+	if d.SpoolDrops != 3 {
+		t.Errorf("drops over the cell: %v, want 2+0+1 = 3", d.SpoolDrops)
+	}
+	if s.restarts != 1 {
+		t.Errorf("restarts %d, want 1", s.restarts)
+	}
+	obs := map[string]string{}
+	addSamplerObserved(obs, s, s)
+	if obs["daemon_run_restarts"] != "1" || obs["spool_drops_during"] != "3" {
+		t.Errorf("%v", obs)
+	}
+	if obs["daemon_store_call_p99_ms"] == "<=0.00" || strings.HasPrefix(obs["daemon_store_call_p99_ms"], "-") {
+		t.Errorf("p99 %q", obs["daemon_store_call_p99_ms"])
+	}
+}
+
+// With no reset the delta is what it was: last less first.
+func TestDeltasWithoutAResetAreLastLessFirst(t *testing.T) {
+	s := &loadSampler{}
+	s.observe(storeCalls(10, 10, 10, 1))
+	s.observe(storeCalls(30, 30, 30, 3))
+	s.observe(storeCalls(30, 30, 30, 3))
+	if d := s.delta(); d.buckets[math.Inf(1)] != 20 || d.SpoolDrops != 2 || s.restarts != 0 {
+		t.Errorf("%v %v %d", d.buckets, d.SpoolDrops, s.restarts)
+	}
+}

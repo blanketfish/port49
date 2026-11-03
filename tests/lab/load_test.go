@@ -200,7 +200,7 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
 	c.Observed["mint_errors"] = strconv.Itoa(mints.Errs)
 	addSamplerObserved(c.Observed, dsam, bsam)
-	c.daemonStore, c.daemonScrapes = dsam.last.Sub(dsam.first), dsam.ok
+	c.daemonStore, c.daemonScrapes = dsam.delta(), dsam.ok
 	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
 		const mb = 1 << 20
 		c.Observed["etcd_session_revisions_per_min"] = loadRevisionsPerMin(walBefore.Revision, m.Revision, time.Since(cellStart))
