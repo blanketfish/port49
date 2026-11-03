@@ -752,7 +752,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		SpoolQuarantines: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_accounting_spool_quarantines_total",
 			Help: "Unreadable spool files renamed aside for an operator."}),
 		SpoolSyncSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "port49_accounting_spool_sync_seconds",
-			Help:    "Seconds one accounting spool group commit spent in fsync; every record in the batch waits on it.",
+			Help:    "Seconds one accounting spool group commit spent in fsync and close (plus the directory fsync of a new file); every record in the batch waits on it.",
 			Buckets: []float64{0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}}),
 		StoreOps: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_operations_total",
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),

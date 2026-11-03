@@ -1468,3 +1468,20 @@ func TestEachGroupSyncIsObservedInTheSyncHistogram(t *testing.T) {
 		t.Fatalf("after two offers one at a time: %d observations", n)
 	}
 }
+
+// A sync that fails after the disk stalled is still disk latency, so it is
+// observed, and only once.
+func TestAFailedGroupSyncIsObservedOnce(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	sp, err := NewSpool(1024, filepath.Join(t.TempDir(), "overflow.jsonl"), decision.NewJSONLines(&bytes.Buffer{}), metrics.New(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.syncFile = func(*os.File) error { time.Sleep(20 * time.Millisecond); return errors.New("EIO") }
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err == nil {
+		t.Fatal("offer succeeded over a failing sync")
+	}
+	if n, sum := syncObservations(t, reg); n != 1 || sum < 0.02 {
+		t.Fatalf("%d observations, sum %.4f s", n, sum)
+	}
+}

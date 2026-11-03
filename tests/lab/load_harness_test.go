@@ -287,8 +287,8 @@ type hostFacts struct {
 	WALFsyncMeanMS string
 
 	// DiskModel is the model of the drive under the run directory ("unknown"
-	// when /sys cannot say). InRAM is PORT49_LAB_LOAD_ETCD_IN_RAM: the session
-	// etcd's data was under /dev/shm. SessionStorage is the line the note
+	// when /sys cannot say). InRAM is PORT49_LAB_LOAD_IN_RAM: the session
+	// etcd's data and the accounting spool were under /dev/shm. SessionStorage is the line the note
 	// carries, so a reader cannot take a RAM run for a disk run.
 	DiskModel, SessionStorage string
 	// SpoolStorage is the drive under port49d's accounting spool, in a disk
@@ -553,7 +553,7 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	}
 	declared := ""
 	if host.DiskDeclared != "" {
-		declared = "- **session_etcd_disk_declared:** " + host.DiskDeclared + " (declared by the operator, not read from the host)\n"
+		declared = "- **disk_declared:** " + host.DiskDeclared + " (declared by the operator, not read from the host)\n"
 	}
 	if host.SpoolStorage != "" {
 		declared += "- **accounting_spool_storage:** " + host.SpoolStorage + "\n"

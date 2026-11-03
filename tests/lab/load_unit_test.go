@@ -1165,7 +1165,7 @@ func TestTheDeclaredDiskLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(note, "\n")
-	want := "- **session_etcd_disk_declared:** GCE pd-ssd, 500 GB (declared by the operator, not read from the host)"
+	want := "- **disk_declared:** GCE pd-ssd, 500 GB (declared by the operator, not read from the host)"
 	if lines[3] != want {
 		t.Fatalf("line 4 %q, want %q", lines[3], want)
 	}
