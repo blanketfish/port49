@@ -8183,6 +8183,20 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     `call_timeout`; clientv3's round-robin puts the next reads on other members. An operator
     with a defragmenting member should expect an occasional `outcome="fail"` and a nonzero
     `port49_store_health_failures`, not zero.
+  - **Which calls are re-sent on another member (hedged).** A member hung with its TCP connection
+    alive costs round-robin's next call on its connection the whole `call_timeout`. Reads (a Range,
+    and the context pool's read-only transaction), and the writes a store method marks as safe
+    sent twice, are re-sent at a quarter and at half of the call's deadline, and the first answer wins
+    (`internal/store/etcd/hedge.go`). Plan 12c adds the login's token redemption and context swap
+    to the marked writes, because each is a compare-and-swap on the revision it read: once one copy
+    has applied, the other's compare fails and writes nothing. A copy that finds the compare failed
+    reads back the record its own transaction wrote (the receipt, the context), and a per-request nonce
+    in it says whether it is this request's earlier copy, which is a success, or another request's
+    write, which is `token_spent` or a conflict as before; so a hedge never turns into a replay
+    refusal or a replay record. Not hedged, and failing one call in three with a member hung: the
+    mint's transaction (a second copy would write a second token), `ExtendReceipt`, `DeleteToken`,
+    and the other single-key swaps. The matrix's `one_member_dark` (`deploy/failure-matrix.md`) logs
+    in thirty times with a member paused, tokens minted before the pause.
   - **Feed lag is a trigger.** The context connection's read waits for the context feed, so a
     feed more than `call_timeout` behind (a mass refresh burst, for example) fails the check,
     and `close_after` of them close every replica. The same reads are denied
