@@ -211,6 +211,21 @@ func TestARetryReusesTheKeyAndHonoursRetryAfter(t *testing.T) {
 	}
 }
 
+// The principal cap's refusal (decision 32): every connection held has a
+// request in flight, so the broker answers 503 too_many_connections with
+// Retry-After, and the run retries under the same key within its deadline.
+func TestABusyPrincipalCapIsRetriedAfterItsRetryAfter(t *testing.T) {
+	f := &fakeBroker{batchMax: 10, answers: []func(http.ResponseWriter, api.MintRequest){
+		refuse(http.StatusServiceUnavailable, "too_many_connections", "1"), permitAll}}
+	h := newHarness(t, f, 24*time.Hour)
+	if _, err := h.client(t).Mint(context.Background(), MintOptions{Devices: devices(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.keys) != 2 || f.keys[0] != f.keys[1] || len(h.slept) != 1 || h.slept[0] != time.Second {
+		t.Fatalf("keys %v slept %v", f.keys, h.slept)
+	}
+}
+
 func TestTheDeadlineEndsWithTheUnmintedDevices(t *testing.T) {
 	f := &fakeBroker{batchMax: 2, answers: []func(http.ResponseWriter, api.MintRequest){
 		permitAll, refuse(http.StatusServiceUnavailable, "store_unavailable", "30")}}
