@@ -275,7 +275,7 @@ L84_NOTE ?= $(CURDIR)/tests/lab/results/L84-systemd-docker.md
 # go test runs in the package's directory, so the three paths are made absolute.
 # L88 (plan 12c, Task 12): the reference AAA configurations on the lab images. One image per run:
 #   make lab-l88 PLATFORM=eos
-lab-l88:
+lab-l88: build
 	@test -n "$(PLATFORM)" || { echo "usage: make lab-l88 PLATFORM=<PORT49_LAB_PLATFORMS selector>"; exit 2; }
 	PORT49_LAB_PLATFORMS=$(PLATFORM) go test -tags lab ./tests/lab/ -run '^TestL88$$' -count=1 -v -timeout 300m
 

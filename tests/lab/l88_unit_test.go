@@ -4,6 +4,7 @@ package lab
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,13 +160,13 @@ func TestL88PasswordHashShapes(t *testing.T) {
 func TestL88LocalAccountLines(t *testing.T) {
 	const hash = "$6$s$h"
 	for name, want := range map[string]string{
-		"juniper_vjunos-router": `set system login user l88deny class read-only authentication encrypted-password "$6$s$h"`,
+		"juniper_vjunos-router": `set system login user l88deny authentication encrypted-password "$6$s$h"`,
 		"arista_eos":            "username l88deny privilege 1 secret sha512 $6$s$h",
 		"arista_ceos":           "username l88deny privilege 1 secret sha512 $6$s$h",
 	} {
 		add, del := l88LocalAccount(name, "l88deny", hash)
-		if len(add) == 0 || add[0] != want {
-			t.Errorf("%s: add = %q, want first line %q", name, add, want)
+		if !slices.Contains(add, want) {
+			t.Errorf("%s: add = %q, want the line %q", name, add, want)
 		}
 		if len(del) == 0 || strings.Contains(strings.Join(del, "\n"), hash) {
 			t.Errorf("%s: delete lines %q are empty or carry the hash", name, del)
@@ -195,5 +196,13 @@ func TestL88MissingTreatsEOSDefaultVRFAsImplicit(t *testing.T) {
 	}
 	if m := l88Missing(append(typed, "aaa accounting exec default start-stop group port49"), shown); len(m) != 1 {
 		t.Errorf("missing = %q, want the accounting line", m)
+	}
+}
+
+func TestL88ExpandListsMakesOneLinePerMember(t *testing.T) {
+	got := l88ExpandLists([]string{"set system accounting events [ login change-log ]", "set system authentication-order tacplus"})
+	want := []string{"set system accounting events login", "set system accounting events change-log", "set system authentication-order tacplus"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

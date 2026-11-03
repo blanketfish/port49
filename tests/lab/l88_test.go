@@ -86,6 +86,7 @@ func l88Run(t *testing.T, l *lab) {
 	e.must("applying the reference", l88Apply(l, "tcp"))
 	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (tcp), values: servers " +
 		strings.Join(l88Servers, ", ") + "; the second is an address on the bridge where nothing listens")
+	e.deviceFacts()
 	e.cells("tcp", l88Cells(l.p.sel, false))
 	e.finish()
 }
@@ -185,7 +186,7 @@ func (e *l88Env) cellA() {
 				_, err := junosConfigure(c, del...)
 				return err
 			}
-			_, err := l73CiscoRun(c, l73Lines(del...), nil, true, l73ExtraMarks(l88Family(e.l.p))...)
+			_, err := l73CiscoRun(c, l88WithCommit(e.l.p, l88Confirming(del)), nil, true, l73ExtraMarks(l88Family(e.l.p))...)
 			return err
 		}))
 	}()
@@ -248,12 +249,27 @@ func (e *l88Env) cellB() {
 // the deny is refused, and accounting START and STOP arrive.
 func (e *l88Env) cellE() {
 	user, secret := e.l.nextLogin(e.t)
-	off := e.l.mark()
-	outs, err := e.l.loginWithin(user, secret, 60*time.Second, "show version", shortDenyPrefix)
-	recs := e.l.waitForRecords(off, 40*time.Second, func(rs []map[string]any) bool {
-		s, p := l88AccountCounts(rs, user)
-		return s > 0 && p > 0
-	})
+	// A device that marked port49 dead after the refusals of the cells before answers
+	// locally, with no packet, until its dead time runs out (IOS XE, L73): the login is
+	// retried every 10 s for 5 minutes, on the same token, until port49 sees it.
+	var outs []string
+	var err error
+	var recs []map[string]any
+	start, tries := time.Now(), 0
+	for {
+		tries++
+		off := e.l.mark()
+		outs, err = e.l.loginWithin(user, secret, 60*time.Second, "show version", l88DenyCommand(e.l.p))
+		recs = e.l.waitForRecords(off, 40*time.Second, func(rs []map[string]any) bool {
+			s, p := l88AccountCounts(rs, user)
+			return s > 0 && p > 0
+		})
+		if redeemFor(recs, user) != nil || time.Since(start) > 5*time.Minute {
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+	waited := fmt.Sprintf("login attempt %d, %s after the first", tries, time.Since(start).Round(time.Second))
 	permits, denies := 0, 0
 	for _, r := range recs {
 		if str(r, "event") == "authorize_command" && l88RecUser(r) == user {
@@ -268,14 +284,22 @@ func (e *l88Env) cellE() {
 	starts, stops := l88AccountCounts(recs, user)
 	shown := ""
 	for i, o := range outs {
-		shown += fmt.Sprintf("[%d] %s ", i, oneLine(stripPrompt(o)))
+		o = oneLine(stripPrompt(o))
+		if len(o) > 160 {
+			o = o[:160] + "..."
+		}
+		shown += fmt.Sprintf("[%d] %s ", i, o)
 	}
-	obs := fmt.Sprintf("token login %s: %d command authorizations permitted, %d denied; accounting START %d, STOP %d; command output: %s",
-		l73Err(err), permits, denies, starts, stops, shown)
-	if len(obs) > 600 {
-		obs = obs[:600] + "..."
+	judged := permits > 0 && denies > 0
+	how := "port49 authorized one command and denied the other"
+	if l88Junos(e.l.p) {
+		// Junos authorizes a command by the login class, locally: port49 sees no command request.
+		judged = len(outs) == 2 && strings.TrimSpace(outs[0]) != "" && !l88Refused(outs[0]) && l88Refused(outs[1])
+		how = "judged on the device output: Junos authorizes a command by the login class and asks port49 for none"
 	}
-	if err == nil && permits > 0 && denies > 0 && starts > 0 && stops > 0 {
+	obs := fmt.Sprintf("token login (%s) %s: %d command authorizations permitted, %d denied by port49; accounting START %d, STOP %d; %s; command output: %s",
+		waited, l73Err(err), permits, denies, starts, stops, how, shown)
+	if err == nil && judged && starts > 0 && stops > 0 {
 		e.n.cell("e", "PASS", obs, summarize(recs))
 		return
 	}
@@ -432,4 +456,48 @@ func (e *l88Env) cellI() {
 		return
 	}
 	e.n.cell("i", "MEASURED", fmt.Sprintf("the largest `idle-timeout` the commit accepts is %d (the next value up was refused: %s)", max, detail), "")
+}
+
+// l88Confirming is lines, each answering a confirmation prompt the device may put to a
+// removal (IOS XE and XR ask before some `no` lines).
+func l88Confirming(lines []string) []l73Dialog {
+	out := l73Lines(lines...)
+	for i := range out {
+		out[i].Steps = []l73Step{{"[confirm]", ""}, {"[yes/no]", "yes"}, {"[y/n]", "y"}}
+	}
+	return out
+}
+
+// deviceFacts records what the device holds after the reference is on: on Junos the
+// authentication order (a `set` on a list adds to it) and fxp0's address (the source pin).
+func (e *l88Env) deviceFacts() {
+	if !l88Junos(e.l.p) {
+		return
+	}
+	_ = l88Admin(e.l, func(c *cliConn) error {
+		for _, cmd := range []string{"show configuration system authentication-order | display set", "show interfaces terse | match fxp0"} {
+			out, err := junosShow(c, cmd)
+			if err != nil {
+				continue
+			}
+			e.n.fact("`" + cmd + "`: " + oneLine(stripPrompt(out)))
+		}
+		return nil
+	})
+}
+
+// l88DenyCommand is the command cell e expects refused: the lab's deny prefix, or on Junos
+// (which authorizes commands by class) one the read-only template class lacks.
+func l88DenyCommand(p platform) string {
+	if l88Junos(p) {
+		return "clear arp" // needs the clear permission; the template class holds view only
+	}
+	return shortDenyPrefix
+}
+
+func l88Refused(out string) bool {
+	o := strings.ToLower(out)
+	return strings.Contains(o, "permission denied") || strings.Contains(o, "authorization denied") || strings.Contains(o, "not allowed") ||
+		// Junos hides the commands a class lacks: `error: unknown command: clear` for a view-only class.
+		strings.Contains(o, "unknown command")
 }

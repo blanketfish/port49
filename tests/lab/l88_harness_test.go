@@ -84,7 +84,9 @@ func l88Values(p platform, servers []string) deviceaaa.Values {
 	case "nokia_srlinux":
 		v.MgmtVRF = "mgmt"
 	default:
-		v.MgmtVRF = "mgmt_junos"
+		// fxp0's own address: vrnetlab NATs the VM's 10.0.0.15 to the container's, which is the
+		// address port49d sees (L12). A source-address the box does not hold never leaves it.
+		v.MgmtVRF, v.SourceAddress = "mgmt_junos", "10.0.0.15"
 	}
 	return v
 }
@@ -121,15 +123,29 @@ func l88Family(p platform) string { return l73Dialects[p.name].Family }
 // l88Push types lines on the device over c and reads them back.
 func l88Push(p platform, c *cliConn, lines []string) error {
 	if l88Junos(p) {
+		// A long line (a password hash) wraps at the pty's width, and the wrap reads as an answer.
+		if _, err := c.sendExpect("set cli screen-width 1000", 45*time.Second, junosOpPrompt); err != nil {
+			return err
+		}
 		if _, err := junosConfigure(c, lines...); err != nil {
 			c.sendExpect("rollback 0", 60*time.Second, junosCfgPrompt)
 			c.sendExpect("exit configuration-mode", 60*time.Second, junosOpPrompt)
 			return err
 		}
-		return junosVerifyApplied(c, lines)
+		// The device shows a hash in its own form; cell a's control login is what proves it took.
+		var check []string
+		for _, ln := range l88ExpandLists(lines) {
+			if !strings.Contains(ln, " encrypted-password ") {
+				check = append(check, ln)
+			}
+		}
+		return junosVerifyApplied(c, check)
 	}
-	if _, err := l73CiscoRun(c, l73Lines(lines...), nil, false, l73ExtraMarks(l88Family(p))...); err != nil {
-		return err
+	if out, err := l73CiscoRun(c, l88WithCommit(p, l73Lines(lines...)), nil, false, l73ExtraMarks(l88Family(p))...); err != nil {
+		if len(out) > 2500 {
+			out = out[len(out)-2500:]
+		}
+		return fmt.Errorf("%w; the device said: %s", err, oneLine(out))
 	}
 	shown, err := c.sendExpect("show running-config", 60*time.Second, c.prompt)
 	if err != nil {
@@ -275,7 +291,9 @@ func l88Type9(pw string) (string, error) {
 func l88LocalAccount(name, user, hash string) (add, del []string) {
 	switch name {
 	case "juniper_vjunos-router", "juniper_vsrx", "juniper_vjunos-switch":
-		return []string{`set system login user ` + user + ` class read-only authentication encrypted-password "` + hash + `"`},
+		// Two lines: `display set` shows the class and the password apart.
+		return []string{"set system login user " + user + " class read-only",
+				`set system login user ` + user + ` authentication encrypted-password "` + hash + `"`},
 			[]string{"delete system login user " + user}
 	case "arista_eos", "arista_ceos":
 		return []string{"username " + user + " privilege 1 secret sha512 " + hash}, []string{"no username " + user}
@@ -376,4 +394,30 @@ func (n *l88Note) render() (string, error) {
 		}
 	}
 	return out, nil
+}
+
+// l88ExpandLists is lines with each `set a b [ x y ]` replaced by `set a b x` and `set a b y`:
+// `show configuration | display set` prints one line per member.
+func l88ExpandLists(lines []string) []string {
+	var out []string
+	for _, ln := range lines {
+		i, j := strings.Index(ln, " [ "), strings.LastIndex(ln, " ]")
+		if i < 0 || j < i {
+			out = append(out, ln)
+			continue
+		}
+		for _, m := range strings.Fields(ln[i+3 : j]) {
+			out = append(out, ln[:i]+" "+m+ln[j+2:])
+		}
+	}
+	return out
+}
+
+// l88WithCommit ends an XR session's items with `commit`: XR keeps a change in its candidate
+// until then. It is the device's dialogue, not part of the shipped file.
+func l88WithCommit(p platform, items []l73Dialog) []l73Dialog {
+	if l88Family(p) == "xr" {
+		items = append(items, l73Dialog{Cmd: "commit"})
+	}
+	return items
 }
