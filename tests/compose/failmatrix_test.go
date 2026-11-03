@@ -238,6 +238,62 @@ func scrape(addr, sample string) (v float64, found bool, err error) {
 	return 0, false, nil
 }
 
+// series is every sample of metric name at addr (labelled or not), as
+// "labels value" lines in order, for a before and after listing. A scrape that
+// fails is one line saying so.
+func series(addr, name string) []string {
+	resp, err := http.Get("http://" + addr + "/metrics")
+	if err != nil {
+		return []string{"scrape failed: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, name+"{") || strings.HasPrefix(line, name+" ") {
+			out = append(out, strings.TrimPrefix(line, name))
+		}
+	}
+	return out
+}
+
+// storeCounts logs the daemon's store operation and call counters under label.
+func (m matrix) storeCounts(label string) {
+	for _, name := range []string{"port49_store_operations_total", "port49_store_calls_total"} {
+		m.s.t.Logf("%s: %s\n  %s", label, name, strings.Join(series(daemonMetrics, name), "\n  "))
+	}
+}
+
+var logTS = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z`)
+
+// daemonMarks are the port49d lines (with their offsets from since) that
+// say the feed stopped or followed again, the listeners closed, and the
+// listeners opened again, read through the filter.
+func (m matrix) daemonMarks(since time.Time) []string {
+	out, _ := m.s.try("logs", "--no-color", "--timestamps", "--since", since.Add(-time.Second).UTC().Format(time.RFC3339), "port49d")
+	var marks []string
+	for _, line := range strings.Split(shapetest.Filtered(m.root, out), "\n") {
+		for _, want := range []string{"closing every listener", "every listener is closed", "listeners open again", "context feed",
+			"not answering", "answering again", "circuit is"} {
+			if !strings.Contains(line, want) {
+				continue
+			}
+			at := ""
+			if ts := logTS.FindString(line); ts != "" {
+				if tm, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+					at = fmt.Sprintf("+%v ", tm.Sub(since).Round(10*time.Millisecond))
+				}
+			}
+			if i := strings.Index(line, "port49d:"); i >= 0 {
+				line = line[i:]
+			}
+			marks = append(marks, at+line)
+			break
+		}
+	}
+	return marks
+}
+
 // tlsDial is a TLS connection to addr that checks nothing about the server: a
 // stopped broker is the thing under test, not its certificate.
 func tlsDial(addr string) (*tls.Conn, error) {
@@ -338,6 +394,7 @@ func TestFailureMatrix(t *testing.T) {
 			}
 		}
 		t.Logf("raft leader %s; pausing follower %s", leader, dark)
+		m.storeCounts("before the pauses")
 		var slowest, slowestMint time.Duration
 		var failed []int
 		var retried, mints int
@@ -378,6 +435,7 @@ func TestFailureMatrix(t *testing.T) {
 			}
 			m.s.run("unpause", dark)
 		}
+		m.storeCounts("after the pauses")
 		if len(failed) > 0 {
 			t.Errorf("logins %v of 30 with one member paused did not pass", failed)
 		}
@@ -397,7 +455,19 @@ func TestFailureMatrix(t *testing.T) {
 	run("leader_dark", func(m matrix) {
 		t := m.s.t
 		const rounds, perRound = 6, 5
-		bound := electionTimeout + breakerOpenFor + 5*time.Second
+		// The bound, term by term (each from the config the stack runs):
+		// the election (etcd's default timeout, nothing set in the stack); the
+		// listeners close after closeAfter failed health checks one
+		// healthInterval apart (health.close_after, health.interval), the last
+		// of them taking up to call_timeout; they open again after openAfter
+		// passes (health.open_after); and the breaker may hold its circuit
+		// open for open_for (etcd.breaker.open_for) on top. A watch left on the
+		// dark leader is what puts the health check behind (the feed lag);
+		// WatchContexts ends it after feedStall and FollowContexts opens it
+		// again after a second, which falls inside the close term. slack is
+		// the poll interval and a docker call.
+		const slack = 2 * time.Second
+		bound := electionTimeout + closeAfter*healthInterval + callTimeout + openAfter*healthInterval + breakerOpenFor + slack
 		t.Cleanup(m.clearTokens)
 		var worst time.Duration
 		for r := 0; r < rounds; r++ {
@@ -409,14 +479,21 @@ func TestFailureMatrix(t *testing.T) {
 			leader := m.leader()
 			paused := time.Now()
 			m.s.run("pause", leader)
-			var firstRefused, lastRefused time.Duration
+			var firstRefused, lastRefused, firstHealth time.Duration
+			var firstPass time.Duration
 			refused := 0
 			for i, tok := range toks {
 				for tries := 0; ; tries++ {
 					ok := m.passes(tok)
 					at := time.Since(paused) // after the attempt: a refusal that ends past the bound is flagged
+					if v, found, _ := scrape(daemonMetrics, "port49_store_health_failures"); found && v > 0 && firstHealth == 0 {
+						firstHealth = time.Since(paused)
+					}
 					if ok {
 						t.Logf("round %d login %d of %d: passed at +%v after %d refused", r+1, i+1, perRound, at.Round(time.Millisecond), tries)
+						if firstPass == 0 {
+							firstPass = at
+						}
 						if at > bound {
 							t.Fatalf("round %d: login passed %v after the leader %s was paused, want under %v", r+1, at.Round(time.Millisecond), leader, bound)
 						}
@@ -428,8 +505,9 @@ func TestFailureMatrix(t *testing.T) {
 					}
 					lastRefused = at
 					if at > bound {
-						t.Fatalf("round %d: logins still refused %v after the leader %s was paused, want under election %v + open_for %v + 5s (%v)",
-							r+1, at.Round(time.Millisecond), leader, electionTimeout, breakerOpenFor, bound)
+						t.Fatalf("round %d: logins still refused %v after the leader %s was paused, want under election %v + close_after*interval %v + call_timeout %v + open_after*interval %v + open_for %v + %v (%v)",
+							r+1, at.Round(time.Millisecond), leader, electionTimeout, closeAfter*healthInterval, callTimeout,
+							openAfter*healthInterval, breakerOpenFor, slack, bound)
 					}
 					time.Sleep(250 * time.Millisecond)
 				}
@@ -437,6 +515,11 @@ func TestFailureMatrix(t *testing.T) {
 			worst = max(worst, lastRefused)
 			t.Logf("round %d: leader %s paused; %d refused attempts, first at +%v, last at +%v; new leader %s", r+1, leader, refused,
 				firstRefused.Round(time.Millisecond), lastRefused.Round(time.Millisecond), m.leader())
+			t.Logf("round %d timeline from the pause: first health check failure seen +%v; first login passed +%v; last refusal +%v",
+				r+1, firstHealth.Round(10*time.Millisecond), firstPass.Round(10*time.Millisecond), lastRefused.Round(10*time.Millisecond))
+			for _, mk := range m.daemonMarks(paused) {
+				t.Logf("round %d daemon: %s", r+1, mk)
+			}
 			m.s.run("unpause", leader)
 			shapetest.WaitFor(t, "the unpaused member to rejoin", 30*time.Second, func() bool {
 				return m.gauge(daemonMetrics, "port49_store_health_failures") == 0

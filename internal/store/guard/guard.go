@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +126,11 @@ type pool struct {
 	until   time.Time
 	probe   bool
 	cause   error
+	// ops counts the failures of the current run by the store method that
+	// made the call, and openOps is that run as it stood when the circuit
+	// last opened: the open line names which calls fed it.
+	ops     map[string]int
+	openOps string
 	// openedAt is when the circuit last opened from closed; a failed probe
 	// opens it again without moving it. refusedSince is the first refusal
 	// of the current run, lastRefused its latest, and refused its count: a
@@ -230,7 +237,7 @@ func (p *pool) enter(now time.Time) (probe, ok bool) {
 // and how it now stands. A call not counted (a caller that went away, a
 // refusal, a slot never got) changes nothing but the probe it held; a
 // refusal also starts or continues the refused run, and an answer ends it.
-func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, threshold int, openFor time.Duration) (changed, open bool) {
+func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error, threshold int, openFor time.Duration) (changed, open bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if probe {
@@ -249,11 +256,16 @@ func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, thr
 	case "timeout", "deadline", "unavailable":
 		p.fails++
 		p.cause = cause
+		if p.ops == nil {
+			p.ops = map[string]int{}
+		}
+		p.ops[op]++
 		if probe || !p.open && p.fails >= threshold {
 			was := p.open
 			p.open, p.until = true, now.Add(openFor)
 			if !was {
 				p.openedAt, p.toldOpen = now, false
+				p.openOps = opTally(p.ops)
 			}
 			return !was, true
 		}
@@ -261,6 +273,7 @@ func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, thr
 	}
 	// An answer: ok, not_found, conflict, error.
 	p.fails, p.refusedSince, p.refused, p.toldRefused = 0, time.Time{}, 0, false
+	clear(p.ops)
 	if p.open {
 		p.open = false
 		return true, false
@@ -291,8 +304,33 @@ func (p *pool) gone(now time.Time, stopAfter time.Duration, minRefused int, comp
 	return "", false
 }
 
+// opTally is a run's failures by op, "GetContext 3, PutToken 2".
+func opTally(ops map[string]int) string {
+	names := make([]string, 0, len(ops))
+	for n := range ops {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for i, n := range names {
+		names[i] = fmt.Sprintf("%s %d", n, ops[n])
+	}
+	return strings.Join(names, ", ")
+}
+
+// callerOp is the store method that called do: the guard's methods each call
+// it directly, so the frame above do is the method.
+func callerOp() string {
+	pc, _, _, ok := runtime.Caller(2)
+	if !ok {
+		return "unknown"
+	}
+	name := runtime.FuncForPC(pc).Name()
+	return name[strings.LastIndex(name, ".")+1:]
+}
+
 // do runs one call in pool p.
 func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error) error {
+	op := callerOp()
 	pl := g.pools[p]
 	defer g.watch(pl)
 	probe, ok := pl.enter(g.c.Now())
@@ -311,7 +349,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 			outcome, err = "deadline", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
 		}
 		g.count(p, outcome)
-		if changed, open := pl.leave(g.c.Now(), probe, outcome, err, g.c.Failures, g.c.OpenFor); changed {
+		if changed, open := pl.leave(g.c.Now(), probe, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
 			g.changed(p, open, err)
 		}
 		return err
@@ -321,7 +359,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	select {
 	case pl.slots <- struct{}{}:
 	case <-cctx.Done():
-		pl.leave(g.c.Now(), probe, "saturated", nil, g.c.Failures, g.c.OpenFor)
+		pl.leave(g.c.Now(), probe, "saturated", op, nil, g.c.Failures, g.c.OpenFor)
 		if errors.Is(ctx.Err(), context.Canceled) {
 			g.count(p, "canceled")
 			return ctx.Err()
@@ -346,7 +384,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 		err = fmt.Errorf("%w: no answer in %v (%w)", store.ErrUnavailable, pl.timeout, err)
 	}
 	g.count(p, outcome)
-	if changed, open := pl.leave(g.c.Now(), probe, outcome, err, g.c.Failures, g.c.OpenFor); changed {
+	if changed, open := pl.leave(g.c.Now(), probe, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
 		g.changed(p, open, err)
 	}
 	return err
@@ -445,9 +483,13 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		case strings.HasSuffix(g.c.Component, enrollmentsSuffix):
 			impact = "password sign-in and second-factor enrollment through it are refused"
 		}
-		g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
+		pl := g.pools[p]
+		pl.mu.Lock()
+		ops := pl.openOps
+		pl.mu.Unlock()
+		g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is open after %d consecutive failures (%v; by call: %s); "+
 			"each call on it fails at once until a probe in %v succeeds; %s%s", g.c.Proc, g.noun(), g.c.Component, p,
-			g.c.Failures, cause, g.c.OpenFor, impact, closes))
+			g.c.Failures, cause, ops, g.c.OpenFor, impact, closes))
 		return
 	}
 	g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,

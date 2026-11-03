@@ -100,10 +100,15 @@ func (c *hedgeCC) UpdateState(s balancer.State) {
 		}
 		if len(ready) > 0 {
 			s.Picker = &picker{ready: ready, next: &c.next}
+			placingPickers.Add(1)
 		}
 	}
 	c.ClientConn.UpdateState(s)
 }
+
+// placingPickers counts the pickers installed, for the test that fails loudly
+// if a grpc upgrade stops them being.
+var placingPickers atomic.Int64
 
 type picker struct {
 	ready []endpointsharding.ChildState
