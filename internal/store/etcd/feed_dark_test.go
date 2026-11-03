@@ -75,3 +75,41 @@ func TestAContextWatchOnADarkMemberMovesToAnother(t *testing.T) {
 		time.Sleep(3 * time.Second) // reconnect settles
 	}
 }
+
+// With every member dark the watch is left alone: it revives when the store
+// returns, and ending it would only add the retry's second to the recovery
+// (CI 41736080508: store_hangs, two of three members paused, took longer to
+// open the listener again).
+func TestAContextWatchIsLeftAloneWhileEveryMemberIsDark(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var opens int
+	var mu sync.Mutex
+	go func() {
+		for ctx.Err() == nil {
+			mu.Lock()
+			opens++
+			mu.Unlock()
+			s.WatchContexts(ctx, 0, func(store.ContextChange) {}, func(uint64) {}, nil)
+			time.Sleep(time.Second)
+		}
+	}()
+	time.Sleep(2 * time.Second)
+	mu.Lock()
+	before := opens
+	mu.Unlock()
+	for _, p := range ps {
+		p.Hang(true)
+	}
+	time.Sleep(8 * time.Second)
+	mu.Lock()
+	n := opens - before
+	mu.Unlock()
+	for _, p := range ps {
+		p.Hang(false)
+	}
+	if n != 0 {
+		t.Fatalf("the watch was ended and opened %d times in 8s with every member dark", n)
+	}
+}
