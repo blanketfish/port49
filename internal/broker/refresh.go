@@ -1,8 +1,8 @@
 package broker
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log"
@@ -330,9 +330,16 @@ func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation
 	return len(reached), first
 }
 
+// supersedeMemoSize, when set, sees the size of supersedeTokens' memo after
+// each entry it adds: a test's way to bound it.
+var supersedeMemoSize func(n int)
+
 // minted is what a token for one principal on one device carries of its
 // policy. blob is its blob with the bundle aside: every policy file has its
-// own bundle, so comparing it would flag every key at every edit. hash is the
+// own bundle, so comparing it would flag every key at every edit. It is kept
+// as the digest of that body: a pass holds an answer for every device of one
+// principal, and the blobs themselves reached 3.4 GB at 500 principals on
+// 10 000 devices. hash is the
 // blob's hash with the policy's own bundle, the one a token it mints carries,
 // by which a changed key's tokens are judged (spec §5.1.3). ttl is the subject's
 // token_ttl, the longest the token can live; age is the device's
@@ -341,7 +348,7 @@ func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation
 // one than the policy in force is a login nobody proved (final review I1).
 type minted struct {
 	username string
-	blob     []byte
+	body     [sha256.Size]byte
 	hash     string
 	ceiling  uint8
 	enable   string
@@ -372,7 +379,7 @@ func mintedBy(p *policy.Policy, m policy.Member, d admission.Device, at time.Tim
 	if err != nil {
 		return minted{}, false
 	}
-	return minted{username: res.Username, blob: body, hash: hash, ceiling: res.MaxPrivilege, enable: res.Enable,
+	return minted{username: res.Username, body: sha256.Sum256(body), hash: hash, ceiling: res.MaxPrivilege, enable: res.Enable,
 		ttl: res.TokenTTL, age: res.SessionAge.Of(def), mfa: res.PerLoginMFA}, true
 }
 
@@ -383,7 +390,7 @@ func mintedBy(p *policy.Policy, m policy.Member, d admission.Device, at time.Tim
 // under the looser one; a lengthened or loosened one does not, since those
 // tokens already meet it.
 func (m minted) keeps(o minted) bool {
-	return m.username == o.username && bytes.Equal(m.blob, o.blob) && m.ceiling == o.ceiling &&
+	return m.username == o.username && m.body == o.body && m.ceiling == o.ceiling &&
 		m.enable == o.enable && m.ttl <= o.ttl && !longerAge(m.age, o.age) && o.mfa.MetBy(m.mfa)
 }
 
@@ -458,17 +465,28 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		m  minted
 		ok bool
 	}
-	current := map[[2]string]answer{} // the policy in force's, by (principal, device), computed once
+	// current is the policy in force's answers for one principal at a time,
+	// by device, computed once: a pass over many principals holds one
+	// principal's devices, not every pair.
+	current := map[string]answer{}
+	currentFor := ""
 	// inForce is the policy in force's answer for principal on device, computed
 	// once. A device the inventory in force no longer names mints nothing
 	// now, so every token for it is superseded.
 	inForce := func(principal string, m policy.Member, name string) answer {
-		is, computed := current[[2]string{principal, name}]
+		if principal != currentFor {
+			clear(current)
+			currentFor = principal
+		}
+		is, computed := current[name]
 		if !computed {
 			if nd, ok := cur.Device(name); ok {
 				is.m, is.ok = mintedFor(cur, m, nd, now, b.MaxSessionAge)
 			}
-			current[[2]string{principal, name}] = is
+			current[name] = is
+			if supersedeMemoSize != nil {
+				supersedeMemoSize(len(current))
+			}
 		}
 		return is
 	}
