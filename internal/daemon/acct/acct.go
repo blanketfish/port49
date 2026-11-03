@@ -9,8 +9,10 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"hash/fnv"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blanketfish/port49/internal/daemon/authen"
@@ -36,6 +38,31 @@ type Handler struct {
 	// redact is the redaction every record passes through before it reaches
 	// the spool (spec §5.8); nil is the built-in patterns.
 	redact platform.Redactor
+
+	// The annotation queue (spec §5.8): the annotation is advisory, so it is
+	// written after the reply, on a worker. A key always maps to the same
+	// shard, so a START and the STOP after it are written in the order they
+	// arrived. A full shard drops its newest annotation and counts it
+	// (metrics.AnnotationDrops) rather than hold a device's reply, or grow
+	// without bound, behind a store that is slow or down.
+	annotateOnce sync.Once
+	shards       [annotateShards]chan annotation
+	pending      sync.WaitGroup
+}
+
+const (
+	// annotateShards workers, each with annotateQueue waiting, bound the
+	// annotations in flight at annotateShards*(annotateQueue+1).
+	annotateShards = 8
+	annotateQueue  = 64
+	// annotateTimeout bounds one annotation's store call: the request's
+	// context ended with its reply.
+	annotateTimeout = 5 * time.Second
+)
+
+type annotation struct {
+	key         store.ContextKey
+	disc, state string
 }
 
 // WithRedactor sets the redaction applied to every record before it reaches
@@ -234,10 +261,42 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 // the store can refuse a write aimed at a context that has since been replaced.
 // That is an AnnotateContext signature change and is recorded in this plan's
 // report rather than taken here.
-func (h *Handler) annotate(ctx context.Context, key store.ContextKey, discHash, state string) {
-	err := h.store.AnnotateContext(ctx, key, discHash, state)
-	h.metrics.StoreOps.WithLabelValues("annotate_context", storeOutcome(err)).Inc()
+//
+// It is queued, not written: the reply goes first (see Handler.shards).
+func (h *Handler) annotate(_ context.Context, key store.ContextKey, discHash, state string) {
+	h.annotateOnce.Do(func() {
+		for i := range h.shards {
+			h.shards[i] = make(chan annotation, annotateQueue)
+			go h.annotateWorker(h.shards[i])
+		}
+	})
+	sum := fnv.New32a()
+	sum.Write([]byte(key.NAS))
+	sum.Write([]byte{0})
+	sum.Write([]byte(key.Username))
+	shard := h.shards[sum.Sum32()%annotateShards]
+	h.pending.Add(1)
+	select {
+	case shard <- annotation{key, discHash, state}:
+	default:
+		h.pending.Done()
+		h.metrics.AnnotationDrops.Inc()
+	}
 }
+
+func (h *Handler) annotateWorker(in <-chan annotation) {
+	for a := range in {
+		ctx, cancel := context.WithTimeout(context.Background(), annotateTimeout)
+		err := h.store.AnnotateContext(ctx, a.key, a.disc, a.state)
+		cancel()
+		h.metrics.StoreOps.WithLabelValues("annotate_context", storeOutcome(err)).Inc()
+		h.pending.Done()
+	}
+}
+
+// Flush waits for every annotation queued so far to be written or to fail.
+// The daemon never needs it; a test reading the store after a Handle does.
+func (h *Handler) Flush() { h.pending.Wait() }
 
 // hashOf renders a discriminator for the store, and maps "no discriminator" to
 // "nothing to add" rather than to the hash of the empty string — a platform
