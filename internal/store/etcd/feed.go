@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -71,6 +72,11 @@ func (s *Store) ScanContexts(ctx context.Context, fn func(store.ContextKey, stor
 	}
 }
 
+const (
+	feedIdle  = time.Second     // a context watch this quiet asks for its progress
+	feedStall = 2 * time.Second // and one this quiet ends
+)
+
 // WatchContexts calls fn for every change to the context family after
 // `after` (store.ContextFeed), on the context client, requiring a leader so
 // a member cut off from its quorum ends the watch rather than going quiet.
@@ -89,10 +95,19 @@ func (s *Store) ScanContexts(ctx context.Context, fn func(store.ContextKey, stor
 // (unavailable).
 func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange),
 	progress func(uint64), asks <-chan struct{}) error {
-	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+	wctx, cancel := context.WithCancel(withTriedSet(clientv3.WithRequireLeader(ctx), &s.feedTried))
 	defer cancel()
 	ch := s.ctx.Watch(wctx, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1),
 		clientv3.WithProgressNotify())
+	// A paused or partitioned member keeps its connection up until keepalive
+	// fails it, 10 to 12 s on, and the watch on it goes quiet with nothing to
+	// say so: a quiet family looks the same. So a watch that has heard nothing
+	// for feedIdle asks for its progress, and one that has heard nothing for
+	// feedStall ends, to be opened again on another member (feedTried): its
+	// fence otherwise holds every login behind the feed until keepalive acts.
+	heard := time.Now()
+	probe := time.NewTicker(feedIdle / 2)
+	defer probe.Stop()
 	for {
 		var resp clientv3.WatchResponse
 		var ok bool
@@ -102,11 +117,24 @@ func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.C
 				s.logf("etcd: asking the context watch for its progress: %v", err)
 			}
 			continue
+		case <-probe.C:
+			switch quiet := time.Since(heard); {
+			case quiet >= feedStall:
+				return fmt.Errorf("%w: the context watch's member has not answered for %v", store.ErrUnavailable,
+					quiet.Round(100*time.Millisecond))
+			case quiet >= feedIdle:
+				if err := s.ctx.RequestProgress(wctx); err != nil && ctx.Err() == nil {
+					s.logf("etcd: probing the context watch: %v", err)
+				}
+			}
+			continue
 		case resp, ok = <-ch:
 		}
 		if !ok {
 			break
 		}
+		heard = time.Now()
+		s.feedTried.keepLast()
 		s.saw(resp.Header.Revision)
 		if err := resp.Err(); err != nil {
 			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {

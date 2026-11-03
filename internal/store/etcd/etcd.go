@@ -76,6 +76,7 @@ type Store struct {
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
 	ownLifts             ownLifts           // this process's own lifts, by key (marks.go)
 	seenRev              atomic.Uint64      // Seen: the highest revision a response carried
+	feedTried            tried              // the members the context watch has been on (WatchContexts)
 	logf                 func(format string, args ...any)
 	idxUndecodable       prometheus.Counter // nil counts nothing
 	// user is the etcd user this identity authenticates as, its client
