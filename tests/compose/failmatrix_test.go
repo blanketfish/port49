@@ -131,6 +131,26 @@ func (m matrix) restore() {
 	shapetest.WaitFor(t, "port49_policy_file_refused back at 0", time.Minute, func() bool {
 		return m.gauge(daemonMetrics, "port49_policy_file_refused") == 0
 	})
+	// smoke1 can mint again: no subtest leaves unspent tokens at token.candidate_cap
+	// for the next. The probe's own token is deleted with the rest.
+	m.clearTokens()
+	shapetest.MintRetrying(t, m.brokerDir, brokerAddr, "smoke1")
+	m.clearTokens()
+}
+
+// clearTokens deletes every token in the store as etcd's root, as the restore
+// runbook does: a test that failed between a mint and its login must not leave
+// unspent tokens to reach token.candidate_cap for the next subtest.
+func (m matrix) clearTokens() {
+	t := m.s.t
+	t.Helper()
+	out, err := exec.Command("docker", "run", "--rm", "--user", "0", "--network", project+"_port49",
+		"-v", project+"_etcd-root:/etcd-root:ro", "--entrypoint", "etcdctl", m.etcdImage(),
+		"--endpoints=https://etcd-1:2379,https://etcd-2:2379,https://etcd-3:2379", "--cacert=/etcd-root/ca.pem",
+		"--cert=/etcd-root/root.pem", "--key=/etcd-root/root-key.pem", "del", "--prefix", "/port49/v1/t/").CombinedOutput()
+	if err != nil {
+		t.Logf("etcdctl del tokens: %v\n%s", err, shapetest.Filtered(m.root, string(out)))
+	}
 }
 
 // dump logs the tail of both processes' stderr through the filter.
@@ -260,51 +280,60 @@ func TestFailureMatrix(t *testing.T) {
 
 	run("one_member_dark", func(m matrix) {
 		t := m.s.t
-		// The mint's transaction is not hedged (a second copy would write a second
-		// token), so the tokens are minted while every member answers: the claim
-		// is about logins.
-		var toks []string
-		for i := 0; i < 30; i++ {
-			toks = append(toks, m.mint())
-		}
-		m.s.run("pause", "etcd-2")
-		var slowest time.Duration
+		// token.candidate_cap (8 by default) bounds the unspent tokens one device
+		// and user may hold, so the 30 logins run in rounds under it: each round
+		// mints its tokens while every member answers (the mint is not hedged),
+		// pauses etcd-2, logs them in, then mints and redeems more with the
+		// member still dark. No token is left standing between rounds.
+		const rounds, perRound = 6, 5
+		t.Cleanup(m.clearTokens) // after a failure, no unspent token caps the next subtest
+		var slowest, slowestMint time.Duration
 		var failed []int
-		for i := 0; i < 30; i++ {
-			start := time.Now()
-			ok := m.passes(toks[i])
-			d := time.Since(start)
-			if d > slowest {
-				slowest = d
+		var retried, mints int
+		for r := 0; r < rounds; r++ {
+			toks := make([]string, perRound)
+			for i := range toks {
+				toks[i] = m.mint()
 			}
-			t.Logf("login %d of 30: pass %v in %v", i+1, ok, d)
-			if !ok {
-				failed = append(failed, i+1)
+			m.s.run("pause", "etcd-2")
+			for i, tok := range toks {
+				n := r*perRound + i + 1
+				start := time.Now()
+				ok := m.passes(tok)
+				d := time.Since(start)
+				slowest = max(slowest, d)
+				t.Logf("login %d of 30: pass %v in %v", n, ok, d)
+				if !ok {
+					failed = append(failed, n)
+				}
 			}
+			// The mint is not hedged, so with a member dark it can be refused
+			// store_unavailable: measured, with the retry `port49 token` makes (the
+			// reply's Retry-After, up to 30s). Each is redeemed before the next.
+			for i := 0; i < perRound; i++ {
+				tok, retries, took := shapetest.MintRetrying(t, m.brokerDir, brokerAddr, "smoke1")
+				mints++
+				if retries > 0 {
+					retried++
+				}
+				slowestMint = max(slowestMint, took)
+				t.Logf("mint %d of 30 with one member dark: %d retries in %v", mints, retries, took)
+				if !m.passes(tok) {
+					t.Errorf("the login of the mint %d made with one member dark did not pass", mints)
+				}
+			}
+			m.s.run("unpause", "etcd-2")
 		}
 		if len(failed) > 0 {
 			t.Errorf("logins %v of 30 with one member paused did not pass", failed)
 		}
 		t.Logf("slowest of 30 logins with one member dark: %v", slowest)
+		t.Logf("mints with one member dark: %d of 30 needed a retry, slowest %v", retried, slowestMint)
+		fmt.Fprintf(os.Stderr, "failure matrix: one member dark: %d of 30 logins failed (slowest %v); %d of 30 mints needed a retry (slowest %v)\n",
+			len(failed), slowest, retried, slowestMint)
 		if limit := 12*time.Second + callTimeout; slowest > limit {
 			t.Fatalf("slowest login %v, want under 12s + call_timeout (%v)", slowest, limit)
 		}
-		// The mint is not hedged, so with a member dark it can be refused
-		// store_unavailable: measured, with the retry `port49 token` makes (the
-		// reply's Retry-After, up to 30s). Each must succeed within that bound.
-		var retried int
-		var slowestMint time.Duration
-		for i := 0; i < 30; i++ {
-			_, retries, took := shapetest.MintRetrying(t, m.brokerDir, brokerAddr, "smoke1")
-			if retries > 0 {
-				retried++
-			}
-			slowestMint = max(slowestMint, took)
-			t.Logf("mint %d of 30 with one member dark: %d retries in %v", i+1, retries, took)
-		}
-		t.Logf("mints with one member dark: %d of 30 needed a retry, slowest %v", retried, slowestMint)
-		fmt.Fprintf(os.Stderr, "failure matrix: one member dark: 30 of 30 logins passed (slowest %v); %d of 30 mints needed a retry (slowest %v)\n",
-			slowest, retried, slowestMint)
 	})
 
 	run("broker_stopped", func(m matrix) {
