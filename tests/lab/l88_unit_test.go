@@ -206,3 +206,24 @@ func TestL88ExpandListsMakesOneLinePerMember(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestL88RedactRemovesEveryCredentialAndKeepsTheDevicesWords(t *testing.T) {
+	n := newL88Note(platform{name: "arista_eos"}, "tcp", "pw-Zx81-run-password-value", "$6$salt$hashhashhashhashhashhash")
+	n.addSecret("tokentokentokentoken")
+	n.addSecret("123456")
+	device := "Password: ssh: handshake failed with pw-Zx81-run-password-value and $6$salt$hashhashhashhashhashhash; " +
+		"tokentokentokentoken, 123456, " + breakglassPassword + ", " + labKeyDefault + " % Authorization failed " +
+		"abcdefghijklmnopqrstuvwxyz0123456789"
+	got := n.redact(device)
+	for _, s := range []string{"pw-Zx81-run-password-value", "$6$salt$hashhashhashhashhashhash", "tokentokentokentoken", "123456",
+		breakglassPassword, labKeyDefault, "abcdefghijklmnopqrstuvwxyz0123456789"} {
+		if strings.Contains(got, s) {
+			t.Errorf("the redacted text still holds %q: %s", s, got)
+		}
+	}
+	for _, keep := range []string{"Password:", "% Authorization failed", "handshake failed", "<redacted>", "<LONG>"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("the redacted text lost %q: %s", keep, got)
+		}
+	}
+}

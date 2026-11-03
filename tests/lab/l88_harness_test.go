@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -366,6 +367,22 @@ func (n *l88Note) cell(id, verdict, observation, evidence string) {
 }
 
 func (n *l88Note) fact(f string) { n.facts = append(n.facts, f) }
+
+var l88Long = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
+
+// addSecret registers a credential the run used (a token) for masking.
+func (n *l88Note) addSecret(s string) { n.secrets = append(n.secrets, s) }
+
+// redact is s with every credential the run used replaced by <redacted>, then every run of
+// 24 or more token characters by <LONG>. Text is redacted before it is kept or written.
+func (n *l88Note) redact(s string) string {
+	for _, sec := range n.secrets {
+		if sec != "" {
+			s = strings.ReplaceAll(s, sec, "<redacted>")
+		}
+	}
+	return l88Long.ReplaceAllString(hideKeys(s), "<LONG>")
+}
 
 // mask is s with every secret of the run replaced.
 func (n *l88Note) mask(s string) string { return hideKeys(l73MaskAll(s, n.secrets...)) }

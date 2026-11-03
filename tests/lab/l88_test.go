@@ -106,6 +106,10 @@ func (e *l88Env) cells(transport string, ids []string) {
 			e.cellA()
 		case "b":
 			e.cellB()
+		case "c", "d":
+			if id == "c" {
+				e.cellsCD()
+			}
 		case "e":
 			e.cellE()
 		case "f":
@@ -249,6 +253,7 @@ func (e *l88Env) cellB() {
 // the deny is refused, and accounting START and STOP arrive.
 func (e *l88Env) cellE() {
 	user, secret := e.l.nextLogin(e.t)
+	e.n.addSecret(secret)
 	// A device that marked port49 dead after the refusals of the cells before answers
 	// locally, with no packet, until its dead time runs out (IOS XE, L73): the login is
 	// retried every 10 s for 5 minutes, on the same token, until port49 sees it.
@@ -332,6 +337,7 @@ func (e *l88Env) cellF() {
 		e.restart()
 	}
 	user, secret := e.l.nextLogin(e.t)
+	e.n.addSecret(secret)
 	off := e.l.mark()
 	t0 := time.Now()
 	outs, lerr := e.l.loginWithin(user, secret, 120*time.Second, "show version")
@@ -500,4 +506,93 @@ func l88Refused(out string) bool {
 	return strings.Contains(o, "permission denied") || strings.Contains(o, "authorization denied") || strings.Contains(o, "not allowed") ||
 		// Junos hides the commands a class lacks: `error: unknown command: clear` for a view-only class.
 		strings.Contains(o, "unknown command")
+}
+
+// cellsCD run on etcd, with port49d and port49-broker on the store the lab's proxy can hang
+// (the machinery TestStoreOutageEndToEnd uses: startSplit, Proxy.Hang, port49d's own
+// "closing every listener" line). They run in a subtest so the split's cleanup puts the
+// standing daemon back before the next cell.
+//
+// (c) the store hangs and port49 answers ERROR: break-glass login and one command, with
+// the time and whether port49d went dark meanwhile. (d) port49d has gone dark (its
+// health checks closed the listener): PASS iff break-glass logs in and runs a command.
+func (e *l88Env) cellsCD() {
+	e.t.Run("etcd", func(t *testing.T) {
+		x := *e
+		x.t = t
+		s := x.l.startSplit(t, splitCfg{})
+		hang := func(on bool) { s.Proxy.Hang(on) }
+		restore := func(off int64) {
+			hang(false)
+			time.Sleep(15 * time.Second) // the circuits' probes and the fence's next answered read
+			// It says "listens again" only after it closed its listeners.
+			if len(x.l.errLinesSince(off, darkCloseText)) > 0 {
+				x.must("port49d listening again", x.l.listenAgain(off, 150*time.Second))
+			}
+			x.must("port49d healthy", func() error {
+				if !daemonHealthy() {
+					return fmt.Errorf("port49d is not healthy after the store returned")
+				}
+				return nil
+			}())
+		}
+		// (c) what happened, not why: the login, the command, port49d's own records and log
+		// lines for the window.
+		off := x.l.errLogSize()
+		mark := x.l.mark()
+		hang(true)
+		t0 := time.Now()
+		outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+		took := time.Since(t0)
+		dark := x.l.errLinesSince(off, darkCloseText)
+		recs := x.l.recordsSince(mark)
+		hang(false)
+		logged := "port49d's log shows no listener closing during the login"
+		if len(dark) > 0 {
+			logged = "port49d's log: " + dark[0]
+		}
+		x.n.cell("c", "OBSERVED", x.n.redact(fmt.Sprintf("the store hung (the proxy to etcd held), break-glass login %s in %s, `show version` output %q; "+
+			"port49d records: authorize_session %v, authorize_command %v, accounting %v; %s",
+			l88Err(err), took.Round(10*time.Millisecond), l88Brief(firstOut(outs)),
+			reasonsOf(recs, "authorize_session"), reasonsOf(recs, "authorize_command"), reasonsOf(recs, "accounting"), logged)), "")
+		restore(off)
+		// (d)
+		off = x.l.errLogSize()
+		hang(true)
+		deadline := time.Now().Add(90 * time.Second)
+		for len(x.l.errLinesSince(off, darkCloseText)) == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Second)
+		}
+		wentDark := len(x.l.errLinesSince(off, darkCloseText)) > 0
+		t0 = time.Now()
+		outs, err = x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+		took = time.Since(t0)
+		hang(false)
+		first := l88Brief(firstOut(outs))
+		obs := x.n.redact(fmt.Sprintf("port49d dark (its log shows it closed its listeners: %v): break-glass login %s in %s, `show version` output %q", wentDark, l88Err(err), took.Round(10*time.Millisecond), first))
+		if wentDark && err == nil && strings.TrimSpace(firstOut(outs)) != "" {
+			x.n.cell("d", "PASS", obs, "")
+		} else {
+			x.n.cell("d", "FAIL", obs, "")
+			t.Errorf("cell d FAIL: %s", x.n.mask(obs))
+		}
+		restore(off)
+	})
+}
+
+// l88Brief is out on one line, cut to 160 characters.
+func l88Brief(out string) string {
+	o := strings.Join(strings.Fields(out), " ")
+	if len(o) > 160 {
+		o = o[:160] + "..."
+	}
+	return o
+}
+
+// l88Err is err on one line. It is masked by n.redact before it is written, never here.
+func l88Err(err error) string {
+	if err == nil {
+		return "no error"
+	}
+	return strings.Join(strings.Fields(err.Error()), " ")
 }

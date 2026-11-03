@@ -6,11 +6,11 @@ Platform: arista_eos. Image: vEOS-lab 4.31.2F (image tagged 4.32.2F). Transport:
 
 | Cell | Verdict | Observation |
 |---|---|---|
-| a | PASS | control (port49d stopped, the local password): logged in true (no error). With port49d answering: logged in false after 529ms (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none keyboard-interactive], no supported methods remain); port49 decision for the attempt: verdict="deny" reason="token_not_found" |
+| a | PASS | control (port49d stopped, the local password): logged in true (no error). With port49d answering: logged in false after 530ms (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none keyboard-interactive], no supported methods remain); port49 decision for the attempt: verdict="deny" reason="token_not_found" |
 | b | PASS | break-glass login with port49d stopped: ok true in 40ms (no error) |
-| c | NOT MEASURED | the harness does not run cell c yet |
-| d | NOT MEASURED | the harness does not run cell d yet |
-| e | PASS | token login no error: 1 command authorizations permitted, 1 denied; accounting START 1, STOP 1; command output: [0] Hardware version: Serial number: Hardware MAC address: 0c00.f7b1.4578 System MAC address: 0c00.f7b1.4578 Software image version: 4.31.2F Architecture: x86_64 Internal build version: 4.31.2F-35442176.4312F Internal build ID: 48bb2b78-5325-4a32-b124-dcd4e37fd3bc Image format version: 1.0 Image optimization: None Uptime: 1 minute Total memory: 1979668 kB Free memory: 619312 kB [1] > show clock % Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); ... |
+| c | OBSERVED | the store hung (the proxy to etcd held), break-glass login no error in 1.09s, `show version` output "'Authorization denied: port49: authorization store unavailable'"; port49d records: authorize_session [deny store_unavailable], authorize_command [], accounting []; port49d's log shows no listener closing during the login |
+| d | PASS | port49d dark (its log shows it closed its listeners: true): break-glass login no error in 140ms, `show version` output "'Arista vEOS-lab'" |
+| e | PASS | token login (login attempt 1, 0s after the first) no error: 1 command authorizations permitted, 1 denied by port49; accounting START 1, STOP 1; port49 authorized one command and denied the other; command output: [0] Hardware version: Serial number: Hardware MAC address: 0c00.cdca.1427 System MAC address: 0c00.cdca.1427 Software image version: 4.31.2F Architecture: x86_64 In... [1] > show clock % Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); see 'port49 explain' at line 1  |
 | f | PASS | token login with the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 290ms; connections the first server reset: 1; port49 redeemed the token: true; first command output:  |
 
 ### Cell a evidence

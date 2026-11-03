@@ -78,6 +78,7 @@ paths = [
   '''^tests/lab/l71_unit_test\.go$''',
   '''^tests/lab/l73_junos_root_unit_test\.go$''',
   '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/l88_unit_test\.go$''',
   '''^tests/lab/labcreds/labcreds_test\.go$''',
 ]
 
@@ -190,6 +191,7 @@ paths = [
   '''^tests/lab/l72_unit_test\.go$''',
   '''^tests/lab/l74_test\.go$''',
   '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/l88_unit_test\.go$''',
   '''^tests/lab/qual_evidence_unit_test\.go$''',
   '''^tests/lab/testdata/etcd-get-keys-only\.json$''',
   '''^docs/superpowers/plans/2026-09-24-05a-platform-adapters\.md$''',
@@ -242,5 +244,6 @@ regexTarget = "match"
 regexes = ['''^\$y\$[^$]+\$[^$]+\$[./0-9A-Za-z]{1,30}$''']
 paths = [
   '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/l88_unit_test\.go$''',
   '''^docs/superpowers/plans/2026-10-17-l76-srlinux\.md$''',
 ]
