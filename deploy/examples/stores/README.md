@@ -16,7 +16,8 @@ regions. The lab's regions have a round trip of 40 ms (L74 measured an average o
 covers a round trip up to 125 ms. Cell f passes at a 40 ms injected delay with the session etcd and
 the accounting spool in RAM (`tests/lab/results/load-beehive-ram.md`). Cell f also passes on
 GCE (n2-standard-16, a 400 GB pd-ssd the operator declared) at a 40 ms injected delay
-(`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`), so this is measured on GCE pd-ssd.
+(`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`). The 4x rule is guidance; what
+was measured is that cell f passes at the 40 ms injected round trip.
 
 Both name every member's URL, never a load balancer or a VIP. Every `secret_ref` is a `file:`.
 Replace the `example.com` names and PKI paths; run `port49d store-roles` once per cluster (the

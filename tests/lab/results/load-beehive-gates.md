@@ -98,6 +98,6 @@ not there is not stated.
      the GCP pass in beta.
    - **Met on GCE pd-ssd** (the GCE note): cells a and b hold 170/s with `errors` 0 and `late` 0, and
      per-command p99 is 3.30 ms (a) and 4.90 ms (b), under 5 ms. The fault cells pass under their own
-     gates; their per-command p99 is 4.99 ms (d), 5.01 ms (e) and 5.12 ms (e2), recorded here
-     because they are over 5 ms while a drill is running. Slow applies in the session etcd are 44 (a),
+     gates; their per-command p99 is 4.99 ms (d, under 5 ms), 5.01 ms (e) and 5.12 ms (e2); e and e2
+     are over 5 ms while a drill is running, and are recorded here for that reason. Slow applies in the session etcd are 44 (a),
      0 (b), 74 (c), 1 (d) and 0 (e, e2, f); the WAL fsync mean is 0.72 to 0.86 ms per cell.
