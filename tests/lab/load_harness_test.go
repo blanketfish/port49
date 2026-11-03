@@ -442,6 +442,7 @@ func parseLoadMetrics(text string) loadMetrics {
 // gauges are m's own.
 func (m loadMetrics) Sub(earlier loadMetrics) loadMetrics {
 	out := m
+	out.WALFsyncSum, out.WALFsyncCount = m.WALFsyncSum-earlier.WALFsyncSum, m.WALFsyncCount-earlier.WALFsyncCount
 	out.buckets = map[float64]float64{}
 	for le, v := range m.buckets {
 		out.buckets[le] = v - earlier.buckets[le]
@@ -483,20 +484,25 @@ func (m loadMetrics) WALFsyncMeanMS() string {
 	return strconv.FormatFloat(m.WALFsyncSum/m.WALFsyncCount*1000, 'f', 2, 64)
 }
 
-// QuantileLabel is Quantile in milliseconds, as note text. A quantile in the
-// histogram's top finite bucket, or past it, is only a lower bound: ">=<top>".
+// QuantileLabel is Quantile in milliseconds, as note text: "<=<bound>" for a
+// quantile in a finite bucket, and ">=<last bound>" only for one past the last
+// finite bucket (+Inf), which is a lower bound.
 func (m loadMetrics) QuantileLabel(q float64) string {
 	d := m.Quantile(q)
+	total := m.buckets[math.Inf(1)]
+	if total <= 0 {
+		return loadMS(d)
+	}
 	top := 0.0
 	for le := range m.buckets {
 		if !math.IsInf(le, 1) {
 			top = math.Max(top, le)
 		}
 	}
-	if top > 0 && d >= time.Duration(top*float64(time.Second)) {
+	if m.buckets[top] < math.Ceil(q*total) {
 		return ">=" + loadMS(d)
 	}
-	return loadMS(d)
+	return "<=" + loadMS(d)
 }
 
 // loadScrape reads a /metrics endpoint over plain HTTP.
@@ -997,6 +1003,8 @@ func loadItemReason(out api.MintResponse) string {
 	}
 	if it := out.Results[0]; it.Reason != "" {
 		return it.Reason
+	} else if it.Error != "" {
+		return it.Error
 	} else if it.Verdict != "" {
 		return it.Verdict
 	}

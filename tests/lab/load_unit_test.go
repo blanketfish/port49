@@ -18,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/blanketfish/port49/internal/admission"
+	"github.com/blanketfish/port49/internal/broker/api"
 	"github.com/blanketfish/port49/internal/devicemock"
 	"github.com/blanketfish/port49/internal/policy"
 )
@@ -536,6 +537,10 @@ func TestTheWALFsyncMeanIsSumOverCount(t *testing.T) {
 	if got := m.WALFsyncMeanMS(); got != "5.00" {
 		t.Fatalf("mean %q", got)
 	}
+	later := parseLoadMetrics("etcd_disk_wal_fsync_duration_seconds_sum 3.5\netcd_disk_wal_fsync_duration_seconds_count 600\n")
+	if got := later.Sub(m).WALFsyncMeanMS(); got != "10.00" {
+		t.Fatalf("the cell's own mean %q", got)
+	}
 	if got := parseLoadMetrics("").WALFsyncMeanMS(); got != "unknown" {
 		t.Fatalf("no fsyncs: %q", got)
 	}
@@ -553,18 +558,26 @@ func TestRunDirFSNamesTheFilesystem(t *testing.T) {
 	}
 }
 
-// A p99 in the histogram's top bucket is a lower bound, and the note says so.
-func TestAP99InTheTopBucketIsNamedAsALowerBound(t *testing.T) {
+// A p99 in a finite bucket is that bucket's upper bound; only one past the last
+// finite bucket is a lower bound, and the note says which.
+func TestQuantileLabelNamesABoundOrALowerBound(t *testing.T) {
 	m := loadMetrics{buckets: map[float64]float64{0.001: 1, 0.5: 2, 1: 100, math.Inf(1): 100}}
-	if got := m.QuantileLabel(0.99); got != ">=1000.00" {
-		t.Fatalf("%q", got)
+	if got := m.QuantileLabel(0.99); got != "<=1000.00" {
+		t.Fatalf("a finite top bucket: %q", got)
 	}
 	m = loadMetrics{buckets: map[float64]float64{0.001: 100, 0.5: 100, 1: 100, math.Inf(1): 100}}
-	if got := m.QuantileLabel(0.99); got != "1.00" {
+	if got := m.QuantileLabel(0.99); got != "<=1.00" {
 		t.Fatalf("%q", got)
 	}
 	m = loadMetrics{buckets: map[float64]float64{0.001: 1, 1: 1, math.Inf(1): 100}}
 	if got := m.QuantileLabel(0.99); got != ">=1000.00" {
 		t.Fatalf("past the top: %q", got)
+	}
+}
+
+func TestAMintFaultItemKeepsItsErrorCode(t *testing.T) {
+	out := api.MintResponse{Results: []api.MintItem{{Error: "broker_error"}}}
+	if got := loadItemReason(out); got != "broker_error" {
+		t.Fatalf("%q", got)
 	}
 }

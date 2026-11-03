@@ -152,6 +152,7 @@ func TestLoad(t *testing.T) {
 func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCell, devicemock.FleetResult) {
 	r.takeMints() // a cell's mints are its own
 	before := r.usage()
+	walBefore, walErr := loadScrape(loadSessionMetrics)
 	dsam, bsam := startLoadSampler(loadDaemonMetrics), startLoadSampler(loadBrokerMetrics)
 	res := run()
 	dsam.finish()
@@ -166,8 +167,9 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	c.Observed["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
 	c.Observed["daemon_store_call_p99_ms"] = dsam.last.Sub(dsam.first).QuantileLabel(0.99)
 	c.Observed["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
-	if m, err := loadScrape(loadSessionMetrics); err == nil {
-		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.WALFsyncMeanMS()
+	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
+		// This cell's fsyncs: etcd's counters are cumulative since it started.
+		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.Sub(walBefore).WALFsyncMeanMS()
 	} else {
 		c.Observed["etcd_session_wal_fsync_mean_ms"] = loadScrapeFailed
 	}
