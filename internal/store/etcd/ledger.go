@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -90,25 +91,158 @@ func (s *Store) LedgerMarks(ctx context.Context) (uint64, []store.LedgerMark, er
 }
 
 // PutLedgerMarks raises each key's record to its mark (store.LedgerSink),
-// never lowering one, by cas on the record's revision; a lost race reads
-// again. A mark is leased to its Until, and one with none has no lease.
+// never lowering one. A batch of up to ledgerBatch marks is read in one
+// transaction and written in one, each mark in a transaction of its own
+// inside it with its own compare on the record's revision: a lost compare
+// reads and writes that mark again, alone, and the batch's other marks
+// stand. A mark is leased to its Until, and one with none has no lease.
 // It stops at the first error and returns it, with how many marks before
 // it landed or raised nothing; the keeper owes the rest again.
 func (s *Store) PutLedgerMarks(ctx context.Context, ms []store.LedgerMark) (int, error) {
-	live := func(ledgerRec) bool { return true }
-	for i, m := range ms {
-		err := cas(ctx, s.ctxKV, s.ctxLeases, s.k.ledgerOf(m.Key), live,
-			func(r *ledgerRec, _ bool) (bool, time.Time, bool, error) {
-				next, ok := r.raised(m)
-				if !ok {
-					return false, time.Time{}, false, nil
-				}
-				*r = next
-				return true, next.Until, false, nil
-			})
+	for from := 0; from < len(ms); from += ledgerBatch {
+		batch := ms[from:min(from+ledgerBatch, len(ms))]
+		n, err := s.putLedgerBatch(ctx, batch)
 		if err != nil {
-			return i, err
+			return from + n, err
 		}
 	}
 	return len(ms), nil
 }
+
+// putLedgerBatch lands batch, and says how many marks from its start landed
+// when it stops on an error. A record that does not decode stops it at that
+// key: the keys before it are still written first.
+func (s *Store) putLedgerBatch(ctx context.Context, batch []store.LedgerMark) (int, error) {
+	// Marks for one key are applied in order, in one write.
+	var todo []string
+	byKey := map[string][]store.LedgerMark{}
+	for _, m := range batch {
+		k := s.k.ledgerOf(m.Key)
+		if _, ok := byKey[k]; !ok {
+			todo = append(todo, k)
+		}
+		byKey[k] = append(byKey[k], m)
+	}
+	pending := map[string]bool{}
+	for _, k := range todo {
+		pending[k] = true
+	}
+	// landed is how many marks from the batch's start have landed: up to the
+	// first whose key is still pending.
+	landed := func() int {
+		for i, m := range batch {
+			if pending[s.k.ledgerOf(m.Key)] {
+				return i
+			}
+		}
+		return len(batch)
+	}
+	var stop error
+	for round := 0; len(todo) > 0; round++ {
+		if round > 0 {
+			if err := casBackoff(ctx, round); err != nil {
+				return landed(), unavailable(err)
+			}
+		}
+		gets := make([]clientv3.Op, len(todo))
+		for i, k := range todo {
+			gets[i] = clientv3.OpGet(k)
+		}
+		read, err := s.ctxKV.Txn(ctx).Then(gets...).Commit()
+		if err != nil {
+			return landed(), unavailable(err)
+		}
+		var writes []ledgerWrite
+		for i := 0; i < len(todo); i++ {
+			k := todo[i]
+			var r ledgerRec
+			var mod int64
+			if kvs := read.Responses[i].GetResponseRange().Kvs; len(kvs) == 1 {
+				if json.Unmarshal(kvs[0].Value, &r) != nil {
+					stop, todo = notDecoded(k), todo[:i]
+					break
+				}
+				mod = kvs[0].ModRevision
+			}
+			changed := false
+			for _, m := range byKey[k] {
+				if next, ok := r.raised(m); ok {
+					r, changed = next, true
+				}
+			}
+			if !changed {
+				delete(pending, k)
+				continue
+			}
+			writes = append(writes, ledgerWrite{key: k, mod: mod, rec: r})
+		}
+		lost, err := s.writeLedger(ctx, writes)
+		if err != nil {
+			return landed(), err
+		}
+		todo = lost
+		for _, w := range writes {
+			if !slices.Contains(lost, w.key) {
+				delete(pending, w.key)
+			}
+		}
+	}
+	if stop != nil {
+		return landed(), stop
+	}
+	return len(batch), nil
+}
+
+// ledgerWrite is one record to write, if its key is still at mod.
+type ledgerWrite struct {
+	key string
+	mod int64
+	rec ledgerRec
+}
+
+// writeLedger writes each of ws in a transaction of its own inside one
+// transaction, each under its own compare on the key's revision, and
+// returns the keys whose compare was lost. A lease etcd no longer knows
+// costs one retry on fresh leases, as commit does.
+func (s *Store) writeLedger(ctx context.Context, ws []ledgerWrite) ([]string, error) {
+	if len(ws) == 0 {
+		return nil, nil
+	}
+	for attempt := 0; ; attempt++ {
+		ops := make([]clientv3.Op, len(ws))
+		for i, w := range ws {
+			body, err := json.Marshal(w.rec)
+			if err != nil {
+				return nil, err
+			}
+			put := clientv3.OpPut(w.key, string(body))
+			if !w.rec.Until.IsZero() {
+				id, err := s.ctxLeases.For(ctx, w.rec.Until)
+				if err != nil {
+					return nil, unavailable(err)
+				}
+				put = clientv3.OpPut(w.key, string(body), clientv3.WithLease(id))
+			}
+			ops[i] = clientv3.OpTxn([]clientv3.Cmp{unchanged(w.key, w.mod)}, []clientv3.Op{put}, nil)
+		}
+		resp, err := s.ctxKV.Txn(ctx).Then(ops...).Commit()
+		if isLeaseLost(err) && attempt == 0 {
+			s.ctxLeases.Reset()
+			continue
+		}
+		if err != nil {
+			return nil, unavailable(err)
+		}
+		var lost []string
+		for i, r := range resp.Responses {
+			if !r.GetResponseTxn().Succeeded {
+				lost = append(lost, ws[i].key)
+			}
+		}
+		return lost, nil
+	}
+}
+
+// ledgerBatch is how many marks one transaction carries: etcd's default
+// --max-txn-ops is 128, and chunked keeps to maxTxnOps.
+const ledgerBatch = maxTxnOps
