@@ -6,12 +6,12 @@ Platform: cisco_nxos. Image: Nexus 9300v 10.4(2)F. Transport: tcp. Measured 2026
 
 | Cell | Verdict | Observation |
 |---|---|---|
-| a | PASS | control (port49d stopped, the local password): logged in true (no error). With port49d answering: logged in false after 2.09s (); port49 decision for the attempt: verdict="deny" reason="token_not_found" |
+| a | PASS | control (port49d stopped, the local password): logged in true (no error). With port49d answering: logged in false after 1.971s (); port49 decision for the attempt: verdict="deny" reason="token_not_found" |
 | b | PASS | break-glass login with port49d stopped: ok true in 140ms (no error) |
-| c | NOT MEASURED | the harness does not run cell c yet |
-| d | NOT MEASURED | the harness does not run cell d yet |
-| e | PASS | token login (login attempt 1, 1s after the first) no error: 3 command authorizations permitted, 1 denied; accounting START 2, STOP 1; command output: [0] TAC support: http://www.cisco.com/tac Documents: http://www.cisco.com/en/US/products/ps9372/tsd_products_support_series_home.html Copyright (c) 2002-2023, Cisco Systems, Inc. All rights reserved. The copyrights to certain works contained herein are owned by other third parties and are used and distributed under license. Some parts of this software are covered under the GNU Public License. A copy of the license is available at http://www.gnu.o... |
-| f | PASS | token login with the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 1.13s; connections the first server reset: 5; port49 redeemed the token: true; first command output:  |
+| c | OBSERVED | the store hung (the proxy to etcd held), break-glass login no error in 2.25s, `show version` output "'Error: AAA authorization failed <LONG>(0x10)'"; port49d records: authorize_session [], authorize_command [deny store_unavailable deny store_unavailable], accounting []; port49d's log shows no listener closing during the login |
+| d | PASS | port49d dark (its log shows it closed its listeners: true): break-glass login no error in 1.08s, `show version` output "'Cisco Nexus Operating System (NX-OS) Software'" |
+| e | PASS | token login (login attempt 1, 1s after the first) no error: 3 command authorizations permitted, 1 denied by port49; accounting START 2, STOP 1; port49 authorized one command and denied the other; command output: [0] TAC support: http://www.cisco.com/tac Documents: http://www.cisco.com/en/US/products/ps9372/tsd_products_support_series_home.html Copyright (c) 2002-2023, Cisco... [1] Cmd exec error.  |
+| f | PASS | token login with the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 1.29s; connections the first server reset: 5; port49 redeemed the token: true; first command output:  |
 
 ### Cell a evidence
 
@@ -46,4 +46,5 @@ Platform: cisco_nxos. Image: Nexus 9300v 10.4(2)F. Transport: tcp. Measured 2026
   event=authorize_command verdict=permit reason=permit_dominates flags= user=alice02 port=
   event=account verdict= reason= flags=start user=alice02 port=0
   event=authorize_command verdict=permit reason=permit_dominates flags= user=alice02 port=
+  event=account verdict= reason= flags=stop user=alice02 port=0
 ```
