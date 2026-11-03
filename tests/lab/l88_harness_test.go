@@ -180,7 +180,7 @@ func l88Missing(lines []string, shown string) []string {
 	var missing []string
 	for _, ln := range lines {
 		n := norm(ln)
-		if n == "" || strings.Contains(ln, labKeyDefault) || have[n] {
+		if n == "" || n == "exit" || strings.Contains(ln, labKeyDefault) || have[n] {
 			continue
 		}
 		missing = append(missing, n)
@@ -307,7 +307,8 @@ func l88LocalAccount(name, user, hash string) (add, del []string) {
 	case "cisco_nxos":
 		return []string{"username " + user + " password 5 " + hash + " role network-operator"}, []string{"no username " + user}
 	case "cisco_xrd":
-		return []string{"username " + user + " group root-lr secret 10 " + hash}, []string{"no username " + user}
+		// XR takes the group and the secret in the user's own submode (the one-line form is refused).
+		return []string{"username " + user, "group root-lr", "secret 10 " + hash, "exit"}, []string{"no username " + user}
 	}
 	return nil, nil
 }

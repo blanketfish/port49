@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	"net"
 	"os"
 	"os/exec"
@@ -89,6 +90,7 @@ func l88Run(t *testing.T, l *lab) {
 	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (tcp), values: servers " +
 		strings.Join(l88Servers, ", ") + "; the second is an address on the bridge where nothing listens")
 	e.deviceFacts()
+	e.debugOn()
 	e.cells("tcp", l88Cells(l.p.sel, false))
 	e.finish()
 }
@@ -215,14 +217,36 @@ func (e *l88Env) cellA() {
 		cl.Close()
 	}
 	e.restart()
-	off := e.l.mark()
-	t0 := time.Now()
-	cl, err := e.l.dial(l88DenyUser, e.pw, 120*time.Second)
-	took := time.Since(t0)
-	if err == nil {
-		cl.Close()
+	// A device that marked port49d dead during the control answers locally, with no packet,
+	// until its dead time runs out (XR 26.1.1 and IOS XE; cell e waits the same way). The
+	// attempt is repeated every 10 s for up to 5 minutes until port49 sees one; the attempts
+	// that never reached port49 are recorded, and the one that did is judged.
+	var (
+		err    error
+		took   time.Duration
+		recs   []map[string]any
+		before []string
+		start  = time.Now()
+	)
+	for {
+		off := e.l.mark()
+		t0 := time.Now()
+		var cl *ssh.Client
+		cl, err = e.l.dial(l88DenyUser, e.pw, 120*time.Second)
+		took = time.Since(t0)
+		if err == nil {
+			cl.Close()
+		}
+		recs = e.l.waitForRecords(off, 10*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, l88DenyUser) != nil })
+		if redeemFor(recs, l88DenyUser) != nil || time.Since(start) > 5*time.Minute {
+			break
+		}
+		before = append(before, fmt.Sprintf("+%s logged in %v without port49 seeing it", time.Since(start).Round(time.Second), err == nil))
+		time.Sleep(10 * time.Second)
 	}
-	recs := e.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, l88DenyUser) != nil })
+	if len(before) > 0 {
+		e.n.fact("cell a: before an attempt reached port49 the denied user was tried " + fmt.Sprint(len(before)) + " times: " + strings.Join(before, "; "))
+	}
 	var verdict, reason string
 	if r := redeemFor(recs, l88DenyUser); r != nil {
 		verdict, reason = str(r, "verdict"), str(r, "reason")
@@ -352,18 +376,41 @@ func (e *l88Env) cellF() {
 	}
 	user, secret := e.l.nextLogin(e.t)
 	e.n.addSecret(secret)
+	stopCap := e.l.capture(e.t, "L88-f")
+	defer stopCap()
+	// A device that marked both servers dead earlier (XR 26.1.1 and IOS XE, cell e) fails the
+	// login at once without sending a packet until its dead time runs out: the login is
+	// retried every 10 s for 5 minutes on the same credential, and the tries are recorded.
 	off := e.l.mark()
 	t0 := time.Now()
-	outs, lerr := e.l.loginWithin(user, secret, 120*time.Second, "show version")
+	var (
+		outs  []string
+		lerr  error
+		recs  []map[string]any
+		tries int
+	)
+	for {
+		tries++
+		outs, lerr = e.l.loginWithin(user, secret, 120*time.Second, "show version")
+		recs = e.l.waitForRecords(off, 15*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
+		if redeemFor(recs, user) != nil || time.Since(t0) > 5*time.Minute {
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
 	took := time.Since(t0)
-	recs := e.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
+	e.l.flushCapture(e.t)
+	wire := l88Wire(e.l, t0, time.Now())
+	if tries > 1 {
+		e.n.fact(fmt.Sprintf("cell f: the login took %d tries over %s before port49 saw it", tries, took.Round(time.Second)))
+	}
 	n := rst.n.Load()
 	restore()
 	red := redeemFor(recs, user)
 	obs := fmt.Sprintf("login with a one-time credential, the first server (%s) resetting every connection at Accept and port49d on the second (%s): %s in %s; "+
 		"connections the first server reset: %d; port49 redeemed the credential: %v; first command output: %s",
 		l88Servers[0], l88Servers[1], e.n.redact(l88Err(lerr)), took.Round(10*time.Millisecond), n, red != nil, oneLine(stripPrompt(firstOut(outs))))
-	evidence := summarize(recs)
+	evidence := summarize(recs) + "\nthe wire during the login (headers only):\n" + wire + e.debugRead()
 	if e.l.p.name == "cisco_iosxe" {
 		// The device's own state, read after f: a break-glass login with port49d stopped made
 		// the next login choose no server when it came before f (this run's first two tries).
@@ -922,4 +969,62 @@ func lastLines(lines []string, n int) []string {
 		return lines[len(lines)-n:]
 	}
 	return lines
+}
+
+// l88Debug is the device debug a platform runs with from the start of the run, so that the
+// log buffer holds what the device did at cell f without a session being opened before f
+// (a break-glass session with port49d down changes the device's server state: IOS XE, f2).
+var l88Debug = map[string]struct {
+	on, off []string
+	read    []string
+	prompt  string
+}{
+	"cisco_xrd": {on: []string{"debug tacacs", "debug aaa authentication"}, off: []string{"undebug all"},
+		read: []string{"show logging | include tacacs", "show logging | include TACACS", "show logging | include AAA", "show logging | include aaa"}, prompt: "xrd1#"},
+}
+
+func (e *l88Env) debugOn() {
+	d, ok := l88Debug[e.l.p.name]
+	if !ok {
+		return
+	}
+	e.must("turning the device debug on", l88Admin(e.l, func(c *cliConn) error {
+		for _, cmd := range append([]string{"terminal length 0"}, d.on...) {
+			if _, err := c.sendExpect(cmd, 60*time.Second, d.prompt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	e.n.fact("device debug on from before cell a: " + strings.Join(d.on, ", "))
+}
+
+// debugRead is the device's log lines for the debug, filtered and redacted, and turns the debug off.
+func (e *l88Env) debugRead() string {
+	d, ok := l88Debug[e.l.p.name]
+	if !ok {
+		return ""
+	}
+	var b strings.Builder
+	err := l88Admin(e.l, func(c *cliConn) error {
+		for _, cmd := range append([]string{"terminal length 0"}, d.read...) {
+			out, err := c.sendExpect(cmd, 90*time.Second, d.prompt)
+			if err != nil {
+				out += "\n(" + err.Error() + ")"
+			}
+			lines := strings.Split(e.n.redact(l88Evidence(out)), "\n")
+			if len(lines) > 250 {
+				lines = lines[len(lines)-250:]
+			}
+			fmt.Fprintf(&b, "\n`%s`:\n%s\n", cmd, strings.Join(lines, "\n"))
+		}
+		for _, cmd := range d.off {
+			c.sendExpect(cmd, 60*time.Second, d.prompt)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(&b, "(the debug read failed: %s)\n", e.n.redact(err.Error()))
+	}
+	return b.String()
 }
