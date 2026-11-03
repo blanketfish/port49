@@ -41,11 +41,27 @@ type triedKey struct{}
 type tried struct {
 	mu   sync.Mutex
 	used map[string]bool
+	last string // the member the latest pick chose
+}
+
+// keepLast forgets every member but the latest pick: that one answered, so
+// the next placement made with t goes elsewhere and the rest are fair game.
+func (t *tried) keepLast() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.used = map[string]bool{t.last: t.last != ""}
 }
 
 // withTried marks ctx as one hedged call's: its copies are placed apart.
 func withTried(ctx context.Context) context.Context {
 	return context.WithValue(ctx, triedKey{}, &tried{used: map[string]bool{}})
+}
+
+// withTriedSet places ctx's calls apart by t, which outlives them: a
+// long-lived stream that is opened again after it stalls avoids the members
+// it has just been on.
+func withTriedSet(ctx context.Context, t *tried) context.Context {
+	return context.WithValue(ctx, triedKey{}, t)
 }
 
 // hedgeBuilder is round_robin (gRPC's endpointsharding over pick_first
@@ -103,15 +119,20 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.used == nil {
+		t.used = map[string]bool{}
+	}
 	for j := 0; j < n; j++ {
 		k := p.ready[(start+j)%n]
 		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] {
 			t.used[addr] = true
+			t.last = addr
 			return k.State.Picker.Pick(info)
 		}
 	}
 	// Every ready member has had a copy: begin again.
 	k := p.ready[start]
-	t.used = map[string]bool{k.Endpoint.Addresses[0].Addr: true}
+	t.last = k.Endpoint.Addresses[0].Addr
+	t.used = map[string]bool{t.last: true}
 	return k.State.Picker.Pick(info)
 }

@@ -357,6 +357,7 @@ func TestFailureMatrix(t *testing.T) {
 				t.Logf("login %d of 30: pass %v in %v", n, ok, d)
 				if !ok {
 					failed = append(failed, n)
+					m.dump() // the daemon's own reason for the refusal, while it is the tail
 				}
 			}
 			// The mint is not hedged, so with a member dark it can be refused
@@ -372,6 +373,7 @@ func TestFailureMatrix(t *testing.T) {
 				t.Logf("mint %d of 30 with one member dark: %d retries in %v", mints, retries, took)
 				if !m.passes(tok) {
 					t.Errorf("the login of the mint %d made with one member dark did not pass", mints)
+					m.dump()
 				}
 			}
 			m.s.run("unpause", dark)
