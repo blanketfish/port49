@@ -284,6 +284,11 @@ func etcdValues(t *testing.T) (mode, retention, quota string) {
 	if mode == "<nil>" || retention == "<nil>" || quota == "<nil>" {
 		t.Fatal("etcd-1.yaml lacks compaction or a quota")
 	}
+	// One hour of history at the design rate (~150 MB/min) does not fit the 8 GiB
+	// quota; every use of history handles ErrCompacted by rescanning (load run 4).
+	if retention != "10m" || quota != "8589934592" {
+		t.Fatalf("etcd-1.yaml retention %q, quota %q; want 10m and 8589934592", retention, quota)
+	}
 	return mode, retention, quota
 }
 

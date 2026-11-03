@@ -46,7 +46,7 @@ spec:
             - {name: ETCD_CLIENT_CERT_AUTH, value: "true"}
             # design §13: periodic compaction, since every login and touch writes a revision
             - {name: ETCD_AUTO_COMPACTION_MODE, value: periodic}
-            - {name: ETCD_AUTO_COMPACTION_RETENTION, value: "1h"}
+            - {name: ETCD_AUTO_COMPACTION_RETENTION, value: "10m"}
             # and a backend quota: etcd's 2 GiB default fills and refuses every write
             - {name: ETCD_QUOTA_BACKEND_BYTES, value: "8589934592"}
             - {name: ETCD_PEER_CLIENT_CERT_AUTH, value: "true"}

@@ -22,5 +22,5 @@ peer-transport-security:
   client-cert-auth: true
 # Without compaction etcd grows until it hits its quota and refuses every write.
 auto-compaction-mode: periodic
-auto-compaction-retention: "1h"
+auto-compaction-retention: "10m"
 quota-backend-bytes: 8589934592

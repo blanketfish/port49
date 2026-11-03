@@ -75,9 +75,9 @@ func (s *Store) ScanContexts(ctx context.Context, fn func(store.ContextKey, stor
 // `after` (store.ContextFeed), on the context client, requiring a leader so
 // a member cut off from its quorum ends the watch rather than going quiet.
 // It asks for etcd's periodic progress notifications (every 10 minutes by
-// default, inside the 1h compaction retention design §13 prescribes), so
-// a quiet family's re-watch resumes above a compaction (final review 7e-1
-// I-1).
+// default, against the 10m compaction retention design §13 prescribes: a resume
+// that lands under a compaction is ErrCompacted and rescans), so a quiet
+// family's re-watch usually resumes above one (final review 7e-1 I-1).
 // A request on asks is sent with RequestProgress on the watch's own
 // context, which names its stream: etcd answers it with a progress
 // notification once the stream's watchers are synced, and that header

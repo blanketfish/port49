@@ -243,7 +243,7 @@ type regionEtcd struct {
 // Without them etcd's defaults fill a 2 GiB quota inside two load cells.
 const (
 	etcdCompactionMode      = "periodic"
-	etcdCompactionRetention = "1h"
+	etcdCompactionRetention = "10m"
 	etcdQuotaBackendBytes   = "8589934592"
 )
 

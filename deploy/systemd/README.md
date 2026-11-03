@@ -265,7 +265,7 @@ trial.
 ## etcd
 
 The two examples in `examples/` are for your etcd hosts. The three `etcd-N.yaml` files each set
-`auto-compaction-mode: periodic`, `auto-compaction-retention: "1h"` and an 8 GiB quota, with TLS
+`auto-compaction-mode: periodic`, `auto-compaction-retention: "10m"` and an 8 GiB quota, with TLS
 and client-certificate auth. Install etcd 3.6.15 or later at `/usr/local/bin/etcd`, create the user
 (`sysusers-etcd.conf`) and its data directory (`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700; it also makes `/etc/etcd/pki` for the certificates), copy `etcd@.service`, and `systemctl enable --now etcd@etcd-1` on the first host, and so
 on. Then apply the roles once per cluster:
