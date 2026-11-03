@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -303,7 +304,7 @@ func (e *l88Env) cellE() {
 		how = "judged on the device output: Junos authorizes a command by the login class and asks port49 for none"
 	}
 	obs := fmt.Sprintf("token login (%s) %s: %d command authorizations permitted, %d denied by port49; accounting START %d, STOP %d; %s; command output: %s",
-		waited, l73Err(err), permits, denies, starts, stops, how, shown)
+		waited, e.n.redact(l88Err(err)), permits, denies, starts, stops, how, shown)
 	if err == nil && judged && starts > 0 && stops > 0 {
 		e.n.cell("e", "PASS", obs, summarize(recs))
 		return
@@ -316,6 +317,12 @@ func (e *l88Env) cellE() {
 // login succeeds through the second. port49d moves to the second address and a listener that
 // resets every connection takes the first.
 func (e *l88Env) cellF() {
+	// IOS XE: the device's own server state before and after, and its tacacs debug around the
+	// login (the lead's ruling after the first run's FAIL).
+	var ev *l88FEvidence
+	if e.l.p.name == "cisco_iosxe" {
+		ev = e.fEvidenceStart()
+	}
 	e.must("stopping port49d", e.l.stopDaemon())
 	base, err := e.l.configPath()
 	e.must("reading the standing config", err)
@@ -344,16 +351,25 @@ func (e *l88Env) cellF() {
 	took := time.Since(t0)
 	recs := e.l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
 	n := rst.n.Load()
+	evidence := ""
+	if ev != nil {
+		evidence = ev.finish()
+	}
 	restore()
 	red := redeemFor(recs, user)
 	obs := fmt.Sprintf("token login with the first server (%s) resetting every connection at Accept and port49d on the second (%s): %s in %s; "+
 		"connections the first server reset: %d; port49 redeemed the token: %v; first command output: %s",
-		l88Servers[0], l88Servers[1], l73Err(lerr), took.Round(10*time.Millisecond), n, red != nil, oneLine(stripPrompt(firstOut(outs))))
+		l88Servers[0], l88Servers[1], e.n.redact(l88Err(lerr)), took.Round(10*time.Millisecond), n, red != nil, oneLine(stripPrompt(firstOut(outs))))
+	if ev != nil {
+		evidence = ev.before + "\n" + evidence + "\n" + summarize(recs)
+	} else {
+		evidence = summarize(recs)
+	}
 	if lerr == nil && red != nil && n > 0 {
-		e.n.cell("f", "PASS", obs, summarize(recs))
+		e.n.cell("f", "PASS", obs, evidence)
 		return
 	}
-	e.n.cell("f", "FAIL", obs, summarize(recs))
+	e.n.cell("f", "FAIL", obs, evidence)
 	e.t.Errorf("cell f FAIL: %s", e.n.mask(obs))
 }
 
@@ -536,25 +552,67 @@ func (e *l88Env) cellsCD() {
 				return nil
 			}())
 		}
-		// (c) what happened, not why: the login, the command, port49d's own records and log
-		// lines for the window.
+		// (c) what happened, not why. Break-glass is tried again and again from the start of the
+		// hang through design §12's bound on the listener close (close_after x interval +
+		// call_timeout, 5.5 s at the defaults) plus 30 s; the notes give the first success and
+		// the moment port49d's own close line appeared, both from the hang's start.
 		off := x.l.errLogSize()
 		mark := x.l.mark()
+		const window = 5*time.Second + 500*time.Millisecond + 30*time.Second
+		stopWatch := make(chan struct{})
+		darkAt := darkWatch(stopWatch, func() bool { return len(x.l.errLinesSince(off, darkCloseText)) > 0 })
 		hang(true)
 		t0 := time.Now()
-		outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
-		took := time.Since(t0)
+		type try struct {
+			at   time.Duration
+			took time.Duration
+			err  error
+			out  string
+		}
+		var tries []try
+		var first *try
+		for time.Since(t0) < window {
+			at := time.Since(t0)
+			ts := time.Now()
+			outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+			tr := try{at, time.Since(ts), err, l88Brief(firstOut(outs))}
+			tries = append(tries, tr)
+			if err == nil && first == nil {
+				first = &tr
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		// The close line may land just after the last try: give it until the window's end.
+		for time.Since(t0) < window && len(x.l.errLinesSince(off, darkCloseText)) == 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+		close(stopWatch)
+		at := <-darkAt
 		dark := x.l.errLinesSince(off, darkCloseText)
 		recs := x.l.recordsSince(mark)
 		hang(false)
-		logged := "port49d's log shows no listener closing during the login"
-		if len(dark) > 0 {
-			logged = "port49d's log: " + dark[0]
+		var b strings.Builder
+		for i, tr := range tries {
+			if i >= 12 {
+				fmt.Fprintf(&b, "; ... %d more tries", len(tries)-i)
+				break
+			}
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			fmt.Fprintf(&b, "try at +%s took %s: %s", tr.at.Round(100*time.Millisecond), tr.took.Round(100*time.Millisecond), l88TryResult(tr.err, tr.out))
 		}
-		x.n.cell("c", "OBSERVED", x.n.redact(fmt.Sprintf("the store hung (the proxy to etcd held), break-glass login %s in %s, `show version` output %q; "+
-			"port49d records: authorize_session %v, authorize_command %v, accounting %v; %s",
-			l88Err(err), took.Round(10*time.Millisecond), l88Brief(firstOut(outs)),
-			reasonsOf(recs, "authorize_session"), reasonsOf(recs, "authorize_command"), reasonsOf(recs, "accounting"), logged)), "")
+		succeeded := fmt.Sprintf("break-glass never logged in within %s of the hang's start", window)
+		if first != nil {
+			succeeded = fmt.Sprintf("break-glass first logged in at +%s", first.at.Round(100*time.Millisecond))
+		}
+		closed := "port49d's log showed no listener close within the window"
+		if !at.IsZero() {
+			closed = fmt.Sprintf("port49d's own close line appeared at +%s: %s", at.Sub(t0).Round(100*time.Millisecond), dark[0])
+		}
+		x.n.cell("c", "OBSERVED", x.n.redact(fmt.Sprintf("the store hung (the proxy to etcd held); %s; %s; port49d records: authorize_session %v, authorize_command %v, accounting %v; tries: %s",
+			succeeded, closed, reasonsOf(recs, "authorize_session"), reasonsOf(recs, "authorize_command"), reasonsOf(recs, "accounting"), b.String())), "")
 		restore(off)
 		// (d)
 		off = x.l.errLogSize()
@@ -565,11 +623,11 @@ func (e *l88Env) cellsCD() {
 		}
 		wentDark := len(x.l.errLinesSince(off, darkCloseText)) > 0
 		t0 = time.Now()
-		outs, err = x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
-		took = time.Since(t0)
+		outs, err := x.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+		took := time.Since(t0)
 		hang(false)
-		first := l88Brief(firstOut(outs))
-		obs := x.n.redact(fmt.Sprintf("port49d dark (its log shows it closed its listeners: %v): break-glass login %s in %s, `show version` output %q", wentDark, l88Err(err), took.Round(10*time.Millisecond), first))
+		shown := l88Brief(firstOut(outs))
+		obs := x.n.redact(fmt.Sprintf("port49d dark (its log shows it closed its listeners: %v): break-glass login %s in %s, `show version` output %q", wentDark, l88Err(err), took.Round(10*time.Millisecond), shown))
 		if wentDark && err == nil && strings.TrimSpace(firstOut(outs)) != "" {
 			x.n.cell("d", "PASS", obs, "")
 		} else {
@@ -595,4 +653,83 @@ func l88Err(err error) string {
 		return "no error"
 	}
 	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
+// l88FEvidence is the device's own view around cell f on IOS XE: `show tacacs` before (and
+// until it reads clean of a dead server, so f starts from a known state), the tacacs debug
+// during the login, and `show tacacs` and the buffered debug lines after. Every line the
+// device printed passes l88Evidence's filter and the note's redaction.
+type l88FEvidence struct {
+	e      *l88Env
+	c      *cliConn
+	before string
+}
+
+var l88Unsafe = regexp.MustCompile(`(?i)password|token|secret|eyJ|payload`)
+
+// l88Evidence drops each line that could hold a credential or a payload.
+func l88Evidence(s string) string {
+	var keep []string
+	for _, ln := range strings.Split(strings.ReplaceAll(s, "\r", ""), "\n") {
+		if !l88Unsafe.MatchString(ln) {
+			keep = append(keep, ln)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+// run types one exec-mode command and returns what the device printed, filtered and redacted.
+func (v *l88FEvidence) run(cmd string) string {
+	out, err := v.c.sendExpect(cmd, 90*time.Second, "xe1#")
+	if err != nil {
+		out += "\n(" + err.Error() + ")"
+	}
+	return v.e.n.redact(l88Evidence(out))
+}
+
+func (e *l88Env) fEvidenceStart() *l88FEvidence {
+	e.must("stopping port49d", e.l.stopDaemon())
+	open := l88Opener(e.l.p)
+	c, err := open(e.l)
+	e.must("opening the break-glass CLI for the evidence", err)
+	v := &l88FEvidence{e: e, c: c}
+	v.run("terminal length 0")
+	t0 := time.Now()
+	var b strings.Builder
+	clean := false
+	for time.Since(t0) < 150*time.Second {
+		out := v.run("show tacacs")
+		fmt.Fprintf(&b, "`show tacacs` %s after the break-glass login (port49d stopped):\n%s\n", time.Since(t0).Round(time.Second), out)
+		if !strings.Contains(strings.ToLower(out), "dead") {
+			clean = true
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+	v.before = b.String()
+	if !clean {
+		e.n.cell("f", "INVALID", "the device's server state never read clean of a dead server within 150 s", v.before)
+		c.Close()
+		e.t.Fatalf("cell f INVALID: IOS XE still shows a dead server after 150 s")
+	}
+	v.before += "`debug tacacs` on:\n" + v.run("debug tacacs")
+	return v
+}
+
+func (v *l88FEvidence) finish() string {
+	v.e.must("stopping the second-address daemon", v.e.l.stopDaemon())
+	var b strings.Builder
+	b.WriteString("`show tacacs` after the login (port49d stopped):\n" + v.run("show tacacs") + "\n")
+	b.WriteString("`show logging` tacacs lines:\n" + v.run("show logging | include TAC|tacacs|TPLUS|AAA") + "\n")
+	v.run("undebug all")
+	v.c.Close()
+	return b.String()
+}
+
+// l88TryResult is one break-glass try on a line: its error, or the command's first output.
+func l88TryResult(err error, out string) string {
+	if err != nil {
+		return l88Err(err)
+	}
+	return fmt.Sprintf("logged in, `show version` printed %q", out)
 }

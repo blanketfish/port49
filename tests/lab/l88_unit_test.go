@@ -227,3 +227,14 @@ func TestL88RedactRemovesEveryCredentialAndKeepsTheDevicesWords(t *testing.T) {
 		}
 	}
 }
+
+func TestL88EvidenceDropsLinesThatCouldHoldACredential(t *testing.T) {
+	got := l88Evidence("Server: 172.100.100.1 state: UP\r\nPassword: x\nauth token abc\nthe secret\nPayload 00ff\neyJhbGci\nTPLUS: sent")
+	if strings.Contains(got, "x") && strings.Contains(got, "Password") || strings.Contains(got, "token") ||
+		strings.Contains(got, "secret") || strings.Contains(got, "Payload") || strings.Contains(got, "eyJ") {
+		t.Errorf("a line that could hold a credential survived: %q", got)
+	}
+	if !strings.Contains(got, "state: UP") || !strings.Contains(got, "TPLUS: sent") {
+		t.Errorf("a plain line was dropped: %q", got)
+	}
+}
