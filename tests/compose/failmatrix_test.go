@@ -138,6 +138,42 @@ func (m matrix) restore() {
 	m.clearTokens()
 }
 
+// leader is the member etcd reports as the raft leader.
+func (m matrix) leader() string {
+	t := m.s.t
+	t.Helper()
+	out, err := exec.Command("docker", "run", "--rm", "--user", "0", "--network", project+"_port49",
+		"-v", project+"_etcd-root:/etcd-root:ro", "--entrypoint", "etcdctl", m.etcdImage(),
+		"--endpoints=https://etcd-1:2379,https://etcd-2:2379,https://etcd-3:2379", "--cacert=/etcd-root/ca.pem",
+		"--cert=/etcd-root/root.pem", "--key=/etcd-root/root-key.pem", "endpoint", "status", "-w", "json").Output()
+	if err != nil {
+		t.Fatalf("etcdctl endpoint status: %v", err)
+	}
+	var sts []struct {
+		Endpoint string `json:"Endpoint"`
+		Status   struct {
+			Header struct {
+				MemberID uint64 `json:"member_id"`
+			} `json:"header"`
+			Leader uint64 `json:"leader"`
+		} `json:"Status"`
+	}
+	if err := json.Unmarshal(out, &sts); err != nil {
+		t.Fatalf("etcdctl endpoint status: %v", err)
+	}
+	for _, st := range sts {
+		if st.Status.Leader != 0 && st.Status.Header.MemberID == st.Status.Leader {
+			for _, name := range members {
+				if strings.Contains(st.Endpoint, name) {
+					return name
+				}
+			}
+		}
+	}
+	t.Fatalf("no member reports itself the raft leader: %s", out)
+	return ""
+}
+
 // clearTokens deletes every token in the store as etcd's root, as the restore
 // runbook does: a test that failed between a mint and its login must not leave
 // unspent tokens to reach token.candidate_cap for the next subtest.
@@ -287,15 +323,29 @@ func TestFailureMatrix(t *testing.T) {
 		// member still dark. No token is left standing between rounds.
 		const rounds, perRound = 6, 5
 		t.Cleanup(m.clearTokens) // after a failure, no unspent token caps the next subtest
+		// A raft leader paused is not a dark member the client can route around:
+		// the others hold no leader for an election timeout (etcd's default 1s)
+		// and every read and write waits for one, hedged or not. The claim "one
+		// member dark" is tested on a follower, and the leader is logged.
+		leader := m.leader()
+		dark := ""
+		for _, name := range members {
+			if name != leader {
+				dark = name
+				break
+			}
+		}
+		t.Logf("raft leader %s; pausing follower %s", leader, dark)
 		var slowest, slowestMint time.Duration
 		var failed []int
 		var retried, mints int
 		for r := 0; r < rounds; r++ {
+			m.clearTokens() // a failed login of the last round must not leave tokens at the cap
 			toks := make([]string, perRound)
 			for i := range toks {
 				toks[i] = m.mint()
 			}
-			m.s.run("pause", "etcd-2")
+			m.s.run("pause", dark)
 			for i, tok := range toks {
 				n := r*perRound + i + 1
 				start := time.Now()
@@ -322,7 +372,7 @@ func TestFailureMatrix(t *testing.T) {
 					t.Errorf("the login of the mint %d made with one member dark did not pass", mints)
 				}
 			}
-			m.s.run("unpause", "etcd-2")
+			m.s.run("unpause", dark)
 		}
 		if len(failed) > 0 {
 			t.Errorf("logins %v of 30 with one member paused did not pass", failed)
