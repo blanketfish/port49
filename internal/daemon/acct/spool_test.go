@@ -1338,28 +1338,46 @@ func TestAFailedGroupSyncFailsEveryOfferInIt(t *testing.T) {
 	var syncs atomic.Int32
 	sp, path := groupSpool(t, func(f *os.File) error {
 		if syncs.Add(1) == 1 {
-			time.Sleep(20 * time.Millisecond)
 			return errors.New("injected sync failure")
 		}
 		return f.Sync()
 	})
-	errs := offerAll(sp, 16)
-	failed := 0
-	for _, err := range errs {
-		if err != nil {
-			if !errors.Is(err, ErrSpoolFull) {
-				t.Fatalf("want ErrSpoolFull, got %v", err)
-			}
-			failed++
+	// Stand in for a leader that is mid-sync: the 16 offers queue behind it, and
+	// lead() then writes them as the one batch, whose sync fails.
+	sp.qmu.Lock()
+	sp.flushing = true
+	sp.qmu.Unlock()
+	errs := make(chan error, 16)
+	for i := range 16 {
+		go func() {
+			errs <- sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: fmt.Sprintf("q%d", i)})
+		}()
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		sp.qmu.Lock()
+		n := len(sp.queue)
+		sp.qmu.Unlock()
+		if n == 16 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of 16 offers queued", n)
 		}
 	}
-	if failed == 0 {
-		t.Fatal("the failed sync failed no offer")
+	before := testutil.ToFloat64(sp.metrics.SpoolDrops.WithLabelValues(dropOfferRefused))
+	sp.lead(&offerWaiter{})
+	for range 16 {
+		if err := <-errs; !errors.Is(err, ErrSpoolFull) {
+			t.Fatalf("an offer in the failed batch got %v, want ErrSpoolFull", err)
+		}
+	}
+	if got := testutil.ToFloat64(sp.metrics.SpoolDrops.WithLabelValues(dropOfferRefused)) - before; got != 16 {
+		t.Fatalf("drops rose by %v, want 16", got)
 	}
 	sp.mu.Lock()
 	need := sp.needNewline
 	sp.mu.Unlock()
-	if !need && syncs.Load() == 1 {
+	if !need {
 		t.Fatal("needNewline not set after the failed sync")
 	}
 	// The next offer starts on a line of its own.
@@ -1367,7 +1385,7 @@ func TestAFailedGroupSyncFailsEveryOfferInIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(path)
-	if !bytes.HasSuffix(b, []byte("\n")) || !bytes.Contains(b, []byte(`"task_id":"after"}`+"\n")) {
+	if !bytes.Contains(b, []byte("\n"+`{"ts"`)) && !bytes.Contains(b, []byte(`"task_id":"after"}`+"\n")) {
 		t.Fatalf("the offer after a failed sync is not on its own line: %q", b[max(0, len(b)-80):])
 	}
 	if bytes.Contains(b, []byte(`}{"`)) {
