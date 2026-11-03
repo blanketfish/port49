@@ -91,9 +91,35 @@ func TestLoad(t *testing.T) {
 	defer stopped()
 
 	var cells []loadCell
+	var running *loadCell // the cell in progress, for the note if it ends the test
+	defer func() {
+		if running == nil || !t.Failed() {
+			return
+		}
+		// A cell that ends the test INVALID (a broker that cannot start, a
+		// full etcd) still leaves the cells already finished in the note.
+		c := *running
+		c.Invalid = r.invalidWhy
+		if c.Invalid == "" {
+			c.Invalid = "the test ended during the cell; see the test log"
+		}
+		host := readHostFacts(r.dir)
+		note, err := loadNote(append(slices.Clone(cells), c), host)
+		if err != nil {
+			t.Logf("the partial note was not written: %v", err)
+			return
+		}
+		path := filepath.Join(root, "tests", "lab", "results", "load-"+host.Host+".md")
+		if err := os.WriteFile(path, []byte(note), 0o644); err != nil {
+			t.Logf("the partial note was not written: %v", err)
+			return
+		}
+		t.Logf("a partial note, with cell %s INVALID, is at %s", c.ID, path)
+	}()
 	for _, id := range ids {
 		guard()
 		c := plan[id]
+		running = &c
 		t.Logf("cell %s: %s at %.0f/s for %s", id, c.Transport, c.Rate, c.Duration)
 		switch id {
 		case "a":
@@ -118,7 +144,18 @@ func TestLoad(t *testing.T) {
 			c = r.cellNetem(ctx, c)
 		}
 		t.Logf("cell %s: pass=%v", id, c.Pass)
+		keys := make([]string, 0, len(c.Observed))
+		for k := range c.Observed {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		for _, k := range keys {
+			if !loadNamesCredential(k) && !loadLeaky(c.Observed[k]) {
+				t.Logf("cell %s: %s = %s", id, k, c.Observed[k])
+			}
+		}
 		cells = append(cells, c)
+		running = nil
 	}
 
 	if err := stopped(); err != nil {
@@ -153,6 +190,7 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	r.takeMints() // a cell's mints are its own
 	before := r.usage()
 	walBefore, walErr := loadScrape(loadSessionMetrics)
+	cellStart := time.Now()
 	dsam, bsam := startLoadSampler(loadDaemonMetrics), startLoadSampler(loadBrokerMetrics)
 	res := run()
 	dsam.finish()
@@ -169,6 +207,10 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	c.Observed["daemon_store_call_p99_ms"] = c.daemonStore.QuantileLabel(0.99)
 	c.Observed["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
 	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
+		const mb = 1 << 20
+		c.Observed["etcd_session_db_mb"] = num(m.DBBytes / mb)
+		c.Observed["etcd_session_db_in_use_mb"] = num(m.DBInUseBytes / mb)
+		c.Observed["etcd_session_db_growth_mb_per_min"] = loadDBGrowthMBPerMin(walBefore.DBInUseBytes, m.DBInUseBytes, time.Since(cellStart))
 		// This cell's fsyncs: etcd's counters are cumulative since it started.
 		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.Sub(walBefore).WALFsyncMeanMS()
 	} else {

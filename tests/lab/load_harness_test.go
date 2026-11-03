@@ -81,6 +81,9 @@ type loadCell struct {
 	Pass      bool
 	Observed  map[string]string
 
+	// Invalid is why the cell ended INVALID; empty for a cell that ran to a verdict.
+	Invalid string
+
 	// daemonStore is the daemon's store-call histogram over the cell: what a
 	// verdict gate reads, never the note's label text for it.
 	daemonStore loadMetrics
@@ -341,6 +344,19 @@ func loadFSName(magic int64) string {
 	return fmt.Sprintf("unknown_%#x", magic)
 }
 
+// loadInvalidReason is why a cell ended INVALID as note text: the first line,
+// capped, or a pointer to the test log when it could hold a credential.
+func loadInvalidReason(why string) string {
+	why, _, _ = strings.Cut(why, "\n")
+	if len(why) > 200 {
+		why = why[:200]
+	}
+	if loadLeaky(why) {
+		return "withheld: see the test log"
+	}
+	return why
+}
+
 // loadNote is the results note for cells. It is refused, whole, when any
 // value in it could hold a credential: the check runs before a byte is printed.
 func loadNote(cells []loadCell, host hostFacts) (string, error) {
@@ -355,8 +371,15 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 		if !c.Pass {
 			verdict = "**FAIL**"
 		}
-		fmt.Fprintf(&b, "## Cell %s\n\n- **Transport:** %s\n- **Rate:** %.0f per second\n- **Duration:** %s\n- **Verdict:** %s\n\n",
+		if c.Invalid != "" {
+			verdict = "**INVALID**"
+		}
+		fmt.Fprintf(&b, "## Cell %s\n\n- **Transport:** %s\n- **Rate:** %.0f per second\n- **Duration:** %s\n- **Verdict:** %s\n",
 			c.ID, c.Transport, c.Rate, c.Duration.Round(time.Second), verdict)
+		if c.Invalid != "" {
+			fmt.Fprintf(&b, "- **Reason:** %s\n", loadInvalidReason(c.Invalid))
+		}
+		b.WriteString("\n")
 		keys := make([]string, 0, len(c.Observed))
 		for k := range c.Observed {
 			keys = append(keys, k)
@@ -397,6 +420,19 @@ type loadMetrics struct {
 	// WALFsyncSum and WALFsyncCount are etcd_disk_wal_fsync_duration_seconds'
 	// sum and count, on a session etcd's /metrics.
 	WALFsyncSum, WALFsyncCount float64
+
+	// DBBytes and DBInUseBytes are etcd_mvcc_db_total_size_in_bytes and
+	// ..._in_use_in_bytes: the file's size, and what compaction cannot free.
+	DBBytes, DBInUseBytes float64
+}
+
+// loadDBGrowthMBPerMin is the in-use database size's change over d, in MB a
+// minute: the operator's sizing figure for the quota.
+func loadDBGrowthMBPerMin(startInUse, endInUse float64, d time.Duration) string {
+	if d <= 0 {
+		return "unknown"
+	}
+	return strconv.FormatFloat((endInUse-startInUse)/(1<<20)/d.Minutes(), 'f', 2, 64)
 }
 
 var loadBucket = regexp.MustCompile(`le="([^"]+)"`)
@@ -425,6 +461,10 @@ func parseLoadMetrics(text string) loadMetrics {
 			m.Evicted += v
 		case strings.HasPrefix(name, "port49_accounting_spool_drops_total"):
 			m.SpoolDrops += v
+		case name == "etcd_mvcc_db_total_size_in_bytes":
+			m.DBBytes = v
+		case name == "etcd_mvcc_db_total_size_in_use_in_bytes":
+			m.DBInUseBytes = v
 		case name == "etcd_disk_wal_fsync_duration_seconds_sum":
 			m.WALFsyncSum = v
 		case name == "etcd_disk_wal_fsync_duration_seconds_count":
@@ -640,6 +680,7 @@ type loadRun struct {
 	mintErrs int
 	// mintFails are the failed mints' times, and mintBuckets their count by
 	// "<status>_<reason>".
+	invalidWhy  string // why the test ended INVALID, for the note (invalid)
 	mintFails   []time.Duration
 	mintBuckets map[string]int
 	transport   string // the daemon's current inventory: tcp or tls
@@ -879,10 +920,18 @@ func (r *loadRun) startProcs() {
 		}
 		for _, want := range lines {
 			if _, err := p.wait(want, loadStartWait); err != nil {
-				r.t.Fatalf("INVALID: %v\n%s", err, tailOf(p.said(), 2000))
+				r.invalid(err, "\n"+tailOf(p.said(), 2000))
 			}
 		}
 	}
+}
+
+// invalid ends the test INVALID, recording err as the reason the cell in
+// progress is written to the note with; detail is for the test log alone.
+func (r *loadRun) invalid(err error, detail string) {
+	r.t.Helper()
+	r.invalidWhy = err.Error()
+	r.t.Fatalf("INVALID: %v%s", err, detail)
 }
 
 func (r *loadRun) stopProcs() {

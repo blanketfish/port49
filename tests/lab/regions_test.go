@@ -238,12 +238,23 @@ type regionEtcd struct {
 	done          chan struct{}
 }
 
+// The lab's etcd runs with the compaction and quota port49 ships
+// (deploy/systemd/examples/etcd-1.yaml; a unit test holds the three equal to it).
+// Without them etcd's defaults fill a 2 GiB quota inside two load cells.
+const (
+	etcdCompactionMode      = "periodic"
+	etcdCompactionRetention = "1h"
+	etcdQuotaBackendBytes   = "8589934592"
+)
+
 func (e *regionEtcd) argv() []string {
 	a := []string{filepath.Join(e.bin, "etcd"), "--name", e.name, "--data-dir", e.data,
 		"--listen-client-urls", "https://" + e.client, "--advertise-client-urls", "https://" + e.client,
 		"--listen-peer-urls", "http://" + e.peer, "--initial-advertise-peer-urls", "http://" + e.peer,
 		"--initial-cluster", e.cluster, "--initial-cluster-state", "new",
-		"--cert-file", e.pki.server, "--key-file", e.pki.serverKey, "--trusted-ca-file", e.pki.ca, "--client-cert-auth"}
+		"--cert-file", e.pki.server, "--key-file", e.pki.serverKey, "--trusted-ca-file", e.pki.ca, "--client-cert-auth",
+		"--auto-compaction-mode", etcdCompactionMode, "--auto-compaction-retention", etcdCompactionRetention,
+		"--quota-backend-bytes", etcdQuotaBackendBytes}
 	if e.metrics != "" {
 		a = append(a, "--listen-metrics-urls", "http://"+e.metrics)
 	}

@@ -5,6 +5,7 @@ package lab
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"net/netip"
 	"os"
@@ -603,5 +604,75 @@ func TestCellFFailsOnAP99PastTheCallTimeout(t *testing.T) {
 	inf := cell(map[float64]float64{0.005: 1, 0.25: 1, 1: 1, math.Inf(1): 100})
 	if loadNetemPass(0, inf) {
 		t.Error("a p99 past the last bucket passed the cell")
+	}
+}
+
+// The harness runs etcd as port49 ships it: its compaction and quota are the
+// shipped example's, read from the file, not copied.
+func TestTheHarnessEtcdRunsWithTheShippedCompactionAndQuota(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/systemd/examples/etcd-1.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shipped map[string]any
+	if err := yaml.Unmarshal(raw, &shipped); err != nil {
+		t.Fatal(err)
+	}
+	e := &regionEtcd{name: "s", bin: "/bin", client: "127.0.0.1:1", peer: "127.0.0.1:2", cluster: "s=http://127.0.0.1:2",
+		data: "/d", log: "/l", pki: &regionPKI{}}
+	argv := strings.Join(e.argv(), " ")
+	for _, k := range []string{"auto-compaction-mode", "auto-compaction-retention", "quota-backend-bytes"} {
+		want := fmt.Sprint(shipped[k])
+		if want == "" || want == "<nil>" {
+			t.Fatalf("the shipped example has no %s", k)
+		}
+		if !strings.Contains(argv, "--"+k+" "+want+" ") && !strings.HasSuffix(argv, "--"+k+" "+want) {
+			t.Errorf("the harness's etcd lacks --%s %s: %s", k, want, argv)
+		}
+	}
+}
+
+func TestTheDBGrowthIsTheInUseChangePerMinute(t *testing.T) {
+	const mb = 1 << 20
+	if got := loadDBGrowthMBPerMin(100*mb, 160*mb, 10*time.Minute); got != "6.00" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadDBGrowthMBPerMin(100*mb, 100*mb, 10*time.Minute); got != "0.00" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadDBGrowthMBPerMin(100*mb, 160*mb, 0); got != "unknown" {
+		t.Fatalf("%q", got)
+	}
+	m := parseLoadMetrics("etcd_mvcc_db_total_size_in_bytes 2097152\netcd_mvcc_db_total_size_in_use_in_bytes 1048576\n")
+	if m.DBBytes != 2097152 || m.DBInUseBytes != 1048576 {
+		t.Fatalf("%+v", m)
+	}
+}
+
+// A cell that ends INVALID does not take the finished cells with it.
+func TestTheNoteSurvivesAnInvalidCell(t *testing.T) {
+	done := func(id string) loadCell {
+		return loadCell{ID: id, Transport: "tcp", Rate: 170, Duration: 10 * time.Minute, Pass: true,
+			Observed: map[string]string{"plays": "1"}}
+	}
+	cells := []loadCell{done("a"), done("b"),
+		{ID: "c", Transport: "tcp", Rate: 170, Duration: time.Minute, Invalid: "etcdserver: mvcc: database space exceeded"}}
+	note, err := loadNote(cells, hostFacts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Cell a", "## Cell b", "## Cell c", "**INVALID**", "database space exceeded"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note lacks %q:\n%s", want, note)
+		}
+	}
+	// A reason that could hold a credential is not printed.
+	cells[2].Invalid = "bearer abc"
+	note, err = loadNote(cells, hostFacts{})
+	if err != nil || strings.Contains(note, "bearer") {
+		t.Fatalf("%v\n%s", err, note)
+	}
+	if !strings.Contains(note, "INVALID") {
+		t.Fatal("the withheld reason lost the verdict")
 	}
 }
