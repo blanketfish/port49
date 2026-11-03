@@ -1065,6 +1065,10 @@ func TestCheckOwnedRefusesAGroupWritableDirectoryOnLinux(t *testing.T) {
 	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), open+" is writable by group (mode 0770)") {
 		t.Fatalf("a group-writable directory: %v", err)
 	}
+	if _, err := ReadPrivate(mod, 16, "PKCS#11 module"); err == nil ||
+		!strings.Contains(err.Error(), open+" is writable by group (mode 0770)") {
+		t.Fatalf("ReadPrivate in a group-writable directory: %v", err)
+	}
 }
 
 // The option is threaded, not global: with a trust that accepts the entry's
@@ -1080,12 +1084,12 @@ func TestOwnedAloneGroupTrustIsExplicit(t *testing.T) {
 	for _, c := range []struct {
 		mode  os.FileMode
 		trust func(uint32) bool
-		fails bool
+		want  string // the refusal's text; "" passes
 	}{
-		{0o775, nil, true},
-		{0o775, trustAll, false},
-		{0o757, trustAll, true},
-		{0o777, trustAll, true},
+		{0o775, nil, "is writable by group (mode 0775)"},
+		{0o775, trustAll, ""},
+		{0o757, trustAll, "is writable by others (mode 0757)"},
+		{0o777, trustAll, "is writable by others (mode 0777)"},
 	} {
 		if err := os.Chmod(f, c.mode); err != nil {
 			t.Fatal(err)
@@ -1094,8 +1098,9 @@ func TestOwnedAloneGroupTrustIsExplicit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := ownedAlone(f, fi, "PKCS#11 module", c.trust); (got != nil) != c.fails {
-			t.Errorf("mode %04o trust=%v: %v", c.mode, c.trust != nil, got)
+		got := ownedAlone(f, fi, "PKCS#11 module", c.trust)
+		if (c.want == "") != (got == nil) || (got != nil && !strings.Contains(got.Error(), c.want)) {
+			t.Errorf("mode %04o trust=%v: %v, want %q", c.mode, c.trust != nil, got, c.want)
 		}
 	}
 }
