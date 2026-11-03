@@ -189,20 +189,18 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	walBefore, walErr := loadScrape(loadSessionMetrics)
 	cellStart := time.Now()
 	dsam, bsam := startLoadSampler(loadDaemonMetrics), startLoadSampler(loadBrokerMetrics)
+	rss := startLoadRSSSampler(r.pidfiles(), loadProcRSS, 2*time.Second)
 	res := run()
 	dsam.finish()
 	bsam.finish()
+	peakRSS := rss.finish()
 	mints := r.takeMints()
 	c.Observed = loadObserved(res, mints.P50, mints.P99)
 	mints.addTo(c.Observed)
 	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
 	c.Observed["mint_errors"] = strconv.Itoa(mints.Errs)
-	c.Observed["peak_port49_connections"] = num(dsam.peakConns)
-	c.Observed["peak_spool_depth"] = num(dsam.peakDepth)
-	c.Observed["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
+	addSamplerObserved(c.Observed, dsam, bsam)
 	c.daemonStore = dsam.last.Sub(dsam.first)
-	c.Observed["daemon_store_call_p99_ms"] = c.daemonStore.QuantileLabel(0.99)
-	c.Observed["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
 	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
 		const mb = 1 << 20
 		c.Observed["etcd_session_revisions_per_min"] = loadRevisionsPerMin(walBefore.Revision, m.Revision, time.Since(cellStart))
@@ -212,15 +210,21 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 		c.Observed["etcd_session_db_growth_mb_per_min"] = loadDBGrowthMBPerMin(walBefore.DBInUseBytes, m.DBInUseBytes, time.Since(cellStart))
 		// This cell's fsyncs: etcd's counters are cumulative since it started.
 		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.Sub(walBefore).WALFsyncMeanMS()
+		// The bbolt commit and etcd's own slow-apply count: stalls from commit cost on a large file.
+		c.Observed["etcd_session_backend_commit_p99_ms"] = m.Sub(walBefore).BackendCommitP99()
+		c.Observed["etcd_session_apply_slow_total_delta"] = num(m.SlowApply - walBefore.SlowApply)
 	} else {
 		for _, k := range []string{"etcd_session_wal_fsync_mean_ms", "etcd_session_db_mb", "etcd_session_db_in_use_mb",
-			"etcd_session_db_growth_mb_per_min", "etcd_session_revisions_per_min", "etcd_session_compacted_during_cell"} {
+			"etcd_session_db_growth_mb_per_min", "etcd_session_revisions_per_min", "etcd_session_compacted_during_cell",
+			"etcd_session_backend_commit_p99_ms", "etcd_session_apply_slow_total_delta"} {
 			c.Observed[k] = loadScrapeFailed
 		}
 	}
 	for name, after := range r.usage() {
 		c.Observed["cpu_seconds_"+name] = strconv.FormatFloat(after[0]-before[name][0], 'f', 1, 64)
-		c.Observed["peak_rss_mb_"+name] = num(after[1] / 1024)
+	}
+	for name, kb := range peakRSS { // this cell's peak, not the process's lifetime VmHWM
+		c.Observed["peak_rss_mb_"+name] = num(float64(kb) / 1024)
 	}
 	return c, res
 }

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"os"
@@ -432,6 +433,13 @@ type loadMetrics struct {
 	// Revision and CompactRevision are etcd_debugging_mvcc_current_revision and
 	// ..._compact_revision (the names in etcd v3.6.15).
 	Revision, CompactRevision float64
+
+	// commitBuckets and SlowApply are etcd_disk_backend_commit_duration_seconds'
+	// buckets and etcd_server_slow_apply_total (the names in etcd v3.6.15, read
+	// from its binary): the bbolt commit cost on a large file, and the applies
+	// etcd itself calls slow.
+	commitBuckets map[float64]float64
+	SlowApply     float64
 }
 
 // loadRevisionsPerMin is etcd's revision counter's climb over d, per minute: the
@@ -495,7 +503,7 @@ func loadDBGrowthMBPerMin(startInUse, endInUse float64, d time.Duration) string 
 var loadBucket = regexp.MustCompile(`le="([^"]+)"`)
 
 func parseLoadMetrics(text string) loadMetrics {
-	m := loadMetrics{buckets: map[float64]float64{}}
+	m := loadMetrics{buckets: map[float64]float64{}, commitBuckets: map[float64]float64{}}
 	for _, l := range strings.Split(text, "\n") {
 		if l == "" || l[0] == '#' {
 			continue
@@ -530,6 +538,16 @@ func parseLoadMetrics(text string) loadMetrics {
 			m.WALFsyncSum = v
 		case name == "etcd_disk_wal_fsync_duration_seconds_count":
 			m.WALFsyncCount = v
+		case name == "etcd_server_slow_apply_total":
+			m.SlowApply = v
+		case strings.HasPrefix(name, "etcd_disk_backend_commit_duration_seconds_bucket"):
+			if sm := loadBucket.FindStringSubmatch(name); sm != nil {
+				le := math.Inf(1)
+				if sm[1] != "+Inf" {
+					le, _ = strconv.ParseFloat(sm[1], 64)
+				}
+				m.commitBuckets[le] += v
+			}
 		case strings.HasPrefix(name, "port49_store_call_seconds_bucket"):
 			if sm := loadBucket.FindStringSubmatch(name); sm != nil {
 				le := math.Inf(1)
@@ -548,9 +566,14 @@ func parseLoadMetrics(text string) loadMetrics {
 func (m loadMetrics) Sub(earlier loadMetrics) loadMetrics {
 	out := m
 	out.WALFsyncSum, out.WALFsyncCount = m.WALFsyncSum-earlier.WALFsyncSum, m.WALFsyncCount-earlier.WALFsyncCount
+	out.SlowApply = m.SlowApply - earlier.SlowApply
 	out.buckets = map[float64]float64{}
 	for le, v := range m.buckets {
 		out.buckets[le] = v - earlier.buckets[le]
+	}
+	out.commitBuckets = map[float64]float64{}
+	for le, v := range m.commitBuckets {
+		out.commitBuckets[le] = v - earlier.commitBuckets[le]
 	}
 	return out
 }
@@ -619,14 +642,27 @@ func (m loadMetrics) QuantileLabel(q float64) string {
 	return "<=" + loadMS(d)
 }
 
-// loadScrape reads a /metrics endpoint over plain HTTP.
+// BackendCommitP99 is the p99 of etcd's backend (bbolt) commit in this window,
+// as note text: a stall from commit cost on a large file shows here.
+func (m loadMetrics) BackendCommitP99() string {
+	return loadMetrics{buckets: m.commitBuckets}.QuantileLabel(0.99)
+}
+
+var loadScrapeClient = &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
+
+// loadScrape reads a /metrics endpoint over plain HTTP. A status other than 200
+// is an error, never an empty read: an error page parses as zero metrics. The
+// client keeps no connection alive, so a scrape after a process restarted
+// reads the new process.
 func loadScrape(addr string) (loadMetrics, error) {
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get("http://" + addr + "/metrics")
+	resp, err := loadScrapeClient.Get("http://" + addr + "/metrics")
 	if err != nil {
 		return loadMetrics{}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return loadMetrics{}, fmt.Errorf("scrape %s: status %d", addr, resp.StatusCode)
+	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return loadMetrics{}, err
@@ -642,6 +678,7 @@ type loadSampler struct {
 	peakConns, peakDepth float64
 	first, last          loadMetrics
 	got                  bool
+	ok                   int // scrapes that answered; none means every peak below is unread, not zero
 }
 
 func startLoadSampler(addr string) *loadSampler {
@@ -656,6 +693,7 @@ func startLoadSampler(addr string) *loadSampler {
 					s.first, s.got = m, true
 				}
 				s.last = m
+				s.ok++
 				s.peakConns = math.Max(s.peakConns, m.Connections)
 				s.peakDepth = math.Max(s.peakDepth, m.SpoolDepth)
 			}
@@ -667,6 +705,98 @@ func startLoadSampler(addr string) *loadSampler {
 		}
 	}()
 	return s
+}
+
+// loadRSSSampler keeps each process's peak resident set (VmRSS) over one
+// cell: a new sampler per cell, so a cell's peak is its own and not the
+// process's lifetime high-water mark (VmHWM), which a heavy earlier cell sets
+// for every cell after it.
+type loadRSSSampler struct {
+	read       func(pidfile string) (kB int, err error)
+	pids       map[string]string
+	stop, done chan struct{}
+	mu         sync.Mutex
+	peakKB     map[string]int
+}
+
+func startLoadRSSSampler(pids map[string]string, read func(string) (int, error), every time.Duration) *loadRSSSampler {
+	s := &loadRSSSampler{read: read, pids: pids, stop: make(chan struct{}), done: make(chan struct{}), peakKB: map[string]int{}}
+	s.sample()
+	go func() {
+		defer close(s.done)
+		tick := time.NewTicker(every)
+		defer tick.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case <-tick.C:
+				s.sample()
+			}
+		}
+	}()
+	return s
+}
+
+func (s *loadRSSSampler) sample() {
+	for name, pf := range s.pids {
+		if kb, err := s.read(pf); err == nil {
+			s.mu.Lock()
+			s.peakKB[name] = max(s.peakKB[name], kb)
+			s.mu.Unlock()
+		}
+	}
+}
+
+// finish samples once more, so the cell's last moment counts, and returns the
+// peaks in kB by process.
+func (s *loadRSSSampler) finish() map[string]int {
+	close(s.stop)
+	<-s.done
+	s.sample()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.peakKB)
+}
+
+// loadProcRSS is a process's resident set in kB now, by the PID in its pidfile.
+func loadProcRSS(pidfile string) (int, error) {
+	raw, err := os.ReadFile(pidfile)
+	if err != nil {
+		return 0, err
+	}
+	status, err := os.ReadFile("/proc/" + strings.TrimSpace(string(raw)) + "/status")
+	if err != nil {
+		return 0, err
+	}
+	for _, l := range strings.Split(string(status), "\n") {
+		if fs := strings.Fields(l); len(fs) >= 2 && fs[0] == "VmRSS:" {
+			return strconv.Atoi(fs[1])
+		}
+	}
+	return 0, errors.New("no VmRSS in /proc status")
+}
+
+// addSamplerObserved records what a cell's two samplers read. A sampler that
+// never got a scrape answered reads scrape_failed for every key it feeds, never
+// the 0 of an unread peak.
+func addSamplerObserved(obs map[string]string, dsam, bsam *loadSampler) {
+	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
+	if dsam.ok == 0 {
+		for _, k := range []string{"peak_port49_connections", "peak_spool_depth", "spool_drops_during", "daemon_store_call_p99_ms"} {
+			obs[k] = loadScrapeFailed
+		}
+	} else {
+		obs["peak_port49_connections"] = num(dsam.peakConns)
+		obs["peak_spool_depth"] = num(dsam.peakDepth)
+		obs["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
+		obs["daemon_store_call_p99_ms"] = dsam.last.Sub(dsam.first).QuantileLabel(0.99)
+	}
+	if bsam.ok == 0 {
+		obs["broker_store_call_p99_ms"] = loadScrapeFailed
+	} else {
+		obs["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
+	}
 }
 
 func (s *loadSampler) finish() *loadSampler {
@@ -1262,14 +1392,20 @@ func loadSignal(pidfile string, want []string, sig syscall.Signal) string {
 	return killRecorded("/proc", pidfile, want, func(pid int) error { return syscall.Kill(pid, sig) })
 }
 
-// usage is each process's CPU seconds and peak RSS, for a cell's note.
-func (r *loadRun) usage() map[string][2]float64 {
-	out := map[string][2]float64{}
+// pidfiles is each process of the stack by its note name.
+func (r *loadRun) pidfiles() map[string]string {
 	pids := map[string]string{"port49d": r.daemon.pidfile(), "port49-broker": r.broker.pidfile(), "etcd_session": r.sess.pidfile()}
 	for _, m := range r.dirMembers {
 		pids["etcd_"+m.name] = m.pidfile()
 	}
-	for name, pf := range pids {
+	return pids
+}
+
+// usage is each process's CPU seconds and lifetime peak RSS (VmHWM); a cell's
+// own RSS peak is loadRSSSampler's.
+func (r *loadRun) usage() map[string][2]float64 {
+	out := map[string][2]float64{}
+	for name, pf := range r.pidfiles() {
 		if cpu, kb, err := loadProcUsage(pf); err == nil {
 			out[name] = [2]float64{cpu, float64(kb)}
 		}

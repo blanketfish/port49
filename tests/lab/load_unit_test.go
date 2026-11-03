@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -767,5 +770,110 @@ func TestTheRunDirectoryIsKeptOnlyWhenAsked(t *testing.T) {
 	}
 	if _, err := os.Stat(log); err != nil {
 		t.Errorf("keep 1: the log is gone: %v", err)
+	}
+}
+
+// A scrape endpoint that answers 500 is a failed scrape, not an empty one: its
+// body parses as zero metrics, and the cell must read scrape_failed, not 0.
+func TestASamplerThatNeverGotAScrapeReadsScrapeFailed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	if _, err := loadScrape(addr); err == nil {
+		t.Fatal("a 500 was read as metrics")
+	}
+	dsam, bsam := startLoadSampler(addr).finish(), startLoadSampler(addr).finish()
+	if dsam.ok != 0 || bsam.ok != 0 {
+		t.Fatalf("scrapes counted against a 500: %d, %d", dsam.ok, bsam.ok)
+	}
+	obs := map[string]string{}
+	addSamplerObserved(obs, dsam, bsam)
+	for _, k := range []string{"peak_port49_connections", "peak_spool_depth", "spool_drops_during",
+		"daemon_store_call_p99_ms", "broker_store_call_p99_ms"} {
+		if obs[k] != loadScrapeFailed {
+			t.Errorf("%s = %q, want %s", k, obs[k], loadScrapeFailed)
+		}
+	}
+}
+
+// With at least one scrape the peaks are numbers, a real 0 among them.
+func TestASamplerThatScrapedReadsItsPeaks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "port49_accounting_spool_depth 0\n")
+	}))
+	defer srv.Close()
+	s := startLoadSampler(strings.TrimPrefix(srv.URL, "http://")).finish()
+	obs := map[string]string{}
+	addSamplerObserved(obs, s, s)
+	if s.ok == 0 || obs["peak_spool_depth"] != "0" {
+		t.Fatalf("ok %d, peak_spool_depth %q", s.ok, obs["peak_spool_depth"])
+	}
+}
+
+// The scrape client keeps no connection alive: a scrape after a restart reads
+// the new process.
+func TestTheScrapeClientKeepsNoConnectionAlive(t *testing.T) {
+	var conns atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "port49_accounting_spool_depth 1\n")
+	}))
+	srv.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			conns.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	for i := 0; i < 3; i++ {
+		if _, err := loadScrape(strings.TrimPrefix(srv.URL, "http://")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if conns.Load() != 3 {
+		t.Fatalf("three scrapes used %d connections", conns.Load())
+	}
+}
+
+// A cell's RSS peak is its own: the second cell, run after a heavy first, reads
+// its own smaller peak, not the first's high-water mark.
+func TestThePerCellRSSPeakResetsBetweenCells(t *testing.T) {
+	var kb atomic.Int64
+	read := func(string) (int, error) { return int(kb.Load()), nil }
+	pids := map[string]string{"port49d": "unused"}
+	kb.Store(1000)
+	a := startLoadRSSSampler(pids, read, time.Millisecond)
+	kb.Store(9000)
+	time.Sleep(20 * time.Millisecond)
+	kb.Store(2000)
+	first := a.finish()
+	if first["port49d"] != 9000 {
+		t.Fatalf("cell one's peak %d, want 9000", first["port49d"])
+	}
+	kb.Store(1500)
+	b := startLoadRSSSampler(pids, read, time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	if second := b.finish(); second["port49d"] != 1500 {
+		t.Fatalf("cell two's peak %d, want 1500 (cell one's 9000 carried over)", second["port49d"])
+	}
+}
+
+// The etcd metrics a cell now reports are read by the names v3.6.15 exposes.
+func TestTheEtcdCommitAndSlowApplyMetricsAreParsed(t *testing.T) {
+	text := `etcd_disk_backend_commit_duration_seconds_bucket{le="0.001"} 0
+etcd_disk_backend_commit_duration_seconds_bucket{le="0.002"} 90
+etcd_disk_backend_commit_duration_seconds_bucket{le="0.004"} 98
+etcd_disk_backend_commit_duration_seconds_bucket{le="0.008"} 100
+etcd_disk_backend_commit_duration_seconds_bucket{le="+Inf"} 100
+etcd_server_slow_apply_total 7
+`
+	before := parseLoadMetrics("etcd_server_slow_apply_total 2\n")
+	m := parseLoadMetrics(text).Sub(before)
+	if m.SlowApply != 5 {
+		t.Fatalf("slow apply delta %v, want 5", m.SlowApply)
+	}
+	if got := m.BackendCommitP99(); got != "<=8.00" && got != "<=8" {
+		t.Fatalf("backend commit p99 %q", got)
 	}
 }
