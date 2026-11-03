@@ -508,3 +508,13 @@ func TestPrometheusRuleIsOffByDefault(t *testing.T) {
 		}
 	}
 }
+
+// autoscaling.averageConnections is half the peak port49_connections per replica
+// at target, to the nearest 50 (plan 12c decision 7): beehive's real-disk cell b
+// peaked at 62 with one replica. Provisional on the beta datacenter-disk pass.
+func TestHPAAverageConnections(t *testing.T) {
+	v := parseValuesFile(t, filepath.Join(chartDir, "values.yaml"))
+	if got := str(at(at(v, "autoscaling"), "averageConnections")); got != "50" {
+		t.Fatalf("autoscaling.averageConnections is %s, want 50", got)
+	}
+}

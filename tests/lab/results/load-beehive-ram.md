@@ -1,20 +1,20 @@
-# Load at the design rate (session etcd in RAM)
+# Load at the design rate (session etcd and accounting spool in RAM)
 
-- **session_etcd_storage:** ram (/dev/shm): not a deployable shape; port49's own ceiling
+- **session_etcd_storage:** ram (/dev/shm): session etcd data and the accounting spool; not a deployable shape; port49's own ceiling
 - **Date measured:** 2026-11-03
 - **Host CPU:** AMD Ryzen 7 8745HS w/ Radeon 780M Graphics, 16 cores
 - **Host RAM:** 30818 MB
-- **Host disk:** 913 GB total, 693 GB free under the run directory
+- **Host disk:** 913 GB total, 700 GB free under the run directory
 - **Host kernel:** 7.0.0-38-generic
 - **Host:** beehive
-- **Commit:** 7c811b8ba9af2bc78c31b3238b96276428edab75
+- **Commit:** 15e77241a360b1ba2b7229c65c22330ecc4651d4
 - **Fleet:** 10000 devices, 50 machine principals, 450 people
 - **run_dir_fs:** ext4
 - **etcd_session_wal_fsync_mean_ms:** n/a (ram)
 
 Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total size, which the quota counts) with 8589934592 bytes (8192 MB). `etcd_session_db_growth_mb_per_min` is the in-use size's change and is understated when `etcd_session_compacted_during_cell` is true (a compaction freed space in the cell); `etcd_session_revisions_per_min` is the write rate compaction cannot hide.
 
-## Cell a (etcd in RAM)
+## Cell a (etcd and spool in RAM)
 
 - **Transport:** tcp
 - **Rate:** 170 per second
@@ -22,56 +22,56 @@ Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total 
 - **Verdict:** PASS
 
 - `broker_store_call_p99_ms`: <=2.50
-- `cpu_seconds_etcd_d1`: 3.2
-- `cpu_seconds_etcd_d2`: 3.2
-- `cpu_seconds_etcd_d3`: 3.3
-- `cpu_seconds_etcd_session`: 731.0
-- `cpu_seconds_port49-broker`: 193.1
-- `cpu_seconds_port49d`: 515.2
+- `cpu_seconds_etcd_d1`: 3.0
+- `cpu_seconds_etcd_d2`: 3.1
+- `cpu_seconds_etcd_d3`: 3.1
+- `cpu_seconds_etcd_session`: 721.0
+- `cpu_seconds_port49-broker`: 185.3
+- `cpu_seconds_port49d`: 528.5
 - `daemon_run_restarts`: 0
-- `daemon_store_call_p99_ms`: <=2.50
+- `daemon_store_call_p99_ms`: <=1.00
 - `errors`: 0
 - `etcd_session_apply_slow_total_delta`: 0
 - `etcd_session_backend_commit_p99_ms`: <=1.00
 - `etcd_session_compacted_during_cell`: true
-- `etcd_session_db_growth_mb_per_min`: 112.95
-- `etcd_session_db_in_use_mb`: 1130
-- `etcd_session_db_mb`: 1130
-- `etcd_session_revisions_per_min`: 43200
+- `etcd_session_db_growth_mb_per_min`: 109.28
+- `etcd_session_db_in_use_mb`: 1093
+- `etcd_session_db_mb`: 1093
+- `etcd_session_revisions_per_min`: 43180
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `late`: 0
 - `mint_errors`: 0
 - `mint_fail_p50_ms`: 0.00
 - `mint_fail_p99_ms`: 0.00
-- `mint_p50_ms`: 1.75
-- `mint_p99_ms`: 4.12
-- `peak_port49_connections`: 21
-- `peak_rss_mb_etcd_d1`: 44
+- `mint_p50_ms`: 1.64
+- `mint_p99_ms`: 4.32
+- `peak_port49_connections`: 3
+- `peak_rss_mb_etcd_d1`: 43
 - `peak_rss_mb_etcd_d2`: 43
 - `peak_rss_mb_etcd_d3`: 45
-- `peak_rss_mb_etcd_session`: 1591
-- `peak_rss_mb_port49-broker`: 81
+- `peak_rss_mb_etcd_session`: 1548
+- `peak_rss_mb_port49-broker`: 79
 - `peak_rss_mb_port49d`: 97
-- `peak_spool_depth`: 32
-- `play_max_ms`: 162.48
-- `play_p50_ms`: 22.19
-- `play_p99_ms`: 119.72
+- `peak_spool_depth`: 1
+- `play_max_ms`: 32.25
+- `play_p50_ms`: 6.90
+- `play_p99_ms`: 14.20
 - `plays`: 102000
 - `spool_drops_during`: 0
-- `step_p50_ms_account_start`: 8.03
-- `step_p50_ms_account_stop`: 8.17
-- `step_p50_ms_authorize_session`: 0.57
+- `step_p50_ms_account_start`: 0.88
+- `step_p50_ms_account_stop`: 0.41
+- `step_p50_ms_authorize_session`: 0.58
 - `step_p50_ms_command_denied`: 0.34
 - `step_p50_ms_command_permitted`: 0.34
-- `step_p50_ms_login`: 2.15
-- `step_p99_ms_account_start`: 56.45
-- `step_p99_ms_account_stop`: 64.23
-- `step_p99_ms_authorize_session`: 1.40
-- `step_p99_ms_command_denied`: 0.78
-- `step_p99_ms_command_permitted`: 0.75
-- `step_p99_ms_login`: 4.93
+- `step_p50_ms_login`: 2.08
+- `step_p99_ms_account_start`: 1.75
+- `step_p99_ms_account_stop`: 0.85
+- `step_p99_ms_authorize_session`: 1.35
+- `step_p99_ms_command_denied`: 0.77
+- `step_p99_ms_command_permitted`: 0.71
+- `step_p99_ms_login`: 4.37
 
-## Cell b (etcd in RAM)
+## Cell b (etcd and spool in RAM)
 
 - **Transport:** tls
 - **Rate:** 170 per second
@@ -79,80 +79,81 @@ Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total 
 - **Verdict:** PASS
 
 - `broker_store_call_p99_ms`: <=2.50
-- `cpu_seconds_etcd_d1`: 3.1
-- `cpu_seconds_etcd_d2`: 3.2
-- `cpu_seconds_etcd_d3`: 3.2
-- `cpu_seconds_etcd_session`: 803.6
-- `cpu_seconds_port49-broker`: 188.3
-- `cpu_seconds_port49d`: 731.5
+- `cpu_seconds_etcd_d1`: 3.0
+- `cpu_seconds_etcd_d2`: 3.1
+- `cpu_seconds_etcd_d3`: 3.1
+- `cpu_seconds_etcd_session`: 802.1
+- `cpu_seconds_port49-broker`: 181.0
+- `cpu_seconds_port49d`: 741.3
 - `daemon_run_restarts`: 0
 - `daemon_store_call_p99_ms`: <=2.50
 - `errors`: 0
 - `etcd_session_apply_slow_total_delta`: 0
 - `etcd_session_backend_commit_p99_ms`: <=1.00
 - `etcd_session_compacted_during_cell`: true
-- `etcd_session_db_growth_mb_per_min`: 42.16
-- `etcd_session_db_in_use_mb`: 1599
-- `etcd_session_db_mb`: 2309
-- `etcd_session_revisions_per_min`: 42222
+- `etcd_session_db_growth_mb_per_min`: 51.12
+- `etcd_session_db_in_use_mb`: 1652
+- `etcd_session_db_mb`: 2318
+- `etcd_session_revisions_per_min`: 42238
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `late`: 0
 - `mint_errors`: 0
 - `mint_fail_p50_ms`: 0.00
 - `mint_fail_p99_ms`: 0.00
-- `mint_p50_ms`: 1.77
-- `mint_p99_ms`: 7.52
-- `peak_port49_connections`: 25
+- `mint_p50_ms`: 1.68
+- `mint_p99_ms`: 7.63
+- `peak_port49_connections`: 8
 - `peak_rss_mb_etcd_d1`: 44
 - `peak_rss_mb_etcd_d2`: 44
-- `peak_rss_mb_etcd_d3`: 45
-- `peak_rss_mb_etcd_session`: 3103
+- `peak_rss_mb_etcd_d3`: 46
+- `peak_rss_mb_etcd_session`: 3113
 - `peak_rss_mb_port49-broker`: 87
-- `peak_rss_mb_port49d`: 162
-- `peak_spool_depth`: 35
-- `play_max_ms`: 262.61
-- `play_p50_ms`: 25.68
-- `play_p99_ms`: 112.53
+- `peak_rss_mb_port49d`: 161
+- `peak_spool_depth`: 1
+- `play_max_ms`: 67.56
+- `play_p50_ms`: 11.17
+- `play_p99_ms`: 34.83
 - `plays`: 102000
 - `spool_drops_during`: 0
-- `step_p50_ms_account_start`: 8.13
-- `step_p50_ms_account_stop`: 7.60
-- `step_p50_ms_authorize_session`: 0.71
-- `step_p50_ms_command_denied`: 0.55
-- `step_p50_ms_command_permitted`: 0.54
-- `step_p50_ms_login`: 2.39
-- `step_p99_ms_account_start`: 48.16
-- `step_p99_ms_account_stop`: 54.90
-- `step_p99_ms_authorize_session`: 2.41
-- `step_p99_ms_command_denied`: 1.42
-- `step_p99_ms_command_permitted`: 1.49
-- `step_p99_ms_login`: 11.80
+- `step_p50_ms_account_start`: 1.05
+- `step_p50_ms_account_stop`: 0.57
+- `step_p50_ms_authorize_session`: 0.66
+- `step_p50_ms_command_denied`: 0.56
+- `step_p50_ms_command_permitted`: 0.50
+- `step_p50_ms_login`: 2.50
+- `step_p99_ms_account_start`: 2.78
+- `step_p99_ms_account_stop`: 1.51
+- `step_p99_ms_authorize_session`: 2.35
+- `step_p99_ms_command_denied`: 1.39
+- `step_p99_ms_command_permitted`: 1.56
+- `step_p99_ms_login`: 11.69
 
-## Cell c (etcd in RAM)
+## Cell c (etcd and spool in RAM)
 
 - **Transport:** tcp
-- **Rate:** 0 per second
-- **Duration:** 1m0s
-- **Verdict:** **FAIL**
+- **Rate:** 1291 per second
+- **Duration:** 7m0s
+- **Verdict:** PASS
 
-- `broker_store_call_p99_ms`: 0.00
-- `capacity_per_s`: 0
-- `cpu_seconds_etcd_d1`: 0.4
-- `cpu_seconds_etcd_d2`: 0.4
-- `cpu_seconds_etcd_d3`: 0.5
-- `cpu_seconds_etcd_session`: 11.5
-- `cpu_seconds_port49-broker`: 0.4
-- `cpu_seconds_port49d`: 23.1
+- `broker_store_call_p99_ms`: <=1.00
+- `capacity_per_s`: 1291
+- `cpu_seconds_etcd_d1`: 4.6
+- `cpu_seconds_etcd_d2`: 4.7
+- `cpu_seconds_etcd_d3`: 5.2
+- `cpu_seconds_etcd_session`: 224.2
+- `cpu_seconds_port49-broker`: 12.3
+- `cpu_seconds_port49d`: 402.1
 - `daemon_run_restarts`: 0
-- `daemon_store_call_p99_ms`: <=1.00
-- `errors`: 0
+- `daemon_store_call_p99_ms`: <=10.00
+- `errors`: 9328
+- `errors_connection`: 9328
 - `etcd_session_apply_slow_total_delta`: 0
 - `etcd_session_backend_commit_p99_ms`: <=1.00
-- `etcd_session_compacted_during_cell`: false
-- `etcd_session_db_growth_mb_per_min`: 0.81
-- `etcd_session_db_in_use_mb`: 1642
-- `etcd_session_db_mb`: 2309
-- `etcd_session_revisions_per_min`: 279
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: -23.72
+- `etcd_session_db_in_use_mb`: 1476
+- `etcd_session_db_mb`: 2318
+- `etcd_session_revisions_per_min`: 1877
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `late`: 0
 - `mint_errors`: 0
@@ -160,29 +161,53 @@ Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total 
 - `mint_fail_p99_ms`: 0.00
 - `mint_p50_ms`: 0.00
 - `mint_p99_ms`: 0.00
-- `peak_port49_connections`: 24
+- `peak_port49_connections`: 73
 - `peak_rss_mb_etcd_d1`: 44
 - `peak_rss_mb_etcd_d2`: 44
 - `peak_rss_mb_etcd_d3`: 46
-- `peak_rss_mb_etcd_session`: 3122
-- `peak_rss_mb_port49-broker`: 80
-- `peak_rss_mb_port49d`: 78
-- `peak_spool_depth`: 29
-- `play_max_ms`: 150.54
-- `play_p50_ms`: 12.68
-- `play_p99_ms`: 115.26
-- `plays`: 10200
+- `peak_rss_mb_etcd_session`: 3150
+- `peak_rss_mb_port49-broker`: 78
+- `peak_rss_mb_port49d`: 112
+- `peak_spool_depth`: 313
+- `play_max_ms`: 172042.90
+- `play_p50_ms`: 16308.74
+- `play_p99_ms`: 79371.39
+- `plays`: 116184
 - `spool_drops_during`: 0
-- `step_1_account_p99_ms`: 67.07
+- `step_1_account_p99_ms`: 1.73
 - `step_1_errors_late`: 0, 0
 - `step_1_rate_per_s`: 170
 - `step_1_spool_drops`: 0
-- `step_p50_ms_account_start`: 6.15
-- `step_p50_ms_account_stop`: 6.06
-- `step_p99_ms_account_start`: 56.92
-- `step_p99_ms_account_stop`: 67.07
+- `step_2_account_p99_ms`: 1.65
+- `step_2_errors_late`: 0, 0
+- `step_2_rate_per_s`: 255
+- `step_2_spool_drops`: 0
+- `step_3_account_p99_ms`: 1.53
+- `step_3_errors_late`: 0, 0
+- `step_3_rate_per_s`: 382
+- `step_3_spool_drops`: 0
+- `step_4_account_p99_ms`: 1.36
+- `step_4_errors_late`: 0, 0
+- `step_4_rate_per_s`: 574
+- `step_4_spool_drops`: 0
+- `step_5_account_p99_ms`: 1.47
+- `step_5_errors_late`: 0, 0
+- `step_5_rate_per_s`: 861
+- `step_5_spool_drops`: 0
+- `step_6_account_p99_ms`: 11.04
+- `step_6_errors_late`: 0, 0
+- `step_6_rate_per_s`: 1291
+- `step_6_spool_drops`: 0
+- `step_7_account_p99_ms`: 112.36
+- `step_7_errors_late`: 9328, 0
+- `step_7_rate_per_s`: 1936
+- `step_7_spool_drops`: 0
+- `step_p50_ms_account_start`: 2.70
+- `step_p50_ms_account_stop`: 4.07
+- `step_p99_ms_account_start`: 75.72
+- `step_p99_ms_account_stop`: 112.36
 
-## Cell d (etcd in RAM)
+## Cell d (etcd and spool in RAM)
 
 - **Transport:** tcp
 - **Rate:** 170 per second
@@ -190,65 +215,65 @@ Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total 
 - **Verdict:** PASS
 
 - `broker_store_call_p99_ms`: <=5.00
-- `cpu_seconds_etcd_d1`: 3.4
-- `cpu_seconds_etcd_d2`: 3.4
-- `cpu_seconds_etcd_d3`: 3.6
-- `cpu_seconds_etcd_session`: 842.5
-- `cpu_seconds_port49-broker`: 708.6
-- `cpu_seconds_port49d`: 524.9
+- `cpu_seconds_etcd_d1`: 3.2
+- `cpu_seconds_etcd_d2`: 3.3
+- `cpu_seconds_etcd_d3`: 3.5
+- `cpu_seconds_etcd_session`: 842.4
+- `cpu_seconds_port49-broker`: 714.1
+- `cpu_seconds_port49d`: 545.0
 - `daemon_run_restarts`: 0
 - `daemon_store_call_p99_ms`: <=2.50
-- `errors`: 4092
-- `errors_connection`: 3194
-- `errors_no_reaction`: 898
-- `etcd_session_apply_slow_total_delta`: 0
+- `errors`: 4084
+- `errors_connection`: 3229
+- `errors_no_reaction`: 855
+- `etcd_session_apply_slow_total_delta`: 1
 - `etcd_session_backend_commit_p99_ms`: <=1.00
 - `etcd_session_compacted_during_cell`: true
-- `etcd_session_db_growth_mb_per_min`: 22.21
-- `etcd_session_db_in_use_mb`: 1864
-- `etcd_session_db_mb`: 2676
-- `etcd_session_revisions_per_min`: 42160
+- `etcd_session_db_growth_mb_per_min`: 59.51
+- `etcd_session_db_in_use_mb`: 2071
+- `etcd_session_db_mb`: 2318
+- `etcd_session_revisions_per_min`: 43212
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `fault`: policy edit at one third; session store stopped 20s at two thirds
 - `fault_inside_run`: true
 - `hang_bound_ms`: 10000.00
 - `late`: 0
-- `mint_errors`: 3954
-- `mint_errors_200_store_unavailable`: 1573
-- `mint_errors_503_store_unavailable`: 2381
+- `mint_errors`: 3690
+- `mint_errors_200_store_unavailable`: 1308
+- `mint_errors_503_store_unavailable`: 2382
 - `mint_fail_p50_ms`: 0.37
-- `mint_fail_p99_ms`: 500.70
-- `mint_p50_ms`: 1.82
-- `mint_p99_ms`: 12.89
-- `peak_port49_connections`: 41
-- `peak_rss_mb_etcd_d1`: 45
-- `peak_rss_mb_etcd_d2`: 45
+- `mint_fail_p99_ms`: 500.66
+- `mint_p50_ms`: 1.77
+- `mint_p99_ms`: 11.61
+- `peak_port49_connections`: 7
+- `peak_rss_mb_etcd_d1`: 44
+- `peak_rss_mb_etcd_d2`: 44
 - `peak_rss_mb_etcd_d3`: 46
-- `peak_rss_mb_etcd_session`: 3683
-- `peak_rss_mb_port49-broker`: 128
-- `peak_rss_mb_port49d`: 98
-- `peak_spool_depth`: 41
-- `play_max_ms`: 559.19
-- `play_p50_ms`: 22.47
-- `play_p99_ms`: 109.37
+- `peak_rss_mb_etcd_session`: 3284
+- `peak_rss_mb_port49-broker`: 129
+- `peak_rss_mb_port49d`: 104
+- `peak_spool_depth`: 2
+- `play_max_ms`: 1508.37
+- `play_p50_ms`: 7.41
+- `play_p99_ms`: 43.63
 - `plays`: 102000
-- `port49_broker_reload_seconds`: 9.5
-- `port49d_reload_seconds`: 10.6
+- `port49_broker_reload_seconds`: 7.9
+- `port49d_reload_seconds`: 9.3
 - `spool_drops_during`: 0
-- `step_p50_ms_account_start`: 7.89
-- `step_p50_ms_account_stop`: 8.09
+- `step_p50_ms_account_start`: 0.97
+- `step_p50_ms_account_stop`: 0.43
 - `step_p50_ms_authorize_session`: 0.61
 - `step_p50_ms_command_denied`: 0.37
 - `step_p50_ms_command_permitted`: 0.37
-- `step_p50_ms_login`: 2.33
-- `step_p99_ms_account_start`: 46.31
-- `step_p99_ms_account_stop`: 55.16
-- `step_p99_ms_authorize_session`: 4.05
-- `step_p99_ms_command_denied`: 1.96
-- `step_p99_ms_command_permitted`: 2.08
-- `step_p99_ms_login`: 17.88
+- `step_p50_ms_login`: 2.26
+- `step_p99_ms_account_start`: 4.03
+- `step_p99_ms_account_stop`: 1.68
+- `step_p99_ms_authorize_session`: 4.03
+- `step_p99_ms_command_denied`: 1.85
+- `step_p99_ms_command_permitted`: 1.99
+- `step_p99_ms_login`: 16.53
 
-## Cell e (etcd in RAM)
+## Cell e (etcd and spool in RAM)
 
 - **Transport:** tcp
 - **Rate:** 170 per second
@@ -259,58 +284,58 @@ Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total 
 - `burst_devices_each`: 100
 - `burst_errors`: 0
 - `burst_mints`: 20
-- `burst_p50_ms`: 483.21
-- `burst_p99_ms`: 844.11
-- `cpu_seconds_etcd_d1`: 3.1
+- `burst_p50_ms`: 478.90
+- `burst_p99_ms`: 849.42
+- `cpu_seconds_etcd_d1`: 3.2
 - `cpu_seconds_etcd_d2`: 3.2
 - `cpu_seconds_etcd_d3`: 3.4
-- `cpu_seconds_etcd_session`: 874.9
-- `cpu_seconds_port49-broker`: 1006.6
-- `cpu_seconds_port49d`: 542.3
+- `cpu_seconds_etcd_session`: 875.1
+- `cpu_seconds_port49-broker`: 1003.8
+- `cpu_seconds_port49d`: 562.0
 - `daemon_run_restarts`: 0
 - `daemon_store_call_p99_ms`: <=2.50
 - `errors`: 0
 - `etcd_session_apply_slow_total_delta`: 0
 - `etcd_session_backend_commit_p99_ms`: <=1.00
 - `etcd_session_compacted_during_cell`: true
-- `etcd_session_db_growth_mb_per_min`: 32.75
-- `etcd_session_db_in_use_mb`: 2192
-- `etcd_session_db_mb`: 2928
+- `etcd_session_db_growth_mb_per_min`: 103.21
+- `etcd_session_db_in_use_mb`: 3104
+- `etcd_session_db_mb`: 3104
 - `etcd_session_revisions_per_min`: 43282
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `late`: 0
 - `mint_errors`: 0
 - `mint_fail_p50_ms`: 0.00
 - `mint_fail_p99_ms`: 0.00
-- `mint_p50_ms`: 1.80
-- `mint_p99_ms`: 13.62
-- `peak_port49_connections`: 20
-- `peak_rss_mb_etcd_d1`: 45
+- `mint_p50_ms`: 1.79
+- `mint_p99_ms`: 12.79
+- `peak_port49_connections`: 9
+- `peak_rss_mb_etcd_d1`: 44
 - `peak_rss_mb_etcd_d2`: 44
 - `peak_rss_mb_etcd_d3`: 46
-- `peak_rss_mb_etcd_session`: 4213
-- `peak_rss_mb_port49-broker`: 130
-- `peak_rss_mb_port49d`: 96
-- `peak_spool_depth`: 27
-- `play_max_ms`: 567.87
-- `play_p50_ms`: 22.56
-- `play_p99_ms`: 113.20
+- `peak_rss_mb_etcd_session`: 4273
+- `peak_rss_mb_port49-broker`: 133
+- `peak_rss_mb_port49d`: 104
+- `peak_spool_depth`: 1
+- `play_max_ms`: 562.56
+- `play_p50_ms`: 7.51
+- `play_p99_ms`: 55.31
 - `plays`: 102000
 - `spool_drops_during`: 0
-- `step_p50_ms_account_start`: 7.94
-- `step_p50_ms_account_stop`: 8.10
+- `step_p50_ms_account_start`: 0.98
+- `step_p50_ms_account_stop`: 0.43
 - `step_p50_ms_authorize_session`: 0.61
 - `step_p50_ms_command_denied`: 0.38
-- `step_p50_ms_command_permitted`: 0.38
-- `step_p50_ms_login`: 2.36
-- `step_p99_ms_account_start`: 49.87
-- `step_p99_ms_account_stop`: 57.00
-- `step_p99_ms_authorize_session`: 5.55
-- `step_p99_ms_command_denied`: 2.34
-- `step_p99_ms_command_permitted`: 2.60
-- `step_p99_ms_login`: 21.59
+- `step_p50_ms_command_permitted`: 0.37
+- `step_p50_ms_login`: 2.28
+- `step_p99_ms_account_start`: 6.69
+- `step_p99_ms_account_stop`: 2.10
+- `step_p99_ms_authorize_session`: 5.45
+- `step_p99_ms_command_denied`: 2.46
+- `step_p99_ms_command_permitted`: 2.68
+- `step_p99_ms_login`: 20.84
 
-## Cell e2 (etcd in RAM)
+## Cell e2 (etcd and spool in RAM)
 
 - **Transport:** tcp
 - **Rate:** 170 per second
@@ -318,126 +343,126 @@ Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total 
 - **Verdict:** PASS
 
 - `broker_store_call_p99_ms`: <=5.00
-- `cpu_seconds_etcd_d1`: 3.2
+- `cpu_seconds_etcd_d1`: 3.1
 - `cpu_seconds_etcd_d2`: 3.2
-- `cpu_seconds_etcd_d3`: 3.4
-- `cpu_seconds_etcd_session`: 860.6
-- `cpu_seconds_port49-broker`: 347.3
-- `cpu_seconds_port49d`: 522.2
+- `cpu_seconds_etcd_d3`: 3.2
+- `cpu_seconds_etcd_session`: 859.4
+- `cpu_seconds_port49-broker`: 335.9
+- `cpu_seconds_port49d`: 539.6
 - `daemon_run_restarts`: 0
 - `daemon_store_call_p99_ms`: <=2.50
-- `errors`: 7
-- `errors_no_reaction`: 7
+- `errors`: 5
+- `errors_no_reaction`: 5
 - `etcd_session_apply_slow_total_delta`: 0
 - `etcd_session_backend_commit_p99_ms`: <=1.00
 - `etcd_session_compacted_during_cell`: true
-- `etcd_session_db_growth_mb_per_min`: 19.52
-- `etcd_session_db_in_use_mb`: 2387
-- `etcd_session_db_mb`: 3267
-- `etcd_session_revisions_per_min`: 43879
+- `etcd_session_db_growth_mb_per_min`: 26.36
+- `etcd_session_db_in_use_mb`: 3367
+- `etcd_session_db_mb`: 3367
+- `etcd_session_revisions_per_min`: 43880
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `fleet_principal_cap_evicted_delta`: 0
 - `fleet_window_s`: 300.0
 - `late`: 0
-- `mint_errors`: 7
-- `mint_errors_503_too_many_connections`: 7
-- `mint_fail_p50_ms`: 1.35
-- `mint_fail_p99_ms`: 3.73
-- `mint_p50_ms`: 1.78
-- `mint_p99_ms`: 10.55
-- `peak_port49_connections`: 33
-- `peak_rss_mb_etcd_d1`: 45
+- `mint_errors`: 5
+- `mint_errors_503_too_many_connections`: 5
+- `mint_fail_p50_ms`: 1.53
+- `mint_fail_p99_ms`: 1.82
+- `mint_p50_ms`: 1.71
+- `mint_p99_ms`: 10.44
+- `peak_port49_connections`: 9
+- `peak_rss_mb_etcd_d1`: 44
 - `peak_rss_mb_etcd_d2`: 44
 - `peak_rss_mb_etcd_d3`: 46
-- `peak_rss_mb_etcd_session`: 4841
-- `peak_rss_mb_port49-broker`: 128
-- `peak_rss_mb_port49d`: 96
-- `peak_spool_depth`: 43
-- `play_max_ms`: 242.76
-- `play_p50_ms`: 22.13
-- `play_p99_ms`: 112.37
+- `peak_rss_mb_etcd_session`: 4826
+- `peak_rss_mb_port49-broker`: 126
+- `peak_rss_mb_port49d`: 104
+- `peak_spool_depth`: 1
+- `play_max_ms`: 136.59
+- `play_p50_ms`: 7.16
+- `play_p99_ms`: 54.34
 - `plays`: 102000
-- `principal_cap_evicted_burst_window_s`: 4.4
-- `principal_cap_evicted_delta`: 5
-- `principal_cap_refused_delta`: 47
+- `principal_cap_evicted_burst_window_s`: 4.5
+- `principal_cap_evicted_delta`: 10
+- `principal_cap_refused_delta`: 41
 - `spool_drops_during`: 0
-- `step_p50_ms_account_start`: 7.90
-- `step_p50_ms_account_stop`: 8.09
-- `step_p50_ms_authorize_session`: 0.58
-- `step_p50_ms_command_denied`: 0.36
+- `step_p50_ms_account_start`: 0.93
+- `step_p50_ms_account_stop`: 0.42
+- `step_p50_ms_authorize_session`: 0.59
+- `step_p50_ms_command_denied`: 0.35
 - `step_p50_ms_command_permitted`: 0.35
-- `step_p50_ms_login`: 2.24
-- `step_p99_ms_account_start`: 49.71
-- `step_p99_ms_account_stop`: 56.82
-- `step_p99_ms_authorize_session`: 5.77
-- `step_p99_ms_command_denied`: 2.88
-- `step_p99_ms_command_permitted`: 3.15
-- `step_p99_ms_login`: 20.91
+- `step_p50_ms_login`: 2.17
+- `step_p99_ms_account_start`: 7.74
+- `step_p99_ms_account_stop`: 2.56
+- `step_p99_ms_authorize_session`: 5.58
+- `step_p99_ms_command_denied`: 2.87
+- `step_p99_ms_command_permitted`: 3.03
+- `step_p99_ms_login`: 20.57
 - `workload_devices_each`: 100
 - `workload_exit_0`: 20
 - `workload_exit_codes_not_0`: 
 - `workload_not_exit_0`: 0
-- `workload_p50_ms`: 2405.71
-- `workload_p99_ms`: 4430.50
+- `workload_p50_ms`: 2352.21
+- `workload_p99_ms`: 4499.18
 - `workload_processes`: 20
 
-## Cell f (etcd in RAM)
+## Cell f (etcd and spool in RAM)
 
 - **Transport:** tcp
 - **Rate:** 170 per second
 - **Duration:** 2m0s
 - **Verdict:** PASS
 
-- `broker_store_call_p99_ms`: <=2.50
+- `broker_store_call_p99_ms`: <=5.00
 - `call_timeout_ms`: 500.00
-- `cpu_seconds_etcd_d1`: 0.7
+- `cpu_seconds_etcd_d1`: 0.6
 - `cpu_seconds_etcd_d2`: 0.6
-- `cpu_seconds_etcd_d3`: 0.7
-- `cpu_seconds_etcd_session`: 164.9
-- `cpu_seconds_port49-broker`: 37.2
-- `cpu_seconds_port49d`: 104.0
+- `cpu_seconds_etcd_d3`: 0.6
+- `cpu_seconds_etcd_session`: 171.2
+- `cpu_seconds_port49-broker`: 36.6
+- `cpu_seconds_port49d`: 108.1
 - `daemon_run_restarts`: 0
-- `daemon_store_call_p99_ms`: <=2.50
+- `daemon_store_call_p99_ms`: <=5.00
 - `errors`: 0
 - `etcd_session_apply_slow_total_delta`: 0
-- `etcd_session_backend_commit_p99_ms`: <=1.00
+- `etcd_session_backend_commit_p99_ms`: <=2.00
 - `etcd_session_compacted_during_cell`: false
-- `etcd_session_db_growth_mb_per_min`: 121.08
-- `etcd_session_db_in_use_mb`: 2629
-- `etcd_session_db_mb`: 3267
+- `etcd_session_db_growth_mb_per_min`: -439.07
+- `etcd_session_db_in_use_mb`: 2489
+- `etcd_session_db_mb`: 3381
 - `etcd_session_revisions_per_min`: 41037
 - `etcd_session_wal_fsync_mean_ms`: n/a (ram)
 - `late`: 0
 - `mint_errors`: 0
 - `mint_fail_p50_ms`: 0.00
 - `mint_fail_p99_ms`: 0.00
-- `mint_p50_ms`: 1.78
-- `mint_p99_ms`: 9.15
+- `mint_p50_ms`: 1.74
+- `mint_p99_ms`: 10.37
 - `netem_delay`: 40ms
-- `peak_port49_connections`: 18
-- `peak_rss_mb_etcd_d1`: 45
+- `peak_port49_connections`: 8
+- `peak_rss_mb_etcd_d1`: 44
 - `peak_rss_mb_etcd_d2`: 44
 - `peak_rss_mb_etcd_d3`: 46
-- `peak_rss_mb_etcd_session`: 4843
-- `peak_rss_mb_port49-broker`: 82
-- `peak_rss_mb_port49d`: 96
-- `peak_spool_depth`: 24
-- `play_max_ms`: 242.38
-- `play_p50_ms`: 22.13
-- `play_p99_ms`: 116.87
+- `peak_rss_mb_etcd_session`: 4980
+- `peak_rss_mb_port49-broker`: 83
+- `peak_rss_mb_port49d`: 103
+- `peak_spool_depth`: 1
+- `play_max_ms`: 95.83
+- `play_p50_ms`: 7.26
+- `play_p99_ms`: 57.04
 - `plays`: 20400
-- `signin_p99_ms`: 19.75
+- `signin_p99_ms`: 21.39
 - `spool_drops_during`: 0
-- `step_p50_ms_account_start`: 7.94
-- `step_p50_ms_account_stop`: 8.10
-- `step_p50_ms_authorize_session`: 0.58
+- `step_p50_ms_account_start`: 0.94
+- `step_p50_ms_account_stop`: 0.42
+- `step_p50_ms_authorize_session`: 0.59
 - `step_p50_ms_command_denied`: 0.35
 - `step_p50_ms_command_permitted`: 0.35
-- `step_p50_ms_login`: 2.23
-- `step_p99_ms_account_start`: 53.78
-- `step_p99_ms_account_stop`: 59.50
-- `step_p99_ms_authorize_session`: 5.44
-- `step_p99_ms_command_denied`: 2.80
-- `step_p99_ms_command_permitted`: 2.85
-- `step_p99_ms_login`: 19.75
+- `step_p50_ms_login`: 2.18
+- `step_p99_ms_account_start`: 8.67
+- `step_p99_ms_account_stop`: 3.09
+- `step_p99_ms_authorize_session`: 6.16
+- `step_p99_ms_command_denied`: 3.73
+- `step_p99_ms_command_permitted`: 3.53
+- `step_p99_ms_login`: 21.39
 
