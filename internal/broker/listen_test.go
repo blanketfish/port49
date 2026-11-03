@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -63,9 +64,24 @@ func serveThroughWith(t *testing.T, f *fixture, lim ListenerLimits, logf func(st
 	if set != nil {
 		set(bl)
 	}
+	inner := srv.Handler
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestsSeen(bl).Add(1)
+		inner.ServeHTTP(w, r)
+	})
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return raw.Addr().String(), bl
+}
+
+var seen sync.Map // *Listener -> *atomic.Int64
+
+// requestsSeen counts the requests whose headers a handler behind bl has
+// received. A bound connection is busy before any request arrives (bind sets
+// active), so only this proves the broker has read one.
+func requestsSeen(bl *Listener) *atomic.Int64 {
+	n, _ := seen.LoadOrStore(bl, new(atomic.Int64))
+	return n.(*atomic.Int64)
 }
 
 func logTo(b *lockedBuffer) func(string, ...any) {

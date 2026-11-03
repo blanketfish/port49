@@ -25,11 +25,17 @@ func busy(t *testing.T, f *fixture, bl *Listener, addr string, cert tls.Certific
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	before := activeHeld(bl)
+	before := requestsSeen(bl).Load()
 	if _, err := io.WriteString(c, "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\nContent-Length: 2\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "a request in flight", func() bool { return activeHeld(bl) > before })
+	// The connection is busy from bind, so activeHeld rising is no sign of the
+	// request, and may already have risen before this helper looked. Wait for
+	// the handler to see the request, then require a busy connection.
+	eventually(t, "a request in flight", func() bool { return requestsSeen(bl).Load() > before })
+	if activeHeld(bl) == 0 {
+		t.Fatal("a request is in flight on a connection the broker counts idle")
+	}
 	br := bufio.NewReader(c)
 	return c, func() {
 		t.Helper()
