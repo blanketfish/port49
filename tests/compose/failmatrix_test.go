@@ -259,13 +259,19 @@ func TestFailureMatrix(t *testing.T) {
 
 	run("one_member_dark", func(m matrix) {
 		t := m.s.t
+		// The mint's transaction is not hedged (a second copy would write a second
+		// token), so the tokens are minted while every member answers: the claim
+		// is about logins.
+		var toks []string
+		for i := 0; i < 30; i++ {
+			toks = append(toks, m.mint())
+		}
 		m.s.run("pause", "etcd-2")
 		var slowest time.Duration
 		var failed []int
 		for i := 0; i < 30; i++ {
-			tok := m.mint()
 			start := time.Now()
-			ok := m.passes(tok)
+			ok := m.passes(toks[i])
 			d := time.Since(start)
 			if d > slowest {
 				slowest = d

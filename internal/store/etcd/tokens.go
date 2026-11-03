@@ -166,6 +166,10 @@ func (s *Store) liveToken(ctx context.Context, k store.TokenKey, id string) (mod
 	return mod, r.ExpiresAt.After(s.now()), nil
 }
 
+// tokenKV is the KV RedeemAndReceipt's transaction goes through: the token
+// client, but for a test that stands between (redeem_hedge_test.go).
+var tokenKV = func(kv clientv3.KV) clientv3.KV { return kv }
+
 // RedeemAndReceipt deletes the token and writes the receipt and its index
 // entry in one transaction that holds only while the token is the one
 // read: of two racing redeemers, exactly one's compare holds (design §12).
@@ -177,7 +181,10 @@ func (s *Store) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID 
 	if !live {
 		return store.ErrNotFound
 	}
-	body, err := json.Marshal(receiptRecOf(w.Receipt))
+	nonce := newNonce()
+	rec := receiptRecOf(w.Receipt)
+	rec.Nonce = nonce
+	body, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
@@ -189,15 +196,41 @@ func (s *Store) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID 
 		}
 		puts = append(puts, put{key: s.k.receiptBy(w.Principal, w.Key), val: idx, exp: s.now().Add(w.IndexTTL)})
 	}
-	tk := s.k.token(k, tokenID)
-	ok, err := commit(ctx, s.tok, s.tokLeases, []clientv3.Cmp{unchanged(tk, mod)}, puts, del{key: tk})
+	tk, rk := s.k.token(k, tokenID), s.k.receipt(w.Key)
+	// Hedged (hedge.go): with one member dark, a Txn sent to its stalled
+	// connection is sent again on the next. A second copy is safe: the
+	// compare is the token's mod_revision, so once one copy has spent the
+	// token the other's compare fails. That failure is read back in the else
+	// branch: the receipt this request's own nonce wrote is a success, and
+	// anything else is another redeemer, token_spent as ever.
+	resp, err := commitTxn(idempotent(ctx), tokenKV(s.tok), s.tokLeases, []clientv3.Cmp{unchanged(tk, mod)}, puts,
+		[]del{{key: tk}}, []clientv3.Op{clientv3.OpGet(rk)})
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if !resp.Succeeded {
+		if _, own := ownWrite(resp, func(value []byte) bool {
+			var r receiptRec
+			return json.Unmarshal(value, &r) == nil && r.Nonce == nonce
+		}); own {
+			return nil
+		}
 		return store.ErrNotFound // another redeemer, or a delete, took it
 	}
 	return nil
+}
+
+// ownWrite reads the else branch's one Get: the record's mod_revision, and
+// whether own accepts its value.
+func ownWrite(resp *clientv3.TxnResponse, own func(value []byte) bool) (mod int64, ok bool) {
+	if len(resp.Responses) != 1 {
+		return 0, false
+	}
+	kvs := resp.Responses[0].GetResponseRange().Kvs
+	if len(kvs) != 1 || !own(kvs[0].Value) {
+		return 0, false
+	}
+	return kvs[0].ModRevision, true
 }
 
 // DeleteTokens drops every token under k, spent or not.

@@ -62,7 +62,8 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	for _, m := range marks {
 		ops = append(ops, clientv3.OpGet(s.k.mark(m[0], m[1])))
 	}
-	resp, err := s.ctxKV.Txn(ctx).Then(ops...).Commit()
+	// A read-only transaction, harmless sent twice: hedged like a Range.
+	resp, err := s.ctxKV.Txn(idempotent(ctx)).Then(ops...).Commit()
 	if err != nil {
 		return ctxSnap{}, unavailable(err)
 	}
@@ -104,6 +105,19 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 // entry's.
 func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap, rec *ctxRec, idx *idxRec,
 	added []string) (bool, int64, error) {
+	return s.commitCtxAs(ctx, k, snap, rec, idx, added, false)
+}
+
+// commitCtxAs is commitCtx, hedged when hedge is set (hedge.go): the
+// transaction is sent again on another connection when the first is slow, and
+// a copy that finds the compare failed reads the context back. A record
+// carrying this swap's own nonce is its earlier copy's write: success, at the
+// revision that copy committed at. Any other record is a lost race, ErrConflict
+// for the caller to read again. A write by someone else after the first copy
+// and before the read-back drops the nonce, and reads as a lost race: the
+// caller reads again and joins what it finds, as for any race.
+func (s *Store) commitCtxAs(ctx context.Context, k store.ContextKey, snap ctxSnap, rec *ctxRec, idx *idxRec,
+	added []string, hedge bool) (bool, int64, error) {
 	ck, xk := s.k.context(k), s.k.indexed(refOf(k))
 	cmps := []clientv3.Cmp{unchanged(ck, snap.mod), unchanged(xk, snap.idxMod)}
 	for m, ms := range snap.marks {
@@ -112,6 +126,9 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 	var puts []put
 	var dels []del
 	if rec != nil {
+		if hedge {
+			rec.SwapNonce = newNonce()
+		}
 		body, err := json.Marshal(rec)
 		if err != nil {
 			return false, 0, err
@@ -132,7 +149,23 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 	for _, key := range added {
 		puts = append(puts, put{key: key, val: []byte("{}")}) // no lease: the index record decides (Ruling 6)
 	}
-	return commitRev(ctx, s.ctxKV, s.ctxLeases, cmps, puts, dels...)
+	if !hedge || rec == nil {
+		return commitRev(ctx, s.ctxKV, s.ctxLeases, cmps, puts, dels...)
+	}
+	resp, err := commitTxn(idempotent(ctx), s.ctxKV, s.ctxLeases, cmps, puts, dels, []clientv3.Op{clientv3.OpGet(ck)})
+	if err != nil {
+		return false, 0, err
+	}
+	if resp.Succeeded {
+		return true, resp.Header.Revision, nil
+	}
+	if mod, own := ownWrite(resp, func(value []byte) bool {
+		var r ctxRec
+		return json.Unmarshal(value, &r) == nil && r.SwapNonce == rec.SwapNonce
+	}); own {
+		return true, mod, nil
+	}
+	return false, resp.Header.Revision, nil
 }
 
 // seenCache is the plaintext bookkeeping of the last version GetContext
@@ -309,7 +342,7 @@ func (s *Store) SwapLoginRev(ctx context.Context, k store.ContextKey, rev uint64
 		if touched || len(added) > 0 {
 			idx = &x
 		}
-		if ok, mod, err := s.commitCtx(ctx, k, snap, &r, idx, added); err != nil || ok {
+		if ok, mod, err := s.commitCtxAs(ctx, k, snap, &r, idx, added, true); err != nil || ok {
 			return uint64(mod), err
 		}
 	}
