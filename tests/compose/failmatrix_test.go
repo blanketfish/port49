@@ -127,6 +127,9 @@ func (m matrix) restore() {
 	shapetest.WaitFor(t, "port49_store_health_failures back at 0", time.Minute, func() bool {
 		return m.gauge(daemonMetrics, "port49_store_health_failures") == 0
 	})
+	shapetest.WaitFor(t, "port49_policy_file_refused back at 0", time.Minute, func() bool {
+		return m.gauge(daemonMetrics, "port49_policy_file_refused") == 0
+	})
 }
 
 // dump logs the tail of both processes' stderr through the filter.
@@ -200,10 +203,11 @@ func TestFailureMatrix(t *testing.T) {
 		})
 	}
 	// dark is a store row: while port49d still listens, a token login is
-	// answered ERROR store_unavailable and a command of an open session is
-	// answered cmdStatus, never PASS (design §12; spec §5.7). An unanswered
+	// answered ERROR store_unavailable and a command of an open session FAIL
+	// store_unavailable (design §12, the "Store hangs" and "Token store
+	// unavailable" rows; spec §5.7: an authorization is FAIL, never ERROR). An unanswered
 	// connection is allowed only once the listener has closed.
-	dark := func(name string, cmdStatus uint8, listenBound time.Duration, down, up func(m matrix)) {
+	dark := func(name string, listenBound time.Duration, down, up func(m matrix)) {
 		run(name, func(m matrix) {
 			t := m.s.t
 			if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
@@ -225,8 +229,8 @@ func TestFailureMatrix(t *testing.T) {
 			}
 			cst, err := m.dev.AuthorStatus("alice", "show", "version")
 			switch {
-			case err == nil && cst != cmdStatus:
-				t.Fatalf("a command with the store dark was answered status %#x, want %#x", cst, cmdStatus)
+			case err == nil && cst != wire.AuthorStatusFail:
+				t.Fatalf("a command with the store dark was answered status %#x, want FAIL (%#x)", cst, wire.AuthorStatusFail)
 			case err != nil && listening(tacacsAddr):
 				t.Fatalf("a command with the store dark and the listener open was not answered: %v", err)
 			}
@@ -246,10 +250,10 @@ func TestFailureMatrix(t *testing.T) {
 	// It kills the members rather than stopping them: etcd's graceful stop took
 	// 7s or more in CI, so port49d had closed its listener before `stop` returned
 	// and the statuses of the 5.5s window could not be probed.
-	dark("store_hangs", wire.AuthorStatusError, openAfter*healthInterval+2*time.Second+callTimeout,
+	dark("store_hangs", openAfter*healthInterval+2*time.Second+callTimeout,
 		func(m matrix) { m.s.run("pause", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("unpause", "etcd-2", "etcd-3") })
-	dark("store_stopped", wire.AuthorStatusFail, 30*time.Second,
+	dark("store_stopped", 30*time.Second,
 		func(m matrix) { m.s.run("kill", "etcd-1", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("start", "etcd-1", "etcd-2", "etcd-3") })
 
@@ -257,16 +261,22 @@ func TestFailureMatrix(t *testing.T) {
 		t := m.s.t
 		m.s.run("pause", "etcd-2")
 		var slowest time.Duration
+		var failed []int
 		for i := 0; i < 30; i++ {
 			tok := m.mint()
 			start := time.Now()
 			ok := m.passes(tok)
-			if d := time.Since(start); d > slowest {
+			d := time.Since(start)
+			if d > slowest {
 				slowest = d
 			}
+			t.Logf("login %d of 30: pass %v in %v", i+1, ok, d)
 			if !ok {
-				t.Fatalf("login %d of 30 with one member paused did not pass", i+1)
+				failed = append(failed, i+1)
 			}
+		}
+		if len(failed) > 0 {
+			t.Errorf("logins %v of 30 with one member paused did not pass", failed)
 		}
 		t.Logf("slowest of 30 logins with one member dark: %v", slowest)
 		if limit := 12*time.Second + callTimeout; slowest > limit {
@@ -480,6 +490,14 @@ func retiredKey(m matrix) {
 	t.Cleanup(func() {
 		if err := c.WritePolicy(policy); err != nil {
 			t.Logf("putting the version 1 policy back: %v", err)
+			return
+		}
+		// port49d reads the file at its watch interval, and a strike holds the
+		// source for its backoff: the next subtest starts when v1 logs in again,
+		// or its own policy edit meets a reload still pending.
+		deadline := time.Now().Add(45 * time.Second)
+		for !m.passes(m.mint()) && time.Now().Before(deadline) {
+			time.Sleep(time.Second)
 		}
 	})
 	if err := c.WritePolicy(next); err != nil {
@@ -489,7 +507,13 @@ func retiredKey(m matrix) {
 		return strings.Contains(m.s.run("logs", "--no-color", "port49d"), "version 1 retired")
 	})
 	misses := counter(t, daemonMetrics, `port49_connection_events_total{event="key_miss_closed"}`)
+	held := counter(t, daemonMetrics, `port49_connection_events_total{event="held_refused"}`)
+	dv2 := shapetest.Device{T: t, Addr: tacacsAddr, Key: []byte(v2)}
+	tok2 := m.mint()
+	// The strike's first backoff is limits.malformed_backoff_base, 100ms: the
+	// version 2 retry follows the miss at once, before anything else is read.
 	st, err := m.dev.TryLogin("alice", tok)
+	_, retryErr := dv2.TryLogin("alice", tok2)
 	var ne net.Error
 	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
 		t.Fatalf("a login keyed with the retired version: status %d, error %v, want a reset with no reply", st, err)
@@ -505,14 +529,11 @@ func retiredKey(m matrix) {
 	if got := counter(t, daemonMetrics, `port49_connection_events_total{event="key_miss_closed"}`); got <= misses {
 		t.Fatalf("key_miss_closed went from %v to %v: the retired version's packet was not struck", misses, got)
 	}
-	// The strike's hold: the same source, under the good version 2 key, is reset
-	// at Accept, and once the backoff has passed the same token redeems (a
+	// The strike's hold: the same source, under the good version 2 key, was
+	// reset at Accept, and once the backoff has passed the same token redeems (a
 	// connection reset at Accept redeems nothing).
-	held := counter(t, daemonMetrics, `port49_connection_events_total{event="held_refused"}`)
-	dv2 := shapetest.Device{T: t, Addr: tacacsAddr, Key: []byte(v2)}
-	tok2 := m.mint()
-	if st, err := dv2.TryLogin("alice", tok2); err == nil {
-		t.Fatalf("the next connection from the struck source was answered (status %d): the miss was not a strike", st)
+	if retryErr == nil {
+		t.Fatal("the next connection from the struck source was answered: the miss was not a strike")
 	}
 	if got := counter(t, daemonMetrics, `port49_connection_events_total{event="held_refused"}`); got <= held {
 		t.Fatalf("held_refused went from %v to %v: the immediate retry was not refused by the hold", held, got)
