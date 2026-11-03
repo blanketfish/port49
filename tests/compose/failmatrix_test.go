@@ -1,0 +1,487 @@
+//go:build compose && failmatrix
+
+// The failure matrix (plan 12c, Task 9; design §12): each row the compose
+// stack can reach is run against it, and deploy/failure-matrix.md names the
+// subtest that is its evidence. It has its own tag so that `make
+// compose-smoke` never builds or runs it; `make failure-matrix` and the
+// failmatrix CI job do.
+package compose
+
+import (
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/tests/shapes/shapetest"
+	"gopkg.in/yaml.v3"
+)
+
+// The settings deploy/compose/config/port49d.yaml states and the defaults it leaves.
+const (
+	healthInterval = time.Second            // stores.directory.etcd.health.interval
+	closeAfter     = 5                      // health.close_after
+	openAfter      = 3                      // health.open_after
+	callTimeout    = 500 * time.Millisecond // etcd.call_timeout default
+	holdTTL        = 15 * time.Second       // etcd.hold_ttl default
+	tacacsAddr     = "127.0.0.1:49"
+	daemonMetrics  = "127.0.0.1:9049"
+	brokerMetrics  = "127.0.0.1:9050"
+	brokerAddr     = "127.0.0.1:8443"
+	snapVolume     = project + "_snap"
+	initialCluster = "etcd-1=https://etcd-1:2380,etcd-2=https://etcd-2:2380,etcd-3=https://etcd-3:2380"
+)
+
+var members = []string{"etcd-1", "etcd-2", "etcd-3"}
+
+// matrix is the stack the subtests share, and what they log in with.
+type matrix struct {
+	s         stack
+	dev       shapetest.Device
+	brokerDir string
+	root      string
+}
+
+// with is m with its failures reported to t: a subtest runs in its own
+// goroutine, and the parent's Fatalf from there would not stop it.
+func (m matrix) with(t *testing.T) matrix {
+	m.s.t = t
+	m.dev.T = t
+	return m
+}
+
+// composeUp brings the stack up on a fresh PKI and waits for both processes.
+func composeUp(t *testing.T) matrix {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newStack(t)
+	s.run("up", "-d", "--build")
+	s.ready(daemonMetrics)
+	s.ready(brokerMetrics)
+	key, err := os.ReadFile(filepath.Join(s.local, "keys", "tacacs_v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matrix{s: s, brokerDir: filepath.Join(s.local, "broker"), root: root,
+		dev: shapetest.Device{T: t, Addr: tacacsAddr, Key: key}}
+}
+
+func (m matrix) mint() string { return shapetest.Mint(m.s.t, m.brokerDir, brokerAddr, "smoke1") }
+
+// passes is a login that is answered PASS.
+func (m matrix) passes(tok string) bool {
+	st, err := m.dev.TryLogin("alice", tok)
+	return err == nil && st == wire.AuthenStatusPass
+}
+
+// refused is a login that did not pass: no answer, or an answer that is not PASS.
+func (m matrix) refused(tok string) bool { return !m.passes(tok) }
+
+// listening is true when port49d holds TCP 49: a connection is made and stays
+// open and quiet for 400ms. A published port whose container has closed its
+// listener may still accept at the host (the userland proxy) and then close
+// at once, which is not listening.
+func listening(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	c.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+	_, err = c.Read(make([]byte, 1))
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// restore leaves the stack as composeUp made it: whatever a subtest paused or
+// stopped is running again, both processes are ready and port49d listens.
+func (m matrix) restore() {
+	t := m.s.t
+	t.Helper()
+	m.s.try("unpause", "etcd-1", "etcd-2", "etcd-3", "port49d", "port49-broker") // an error is a container not paused
+	m.s.run("start", "etcd-1", "etcd-2", "etcd-3", "port49-broker", "port49d")
+	m.s.ready(daemonMetrics)
+	m.s.ready(brokerMetrics)
+	shapetest.WaitFor(t, "port49d listening", time.Minute, func() bool { return listening(tacacsAddr) })
+}
+
+func (m matrix) gauge(addr, name string) float64 {
+	m.s.t.Helper()
+	return shapetest.Gauge(m.s.t, addr, name)
+}
+
+// tlsDial is a TLS connection to addr that checks nothing about the server: a
+// stopped broker is the thing under test, not its certificate.
+func tlsDial(addr string) (*tls.Conn, error) {
+	return tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
+}
+
+func TestFailureMatrix(t *testing.T) {
+	shapetest.RefuseOnKeyHost(t)
+	m := composeUp(t)
+	run := func(name string, f func(m matrix)) {
+		t.Run(name, func(t *testing.T) {
+			defer m.with(t).restore()
+			f(m.with(t))
+		})
+	}
+	dark := func(name string, down, up func(m matrix)) {
+		run(name, func(m matrix) {
+			t := m.s.t
+			tok := m.mint()
+			down(m)
+			if !m.refused(tok) {
+				t.Fatal("a token login passed with the store dark")
+			}
+			shapetest.WaitFor(t, "the listener closed", closeAfter*healthInterval+callTimeout+2*time.Second,
+				func() bool { return !listening(tacacsAddr) })
+			shapetest.WaitFor(t, "port49_store_health_failures at close_after", 10*time.Second, func() bool {
+				return m.gauge(daemonMetrics, "port49_store_health_failures") >= closeAfter
+			})
+			up(m)
+			shapetest.WaitFor(t, "the listener open again", openAfter*healthInterval+2*time.Second+callTimeout,
+				func() bool { return listening(tacacsAddr) })
+			next := m.mint()
+			shapetest.WaitFor(t, "a login", 10*time.Second, func() bool { return m.passes(next) })
+		})
+	}
+	dark("store_hangs",
+		func(m matrix) { m.s.run("pause", "etcd-2", "etcd-3") },
+		func(m matrix) { m.s.run("unpause", "etcd-2", "etcd-3") })
+	dark("store_stopped",
+		func(m matrix) { m.s.run("stop", "etcd-1", "etcd-2", "etcd-3") },
+		func(m matrix) { m.s.run("start", "etcd-1", "etcd-2", "etcd-3") })
+
+	run("one_member_dark", func(m matrix) {
+		t := m.s.t
+		m.s.run("pause", "etcd-2")
+		var slowest time.Duration
+		for i := 0; i < 30; i++ {
+			tok := m.mint()
+			start := time.Now()
+			ok := m.passes(tok)
+			if d := time.Since(start); d > slowest {
+				slowest = d
+			}
+			if !ok {
+				t.Fatalf("login %d of 30 with one member paused did not pass", i+1)
+			}
+		}
+		t.Logf("slowest of 30 logins with one member dark: %v", slowest)
+		if limit := 12*time.Second + callTimeout; slowest > limit {
+			t.Fatalf("slowest login %v, want under 12s + call_timeout (%v)", slowest, limit)
+		}
+	})
+
+	run("broker_stopped", func(m matrix) {
+		t := m.s.t
+		if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
+			t.Fatalf("login before the stop: status %d", st)
+		}
+		held := m.mint()
+		m.s.run("stop", "port49-broker")
+		if !m.dev.Permits("alice", "show", "version") {
+			t.Fatal("an open session's next command was refused with the broker stopped")
+		}
+		if !m.passes(held) {
+			t.Fatal("a token minted before the stop did not log in with the broker stopped (split deployment, L37)")
+		}
+		if conn, err := tlsDial(brokerAddr); err == nil {
+			conn.Close()
+			t.Fatal("a connection to the stopped broker succeeded: a mint cannot fail with a connection error")
+		}
+		m.s.run("start", "port49-broker")
+		m.s.ready(brokerMetrics)
+		if !m.passes(m.mint()) {
+			t.Fatal("a mint and login after the broker started did not pass")
+		}
+	})
+
+	run("port49d_stopped", func(m matrix) {
+		m.s.run("stop", "port49d")
+		if listening(tacacsAddr) {
+			m.s.t.Fatal("TCP 49 still accepts with port49d stopped: a device would not find the connection refused")
+		}
+	})
+
+	run("store_absent_at_start", func(m matrix) {
+		t := m.s.t
+		m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
+		m.s.run("restart", "port49d")
+		shapetest.WaitFor(t, "/readyz answering 503 with no store", time.Minute, func() bool {
+			resp, err := http.Get("http://" + daemonMetrics + "/readyz")
+			if err != nil {
+				return false
+			}
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusServiceUnavailable
+		})
+		if listening(tacacsAddr) {
+			t.Fatal("port49d listens on TCP 49 with no store at its start")
+		}
+		m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
+		m.s.ready(daemonMetrics)
+		shapetest.WaitFor(t, "the listener", time.Minute, func() bool { return listening(tacacsAddr) })
+		next := m.mint()
+		shapetest.WaitFor(t, "a login", 20*time.Second, func() bool { return m.passes(next) })
+	})
+
+	run("port49d_restarted", func(m matrix) {
+		t := m.s.t
+		if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
+			t.Fatalf("login before the restart: status %d", st)
+		}
+		if !m.dev.Permits("alice", "show", "version") {
+			t.Fatal("a command before the restart was refused")
+		}
+		before := lastCtxID(m.s.run("logs", "--no-color", "port49d"))
+		held := m.mint()
+		m.s.run("restart", "port49d")
+		m.s.ready(daemonMetrics)
+		shapetest.WaitFor(t, "the listener", time.Minute, func() bool { return listening(tacacsAddr) })
+		if !m.passes(held) {
+			t.Fatal("a token minted before the restart did not redeem (split deployment, decision 36 ruling 7)")
+		}
+		if !m.dev.Permits("alice", "show", "version") {
+			t.Fatal("an open session's next command after the restart was refused")
+		}
+		after := lastCtxID(m.s.run("logs", "--no-color", "port49d"))
+		if before == "" || after != before {
+			t.Fatalf("the command after the restart was answered from ctx_id %q, want the session's %q", after, before)
+		}
+	})
+
+	run("partition", func(m matrix) {
+		tok := m.mint()
+		m.s.run("pause", "port49d")
+		_, err := m.dev.TryLogin("alice", tok)
+		var ne net.Error
+		if !errors.As(err, &ne) || !ne.Timeout() {
+			m.s.t.Fatalf("a request to a paused port49d: %v, want silence (a read timeout), not a reply or a reset", err)
+		}
+	})
+
+	run("retired_key", func(m matrix) { retiredKey(m) })
+
+	run("policy_refused", func(m matrix) {
+		t := m.s.t
+		out, err := volumeSh(project+"_port49d-etc", "stat -c %a /e")
+		if err != nil {
+			t.Fatalf("stat the policy's directory: %v", err)
+		}
+		mode := strings.TrimSpace(out)
+		if _, err := volumeSh(project+"_port49d-etc", "chmod g+w /e"); err != nil {
+			t.Fatal(err)
+		}
+		defer volumeSh(project+"_port49d-etc", "chmod "+mode+" /e")
+		shapetest.WaitFor(t, "port49_policy_file_refused at 1", 30*time.Second, func() bool {
+			return m.gauge(daemonMetrics, "port49_policy_file_refused") == 1
+		})
+		if !m.passes(m.mint()) {
+			t.Fatal("a login did not pass on the policy in force while the policy file was refused")
+		}
+		if _, err := volumeSh(project+"_port49d-etc", "chmod "+mode+" /e"); err != nil {
+			t.Fatal(err)
+		}
+		shapetest.WaitFor(t, "port49_policy_file_refused back at 0", 30*time.Second, func() bool {
+			return m.gauge(daemonMetrics, "port49_policy_file_refused") == 0
+		})
+	})
+
+	run("restore_guarded", restoreGuarded)
+}
+
+var ctxIDRe = regexp.MustCompile(`"ctx_id":"([^"]+)"`)
+
+// lastCtxID is the ctx_id of the last decision record in log, "" if none.
+func lastCtxID(log string) string {
+	all := ctxIDRe.FindAllStringSubmatch(log, -1)
+	if len(all) == 0 {
+		return ""
+	}
+	return all[len(all)-1][1]
+}
+
+// volumeSh runs script in a throwaway container on the setup image as root,
+// with volume at /e.
+func volumeSh(volume, script string) (string, error) {
+	out, err := exec.Command("docker", "run", "--rm", "-v", volume+":/e", "--entrypoint", "sh",
+		"port49-setup:dev", "-c", script).CombinedOutput()
+	return string(out), err
+}
+
+// retiredKey: a policy edit moves the device's key version 1 to retired while
+// the device still uses it. A new connection's first packet is an unvalidated
+// record (matches_retired) and a strike: the source's next connection, even
+// under a good key, meets the backoff. The open-connection half, a reset with
+// no strike, is internal/daemon/server's
+// TestAReloadThatWithdrawsTheVersionEndsItsConnectionWithoutAStrike.
+func retiredKey(m matrix) {
+	t := m.s.t
+	c := composeRotator{s: m.s}
+	policy, err := os.ReadFile(filepath.Join(m.s.config, "policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(policy, &doc); err != nil {
+		t.Fatal(err)
+	}
+	k := doc["keys"].(map[string]any)["k"].(map[string]any)
+	v2 := "not-a-real-device-key-for-the-matrix"
+	if err := c.WriteKey("tacacs_v2", []byte(v2)); err != nil {
+		t.Fatal(err)
+	}
+	k["current"] = map[string]any{"version": 2, "secret_ref": "file:/run/port49/keys/tacacs_v2"}
+	k["retired"] = []any{map[string]any{"version": 1, "secret_ref": "file:/run/port49/keys/tacacs_v1"}}
+	next, err := yaml.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := m.mint()
+	if err := c.WritePolicy(next); err != nil {
+		t.Fatal(err)
+	}
+	shapetest.WaitFor(t, "port49d reading the policy that retires version 1", 30*time.Second, func() bool {
+		return strings.Contains(m.s.run("logs", "--no-color", "port49d"), "version 1 retired")
+	})
+	if st, err := m.dev.TryLogin("alice", tok); err == nil {
+		t.Fatalf("a login keyed with the retired version was answered (status %d), want a reset with no reply", st)
+	}
+	logs := m.s.run("logs", "--no-color", "port49d")
+	found := false
+	for _, line := range strings.Split(logs, "\n") {
+		found = found || (strings.Contains(line, "unvalidated") && strings.Contains(line, "matches_retired"))
+	}
+	if !found {
+		t.Fatal("no unvalidated record says matches_retired")
+	}
+	dv2 := shapetest.Device{T: t, Addr: tacacsAddr, Key: []byte(v2)}
+	if st, err := dv2.TryLogin("alice", m.mint()); err == nil && st == wire.AuthenStatusPass {
+		t.Fatal("the next connection from the struck source was served at once: the miss was not a strike")
+	}
+	if err := c.WritePolicy(policy); err != nil { // the version 1 policy back
+		t.Fatal(err)
+	}
+	next2 := m.mint()
+	shapetest.WaitFor(t, "a version 1 login after the policy is back and the backoff has passed", 30*time.Second,
+		func() bool { return m.passes(next2) })
+}
+
+// snapshot saves etcd's state into the snap volume as the stack's etcd root
+// (etcd-init.sh's client certificate) and returns when it was taken.
+func (m matrix) snapshot() time.Time {
+	t := m.s.t
+	t.Helper()
+	img := m.etcdImage()
+	out, err := exec.Command("docker", "run", "--rm", "--user", "0", "--network", project+"_port49",
+		"-v", project+"_etcd-root:/etcd-root:ro", "-v", snapVolume+":/snap", "--entrypoint", "etcdctl", img,
+		"--endpoints=https://etcd-1:2379", "--cacert=/etcd-root/ca.pem", "--cert=/etcd-root/root.pem",
+		"--key=/etcd-root/root-key.pem", "snapshot", "save", "/snap/snap.db").CombinedOutput()
+	if err != nil {
+		t.Fatalf("etcdctl snapshot save: %v\n%s", err, shapetest.Filtered(m.root, string(out)))
+	}
+	return time.Now()
+}
+
+func (m matrix) etcdImage() string {
+	t := m.s.t
+	t.Helper()
+	id := strings.TrimSpace(m.s.run("ps", "-aq", "etcd-1"))
+	out, err := exec.Command("docker", "inspect", "-f", "{{.Config.Image}}", id).Output()
+	if err != nil {
+		t.Fatalf("docker inspect etcd-1: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// restoreMembers replaces each stopped member's data directory with the
+// snapshot restored under that member's name and peer URL, revision bumped by
+// 1000000 and marked compacted, as the runbook says.
+func (m matrix) restoreMembers() {
+	t := m.s.t
+	t.Helper()
+	img := m.etcdImage()
+	for _, name := range members {
+		vol := project + "_" + name + "-data"
+		out, err := exec.Command("docker", "run", "--rm", "--user", "0", "-v", snapVolume+":/snap:ro", "-v", vol+":/var/lib/etcd",
+			"--entrypoint", "etcdutl", img, "snapshot", "restore", "/snap/snap.db",
+			"--bump-revision", "1000000", "--mark-compacted", "--name", name,
+			"--initial-cluster", initialCluster, "--initial-cluster-token", "port49-compose",
+			"--initial-advertise-peer-urls", "https://"+name+":2380", "--data-dir", "/var/lib/etcd/new").CombinedOutput()
+		if err != nil {
+			t.Fatalf("etcdutl snapshot restore for %s: %v\n%s", name, err, shapetest.Filtered(m.root, string(out)))
+		}
+		if out, err := exec.Command("docker", "run", "--rm", "-v", vol+":/d", "--entrypoint", "sh", "port49-setup:dev", "-c",
+			"set -eu; rm -rf /d/member; mv /d/new/member /d/member; rmdir /d/new; chown -R 65532:65532 /d/member").CombinedOutput(); err != nil {
+			t.Fatalf("swapping %s's data directory: %v\n%s", name, err, out)
+		}
+	}
+}
+
+// restoreGuarded is the restore guard end to end (spec decision 36; Task 9a).
+// TestStoreSnapshotRestore is lab-tagged on a bare etcd binary; on compose the
+// same steps are spelled out.
+func restoreGuarded(m matrix) {
+	t := m.s.t
+	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", snapVolume).Run() })
+	const guarded, until = "port49_redemption_restore_guarded", "port49_redemption_restore_guard_until_timestamp_seconds"
+
+	// Steps 1-3: a token minted before the snapshot and redeemed after it is
+	// the replay a restore brings back.
+	replay := m.mint()
+	snapAt := m.snapshot()
+	if !m.passes(replay) {
+		t.Fatal("the login that moves the store past the snapshot did not pass")
+	}
+	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
+	// Steps 4-5.
+	m.restoreMembers()
+	m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
+
+	// Step 6: guarded, and the token that was redeemed is refused, not redeemed again.
+	shapetest.WaitFor(t, guarded+" at 1", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, guarded) == 1 })
+	if !m.refused(replay) {
+		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
+	}
+	// Step 9: the time bound is armed, at the snapshot's time + 15m + 5m at most.
+	u := m.gauge(daemonMetrics, until)
+	if u == 0 || u < float64(snapAt.Unix())-5 || u > float64(snapAt.Add(20*time.Minute+time.Minute).Unix()) {
+		t.Fatalf("%s is %.0f, want non-zero and within 15m + 5m + 60s of the snapshot (%d)", until, u, snapAt.Unix())
+	}
+	// Step 7: the brokers' witness sees the restore and their purge lifts it.
+	shapetest.WaitFor(t, guarded+" back at 0", 2*holdTTL, func() bool { return m.gauge(daemonMetrics, guarded) == 0 })
+	next := m.mint()
+	shapetest.WaitFor(t, "a fresh login", 20*time.Second, func() bool { return m.passes(next) })
+
+	// Step 8: with the guard standing and no broker to purge, stopping port49d
+	// leaves the device's connection refused at once.
+	again := m.mint()
+	m.snapshot()
+	if !m.passes(again) {
+		t.Fatal("the login after the second snapshot did not pass")
+	}
+	m.s.run("stop", "port49-broker")
+	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
+	m.restoreMembers()
+	m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
+	shapetest.WaitFor(t, guarded+" at 1 with the brokers stopped", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, guarded) == 1 })
+	m.s.run("stop", "port49d")
+	if listening(tacacsAddr) {
+		t.Fatal("TCP 49 still accepts with the guard standing and port49d stopped")
+	}
+	fmt.Fprintln(os.Stderr, "failure matrix: restore guard held, lifted by the purge, and port49d stopped at the 3am escape; guard until "+strconv.FormatFloat(u, 'f', 0, 64))
+}

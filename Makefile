@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l88
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l88 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -183,7 +183,7 @@ vet:
 # `make test && make vet > log 2>&1` is writing.
 	gofmt -l . | (! grep .)
 	go vet ./...
-	go vet -tags compose ./tests/compose/...
+	go vet -tags compose,failmatrix ./tests/compose/...
 	go vet -tags hwkey_dlopen ./...
 	go vet -tags hwkey,hwkey_dlopen $(HW_PACKAGES) ./tests/lab/l60/
 	go vet -tags systemd,helm,kind,image,packages ./tests/...
@@ -436,6 +436,11 @@ image-check: image
 # never needs Docker.
 compose-smoke:
 	go test -tags compose ./tests/compose/ -count=1 -v -timeout 20m
+
+# The design 12 failure matrix on the compose stack (plan 12c, Task 9), CI only: it
+# refuses on a host with a security key attached (shapetest.RefuseOnKeyHost).
+failure-matrix:
+	go test -tags compose,failmatrix ./tests/compose/ -run '^TestFailureMatrix$$' -count=1 -v -timeout 40m
 
 # Secret scanning (.gitleaks.toml). The pinned release is downloaded into bin/ and verified by
 # sha256. CI runs `make leaks`, so this is the single pin: bump the version and the checksum
