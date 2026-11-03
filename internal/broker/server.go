@@ -293,14 +293,15 @@ var readTimeout = 30 * time.Second
 // few kilobytes, so this is generous; it exists for a peer that vanished
 // mid-answer, whose connection would otherwise count as busy to the principal
 // cap until TCP gave up (about 15 minutes), and four of them would refuse
-// their owner (decision 32). It is set per response, at its first byte, and
-// not as the server's WriteTimeout: that one starts when the request is read
-// and would have to outlast the longest handler (a mint's 10 s hold, an
-// import's long body read, admin_api.go).
+// their owner (decision 32). It is set on every write, and not as the
+// server's WriteTimeout: that one starts when the request is read and would
+// have to outlast the longest handler (a mint's 10 s hold, an import's long
+// body read, admin_api.go). When a write fails, crypto/tls spends up to 5 s
+// on its close_notify before the connection is gone.
 var writeTimeout = 15 * time.Second
 
-// boundWrites gives each response's write a deadline of writeTimeout from
-// its first byte, and a later write the same one again. The deadline is per
+// boundWrites gives each write of a response a deadline of writeTimeout from
+// that write (Write, WriteHeader or Flush). The deadline is per
 // Write, so it is the total bound only because every broker response is a
 // single Write; a handler that streams in many writes would need a total
 // bound of its own. Flush is passed through (answerRefusal flushes its answer
