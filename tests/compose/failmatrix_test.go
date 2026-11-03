@@ -9,6 +9,7 @@ package compose
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -288,6 +289,22 @@ func TestFailureMatrix(t *testing.T) {
 		if limit := 12*time.Second + callTimeout; slowest > limit {
 			t.Fatalf("slowest login %v, want under 12s + call_timeout (%v)", slowest, limit)
 		}
+		// The mint is not hedged, so with a member dark it can be refused
+		// store_unavailable: measured, with the retry `port49 token` makes (the
+		// reply's Retry-After, up to 30s). Each must succeed within that bound.
+		var retried int
+		var slowestMint time.Duration
+		for i := 0; i < 30; i++ {
+			_, retries, took := shapetest.MintRetrying(t, m.brokerDir, brokerAddr, "smoke1")
+			if retries > 0 {
+				retried++
+			}
+			slowestMint = max(slowestMint, took)
+			t.Logf("mint %d of 30 with one member dark: %d retries in %v", i+1, retries, took)
+		}
+		t.Logf("mints with one member dark: %d of 30 needed a retry, slowest %v", retried, slowestMint)
+		fmt.Fprintf(os.Stderr, "failure matrix: one member dark: 30 of 30 logins passed (slowest %v); %d of 30 mints needed a retry (slowest %v)\n",
+			slowest, retried, slowestMint)
 	})
 
 	run("broker_stopped", func(m matrix) {
@@ -447,6 +464,8 @@ func counter(t *testing.T, addr, sample string) float64 {
 var ctxIDRe = regexp.MustCompile(`"ctx_id":"([^"]+)"`)
 
 // lastCtxID is the ctx_id of the last decision record in log, "" if none.
+var followedRe = regexp.MustCompile(`meta/witness is [^,]+, below the [1-9][0-9]* this port49d followed`)
+
 func lastCtxID(log string) string {
 	all := ctxIDRe.FindAllStringSubmatch(log, -1)
 	if len(all) == 0 {
@@ -583,6 +602,51 @@ func (m matrix) etcdImage() string {
 	return strings.TrimSpace(string(out))
 }
 
+// etcdGet is `etcdctl get key -w json` as the stack's root client: the store's
+// current revision and the key's ModRevision (0 when absent).
+func (m matrix) etcdGet(key string) (header, mod int64) {
+	t := m.s.t
+	t.Helper()
+	out, err := exec.Command("docker", "run", "--rm", "--user", "0", "--network", project+"_port49",
+		"-v", project+"_etcd-root:/etcd-root:ro", "--entrypoint", "etcdctl", m.etcdImage(),
+		"--endpoints=https://etcd-1:2379,https://etcd-2:2379,https://etcd-3:2379", "--cacert=/etcd-root/ca.pem",
+		"--cert=/etcd-root/root.pem", "--key=/etcd-root/root-key.pem", "get", key, "-w", "json").Output()
+	if err != nil {
+		t.Fatalf("etcdctl get %s: %v", key, err)
+	}
+	var r struct {
+		Header struct {
+			Revision int64 `json:"revision"`
+		} `json:"header"`
+		Kvs []struct {
+			ModRevision int64 `json:"mod_revision"`
+		} `json:"kvs"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil {
+		t.Fatalf("etcdctl get %s: %v", key, err)
+	}
+	if len(r.Kvs) == 1 {
+		mod = r.Kvs[0].ModRevision
+	}
+	return r.Header.Revision, mod
+}
+
+// witnessPast waits, up to 10s, for meta/witness's ModRevision to reach the
+// store's revision as it stands now (after the login that moved the store):
+// the runner has then rewritten the witness past everything a snapshot taken
+// before holds.
+func (m matrix) witnessPast() {
+	t := m.s.t
+	t.Helper()
+	const witnessKey = "/port49/v1/meta/witness"
+	want, _ := m.etcdGet(witnessKey)
+	var mod int64
+	shapetest.WaitFor(t, fmt.Sprintf("meta/witness at or past revision %d", want), 10*time.Second, func() bool {
+		_, mod = m.etcdGet(witnessKey)
+		return mod >= want
+	})
+}
+
 // restoreMembers replaces each stopped member's data directory with the
 // snapshot restored under that member's name and peer URL, revision bumped by
 // 1000000 and marked compacted, as the runbook says.
@@ -618,12 +682,13 @@ func restoreGuarded(m matrix) {
 	const guarded, until = "port49_redemption_restore_guarded", "port49_redemption_restore_guard_until_timestamp_seconds"
 	// The runner rewrites meta/witness once a second, and only when the store
 	// moved (witnessPass). A restore is seen only if the witness it brings back
-	// is older than the one port49d followed, so the stack is given three
-	// passes after the login that moves it: a stop inside the first second
-	// leaves the snapshot's witness current, and the guard rightly sees no
-	// restore (runner.go keepWitness: "about the most of a snapshot's lead over
-	// the last witness that the check cannot see").
-	witnessMovesPast := func() { time.Sleep(3 * time.Second) }
+	// is older than the one port49d followed, so after the login that moves the
+	// store the stack is polled until the witness is at or past that login's
+	// revision: a stop inside the first second would leave the snapshot's
+	// witness current, and the guard rightly sees no restore (runner.go
+	// keepWitness: "about the most of a snapshot's lead over the last witness
+	// that the check cannot see").
+	witnessMovesPast := func() { m.witnessPast() }
 
 	// Steps 1-3: a token minted before the snapshot and redeemed after it is
 	// the replay a restore brings back.
@@ -640,6 +705,12 @@ func restoreGuarded(m matrix) {
 
 	// Step 6: guarded, and the token that was redeemed is refused, not redeemed again.
 	shapetest.WaitFor(t, guarded+" at 1", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, guarded) == 1 })
+	// port49d had followed a witness before the restore: the drop line names
+	// it ("below the N this port49d followed"), which a guard that had followed
+	// none could not say.
+	if log := m.s.run("logs", "--no-color", "port49d"); !followedRe.MatchString(log) {
+		t.Fatalf("port49d's log has no \"meta/witness is ..., below the N this port49d followed\" line: it had followed no witness before the restore")
+	}
 	if !m.refused(replay) {
 		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
 	}

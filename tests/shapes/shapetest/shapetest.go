@@ -174,6 +174,54 @@ func mintRaw(t *testing.T, brokerDir, cert, key, addr, device string) (int, []by
 	}
 }
 
+// MintRetrying is Mint as `port49 token` makes it (cmd/port49/tokenretry.go):
+// a mint refused store_unavailable, as a 503 or as a denied item, is tried
+// again after the reply's Retry-After (5s when it carries none) for up to 30s
+// from the first try. It returns the token, how many tries were refused, and
+// how long the whole mint took; it fails the test when the budget is spent.
+func MintRetrying(t *testing.T, brokerDir, brokerAddr, device string) (token string, retries int, took time.Duration) {
+	t.Helper()
+	const budget, fallback = 30 * time.Second, 5 * time.Second
+	c := brokerClient(t, brokerDir, testpki.LabClientCert, testpki.LabClientKey)
+	start := time.Now()
+	for {
+		resp, err := c.Post("https://"+brokerAddr+"/v1/tokens", "application/json",
+			bytes.NewReader([]byte(`{"devices":["`+device+`"]}`)))
+		wait := fallback
+		refused := false
+		if err == nil {
+			body, rerr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			var out api.MintResponse
+			var e api.Error
+			json.Unmarshal(body, &e)
+			if n, aerr := strconv.Atoi(resp.Header.Get("Retry-After")); aerr == nil && n > 0 && n <= 86400 {
+				wait = time.Duration(n) * time.Second
+			}
+			switch {
+			case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "store_unavailable":
+				refused = true
+			case json.Unmarshal(body, &out) == nil && len(out.Results) == 1 && out.Results[0].Login != "":
+				return out.Results[0].Login, retries, time.Since(start)
+			case json.Unmarshal(body, &out) == nil && len(out.Results) == 1 && out.Results[0].Reason == "store_unavailable":
+				refused = true
+			default:
+				t.Fatalf("mint: status %d, error %q", resp.StatusCode, e.Error) // never the body: it may hold a token
+			}
+		} else {
+			t.Fatalf("mint: %v", err) // the agent retries only store_unavailable
+		}
+		if !refused || wait > budget-time.Since(start) {
+			t.Fatalf("mint refused store_unavailable for %v (%d tries), past the 30s the agent keeps trying", time.Since(start), retries+1)
+		}
+		retries++
+		time.Sleep(wait)
+	}
+}
+
 // mintItem is mintRaw's one device answer. The item's String withholds its
 // tokens.
 func mintItem(t *testing.T, brokerDir, cert, key, addr, device string) api.MintItem {
