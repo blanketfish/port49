@@ -64,6 +64,7 @@ func serveThroughWith(t *testing.T, f *fixture, lim ListenerLimits, logf func(st
 	if set != nil {
 		set(bl)
 	}
+	t.Cleanup(func() { seen.Delete(bl) })
 	inner := srv.Handler
 	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestsSeen(bl).Add(1)
