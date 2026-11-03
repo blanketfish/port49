@@ -355,7 +355,7 @@ etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
 datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
 500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
 or backend commit p99 stays over its bound for 10 minutes.
-port49d's accounting spool directory needs the same: each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency.
+port49d's accounting spool directory needs the same: each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `accounting_spool_disk_slow` alert watches it.
 
 ## Backups
 

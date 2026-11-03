@@ -97,6 +97,7 @@ threshold when you change the setting it follows.
 | roadmap, plan 12c etcd rules: "`etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8` (ticket)" | `etcd_db_nearly_full` | ticket | 10m | Defragment or compact before the quota: ten minutes is not a spike. |
 | roadmap, plan 12c etcd rules: "`increase(etcd_server_leader_changes_seen_total[1h]) > 3` (ticket)" | `etcd_leader_changes` | ticket | none | Occasional changes are rollouts; four in an hour is a fault. |
 | Ryan 2026-11-03, run 5 diagnosis: "p99 of `etcd_disk_wal_fsync_duration_seconds` over 10 ms, or of `etcd_disk_backend_commit_duration_seconds` over 25 ms" | `etcd_disk_slow` | ticket | 10m | etcd's own guidance is a WAL fsync p99 under 10 ms; a drive that stalls can push store calls past the 500 ms call timeout in bursts (tests/lab/results/load-beehive.md). Ten minutes over a 5m rate is a drive, not a compaction. |
+| Ryan 2026-11-03, fix 6b: "p99 of `port49_accounting_spool_sync_seconds` over 10 ms for 10m" | `accounting_spool_disk_slow` | ticket | 10m | Every accounting ack waits on the spool's fsync; with the spool on a QLC drive account p99 was 67 ms at 170/s, in RAM under 1 ms (load-diagnosis-run5.md, run 6, cell c). |
 
 ## Notes
 
