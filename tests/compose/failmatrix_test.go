@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -138,13 +140,31 @@ func TestFailureMatrix(t *testing.T) {
 			f(m.with(t))
 		})
 	}
-	dark := func(name string, down, up func(m matrix)) {
+	// dark is a store row: while port49d still listens, a token login is
+	// answered ERROR store_unavailable and a command of an open session is
+	// answered cmdStatus, never PASS (design §12; spec §5.7). An unanswered
+	// connection is allowed only once the listener has closed.
+	dark := func(name string, cmdStatus uint8, down, up func(m matrix)) {
 		run(name, func(m matrix) {
 			t := m.s.t
+			if st := m.dev.Login("alice", m.mint()); st != wire.AuthenStatusPass {
+				t.Fatalf("login before the store went dark: status %d", st)
+			}
 			tok := m.mint()
 			down(m)
-			if !m.refused(tok) {
-				t.Fatal("a token login passed with the store dark")
+			st, err := m.dev.TryLogin("alice", tok)
+			switch {
+			case err == nil && st != wire.AuthenStatusError:
+				t.Fatalf("a token login with the store dark was answered status %#x, want ERROR (%#x)", st, wire.AuthenStatusError)
+			case err != nil && listening(tacacsAddr):
+				t.Fatalf("a token login with the store dark and the listener open was not answered: %v", err)
+			}
+			cst, err := m.dev.AuthorStatus("alice", "show", "version")
+			switch {
+			case err == nil && cst != cmdStatus:
+				t.Fatalf("a command with the store dark was answered status %#x, want %#x", cst, cmdStatus)
+			case err != nil && listening(tacacsAddr):
+				t.Fatalf("a command with the store dark and the listener open was not answered: %v", err)
 			}
 			shapetest.WaitFor(t, "the listener closed", closeAfter*healthInterval+callTimeout+2*time.Second,
 				func() bool { return !listening(tacacsAddr) })
@@ -158,10 +178,10 @@ func TestFailureMatrix(t *testing.T) {
 			shapetest.WaitFor(t, "a login", 10*time.Second, func() bool { return m.passes(next) })
 		})
 	}
-	dark("store_hangs",
+	dark("store_hangs", wire.AuthorStatusError,
 		func(m matrix) { m.s.run("pause", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("unpause", "etcd-2", "etcd-3") })
-	dark("store_stopped",
+	dark("store_stopped", wire.AuthorStatusFail,
 		func(m matrix) { m.s.run("stop", "etcd-1", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("start", "etcd-1", "etcd-2", "etcd-3") })
 
@@ -212,9 +232,7 @@ func TestFailureMatrix(t *testing.T) {
 
 	run("port49d_stopped", func(m matrix) {
 		m.s.run("stop", "port49d")
-		if listening(tacacsAddr) {
-			m.s.t.Fatal("TCP 49 still accepts with port49d stopped: a device would not find the connection refused")
-		}
+		refusedAtOnce(m.s.t, "port49d stopped")
 	})
 
 	run("store_absent_at_start", func(m matrix) {
@@ -252,13 +270,15 @@ func TestFailureMatrix(t *testing.T) {
 		m.s.run("restart", "port49d")
 		m.s.ready(daemonMetrics)
 		shapetest.WaitFor(t, "the listener", time.Minute, func() bool { return listening(tacacsAddr) })
-		if !m.passes(held) {
-			t.Fatal("a token minted before the restart did not redeem (split deployment, decision 36 ruling 7)")
-		}
+		since := time.Now().UTC().Format(time.RFC3339)
+		// The open session's command first: a redemption would rejoin the context.
 		if !m.dev.Permits("alice", "show", "version") {
 			t.Fatal("an open session's next command after the restart was refused")
 		}
-		after := lastCtxID(m.s.run("logs", "--no-color", "port49d"))
+		if !m.passes(held) {
+			t.Fatal("a token minted before the restart did not redeem (split deployment, decision 36 ruling 7)")
+		}
+		after := lastCtxID(m.s.run("logs", "--no-color", "--since", since, "port49d"))
 		if before == "" || after != before {
 			t.Fatalf("the command after the restart was answered from ctx_id %q, want the session's %q", after, before)
 		}
@@ -302,6 +322,47 @@ func TestFailureMatrix(t *testing.T) {
 	})
 
 	run("restore_guarded", restoreGuarded)
+}
+
+// refusedAtOnce fails unless a connection to TCP 49 is refused (ECONNREFUSED)
+// within 2s: a device then treats the server as down at once. A dial that times
+// out, or one that connects and is closed, is the silence or the hang that
+// costs a device its own timeout.
+func refusedAtOnce(t *testing.T, when string) {
+	t.Helper()
+	start := time.Now()
+	c, err := net.DialTimeout("tcp", tacacsAddr, 2*time.Second)
+	if err == nil {
+		c.Close()
+		t.Fatalf("TCP 49 accepts a connection with %s: a device would not find it refused", when)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) || time.Since(start) > 2*time.Second {
+		t.Fatalf("a connection to TCP 49 with %s: %v after %v, want ECONNREFUSED at once", when, err, time.Since(start))
+	}
+}
+
+// counter reads one sample of a labelled counter, 0 when it has none yet.
+func counter(t *testing.T, addr, sample string) float64 {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics at %s: %v", addr, err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, sample+" "); ok {
+			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil {
+				t.Fatalf("%s: %v", sample, err)
+			}
+			return f
+		}
+	}
+	return 0
 }
 
 var ctxIDRe = regexp.MustCompile(`"ctx_id":"([^"]+)"`)
@@ -352,14 +413,23 @@ func retiredKey(m matrix) {
 		t.Fatal(err)
 	}
 	tok := m.mint()
+	// The version 1 policy goes back whatever happens below, or every later subtest meets a retired key.
+	t.Cleanup(func() {
+		if err := c.WritePolicy(policy); err != nil {
+			t.Logf("putting the version 1 policy back: %v", err)
+		}
+	})
 	if err := c.WritePolicy(next); err != nil {
 		t.Fatal(err)
 	}
 	shapetest.WaitFor(t, "port49d reading the policy that retires version 1", 30*time.Second, func() bool {
 		return strings.Contains(m.s.run("logs", "--no-color", "port49d"), "version 1 retired")
 	})
-	if st, err := m.dev.TryLogin("alice", tok); err == nil {
-		t.Fatalf("a login keyed with the retired version was answered (status %d), want a reset with no reply", st)
+	misses := counter(t, daemonMetrics, `port49_connection_events_total{event="key_miss_closed"}`)
+	st, err := m.dev.TryLogin("alice", tok)
+	var ne net.Error
+	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Fatalf("a login keyed with the retired version: status %d, error %v, want a reset with no reply", st, err)
 	}
 	logs := m.s.run("logs", "--no-color", "port49d")
 	found := false
@@ -369,11 +439,26 @@ func retiredKey(m matrix) {
 	if !found {
 		t.Fatal("no unvalidated record says matches_retired")
 	}
-	dv2 := shapetest.Device{T: t, Addr: tacacsAddr, Key: []byte(v2)}
-	if st, err := dv2.TryLogin("alice", m.mint()); err == nil && st == wire.AuthenStatusPass {
-		t.Fatal("the next connection from the struck source was served at once: the miss was not a strike")
+	if got := counter(t, daemonMetrics, `port49_connection_events_total{event="key_miss_closed"}`); got <= misses {
+		t.Fatalf("key_miss_closed went from %v to %v: the retired version's packet was not struck", misses, got)
 	}
-	if err := c.WritePolicy(policy); err != nil { // the version 1 policy back
+	// The strike's hold: the same source, under the good version 2 key, is reset
+	// at Accept, and once the backoff has passed the same token redeems (a
+	// connection reset at Accept redeems nothing).
+	held := counter(t, daemonMetrics, `port49_connection_events_total{event="held_refused"}`)
+	dv2 := shapetest.Device{T: t, Addr: tacacsAddr, Key: []byte(v2)}
+	tok2 := m.mint()
+	if st, err := dv2.TryLogin("alice", tok2); err == nil {
+		t.Fatalf("the next connection from the struck source was answered (status %d): the miss was not a strike", st)
+	}
+	if got := counter(t, daemonMetrics, `port49_connection_events_total{event="held_refused"}`); got <= held {
+		t.Fatalf("held_refused went from %v to %v: the immediate retry was not refused by the hold", held, got)
+	}
+	shapetest.WaitFor(t, "a version 2 login once the backoff has passed", 30*time.Second, func() bool {
+		st, err := dv2.TryLogin("alice", tok2)
+		return err == nil && st == wire.AuthenStatusPass
+	})
+	if err := c.WritePolicy(policy); err != nil { // the version 1 policy back, and v1 logins waited for
 		t.Fatal(err)
 	}
 	next2 := m.mint()
@@ -427,7 +512,7 @@ func (m matrix) restoreMembers() {
 		}
 		if out, err := exec.Command("docker", "run", "--rm", "-v", vol+":/d", "--entrypoint", "sh", "port49-setup:dev", "-c",
 			"set -eu; rm -rf /d/member; mv /d/new/member /d/member; rmdir /d/new; chown -R 65532:65532 /d/member").CombinedOutput(); err != nil {
-			t.Fatalf("swapping %s's data directory: %v\n%s", name, err, out)
+			t.Fatalf("swapping %s's data directory: %v\n%s", name, err, shapetest.Filtered(m.root, string(out)))
 		}
 	}
 }
@@ -437,6 +522,8 @@ func (m matrix) restoreMembers() {
 // same steps are spelled out.
 func restoreGuarded(m matrix) {
 	t := m.s.t
+	// A killed run's snapshot must not be the one restored.
+	exec.Command("docker", "volume", "rm", "-f", snapVolume).Run()
 	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", snapVolume).Run() })
 	const guarded, until = "port49_redemption_restore_guarded", "port49_redemption_restore_guard_until_timestamp_seconds"
 
@@ -480,8 +567,6 @@ func restoreGuarded(m matrix) {
 	m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
 	shapetest.WaitFor(t, guarded+" at 1 with the brokers stopped", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, guarded) == 1 })
 	m.s.run("stop", "port49d")
-	if listening(tacacsAddr) {
-		t.Fatal("TCP 49 still accepts with the guard standing and port49d stopped")
-	}
+	refusedAtOnce(t, "the guard standing and port49d stopped")
 	fmt.Fprintln(os.Stderr, "failure matrix: restore guard held, lifted by the purge, and port49d stopped at the 3am escape; guard until "+strconv.FormatFloat(u, 'f', 0, 64))
 }

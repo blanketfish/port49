@@ -91,9 +91,10 @@ func (d Device) Login(user, password string) uint8 {
 	return st
 }
 
-// Permits asks for user's session (no words) or a command at 15.
-func (d Device) Permits(user string, words ...string) bool {
-	d.T.Helper()
+// AuthorStatus asks for user's session (no words) or a command at 15, and
+// returns the reply's status, or the error of a connection that was not
+// answered.
+func (d Device) AuthorStatus(user string, words ...string) (uint8, error) {
 	priv := uint8(15)
 	args := [][]byte{[]byte("service=shell")}
 	if len(words) == 0 {
@@ -109,13 +110,24 @@ func (d Device) Permits(user string, words ...string) bool {
 		PrivLvl: priv, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte(user),
 		Port: []byte("vty1"), Args: args}.Encode())
 	if err != nil {
-		d.T.Fatalf("authorize: %v", err)
+		return 0, err
 	}
 	r, err := wire.DecodeAuthorResponse(b)
 	if err != nil {
-		d.T.Fatal(err)
+		return 0, err
 	}
-	return r.Status == wire.AuthorStatusPassAdd || r.Status == wire.AuthorStatusPassRepl
+	return r.Status, nil
+}
+
+// Permits is AuthorStatus that fails the test on a connection that was not
+// answered, and reports whether the answer is a PASS.
+func (d Device) Permits(user string, words ...string) bool {
+	d.T.Helper()
+	st, err := d.AuthorStatus(user, words...)
+	if err != nil {
+		d.T.Fatalf("authorize: %v", err)
+	}
+	return st == wire.AuthorStatusPassAdd || st == wire.AuthorStatusPassRepl
 }
 
 // brokerClient is an HTTPS client for the broker at brokerDir's lab CA, with
