@@ -146,6 +146,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 			return withHeldConn(ctx, acceptedAt(c, b.Now), mappedOf(c))
 		},
 		ConnState: func(c net.Conn, s http.ConnState) {
+			connState(c, s)
 			closeIdleWithoutCertificate(c, s)
 			b.connClosed(c, s)
 		},

@@ -173,6 +173,7 @@ type trackedConn struct {
 	mapped     *directory.Answer
 	legacy     string // the email-SAN principal the certificate had before a directory, "" without one
 	gone       bool
+	active     bool // a request is in flight on it (http.StateActive), under l.mu
 	closeOnce  sync.Once
 }
 
@@ -391,7 +392,7 @@ func (l *Listener) handshake(c *trackedConn) {
 				principal, c.mapped = a.Principal, &a
 			}
 		}
-		rv, ok := l.bind(c, principal, legacy, certKey, ref != nil)
+		rv, ok, capped := l.bind(c, principal, legacy, certKey, ref != nil)
 		// Bind has chosen the answer, so the revocation the refusal carries
 		// is queued now and its mark cannot change it (BindStatus); every
 		// branch queues it, as the status named the certificate whatever
@@ -402,6 +403,15 @@ func (l *Listener) handshake(c *trackedConn) {
 		switch {
 		case !ok:
 			_ = tc.Close()
+			return
+		case capped:
+			l.m.BrokerConnectionEvents.WithLabelValues("principal_cap_refused").Inc()
+			l.say("principal_cap", "broker: answering a connection from %s 503 too_many_connections: %s "+
+				"already holds %d connections with a request in flight (broker.max_conns_per_principal)",
+				c.src, principal, l.lim.MaxPerPrincipal)
+			l.answerRefused(tc, http.StatusServiceUnavailable, api.Error{Error: "too_many_connections",
+				Detail: "every connection this identity holds has a request in flight; retry shortly"},
+				capRetryAfter, principal, cred, "")
 			return
 		case rv != nil:
 			l.answerRefused(tc, http.StatusUnauthorized, revokedError(*rv), 0, principal, cred,
@@ -485,23 +495,25 @@ func handshakeReason(err error) string {
 }
 
 // bind moves c from its source's pending count to its principal's held
-// connections, closing the principal's oldest past MaxPerPrincipal. It
+// connections, closing the principal's oldest idle one past MaxPerPrincipal. It
 // reports false when c was closed under it, and the mark when one names c's
 // principal or certificate: c is then left charged to its source, never
 // held, for answerRefused to answer and close. refused (Status refused c)
 // leaves c the same way once no mark names it, and bind returns nil, true.
-func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refused bool) (*store.Revocation, bool) {
+// capped is the same for a principal whose held connections all have a request
+// in flight: c is left charged to its source, for the 503 to answer.
+func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refused bool) (rv *store.Revocation, ok, capped bool) {
 	l.mu.Lock()
 	if c.gone {
 		l.mu.Unlock()
-		return nil, false
+		return nil, false, false
 	}
 	keys := [][2]string{{store.RevocationPrincipal, principal}, {store.RevocationCert, certKey}}
 	if legacy != "" {
 		keys = append(keys, [2]string{store.RevocationPrincipal, legacy})
 	}
 	for _, k := range keys {
-		rv, marked := l.marked[k]
+		mark, marked := l.marked[k]
 		if !marked {
 			continue
 		}
@@ -516,26 +528,39 @@ func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refus
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
 		l.say("revoked_refused", "broker: answering a connection from %s credential_revoked and "+
 			"closing it as it bound: %s or its certificate is revoked", c.src, principal)
-		return &rv, true
+		return &mark, true, false
 	}
 	if refused {
 		l.mu.Unlock()
-		return nil, true
+		return nil, true, false
 	}
 	l.unpendLocked(c.src)
 	c.principal, c.certKey, c.legacy = principal, certKey, legacy
 	held := append(l.held[principal], c)
 	var evicted *trackedConn
 	if len(held) > l.lim.MaxPerPrincipal {
-		// The oldest of the same certificate goes first, so a flood from one
-		// certificate churns its own slots and never its owner's other
-		// certificate's (pre-flight I3); otherwise the principal's oldest.
-		i := 0
+		// The oldest idle connection of the same certificate goes first, so
+		// a flood from one certificate churns its own slots and never its
+		// owner's other certificate's (pre-flight I3); otherwise the
+		// principal's oldest idle one. A connection with a request in flight
+		// is alive and is never closed for the cap: with none idle the new
+		// connection is the one refused (decision 32; load cell e2).
+		i := -1
 		for j, h := range held[:len(held)-1] {
+			if h.active {
+				continue
+			}
 			if h.certKey == certKey {
 				i = j
 				break
 			}
+			if i < 0 {
+				i = j
+			}
+		}
+		if i < 0 {
+			l.mu.Unlock()
+			return nil, true, true
 		}
 		evicted = held[i]
 		held = append(held[:i:i], held[i+1:]...)
@@ -545,12 +570,12 @@ func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refus
 	if evicted != nil {
 		l.m.BrokerConnectionEvents.WithLabelValues("principal_cap_evicted").Inc()
 		l.say("principal_cap", "broker: %s opened more than %d held connections "+
-			"(broker.max_conns_per_principal); its oldest, from %s and open since %s, is closed", principal,
+			"(broker.max_conns_per_principal); its oldest idle one, from %s and open since %s, is closed", principal,
 			l.lim.MaxPerPrincipal, evicted.src, evicted.acceptedAt.UTC().Format(time.RFC3339))
 		_ = evicted.Close()
 	}
 	l.gauge()
-	return nil, true
+	return nil, true, false
 }
 
 // markedOf is the mark naming the certificate's key, else the principal its
@@ -580,6 +605,10 @@ func (l *Listener) markedOf(certKey, legacy string) *store.Revocation {
 // §5.1.4), where a bare close reads as a broker that restarted, and keeps it
 // on a 503. The request reaches no handler and no store, and is never
 // logged; a connection that sends none is closed unanswered and unrecorded.
+// capRetryAfter is the Retry-After, in seconds, of a connection refused
+// because every connection its principal holds has a request in flight.
+const capRetryAfter = 1
+
 func (l *Listener) answerRefused(tc *tls.Conn, status int, body api.Error, retryAfter int, principal string,
 	cred store.Credential, reason decision.Reason) {
 	defer tc.Close()
@@ -598,7 +627,7 @@ func (l *Listener) answerRefused(tc *tls.Conn, status int, body api.Error, retry
 	if errors.As(err, &ne) && ne.Timeout() {
 		return
 	}
-	if l.Refused != nil {
+	if l.Refused != nil && reason != "" { // a cap refusal is no decision record
 		l.Refused(req.URL.Path, principal, cred, reason)
 	}
 	var buf bytes.Buffer
@@ -772,4 +801,20 @@ func acceptedAt(c net.Conn, now func() time.Time) time.Time {
 		}
 	}
 	return now()
+}
+
+// connState records whether a request is in flight on c, from the
+// http.Server's ConnState: the principal cap closes idle connections only.
+func connState(c net.Conn, s http.ConnState) {
+	tc, ok := c.(*tls.Conn)
+	if !ok {
+		return
+	}
+	t, ok := tc.NetConn().(*trackedConn)
+	if !ok {
+		return
+	}
+	t.l.mu.Lock()
+	t.active = s == http.StateActive
+	t.l.mu.Unlock()
 }
