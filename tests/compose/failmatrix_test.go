@@ -32,17 +32,19 @@ import (
 
 // The settings deploy/compose/config/port49d.yaml states and the defaults it leaves.
 const (
-	healthInterval = time.Second            // stores.directory.etcd.health.interval
-	closeAfter     = 5                      // health.close_after
-	openAfter      = 3                      // health.open_after
-	callTimeout    = 500 * time.Millisecond // etcd.call_timeout default
-	holdTTL        = 15 * time.Second       // etcd.hold_ttl default
-	tacacsAddr     = "127.0.0.1:49"
-	daemonMetrics  = "127.0.0.1:9049"
-	brokerMetrics  = "127.0.0.1:9050"
-	brokerAddr     = "127.0.0.1:8443"
-	snapVolume     = project + "_snap"
-	initialCluster = "etcd-1=https://etcd-1:2380,etcd-2=https://etcd-2:2380,etcd-3=https://etcd-3:2380"
+	healthInterval  = time.Second            // stores.directory.etcd.health.interval
+	closeAfter      = 5                      // health.close_after
+	openAfter       = 3                      // health.open_after
+	callTimeout     = 500 * time.Millisecond // etcd.call_timeout default
+	holdTTL         = 15 * time.Second       // etcd.hold_ttl default
+	electionTimeout = time.Second            // etcd's default --election-timeout (the compose stack sets none)
+	breakerOpenFor  = 5 * time.Second        // etcd.breaker.open_for default
+	tacacsAddr      = "127.0.0.1:49"
+	daemonMetrics   = "127.0.0.1:9049"
+	brokerMetrics   = "127.0.0.1:9050"
+	brokerAddr      = "127.0.0.1:8443"
+	snapVolume      = project + "_snap"
+	initialCluster  = "etcd-1=https://etcd-1:2380,etcd-2=https://etcd-2:2380,etcd-3=https://etcd-3:2380"
 )
 
 var members = []string{"etcd-1", "etcd-2", "etcd-3"}
@@ -145,8 +147,8 @@ func (m matrix) leader() string {
 	out, err := exec.Command("docker", "run", "--rm", "--user", "0", "--network", project+"_port49",
 		"-v", project+"_etcd-root:/etcd-root:ro", "--entrypoint", "etcdctl", m.etcdImage(),
 		"--endpoints=https://etcd-1:2379,https://etcd-2:2379,https://etcd-3:2379", "--cacert=/etcd-root/ca.pem",
-		"--cert=/etcd-root/root.pem", "--key=/etcd-root/root-key.pem", "endpoint", "status", "-w", "json").Output()
-	if err != nil {
+		"--cert=/etcd-root/root.pem", "--key=/etcd-root/root-key.pem", "endpoint", "status", "--command-timeout=3s", "-w", "json").Output()
+	if err != nil && len(out) == 0 { // a paused member makes the command fail after printing the others
 		t.Fatalf("etcdctl endpoint status: %v", err)
 	}
 	var sts []struct {
@@ -384,6 +386,57 @@ func TestFailureMatrix(t *testing.T) {
 		if limit := 12*time.Second + callTimeout; slowest > limit {
 			t.Fatalf("slowest login %v, want under 12s + call_timeout (%v)", slowest, limit)
 		}
+	})
+	// leader_dark: the member paused is the raft leader. The others hold no
+	// leader for an election, and the breaker holds its circuit open for open_for
+	// after the failures it saw: a refusal window no hedge can close. An operator
+	// does not choose which member dies, so the window is measured and bounded
+	// (election timeout + open_for + 5s), not asserted away.
+	run("leader_dark", func(m matrix) {
+		t := m.s.t
+		const rounds, perRound = 6, 5
+		bound := electionTimeout + breakerOpenFor + 5*time.Second
+		t.Cleanup(m.clearTokens)
+		var worst time.Duration
+		for r := 0; r < rounds; r++ {
+			m.clearTokens()
+			toks := make([]string, perRound)
+			for i := range toks {
+				toks[i] = m.mint()
+			}
+			leader := m.leader()
+			paused := time.Now()
+			m.s.run("pause", leader)
+			var firstRefused, lastRefused time.Duration
+			refused := 0
+			for i, tok := range toks {
+				for tries := 0; ; tries++ {
+					at := time.Since(paused)
+					if m.passes(tok) {
+						t.Logf("round %d login %d of %d: passed at +%v after %d refused", r+1, i+1, perRound, at.Round(time.Millisecond), tries)
+						break
+					}
+					refused++
+					if firstRefused == 0 {
+						firstRefused = at
+					}
+					lastRefused = at
+					if at > bound {
+						t.Fatalf("round %d: logins still refused %v after the leader %s was paused, want under election %v + open_for %v + 5s (%v)",
+							r+1, at.Round(time.Millisecond), leader, electionTimeout, breakerOpenFor, bound)
+					}
+					time.Sleep(250 * time.Millisecond)
+				}
+			}
+			worst = max(worst, lastRefused)
+			t.Logf("round %d: leader %s paused; %d refused attempts, first at +%v, last at +%v; new leader %s", r+1, leader, refused,
+				firstRefused.Round(time.Millisecond), lastRefused.Round(time.Millisecond), m.leader())
+			m.s.run("unpause", leader)
+			shapetest.WaitFor(t, "the unpaused member to rejoin", 30*time.Second, func() bool {
+				return m.gauge(daemonMetrics, "port49_store_health_failures") == 0
+			})
+		}
+		fmt.Fprintf(os.Stderr, "failure matrix: leader dark: refusals ended within %v of the pause at worst over %d rounds\n", worst.Round(time.Millisecond), rounds)
 	})
 
 	run("broker_stopped", func(m matrix) {
