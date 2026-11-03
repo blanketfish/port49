@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/store/etcd/etcdtest"
 )
@@ -35,5 +37,13 @@ func TestPingTokenReadsOnTheTokenConnection(t *testing.T) {
 	defer hcancel()
 	if err := s.PingToken(hctx); !errors.Is(err, store.ErrUnavailable) && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("PingToken on a hung store: %v", err)
+	}
+}
+
+// etcd out of space is its own error, still unavailable, and not "too large".
+func TestNoSpaceIsItsOwnUnavailableError(t *testing.T) {
+	err := unavailable(rpctypes.ErrNoSpace)
+	if !errors.Is(err, ErrNoSpace) || !errors.Is(err, store.ErrUnavailable) || errors.Is(err, ErrTooLarge) {
+		t.Fatalf("%v", err)
 	}
 }

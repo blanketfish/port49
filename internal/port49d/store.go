@@ -1000,13 +1000,27 @@ func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig
 		return nil
 	}
 	if err := b.CheckIdentityAt(cctx, true, ref.scope); err != nil {
-		if errors.Is(err, etcdstore.ErrMissingGrant) { // the refusal names the grant itself
-			return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, leaves["broker"].Subject.CommonName, err)
-		}
-		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
-			"apply 'port49d store-roles' output", at, leaves["broker"].Subject.CommonName, err)
+		return brokerRolesError(at, leaves["broker"].Subject.CommonName, err)
 	}
 	return nil
+}
+
+// brokerRolesError is the broker's identity check failing with err. The roles
+// hint goes only on a refusal; a full etcd names its alarm, and any other
+// error is said as it is.
+func brokerRolesError(at, cn string, err error) error {
+	if errors.Is(err, etcdstore.ErrMissingGrant) { // the refusal names the grant itself
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, cn, err)
+	}
+	switch {
+	case errors.Is(err, etcdstore.ErrNoSpace):
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; etcd's space quota is exceeded (alarm NOSPACE): "+
+			"compact and defragment etcd, then run 'etcdctl alarm disarm'", at, cn, err)
+	case errors.Is(err, etcdstore.ErrRefused):
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
+			"apply 'port49d store-roles' output", at, cn, err)
+	}
+	return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, cn, err)
 }
 
 // caCerts is the CA file's certificates, and a pool of them.

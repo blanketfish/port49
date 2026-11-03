@@ -97,6 +97,12 @@ var _ store.Store = (*Store)(nil)
 // no circuit (Task 9).
 var ErrRefused = store.ErrRefused
 
+// ErrNoSpace is etcd refusing a write because its backend is over its space
+// quota (alarm NOSPACE): compaction and defragmentation, then an alarm
+// disarm, mend it; roles and certificates do not. It travels with
+// store.ErrUnavailable.
+var ErrNoSpace = errors.New("etcd: space quota exceeded (alarm NOSPACE)")
+
 // ErrTooLarge is a request etcd will not take for its size (its
 // --max-request-bytes, 1.5 MiB by default, or gRPC's 2 MiB message
 // limit). It is a fault in the request, not in the store: never
@@ -259,6 +265,8 @@ func unavailable(err error) error {
 	case errors.Is(err, rpctypes.ErrPermissionDenied), errors.Is(err, rpctypes.ErrAuthFailed),
 		errors.Is(err, rpctypes.ErrUserEmpty), errors.Is(err, rpctypes.ErrInvalidAuthToken):
 		return fmt.Errorf("%w: %v", ErrRefused, err)
+	case errors.Is(err, rpctypes.ErrNoSpace):
+		return fmt.Errorf("%w: %w: %v", store.ErrUnavailable, ErrNoSpace, err)
 	case errors.Is(err, rpctypes.ErrRequestTooLarge), status.Code(err) == codes.ResourceExhausted:
 		return fmt.Errorf("%w: %v", ErrTooLarge, err)
 	}

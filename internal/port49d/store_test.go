@@ -853,3 +853,26 @@ func TestTheGuardNamesTheBlockItReadsThrough(t *testing.T) {
 func testDirectoryCache() *directoryCache {
 	return &directoryCache{fresh: store.NewFreshness(time.Now)}
 }
+
+// A full etcd is not a roles problem: the operator is told to compact, and the
+// roles hint stays on a refusal alone.
+func TestAFullEtcdIsNotReportedAsARolesProblem(t *testing.T) {
+	const roles = "store-roles"
+	noSpace := fmt.Errorf("writing probe: %w: %w", store.ErrUnavailable, etcdstore.ErrNoSpace)
+	got := brokerRolesError("stores.session.etcd", "broker", noSpace).Error()
+	if !strings.Contains(got, "etcd's space quota is exceeded (alarm NOSPACE): compact and defragment etcd, then run 'etcdctl alarm disarm'") {
+		t.Errorf("no space sentence: %s", got)
+	}
+	if strings.Contains(got, roles) {
+		t.Errorf("a full etcd got the roles hint: %s", got)
+	}
+	refused := fmt.Errorf("writing probe: %w", store.ErrRefused)
+	if got := brokerRolesError("stores.session.etcd", "broker", refused).Error(); !strings.Contains(got, roles) {
+		t.Errorf("a refusal lost the roles hint: %s", got)
+	}
+	other := fmt.Errorf("reading x: %w", store.ErrUnavailable)
+	got = brokerRolesError("stores.session.etcd", "broker", other).Error()
+	if strings.Contains(got, roles) || strings.Contains(got, "NOSPACE") {
+		t.Errorf("an unavailable store got a hint: %s", got)
+	}
+}
