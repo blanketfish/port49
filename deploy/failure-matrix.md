@@ -1,0 +1,40 @@
+# Failure matrix
+
+Design §12 as an operator reads it: what the device does, what you see, what you do, and the evidence
+that says so. Every row names a subtest of `tests/compose/failmatrix_test.go`
+(`TestFailureMatrix/<row>`, run by `make failure-matrix` and the `failmatrix` CI job), an existing test,
+or a closed lab row. `TestEveryMatrixRowHasEvidence` fails when a row of design §12 is missing here or has
+no evidence.
+
+## At 3am
+
+| You see | What the devices do | Do this | Page |
+|---|---|---|---|
+| port49d is up and its store is failing (`port49_store_health_failures` rising) | port49d answers `ERROR` `store_unavailable` for up to 5.5 s (`close_after` 5 x `interval` 1 s + `call_timeout`), then closes TCP 49. **Cisco IOS XE treats that `ERROR` as final, so break-glass is refused for those 5.5 s.** **Junos under the reference `authentication-order tacplus` (Decision 3) does the same.** After the close, devices find the connection refused and fall to their local method | Wait the 5.5 s, or stop port49d to get there at once. Then fix the store | `port49_store_health_failures_close` |
+| SR Linux, same case | Not yet measured: L87 decides whether break-glass waits for the close, as above. The reference does not ship until L87 (b) passes | Filled in with the L87 result (plan 12c Task 11) | |
+| `port49_redemption_restore_guarded` is 1 | port49d refuses every token login with an `ERROR`, which IOS XE and Junos under `tacplus` alone treat as final, so break-glass is refused too. The guard lifts when the brokers purge, or when every token the snapshot could hold has expired: the restored witness's time + 15m + 5m, which port49d's guard line and `port49_redemption_restore_guard_until_timestamp_seconds` give. That is at most 20m after the snapshot, so an older snapshot is never guarded. While the brokers are down, break-glass on those devices is refused by port49d's FAIL even after the guard lifts | Start the brokers: they purge and the guard lifts. If the brokers cannot start, **stop port49d**: devices then find the connection refused and fall to their local method. Revocations made after the snapshot are lost by any restore: re-issue them | `port49_redemption_restore_guarded` (10m) |
+| TCP 49 refused at once | The device treats port49 as down and uses its local method | Start port49d, or leave it stopped until the store is back | |
+
+## Rows
+
+| Failure | Device sees | Operator sees | Fix | Evidence |
+|---|---|---|---|---|
+| **Directory unavailable** | Logins in the grace window pass on the stored membership; past it a new session is refused 503 `directory_unavailable` | `port49_directory_server_down`, `port49_directory_refresh_stale` | Restore the directory servers; the grace is `broker.directory.grace` | `TestGraceReadsTheStoreAfterARestart`, `TestTheDirectoryDownSignInSaysSoAndHoldersMint` |
+| **Enrollment store lost** | Held certificates, tokens and IdP sign-in serve; a password sign-in is refused 503 `enrollment_store_lost` | `port49_directory_enrollment_store_ok` 0, `port49_directory_enrollment_store_lost` | `port49-broker init-enrollments` on a new install, else restore the file or `port49 directory import` | `TestALostEnrollmentStoreRefusesOnlyTheSignIn` |
+| **Identity provider unreachable** | A token held is accepted until its `exp` or `max_token_age`; new OIDC logins fail | `port49_oidc_keys_stale`, `port49_oidc_tokens_unavailable` | Restore the provider, or the broker's route to it | `TestAClusterJWKSOutageKeepsTheHeldKeys`, `TestATokenOlderThanMaxTokenAgeIsRefused` |
+| **Token store unavailable** | `FAIL` `store_unavailable` and every command denied until port49d closes its listener; then the connection is refused and the device falls to local | `port49_store_health_failures`, then the listener closing | Restore the store; port49d listens again after `open_after` passes | `TestFailureMatrix/store_stopped`, L4 |
+| **Store hangs or loses quorum** | `ERROR` `store_unavailable` within the packet deadline, then the listener closes (5.5 s at the defaults); one member dark is invisible | `port49_store_health_failures >= 5`, `port49_store_circuit_open` | Restore quorum; the listener returns on its own | `TestFailureMatrix/store_hangs`, `TestFailureMatrix/one_member_dark` |
+| **Store unreachable at start, or after a store gone** | Nothing listens while port49d waits, as with port49d stopped | `/readyz` 503, no listener | Restore the store; port49d listens and logins pass | `TestFailureMatrix/store_absent_at_start`, L35 |
+| **port49d restarted on etcd, or listening again after a store gone** | A token minted before a restart still redeems on the split deployment; an open session's next command is answered from the same context | A restart in the log; no alarm | None | `TestFailureMatrix/port49d_restarted`, L37 |
+| **Broker unavailable** | An open session runs on, a token minted before the stop logs in; no new token can be minted | Mint fails with a connection error | Start the broker | `TestFailureMatrix/broker_stopped`, L37 |
+| **All daemons unavailable** | The connection is refused at once; the device falls to local | TCP 49 refused | Start port49d | `TestFailureMatrix/port49d_stopped`, L4 |
+| **One region unavailable** | The device fails over to the next server | Per-region listener metrics | None | L74 |
+| **Device→daemon partition** | Silence: no reply and no reset; the device waits out its own timeout, then falls to local | Nothing at port49d: no connection arrives | Restore the path | `TestFailureMatrix/partition`, L4 |
+| **Operator credential lost** | Existing logins persist until `port49 revoke` ends them | `port49_admin_touch_refused` on a refused call | Enroll another key; revoke the lost one with `port49 revoke` | `TestRevokeOthersMarksAPrincipalAndEndsAKey`, `TestARevokedSessionIsDeniedInsideTheTTL` |
+| **Inventory service unavailable** | Logins pass on the last good snapshot, persisted across a restart, never expiring | `port49_inventory_snapshot_stale`, `port49_inventory_sync_failing` | Restore the service | `TestRunStartsFromThePersistedCopyWithTheServiceDown`, `TestTheSnapshotNeverExpiresWithTheServiceDown` |
+| **Device presents a retired or wrong key** | The connection is reset with no reply; the device falls to its local method as fast as with port49d stopped | An `unvalidated` record (`matches_retired`) and a strike for a new connection; none for an open one | Give the device the current key (`port49 keys show`) | `TestFailureMatrix/retired_key`, `TestAReloadThatWithdrawsTheVersionEndsItsConnectionWithoutAStrike`, L28 |
+| **Policy file refused** | Logins and commands pass on the policy in force | `port49_policy_file_refused` 1 and one line saying why | Fix the file or its directory's mode | `TestFailureMatrix/policy_refused` |
+| **Revocations file missing or refused** | port49d does not start: no listener, so the device falls to local | port49d exits naming the file | `port49d init-revocations` once; fix the file's mode | `TestARevocationsFileOthersCouldWriteIsRefused` |
+| **Certificate status unavailable** | A new token for the issuers it covers is refused 503 with `on_unavailable: refuse`; the agent retries | `port49_tls_cert_status_unavailable`, `port49_crl_next_update_passed` | Restore the CRL or OCSP responder | `TestAnAgentConnectingDuringAStatusOutageIsToldToTryAgain`, `TestRunRefusesOnAStaleCRL` |
+| **Policy refresh incomplete** | A context not yet reached keeps its previous policy until the retry (30 s) reaches it | `port49_policy_refresh_pending` | Restore the store | `TestAScheduledRefreshTheStoreStopsIsPending`, `TestARefreshTheStoreStopsIsRetried` |
+| **Store restored from a snapshot** (not a §12 row; Decision 2) | See the 3am table: token logins are refused until the brokers purge or the bound passes | `port49_redemption_restore_guarded` 1 and `port49_redemption_restore_guard_until_timestamp_seconds` | Start the brokers, or stop port49d | `TestFailureMatrix/restore_guarded` |
