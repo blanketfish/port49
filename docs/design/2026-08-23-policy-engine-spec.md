@@ -7478,9 +7478,17 @@ released by its holder alone. The broker's listener completes each TLS handshake
 `server_cert_refused`, `timeout`, `client_closed`, `protocol`). A source holds at most
 `broker.max_pending_conns_per_source` (16) connections not yet bound to a principal, and the next
 is reset at accept; a principal holds at most `broker.max_conns_per_principal` (4) held
-connections, and a new one closes the oldest of its own certificate, else the principal's oldest,
-so dead connections never lock their owner out, one certificate cannot fill the listener, and a
-flood from one certificate churns only its own slots. A source is one address (an IPv6 /64 is not
+connections, and a new one past that closes the oldest **idle** connection of its own certificate,
+else the principal's oldest idle one; if every held connection has a request in flight, the new
+one is refused `503 too_many_connections` with `Retry-After` and nothing is closed (the
+`principal_cap_refused` connection event). A dead connection is idle, so dead connections still
+never lock their owner out, and a request in flight is bounded by the server's request timeout. One
+certificate cannot fill the listener, and a flood from one certificate churns only its own idle
+slots. The first wording closed the oldest connection even with a request in flight on it; the
+load run measured that (`tests/lab/results/load-beehive.md` cell e2: 926 evictions and 19 workloads
+exit 75, 20 live hosts under one principal churning each other's requests until every deadline
+passed), and a connection mid-request is provably alive. A busy-refused workload retries the 503
+within its deadline. A source is one address (an IPv6 /64 is not
 one source), and the global cap is taken before the per-source check, so at global saturation
 connections wait in the backlog; plan 12a owns the global cap (decision 53 ruling 8). A revocation
 by principal or by certificate is a mark that stands until an operator lifts it, because the agent

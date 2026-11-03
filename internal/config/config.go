@@ -219,8 +219,9 @@ type BrokerConfig struct {
 	// and atomically, after every revocation and lift.
 	RevocationsFile string `yaml:"revocations_file"`
 	// MaxConnsPerPrincipal caps one principal's held broker connections; a
-	// new one closes the oldest of its certificate, else the principal's
-	// oldest (spec §13 decision 32). Default 4; 1 to 64.
+	// new one closes the oldest idle one of its certificate, else the
+	// principal's oldest idle one, and is refused 503 when all are busy
+	// (spec §13 decision 32). Default 4; 1 to 64.
 	MaxConnsPerPrincipal int `yaml:"max_conns_per_principal"`
 	// MaxPendingConnsPerSource caps the broker connections one address holds
 	// that are not bound to a principal; the next is reset. Default 16; 1 to
