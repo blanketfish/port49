@@ -125,6 +125,12 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("INVALID: the run was stopped (%v); no note written for a partial run", err)
 	}
 	host := readHostFacts(r.dir)
+	host.WALFsyncMeanMS = "unknown"
+	for _, c := range cells {
+		if v := c.Observed["etcd_session_wal_fsync_mean_ms"]; v != "" {
+			host.WALFsyncMeanMS = v
+		}
+	}
 	note, err := loadNote(cells, host)
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
@@ -150,15 +156,21 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	res := run()
 	dsam.finish()
 	bsam.finish()
-	p50, p99, mintErrs := r.takeMints()
-	c.Observed = loadObserved(res, p50, p99)
+	mints := r.takeMints()
+	c.Observed = loadObserved(res, mints.P50, mints.P99)
+	mints.addTo(c.Observed)
 	num := func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) }
-	c.Observed["mint_errors"] = strconv.Itoa(mintErrs)
+	c.Observed["mint_errors"] = strconv.Itoa(mints.Errs)
 	c.Observed["peak_port49_connections"] = num(dsam.peakConns)
 	c.Observed["peak_spool_depth"] = num(dsam.peakDepth)
 	c.Observed["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
-	c.Observed["daemon_store_call_p99_ms"] = loadMS(dsam.last.Sub(dsam.first).Quantile(0.99))
-	c.Observed["broker_store_call_p99_ms"] = loadMS(bsam.last.Sub(bsam.first).Quantile(0.99))
+	c.Observed["daemon_store_call_p99_ms"] = dsam.last.Sub(dsam.first).QuantileLabel(0.99)
+	c.Observed["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
+	if m, err := loadScrape(loadSessionMetrics); err == nil {
+		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.WALFsyncMeanMS()
+	} else {
+		c.Observed["etcd_session_wal_fsync_mean_ms"] = loadScrapeFailed
+	}
 	for name, after := range r.usage() {
 		c.Observed["cpu_seconds_"+name] = strconv.FormatFloat(after[0]-before[name][0], 'f', 1, 64)
 		c.Observed["peak_rss_mb_"+name] = num(after[1] / 1024)

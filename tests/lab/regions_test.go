@@ -230,6 +230,7 @@ func newRegionPKIFor(t *testing.T, others []string) *regionPKI {
 type regionEtcd struct {
 	ns, name, bin string
 	client, peer  string // host:port
+	metrics       string // host:port of a plain-HTTP /metrics listener; empty is none
 	cluster       string // --initial-cluster
 	data, log     string
 	pki           *regionPKI
@@ -243,6 +244,9 @@ func (e *regionEtcd) argv() []string {
 		"--listen-peer-urls", "http://" + e.peer, "--initial-advertise-peer-urls", "http://" + e.peer,
 		"--initial-cluster", e.cluster, "--initial-cluster-state", "new",
 		"--cert-file", e.pki.server, "--key-file", e.pki.serverKey, "--trusted-ca-file", e.pki.ca, "--client-cert-auth"}
+	if e.metrics != "" {
+		a = append(a, "--listen-metrics-urls", "http://"+e.metrics)
+	}
 	a = pidWrap(e.pidfile(), "", a)
 	if e.ns != "" {
 		return inNS(e.ns, nil, a...)

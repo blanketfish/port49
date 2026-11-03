@@ -58,6 +58,7 @@ const (
 	loadTCPAddr, loadTLSAddr = "127.0.0.1:14949", "127.0.0.1:14300"
 	loadDaemonMetrics        = "127.0.0.1:19049"
 	loadBrokerMetrics        = "127.0.0.1:19050"
+	loadSessionMetrics       = "127.0.0.1:12481" // the session etcd's /metrics, plain HTTP
 	loadBrokerAddr           = "127.0.0.1:18443"
 	loadServerName           = "tacacs.example.net"
 	loadProfile              = "arista_eos/cEOS-lab-4.36.3M.yaml"
@@ -259,13 +260,17 @@ func loadObserved(res devicemock.FleetResult, mintP50, mintP99 time.Duration) ma
 
 // hostFacts is the machine the load ran on: a capacity number means nothing without it.
 type hostFacts struct {
-	CPU    string
-	Cores  int
-	RAMMB  int
-	Disk   string
-	Kernel string
-	Host   string
-	Commit string // the tree the harness ran from, +dirty when it had changes
+	CPU      string
+	Cores    int
+	RAMMB    int
+	Disk     string
+	Kernel   string
+	Host     string
+	Commit   string // the tree the harness ran from, +dirty when it had changes
+	RunDirFS string // the run directory's filesystem: tmpfs hides an fsync cost a disk shows
+
+	// WALFsyncMeanMS is the session etcd's mean WAL fsync as the last cell saw it.
+	WALFsyncMeanMS string
 }
 
 func readHostFacts(dir string) hostFacts {
@@ -300,8 +305,36 @@ func readHostFacts(dir string) hostFacts {
 	if err := syscall.Statfs(dir, &st); err == nil {
 		h.Disk = fmt.Sprintf("%d GB total, %d GB free under the run directory",
 			st.Blocks*uint64(st.Bsize)>>30, st.Bavail*uint64(st.Bsize)>>30)
+		h.RunDirFS = loadFSName(int64(st.Type))
 	}
 	return h
+}
+
+// loadFSName is the name of the filesystem a statfs magic number says.
+func loadFSName(magic int64) string {
+	switch magic {
+	case 0x01021994:
+		return "tmpfs"
+	case 0xEF53:
+		return "ext4"
+	case 0x58465342:
+		return "xfs"
+	case 0x9123683E:
+		return "btrfs"
+	case 0x6969:
+		return "nfs"
+	case 0x794c7630:
+		return "overlayfs"
+	case 0x2fc12fc1:
+		return "zfs"
+	case 0xF2F52010:
+		return "f2fs"
+	case 0x01021997:
+		return "9p"
+	case 0x65735546:
+		return "fuseblk"
+	}
+	return fmt.Sprintf("unknown_%#x", magic)
 }
 
 // loadNote is the results note for cells. It is refused, whole, when any
@@ -309,9 +342,10 @@ func readHostFacts(dir string) hostFacts {
 func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Load at the design rate\n\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
-		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n\n",
+		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n"+
+		"- **run_dir_fs:** %s\n- **etcd_session_wal_fsync_mean_ms:** %s\n\n",
 		time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
-		loadDevices, loadPrincipals, loadHumans)
+		loadDevices, loadPrincipals, loadHumans, host.RunDirFS, host.WALFsyncMeanMS)
 	for _, c := range cells {
 		verdict := "PASS"
 		if !c.Pass {
@@ -355,6 +389,10 @@ type loadMetrics struct {
 	SpoolDrops  float64 // port49_accounting_spool_drops_total, over every stage
 	Evicted     float64 // port49_broker_connection_events_total{event="principal_cap_evicted"}
 	buckets     map[float64]float64
+
+	// WALFsyncSum and WALFsyncCount are etcd_disk_wal_fsync_duration_seconds'
+	// sum and count, on a session etcd's /metrics.
+	WALFsyncSum, WALFsyncCount float64
 }
 
 var loadBucket = regexp.MustCompile(`le="([^"]+)"`)
@@ -383,6 +421,10 @@ func parseLoadMetrics(text string) loadMetrics {
 			m.Evicted += v
 		case strings.HasPrefix(name, "port49_accounting_spool_drops_total"):
 			m.SpoolDrops += v
+		case name == "etcd_disk_wal_fsync_duration_seconds_sum":
+			m.WALFsyncSum = v
+		case name == "etcd_disk_wal_fsync_duration_seconds_count":
+			m.WALFsyncCount = v
 		case strings.HasPrefix(name, "port49_store_call_seconds_bucket"):
 			if sm := loadBucket.FindStringSubmatch(name); sm != nil {
 				le := math.Inf(1)
@@ -431,6 +473,30 @@ func (m loadMetrics) Quantile(q float64) time.Duration {
 		return 0
 	}
 	return time.Duration(les[len(les)-1] * float64(time.Second))
+}
+
+// WALFsyncMeanMS is the mean WAL fsync in milliseconds, "unknown" with none seen.
+func (m loadMetrics) WALFsyncMeanMS() string {
+	if m.WALFsyncCount <= 0 {
+		return "unknown"
+	}
+	return strconv.FormatFloat(m.WALFsyncSum/m.WALFsyncCount*1000, 'f', 2, 64)
+}
+
+// QuantileLabel is Quantile in milliseconds, as note text. A quantile in the
+// histogram's top finite bucket, or past it, is only a lower bound: ">=<top>".
+func (m loadMetrics) QuantileLabel(q float64) string {
+	d := m.Quantile(q)
+	top := 0.0
+	for le := range m.buckets {
+		if !math.IsInf(le, 1) {
+			top = math.Max(top, le)
+		}
+	}
+	if top > 0 && d >= time.Duration(top*float64(time.Second)) {
+		return ">=" + loadMS(d)
+	}
+	return loadMS(d)
 }
 
 // loadScrape reads a /metrics endpoint over plain HTTP.
@@ -550,10 +616,14 @@ type loadRun struct {
 	aborts    []loadAbort
 	abortOnce sync.Once
 
-	mu        sync.Mutex
-	mints     []time.Duration
-	mintErrs  int
-	transport string // the daemon's current inventory: tcp or tls
+	mu       sync.Mutex
+	mints    []time.Duration
+	mintErrs int
+	// mintFails are the failed mints' times, and mintBuckets their count by
+	// "<status>_<reason>".
+	mintFails   []time.Duration
+	mintBuckets map[string]int
+	transport   string // the daemon's current inventory: tcp or tls
 }
 
 func (r *loadRun) writeFile(name, body string) string {
@@ -680,7 +750,7 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 			client: fmt.Sprintf("127.0.0.1:%d", port), peer: fmt.Sprintf("127.0.0.1:%d", port+1), cluster: strings.Join(initial, ","),
 			data: filepath.Join(dir, fmt.Sprintf("d%d.etcd", i+1)), log: filepath.Join(dir, fmt.Sprintf("d%d.log", i+1)), pki: r.pki})
 	}
-	r.sess = &regionEtcd{name: "s", bin: bin, client: "127.0.0.1:12479", peer: "127.0.0.1:12480", cluster: "s=http://127.0.0.1:12480",
+	r.sess = &regionEtcd{name: "s", bin: bin, client: "127.0.0.1:12479", peer: "127.0.0.1:12480", metrics: loadSessionMetrics, cluster: "s=http://127.0.0.1:12480",
 		data: filepath.Join(dir, "s.etcd"), log: filepath.Join(dir, "s.log"), pki: r.pki}
 	loadReapStaleSession(t, bin)
 	all := append(slices.Clone(r.dirMembers), r.sess)
@@ -864,58 +934,137 @@ func (r *loadRun) mint(i int) (devicemock.Login, time.Duration, error) {
 	start := time.Now()
 	out, err := r.mintBatch(i%loadPrincipals, []string{loadDeviceName(i)})
 	took := time.Since(start)
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err == nil && (len(out.Results) != 1 || out.Results[0].Login == "") {
-		err = fmt.Errorf("mint: no login in the answer (%s)", loadItemWhy(out))
+		err = &loadMintError{status: http.StatusOK, reason: loadSafeReason(loadItemReason(out))}
 	}
+	r.noteMint(took, err == nil, err)
 	if err != nil {
-		r.mintErrs++
 		return devicemock.Login{}, took, err
 	}
-	r.mints = append(r.mints, took)
 	it := out.Results[0]
 	return devicemock.Login{User: it.Username, Credential: []byte(it.Login), RemAddr: "192.0.2.50"}, took, nil
 }
 
-func loadItemWhy(out api.MintResponse) string {
-	if len(out.Results) == 0 {
-		return "no results"
+// loadMintError is a mint that failed: the HTTP status, and the reason code
+// the reply's error or reason field carried. It holds no body text.
+type loadMintError struct {
+	status int
+	reason string
+}
+
+func (e *loadMintError) Error() string {
+	return fmt.Sprintf("mint: status %d (%s)", e.status, e.reason)
+}
+
+var loadReasonCode = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+
+// loadSafeReason is reason when it is a snake_case code the note may print,
+// "other" when it is anything else (a body that is not a reply, or a word the
+// note refuses).
+func loadSafeReason(reason string) string {
+	if loadReasonCode.MatchString(reason) && !loadNamesCredential(reason) {
+		return reason
 	}
-	return out.Results[0].Verdict + " " + out.Results[0].Reason + " " + out.Results[0].Error
+	return "other"
+}
+
+// noteMint records one mint: its time, and for a failure its status and reason.
+// A failure that is not a loadMintError never reached the broker's reply.
+func (r *loadRun) noteMint(took time.Duration, ok bool, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ok {
+		r.mints = append(r.mints, took)
+		return
+	}
+	r.mintErrs++
+	r.mintFails = append(r.mintFails, took)
+	key := "0_transport"
+	var me *loadMintError
+	if errors.As(err, &me) {
+		key = fmt.Sprintf("%d_%s", me.status, loadSafeReason(me.reason))
+	}
+	if r.mintBuckets == nil {
+		r.mintBuckets = map[string]int{}
+	}
+	r.mintBuckets[key]++
+}
+
+// loadItemReason is the first result's reason (or verdict with none), a code.
+func loadItemReason(out api.MintResponse) string {
+	if len(out.Results) == 0 {
+		return "no_results"
+	}
+	if it := out.Results[0]; it.Reason != "" {
+		return it.Reason
+	} else if it.Verdict != "" {
+		return it.Verdict
+	}
+	return "no_login"
 }
 
 // mintBatch is one POST /v1/tokens for devices as principal p, decoded.
 func (r *loadRun) mintBatch(p int, devices []string) (api.MintResponse, error) {
-	var out api.MintResponse
 	body, _ := json.Marshal(api.MintRequest{Devices: devices})
 	resp, err := r.clients[p].Post("https://"+loadBrokerAddr+"/v1/tokens", "application/json", bytes.NewReader(body))
 	if err != nil {
-		return out, fmt.Errorf("mint: %w", err)
+		return api.MintResponse{}, errors.New("mint: the request failed")
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return out, fmt.Errorf("mint: reading the answer: %w", err)
+		return api.MintResponse{}, errors.New("mint: reading the answer failed")
 	}
-	if resp.StatusCode != http.StatusOK {
-		return out, fmt.Errorf("mint: status %d", resp.StatusCode)
+	return decodeMint(resp.StatusCode, raw)
+}
+
+// decodeMint is a mint reply: a 200 as a mint response, anything else as a
+// loadMintError whose reason is the reply's error code, never its detail.
+func decodeMint(status int, raw []byte) (api.MintResponse, error) {
+	var out api.MintResponse
+	if status != http.StatusOK {
+		var e api.Error
+		if json.Unmarshal(raw, &e) != nil {
+			return out, &loadMintError{status: status, reason: "other"}
+		}
+		return out, &loadMintError{status: status, reason: loadSafeReason(e.Error)}
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return out, errors.New("mint: an answer that is not a mint response")
+		return out, &loadMintError{status: status, reason: "other"}
 	}
 	return out, nil
 }
 
+// loadMintStats is the mints since the last takeMints: the successful ones'
+// percentiles, the failed ones' (a cell that fails every mint has no
+// successful time to report), the error count, and the failures by
+// "<status>_<reason>".
+type loadMintStats struct {
+	P50, P99, FailP50, FailP99 time.Duration
+	Errs                       int
+	Buckets                    map[string]int
+}
+
+// addTo puts the failure side of the stats in a cell's observed values.
+func (m loadMintStats) addTo(o map[string]string) {
+	o["mint_fail_p50_ms"], o["mint_fail_p99_ms"] = loadMS(m.FailP50), loadMS(m.FailP99)
+	for k, n := range m.Buckets {
+		o["mint_errors_"+k] = strconv.Itoa(n)
+	}
+}
+
 // takeMints returns the mints since the last call, and the errors among them.
-func (r *loadRun) takeMints() (p50, p99 time.Duration, errs int) {
+func (r *loadRun) takeMints() loadMintStats {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	d := r.mints
-	errs = r.mintErrs
-	r.mints, r.mintErrs = nil, 0
+	d, f := r.mints, r.mintFails
+	out := loadMintStats{Errs: r.mintErrs, Buckets: r.mintBuckets}
+	r.mints, r.mintFails, r.mintErrs, r.mintBuckets = nil, nil, 0, nil
 	slices.Sort(d)
-	return loadPercentile(d, 50), loadPercentile(d, 99), errs
+	slices.Sort(f)
+	out.P50, out.P99 = loadPercentile(d, 50), loadPercentile(d, 99)
+	out.FailP50, out.FailP99 = loadPercentile(f, 50), loadPercentile(f, 99)
+	return out
 }
 
 // loadPercentile is the nearest-rank p-th percentile of sorted.

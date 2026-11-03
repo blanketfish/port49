@@ -5,6 +5,7 @@ package lab
 import (
 	"context"
 	"errors"
+	"math"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -471,5 +472,99 @@ func TestLoadHarnessMatchesTheAgentAndKnowsEveryProcess(t *testing.T) {
 		if len(loadStartLines[name]) == 0 {
 			t.Fatalf("no start lines for %q", name)
 		}
+	}
+}
+
+// A failed mint's time and its status and reason are in the note: a cell that
+// fails every mint no longer reads "p50 0".
+func TestTakeMintsRecordsFailedMintsAndTheirReasons(t *testing.T) {
+	r := &loadRun{}
+	r.noteMint(10*time.Millisecond, true, nil)
+	r.noteMint(500*time.Millisecond, false, &loadMintError{status: 503, reason: "store_unavailable"})
+	r.noteMint(700*time.Millisecond, false, &loadMintError{status: 503, reason: "store_unavailable"})
+	r.noteMint(5*time.Millisecond, false, &loadMintError{status: 401, reason: "secret token abc"})
+	r.noteMint(time.Second, false, errors.New("mint: Post: some body text that is not a reason"))
+	got := r.takeMints()
+	if got.P50 != 10*time.Millisecond || got.Errs != 4 {
+		t.Fatalf("p50 %v errs %d", got.P50, got.Errs)
+	}
+	if got.FailP50 != 500*time.Millisecond || got.FailP99 != time.Second {
+		t.Fatalf("failed p50 %v p99 %v", got.FailP50, got.FailP99)
+	}
+	want := map[string]int{"503_store_unavailable": 2, "401_other": 1, "0_transport": 1}
+	if len(got.Buckets) != len(want) {
+		t.Fatalf("buckets %v, want %v", got.Buckets, want)
+	}
+	for k, n := range want {
+		if got.Buckets[k] != n {
+			t.Fatalf("bucket %s = %d, want %d (%v)", k, got.Buckets[k], n, got.Buckets)
+		}
+	}
+	if again := r.takeMints(); again.Errs != 0 || len(again.Buckets) != 0 {
+		t.Fatalf("takeMints did not reset: %+v", again)
+	}
+	o := map[string]string{}
+	got = loadMintStats{FailP50: time.Second, FailP99: 2 * time.Second, Buckets: map[string]int{"503_store_unavailable": 2}}
+	got.addTo(o)
+	if o["mint_fail_p50_ms"] != "1000.00" || o["mint_fail_p99_ms"] != "2000.00" || o["mint_errors_503_store_unavailable"] != "2" {
+		t.Fatalf("observed %v", o)
+	}
+}
+
+// A reason comes from the reply's error code, never its detail or body.
+func TestDecodeMintReadsTheReasonFieldNotTheBody(t *testing.T) {
+	_, err := decodeMint(503, []byte(`{"error":"store_unavailable","detail":"dial tcp 10.1.2.3: refused"}`))
+	var me *loadMintError
+	if !errors.As(err, &me) || me.status != 503 || me.reason != "store_unavailable" {
+		t.Fatalf("%v", err)
+	}
+	if strings.Contains(err.Error(), "10.1.2.3") {
+		t.Fatalf("the detail reached the error: %v", err)
+	}
+	_, err = decodeMint(502, []byte("<html>bad gateway</html>"))
+	if !errors.As(err, &me) || me.reason != "other" {
+		t.Fatalf("a body that is not a reply: %v", err)
+	}
+	out, err := decodeMint(200, []byte(`{"principal":"p","results":[{"verdict":"deny","reason":"store_unavailable"}]}`))
+	if err != nil || len(out.Results) != 1 || loadItemReason(out) != "store_unavailable" {
+		t.Fatalf("%v %v", out, err)
+	}
+}
+
+func TestTheWALFsyncMeanIsSumOverCount(t *testing.T) {
+	m := parseLoadMetrics("etcd_disk_wal_fsync_duration_seconds_sum 2.5\netcd_disk_wal_fsync_duration_seconds_count 500\n")
+	if got := m.WALFsyncMeanMS(); got != "5.00" {
+		t.Fatalf("mean %q", got)
+	}
+	if got := parseLoadMetrics("").WALFsyncMeanMS(); got != "unknown" {
+		t.Fatalf("no fsyncs: %q", got)
+	}
+}
+
+func TestRunDirFSNamesTheFilesystem(t *testing.T) {
+	for magic, want := range map[int64]string{0x01021994: "tmpfs", 0xEF53: "ext4", 0x58465342: "xfs", 0x1234: "unknown_0x1234"} {
+		if got := loadFSName(magic); got != want {
+			t.Errorf("%#x: %q, want %q", magic, got, want)
+		}
+	}
+	note, err := loadNote(nil, hostFacts{RunDirFS: "ext4"})
+	if err != nil || !strings.Contains(note, "run_dir_fs") || !strings.Contains(note, "ext4") {
+		t.Fatalf("%q %v", note, err)
+	}
+}
+
+// A p99 in the histogram's top bucket is a lower bound, and the note says so.
+func TestAP99InTheTopBucketIsNamedAsALowerBound(t *testing.T) {
+	m := loadMetrics{buckets: map[float64]float64{0.001: 1, 0.5: 2, 1: 100, math.Inf(1): 100}}
+	if got := m.QuantileLabel(0.99); got != ">=1000.00" {
+		t.Fatalf("%q", got)
+	}
+	m = loadMetrics{buckets: map[float64]float64{0.001: 100, 0.5: 100, 1: 100, math.Inf(1): 100}}
+	if got := m.QuantileLabel(0.99); got != "1.00" {
+		t.Fatalf("%q", got)
+	}
+	m = loadMetrics{buckets: map[float64]float64{0.001: 1, 1: 1, math.Inf(1): 100}}
+	if got := m.QuantileLabel(0.99); got != ">=1000.00" {
+		t.Fatalf("past the top: %q", got)
 	}
 }
