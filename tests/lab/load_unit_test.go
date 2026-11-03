@@ -676,3 +676,68 @@ func TestTheNoteSurvivesAnInvalidCell(t *testing.T) {
 		t.Fatal("the withheld reason lost the verdict")
 	}
 }
+
+// Compaction cannot hide the write rate: the revision counter only climbs.
+func TestRevisionsPerMinuteAndTheCompactedFlag(t *testing.T) {
+	if got := loadRevisionsPerMin(1000, 7000, 10*time.Minute); got != "600" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadRevisionsPerMin(1000, 7000, 0); got != "unknown" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadCompacted(100, 100); got != "false" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadCompacted(100, 5000); got != "true" {
+		t.Fatalf("%q", got)
+	}
+	m := parseLoadMetrics("etcd_debugging_mvcc_current_revision 7000\netcd_debugging_mvcc_compact_revision 5000\n")
+	if m.Revision != 7000 || m.CompactRevision != 5000 {
+		t.Fatalf("%+v", m)
+	}
+}
+
+// A compaction in the cell can take the in-use size down: the figure stays
+// as measured and signed.
+func TestTheDBGrowthKeepsItsSignWhenCompactionFreedMore(t *testing.T) {
+	const mb = 1 << 20
+	if got := loadDBGrowthMBPerMin(200*mb, 140*mb, 10*time.Minute); got != "-6.00" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// The note outlives whatever ends the run: an INVALID cell, a STOP or the disk
+// floor between cells, or the stopped check after the last one.
+func TestTheNoteIsWrittenWhenARunEndsAnyWay(t *testing.T) {
+	done := loadCell{ID: "a", Transport: "tcp", Rate: 170, Duration: 10 * time.Minute, Pass: true,
+		Observed: map[string]string{"etcd_session_wal_fsync_mean_ms": "4.20"}}
+	running := &loadCell{ID: "b", Transport: "tls", Rate: 170, Duration: 10 * time.Minute}
+	note, err := loadPartialNote([]loadCell{done}, running, "the broker did not start", hostFacts{})
+	if err != nil || !strings.Contains(note, "## Cell a") || !strings.Contains(note, "## Cell b") ||
+		!strings.Contains(note, "**INVALID**") || !strings.Contains(note, "the broker did not start") ||
+		!strings.Contains(note, "4.20") {
+		t.Errorf("an INVALID cell: %v\n%s", err, note)
+	}
+	// Between cells: no cell in progress, the reason closes the note.
+	note, err = loadPartialNote([]loadCell{done}, nil, "the STOP sentinel is set", hostFacts{})
+	if err != nil || !strings.Contains(note, "## Cell a") || strings.Contains(note, "INVALID") ||
+		!strings.Contains(note, "the STOP sentinel is set") {
+		t.Errorf("a stop between cells: %v\n%s", err, note)
+	}
+	// After the last cell (the stopped check): the same shape.
+	note, err = loadPartialNote([]loadCell{done, done}, nil, "the run was stopped", hostFacts{})
+	if err != nil || strings.Count(note, "## Cell a") != 2 || !strings.Contains(note, "the run was stopped") {
+		t.Errorf("a stop after the loop: %v\n%s", err, note)
+	}
+	// Nothing finished and nothing running: nothing to write.
+	if note, err = loadPartialNote(nil, nil, "x", hostFacts{}); note != "" || err != nil {
+		t.Errorf("an empty run wrote %q, %v", note, err)
+	}
+}
+
+func TestTheNoteLegendNamesTheQuotaFigure(t *testing.T) {
+	note, err := loadNote(nil, hostFacts{})
+	if err != nil || !strings.Contains(note, "etcd_session_db_mb") || !strings.Contains(note, "understated") {
+		t.Fatalf("%v\n%s", err, note)
+	}
+}

@@ -199,8 +199,9 @@ func TestTheEtcdAndBackupExamples(t *testing.T) {
 	}
 	for _, n := range []string{"etcd-1", "etcd-2", "etcd-3"} {
 		body := read(t, "deploy/systemd/examples/"+n+".yaml")
-		for _, want := range []string{"auto-compaction-mode: periodic", `auto-compaction-retention: "1h"`,
-			"quota-backend-bytes: 8589934592", "client-cert-auth: true"} {
+		mode, retention, quota := etcdValues(t)
+		for _, want := range []string{"auto-compaction-mode: " + mode, `auto-compaction-retention: "` + retention + `"`,
+			"quota-backend-bytes: " + quota, "client-cert-auth: true"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s.yaml lacks %q", n, want)
 			}

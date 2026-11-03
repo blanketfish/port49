@@ -65,8 +65,10 @@ func TestLoad(t *testing.T) {
 			t.Fatalf("INVALID: %v", err)
 		}
 	}
+	var endWhy string // why the run ended between cells, for the note
 	guard := func() {
 		if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+			endWhy = err.Error()
 			t.Fatalf("INVALID: %v", err)
 		}
 	}
@@ -93,18 +95,17 @@ func TestLoad(t *testing.T) {
 	var cells []loadCell
 	var running *loadCell // the cell in progress, for the note if it ends the test
 	defer func() {
-		if running == nil || !t.Failed() {
+		if !t.Failed() || (running == nil && len(cells) == 0) {
 			return
 		}
-		// A cell that ends the test INVALID (a broker that cannot start, a
-		// full etcd) still leaves the cells already finished in the note.
-		c := *running
-		c.Invalid = r.invalidWhy
-		if c.Invalid == "" {
-			c.Invalid = "the test ended during the cell; see the test log"
+		// Whatever ends the run (an INVALID cell, a STOP or the disk floor between
+		// cells, the stopped check after the last) leaves the finished cells in the note.
+		why := r.invalidWhy
+		if why == "" {
+			why = endWhy
 		}
 		host := readHostFacts(r.dir)
-		note, err := loadNote(append(slices.Clone(cells), c), host)
+		note, err := loadPartialNote(cells, running, why, host)
 		if err != nil {
 			t.Logf("the partial note was not written: %v", err)
 			return
@@ -114,7 +115,7 @@ func TestLoad(t *testing.T) {
 			t.Logf("the partial note was not written: %v", err)
 			return
 		}
-		t.Logf("a partial note, with cell %s INVALID, is at %s", c.ID, path)
+		t.Logf("a partial note is at %s", path)
 	}()
 	for _, id := range ids {
 		guard()
@@ -159,15 +160,11 @@ func TestLoad(t *testing.T) {
 	}
 
 	if err := stopped(); err != nil {
-		t.Fatalf("INVALID: the run was stopped (%v); no note written for a partial run", err)
+		endWhy = "the run was stopped: " + err.Error()
+		t.Fatalf("INVALID: the run was stopped (%v); the finished cells are in a partial note", err)
 	}
 	host := readHostFacts(r.dir)
-	host.WALFsyncMeanMS = "unknown"
-	for _, c := range cells {
-		if v := c.Observed["etcd_session_wal_fsync_mean_ms"]; v != "" {
-			host.WALFsyncMeanMS = v
-		}
-	}
+	host.WALFsyncMeanMS = loadWALFact(cells)
 	note, err := loadNote(cells, host)
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
@@ -208,13 +205,18 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	c.Observed["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
 	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
 		const mb = 1 << 20
+		c.Observed["etcd_session_revisions_per_min"] = loadRevisionsPerMin(walBefore.Revision, m.Revision, time.Since(cellStart))
+		c.Observed["etcd_session_compacted_during_cell"] = loadCompacted(walBefore.CompactRevision, m.CompactRevision)
 		c.Observed["etcd_session_db_mb"] = num(m.DBBytes / mb)
 		c.Observed["etcd_session_db_in_use_mb"] = num(m.DBInUseBytes / mb)
 		c.Observed["etcd_session_db_growth_mb_per_min"] = loadDBGrowthMBPerMin(walBefore.DBInUseBytes, m.DBInUseBytes, time.Since(cellStart))
 		// This cell's fsyncs: etcd's counters are cumulative since it started.
 		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.Sub(walBefore).WALFsyncMeanMS()
 	} else {
-		c.Observed["etcd_session_wal_fsync_mean_ms"] = loadScrapeFailed
+		for _, k := range []string{"etcd_session_wal_fsync_mean_ms", "etcd_session_db_mb", "etcd_session_db_in_use_mb",
+			"etcd_session_db_growth_mb_per_min", "etcd_session_revisions_per_min", "etcd_session_compacted_during_cell"} {
+			c.Observed[k] = loadScrapeFailed
+		}
 	}
 	for name, after := range r.usage() {
 		c.Observed["cpu_seconds_"+name] = strconv.FormatFloat(after[0]-before[name][0], 'f', 1, 64)
@@ -515,11 +517,11 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 	cert, key := testpki.LabClientFiles(loadPrincipalEmail(loadWorkloadPrincipal))
 	keyBytes, err := os.ReadFile(filepath.Join(r.pki.lab, key))
 	if err != nil {
-		r.t.Fatalf("INVALID: %v", err)
+		r.invalid(err, "")
 	}
 	keyPath := filepath.Join(r.dir, "e2-key.pem") // the client wants a key only its owner reads
 	if err := os.WriteFile(keyPath, keyBytes, 0o600); err != nil {
-		r.t.Fatalf("INVALID: %v", err)
+		r.invalid(err, "")
 	}
 	var (
 		wg      sync.WaitGroup

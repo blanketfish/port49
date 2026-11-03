@@ -363,7 +363,11 @@ func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Load at the design rate\n\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
 		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n"+
-		"- **run_dir_fs:** %s\n- **etcd_session_wal_fsync_mean_ms:** %s\n\n",
+		"- **run_dir_fs:** %s\n- **etcd_session_wal_fsync_mean_ms:** %s\n\n"+
+		"Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total size, which the quota counts) "+
+		"with 8589934592 bytes (8192 MB). `etcd_session_db_growth_mb_per_min` is the in-use size's change and is "+
+		"understated when `etcd_session_compacted_during_cell` is true (a compaction freed space in the cell); "+
+		"`etcd_session_revisions_per_min` is the write rate compaction cannot hide.\n\n",
 		time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
 		loadDevices, loadPrincipals, loadHumans, host.RunDirFS, host.WALFsyncMeanMS)
 	for _, c := range cells {
@@ -424,6 +428,59 @@ type loadMetrics struct {
 	// DBBytes and DBInUseBytes are etcd_mvcc_db_total_size_in_bytes and
 	// ..._in_use_in_bytes: the file's size, and what compaction cannot free.
 	DBBytes, DBInUseBytes float64
+
+	// Revision and CompactRevision are etcd_debugging_mvcc_current_revision and
+	// ..._compact_revision (the names in etcd v3.6.15).
+	Revision, CompactRevision float64
+}
+
+// loadRevisionsPerMin is etcd's revision counter's climb over d, per minute: the
+// write rate, which compaction cannot hide.
+func loadRevisionsPerMin(start, end float64, d time.Duration) string {
+	if d <= 0 {
+		return "unknown"
+	}
+	return strconv.FormatFloat((end-start)/d.Minutes(), 'f', 0, 64)
+}
+
+// loadCompacted is whether the compacted revision moved: a compaction landed.
+func loadCompacted(start, end float64) string { return strconv.FormatBool(end > start) }
+
+// loadPartialNote is the note for a run that ended before its last cell: the
+// finished cells, the cell in progress as INVALID with why, and with none in
+// progress a closing line saying why the run ended. Empty when no cell finished
+// and none was running.
+func loadPartialNote(cells []loadCell, running *loadCell, why string, host hostFacts) (string, error) {
+	if len(cells) == 0 && running == nil {
+		return "", nil
+	}
+	all := slices.Clone(cells)
+	if running != nil {
+		c := *running
+		c.Invalid = why
+		if c.Invalid == "" {
+			c.Invalid = "the test ended during the cell; see the test log"
+		}
+		all = append(all, c)
+		why = ""
+	}
+	host.WALFsyncMeanMS = loadWALFact(all)
+	note, err := loadNote(all, host)
+	if err != nil || why == "" {
+		return note, err
+	}
+	return note + "## Run ended\n\n- **Reason:** " + loadInvalidReason(why) + "\n", nil
+}
+
+// loadWALFact is the session etcd's mean WAL fsync as the last cell that saw it did.
+func loadWALFact(cells []loadCell) string {
+	fact := "unknown"
+	for _, c := range cells {
+		if v := c.Observed["etcd_session_wal_fsync_mean_ms"]; v != "" {
+			fact = v
+		}
+	}
+	return fact
 }
 
 // loadDBGrowthMBPerMin is the in-use database size's change over d, in MB a
@@ -461,6 +518,10 @@ func parseLoadMetrics(text string) loadMetrics {
 			m.Evicted += v
 		case strings.HasPrefix(name, "port49_accounting_spool_drops_total"):
 			m.SpoolDrops += v
+		case name == "etcd_debugging_mvcc_current_revision":
+			m.Revision = v
+		case name == "etcd_debugging_mvcc_compact_revision":
+			m.CompactRevision = v
 		case name == "etcd_mvcc_db_total_size_in_bytes":
 			m.DBBytes = v
 		case name == "etcd_mvcc_db_total_size_in_use_in_bytes":
@@ -1206,18 +1267,18 @@ func (r *loadRun) loadNetemOn() (undo func()) {
 	r.t.Helper()
 	show, err := exec.Command("tc", "qdisc", "show", "dev", "lo").Output()
 	if err != nil {
-		r.t.Fatalf("INVALID: tc qdisc show dev lo: %v", err)
+		r.invalid(fmt.Errorf("tc qdisc show dev lo: %w", err), "")
 	}
 	stale, err := loadNetemPlan(string(show))
 	if err != nil {
-		r.t.Fatalf("INVALID: %v", err)
+		r.invalid(err, "")
 	}
 	if stale {
 		_ = sudoRun(loadNetem(false), true) // an earlier run's, left by a timeout or a kill
 	}
 	if err := sudoRun(loadNetem(true), false); err != nil {
 		_ = sudoRun(loadNetem(false), true)
-		r.t.Fatalf("INVALID: netem on the directory's client ports: %v", err)
+		r.invalid(fmt.Errorf("netem on the directory's client ports: %w", err), "")
 	}
 	var once sync.Once
 	undo = func() { once.Do(func() { _ = sudoRun(loadNetem(false), true) }) }

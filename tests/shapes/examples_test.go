@@ -1,12 +1,15 @@
 package shapes
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/blanketfish/port49/internal/config"
 )
@@ -267,17 +270,36 @@ func TestComposeIsPinnedAndHardenedLikeTheChart(t *testing.T) {
 	}
 }
 
+// etcdValues are the compaction and quota every shipped etcd shape carries,
+// read from the first systemd example: the one place they are stated, so the
+// other shapes cannot drift from it.
+func etcdValues(t *testing.T) (mode, retention, quota string) {
+	t.Helper()
+	var y map[string]any
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/systemd/examples/etcd-1.yaml")), &y); err != nil {
+		t.Fatal(err)
+	}
+	mode, retention, quota = fmt.Sprint(y["auto-compaction-mode"]), fmt.Sprint(y["auto-compaction-retention"]),
+		fmt.Sprint(y["quota-backend-bytes"])
+	if mode == "<nil>" || retention == "<nil>" || quota == "<nil>" {
+		t.Fatal("etcd-1.yaml lacks compaction or a quota")
+	}
+	return mode, retention, quota
+}
+
 // Every shipped etcd shape compacts and has a quota: without them etcd's
 // defaults fill a 2 GiB backend and refuse every write (load run 3). The
-// systemd shape is held in units_test.go; the container shapes are here.
+// systemd examples are held to etcd-1.yaml in units_test.go.
 func TestEveryShippedEtcdShapeCompactsAndHasAQuota(t *testing.T) {
+	mode, retention, quota := etcdValues(t)
 	for file, wants := range map[string][]string{
 		"deploy/compose/compose.yaml": {
-			"ETCD_AUTO_COMPACTION_MODE: periodic", "ETCD_AUTO_COMPACTION_RETENTION: 1h",
-			`ETCD_QUOTA_BACKEND_BYTES: "8589934592"`},
+			"ETCD_AUTO_COMPACTION_MODE: " + mode, "ETCD_AUTO_COMPACTION_RETENTION: " + retention,
+			`ETCD_QUOTA_BACKEND_BYTES: "` + quota + `"`},
 		"deploy/helm/port49/examples/etcd/statefulset.yaml": {
-			"{name: ETCD_AUTO_COMPACTION_MODE, value: periodic}", `{name: ETCD_AUTO_COMPACTION_RETENTION, value: "1h"}`,
-			`{name: ETCD_QUOTA_BACKEND_BYTES, value: "8589934592"}`},
+			"{name: ETCD_AUTO_COMPACTION_MODE, value: " + mode + "}",
+			`{name: ETCD_AUTO_COMPACTION_RETENTION, value: "` + retention + `"}`,
+			`{name: ETCD_QUOTA_BACKEND_BYTES, value: "` + quota + `"}`},
 	} {
 		body := read(t, file)
 		for _, want := range wants {
