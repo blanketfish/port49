@@ -59,7 +59,7 @@ func hedgeReads(ctx context.Context, method string, req, reply any, cc *grpc.Cli
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 	total := time.Until(dl)
-	actx, cancel := context.WithCancel(ctx)
+	actx, cancel := context.WithCancel(withTried(ctx))
 	defer cancel()
 	type answer struct {
 		err     error
