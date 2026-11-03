@@ -193,8 +193,10 @@ func (m matrix) clearTokens() {
 
 // dump logs the tail of both processes' stderr through the filter.
 func (m matrix) dump() {
-	out, _ := m.s.try("logs", "--no-color", "--tail", "40", "port49d", "port49-broker")
-	m.s.t.Logf("port49d and port49-broker, last 40 lines each:\n%s", shapetest.Filtered(m.root, out))
+	out, _ := m.s.try("logs", "--no-color", "--timestamps", "--tail", "120", "port49d")
+	m.s.t.Logf("port49d, last 120 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
+	out, _ = m.s.try("logs", "--no-color", "--timestamps", "--tail", "40", "port49-broker")
+	m.s.t.Logf("port49-broker, last 40 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
 }
 
 // gauge reads an unlabelled gauge, retrying for 30s: port49d starts its run
@@ -414,7 +416,9 @@ func TestFailureMatrix(t *testing.T) {
 				t.Logf("login %d of 30: pass %v in %v", n, ok, d)
 				if !ok {
 					failed = append(failed, n)
-					m.dump() // the daemon's own reason for the refusal, while it is the tail
+					if len(failed) == 1 {
+						m.dump() // the daemon's own reason for the refusal, while it is the tail; once, not for each
+					}
 				}
 			}
 			// The mint is not hedged, so with a member dark it can be refused
