@@ -581,3 +581,27 @@ func TestAMintFaultItemKeepsItsErrorCode(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// Cell f fails on a store-call p99 past the call timeout, however the note
+// words it: a p99 in a finite bucket over 500 ms, or in +Inf.
+func TestCellFFailsOnAP99PastTheCallTimeout(t *testing.T) {
+	cell := func(buckets map[float64]float64) loadCell {
+		m := loadMetrics{buckets: buckets}
+		return loadCell{daemonStore: m, Observed: map[string]string{"daemon_store_call_p99_ms": m.QuantileLabel(0.99)}}
+	}
+	fast := cell(map[float64]float64{0.005: 100, 0.25: 100, 1: 100, math.Inf(1): 100})
+	if !loadNetemPass(0, fast) {
+		t.Error("a p99 under the timeout failed the cell")
+	}
+	if loadNetemPass(1, fast) {
+		t.Error("an error passed the cell")
+	}
+	slow := cell(map[float64]float64{0.005: 1, 0.25: 1, 1: 100, math.Inf(1): 100})
+	if loadNetemPass(0, slow) {
+		t.Error("a p99 in the (0.25, 1] bucket passed the cell")
+	}
+	inf := cell(map[float64]float64{0.005: 1, 0.25: 1, 1: 1, math.Inf(1): 100})
+	if loadNetemPass(0, inf) {
+		t.Error("a p99 past the last bucket passed the cell")
+	}
+}

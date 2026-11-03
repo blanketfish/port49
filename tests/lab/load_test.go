@@ -165,7 +165,8 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 	c.Observed["peak_port49_connections"] = num(dsam.peakConns)
 	c.Observed["peak_spool_depth"] = num(dsam.peakDepth)
 	c.Observed["spool_drops_during"] = num(dsam.last.SpoolDrops - dsam.first.SpoolDrops)
-	c.Observed["daemon_store_call_p99_ms"] = dsam.last.Sub(dsam.first).QuantileLabel(0.99)
+	c.daemonStore = dsam.last.Sub(dsam.first)
+	c.Observed["daemon_store_call_p99_ms"] = c.daemonStore.QuantileLabel(0.99)
 	c.Observed["broker_store_call_p99_ms"] = bsam.last.Sub(bsam.first).QuantileLabel(0.99)
 	if m, err := loadScrape(loadSessionMetrics); err == nil && walErr == nil {
 		// This cell's fsyncs: etcd's counters are cumulative since it started.
@@ -594,10 +595,14 @@ func (r *loadRun) cellNetem(ctx context.Context, c loadCell) loadCell {
 	c.Observed["netem_delay"] = loadNetemDelay
 	c.Observed["call_timeout_ms"] = loadMS(loadCallTimeout)
 	c.Observed["signin_p99_ms"] = loadMS(res.StepP99["login"])
-	var p99 time.Duration
-	if f, err := strconv.ParseFloat(c.Observed["daemon_store_call_p99_ms"], 64); err == nil {
-		p99 = time.Duration(f * float64(time.Millisecond))
-	}
-	c.Pass = res.Errors == 0 && p99 < loadCallTimeout
+	c.Pass = loadNetemPass(res.Errors, c)
 	return c
+}
+
+// loadNetemPass is cell f's verdict: no error and the daemon's store-call p99
+// under the call timeout. It reads the histogram, not the note's label: a p99
+// past the last bucket is a lower bound and fails.
+func loadNetemPass(errs int, c loadCell) bool {
+	m := c.daemonStore
+	return errs == 0 && !m.PastLastBucket(0.99) && m.Quantile(0.99) < loadCallTimeout
 }

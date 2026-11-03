@@ -80,6 +80,10 @@ type loadCell struct {
 	Duration  time.Duration
 	Pass      bool
 	Observed  map[string]string
+
+	// daemonStore is the daemon's store-call histogram over the cell: what a
+	// verdict gate reads, never the note's label text for it.
+	daemonStore loadMetrics
 }
 
 // parseLoadCells is PORT49_LAB_LOAD_CELLS: comma-separated cell IDs, empty for
@@ -484,14 +488,12 @@ func (m loadMetrics) WALFsyncMeanMS() string {
 	return strconv.FormatFloat(m.WALFsyncSum/m.WALFsyncCount*1000, 'f', 2, 64)
 }
 
-// QuantileLabel is Quantile in milliseconds, as note text: "<=<bound>" for a
-// quantile in a finite bucket, and ">=<last bound>" only for one past the last
-// finite bucket (+Inf), which is a lower bound.
-func (m loadMetrics) QuantileLabel(q float64) string {
-	d := m.Quantile(q)
+// PastLastBucket is whether the q-th store call is past the last finite
+// bucket: Quantile then reads that bucket's bound, which is only a lower bound.
+func (m loadMetrics) PastLastBucket(q float64) bool {
 	total := m.buckets[math.Inf(1)]
 	if total <= 0 {
-		return loadMS(d)
+		return false
 	}
 	top := 0.0
 	for le := range m.buckets {
@@ -499,7 +501,18 @@ func (m loadMetrics) QuantileLabel(q float64) string {
 			top = math.Max(top, le)
 		}
 	}
-	if m.buckets[top] < math.Ceil(q*total) {
+	return m.buckets[top] < math.Ceil(q*total)
+}
+
+// QuantileLabel is Quantile in milliseconds, as note text: "<=<bound>" for a
+// quantile in a finite bucket, and ">=<last bound>" only for one past the last
+// finite bucket (+Inf), which is a lower bound. Text for the note, never a gate.
+func (m loadMetrics) QuantileLabel(q float64) string {
+	d := m.Quantile(q)
+	if m.buckets[math.Inf(1)] <= 0 {
+		return loadMS(d)
+	}
+	if m.PastLastBucket(q) {
 		return ">=" + loadMS(d)
 	}
 	return "<=" + loadMS(d)
