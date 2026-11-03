@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1268,4 +1270,152 @@ func TestShutdownLogsHeldGapsWithoutTheLock(t *testing.T) {
 	if !probe.wrote || probe.held {
 		t.Fatalf("wrote %v, under gapMu %v", probe.wrote, probe.held)
 	}
+}
+
+// groupSpool is a spool whose fsync is hook, started on a fresh file.
+func groupSpool(t *testing.T, hook func(*os.File) error) (*Spool, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	sp, err := NewSpool(1024, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.syncFile = hook
+	return sp, path
+}
+
+// offerAll runs n offers at once and returns each one's error.
+func offerAll(sp *Spool, n int) []error {
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: fmt.Sprintf("t%d", i)})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	return errs
+}
+
+func fileLines(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.Count(b, []byte("\n"))
+}
+
+// One fsync a record capped accounting at the disk's fsync rate and took
+// port49d dark on an NVMe (load run 2): offers that arrive while a sync runs
+// share the next one.
+func TestConcurrentOffersShareAnFsync(t *testing.T) {
+	var syncs atomic.Int32
+	sp, path := groupSpool(t, func(f *os.File) error {
+		syncs.Add(1)
+		time.Sleep(5 * time.Millisecond)
+		return f.Sync()
+	})
+	for i, err := range offerAll(sp, 64) {
+		if err != nil {
+			t.Fatalf("offer %d: %v", i, err)
+		}
+	}
+	if n := fileLines(t, path); n != 64 {
+		t.Fatalf("want 64 lines, got %d", n)
+	}
+	if n := syncs.Load(); n >= 64 {
+		t.Fatalf("want fewer than 64 syncs, got %d", n)
+	}
+}
+
+func TestAFailedGroupSyncFailsEveryOfferInIt(t *testing.T) {
+	var syncs atomic.Int32
+	sp, path := groupSpool(t, func(f *os.File) error {
+		if syncs.Add(1) == 1 {
+			time.Sleep(20 * time.Millisecond)
+			return errors.New("injected sync failure")
+		}
+		return f.Sync()
+	})
+	errs := offerAll(sp, 16)
+	failed := 0
+	for _, err := range errs {
+		if err != nil {
+			if !errors.Is(err, ErrSpoolFull) {
+				t.Fatalf("want ErrSpoolFull, got %v", err)
+			}
+			failed++
+		}
+	}
+	if failed == 0 {
+		t.Fatal("the failed sync failed no offer")
+	}
+	sp.mu.Lock()
+	need := sp.needNewline
+	sp.mu.Unlock()
+	if !need && syncs.Load() == 1 {
+		t.Fatal("needNewline not set after the failed sync")
+	}
+	// The next offer starts on a line of its own.
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if !bytes.HasSuffix(b, []byte("\n")) || !bytes.Contains(b, []byte(`"task_id":"after"}`+"\n")) {
+		t.Fatalf("the offer after a failed sync is not on its own line: %q", b[max(0, len(b)-80):])
+	}
+	if bytes.Contains(b, []byte(`}{"`)) {
+		t.Fatal("two records share a line")
+	}
+}
+
+// No Offer returns before a sync that covers its line has finished.
+func TestNoOfferReturnsBeforeItsBytesAreSynced(t *testing.T) {
+	var mu sync.Mutex
+	var synced int64
+	sp, path := groupSpool(t, func(f *os.File) error {
+		time.Sleep(2 * time.Millisecond)
+		fi, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if err := f.Sync(); err != nil {
+			return err
+		}
+		mu.Lock()
+		synced = max(synced, fi.Size())
+		mu.Unlock()
+		return nil
+	})
+	var wg sync.WaitGroup
+	for i := range 48 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: fmt.Sprintf("t%d", i)}); err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			covered := synced
+			mu.Unlock()
+			b, _ := os.ReadFile(path)
+			idx := bytes.Index(b, []byte(fmt.Sprintf(`"task_id":"t%d"`, i)))
+			if idx < 0 {
+				t.Errorf("offer %d returned with no line in the file", i)
+				return
+			}
+			end := idx + bytes.IndexByte(b[idx:], '\n') + 1
+			if int64(end) > covered {
+				t.Errorf("offer %d returned with its line ending at %d, synced only to %d", i, end, covered)
+			}
+		}()
+	}
+	wg.Wait()
 }
