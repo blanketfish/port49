@@ -918,7 +918,8 @@ func TestAnUnparseableLookupEntryIsSkippedAndSwept(t *testing.T) {
 		t.Fatal(err)
 	}
 	tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	if err := s.IndexToken(ctx, "user:alice", "", tk, time.Hour); err != nil {
+	if _, err := s.PutToken(ctx, tk, store.Token{ID: "ix", Secret: []byte("s"), Kind: store.KindLogin,
+		ExpiresAt: s.now().Add(time.Hour), IndexPrincipal: "user:alice", IndexTTL: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
 	planted := []string{s.k.lookups(famByPrincipal, "user:alice") + "%zz/x",

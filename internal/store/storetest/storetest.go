@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -512,11 +513,11 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 	leaf2 := store.TokenKey{NAS: "leaf-02", Username: "alice"}
 	leaf1 := store.TokenKey{NAS: "leaf-01", Username: "alice"}
 	for _, k := range []store.TokenKey{leaf2, leaf1, leaf2} {
-		if err := s.IndexToken(ctx, alice, certA, k, time.Minute); err != nil {
+		if err := indexByPut(ctx, s, now, alice, certA, k, time.Minute); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.IndexToken(ctx, bob, "", store.TokenKey{NAS: "leaf-01", Username: "bob"}, time.Minute); err != nil {
+	if err := indexByPut(ctx, s, now, bob, "", store.TokenKey{NAS: "leaf-01", Username: "bob"}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.TokensByPrincipal(ctx, alice)
@@ -538,7 +539,7 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 	// key that is not a CertKey at all names none either.
 	for _, blank := range []string{store.CertKey("", ""), store.CertKey("CN=Corp CA", ""), store.CertKey("", "3f9a01"),
 		"3f9a01"} {
-		if err := s.IndexToken(ctx, bob, blank, store.TokenKey{NAS: "leaf-02", Username: "bob"}, time.Minute); err != nil {
+		if err := indexByPut(ctx, s, now, bob, blank, store.TokenKey{NAS: "leaf-02", Username: "bob"}, time.Minute); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := s.TokensByCert(ctx, blank); err != nil || len(got) != 0 {
@@ -568,12 +569,10 @@ func DeleteTokenRemovesOne(t *testing.T, newStore func() store.Store, now time.T
 	cert := store.CertKey("CN=Corp CA", "3f9a01")
 	put := func(k store.TokenKey, id, principal string) {
 		t.Helper()
-		// Index first, as the minter does (store.IndexToken).
-		if err := s.IndexToken(ctx, principal, cert, k, time.Minute); err != nil {
-			t.Fatal(err)
-		}
+		// The index entries ride in the token's own write, as the minter's do.
 		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("secret-" + id), Kind: store.KindLogin,
-			ExpiresAt: now.Add(time.Minute), Principal: principal, Username: k.Username, MintedAt: now}); err != nil {
+			ExpiresAt: now.Add(time.Minute), Principal: principal, Username: k.Username, MintedAt: now,
+			IndexPrincipal: principal, IndexCertKey: cert, IndexTTL: time.Minute}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1124,7 +1123,7 @@ func Run(t *testing.T, b Backend) {
 		{"PurgeTakesEveryToken", PurgeTakesEveryToken},
 		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
 		{"RewriteBindsToTheRevision", RewriteBindsToTheRevision},
-		{"IndexTokenKeepsTheLongestUnderARace", IndexTokenKeepsTheLongestUnderARace},
+		{"PutTokenKeepsTheLongestIndexUnderARace", PutTokenKeepsTheLongestIndexUnderARace},
 		{"IndexWritesRaceAContextWrite", IndexWritesRaceAContextWrite},
 		{"FailReceiptSurvivesARacingExtend", FailReceiptSurvivesARacingExtend},
 		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
@@ -1163,4 +1162,14 @@ func Run(t *testing.T, b Backend) {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
 	}
+}
+
+var indexSeq atomic.Int64
+
+// indexByPut records k under principal and certKey for ttl from now, the way
+// a mint does: in a token's own write (the token's expiry is the entry's).
+func indexByPut(ctx context.Context, s store.Store, now time.Time, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
+	_, err := s.PutToken(ctx, k, store.Token{ID: fmt.Sprintf("ix-%d", indexSeq.Add(1)), Secret: []byte("s"),
+		Kind: store.KindLogin, ExpiresAt: now.Add(ttl), IndexPrincipal: principal, IndexCertKey: certKey, IndexTTL: ttl})
+	return err
 }

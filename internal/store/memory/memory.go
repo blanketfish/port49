@@ -1314,19 +1314,10 @@ func (s *Store) ActivePrincipals(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
-// IndexToken adds k under principal and certKey, each skipped when empty,
+// indexTokenLocked adds k under principal and certKey, each skipped when empty
 // and a certificate key with no issuer or no serial the same way
-// (blankCertKey).
-func (s *Store) IndexToken(_ context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.indexTokenLocked(principal, certKey, k, ttl)
-	s.wroteLocked()
-	return nil
-}
-
-// indexTokenLocked is IndexToken with mu held; a zero ttl indexes nothing (a
-// PutToken that asked for no index).
+// (blankCertKey); a zero ttl indexes nothing (a PutToken that asked for no
+// index).
 func (s *Store) indexTokenLocked(principal, certKey string, k store.TokenKey, ttl time.Duration) {
 	if ttl <= 0 {
 		return

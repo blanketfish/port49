@@ -211,9 +211,9 @@ func TestUnreadableMarksAfterTheWritesSupersedeThem(t *testing.T) {
 	}
 }
 
-// The race decision 32 ruling 6 closes, deterministically: the mint indexes
-// its token, a revocation lands and sweeps the index — which names a key
-// that holds no token yet — and only then is the token written. The mint
+// The race decision 32 ruling 6 closes, deterministically: a revocation lands
+// and sweeps the index, which names nothing yet, and only then is the token
+// written (with its index entries, in one transaction). The mint
 // reads the marks again after its last write, deletes what it wrote, and
 // answers credential_revoked, so no token minted under a revoked credential
 // survives whichever of the two read the other's write first (spec §5.1.4).
@@ -227,8 +227,8 @@ func TestARevocationDuringAMintDeletesWhatItWrote(t *testing.T) {
 	}()
 	<-p.entered
 	keys, err := f.st.TokensByPrincipal(context.Background(), "user:alice@example.com")
-	if err != nil || len(keys) != 1 || f.live(t, "leaf1") != 0 {
-		t.Fatalf("paused between the index write and the token write: index %v %v, %d live", keys, err, f.live(t, "leaf1"))
+	if err != nil || len(keys) != 0 || f.live(t, "leaf1") != 0 {
+		t.Fatalf("paused before the token's write: index %v %v, %d live", keys, err, f.live(t, "leaf1"))
 	}
 	f.revokeAndSweep(t, "user:alice@example.com")
 	close(p.gate)

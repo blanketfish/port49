@@ -51,7 +51,7 @@ var pools = map[string]Pool{
 	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk,
 
 	"PutToken": Token, "Candidates": Token, "TokenIDs": Token, "RedeemAndReceipt": Token, "DeleteTokens": Token, "DeleteToken": Token,
-	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token, "IndexToken": Token,
+	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token,
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token, "GetLift": Token,
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
@@ -624,10 +624,6 @@ func (g *guarded) ReindexSid(ctx context.Context, oldSid string, newSid string, 
 func (g *guarded) ActivePrincipals(ctx context.Context) (ps []string, err error) {
 	err = g.do(ctx, Bulk, func(ctx context.Context) (e error) { ps, e = g.inner.ActivePrincipals(ctx); return })
 	return
-}
-
-func (g *guarded) IndexToken(ctx context.Context, principal string, certKey string, k store.TokenKey, ttl time.Duration) error {
-	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.IndexToken(ctx, principal, certKey, k, ttl) })
 }
 
 func (g *guarded) TokensByPrincipal(ctx context.Context, principal string) (keys []store.TokenKey, err error) {

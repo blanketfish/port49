@@ -821,7 +821,7 @@ func BlobPutWritesOnlyWhenTooShortLived(t *testing.T, b Backend) {
 }
 
 // PutTokenIndexesInItsOwnWrite: a token put with IndexPrincipal, IndexCertKey and
-// IndexTTL is found by both indexes as IndexToken would leave them, and the
+// IndexTTL is found by both indexes as the index rules leave them, and the
 // later-expiry rule holds: a shorter ttl never shortens an entry, a longer one
 // extends it.
 func PutTokenIndexesInItsOwnWrite(t *testing.T, b Backend) {
@@ -1330,8 +1330,8 @@ func TokenIndexExpiresWithItsLongestToken(t *testing.T, b Backend) {
 	s := b.New(t, func() time.Time { return now })
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	_ = s.IndexToken(ctx, "user:alice", "", k, 10*time.Minute)
-	_ = s.IndexToken(ctx, "user:alice", "", k, time.Minute) // never shortens it
+	_ = indexByPut(ctx, s, now, "user:alice", "", k, 10*time.Minute)
+	_ = indexByPut(ctx, s, now, "user:alice", "", k, time.Minute) // never shortens it
 	now = now.Add(5 * time.Minute)
 	if got, _ := s.TokensByPrincipal(ctx, "user:alice"); len(got) != 1 {
 		t.Fatalf("at 5m: %v", got)

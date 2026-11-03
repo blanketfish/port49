@@ -383,31 +383,6 @@ func (s *Store) DeleteReceiptsByPrincipal(ctx context.Context, principal string)
 	}
 }
 
-// IndexToken records k under principal and certKey, keeping the later
-// expiry where one is recorded; an empty or blank key is skipped
-// (store.BlankCertKey).
-func (s *Store) IndexToken(ctx context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
-	exp := s.now().Add(ttl)
-	for _, ix := range []struct{ fam, key string }{{famTokByPrin, principal}, {famTokByCert, certKey}} {
-		if ix.key == "" || ix.fam == famTokByCert && store.BlankCertKey(ix.key) {
-			continue
-		}
-		err := cas(ctx, s.tok, s.tokLeases, s.k.tokenIndexed(ix.fam, ix.key, k),
-			func(r expiryRec) bool { return true },
-			func(r *expiryRec, found bool) (bool, time.Time, bool, error) {
-				if found && !exp.After(r.ExpiresAt) {
-					return false, time.Time{}, false, nil
-				}
-				r.ExpiresAt = exp
-				return true, exp, false, nil
-			})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Store) tokenKeys(ctx context.Context, fam, key string) ([]store.TokenKey, error) {
 	if key == "" {
 		return nil, nil

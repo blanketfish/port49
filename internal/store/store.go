@@ -164,7 +164,7 @@ type Token struct {
 	VerifiedAt time.Time
 
 	// IndexPrincipal and IndexCertKey, with IndexTTL, ask PutToken to record the
-	// token's key in the principal and certificate indexes (IndexToken's job) in
+	// token's key in the principal and certificate indexes (the token index) in
 	// the same transaction, so a mint is one revision and no token exists that
 	// a revocation cannot find. They are the index's, not the token's: never
 	// stored in the record, never sealed. Zero IndexTTL indexes nothing.
@@ -676,7 +676,7 @@ type Store interface {
 	// §5.1.4; decision 34). ErrNotFound when no live token under k has that
 	// ID. The ID is plaintext (Token.ID), so the sealing layer passes it
 	// through.
-	// It leaves the token index (IndexToken) as it is. That index is by key,
+	// It leaves the token index (Token.IndexTTL) as it is. That index is by key,
 	// not by ID, and the same principal or certificate can hold a second live
 	// token under k: pruning its entry would let a revocation miss that
 	// token, where a stale entry costs a revocation of that principal one
@@ -688,7 +688,7 @@ type Store interface {
 	// persists (plan 7d): no policy this port49d loaded minted them, so none
 	// is redeemable after it, as none was after a restart of the memory
 	// store. The token indexes stay; an entry that outlives its token costs
-	// a revocation one DeleteTokens on an empty key (IndexToken).
+	// a revocation one DeleteTokens on an empty key (Token.IndexTTL).
 	PurgeTokens(ctx context.Context) (int, error)
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
@@ -981,16 +981,14 @@ type Store interface {
 	ContextsByCert(ctx context.Context, certKey string) ([]ContextRef, error)
 	ReindexSid(ctx context.Context, oldSid, newSid string, ref ContextRef, ttl time.Duration) error
 	ActivePrincipals(ctx context.Context) ([]string, error)
-	// IndexToken records that principal, and the certificate certKey
-	// (CertKey), hold an unspent token under k, until ttl from now, keeping
-	// the later expiry where one is already recorded. The minter writes it
-	// before the token, so no token exists that a revocation cannot find
-	// (plan 7a). An empty principal or certKey skips that index, as
-	// IndexContext does, and so does a certKey with no issuer or no serial,
-	// or that is not a CertKey at all.
+	// The token indexes are written by PutToken (Token.IndexPrincipal,
+	// IndexCertKey, IndexTTL), in the token's own write, so no token exists
+	// that a revocation cannot find (plan 7a). An entry holds until ttl from
+	// now, keeping the later expiry where one is already recorded; an empty
+	// principal or certKey skips that index, as IndexContext does, and so does
+	// a certKey with no issuer or no serial, or that is not a CertKey at all.
 	// An entry outliving its token costs a revocation one DeleteTokens on an
 	// empty key.
-	IndexToken(ctx context.Context, principal, certKey string, k TokenKey, ttl time.Duration) error
 	// TokensByPrincipal and TokensByCert are the keys under which the
 	// principal, or the certificate, holds or held an unspent token, sorted
 	// by (NAS, Username).
@@ -1018,7 +1016,7 @@ type Store interface {
 	// A mark that could match nothing is refused: a Kind that is neither
 	// RevocationPrincipal nor RevocationCert, an empty Key, or a certificate
 	// Key that is not a CertKey or has no issuer or no serial, which
-	// IndexToken never indexes.
+	// PutToken never indexes.
 	PutRevocation(ctx context.Context, r Revocation) error
 	// GetRevocation is the mark in force for (kind, key), or ErrNotFound.
 	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)

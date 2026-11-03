@@ -980,12 +980,9 @@ func (w *wrapped) ActivePrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.ActivePrincipals(ctx)
 }
 
-// IndexToken, TokensByPrincipal and TokensByCert are plaintext indexes, as
+// The token index PutToken writes, TokensByPrincipal and TokensByCert are plaintext indexes, as
 // the context indexes are (the package comment): revocation must not depend
 // on the encryption key.
-func (w *wrapped) IndexToken(ctx context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
-	return w.inner.IndexToken(ctx, principal, certKey, k, ttl)
-}
 
 func (w *wrapped) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
 	return w.inner.TokensByPrincipal(ctx, principal)
