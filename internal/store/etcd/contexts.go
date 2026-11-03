@@ -452,6 +452,15 @@ func (s *Store) mutate(ctx context.Context, k store.ContextKey,
 			x.restamp(r.ExpiresAt)
 			idx = &x
 		}
+		// A setter that changed nothing (a device repeating the level it holds, an
+		// annotation already recorded) writes nothing: no revision, no history.
+		if idx == nil {
+			was, errA := json.Marshal(snap.rec)
+			now, errB := json.Marshal(r)
+			if errA == nil && errB == nil && bytes.Equal(was, now) {
+				return nil
+			}
+		}
 		if ok, _, err := s.commitCtx(ctx, k, snap, &r, idx, nil); err != nil || ok {
 			return err
 		}

@@ -41,13 +41,17 @@ func liveTokens(kvs []*mvccpb.KeyValue, now time.Time) []store.Token {
 var beforeTokenTxn func(ctx context.Context)
 
 // PutToken writes t and counts the live tokens under k, in one
-// transaction, as the memory store counts them after its append.
+// transaction, as the memory store counts them after its append. A token
+// that asks for index entries (store.Token.IndexTTL) has them in the same
+// transaction, each kept at the later expiry by a compare on the entry's
+// revision: a mint is one revision, and no token exists that a revocation
+// cannot find.
 func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
 	body, err := json.Marshal(tokenRecOf(t))
 	if err != nil {
 		return 0, err
 	}
-	for attempt := 0; ; attempt++ {
+	for attempt, lost := 0, 0; ; {
 		// The grant alone is hedged: a mint at a bucket's rollover grants,
 		// and an unhedged grant on a dark member's stalled connection fails
 		// one mint in three. The marked ctx goes to the grant only; the
@@ -57,22 +61,71 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		if err != nil {
 			return 0, unavailable(err)
 		}
+		cmps, ops, err := s.tokenIndexOps(ctx, k, t)
+		if err != nil {
+			return 0, err
+		}
+		ops = append([]clientv3.Op{clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id))}, ops...)
+		ops = append(ops, clientv3.OpGet(s.k.tokens(k), clientv3.WithPrefix()))
 		if beforeTokenTxn != nil {
 			beforeTokenTxn(ctx)
 		}
-		resp, err := s.tok.Txn(ctx).Then(
-			clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id)),
-			clientv3.OpGet(s.k.tokens(k), clientv3.WithPrefix()),
-		).Commit()
+		resp, err := s.tok.Txn(ctx).If(cmps...).Then(ops...).Commit()
 		if isLeaseLost(err) && attempt == 0 {
+			attempt++
 			s.tokLeases.Reset()
 			continue
 		}
 		if err != nil {
 			return 0, unavailable(err)
 		}
-		return len(liveTokens(resp.Responses[1].GetResponseRange().Kvs, s.now())), nil
+		if !resp.Succeeded { // an index entry moved since it was read: read it again
+			lost++
+			if err := casBackoff(ctx, lost); err != nil {
+				return 0, unavailable(err)
+			}
+			continue
+		}
+		return len(liveTokens(resp.Responses[len(ops)-1].GetResponseRange().Kvs, s.now())), nil
 	}
+}
+
+// tokenIndexOps are the index entries t asks for, as the puts to add to its
+// transaction and the compares that hold them: an entry already covering the
+// expiry is not written, but is still compared, so a delete since the read
+// is not missed. An empty or blank key is skipped (store.BlankCertKey).
+func (s *Store) tokenIndexOps(ctx context.Context, k store.TokenKey, t store.Token) ([]clientv3.Cmp, []clientv3.Op, error) {
+	if t.IndexTTL <= 0 {
+		return nil, nil, nil
+	}
+	exp := s.now().Add(t.IndexTTL)
+	var cmps []clientv3.Cmp
+	var ops []clientv3.Op
+	for _, ix := range []struct{ fam, key string }{{famTokByPrin, t.IndexPrincipal}, {famTokByCert, t.IndexCertKey}} {
+		if ix.key == "" || ix.fam == famTokByCert && store.BlankCertKey(ix.key) {
+			continue
+		}
+		key := s.k.tokenIndexed(ix.fam, ix.key, k)
+		var r expiryRec
+		mod, found, err := getJSON(ctx, s.tok, key, &r)
+		if err != nil {
+			return nil, nil, err
+		}
+		cmps = append(cmps, unchanged(key, mod))
+		if found && !exp.After(r.ExpiresAt) {
+			continue
+		}
+		body, err := json.Marshal(expiryRec{ExpiresAt: exp})
+		if err != nil {
+			return nil, nil, err
+		}
+		lease, err := s.tokLeases.For(idempotent(ctx), exp)
+		if err != nil {
+			return nil, nil, unavailable(err)
+		}
+		ops = append(ops, clientv3.OpPut(key, string(body), clientv3.WithLease(lease)))
+	}
+	return cmps, ops, nil
 }
 
 // Candidates is every live token under k.

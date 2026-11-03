@@ -483,9 +483,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	if c := r.Subject.Credential; c.Issuer != "" && c.Serial != "" {
 		certKey = store.CertKey(c.Issuer, c.Serial)
 	}
-	if err := m.store.IndexToken(ctx, r.Subject.Principal, certKey, key, ttl+time.Minute); err != nil {
-		return Result{}, fmt.Errorf("token: indexing the token for revocation: %w", err)
-	}
+	indexTTL := ttl + time.Minute // written with the token itself, in its transaction
 
 	// A token never outlives its session ceiling. Given its full TTL, a token
 	// minted just before the ceiling would open a session just after it on
@@ -521,7 +519,8 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 			Principal: r.Subject.Principal, Username: r.Subject.Username, BlobHash: r.BlobHash,
 			MaxSessionAge: r.Subject.MaxSessionAge, Enable: r.Subject.Enable, MaxPrivilege: r.Subject.MaxPrivilege,
 			Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime, MintedAt: mintedAt,
-			VerifiedAt: r.Subject.VerifiedAt,
+			VerifiedAt:     r.Subject.VerifiedAt,
+			IndexPrincipal: r.Subject.Principal, IndexCertKey: certKey, IndexTTL: indexTTL,
 		}); err != nil {
 			return "", err
 		}

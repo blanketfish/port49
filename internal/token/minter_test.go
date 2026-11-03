@@ -625,17 +625,25 @@ func TestALongBatchRenewsEachDevicesHoldBeforeMintingIt(t *testing.T) {
 	}
 }
 
-// indexFailingStore fails IndexToken.
-type indexFailingStore struct{ *memory.Store }
-
-func (indexFailingStore) IndexToken(context.Context, string, string, store.TokenKey, time.Duration) error {
-	return errors.New("store: connection refused")
+// putRecordingStore records the tokens put, and fails the put when fail is set.
+type putRecordingStore struct {
+	*memory.Store
+	put  []store.Token
+	fail bool
 }
 
-// A token is indexed before it is written, so none exists that a
-// revocation cannot find; an index that cannot be written refuses the mint
-// and writes no token (plan 7a).
-func TestEveryTokenIsIndexedBeforeItIsWritten(t *testing.T) {
+func (p *putRecordingStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
+	p.put = append(p.put, t)
+	if p.fail {
+		return 0, errors.New("store: connection refused")
+	}
+	return p.Store.PutToken(ctx, k, t)
+}
+
+// A token carries its index entries in its own write, so none exists that a
+// revocation cannot find (plan 7a); a write that cannot land refuses the mint
+// and leaves no token and no index.
+func TestEveryTokenIsIndexedInItsOwnWrite(t *testing.T) {
 	m, st, _ := minter(t)
 	ctx := context.Background()
 	sub := subject()
@@ -651,13 +659,20 @@ func TestEveryTokenIsIndexedBeforeItIsWritten(t *testing.T) {
 		t.Fatalf("by certificate: %v", got)
 	}
 
-	bad := indexFailingStore{memory.New(time.Now)}
-	m2 := NewMinter(bad, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), time.Now, 3)
+	rec := &putRecordingStore{Store: memory.New(time.Now), fail: true}
+	m2 := NewMinter(rec, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), time.Now, 3)
 	if _, err := m2.Mint(ctx, Request{Subject: sub, Device: "leaf-01", TTL: time.Minute}); err == nil {
-		t.Fatal("a mint whose index failed was not refused")
+		t.Fatal("a mint whose write failed was not refused")
 	}
-	if c, _ := bad.Candidates(ctx, k); len(c) != 0 {
-		t.Fatalf("an unindexed token was written: %d", len(c))
+	if len(rec.put) != 1 || rec.put[0].IndexPrincipal != sub.Principal ||
+		rec.put[0].IndexCertKey != store.CertKey("CN=Corp CA", "3f9a01") || rec.put[0].IndexTTL != 2*time.Minute {
+		t.Fatalf("the put did not carry the index entries: %+v", rec.put)
+	}
+	if c, _ := rec.Candidates(ctx, k); len(c) != 0 {
+		t.Fatalf("a token was written: %d", len(c))
+	}
+	if got, _ := rec.TokensByPrincipal(ctx, sub.Principal); len(got) != 0 {
+		t.Fatalf("an index was written with no token: %v", got)
 	}
 }
 

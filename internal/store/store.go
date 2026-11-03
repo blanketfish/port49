@@ -163,6 +163,14 @@ type Token struct {
 	// clock. Zero is a mint with no directory: the redemption's now.
 	VerifiedAt time.Time
 
+	// IndexPrincipal and IndexCertKey, with IndexTTL, ask PutToken to record the
+	// token's key in the principal and certificate indexes (IndexToken's job) in
+	// the same transaction, so a mint is one revision and no token exists that
+	// a revocation cannot find. They are the index's, not the token's: never
+	// stored in the record, never sealed. Zero IndexTTL indexes nothing.
+	IndexPrincipal, IndexCertKey string
+	IndexTTL                     time.Duration
+
 	Sealed []byte // written by internal/store/crypt; zero in plaintext form
 }
 

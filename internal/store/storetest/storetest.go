@@ -170,7 +170,8 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 			return s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now,
 				BlobHash: "sha256:old"}, time.Hour)
 		}},
-		{"SetPrivilege at the held level", func(s store.Store) error { return s.SetPrivilege(ctx, k, 1) }},
+		// SetPrivilege at the held level is no write at all: see
+		// AnUnchangedSetterLeavesTheRevision.
 	} {
 		s := fresh()
 		before := read(s)

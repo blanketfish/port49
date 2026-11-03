@@ -150,3 +150,43 @@ func TestACasThatKeepsLosingBacksOffAndEndsOnItsContext(t *testing.T) {
 		t.Fatalf("%d rounds in 300 ms: not sleeping between rounds", kv.gets)
 	}
 }
+
+// A mint's token and its two index entries are one transaction: one revision,
+// so all three keys share a ModRevision. (The shared member's header revision
+// moves with every parallel test, so the keys are compared, not the counter.)
+func TestAPutTokenWithIndexKeysIsOneRevision(t *testing.T) {
+	t.Parallel()
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-one-rev", Username: "alice"}
+	const principal = "user:one-rev@example.com"
+	cert := store.CertKey("CN=CA", "01")
+	put := func(id string) {
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("s"), Kind: store.KindLogin,
+			ExpiresAt: t0.Add(time.Hour), IndexPrincipal: principal, IndexCertKey: cert, IndexTTL: 10 * time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mods := func() [3]int64 {
+		var out [3]int64
+		for i, key := range []string{s.k.token(k, "a"), s.k.tokenIndexed(famTokByPrin, principal, k),
+			s.k.tokenIndexed(famTokByCert, cert, k)} {
+			resp, err := s.tok.Get(ctx, key)
+			if err != nil || len(resp.Kvs) != 1 {
+				t.Fatalf("key %d: %v", i, err)
+			}
+			out[i] = resp.Kvs[0].ModRevision
+		}
+		return out
+	}
+	put("a")
+	m := mods()
+	if m[0] != m[1] || m[1] != m[2] {
+		t.Fatalf("the token and its index entries are in different revisions: %v", m)
+	}
+	// The pair mint's second token finds the index covering it and writes only itself.
+	put("b")
+	if got := mods(); got[1] != m[1] || got[2] != m[2] {
+		t.Fatalf("the second put rewrote a covering index entry: %v then %v", m, got)
+	}
+}
