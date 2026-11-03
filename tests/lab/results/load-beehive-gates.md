@@ -4,8 +4,9 @@ Written by hand, as the lead's application of plan 12c ruling 7 to the two harne
 harness notes are never edited; every figure below names the note and cell it comes from.
 `load-beehive.md` is the real-disk note and `load-beehive-ram.md` the RAM one.
 
-- **Commit both runs were built from:** 15e77241 (both notes record it as `15e77241...+dirty`: the
-  worktree held the two uncommitted notes themselves).
+- **Commit both runs were built from:** 15e77241 (the RAM note records it plain; the disk note
+  records `15e77241...+dirty`, because the RAM run's uncommitted note was in the tree when the disk run
+  started).
 - **Host:** beehive (SER8), AMD Ryzen 7 8745HS, 16 cores, 30818 MB RAM, kernel 7.0.0-38-generic.
 - **Fleet:** 10000 devices, 50 machine principals, 450 people (both notes).
 - **Real-disk run** (`load-beehive.md`): session etcd, accounting spool and run directory on a
@@ -32,7 +33,7 @@ not there is not stated.
 - **Task 6b** (e9af0b60 to eca7ae4b, `task-6b-report.md`): Parse 68.5 s to 0.036 s, varied fleet
   91.8 s to 0.60 s, PolicyEditLoad 394.7 s to 1.36 s, ClassAges 23.5 s to 0.004 s, Compare 282.5 s
   to 2.99 s, MFARequirements 30.6 s to 0.13 s. Follow-up (66a1c998, e6c378a0): named-scope fleets
-  55.4 s to 8.19 s. The other rows were not re-measured after the follow-up.
+  55.4 s to 8.19 s. Two rows were re-measured after it: the varied fleet 0.52 s and Compare 2.80 s. The other rows were not.
 
 ## Gate rulings
 
@@ -57,11 +58,13 @@ not there is not stated.
    disk cells a and b `daemon_store_call_p99_ms` and `broker_store_call_p99_ms` are at most 50 ms
    (`load-beehive.md`), and in RAM at most 2.50 ms (`load-beehive-ram.md`).
 6. **`stores.directory.etcd.call_timeout` guidance** is in `deploy/examples/stores/README.md`: at
-   least four times the cross-region round trip. The lab injects 20 ms of egress delay on each
-   region's link (`tests/lab/regions_test.go`, `regionDelay`), so the injected round trip is 80 ms
-   and four times that is 320 ms; the 500 ms in the example covers an injected round trip up to
-   125 ms. Cell f passes at that delay in RAM (`load-beehive-ram.md`, cell f). The figure is the
-   injected delay, not a measured round trip.
+   least four times the cross-region round trip. The lab's regions have a round trip of 40 ms: netem
+   adds 20 ms on the namespace side of each veth only (`tests/lab/regions_test.go`), so 20 ms out
+   and 20 ms back, and L74 measured an average of 40.5 ms (`tests/lab/results/L74-regions.md`). Four
+   times that is 160 ms; the 500 ms in the example covers a round trip up to 125 ms. Cell f applies
+   a 40 ms delay (`netem_delay: 40ms` in both notes, `loadNetemDelay`, on packets sent to the
+   directory members only) and passes in RAM (`load-beehive-ram.md`, cell f). Provisional on the GCP
+   pass.
 7. **The reload settle is inside its bound.** `port49d_reload_seconds` is 10.4 on disk and 9.3 in
    RAM (cell d, both notes); `port49_broker_reload_seconds` is 7.3 and 7.9. The bound is
    `max(30 s, 2 x policy.watch_interval + 5 s)`; `policy.watch_interval` defaults to 5 s
