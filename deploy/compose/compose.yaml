@@ -38,6 +38,8 @@ x-etcd: &etcd
     # design §13: periodic compaction, since every login and touch writes a revision
     ETCD_AUTO_COMPACTION_MODE: periodic
     ETCD_AUTO_COMPACTION_RETENTION: 1h
+    # and a backend quota: etcd's 2 GiB default fills and refuses every write
+    ETCD_QUOTA_BACKEND_BYTES: "8589934592"
 
 services:
   # One-shot, as root: copies the configuration and the PKI into one volume

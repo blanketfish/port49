@@ -266,3 +266,24 @@ func TestComposeIsPinnedAndHardenedLikeTheChart(t *testing.T) {
 		}
 	}
 }
+
+// Every shipped etcd shape compacts and has a quota: without them etcd's
+// defaults fill a 2 GiB backend and refuse every write (load run 3). The
+// systemd shape is held in units_test.go; the container shapes are here.
+func TestEveryShippedEtcdShapeCompactsAndHasAQuota(t *testing.T) {
+	for file, wants := range map[string][]string{
+		"deploy/compose/compose.yaml": {
+			"ETCD_AUTO_COMPACTION_MODE: periodic", "ETCD_AUTO_COMPACTION_RETENTION: 1h",
+			`ETCD_QUOTA_BACKEND_BYTES: "8589934592"`},
+		"deploy/helm/port49/examples/etcd/statefulset.yaml": {
+			"{name: ETCD_AUTO_COMPACTION_MODE, value: periodic}", `{name: ETCD_AUTO_COMPACTION_RETENTION, value: "1h"}`,
+			`{name: ETCD_QUOTA_BACKEND_BYTES, value: "8589934592"}`},
+	} {
+		body := read(t, file)
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q", file, want)
+			}
+		}
+	}
+}
