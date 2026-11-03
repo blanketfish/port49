@@ -351,7 +351,7 @@ A port49d whose etcd is down at boot comes back on its own when etcd does.
 
 ## etcd's disk
 
-**etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
 datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
 500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
 or backend commit p99 stays over its bound for 10 minutes.
@@ -362,4 +362,4 @@ Each etcd data volume and `broker-state` (design §13's runbook).
 
 ## Not here yet
 
-Plan 13's install page, compaction quota sizing, and etcd alarms.
+Plan 13's install page and etcd sizing.
