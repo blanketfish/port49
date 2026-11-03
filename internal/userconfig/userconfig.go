@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -475,15 +476,21 @@ func ReadPrivate(path string, max int64, what string) ([]byte, error) {
 // libykcs11.so usually is): each link must be owned by root or the user, and
 // the directory its target is in is walked again. The final component must
 // be a regular file. Nothing is opened.
+//
+// On macOS write access held by the admin group (gid 80) is accepted too
+// (groupWriteTrusted): Homebrew's prefix is group-writable by admin by design,
+// and a macOS admin can sudo anyway. No other group is, and no other caller
+// takes this rule.
 func CheckOwned(path string) error {
 	const what = "PKCS#11 module"
+	trust := func(gid uint32) bool { return groupWriteTrusted(runtime.GOOS, gid) }
 	links := 0
 	for {
 		dir, base, err := splitPath(path)
 		if err != nil {
 			return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
 		}
-		resolved, err := resolveOwned(dir, false, what)
+		resolved, err := resolveOwned(dir, false, what, trust)
 		if err != nil {
 			return err
 		}
@@ -496,7 +503,7 @@ func CheckOwned(path string) error {
 			if !fi.Mode().IsRegular() {
 				return fmt.Errorf("%s is not a regular file; the %s must be one", file, what)
 			}
-			return ownedAlone(file, fi, what)
+			return ownedAlone(file, fi, what, trust)
 		}
 		if err := ownedBy(file, fi, what); err != nil {
 			return err
@@ -523,7 +530,7 @@ func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, er
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
 	}
-	resolved, err := resolveOwned(dir, false, what)
+	resolved, err := resolveOwned(dir, false, what, nil)
 	if err != nil {
 		// Nothing is read from a path refused, and nothing is there to read
 		// when the kernel finds no file: that is no file, as it always was,
@@ -547,7 +554,7 @@ func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, er
 	if !li.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file; the %s must be one", path, what)
 	}
-	if err := ownedAlone(file, li, what); err != nil {
+	if err := ownedAlone(file, li, what, nil); err != nil {
 		return nil, err
 	}
 	if st, ok := li.Sys().(*syscall.Stat_t); rootOnly && (!ok || st.Uid != SystemOwner) {
@@ -595,22 +602,55 @@ func readPrivate(path string, max int64, what string, rootOnly bool) ([]byte, er
 // entry they do not own, which is all a directory above the file is checked
 // for. Root owning a file is OpenSSH's StrictModes rule too: root can write
 // anything, so trusting it trusts nobody new.
-func ownedAlone(path string, fi fs.FileInfo, what string) error {
+func ownedAlone(path string, fi fs.FileInfo, what string, trust groupTrust) error {
 	if err := ownedBy(path, fi, what); err != nil {
 		return err
 	}
-	if fi.Mode().Perm()&0o022 != 0 && fi.IsDir() && fi.Mode()&fs.ModeSticky == 0 {
+	writers := writtenBy(fi, trust)
+	if writers == "" || (fi.IsDir() && fi.Mode()&fs.ModeSticky != 0) {
+		return nil
+	}
+	if fi.IsDir() {
 		// A directory may be shared, as a group-writable ~/.config is, so
 		// the refusal says what it needs, never a chmod that would change it
 		// for everyone else.
-		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
-			"trusts, so port49 needs it writable by its owner alone (mode 0755 or 0700)", path, fi.Mode().Perm(), what)
+		return fmt.Errorf("%s is writable by %s (mode %04o); whoever can write the %s chooses what port49 "+
+			"trusts, so port49 needs it writable by its owner alone (mode 0755 or 0700)", path, writers, fi.Mode().Perm(), what)
 	}
-	if fi.Mode().Perm()&0o022 != 0 && !fi.IsDir() {
-		return fmt.Errorf("%s is writable by others (mode %v); whoever can write the %s chooses what port49 "+
-			"trusts: chmod go-w %s", path, fi.Mode().Perm(), what, path)
+	return fmt.Errorf("%s is writable by %s (mode %04o); whoever can write the %s chooses what port49 "+
+		"trusts: chmod go-w %s", path, writers, fi.Mode().Perm(), what, path)
+}
+
+// groupTrust says whether a group-write bit held by gid is accepted as
+// root-equivalent; nil trusts no group.
+type groupTrust func(gid uint32) bool
+
+// groupWriteTrusted is the macOS rule for a PKCS#11 module (Ryan, 2026-11-03):
+// the admin group, gid 80, counts as root, since its members can sudo and
+// Homebrew's prefix is group-admin by design (GHA run 41633453384). No other
+// group does, and no other GOOS trusts any.
+func groupWriteTrusted(goos string, gid uint32) bool { return goos == "darwin" && gid == 80 }
+
+// writtenBy names who the mode of fi lets write it besides its owner, "group",
+// "others" or "group and others", or "" when nobody; a group trust accepts is
+// not counted.
+func writtenBy(fi fs.FileInfo, trust groupTrust) string {
+	group := fi.Mode().Perm()&0o020 != 0
+	if group && trust != nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && trust(st.Gid) {
+			group = false
+		}
 	}
-	return nil
+	others := fi.Mode().Perm()&0o002 != 0
+	switch {
+	case group && others:
+		return "group and others"
+	case group:
+		return "group"
+	case others:
+		return "others"
+	}
+	return ""
 }
 
 // ownedBy refuses what fi describes unless this user or root owns it.
@@ -675,7 +715,8 @@ func joinPath(dir, name string) string {
 // not judged: root's, and the one a login got to the home through. With create
 // set, a missing directory is made 0700 and judged like the rest, which only
 // happens below a prefix that has passed, so a refused path creates nothing.
-func resolveOwned(dir string, create bool, what string) (string, error) {
+// trust, when not nil, names the groups whose write bit ownedAlone accepts.
+func resolveOwned(dir string, create bool, what string, trust groupTrust) (string, error) {
 	if !strings.HasPrefix(dir, "/") {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -735,7 +776,7 @@ func resolveOwned(dir string, create bool, what string) (string, error) {
 				prefix = next // above the home directory: not judged
 				continue
 			}
-			if err := ownedAlone(next, fi, holder); err != nil {
+			if err := ownedAlone(next, fi, holder, trust); err != nil {
 				return "", err
 			}
 			prefix = next
@@ -792,7 +833,7 @@ func dirError(d string, err error, what string) error {
 // holding no links, is returned. It is for a caller that keeps a file beside
 // the one WritePrivate writes, such as a lock, and must not make it before the
 // directory is judged.
-func PrivateDir(dir, what string) (string, error) { return resolveOwned(dir, true, what) }
+func PrivateDir(dir, what string) (string, error) { return resolveOwned(dir, true, what, nil) }
 
 // WritePrivate replaces path with data at mode 0600, through a temporary
 // file in its directory renamed over it, so a reader never sees half a file.
@@ -829,7 +870,7 @@ func WritePrivateAll(files ...PrivateFile) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w; the %s must be a file", f.Path, err, f.What)
 		}
-		dir, err := resolveOwned(dirPart, true, f.What)
+		dir, err := resolveOwned(dirPart, true, f.What, nil)
 		if err != nil {
 			return err
 		}
@@ -947,7 +988,7 @@ func replaceFile(path string, data []byte, what string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w; the %s must be a file", path, err, what)
 	}
-	dir, err := resolveOwned(dirPart, false, what)
+	dir, err := resolveOwned(dirPart, false, what, nil)
 	if err != nil {
 		return err
 	}

@@ -9569,12 +9569,16 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - **3. The module.** The `module-path` must be absolute, a regular file, and owned by root or the
   user, with it and every directory above it not writable by group or others: it is code the agent
   runs. `userconfig.CheckOwned(path)` walks the directory with `resolveOwned(filepath.Dir(path),
-  false, what)` (which judges directories only, and refuses a non-directory as "not a
+  false, what, trust)` (which judges directories only, and refuses a non-directory as "not a
   directory"), then follows the base name's symbolic links (`libykcs11.so` is usually a chain),
   each link owned by root or the user, and judges the final regular file by `ownedBy` and a mode
-  with no group or other write bit. One module per process, `C_Initialize` with
-  `CKF_OS_LOCKING_OK` and no mutex callbacks, so the module never calls into Go. Memory the module
-  sees is heap-allocated and pinned with `runtime.Pinner` for the call.
+  with no group or other write bit. On macOS, write access by the `admin` group (gid 80) is
+  accepted, and no other group's is: admins can sudo, and Homebrew's prefix is group-`admin` by
+  design (`groupWriteTrusted`; Ryan's ruling of 2026-11-03; GHA run 41633453384 showed
+  Homebrew's `libykcs11.dylib` refused on `macos-15` and `macos-15-intel` without it); an
+  other-write bit is refused as everywhere, and Linux is unchanged. One module per process,
+  `C_Initialize` with `CKF_OS_LOCKING_OK` and no mutex callbacks, so the module never calls into
+  Go. Memory the module sees is heap-allocated and pinned with `runtime.Pinner` for the call.
 - **4. The PIN.** Asked by `port49 login` on the terminal only when the token says
   `CKF_LOGIN_REQUIRED`, with echo off; handed to the agent on descriptor 4 (`--pin-fd 4`), as the
   broker CA is on 3; dropped (zeroed) after `C_Login`. It is held as bytes, decoded by hand, never

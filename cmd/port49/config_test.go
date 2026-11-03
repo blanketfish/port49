@@ -169,7 +169,7 @@ func TestAConfigFileOthersCanWriteIsRefused(t *testing.T) {
 	var out, errb bytes.Buffer
 	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
 	code := run([]string{"login", "--config", cfg}, &out, &errb)
-	if code != 2 || refreshes() != 0 || !strings.HasPrefix(errb.String(), "port49 login: "+cfg+" is writable by others") {
+	if code != 2 || refreshes() != 0 || !strings.HasPrefix(errb.String(), "port49 login: "+cfg+" is writable by ") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
