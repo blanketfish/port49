@@ -1188,3 +1188,14 @@ func TestTheDeclaredDiskLine(t *testing.T) {
 		}
 	}
 }
+
+// The broker's refusals of a principal at its cap are read beside its evictions.
+func TestThePrincipalCapRefusedCounterIsParsed(t *testing.T) {
+	m := parseLoadMetrics(`port49_broker_connection_events_total{event="principal_cap_evicted"} 3
+port49_broker_connection_events_total{event="principal_cap_refused"} 7
+port49_broker_connection_events_total{event="source_cap_refused"} 100
+`)
+	if m.Evicted != 3 || m.Refused != 7 {
+		t.Fatalf("evicted %v refused %v, want 3 and 7", m.Evicted, m.Refused)
+	}
+}

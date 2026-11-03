@@ -596,6 +596,7 @@ type loadMetrics struct {
 	SpoolDepth  float64
 	SpoolDrops  float64 // port49_accounting_spool_drops_total, over every stage
 	Evicted     float64 // port49_broker_connection_events_total{event="principal_cap_evicted"}
+	Refused     float64 // ...{event="principal_cap_refused"}: every connection of the principal busy
 	buckets     map[float64]float64
 
 	// WALFsyncSum and WALFsyncCount are etcd_disk_wal_fsync_duration_seconds'
@@ -700,6 +701,8 @@ func parseLoadMetrics(text string) loadMetrics {
 			m.SpoolDepth = v
 		case strings.HasPrefix(name, "port49_broker_connection_events_total{") && strings.Contains(name, `event="principal_cap_evicted"`):
 			m.Evicted += v
+		case strings.HasPrefix(name, "port49_broker_connection_events_total{") && strings.Contains(name, `event="principal_cap_refused"`):
+			m.Refused += v
 		case strings.HasPrefix(name, "port49_accounting_spool_drops_total"):
 			m.SpoolDrops += v
 		case name == "etcd_debugging_mvcc_current_revision":

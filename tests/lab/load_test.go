@@ -531,6 +531,7 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 		took    []time.Duration
 		codes   []int
 		evicted float64
+		refused float64
 		haveEv  bool
 		// The fleet's own evictions: the counter has no principal label, by rule,
 		// so the burst window's delta holds the fleet's too. The window before
@@ -585,7 +586,7 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 			}
 			burst.Wait()
 			if after, aerr := loadScrape(loadBrokerMetrics); berr == nil && aerr == nil {
-				evicted, haveEv, burstFor = after.Evicted-before.Evicted, true, time.Since(burstAt)
+				evicted, refused, haveEv, burstFor = after.Evicted-before.Evicted, after.Refused-before.Refused, true, time.Since(burstAt)
 			}
 		}()
 		return r.fleet(ctx, c.Transport, c.Rate, c.Duration, false)
@@ -611,9 +612,11 @@ func (r *loadRun) cellWorkloadBurst(ctx context.Context, c loadCell) loadCell {
 	c.Observed["workload_p99_ms"] = loadMS(loadPercentile(took, 99))
 	if haveEv {
 		c.Observed["principal_cap_evicted_delta"] = strconv.FormatFloat(evicted, 'f', 0, 64)
+		c.Observed["principal_cap_refused_delta"] = strconv.FormatFloat(refused, 'f', 0, 64)
 		c.Observed["principal_cap_evicted_burst_window_s"] = strconv.FormatFloat(burstFor.Seconds(), 'f', 1, 64)
 	} else {
 		c.Observed["principal_cap_evicted_delta"] = loadScrapeFailed
+		c.Observed["principal_cap_refused_delta"] = loadScrapeFailed
 		c.Observed["principal_cap_evicted_burst_window_s"] = loadScrapeFailed
 	}
 	if haveFleet {
