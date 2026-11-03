@@ -7482,7 +7482,7 @@ connections, and a new one past that closes the oldest **idle** connection of it
 else the principal's oldest idle one; if every held connection has a request in flight, the new
 one is refused `503 too_many_connections` with `Retry-After` and nothing is closed (the
 `principal_cap_refused` connection event). A dead connection is idle, so dead connections still
-never lock their owner out, and a request in flight is bounded by the server's request timeout. One
+never lock their owner out, and a request in flight is bounded by the server's 30 s read timeout for its request, the 10 s hold of a mint, and 500 ms for each store call; the one write the server does not bound is a response to a peer that vanished mid-answer, which TCP's retransmission limit ends. A connection just bound counts as busy until its first request is answered, and `ReadHeaderTimeout` (10 s) closes one that never sends. The refusal is a log line and the `principal_cap_refused` count, not a decision record, as a handshake's `identity_refused` is not (§5.7). One
 certificate cannot fill the listener, and a flood from one certificate churns only its own idle
 slots. The first wording closed the oldest connection even with a request in flight on it; the
 load run measured that (`tests/lab/results/load-beehive.md` cell e2: 926 evictions and 19 workloads

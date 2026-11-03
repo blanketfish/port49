@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -534,11 +535,12 @@ func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refus
 		l.mu.Unlock()
 		return nil, true, false
 	}
-	l.unpendLocked(c.src)
-	c.principal, c.certKey, c.legacy = principal, certKey, legacy
-	held := append(l.held[principal], c)
+	// The cap is decided before c is charged to anyone: a connection refused
+	// for it stays pending against its source until it closes (forget), so
+	// max_pending_conns_per_source still bounds a flood of them.
 	var evicted *trackedConn
-	if len(held) > l.lim.MaxPerPrincipal {
+	held := l.held[principal]
+	if len(held) >= l.lim.MaxPerPrincipal {
 		// The oldest idle connection of the same certificate goes first, so
 		// a flood from one certificate churns its own slots and never its
 		// owner's other certificate's (pre-flight I3); otherwise the
@@ -546,7 +548,7 @@ func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refus
 		// is alive and is never closed for the cap: with none idle the new
 		// connection is the one refused (decision 32; load cell e2).
 		i := -1
-		for j, h := range held[:len(held)-1] {
+		for j, h := range held {
 			if h.active {
 				continue
 			}
@@ -563,8 +565,15 @@ func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refus
 			return nil, true, true
 		}
 		evicted = held[i]
-		held = append(held[:i:i], held[i+1:]...)
+		held = slices.Delete(slices.Clone(held), i, i+1)
 	}
+	l.unpendLocked(c.src)
+	c.principal, c.certKey, c.legacy = principal, certKey, legacy
+	// A bound connection is busy until its first request is answered: it is
+	// not dead, its client is about to send, and ReadHeaderTimeout bounds one
+	// that never does.
+	c.active = true
+	held = append(held, c)
 	l.held[principal] = held
 	l.mu.Unlock()
 	if evicted != nil {
@@ -803,8 +812,8 @@ func acceptedAt(c net.Conn, now func() time.Time) time.Time {
 	return now()
 }
 
-// connState records whether a request is in flight on c, from the
-// http.Server's ConnState: the principal cap closes idle connections only.
+// connState records whether a request is in flight on c (or about to be: see
+// bind), from the http.Server's ConnState: the principal cap closes idle connections only.
 func connState(c net.Conn, s http.ConnState) {
 	tc, ok := c.(*tls.Conn)
 	if !ok {
@@ -815,6 +824,11 @@ func connState(c net.Conn, s http.ConnState) {
 		return
 	}
 	t.l.mu.Lock()
-	t.active = s == http.StateActive
+	switch s {
+	case http.StateActive:
+		t.active = true
+	case http.StateIdle, http.StateHijacked, http.StateClosed:
+		t.active = false
+	} // StateNew follows the bind, and must not clear what it set
 	t.l.mu.Unlock()
 }

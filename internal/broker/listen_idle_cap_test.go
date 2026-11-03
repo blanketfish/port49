@@ -161,3 +161,62 @@ func TestAFloodChurnsOnlyItsOwnIdleSlots(t *testing.T) {
 	}
 	ask(t, rc, rbr)
 }
+
+func pendingTotal(l *Listener) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, c := range l.pending {
+		n += c
+	}
+	return n
+}
+
+// A connection refused for the cap stays charged to its source until it
+// closes, so max_pending_conns_per_source still bounds a flood of them.
+func TestACapRefusedConnectionStaysPendingUntilItCloses(t *testing.T) {
+	f := newFixture(t, 8)
+	lim := DefaultListenerLimits
+	lim.MaxPerPrincipal = 4
+	addr, bl := serveThrough(t, f, lim, nil)
+	for i := 0; i < 4; i++ {
+		busy(t, f, bl, addr, f.alice)
+	}
+	var refused []*tls.Conn
+	for i := 0; i < 3; i++ {
+		c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
+			MinVersion: tls.VersionTLS13})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused = append(refused, c)
+	}
+	eventually(t, "three refused connections pending", func() bool { return pendingTotal(bl) == 3 })
+	for _, c := range refused {
+		c.Close()
+	}
+	eventually(t, "pending given back", func() bool { return pendingTotal(bl) == 0 })
+}
+
+// A connection just bound, whose request has not arrived, is not dead: the
+// cap does not close it for a newcomer.
+func TestAJustBoundConnectionIsNotEvicted(t *testing.T) {
+	f := newFixture(t, 8)
+	lim := DefaultListenerLimits
+	lim.MaxPerPrincipal = 2
+	addr, _ := serveThrough(t, f, lim, nil)
+	fresh, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
+		MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	time.Sleep(200 * time.Millisecond) // bound, and the server's StateNew has fired
+	idle, _ := held(t, f, addr, f.alice)
+	third, tbr := held(t, f, addr, f.alice)
+	if !closedByPeer(idle) {
+		t.Fatal("the idle connection was not the one closed")
+	}
+	ask(t, fresh, bufio.NewReader(fresh)) // the just-bound connection still serves
+	ask(t, third, tbr)
+}

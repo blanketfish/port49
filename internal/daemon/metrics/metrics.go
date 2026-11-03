@@ -210,8 +210,10 @@ type Metrics struct {
 	BrokerHandshakeFailures *prometheus.CounterVec
 	// port49_broker_connection_events_total{event}: source_cap_refused (reset
 	// at accept, its source holding max_pending_conns_per_source),
-	// principal_cap_evicted (a principal's oldest held connection closed for
-	// its newest), revoked_closed (closed by a revocation), revoked_refused
+	// principal_cap_evicted (a principal's oldest idle held connection closed for
+	// its newest), principal_cap_refused (answered 503 too_many_connections and
+	// closed at bind: every connection the principal holds has a request in
+	// flight), revoked_closed (closed by a revocation), revoked_refused
 	// (answered credential_revoked and closed at bind: its certificate or
 	// principal is marked, or its certificate is revoked at its CA),
 	// status_unavailable_refused (answered 503 certificate_status_unavailable
