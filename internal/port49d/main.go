@@ -886,21 +886,28 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if err != nil {
 		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 	}
-	defer mln.Close()
 	// rd is /readyz: 200 while the TACACS+ listener serves, and 503 with
 	// why before it opens and from the start of shutdown.
 	rd := newReadiness()
 	// status is GET /store/status, given the stores once they are open.
 	status := &statusHandler{}
 	metricsErr := make(chan error, 1)
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		mux.Handle("/readyz", rd)
-		mux.Handle("GET /store/status", status)
-		metricsErr <- http.Serve(mln, mux)
-	}()
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.Handle("/readyz", rd)
+	mux.Handle("GET /store/status", status)
+	// The metrics server is closed with the run, connections and all: a
+	// scraper that keeps its connection alive would otherwise go on reading
+	// this run's registry and /readyz after the next run has bound the same
+	// address.
+	msrv := &http.Server{Handler: mux}
+	closeMetrics := func() {
+		msrv.Close()
+		mln.Close()
+	}
+	defer closeMetrics()
+	go func() { metricsErr <- msrv.Serve(mln) }()
 	fmt.Fprintf(stderr, "port49d: metrics on %s\n", mln.Addr())
 
 	var startDoc *inventory.Published
@@ -1324,7 +1331,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	limit := openFileLimit()
 	capN, err := connectionCap(cfg.Limits.MaxConnections, limit)
 	if err != nil {
-		mln.Close()
+		closeMetrics()
 		stopSpool()
 		<-spoolDone
 		return fmt.Errorf("config: %w", err)
@@ -1369,7 +1376,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	sayf := func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) }
 	tl, tlsChecker, err := tlsListenerOf(cfg, m, sayf, tlsDeviceSource(cfg, live))
 	if err != nil {
-		mln.Close()
+		closeMetrics()
 		stopSpool()
 		<-spoolDone
 		return err
@@ -1392,7 +1399,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		fmt.Fprintf(stderr, "port49d: store: the store answers; the listeners open again after %d consecutive "+
 			"health checks pass (%s.etcd.health.open_after)\n", sts.health.openAfter, cfg.Stores.SessionPath())
 		if err := sts.health.passes(ctx); err != nil {
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return nil
@@ -1410,7 +1417,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	if cfg.Listen != "" {
 		if ln, err = net.Listen("tcp", cfg.Listen); err != nil {
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return err
@@ -1419,7 +1426,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if tl != nil {
 		if tln, err = net.Listen("tcp", cfg.TLSListener.Listen); err != nil {
 			closeListeners()
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("tls_listener.listen %s: %w", cfg.TLSListener.Listen, err)
@@ -1433,7 +1440,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if brokerSrv != nil {
 		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
 			closeListeners()
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
@@ -1684,7 +1691,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	stopSpool()
 	<-spoolDone
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
-	mln.Close()
+	closeMetrics()
 	return runErr
 }
 
