@@ -1410,6 +1410,44 @@ tests:
       - eval_time: 15m
         alertname: etcd_db_nearly_full
         exp_alerts: []
+  # etcd_disk_slow
+  - interval: 1m
+    input_series:
+      - {series: "etcd_disk_wal_fsync_duration_seconds_bucket{instance=\"e1\",le=\"0.004\"}", values: "0+0x40"}
+      - {series: "etcd_disk_wal_fsync_duration_seconds_bucket{instance=\"e1\",le=\"0.016\"}", values: "0+10x40"}
+      - {series: "etcd_disk_wal_fsync_duration_seconds_bucket{instance=\"e1\",le=\"+Inf\"}", values: "0+10x40"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: etcd_disk_slow
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: etcd_disk_slow
+        exp_alerts:
+          - exp_labels: {instance: "e1", severity: "ticket"}
+            exp_annotations:
+              summary: "etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etcd to a disk with sustained fsync p99 under 10 ms (datacenter NVMe or a cloud SSD volume)."
+  - interval: 1m
+    input_series:
+      - {series: "etcd_disk_backend_commit_duration_seconds_bucket{instance=\"e1\",le=\"0.016\"}", values: "0+0x40"}
+      - {series: "etcd_disk_backend_commit_duration_seconds_bucket{instance=\"e1\",le=\"0.064\"}", values: "0+10x40"}
+      - {series: "etcd_disk_backend_commit_duration_seconds_bucket{instance=\"e1\",le=\"+Inf\"}", values: "0+10x40"}
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: etcd_disk_slow
+        exp_alerts:
+          - exp_labels: {instance: "e1", severity: "ticket"}
+            exp_annotations:
+              summary: "etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etcd to a disk with sustained fsync p99 under 10 ms (datacenter NVMe or a cloud SSD volume)."
+  - interval: 1m
+    input_series:
+      - {series: "etcd_disk_wal_fsync_duration_seconds_bucket{instance=\"e1\",le=\"0.004\"}", values: "0+10x40"}
+      - {series: "etcd_disk_wal_fsync_duration_seconds_bucket{instance=\"e1\",le=\"+Inf\"}", values: "0+10x40"}
+      - {series: "etcd_disk_backend_commit_duration_seconds_bucket{instance=\"e1\",le=\"0.016\"}", values: "0+10x40"}
+      - {series: "etcd_disk_backend_commit_duration_seconds_bucket{instance=\"e1\",le=\"+Inf\"}", values: "0+10x40"}
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: etcd_disk_slow
+        exp_alerts: []
   # etcd_leader_changes
   - interval: 1m
     input_series:

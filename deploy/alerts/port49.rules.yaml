@@ -398,6 +398,12 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "An etcd member's database is over 80% of its quota; at the quota etcd refuses writes."
+      - alert: etcd_disk_slow
+        expr: "histogram_quantile(0.99, rate(etcd_disk_wal_fsync_duration_seconds_bucket[5m])) > 0.010 or histogram_quantile(0.99, rate(etcd_disk_backend_commit_duration_seconds_bucket[5m])) > 0.025"
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "etcd's disk cannot keep up; port49 store calls will time out in bursts. Move etcd to a disk with sustained fsync p99 under 10 ms (datacenter NVMe or a cloud SSD volume)."
       - alert: etcd_leader_changes
         expr: "increase(etcd_server_leader_changes_seen_total[1h]) > 3"
         labels: {severity: ticket}
