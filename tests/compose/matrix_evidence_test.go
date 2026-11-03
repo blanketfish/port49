@@ -42,7 +42,8 @@ func matrixNames(t *testing.T, design string) []string {
 }
 
 var (
-	evidenceRef = regexp.MustCompile("`(TestFailureMatrix/[a-z_0-9]+|Test[A-Za-z0-9_]+)`|\\bL[0-9]+\\b")
+	// A lab row is L<N> standing alone: not the start of a results file's name (L4-error-x.md).
+	evidenceRef = regexp.MustCompile("`(TestFailureMatrix/[a-z_0-9]+|Test[A-Za-z0-9_]+|tests/lab/results/[A-Za-z0-9_.-]+\\.md)`|(?:^|[^A-Za-z0-9/-])(L[0-9]+)(?:[^A-Za-z0-9-]|$)")
 	subtestRef  = regexp.MustCompile(`TestFailureMatrix/([a-z_0-9]+)`)
 )
 
@@ -64,6 +65,7 @@ func TestEveryMatrixRowHasEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := testFunctions(t, root)
+	closed := closedLabRows(t, filepath.Join(root, "docs", "design", "2026-08-23-policy-engine-spec.md"))
 	for _, name := range names {
 		var cells []string
 		for _, line := range strings.Split(string(table), "\n") {
@@ -86,13 +88,44 @@ func TestEveryMatrixRowHasEvidence(t *testing.T) {
 				t.Errorf("%q: evidence names subtest %s, which failmatrix_test.go does not run", name, m[1])
 			}
 		}
-		for _, r := range refs {
-			r = strings.Trim(r, "`")
-			if strings.HasPrefix(r, "Test") && !strings.Contains(r, "/") && !tests[r] {
+		for _, m := range evidenceRef.FindAllStringSubmatch(evidence, -1) {
+			switch r := strings.Trim(m[0], "` "); {
+			case m[2] != "":
+				if !closed[m[2]] {
+					t.Errorf("%q: evidence cites %s, which spec §15 does not show closed (an open row is unmeasured; cite its results note or a test)", name, m[2])
+				}
+			case strings.HasPrefix(r, "tests/lab/results/"):
+				if _, err := os.Stat(filepath.Join(root, r)); err != nil {
+					t.Errorf("%q: evidence cites %s, which does not exist", name, r)
+				}
+			case strings.HasPrefix(r, "Test") && !strings.Contains(r, "/") && !tests[r]:
 				t.Errorf("%q: evidence names %s, which no _test.go file declares", name, r)
 			}
 		}
 	}
+}
+
+// closedLabRows is the set of lab register entries (L<N>) whose row in spec
+// §15 says `closed — measured` (or **closed**); a row with platforms still open
+// says so and is not in it.
+func closedLabRows(t *testing.T, spec string) map[string]bool {
+	t.Helper()
+	b, err := os.ReadFile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := regexp.MustCompile(`^\| \*\*(L[0-9]+)\*\* \|`)
+	done := regexp.MustCompile(`closed(\*\*)? — measured`)
+	out := map[string]bool{}
+	for _, line := range strings.Split(string(b), "\n") {
+		if m := row.FindStringSubmatch(line); m != nil && done.MatchString(line) && !strings.Contains(line, "Still open") {
+			out[m[1]] = true
+		}
+	}
+	if !out["L28"] || out["L4"] {
+		t.Fatalf("the §15 parse is wrong: L28 closed %v, L4 closed %v (want true, false)", out["L28"], out["L4"])
+	}
+	return out
 }
 
 // testFunctions is every Test function declared in a _test.go file under root.
