@@ -870,6 +870,10 @@ func TestAFullEtcdIsNotReportedAsARolesProblem(t *testing.T) {
 	if got := brokerRolesError("stores.session.etcd", "broker", refused).Error(); !strings.Contains(got, roles) {
 		t.Errorf("a refusal lost the roles hint: %s", got)
 	}
+	notSeparated := fmt.Errorf("%w: user %q holds etcd's root role", etcdstore.ErrNotSeparated, "b")
+	if got := brokerRolesError("stores.session.etcd", "broker", notSeparated).Error(); !strings.Contains(got, roles) {
+		t.Errorf("a broker that is not separated lost the roles hint: %s", got)
+	}
 	other := fmt.Errorf("reading x: %w", store.ErrUnavailable)
 	got = brokerRolesError("stores.session.etcd", "broker", other).Error()
 	if strings.Contains(got, roles) || strings.Contains(got, "NOSPACE") {

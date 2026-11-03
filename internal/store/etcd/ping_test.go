@@ -47,3 +47,11 @@ func TestNoSpaceIsItsOwnUnavailableError(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// A status error that escaped clientv3's conversion is no space too, not "too large".
+func TestARawNoSpaceStatusIsNoSpace(t *testing.T) {
+	err := unavailable(rpctypes.ErrGRPCNoSpace)
+	if !errors.Is(err, ErrNoSpace) || errors.Is(err, ErrTooLarge) {
+		t.Fatalf("%v", err)
+	}
+}

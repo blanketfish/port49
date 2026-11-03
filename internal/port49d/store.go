@@ -1016,7 +1016,7 @@ func brokerRolesError(at, cn string, err error) error {
 	case errors.Is(err, etcdstore.ErrNoSpace):
 		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; etcd's space quota is exceeded (alarm NOSPACE): "+
 			"compact and defragment etcd, then run 'etcdctl alarm disarm'", at, cn, err)
-	case errors.Is(err, etcdstore.ErrRefused):
+	case errors.Is(err, etcdstore.ErrRefused), errors.Is(err, etcdstore.ErrNotSeparated):
 		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
 			"apply 'port49d store-roles' output", at, cn, err)
 	}

@@ -265,7 +265,7 @@ func unavailable(err error) error {
 	case errors.Is(err, rpctypes.ErrPermissionDenied), errors.Is(err, rpctypes.ErrAuthFailed),
 		errors.Is(err, rpctypes.ErrUserEmpty), errors.Is(err, rpctypes.ErrInvalidAuthToken):
 		return fmt.Errorf("%w: %v", ErrRefused, err)
-	case errors.Is(err, rpctypes.ErrNoSpace):
+	case errors.Is(err, rpctypes.ErrNoSpace), errors.Is(err, rpctypes.ErrGRPCNoSpace):
 		return fmt.Errorf("%w: %w: %v", store.ErrUnavailable, ErrNoSpace, err)
 	case errors.Is(err, rpctypes.ErrRequestTooLarge), status.Code(err) == codes.ResourceExhausted:
 		return fmt.Errorf("%w: %v", ErrTooLarge, err)
