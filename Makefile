@@ -229,8 +229,12 @@ lab-regions:
 
 # The load harness (plan 12c): the design 5 rate against port49d and port49-broker on
 # a three-member etcd, up to 150 minutes. PORT49_LAB_LOAD_CELLS=a,c runs only those cells.
+# PORT49_LAB_LOAD_ETCD_IN_RAM=1 (lab-only) puts only the session etcd's data under /dev/shm: port49's own
+# ceiling, not a deployable shape. The note says so and is written to load-<host>-ram.md, so the RAM run and
+# the real-disk run (load-<host>.md, whose note names the drive) never overwrite each other.
 lab-load:
 	PORT49_LAB_LOAD=1 PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) PORT49_LAB_LOAD_CELLS=$(PORT49_LAB_LOAD_CELLS) \
+		PORT49_LAB_LOAD_ETCD_IN_RAM=$(PORT49_LAB_LOAD_ETCD_IN_RAM) \
 		go test -tags lab ./tests/lab/ -run '^TestLoad$$' -count=1 -v -timeout 150m
 
 # The closed lab entries, rerun under the lab lock and diffed against their notes

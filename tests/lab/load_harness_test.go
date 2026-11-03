@@ -283,6 +283,99 @@ type hostFacts struct {
 
 	// WALFsyncMeanMS is the session etcd's mean WAL fsync as the last cell saw it.
 	WALFsyncMeanMS string
+
+	// DiskModel is the model of the drive under the run directory ("unknown"
+	// when /sys cannot say). InRAM is PORT49_LAB_LOAD_ETCD_IN_RAM: the session
+	// etcd's data was under /dev/shm. SessionStorage is the line the note
+	// carries, so a reader cannot take a RAM run for a disk run.
+	DiskModel, SessionStorage string
+	InRAM                     bool
+}
+
+// loadEtcdInRAM is PORT49_LAB_LOAD_ETCD_IN_RAM=1 (lab-only): the session
+// etcd's data-dir goes under /dev/shm and the note says so. The directory
+// etcds stay on the run directory's disk.
+func loadEtcdInRAM() bool { return os.Getenv("PORT49_LAB_LOAD_ETCD_IN_RAM") == "1" }
+
+// loadNoteName is the note's file name: the RAM run and the disk run never
+// overwrite each other.
+func loadNoteName(host string, inRAM bool) string {
+	if inRAM {
+		return "load-" + host + "-ram.md"
+	}
+	return "load-" + host + ".md"
+}
+
+// loadStorageFact is the note's session_etcd_storage.
+func loadStorageFact(inRAM bool, h hostFacts) string {
+	if inRAM {
+		return "ram (/dev/shm): not a deployable shape; port49's own ceiling"
+	}
+	model, fs := h.DiskModel, h.RunDirFS
+	if model == "" {
+		model = "unknown"
+	}
+	if fs == "" {
+		fs = "unknown filesystem"
+	}
+	return model + ", " + fs
+}
+
+// loadWALMean is the session etcd's WAL fsync mean for the note: in RAM there
+// is no disk fsync to report.
+func loadWALMean(inRAM bool, mean string) string {
+	if inRAM {
+		return "n/a (ram)"
+	}
+	return mean
+}
+
+// loadSessionDataDir is the session etcd's --data-dir: under the run directory,
+// or with inRAM in a 0700 directory of its own under shm. The caller removes
+// the directory above the returned path at cleanup.
+func loadSessionDataDir(run, shm string, inRAM bool) (string, error) {
+	if !inRAM {
+		return filepath.Join(run, "s.etcd"), nil
+	}
+	d, err := os.MkdirTemp(shm, "p49load-s")
+	if err != nil {
+		return "", err
+	}
+	if err := os.Chmod(d, 0o700); err != nil {
+		os.RemoveAll(d)
+		return "", err
+	}
+	return filepath.Join(d, "s.etcd"), nil
+}
+
+// loadDiskModel is the model of the drive behind the block device major:minor,
+// read from sys (/sys): a partition is resolved to its disk, a device-mapper
+// device to its first slave. "unknown" when sys cannot say.
+func loadDiskModel(sys string, major, minor uint32) string {
+	p, err := filepath.EvalSymlinks(filepath.Join(sys, "dev", "block", fmt.Sprintf("%d:%d", major, minor)))
+	if err != nil {
+		return "unknown"
+	}
+	for range 8 {
+		if _, err := os.Stat(filepath.Join(p, "partition")); err == nil {
+			p = filepath.Dir(p)
+			continue
+		}
+		if ents, err := os.ReadDir(filepath.Join(p, "slaves")); err == nil && len(ents) > 0 {
+			next, err := filepath.EvalSymlinks(filepath.Join(p, "slaves", ents[0].Name()))
+			if err != nil {
+				return "unknown"
+			}
+			p = next
+			continue
+		}
+		break
+	}
+	raw, err := os.ReadFile(filepath.Join(p, "device", "model"))
+	if m := strings.TrimSpace(string(raw)); err == nil && m != "" {
+		return m
+	}
+	return "unknown"
 }
 
 func readHostFacts(dir string) hostFacts {
@@ -318,6 +411,12 @@ func readHostFacts(dir string) hostFacts {
 		h.Disk = fmt.Sprintf("%d GB total, %d GB free under the run directory",
 			st.Blocks*uint64(st.Bsize)>>30, st.Bavail*uint64(st.Bsize)>>30)
 		h.RunDirFS = loadFSName(int64(st.Type))
+	}
+	h.DiskModel = "unknown"
+	var ds syscall.Stat_t
+	if err := syscall.Stat(dir, &ds); err == nil {
+		dev := ds.Dev
+		h.DiskModel = loadDiskModel("/sys", uint32((dev>>8)&0xfff|(dev>>32)&^0xfff), uint32(dev&0xff|(dev>>12)&^0xff))
 	}
 	return h
 }
@@ -366,14 +465,18 @@ func loadInvalidReason(why string) string {
 // value in it could hold a credential: the check runs before a byte is printed.
 func loadNote(cells []loadCell, host hostFacts) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Load at the design rate\n\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
+	title := "# Load at the design rate"
+	if host.InRAM {
+		title += " (session etcd in RAM)"
+	}
+	fmt.Fprintf(&b, title+"\n\n- **session_etcd_storage:** %s\n- **Date measured:** %s\n- **Host CPU:** %s, %d cores\n- **Host RAM:** %d MB\n"+
 		"- **Host disk:** %s\n- **Host kernel:** %s\n- **Host:** %s\n- **Commit:** %s\n- **Fleet:** %d devices, %d machine principals, %d people\n"+
 		"- **run_dir_fs:** %s\n- **etcd_session_wal_fsync_mean_ms:** %s\n\n"+
 		"Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total size, which the quota counts) "+
 		"with 8589934592 bytes (8192 MB). `etcd_session_db_growth_mb_per_min` is the in-use size's change and is "+
 		"understated when `etcd_session_compacted_during_cell` is true (a compaction freed space in the cell); "+
 		"`etcd_session_revisions_per_min` is the write rate compaction cannot hide.\n\n",
-		time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
+		host.SessionStorage, time.Now().UTC().Format("2006-01-02"), host.CPU, host.Cores, host.RAMMB, host.Disk, host.Kernel, host.Host, host.Commit,
 		loadDevices, loadPrincipals, loadHumans, host.RunDirFS, host.WALFsyncMeanMS)
 	for _, c := range cells {
 		verdict := "PASS"
@@ -929,6 +1032,7 @@ type loadRun struct {
 	encKey     string
 	tacacsKey  string
 	envFile    string
+	inRAM      bool // PORT49_LAB_LOAD_ETCD_IN_RAM: the session etcd's data is under /dev/shm
 	devices    int
 	profile    *devicemock.Profile
 	clients    []*http.Client // one per machine principal
@@ -1094,8 +1198,17 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 			client: fmt.Sprintf("127.0.0.1:%d", port), peer: fmt.Sprintf("127.0.0.1:%d", port+1), cluster: strings.Join(initial, ","),
 			data: filepath.Join(dir, fmt.Sprintf("d%d.etcd", i+1)), log: filepath.Join(dir, fmt.Sprintf("d%d.log", i+1)), pki: r.pki})
 	}
+	r.inRAM = loadEtcdInRAM()
+	sessData, err := loadSessionDataDir(dir, "/dev/shm", r.inRAM)
+	if err != nil {
+		t.Fatalf("INVALID: the session etcd's data directory: %v", err)
+	}
+	if r.inRAM { // removed with the run directory, and kept by the same switch
+		shm := filepath.Dir(sessData)
+		t.Cleanup(func() { t.Log(loadCleanRunDir(shm, os.Getenv("PORT49_LAB_LOAD_KEEP"))) })
+	}
 	r.sess = &regionEtcd{name: "s", bin: bin, client: "127.0.0.1:12479", peer: "127.0.0.1:12480", metrics: loadSessionMetrics, cluster: "s=http://127.0.0.1:12480",
-		data: filepath.Join(dir, "s.etcd"), log: filepath.Join(dir, "s.log"), pki: r.pki}
+		data: sessData, log: filepath.Join(dir, "s.log"), pki: r.pki}
 	loadReapStaleSession(t, bin)
 	all := append(slices.Clone(r.dirMembers), r.sess)
 	for _, e := range all {
@@ -1467,6 +1580,14 @@ func (r *loadRun) fleet(ctx context.Context, transport string, rate float64, d t
 // arguments are given, only while /proc says it still runs those arguments.
 func loadSignal(pidfile string, want []string, sig syscall.Signal) string {
 	return killRecorded("/proc", pidfile, want, func(pid int) error { return syscall.Kill(pid, sig) })
+}
+
+// hostFacts is the machine, with the storage the session etcd ran on.
+func (r *loadRun) hostFacts() hostFacts {
+	h := readHostFacts(r.dir)
+	h.InRAM = r.inRAM
+	h.SessionStorage = loadStorageFact(r.inRAM, h)
+	return h
 }
 
 // pidfiles is each process of the stack by its note name.

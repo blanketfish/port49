@@ -104,13 +104,13 @@ func TestLoad(t *testing.T) {
 		if why == "" {
 			why = endWhy
 		}
-		host := readHostFacts(r.dir)
+		host := r.hostFacts()
 		note, err := loadPartialNote(cells, running, why, host)
 		if err != nil {
 			t.Logf("the partial note was not written: %v", err)
 			return
 		}
-		path := filepath.Join(root, "tests", "lab", "results", "load-"+host.Host+".md")
+		path := filepath.Join(root, "tests", "lab", "results", loadNoteName(host.Host, host.InRAM))
 		if err := os.WriteFile(path, []byte(note), 0o644); err != nil {
 			t.Logf("the partial note was not written: %v", err)
 			return
@@ -163,13 +163,13 @@ func TestLoad(t *testing.T) {
 		endWhy = "the run was stopped: " + err.Error()
 		t.Fatalf("INVALID: the run was stopped (%v); the finished cells are in a partial note", err)
 	}
-	host := readHostFacts(r.dir)
+	host := r.hostFacts()
 	host.WALFsyncMeanMS = loadWALFact(cells)
 	note, err := loadNote(cells, host)
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	path := filepath.Join(root, "tests", "lab", "results", "load-"+host.Host+".md")
+	path := filepath.Join(root, "tests", "lab", "results", loadNoteName(host.Host, host.InRAM))
 	if err := os.WriteFile(path, []byte(note), 0o644); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
@@ -209,7 +209,7 @@ func (r *loadRun) measure(c loadCell, run func() devicemock.FleetResult) (loadCe
 		c.Observed["etcd_session_db_in_use_mb"] = num(m.DBInUseBytes / mb)
 		c.Observed["etcd_session_db_growth_mb_per_min"] = loadDBGrowthMBPerMin(walBefore.DBInUseBytes, m.DBInUseBytes, time.Since(cellStart))
 		// This cell's fsyncs: etcd's counters are cumulative since it started.
-		c.Observed["etcd_session_wal_fsync_mean_ms"] = m.Sub(walBefore).WALFsyncMeanMS()
+		c.Observed["etcd_session_wal_fsync_mean_ms"] = loadWALMean(r.inRAM, m.Sub(walBefore).WALFsyncMeanMS())
 		// The bbolt commit and etcd's own slow-apply count: stalls from commit cost on a large file.
 		c.Observed["etcd_session_backend_commit_p99_ms"] = m.Sub(walBefore).BackendCommitP99()
 		c.Observed["etcd_session_apply_slow_total_delta"] = num(m.SlowApply - walBefore.SlowApply)

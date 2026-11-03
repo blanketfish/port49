@@ -959,3 +959,128 @@ func TestDeltasWithoutAResetAreLastLessFirst(t *testing.T) {
 		t.Errorf("%v %v %d", d.buckets, d.SpoolDrops, s.restarts)
 	}
 }
+
+// A fake /sys with the run directory's device a partition of an NVMe drive.
+func fakeSys(t *testing.T, model string) (sys string, major, minor uint32) {
+	t.Helper()
+	sys = t.TempDir()
+	disk := filepath.Join(sys, "devices", "pci0", "nvme", "nvme0", "nvme0n1")
+	part := filepath.Join(disk, "nvme0n1p2")
+	for _, d := range []string{filepath.Join(disk, "device"), part, filepath.Join(sys, "dev", "block")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(disk, "device", "model"), []byte(model+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(part, "partition"), []byte("2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(part, filepath.Join(sys, "dev", "block", "259:2")); err != nil {
+		t.Fatal(err)
+	}
+	return sys, 259, 2
+}
+
+// The disk's model is read for the run directory's device, through a partition.
+func TestTheDiskModelIsReadThroughAPartition(t *testing.T) {
+	sys, maj, min := fakeSys(t, "CT1000P3PSSD8")
+	if got := loadDiskModel(sys, maj, min); got != "CT1000P3PSSD8" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadDiskModel(sys, 8, 1); got != "unknown" {
+		t.Fatalf("a device with no sysfs entry: %q, want unknown", got)
+	}
+}
+
+// A device-mapper device is resolved through its first slave.
+func TestTheDiskModelIsReadThroughADeviceMapper(t *testing.T) {
+	sys, _, _ := fakeSys(t, "SAMSUNG MZVL21T0")
+	dm := filepath.Join(sys, "devices", "virtual", "block", "dm-0")
+	if err := os.MkdirAll(filepath.Join(dm, "slaves"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(sys, "devices", "pci0", "nvme", "nvme0", "nvme0n1", "nvme0n1p2"),
+		filepath.Join(dm, "slaves", "nvme0n1p2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dm, filepath.Join(sys, "dev", "block", "253:0")); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadDiskModel(sys, 253, 0); got != "SAMSUNG MZVL21T0" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestTheStorageFactNamesWhatTheSessionEtcdRunsOn(t *testing.T) {
+	if got := loadStorageFact(true, hostFacts{}); got != "ram (/dev/shm): not a deployable shape; port49's own ceiling" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadStorageFact(false, hostFacts{DiskModel: "CT1000P3PSSD8", RunDirFS: "ext4"}); got != "CT1000P3PSSD8, ext4" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadStorageFact(false, hostFacts{RunDirFS: "ext4"}); got != "unknown, ext4" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// The note says which storage it measured right under its title, so a RAM run
+// cannot be mistaken for a disk run; the WAL fsync of a RAM run is n/a.
+func TestTheNoteSaysWhichStorageItMeasured(t *testing.T) {
+	ram, err := loadNote(nil, hostFacts{SessionStorage: loadStorageFact(true, hostFacts{}), InRAM: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(ram, "\n")
+	if !strings.Contains(lines[0], "etcd in RAM") || !strings.Contains(lines[2], "session_etcd_storage") ||
+		!strings.Contains(lines[2], "not a deployable shape") {
+		t.Fatalf("the head of a RAM note:\n%s", strings.Join(lines[:4], "\n"))
+	}
+	disk, err := loadNote(nil, hostFacts{SessionStorage: "CT1000P3PSSD8, ext4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dl := strings.Split(disk, "\n")
+	if strings.Contains(dl[0], "RAM") || !strings.Contains(dl[2], "CT1000P3PSSD8, ext4") {
+		t.Fatalf("the head of a disk note:\n%s", strings.Join(dl[:4], "\n"))
+	}
+	if got := loadWALMean(true, "4.20"); got != "n/a (ram)" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadWALMean(false, "4.20"); got != "4.20" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// The RAM run and the disk run write different files.
+func TestTheRAMRunWritesItsOwnNoteFile(t *testing.T) {
+	if got := loadNoteName("beehive", false); got != "load-beehive.md" {
+		t.Fatalf("%q", got)
+	}
+	if got := loadNoteName("beehive", true); got != "load-beehive-ram.md" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// Only the session etcd's data goes under /dev/shm, in a 0700 directory.
+func TestOnlyTheSessionEtcdDataGoesToRAM(t *testing.T) {
+	run, shm := t.TempDir(), t.TempDir()
+	if got, err := loadSessionDataDir(run, shm, false); err != nil || got != filepath.Join(run, "s.etcd") {
+		t.Fatalf("disk: %q %v", got, err)
+	}
+	got, err := loadSessionDataDir(run, shm, true)
+	if err != nil || !strings.HasPrefix(got, shm+string(filepath.Separator)) || filepath.Base(got) != "s.etcd" {
+		t.Fatalf("ram: %q %v", got, err)
+	}
+	st, err := os.Stat(filepath.Dir(got))
+	if err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatalf("the directory: %v %v", st, err)
+	}
+	if msg := loadCleanRunDir(filepath.Dir(got), ""); !strings.Contains(msg, "removed") {
+		t.Fatal(msg)
+	}
+	if _, err := os.Stat(filepath.Dir(got)); !os.IsNotExist(err) {
+		t.Fatal("the shm directory outlived cleanup")
+	}
+}
