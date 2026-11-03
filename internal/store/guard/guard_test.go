@@ -152,6 +152,10 @@ func TestTheCircuitOpensAfterFailuresAndProbes(t *testing.T) {
 	if l := said.all(); len(l) != 1 || !strings.Contains(l[0], "context pool's circuit is open after 3 consecutive failures") {
 		t.Fatalf("said %q", l)
 	}
+	// The line names the calls that fed the run, so an operator sees which op failed.
+	if l := said.all(); !strings.Contains(l[0], "by call: GetContext 3") {
+		t.Fatalf("the open line does not name the failing calls: %q", l)
+	}
 	// The token pool is its own: still closed.
 	if _, err := g.PutToken(context.Background(), store.TokenKey{}, store.Token{}); !errors.Is(err, store.ErrUnavailable) ||
 		inner.count() != before+1 {
