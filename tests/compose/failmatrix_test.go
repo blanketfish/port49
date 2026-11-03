@@ -411,9 +411,13 @@ func TestFailureMatrix(t *testing.T) {
 			refused := 0
 			for i, tok := range toks {
 				for tries := 0; ; tries++ {
-					at := time.Since(paused)
-					if m.passes(tok) {
+					ok := m.passes(tok)
+					at := time.Since(paused) // after the attempt: a refusal that ends past the bound is flagged
+					if ok {
 						t.Logf("round %d login %d of %d: passed at +%v after %d refused", r+1, i+1, perRound, at.Round(time.Millisecond), tries)
+						if at > bound {
+							t.Fatalf("round %d: login passed %v after the leader %s was paused, want under %v", r+1, at.Round(time.Millisecond), leader, bound)
+						}
 						break
 					}
 					refused++
@@ -846,7 +850,7 @@ func restoreGuarded(m matrix) {
 	if !m.refused(replay) {
 		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
 	}
-	// Step 9: the time bound is armed, at the snapshot's time + 15m + 5m at most.
+	// Step 9: the time bound is armed: the guard reads the restored tokens' latest expiry, at most a token_ttl (15m) + 5m skew after the snapshot's time.
 	u := m.gauge(daemonMetrics, until)
 	if u == 0 || u < float64(snapAt.Unix())-5 || u > float64(snapAt.Add(20*time.Minute+time.Minute).Unix()) {
 		t.Fatalf("%s is %.0f, want non-zero and within 15m + 5m + 60s of the snapshot (%d)", until, u, snapAt.Unix())

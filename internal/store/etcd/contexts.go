@@ -113,9 +113,11 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 // a copy that finds the compare failed reads the context back. A record
 // carrying this swap's own nonce is its earlier copy's write: success, at the
 // revision that copy committed at. Any other record is a lost race, ErrConflict
-// for the caller to read again. A write by someone else after the first copy
-// and before the read-back drops the nonce, and reads as a lost race: the
-// caller reads again and joins what it finds, as for any race.
+// for the caller to read again. A write that rebuilds the record (RewriteContext,
+// or applyTo through ctxRecOf) after the first copy and before the read-back
+// drops the nonce, and reads as a lost race: the caller reads again and joins
+// what it finds, as for any race. A touch keeps the nonce, and the read-back
+// then reports the touch's revision, not the swap's.
 func (s *Store) commitCtxAs(ctx context.Context, k store.ContextKey, snap ctxSnap, rec *ctxRec, idx *idxRec,
 	added []string, hedge bool) (bool, int64, error) {
 	ck, xk := s.k.context(k), s.k.indexed(refOf(k))

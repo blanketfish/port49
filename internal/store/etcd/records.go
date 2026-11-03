@@ -175,8 +175,9 @@ type ctxRec struct {
 	// production configuration (Task 6 review M-2).
 	Logins []string `json:"logins,omitempty"`
 	Sealed []byte   `json:"sealed,omitempty"`
-	// SwapNonce is the login swap that wrote this record (hedge.go); a later
-	// write that rebuilds the record drops it.
+	// SwapNonce is the login swap that wrote this record (hedge.go); a write
+	// that rebuilds the record from a context (RewriteContext, or applyTo through
+	// ctxRecOf) drops it; mutate, and so TouchContext, keeps it.
 	SwapNonce string `json:"swap_nonce,omitempty"`
 
 	ExpiresAt   time.Time `json:"expires_at"`

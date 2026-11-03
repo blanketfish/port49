@@ -8192,8 +8192,9 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     has applied, the other's compare fails and writes nothing. A copy that finds the compare failed
     reads back the record its own transaction wrote (the receipt, the context), and a per-request nonce
     in it says whether it is this request's earlier copy, which is a success, or another request's
-    write, which is `token_spent` or a conflict as before; so a hedge never turns into a replay
-    refusal or a replay record. Not hedged, and failing one call in three with a member hung: the
+    write, which is `token_spent` or a conflict as before; so the hedge itself adds no replay refusal
+    and no replay record. Only another write that intervenes between the copies (one that drops the
+    nonce, or a revocation) can still fail the call closed, as `token_spent` or a conflict, which is safe. Not hedged, and failing one call in three with a member hung: the
     mint's transaction (a second copy would write a second token), `ExtendReceipt`, `DeleteToken`,
     and the other single-key swaps. The matrix's `one_member_dark` (`deploy/failure-matrix.md`) logs
     in thirty times with a member paused, tokens minted before the pause.
