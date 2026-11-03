@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
@@ -103,7 +104,12 @@ func cas[R any](ctx context.Context, cli clientv3.KV, ls *leases, key string, li
 // carries (plan 7h).
 func casAs[R any](ctx context.Context, cli clientv3.KV, ls *leases, key, what string, live func(R) bool,
 	f func(r *R, found bool) (write bool, exp time.Time, keep bool, err error)) error {
-	for {
+	for round := 0; ; round++ {
+		if round > 0 {
+			if err := casBackoff(ctx, round); err != nil {
+				return unavailable(err)
+			}
+		}
 		resp, err := cli.Get(ctx, key)
 		if err != nil {
 			return unavailable(err)
@@ -133,6 +139,28 @@ func casAs[R any](ctx context.Context, cli clientv3.KV, ls *leases, key, what st
 		if err != nil || ok {
 			return err
 		}
+	}
+}
+
+// casBackoffMax bounds the wait between a lost compare and the next read.
+const casBackoffMax = 50 * time.Millisecond
+
+// casBackoff sleeps a jittered time that doubles from 1 ms to casBackoffMax
+// with each lost round, so writers of one hot key spread out instead of
+// spinning on each other. It ends early with ctx's error.
+func casBackoff(ctx context.Context, round int) error {
+	d := casBackoffMax
+	if round < 7 {
+		d = time.Millisecond << round
+	}
+	d = d/2 + rand.N(d/2+1)
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 

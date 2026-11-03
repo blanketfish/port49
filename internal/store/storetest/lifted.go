@@ -39,6 +39,7 @@ var lifted = []struct {
 	{"AnnotateSetRules", AnnotateSetRules},
 	{"AnnotateDoesNotEditAReadersSlice", AnnotateDoesNotEditAReadersSlice},
 	{"BlobBump", BlobBump},
+	{"BlobPutWritesOnlyWhenTooShortLived", BlobPutWritesOnlyWhenTooShortLived},
 	{"Indexes", Indexes},
 	{"Idempotency", Idempotency},
 	{"SwapIsACompareAndSet", SwapIsACompareAndSet},
@@ -778,6 +779,42 @@ func AnnotateDoesNotEditAReadersSlice(t *testing.T, b Backend) {
 	}
 	if len(before.SessionDiscriminators) != 1 {
 		t.Fatalf("the annotation grew a slice a caller was already holding: %+v", before.SessionDiscriminators)
+	}
+}
+
+// BlobPutWritesOnlyWhenTooShortLived: a PutBlob whose expiry the stored blob
+// already covers writes nothing (the broker's mint calls it once a mint, and
+// a write a mint is a hot key), a longer ttl still writes, and the expiry
+// is rounded up, never down, so the blob outlives what it was asked for.
+func BlobPutWritesOnlyWhenTooShortLived(t *testing.T, b Backend) {
+	now := time.Unix(1000, 0)
+	s := b.New(t, func() time.Time { return now })
+	ctx := context.Background()
+	if err := s.PutBlob(ctx, "sha256:a", []byte("first"), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := s.PutBlob(ctx, "sha256:a", []byte("second"), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetBlob(ctx, "sha256:a"); err != nil || string(got) != "first" {
+		t.Fatalf("a put the stored blob already covered rewrote it: %q %v", got, err)
+	}
+	// The expiry was rounded up to the minute's end (unix 1020), not left at 1010.
+	now = time.Unix(1015, 0)
+	if _, err := s.GetBlob(ctx, "sha256:a"); err != nil {
+		t.Fatalf("the expiry was not rounded up: %v", err)
+	}
+	now = time.Unix(1000, 0)
+	if err := s.PutBlob(ctx, "sha256:a", []byte("third"), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetBlob(ctx, "sha256:a"); err != nil || string(got) != "third" {
+		t.Fatalf("a longer ttl did not write: %q %v", got, err)
+	}
+	now = now.Add(59 * time.Minute)
+	if _, err := s.GetBlob(ctx, "sha256:a"); err != nil {
+		t.Fatalf("the longer put was shortened: %v", err)
 	}
 }
 

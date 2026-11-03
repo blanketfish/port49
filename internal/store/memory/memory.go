@@ -981,15 +981,20 @@ func (s *Store) DeleteContextIf(_ context.Context, k store.ContextKey, rev uint6
 	return nil
 }
 
-// PutBlob writes body under hash, keeping the later of the existing and the
-// new expiry: a re-put must not shorten a blob another context still
-// references.
+// PutBlob writes body under hash only when the stored blob dies before
+// now+ttl, and rounds the expiry up to the minute, as the etcd store's lease
+// bucket does: a re-put must not shorten a blob another context still
+// references, and a put it already covers writes nothing.
 func (s *Store) PutBlob(_ context.Context, hash string, body []byte, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp := s.now().Add(ttl)
-	if existing, ok := s.blobs[hash]; ok && existing.exp.After(exp) {
-		exp = existing.exp
+	want := s.now().Add(ttl)
+	if existing, ok := s.blobs[hash]; ok && existing.exp.After(s.now()) && !existing.exp.Before(want) {
+		return nil
+	}
+	exp := want.Truncate(time.Minute)
+	if exp.Before(want) {
+		exp = exp.Add(time.Minute)
 	}
 	s.blobs[hash] = blobEntry{body: bytes.Clone(body), exp: exp}
 	s.writes++

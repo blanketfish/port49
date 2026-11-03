@@ -612,22 +612,37 @@ func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uin
 	}
 }
 
-// PutBlob writes body, keeping the later of the existing and the new
-// expiry. It is on the token pool, and GetBlob and BumpBlob on the context
+// PutBlob writes body only when the stored blob dies before now+ttl, and
+// rounds the expiry it writes up to the next lease bucket, so one blob is
+// written about once a bucket, not once a mint (load run 2: every mint
+// compare-and-swapped one shared key and half timed out). The expiry is
+// never shortened, and a blob outlives every context that refers to it.
+// It is on the token pool, and GetBlob and BumpBlob on the context
 // pool, on purpose: the broker's mint is what writes a blob, and the
 // commands it authorizes and the refresh are what read and extend one, so
 // each rides the pool of the path that calls it (design §12). The pools
 // are one cluster, so a blob put on one is read on the other.
 func (s *Store) PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
-	exp := s.now().Add(ttl)
+	want := s.now().Add(ttl)
 	return cas(ctx, s.tok, s.tokLeases, s.k.blob(hash), func(b blobRec) bool { return b.ExpiresAt.After(s.now()) },
 		func(b *blobRec, found bool) (bool, time.Time, bool, error) {
-			if found && b.ExpiresAt.After(exp) {
-				exp = b.ExpiresAt
+			if found && !b.ExpiresAt.Before(want) {
+				return false, time.Time{}, false, nil
 			}
+			exp := roundUpToBucket(want)
 			b.Body, b.ExpiresAt = bytes.Clone(body), exp
 			return true, exp, false, nil
 		})
+}
+
+// roundUpToBucket is t, or the end of its lease bucket when t is inside
+// one: the expiry a record may be given without costing a lease.
+func roundUpToBucket(t time.Time) time.Time {
+	r := t.Truncate(leaseBucket)
+	if r.Before(t) {
+		r = r.Add(leaseBucket)
+	}
+	return r
 }
 
 // GetBlob is the blob's body until its expiry.
