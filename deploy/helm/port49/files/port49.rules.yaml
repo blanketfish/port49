@@ -325,7 +325,7 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "The accounting spool discarded records; the stage label says where."
-      - alert: accounting_spool_disk_slow
+      - alert: port49_accounting_spool_disk_slow
         expr: "histogram_quantile(0.99, rate(port49_accounting_spool_sync_seconds_bucket[5m])) > 0.010"
         for: 10m
         labels: {severity: ticket}

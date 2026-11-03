@@ -1448,7 +1448,7 @@ tests:
       - eval_time: 20m
         alertname: etcd_disk_slow
         exp_alerts: []
-  # accounting_spool_disk_slow
+  # port49_accounting_spool_disk_slow
   - interval: 1m
     input_series:
       - {series: "port49_accounting_spool_sync_seconds_bucket{instance=\"a\",le=\"0.005\"}", values: "0+0x40"}
@@ -1456,10 +1456,10 @@ tests:
       - {series: "port49_accounting_spool_sync_seconds_bucket{instance=\"a\",le=\"+Inf\"}", values: "0+10x40"}
     alert_rule_test:
       - eval_time: 5m
-        alertname: accounting_spool_disk_slow
+        alertname: port49_accounting_spool_disk_slow
         exp_alerts: []
       - eval_time: 20m
-        alertname: accounting_spool_disk_slow
+        alertname: port49_accounting_spool_disk_slow
         exp_alerts:
           - exp_labels: {instance: "a", severity: "ticket"}
             exp_annotations:
@@ -1470,7 +1470,7 @@ tests:
       - {series: "port49_accounting_spool_sync_seconds_bucket{instance=\"a\",le=\"+Inf\"}", values: "0+10x40"}
     alert_rule_test:
       - eval_time: 20m
-        alertname: accounting_spool_disk_slow
+        alertname: port49_accounting_spool_disk_slow
         exp_alerts: []
   # etcd_leader_changes
   - interval: 1m
