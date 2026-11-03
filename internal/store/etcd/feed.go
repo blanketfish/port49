@@ -120,7 +120,17 @@ func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.C
 		case <-probe.C:
 			switch quiet := time.Since(heard); {
 			case quiet >= feedStall:
-				return fmt.Errorf("%w: the context watch's member has not answered for %v", store.ErrUnavailable,
+				// Only when the store answers elsewhere: with every member dark
+				// (no quorum, a network out) every watch is as quiet as this one,
+				// the stream revives the moment the store returns, and ending it
+				// would only add a retry's second to the recovery.
+				pc, pcancel := context.WithTimeout(ctx, feedStall/2)
+				_, err := s.ctxKV.Get(pc, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
+				pcancel()
+				if err != nil {
+					continue
+				}
+				return fmt.Errorf("%w: the context watch's member has not answered for %v while the store has", store.ErrUnavailable,
 					quiet.Round(100*time.Millisecond))
 			case quiet >= feedIdle:
 				if err := s.ctx.RequestProgress(wctx); err != nil && ctx.Err() == nil {
