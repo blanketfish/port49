@@ -86,7 +86,8 @@ autoscaling:
   maxReplicas: 6
   # Half the peak port49_connections per replica at the design rate (62 on one replica, TLS,
   # 170/s on a real disk: tests/lab/results/load-beehive.md cell b), to the nearest 50.
-  # Provisional on a datacenter-disk pass; see tests/lab/results/load-beehive-gates.md.
+  # The target cells peak at 7 and 11 on GCE pd-ssd, which would round to 0, so 50 stands as the
+  # floor from beehive's figure; see tests/lab/results/load-beehive-gates.md.
   averageConnections: 50
 
 # The alert rules (files/port49.rules.yaml, a copy of deploy/alerts/port49.rules.yaml) as a
