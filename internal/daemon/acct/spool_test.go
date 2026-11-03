@@ -1426,3 +1426,45 @@ func TestNoOfferReturnsBeforeItsBytesAreSynced(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// syncObservations is the count and sum of port49_accounting_spool_sync_seconds.
+func syncObservations(t *testing.T, reg *prometheus.Registry) (uint64, float64) {
+	t.Helper()
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() == "port49_accounting_spool_sync_seconds" {
+			h := f.GetMetric()[0].GetHistogram()
+			return h.GetSampleCount(), h.GetSampleSum()
+		}
+	}
+	t.Fatal("port49_accounting_spool_sync_seconds is not registered")
+	return 0, 0
+}
+
+// Each group-commit sync is observed once, however many offers it carried, and
+// the observation covers the fsync (the spool's disk is what an ack waits on).
+func TestEachGroupSyncIsObservedInTheSyncHistogram(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	sp, err := NewSpool(1024, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.syncFile = func(f *os.File) error { time.Sleep(20 * time.Millisecond); return f.Sync() }
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	n, sum := syncObservations(t, reg)
+	if n != 1 || sum < 0.02 {
+		t.Fatalf("after one offer on a new file: %d observations, sum %.4f s", n, sum)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := syncObservations(t, reg); n != 2 {
+		t.Fatalf("after two offers one at a time: %d observations", n)
+	}
+}

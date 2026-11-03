@@ -443,11 +443,15 @@ func (s *Spool) writeBatch(batch []*offerWaiter) error {
 	}
 	_, werr := f.Write(buf)
 	var serr error
+	syncStart := time.Now()
 	if werr == nil {
 		serr = s.sync(f)
 	}
 	cerr := f.Close()
 	if werr != nil || serr != nil {
+		if werr == nil {
+			s.metrics.SpoolSyncSeconds.Observe(time.Since(syncStart).Seconds())
+		}
 		// A partial write leaves the file ending mid-record; so does a write
 		// whose sync never landed. Either way the next batch must separate.
 		s.needNewline = true
@@ -461,9 +465,15 @@ func (s *Spool) writeBatch(batch []*offerWaiter) error {
 
 	if isNew {
 		if err := syncDir(filepath.Dir(s.path)); err != nil {
+			s.metrics.SpoolSyncSeconds.Observe(time.Since(syncStart).Seconds())
 			return fail("directory sync", err)
 		}
 	}
+	// One observation per group commit: the data fsync, and the directory
+	// fsync when this batch created the file. It is what every ack in the
+	// batch waited on, so a slow spool disk shows here and not only as slow
+	// accounting.
+	s.metrics.SpoolSyncSeconds.Observe(time.Since(syncStart).Seconds())
 
 	s.depth += len(batch)
 	s.metrics.SpoolDepth.Set(float64(s.depth))

@@ -96,6 +96,10 @@ type Metrics struct {
 	// an operator after three consecutive read failures. Not a record count —
 	// the records are still in the quarantined file.
 	SpoolQuarantines prometheus.Counter
+	// port49_accounting_spool_sync_seconds: the fsync of one group commit
+	// (plus the directory fsync of a batch that created the file), which every
+	// accounting ack in the batch waits on. No labels.
+	SpoolSyncSeconds prometheus.Histogram
 	StoreOps         *prometheus.CounterVec
 	// StoreCalls, StoreCallSeconds and StoreCircuitOpen are the guard's
 	// (internal/store/guard; plan 7d): every store call by component
@@ -747,6 +751,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Accounting records discarded by the spool, by the stage that discarded them."}, []string{"stage"}),
 		SpoolQuarantines: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_accounting_spool_quarantines_total",
 			Help: "Unreadable spool files renamed aside for an operator."}),
+		SpoolSyncSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "port49_accounting_spool_sync_seconds",
+			Help:    "Seconds one accounting spool group commit spent in fsync; every record in the batch waits on it.",
+			Buckets: []float64{0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}}),
 		StoreOps: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_operations_total",
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),
 		StoreCalls: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_calls_total",
@@ -1041,7 +1048,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	m.ConnectionsShed.WithLabelValues("global_cap") // the alarm's series exists before the first shed
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
-		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
+		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines, m.SpoolSyncSeconds,
 		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
