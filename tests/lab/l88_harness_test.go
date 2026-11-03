@@ -45,6 +45,10 @@ func l88HasTLS(sel string) bool { return l88TLSImages[sel] }
 // over TLS, so it lists no h and no i. The plain pass of a TLS image ends in h.
 func l88Cells(sel string, tls bool) []string {
 	cells := []string{"a", "b", "c", "d", "e", "f"}
+	if !tls && l88PlatformOf(sel) == "cisco_iosxe" {
+		// f2: what an IOS XE does after a break-glass session ran with port49d down.
+		cells = append(cells, "f2")
+	}
 	if tls || !l88L29[sel] {
 		cells = append(cells, "g")
 	}

@@ -238,3 +238,13 @@ func TestL88EvidenceDropsLinesThatCouldHoldACredential(t *testing.T) {
 		t.Errorf("a plain line was dropped: %q", got)
 	}
 }
+
+func TestL88OnlyCellsKeepsEveryCellByDefault(t *testing.T) {
+	all := []string{"a", "b", "c", "d", "e", "f"}
+	if got := l88OnlyCells(all, ""); !slices.Equal(got, all) {
+		t.Errorf("an empty filter dropped cells: %v", got)
+	}
+	if got := l88OnlyCells(all, "a,e,x"); !slices.Equal(got, []string{"a", "e"}) {
+		t.Errorf("the filter kept %v, want a and e", got)
+	}
+}
