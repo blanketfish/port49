@@ -822,9 +822,25 @@ func (r *loadRun) mkdir(name string) string {
 	return p
 }
 
+// loadCleanRunDir removes the run directory at the end of a run, unless keep
+// (PORT49_LAB_LOAD_KEEP) is "1": then the processes' logs and the stores'
+// data stay for a diagnosis, and the path is said. A kept directory still
+// holds the run's keys (run.env, the PKI), 0700 as made; delete it when done.
+// It answers the line for the test log.
+func loadCleanRunDir(dir, keep string) string {
+	if keep == "1" {
+		return "the run directory is kept (PORT49_LAB_LOAD_KEEP=1): " + dir
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return "the run directory was not removed: " + err.Error()
+	}
+	return "the run directory is removed"
+}
+
 // loadStack builds the run: members directory etcd members (one, or three) and
 // a session etcd, the roles, port49-broker and port49d on the tcp inventory.
-// Everything is removed at t's cleanup. The caller holds the lab lock.
+// Everything is removed at t's cleanup, unless PORT49_LAB_LOAD_KEEP=1
+// (loadCleanRunDir). The caller holds the lab lock.
 func loadStack(t *testing.T, members int, devices int) *loadRun {
 	t.Helper()
 	bin := os.Getenv("PORT49_LAB_ETCD_BIN")
@@ -841,7 +857,7 @@ func loadStack(t *testing.T, members int, devices int) *loadRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { t.Log(loadCleanRunDir(dir, os.Getenv("PORT49_LAB_LOAD_KEEP"))) })
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}

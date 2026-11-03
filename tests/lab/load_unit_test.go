@@ -741,3 +741,31 @@ func TestTheNoteLegendNamesTheQuotaFigure(t *testing.T) {
 		t.Fatalf("%v\n%s", err, note)
 	}
 }
+
+// PORT49_LAB_LOAD_KEEP=1 keeps the run directory and says where it is; any
+// other value removes it.
+func TestTheRunDirectoryIsKeptOnlyWhenAsked(t *testing.T) {
+	for _, keep := range []string{"", "0", "yes"} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "broker.log"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := loadCleanRunDir(dir, keep); got != "the run directory is removed" {
+			t.Errorf("keep %q: %q", keep, got)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("keep %q: the directory is still there (%v)", keep, err)
+		}
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "broker.log")
+	if err := os.WriteFile(log, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadCleanRunDir(dir, "1"); !strings.Contains(got, dir) || !strings.Contains(got, "kept") {
+		t.Errorf("keep 1: %q", got)
+	}
+	if _, err := os.Stat(log); err != nil {
+		t.Errorf("keep 1: the log is gone: %v", err)
+	}
+}
