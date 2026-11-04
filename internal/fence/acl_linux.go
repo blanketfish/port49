@@ -38,7 +38,7 @@ type aclEntry struct {
 }
 
 // parsePOSIXACL decodes the xattr. A wrong version, a length that is not whole entries, an
-// unknown tag or a permission past rwx is an error: an ACL this does not understand is refused,
+// unknown tag, a permission past rwx or a missing base entry is an error: an ACL this does not understand is refused,
 // never read as empty.
 func parsePOSIXACL(b []byte) ([]aclEntry, error) {
 	if len(b) < 4 || binary.LittleEndian.Uint32(b) != aclVersion {
@@ -60,6 +60,24 @@ func parsePOSIXACL(b []byte) ([]aclEntry, error) {
 			return nil, fmt.Errorf("POSIX ACL permission %#x past rwx", e.perm)
 		}
 		es = append(es, e)
+	}
+	var obj, gobj, other, mask, named int
+	for _, e := range es {
+		switch e.tag {
+		case aclUserObj:
+			obj++
+		case aclGroupObj:
+			gobj++
+		case aclOther:
+			other++
+		case aclMask:
+			mask++
+		default:
+			named++
+		}
+	}
+	if obj != 1 || gobj != 1 || other != 1 || mask > 1 || (named > 0 && mask != 1) {
+		return nil, errors.New("POSIX ACL missing a required entry (user::, group::, other::, or mask:: beside named entries)")
 	}
 	return es, nil
 }
@@ -83,19 +101,19 @@ func secretACLRefusal(entries []aclEntry, euid, owningGroup uint32, groupOurs fu
 		var name, remove string
 		switch e.tag {
 		case aclUser:
-			name, remove = "user:"+strconv.Itoa(int(e.id)), "u:"+strconv.Itoa(int(e.id))
+			name, remove = "user:"+strconv.Itoa(int(e.id)), "setfacl -x u:"+strconv.Itoa(int(e.id))
 		case aclGroup:
-			name, remove = "group:"+strconv.Itoa(int(e.id)), "g:"+strconv.Itoa(int(e.id))
+			name, remove = "group:"+strconv.Itoa(int(e.id)), "setfacl -x g:"+strconv.Itoa(int(e.id))
 		case aclGroupObj:
-			name, remove = "group::", "g::"
+			name, remove = "group::", "setfacl -m g::-"
 		case aclOther:
-			name, remove = "other::", "o::"
+			name, remove = "other::", "setfacl -m o::-"
 		default:
 			continue
 		}
 		entry := fmt.Sprintf("%s:%s", name, aclPerm(e.perm))
 		if e.perm&aclWrite != 0 {
-			return fmt.Errorf("carries the ACL entry %s: write on a secret is for its owner alone - remove it with setfacl -x %s on the file", entry, remove)
+			return fmt.Errorf("carries the ACL entry %s: write on a secret is for its owner alone - remove it with %s on the file (setfacl -b clears every extended entry)", entry, remove)
 		}
 		if e.perm == 0 {
 			continue
@@ -103,26 +121,29 @@ func secretACLRefusal(entries []aclEntry, euid, owningGroup uint32, groupOurs fu
 		switch e.tag {
 		case aclUser:
 			if e.id != euid && e.id != 0 {
-				return fmt.Errorf("carries the ACL entry %s, a user that is neither this process's (uid %d) nor root; it could read the secret too - remove it with setfacl -x %s on the file", entry, euid, remove)
+				return fmt.Errorf("carries the ACL entry %s, a user that is neither this process's (uid %d) nor root; it could read the secret too - remove it with %s on the file (setfacl -b clears every extended entry)", entry, euid, remove)
 			}
 		case aclGroup:
 			if !groupOurs(e.id) {
-				return fmt.Errorf("carries the ACL entry %s, a group this process is not in; its members could read the secret too - remove it with setfacl -x %s on the file", entry, remove)
+				return fmt.Errorf("carries the ACL entry %s, a group this process is not in; its members could read the secret too - remove it with %s on the file (setfacl -b clears every extended entry)", entry, remove)
 			}
 		case aclGroupObj:
 			if e.perm&aclRead != 0 && !groupOurs(owningGroup) {
-				return fmt.Errorf("carries the ACL entry %s, and its owning group (gid %d) is not one this process is in; its members could read the secret too - chgrp the file to the service's group, or remove it with setfacl -x %s on the file", entry, owningGroup, remove)
+				return fmt.Errorf("carries the ACL entry %s, and its owning group (gid %d) is not one this process is in; its members could read the secret too - chgrp the file to the service's group, or remove it with %s on the file (setfacl -b clears every extended entry)", entry, owningGroup, remove)
 			}
 		case aclOther:
-			return fmt.Errorf("carries the ACL entry %s: a secret is for no one but the service - remove it with setfacl -x %s on the file", entry, remove)
+			return fmt.Errorf("carries the ACL entry %s: a secret is for no one but the service - remove it with %s on the file (setfacl -b clears every extended entry)", entry, remove)
 		}
 	}
 	return nil
 }
 
-// dirACLRefusal is the directory's: who could change the directory decides who gets the file, so
-// an entry granting write to anyone but the process's user or root is refused.
-func dirACLRefusal(entries []aclEntry, euid uint32, groupOurs func(uint32) bool) error {
+// dirACLRefusal is the directory's. Read entries are not its business, only write; an entry masked
+// out of effect is refused too (the mask is the mode's group bits, which the mode rule judges
+// separately), and the rule runs before ruling 11's sticky excuse, so a sticky directory whose extra
+// writers come from ACL entries is refused. Whoever could change the directory decides who gets
+// the file, so an entry granting write to anyone but the process's user or root is refused.
+func dirACLRefusal(entries []aclEntry, euid uint32) error {
 	for _, e := range entries {
 		if e.perm&aclWrite == 0 {
 			continue
@@ -133,17 +154,17 @@ func dirACLRefusal(entries []aclEntry, euid uint32, groupOurs func(uint32) bool)
 			if e.id == euid || e.id == 0 {
 				continue
 			}
-			name, remove = "user:"+strconv.Itoa(int(e.id)), "u:"+strconv.Itoa(int(e.id))
+			name, remove = "user:"+strconv.Itoa(int(e.id)), "setfacl -x u:"+strconv.Itoa(int(e.id))
 		case aclGroup:
-			name, remove = "group:"+strconv.Itoa(int(e.id)), "g:"+strconv.Itoa(int(e.id))
+			name, remove = "group:"+strconv.Itoa(int(e.id)), "setfacl -x g:"+strconv.Itoa(int(e.id))
 		case aclGroupObj:
-			name, remove = "group::", "g::"
+			name, remove = "group::", "setfacl -m g::-"
 		case aclOther:
-			name, remove = "other::", "o::"
+			name, remove = "other::", "setfacl -m o::-"
 		default:
 			continue
 		}
-		return fmt.Errorf("carries the ACL entry %s:%s, which lets others than its owner write it; whoever can write it decides who gets access - remove it with setfacl -x %s on the directory", name, aclPerm(e.perm), remove)
+		return fmt.Errorf("carries the ACL entry %s:%s, which lets others than its owner write it; whoever can write it decides who gets access - remove it with %s on the directory (setfacl -b clears every extended entry)", name, aclPerm(e.perm), remove)
 	}
 	return nil
 }
@@ -162,7 +183,7 @@ func fetchACL(get func(dest []byte) (int, error)) ([]aclEntry, bool, error) {
 		}
 		buf := make([]byte, n)
 		n, err = get(buf)
-		if errors.Is(err, unix.ERANGE) {
+		if errors.Is(err, unix.ERANGE) || (err == nil && n > len(buf)) {
 			continue // the ACL grew between the two calls
 		}
 		if err != nil {
@@ -197,10 +218,14 @@ func readACL(f *os.File) ([]aclEntry, bool, error) {
 	return es, has, ferr
 }
 
+// procSelfFd is where a descriptor's magic link lives, swapped in tests. Without /proc (a chroot,
+// or RootDirectory= without API VFS) the directory's ACL cannot be read and every secret is refused.
+var procSelfFd = "/proc/self/fd"
+
 // readDirACL is readACL for a directory held open with O_PATH, which fgetxattr refuses: it asks
 // for the descriptor's own /proc/self/fd entry, which names the same inode whatever is renamed.
 func readDirACL(d *os.File) ([]aclEntry, bool, error) {
-	path := "/proc/self/fd/" + strconv.Itoa(int(d.Fd()))
+	path := procSelfFd + "/" + strconv.Itoa(int(d.Fd()))
 	es, has, err := fetchACL(func(dest []byte) (int, error) { return unix.Getxattr(path, aclXattr, dest) })
 	if err != nil && errors.Is(err, syscall.ENOENT) {
 		err = fmt.Errorf("%w (is /proc mounted?)", err)

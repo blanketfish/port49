@@ -1148,8 +1148,9 @@ func TestAnACLGrantingAnotherUserReadIsRefused(t *testing.T) {
 	}
 }
 
-// systemd's LoadCredential= renders root:root 0440 with an ACL granting the service user read and
-// group:: empty (lab entry L84): the owning group has no access, so it need not be ours.
+// A root:root 0440 file with an ACL granting the service user read and group:: empty: the owning
+// group has no access, so it need not be ours (the shape systemd's LoadCredential= is expected to
+// render; whether it does is for L84's host run to measure).
 func TestTheSystemdCredentialShapeIsAccepted(t *testing.T) {
 	p, dir := secretWithACL(t, fmt.Sprintf("u:%d:r", os.Geteuid()), "g::---")
 	defer func(f func(fs.FileInfo) (uint32, bool)) { FileGroup = f }(FileGroup)
@@ -1209,11 +1210,42 @@ func TestAnACLXattrGrantingAnotherUserWriteOnTheDirIsRefused(t *testing.T) {
 	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
 		t.Fatal(err)
 	}
-	// mask stays r-x so the mode check passes: only the ACL read can see the entry
+	// the mask stays r-x (setfacl -n -m), so the write entry is masked out and the mode check passes:
+	// only the ACL read can see the latent entry
 	setRawACL(t, dir, aclEntry{tUserObj, 7, none}, aclEntry{tUser, 2, 65534}, aclEntry{tGroupObj, 5, none},
 		aclEntry{tMask, 5, none}, aclEntry{tOther, 5, none})
 	_, err := ReadSecret(p, dir, 1<<10)
 	if err == nil || !strings.Contains(err.Error(), "user:65534") {
 		t.Fatalf("a directory ACL granting another user write: %v", err)
+	}
+}
+
+// Without /proc the directory's ACL cannot be read, and the secret is refused with the hint.
+func TestASecretIsRefusedWhereProcIsAbsent(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(s string) { procSelfFd = s }(procSelfFd)
+	procSelfFd = filepath.Join(dir, "no-proc")
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "/proc") || strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("no /proc: %v", err)
+	}
+}
+
+// The systemd directory shape, r-x for the service user by ACL, passes through the /proc read.
+func TestTheSystemdDirectoryShapeXattrIsAccepted(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	setRawACL(t, dir, aclEntry{tUserObj, 5, none}, aclEntry{tUser, 5, uint32(os.Geteuid())}, aclEntry{tGroupObj, 0, none},
+		aclEntry{tMask, 5, none}, aclEntry{tOther, 0, none})
+	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the systemd directory shape: %v", err)
 	}
 }

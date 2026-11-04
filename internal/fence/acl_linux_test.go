@@ -90,9 +90,8 @@ func TestTheSecretACLRule(t *testing.T) {
 
 func TestTheDirectoryACLRuleRefusesWriteOnly(t *testing.T) {
 	const euid = 1000
-	groupOurs := func(g uint32) bool { return g == 50 }
 	ok := []aclEntry{{tUserObj, 7, none}, {tUser, 5, euid}, {tUser, 5, 4242}, {tGroupObj, 5, none}, {tMask, 5, none}, {tOther, 0, none}}
-	if err := dirACLRefusal(ok, euid, groupOurs); err != nil {
+	if err := dirACLRefusal(ok, euid); err != nil {
 		t.Errorf("a read/search ACL refused: %v", err)
 	}
 	for name, e := range map[string]aclEntry{
@@ -102,8 +101,69 @@ func TestTheDirectoryACLRuleRefusesWriteOnly(t *testing.T) {
 		"other":       {tOther, 2, none},
 	} {
 		es := append([]aclEntry{{tUserObj, 7, none}, {tMask, 7, none}}, e)
-		if err := dirACLRefusal(es, euid, groupOurs); err == nil || !strings.Contains(err.Error(), "setfacl") {
+		if err := dirACLRefusal(es, euid); err == nil || !strings.Contains(err.Error(), "setfacl") {
 			t.Errorf("%s write: %v", name, err)
 		}
+	}
+}
+
+func TestTheBaseEntryFixesNameTheModifyForm(t *testing.T) {
+	groupOurs := func(g uint32) bool { return g == 50 }
+	for name, tc := range map[string]struct {
+		es   []aclEntry
+		want string
+	}{
+		"group::": {[]aclEntry{{tUserObj, 4, none}, {tGroupObj, 4, none}, {tMask, 4, none}, {tOther, 0, none}}, "setfacl -m g::-"},
+		"other::": {[]aclEntry{{tUserObj, 4, none}, {tGroupObj, 0, none}, {tMask, 4, none}, {tOther, 4, none}}, "setfacl -m o::-"},
+		"user:":   {[]aclEntry{{tUserObj, 4, none}, {tGroupObj, 0, none}, {tUser, 4, 4242}, {tMask, 4, none}, {tOther, 0, none}}, "setfacl -x u:4242"},
+	} {
+		err := secretACLRefusal(tc.es, 1000, 99, groupOurs)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "-x g::") || strings.Contains(err.Error(), "-x o::") {
+			t.Errorf("%s: want the fix %q, got %v", name, tc.want, err)
+		}
+	}
+	err := dirACLRefusal([]aclEntry{{tUserObj, 7, none}, {tGroupObj, 2, none}, {tMask, 7, none}, {tOther, 2, none}}, 1000)
+	if err == nil || !strings.Contains(err.Error(), "setfacl -m g::-") {
+		t.Errorf("directory group::: %v", err)
+	}
+	err = dirACLRefusal([]aclEntry{{tUserObj, 7, none}, {tGroupObj, 0, none}, {tMask, 7, none}, {tOther, 2, none}}, 1000)
+	if err == nil || !strings.Contains(err.Error(), "setfacl -m o::-") {
+		t.Errorf("directory other::: %v", err)
+	}
+}
+
+func TestAnACLMissingARequiredEntryIsRefused(t *testing.T) {
+	for name, es := range map[string][]aclEntry{
+		"empty":               nil,
+		"no user::":           {{tGroupObj, 0, none}, {tOther, 0, none}},
+		"no group::":          {{tUserObj, 4, none}, {tOther, 0, none}},
+		"no other::":          {{tUserObj, 4, none}, {tGroupObj, 0, none}},
+		"named but no mask::": {{tUserObj, 4, none}, {tUser, 4, 1}, {tGroupObj, 0, none}, {tOther, 0, none}},
+		"two other::":         {{tUserObj, 4, none}, {tGroupObj, 0, none}, {tOther, 0, none}, {tOther, 4, none}},
+	} {
+		if got, err := parsePOSIXACL(aclBytes(2, es...)); err == nil {
+			t.Errorf("%s: accepted, %v", name, got)
+		}
+	}
+	// the bare three-entry ACL (a plain mode) needs no mask
+	if _, err := parsePOSIXACL(aclBytes(2, aclEntry{tUserObj, 4, none}, aclEntry{tGroupObj, 0, none}, aclEntry{tOther, 0, none})); err != nil {
+		t.Errorf("the three base entries: %v", err)
+	}
+}
+
+func TestFetchACLSurvivesAnUnstableSize(t *testing.T) {
+	calls := 0
+	get := func(dest []byte) (int, error) {
+		calls++
+		if calls == 1 {
+			return 0, nil // a size query says empty ...
+		}
+		return 12, nil // ... and the next call, given a zero-length dest, says otherwise
+	}
+	if _, _, err := fetchACL(get); err == nil {
+		t.Error("an unstable size was accepted")
+	}
+	if _, _, err := fetchACL(func(dest []byte) (int, error) { return 0, nil }); err == nil {
+		t.Error("an empty ACL xattr was accepted")
 	}
 }

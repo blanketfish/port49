@@ -82,8 +82,8 @@ test: lab-unit test-python
 #   test-root   the tests that skip unless run as root, which must pass, not skip.
 # A skip in a must-pass test fails: tests/ci/cmd/mustpass reads go test -json.
 PORT49D_PKG = github.com/blanketfish/port49/internal/port49d
-# The setfacl-based tests, as a comma list like ROOT_TESTS. The xattr-based ACL tests do not need setfacl.
-ACL_TEST = TestAnACLGrantingWriteIsRefused,TestAnACLGrantingAnotherUserReadIsRefused,TestTheSystemdCredentialShapeIsAccepted
+# The ACL tests, as a comma list like ROOT_TESTS: three need setfacl, the Xattr ones only an ACL-capable filesystem.
+ACL_TEST = TestAnACLGrantingWriteIsRefused,TestAnACLGrantingAnotherUserReadIsRefused,TestTheSystemdCredentialShapeIsAccepted,TestAnACLXattrGrantingAnotherUserReadIsRefused,TestTheSystemdCredentialShapeXattrIsAccepted,TestAnACLXattrGrantingAnotherUserWriteOnTheDirIsRefused,TestTheSystemdDirectoryShapeXattrIsAccepted
 # The tests that must pass, not skip, as a comma list: it is mustpass's -tests as it stands,
 # and test-root turns it into the -run alternation below.
 ROOT_TESTS = TestAKeyFileTheBrokerDidNotWriteIsRefused
