@@ -89,6 +89,37 @@ func TestCommandErrorFaultRepliesError(t *testing.T) {
 	}
 }
 
+// session_error is an ERROR on the session authorization and leaves commands alone (L87 c).
+func TestSessionErrorFaultRepliesError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fault")
+	now := time.Now
+	st := memory.New(now)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctx1", Username: "alice", PrivLvl: 15, RefreshedAt: now()}, time.Hour)
+	log := &bytes.Buffer{}
+	lab := &Lab{Fault: LabFault{Path: path}}
+	h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), now,
+		platform.Defaults(), time.Hour, time.Minute, time.Hour)
+	session := req("alice", "vty0", "service=shell", "cmd=")
+	cmd := req("alice", "vty0", "service=shell", "cmd=show", "cmd-arg=version", "cmd-arg=<cr>")
+
+	setFault(t, path, FaultSessionError)
+	resp := h.Handle(context.Background(), peer, session)
+	if resp.Status != wire.AuthorStatusError || len(resp.Args) != 0 {
+		t.Fatalf("session_error: %+v", resp)
+	}
+	if r := lastRecord(t, log); r["verdict"] != "deny" || r["reason"] != string(decision.StoreUnavailable) {
+		t.Fatalf("%v", r)
+	}
+	if resp := h.Handle(context.Background(), peer, cmd); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("command under session_error: %+v", resp)
+	}
+	setFault(t, path, "")
+	if resp := h.Handle(context.Background(), peer, session); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("no fault: %+v", resp)
+	}
+}
+
 func TestFaultStoreFailsTheFirstReads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fault")
 	inner := memory.New(time.Now)

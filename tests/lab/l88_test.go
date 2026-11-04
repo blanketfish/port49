@@ -59,6 +59,8 @@ type l88Env struct {
 	pw   string
 	hash string
 	tls  bool
+	// noteName is the results note's file name; empty is l88NoteName's.
+	noteName string
 }
 
 func (e *l88Env) logf(format string, args ...any) {
@@ -66,7 +68,18 @@ func (e *l88Env) logf(format string, args ...any) {
 	e.t.Logf("%s", e.n.mask(fmt.Sprintf(format, args...)))
 }
 
-func l88Run(t *testing.T, l *lab) {
+func l88Run(t *testing.T, l *lab) { l88RunAs(t, l, l88Variant{}) }
+
+// l88Variant is a register entry that runs on the L88 plumbing (the reference loaded, the
+// lab's management address, the teardown) and measures its own cells: L87 is one. The zero
+// value is L88 itself.
+type l88Variant struct {
+	id       string // the register entry, "L87"; empty is L88
+	noteName string
+	cells    func(e *l88Env)
+}
+
+func l88RunAs(t *testing.T, l *lab, v l88Variant) {
 	pw, err := l73NewRootPassword()
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +97,7 @@ func l88Run(t *testing.T, l *lab) {
 		transport = "tls"
 	}
 	e.n = newL88Note(l.p, transport, pw, hash)
+	e.n.id, e.noteName = v.id, v.noteName
 	if !l88Junos(l.p) && l.p.name != "nokia_srlinux" {
 		if lines := l88Clear(l.p); len(lines) > 0 {
 			e.must("clearing the lab's own server lines", l88Admin(l, func(c *cliConn) error {
@@ -206,7 +220,11 @@ func l88Run(t *testing.T, l *lab) {
 		strings.Join(l88Servers, ", ") + "; the second is an address on the bridge where nothing listens")
 	e.deviceFacts()
 	e.debugOn()
-	e.cells(transport, l88Cells(l.p.sel, e.tls))
+	if v.cells != nil {
+		v.cells(e)
+	} else {
+		e.cells(transport, l88Cells(l.p.sel, e.tls))
+	}
 	if e.tls && l.p.name == "nokia_srlinux" {
 		e.srEvidence()
 	}
@@ -264,10 +282,14 @@ func (e *l88Env) finish() {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	path := filepath.Join(root, "tests", "lab", "results", l88NoteName(e.l.p))
+	name := l88NoteName(e.l.p)
+	if e.noteName != "" {
+		name = e.noteName
+	}
+	path := filepath.Join(root, "tests", "lab", "results", name)
 	if os.Getenv("PORT49_L88_CELLS") != "" {
 		// A filtered run is an isolation aid, never the record: its note goes to the temp dir.
-		path = filepath.Join(os.TempDir(), "partial-"+l88NoteName(e.l.p))
+		path = filepath.Join(os.TempDir(), "partial-"+name)
 	}
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		e.t.Fatal(err)

@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -444,6 +445,7 @@ type l88Cell struct{ id, verdict, observation, evidence string }
 // l73MaskAll with the run's secrets when it is rendered, and render refuses a note that
 // still holds the password.
 type l88Note struct {
+	id        string // the register entry the note is for; empty is L88
 	p         platform
 	transport string
 	secrets   []string
@@ -517,9 +519,10 @@ func (n *l88Note) mask(s string) string {
 
 func (n *l88Note) render() (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# L88: the reference AAA configuration on %s\n\n", n.p.version)
-	fmt.Fprintf(&b, "Platform: %s. Image: %s. Transport: %s. Measured %s by TestL88.\n\n", n.p.name, n.p.version, n.transport,
-		time.Now().UTC().Format("2006-01-02"))
+	id := cmp.Or(n.id, "L88")
+	fmt.Fprintf(&b, "# %s: the reference AAA configuration on %s\n\n", id, n.p.version)
+	fmt.Fprintf(&b, "Platform: %s. Image: %s. Transport: %s. Measured %s by Test%s.\n\n", n.p.name, n.p.version, n.transport,
+		time.Now().UTC().Format("2006-01-02"), id)
 	for _, f := range n.facts {
 		b.WriteString("- " + n.mask(f) + "\n")
 	}

@@ -48,6 +48,9 @@ type Lab struct {
 }
 
 func (l *Lab) Session(_ context.Context, _ Request) Decision {
+	if l.Fault.Is(FaultSessionError) {
+		return Decision{Error: true, Reason: decision.StoreUnavailable, ServerMsg: "port49: authorization store unavailable"}
+	}
 	if l.DenySession {
 		return Decision{Permit: false, Reason: decision.NoPermitDominatesDeny,
 			ServerMsg: padLabMessage("port49: denied by lab deny_session; see 'port49 explain'", l.DenyMessageLength)}
@@ -117,6 +120,11 @@ const (
 	// (Handler.Handle). It exists to measure what a device does with an ERROR
 	// there, which is the fall-through question L4 (b) asks.
 	FaultCommandError = "command_error"
+	// FaultSessionError answers every session authorization ERROR after the
+	// login authenticated normally. No production path does (a store outage
+	// at session authorization is a FAIL); it exists for L87 (c), what SR
+	// Linux does with an ERROR there.
+	FaultSessionError = "session_error"
 	// FaultCommandFail answers every per-command authorization FAIL, the
 	// counterpart of FaultCommandError without a daemon restart.
 	FaultCommandFail = "command_fail"
