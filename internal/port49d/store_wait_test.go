@@ -152,3 +152,33 @@ func TestAwaitStoreWaitsAsTheScheduleSays(t *testing.T) {
 		t.Fatalf("first wait with the lowest jitter %v, want 800ms", waits[0])
 	}
 }
+
+// An outage that does not change is repeated every ten minutes with when it
+// began and how many attempts it has had, and not between; a changed one is
+// said at once and starts the count again.
+func TestAnUnchangedOutageIsRepeatedEveryTenMinutes(t *testing.T) {
+	now := time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)
+	s := outageSayer{now: func() time.Time { return now }}
+	var out bytes.Buffer
+	for i := 0; i < 5; i++ { // one a second for 4 s
+		s.say(&out, "port49d: etcd not answering")
+		now = now.Add(time.Second)
+	}
+	if strings.Count(out.String(), "\n") != 1 {
+		t.Fatalf("5 attempts in 5 s said %q, want one line", out.String())
+	}
+	now = now.Add(outageRemindEvery - 5*time.Second) // ten minutes after the first line
+	s.say(&out, "port49d: etcd not answering")
+	if want := "port49d: etcd not answering; still waiting since 2026-11-04T03:00:00Z, 6 attempts\n"; !strings.HasSuffix(out.String(), want) {
+		t.Fatalf("after 10 minutes: %q, want it to end with %q", out.String(), want)
+	}
+	now = now.Add(time.Second)
+	s.say(&out, "port49d: etcd not answering")
+	if strings.Count(out.String(), "\n") != 2 {
+		t.Fatalf("the next attempt repeated it again: %q", out.String())
+	}
+	s.say(&out, "port49d: something else")
+	if !strings.HasSuffix(out.String(), "port49d: something else\n") || strings.Count(out.String(), "\n") != 3 {
+		t.Fatalf("a changed outage was not said at once: %q", out.String())
+	}
+}

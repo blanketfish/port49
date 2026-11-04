@@ -164,7 +164,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 // TLS probe, two clients dialling every member, and a read (about seven
 // handshakes against members that are up without a leader), so a fleet in an
 // hours-long outage backs off to one in ten seconds, spread by the jitter, and
-// an outage is said once and then only when what is said changes (outageSayer).
+// an outage is said once, again when it changes and every ten minutes (outageSayer).
 const (
 	storeAttemptEvery = time.Second
 	storeFastAttempts = 10
@@ -191,15 +191,39 @@ func jittered(d time.Duration, r float64) time.Duration {
 	return time.Duration(float64(d) * (1 - storeJitter + 2*storeJitter*r))
 }
 
-// outageSayer prints an outage's line once and again only when it changes,
-// so a wait of hours at storeAttemptEvery is one line, not thousands. Its
-// lines carry nothing that varies between attempts.
-type outageSayer struct{ last string }
+// outageRemindEvery is how often a sayer repeats an outage that has not
+// changed, so that the newest line after hours shows port49d alive and trying.
+const outageRemindEvery = 10 * time.Minute
+
+// outageSayer prints an outage's line once, again only when it changes, and
+// again every outageRemindEvery as "; still waiting since <time>, N attempts",
+// so a wait of hours at storeAttemptEvery is a line, not thousands. Its lines
+// carry nothing that varies between attempts. now is the clock (time.Now when
+// nil).
+type outageSayer struct {
+	now      func() time.Time
+	last     string
+	since    time.Time
+	said     time.Time
+	attempts int
+}
 
 func (o *outageSayer) say(out io.Writer, line string) {
-	if line != o.last {
-		o.last = line
+	now := time.Now
+	if o.now != nil {
+		now = o.now
+	}
+	t := now()
+	switch {
+	case line != o.last:
+		o.last, o.since, o.said, o.attempts = line, t, t, 1
 		fmt.Fprintln(out, line)
+	default:
+		o.attempts++
+		if t.Sub(o.said) >= outageRemindEvery {
+			o.said = t
+			fmt.Fprintf(out, "%s; still waiting since %s, %d attempts\n", line, o.since.UTC().Format(time.RFC3339), o.attempts)
+		}
 	}
 }
 
