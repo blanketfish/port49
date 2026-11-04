@@ -1220,18 +1220,33 @@ func TestAnACLXattrGrantingAnotherUserWriteOnTheDirIsRefused(t *testing.T) {
 	}
 }
 
-// Without /proc the directory's ACL cannot be read, and the secret is refused with the hint.
-func TestASecretIsRefusedWhereProcIsAbsent(t *testing.T) {
+// A directory that cannot be reopened for reading (injected EACCES) falls back to /proc; with
+// /proc absent too the secret is refused naming the directory and why. With the reopen working,
+// /proc is never needed.
+func TestASecretNeedsProcOnlyWhereTheDirectoryCannotBeReopened(t *testing.T) {
 	dir := safeDir(t)
 	p := filepath.Join(dir, "k")
 	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
 		t.Fatal(err)
 	}
-	defer func(s string) { procSelfFd = s }(procSelfFd)
+	defer func(s string, r func(*os.File) (*os.File, error)) { procSelfFd, reopenDir = s, r }(procSelfFd, reopenDir)
 	procSelfFd = filepath.Join(dir, "no-proc")
+	if _, err := ReadSecret(p, dir, 1<<10); err != nil {
+		t.Fatalf("the reopen works, so /proc is not needed: %v", err)
+	}
+	reopenDir = func(*os.File) (*os.File, error) { return nil, syscall.EACCES }
 	_, err := ReadSecret(p, dir, 1<<10)
-	if err == nil || !strings.Contains(err.Error(), "/proc") || strings.Contains(err.Error(), "not-a-real-secret") {
-		t.Fatalf("no /proc: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "the directory "+dir) || !strings.Contains(err.Error(), "/proc") ||
+		strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("no reopen and no /proc: %v", err)
+	}
+	procSelfFd = "/proc/self/fd"
+	if _, err := ReadSecret(p, dir, 1<<10); err != nil {
+		t.Fatalf("the /proc fallback: %v", err)
+	}
+	reopenDir = func(*os.File) (*os.File, error) { return nil, syscall.EIO }
+	if _, err := ReadSecret(p, dir, 1<<10); err == nil || !strings.Contains(err.Error(), "cannot be reopened") {
+		t.Fatalf("a reopen failing otherwise: %v", err)
 	}
 }
 

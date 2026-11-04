@@ -218,17 +218,37 @@ func readACL(f *os.File) ([]aclEntry, bool, error) {
 	return es, has, ferr
 }
 
-// procSelfFd is where a descriptor's magic link lives, swapped in tests. Without /proc (a chroot,
-// or RootDirectory= without API VFS) the directory's ACL cannot be read and every secret is refused.
+// procSelfFd is where a descriptor's magic link lives, swapped in tests. It is the fallback only:
+// a directory port49d may search but not read cannot be reopened, and then without /proc (a chroot,
+// or RootDirectory= without API VFS) its ACL cannot be read and the secret is refused.
 var procSelfFd = "/proc/self/fd"
 
-// readDirACL is readACL for a directory held open with O_PATH, which fgetxattr refuses: it asks
-// for the descriptor's own /proc/self/fd entry, which names the same inode whatever is renamed.
-func readDirACL(d *os.File) ([]aclEntry, bool, error) {
-	path := procSelfFd + "/" + strconv.Itoa(int(d.Fd()))
-	es, has, err := fetchACL(func(dest []byte) (int, error) { return unix.Getxattr(path, aclXattr, dest) })
-	if err != nil && errors.Is(err, syscall.ENOENT) {
-		err = fmt.Errorf("%w (is /proc mounted?)", err)
+// reopenDir opens the directory held as the O_PATH descriptor d for reading, relative to d itself
+// ("." names the same inode whatever is renamed), without following a link. Swapped in tests.
+var reopenDir = func(d *os.File) (*os.File, error) {
+	fd, err := syscall.Openat(int(d.Fd()), ".", os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
 	}
-	return es, has, err
+	return os.NewFile(uintptr(fd), d.Name()), nil
+}
+
+// readDirACL is readACL for a directory held open with O_PATH, which fgetxattr refuses. It reopens
+// the directory with fgetxattr's kind of descriptor, and only when that is denied (EACCES: search
+// without read) asks for the descriptor's /proc/self/fd entry. If both fail it refuses, naming why.
+func readDirACL(d *os.File) ([]aclEntry, bool, error) {
+	f, err := reopenDir(d)
+	if err == nil {
+		defer f.Close()
+		return readACL(f)
+	}
+	if !errors.Is(err, syscall.EACCES) {
+		return nil, false, fmt.Errorf("cannot be reopened to read its POSIX ACL: %w", err)
+	}
+	path := procSelfFd + "/" + strconv.Itoa(int(d.Fd()))
+	es, has, perr := fetchACL(func(dest []byte) (int, error) { return unix.Getxattr(path, aclXattr, dest) })
+	if perr != nil && errors.Is(perr, syscall.ENOENT) {
+		perr = fmt.Errorf("it is searchable but not readable (%v), so its POSIX ACL is read through /proc, which is not mounted: %w", err, perr)
+	}
+	return es, has, perr
 }
