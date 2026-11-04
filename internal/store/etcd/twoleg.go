@@ -196,11 +196,18 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			}
 		}()
 		check := func(now time.Time) {
-			if !legs[0].placed.Load() || !legs[1].placed.Load() {
-				return // a leg is being opened: where it lands is not yet known
+			// A leg that failed is about to be opened again where it was, or
+			// elsewhere; one being opened has no member yet. The state holds
+			// through both, so a stream breaking now and then neither says
+			// "apart again" nor drops the gauge to bring it back a second on.
+			if legs[0].failed || legs[1].failed {
+				return
 			}
 			m0, m1 := src.member(0), src.member(1)
-			on := !legs[0].failed && !legs[1].failed && m0 != "" && m0 == m1
+			if m0 == "" || m1 == "" {
+				return
+			}
+			on := m0 == m1
 			switch {
 			case on && !together:
 				together, tryAt = true, now.Add(wait)
@@ -296,7 +303,9 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 						if !now.Before(l.reopenAt) {
 							start(i)
 						}
-					case quiet >= feedStall:
+					case quiet >= feedStall && src.member(i) != "":
+						// (A leg with no member yet is waiting for a connection
+						// at the pick: opening it again would pick no sooner.)
 						// Only while the store answers a read: with every member dark
 						// (no quorum, a network out) every leg is as quiet as this
 						// one, the stream revives when the store returns, and ending
@@ -332,6 +341,8 @@ type clientLegs struct {
 	key      string
 	keysOnly bool
 	probeFn  func(context.Context) error
+	// watch is cl.Watch; a test sets its own.
+	watch func(ctx context.Context, key string, opts ...clientv3.OpOption) clientv3.WatchChan
 	// openMu serializes the openings, so that the second leg's pick comes
 	// after the first's placement is recorded; an opening can wait on a
 	// connection, and holds it meanwhile. mu guards trs and ctxs, briefly: the
@@ -355,7 +366,19 @@ func traceLeg(ev string, leg, gen int, detail string) {
 
 func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
 	c.openMu.Lock()
-	defer c.openMu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			c.openMu.Unlock()
+		}
+	}()
+	if ctx.Err() != nil {
+		// The leg was ended while this opening waited its turn: its placement
+		// is not recorded over the one that has replaced it.
+		ch := make(chan clientv3.WatchResponse)
+		close(ch)
+		return ch, func() {}
+	}
 	tr := &tried{used: map[string]bool{}}
 	c.mu.Lock()
 	if prev := c.trs[i]; prev != nil && prev.lastMember() != "" {
@@ -370,18 +393,34 @@ func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan c
 	if other != nil {
 		other.peer.Store(tr)
 	}
-	// Watch returns when the stream's pick has been made, which records the
-	// placement; if it returns early the wait is at most 300 ms.
-	ch := c.cl.Watch(wctx, c.key, legOpts(from, c.keysOnly)...)
+	// Watch returns only after the server's Created, which a member that is
+	// ready and hung does not send for 10 to 12 s. The lock is held to the
+	// pick, which records the placement the other leg avoids (at most 300 ms
+	// when the pick waits for a connection), and not to Created.
+	got := make(chan clientv3.WatchChan, 1)
+	go func() { got <- c.watchFn()(wctx, c.key, legOpts(from, c.keysOnly)...) }()
 	for end := time.Now().Add(300 * time.Millisecond); tr.lastMember() == "" && time.Now().Before(end); {
 		time.Sleep(5 * time.Millisecond)
+		if len(got) > 0 {
+			break
+		}
 	}
+	locked = false
+	c.openMu.Unlock()
+	ch := <-got
 	peer := ""
 	if other != nil {
 		peer = other.lastMember()
 	}
 	traceLeg("open", i, gen, "on "+tr.lastMember()+", the other on "+peer)
 	return ch, cancel
+}
+
+func (c *clientLegs) watchFn() func(context.Context, string, ...clientv3.OpOption) clientv3.WatchChan {
+	if c.watch != nil {
+		return c.watch
+	}
+	return c.cl.Watch
 }
 
 func (c *clientLegs) progress(i int) error {

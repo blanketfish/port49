@@ -12,6 +12,7 @@ import (
 	pb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/metadata"
 )
 
 // scripted is a legSource the test drives: it hands out one channel per
@@ -419,5 +420,102 @@ func TestTheMoveOfLegsOnOneMemberBacksOff(t *testing.T) {
 	// attempts at about 100, 300, 700, 1100 ms; unbacked, one every 50 ms
 	if n := src.opens[1].Load() - 1; n < 2 || n > 6 {
 		t.Fatalf("leg 1 was opened again %d times in 1.5 s, want 2 to 6", n)
+	}
+}
+
+// fakeWatch stands for clientv3's Watch: it records the pick as the balancer
+// does (on the opening's tried-set), then returns at once, or, for a leg in
+// hold, only when its context ends (a member that is ready and does not
+// answer: Created never comes).
+func fakeWatch(hold map[string]bool) func(context.Context, string, ...clientv3.OpOption) clientv3.WatchChan {
+	return func(ctx context.Context, key string, _ ...clientv3.OpOption) clientv3.WatchChan {
+		md, _ := metadata.FromOutgoingContext(ctx)
+		leg := md.Get("port49-leg")[0]
+		ctx.Value(triedKey{}).(*tried).last.Store("m" + leg)
+		ch := make(chan clientv3.WatchResponse)
+		if hold[leg] {
+			<-ctx.Done()
+		}
+		return ch
+	}
+}
+
+// Leg 0's opening is held after its pick, waiting for Created from a member
+// that does not answer: leg 1 still opens, and does not wait for it.
+func TestAnOpeningWaitingForCreatedDoesNotHoldTheOtherLegsOpening(t *testing.T) {
+	c := &clientLegs{watch: fakeWatch(map[string]bool{"0.1": true})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.open(ctx, 0, 1, 1)
+	for c.member(0) == "" {
+		time.Sleep(time.Millisecond)
+	}
+	done := make(chan struct{})
+	go func() { c.open(ctx, 1, 1, 1); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("leg 1's opening waited for leg 0's Created")
+	}
+	if c.member(1) != "m1.1" {
+		t.Fatalf("leg 1 placed on %q", c.member(1))
+	}
+}
+
+// An opening whose leg has been ended since (its context is done by the time
+// its turn comes) leaves the leg's placement alone.
+func TestAnEndedOpeningDoesNotOverwriteTheLegsPlacement(t *testing.T) {
+	c := &clientLegs{watch: fakeWatch(nil)}
+	live := &tried{}
+	live.last.Store("kept")
+	c.trs[0] = live
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ch, _ := c.open(ctx, 0, 2, 1)
+	select {
+	case _, open := <-ch:
+		if open {
+			t.Fatal("an ended opening returned a response")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("an ended opening returned a live channel")
+	}
+	if c.trs[0] != live || c.member(0) != "kept" {
+		t.Fatalf("an ended opening replaced the leg's placement: %q", c.member(0))
+	}
+}
+
+// A leg that fails and is opened again (the single-member cluster's stream
+// breaking now and then) does not read as the legs being apart: the state and
+// the gauge stay at together.
+func TestALegFailingAndReopeningLeavesTheLegsTogether(t *testing.T) {
+	fastLegs(t, 100*time.Millisecond, time.Hour, time.Hour) // no move: only the failure
+	ol := legRetry
+	legRetry = 150 * time.Millisecond
+	t.Cleanup(func() { legRetry = ol })
+	src := newScripted()
+	var tl togetherLog
+	ctx, cancel := context.WithCancel(context.Background())
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, tl.note)
+	t.Cleanup(func() {
+		cancel()
+		for range out {
+		}
+	})
+	<-src.opened
+	<-src.opened
+	time.Sleep(200 * time.Millisecond)
+	src.end(1, 1)
+	select {
+	case o := <-src.opened:
+		if o != [2]int{1, 2} {
+			t.Fatalf("opened %v", o)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the failed leg was not opened again")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := tl.get(); got != "true@a" {
+		t.Fatalf("colocation reports %q across a leg failure, want only true@a", got)
 	}
 }
