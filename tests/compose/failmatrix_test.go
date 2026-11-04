@@ -193,6 +193,11 @@ func (m matrix) clearTokens() {
 
 // dump logs the tail of both processes' stderr through the filter.
 func (m matrix) dump() {
+	// The counters first: which step failed (operations), by what outcome in
+	// which pool (calls: circuit_open, saturated, feed_behind, timeout), and
+	// what the client refused at once (fast_fail), say where an instant refusal
+	// came from.
+	m.storeCounts("at the failure")
 	out, _ := m.s.try("logs", "--no-color", "--timestamps", "--tail", "120", "port49d")
 	m.s.t.Logf("port49d, last 120 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
 	// The credential filter withholds every line that says "token", the token
@@ -201,11 +206,15 @@ func (m matrix) dump() {
 	// the raw line is printed, and the word is spelled "tkn" in the summary
 	// only: these are code identifiers (PutTkn), not values.
 	raw, _ := m.s.try("logs", "--no-color", "--timestamps", "port49d", "port49-broker")
+	opened := 0
 	for _, line := range strings.Split(raw, "\n") {
 		if sm, ok := circuitSummary(line); ok {
+			opened++
 			m.s.t.Logf("guard: %s", sm)
 		}
 	}
+	// Said even at zero, so silence is told from a summary that matched nothing.
+	m.s.t.Logf("guard: %d circuit-open lines in %d bytes of daemon and broker logs", opened, len(raw))
 	out, _ = m.s.try("logs", "--no-color", "--timestamps", "--tail", "40", "port49-broker")
 	m.s.t.Logf("port49-broker, last 40 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
 }
@@ -272,7 +281,8 @@ func series(addr, name string) []string {
 
 // storeCounts logs the daemon's store operation and call counters under label.
 func (m matrix) storeCounts(label string) {
-	for _, name := range []string{"port49_store_operations_total", "port49_store_calls_total"} {
+	for _, name := range []string{"port49_store_operations_total", "port49_store_calls_total",
+		"port49_store_fast_fail_total", "port49_store_member_suspect_total", "port49_store_fence_timeouts_total"} {
 		m.s.t.Logf("%s: %s\n  %s", label, name, strings.Join(series(daemonMetrics, name), "\n  "))
 	}
 }
