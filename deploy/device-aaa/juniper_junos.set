@@ -17,8 +17,8 @@
 delete system authentication-order
 set system authentication-order tacplus
 #
-# source-address must be fxp0's own address: vrnetlab NATs the VM's to the container's, and an
-# address the box does not hold never leaves it (L88).
+# source-address must be an address the box holds on the routing instance (in the lab, fxp0's own:
+# vrnetlab NATs the VM's address). An address the box does not hold never leaves it (L88).
 set system tacplus-server <PORT49_1> secret "<KEY>"
 set system tacplus-server <PORT49_1> routing-instance <MGMT_VRF>
 set system tacplus-server <PORT49_1> source-address <SOURCE_ADDRESS>

@@ -11725,7 +11725,7 @@ L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01).
   an unreachable broker or another CA's included). `--json` is status's only form and prints `{"token": "...",
   "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys
   snake_case, the serial masked, no secret.
-- **Open.** L87, L88, L89, L90, L91 and L39 (b) and (c) are provisional until they close.
+- **Open.** L87, L89, L90, L91 and L39 (b) and (c) are provisional until they close.
 
 ---
 

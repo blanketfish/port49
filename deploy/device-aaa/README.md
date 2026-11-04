@@ -37,25 +37,27 @@ L88 loaded these files on every lab image, plain TCP and RFC 9887, and they work
 below cite them). Still unshown: the Junos TLS enrolment through the PKI store, which the lab
 did through a root shell.
 
-Two device facts the lab found: the Junos `source-address` must be fxp0's own address
-(10.0.0.15 on the lab's VMs), because vrnetlab NATs it to the container's; an address the box
-does not hold never leaves it. On XR the group `vrf` clause is for a named VRF only: XR reserves
-the name `default`, so the default-VRF form omits it (the file ships both, and L88 measured both). In the L73 run the lab
-placed Junos's trust files and client key through a lab-only root shell, so the PKI-store method
-is documented but not shown to work. The IOS XE and XR revocation settings are left to you: the
+Two device facts the lab found: the Junos `source-address` must be an address the box holds
+on the routing instance (in the lab, fxp0's own, 10.0.0.15, because vrnetlab NATs the VM's address);
+an address the box does not hold never leaves it. On XR the group `vrf` clause is for a named VRF only: XR reserves
+the name `default`, so the default-VRF form omits it (the file ships both, and L88 measured both). The Junos
+PKI-store method is not shown to work: the lab placed the trust files and client key through a lab-only root shell. The IOS XE and XR revocation settings are left to you: the
 lab used `revocation-check none` and `crl optional` because its CAs publish no CRL.
 
 ## What is measured
 
-Cells cite the note that measured them. "Unmeasured (L88)" means the lab register's L88 has not
-measured it under these files; treat the cell as unknown, not as a promise.
+Cells cite the note that measured them. A cell that says "not measured" cites its open register entry
+(L87, L92); treat it as unknown, not as a promise.
 
 **How long a device keeps answering locally after its servers failed** (measured by the
 retries in L88 cells a, f, e, f2, f3): vJunos, vSRX, vEOS, cEOS and NX-OS: none beyond the
 go-dark bound; XR 26.1.1: about 24 to 46 s; IOS XE: 30 to 65 s, the device's own dead-time
 (it has no configurable `deadtime`: `deadtime 1` is "Invalid input" and `aaa dead-criteria` is
 "Unrecognized", L4-error-cisco_iosxe.md). Inside that window a token login is refused with nothing
-sent to port49, and break-glass works. After port49d returns from a stop expect it.
+sent to port49, and break-glass works. After port49d returns from a stop expect it. On XR, in that window any
+local account's password also logs in, including one whose user port49 denies (L88 a, `L88-cisco_xrd.md`: a
+login at +12 s succeeded on a local account while port49d was up and saw no request), so keep local
+accounts to break-glass only. A deny port49 answers is refused.
 
 ### Junos
 
@@ -90,7 +92,7 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | port49 stopped | Break-glass in 20 to 30 ms under the reference (L88 b) | `tests/lab/results/L88-cisco_iosxe.md` |
 | ERROR | Final: the login is refused, not tried locally. Keep a console path. During a store hang the local account works once port49d closes its listener: +6 s (L88 c) | `tests/lab/results/L4-error-cisco_iosxe.md`. Over TLS it was final too (L73 cell i) |
 | Dark | Break-glass logs in, 780 ms (L88 d) | L88 notes |
-| Second server | Token login through the second in under 3 s on a fresh device (L88 f). After a break-glass session with port49d stopped, the next token login took 39 s to reach the second (L88 f3, the device's dead window) | `tests/lab/results/L88-cisco_iosxe.md` (f, f3) |
+| Second server | Token login through the second in under 3 s on a fresh device (L88 f). After a break-glass session with port49d stopped, the next token login took 39 s to reach the second (L88 f3, the device's dead window); a session opened before f made f choose no server and f FAILed, which is why the evidence is read after f (`L88-cisco_iosxe-f-evidence-run.md`). One earlier full run failed f unexplained and did not repeat in the three after it; that stays open (L52 is the intermittent-skip entry) | `tests/lab/results/L88-cisco_iosxe.md` (f, f3), `L88-cisco_iosxe-f-evidence-run.md` |
 | After port49d returns from a stop | The device answers locally for 30 s measured in f2, 55 s in cell e: a token login in that window is refused with nothing sent to port49, break-glass works (L88 f2) | `tests/lab/results/L88-cisco_iosxe.md` (f2) |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_iosxe.md` (17.13). On 17.18.02 the device held no connection open across the reload (L88 g, `L88-cisco_iosxe-iosxe1718.md`) |
 | TLS | `tls trustpoint server` names the root (L73 ran it). Port 6049 with none set. Two server objects need two distinct addresses (17.18.02 drops a shared one). After a refused handshake the client marks the server dead and answers locally for 57 to 67 s. SNI: none. Sends leaf and intermediate | `tests/lab/results/L73-cisco_iosxe.md` (17.18.02) |
@@ -133,7 +135,7 @@ Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name`
 
 | What | Measured | Note |
 |---|---|---|
-| A deny | Refused, no fall-through (L88 a). The device may answer locally for about 24 s after earlier failures, with nothing sent to port49 | `tests/lab/results/L88-cisco_xrd.md`, `L88-cisco_xrd-named-vrf.md` |
+| A deny | A deny port49 answers is refused (L88 a). After earlier failures XR answers locally for about 24 to 46 s and asks port49 nothing: a login at +12 s succeeded on a local account while port49d was up and saw no request. In that window any local account's password logs in, including one whose user port49 denies, so keep local accounts to break-glass only | `tests/lab/results/L88-cisco_xrd.md`, `L88-cisco_xrd-named-vrf.md` |
 | port49 stopped | Break-glass in 110 ms (L88 b) | L88 notes |
 | ERROR | Over TLS (L73) final: no fall to local, and break-glass fails; keep a console or second path. Under the reference over plain TCP the break-glass login landed at once during a store hang (L88 c) | `tests/qual/profiles/cisco_iosxr/XRd-control-plane-26.1.1.yaml`, `tests/lab/results/L73-cisco_xrd.md` |
 | Dark | Break-glass logs in, 5.6 s (L88 d) | L88 notes |
