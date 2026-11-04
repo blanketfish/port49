@@ -349,19 +349,21 @@ type Refused struct {
 	Phrase   string
 	Category string
 	Source   string // the file under the repository root that holds Phrase
+	Also     string // when set, the matching line must also hold this (a path the harness wrote)
 }
 
 // Refusals are matched in order against port49d's journal, most specific first.
 var Refusals = []Refused{
-	{"is group-readable by gid", "refused: the file's group is not one port49d is in", "internal/fence/fence_linux.go"},
-	{"is owned by uid", "refused: the owner is neither port49d nor root", "internal/fence/fence_linux.go"},
-	{"writable by others than its owner", "refused: a mode lets others write", "internal/fence/fence_linux.go"},
-	{"a secret file may be group-readable, never world-readable", "refused: a mode lets others read", "internal/fence/fence_linux.go"},
-	{"more than one hard link", "refused: more than one hard link", "internal/fence/fence_linux.go"},
-	{"resolves to", "refused: resolves outside key_secret_refs.file_dir", "internal/fence/fence_linux.go"},
-	{"is outside key_secret_refs", "refused: the policy's reference is outside key_secret_refs", "internal/port49d/livekeys.go"},
-	{"overlaps key_secret_refs.file_dir", "refused: port49d.yaml names key material inside file_dir", "internal/config/allowance.go"},
-	{"the secret is empty", "refused: the secret is empty", "internal/secretref/secretref.go"},
-	{"permission denied", "unreadable: permission denied", ""},
-	{"no such file or directory", "unreadable: no such file or directory", ""},
+	{"no such file or directory", "unreadable: absent - a line says no such file naming the credentials directory", "", "/run/credentials/port49d.service"},
+	{"is group-readable by gid", "refused: the file's group is not one port49d is in", "internal/fence/fence_linux.go", ""},
+	{"is owned by uid", "refused: the owner is neither port49d nor root", "internal/fence/fence_linux.go", ""},
+	{"writable by others than its owner", "refused: a mode lets others write", "internal/fence/fence_linux.go", ""},
+	{"a secret file may be group-readable, never world-readable", "refused: a mode lets others read", "internal/fence/fence_linux.go", ""},
+	{"more than one hard link", "refused: more than one hard link", "internal/fence/fence_linux.go", ""},
+	{"resolves to", "refused: resolves outside key_secret_refs.file_dir", "internal/fence/fence_linux.go", ""},
+	{"is outside key_secret_refs", "refused: the policy's reference is outside key_secret_refs", "internal/port49d/livekeys.go", ""},
+	{"overlaps key_secret_refs.file_dir", "refused: port49d.yaml names key material inside file_dir", "internal/config/allowance.go", ""},
+	{"the secret is empty", "refused: the secret is empty", "internal/secretref/secretref.go", ""},
+	{"permission denied", "unreadable: permission denied", "", ""},
+	{"no such file or directory", "unreadable: no such file or directory (not naming the credentials directory)", "", ""},
 }

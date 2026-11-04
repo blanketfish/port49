@@ -72,12 +72,31 @@ func TestL84Credentials(t *testing.T) {
 	b.put("/etc/port49/policy.yaml", "root:root", "0644", policy)
 	b.put(dropIn+"/l84.conf", "root:root", "0644", "[Service]\nLoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\n")
 	b.sh("systemctl daemon-reload && systemctl restart port49d")
-	// What the unit's user is given, whatever port49d makes of it: a one-shot unit with the same
-	// LoadCredential= and User=, so the owner and mode are measured apart from the product.
-	a.Rows = append(a.Rows, l84.Row{Case: "as systemd renders it for User=port49d (numeric owner:group, mode, name)",
-		Observation: strings.TrimSpace(b.sh("systemd-run --wait --pipe --collect -p User=port49d -p Group=port49d " +
-			"-p LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1 sh -c 'ls -ldn \"$CREDENTIALS_DIRECTORY\" " +
-			"\"$CREDENTIALS_DIRECTORY\"/tacacs_v1; id port49d' 2>&1 || true"))})
+	// What systemd renders for User=port49d, measured apart from port49d by two one-shot units that
+	// print the credentials directory they are given: l84-bare (User= and LoadCredential= only) and
+	// l84-hard (the shipped port49d.service, its ExecStart replaced, with the same LoadCredential=).
+	// If bare shows the directory and hard does not, the shipped hardening hides it; if neither does,
+	// this systemd cannot render credentials here. The output holds paths, owners and modes only.
+	b.put("/usr/local/bin/l84-probe.sh", "root:root", "0755", `#!/bin/sh
+echo "CREDENTIALS_DIRECTORY=[$CREDENTIALS_DIRECTORY]"
+ls -ldn /run/credentials /run/credentials/* 2>&1
+ls -ln "$CREDENTIALS_DIRECTORY" 2>&1
+id
+`)
+	b.put("/etc/systemd/system/l84-bare.service", "root:root", "0644", "[Service]\nType=oneshot\nUser=port49d\nGroup=port49d\n"+
+		"LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\nExecStart=/bin/sh /usr/local/bin/l84-probe.sh\n")
+	b.sh(`frag=$(systemctl show port49d -p FragmentPath --value) && sed -e 's|^ExecStart=.*|ExecStart=/bin/sh /usr/local/bin/l84-probe.sh|' ` +
+		`-e 's|^Type=simple|Type=oneshot|' -e '/^ExecReload=/d;/^Restart=/d;/^RestartSec=/d;/^\[Install\]/,$d' "$frag" ` +
+		`> /etc/systemd/system/l84-hard.service && echo 'LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1' >> /etc/systemd/system/l84-hard.service`)
+	probe := func(name string) string {
+		out := b.sh("systemctl daemon-reload; systemctl start " + name + ".service 2>&1; " +
+			"echo \"start result: $(systemctl show " + name + " -p Result --value) status $(systemctl show " + name + " -p ExecMainStatus --value)\"; " +
+			"journalctl -u " + name + ".service --no-pager -o cat 2>&1 || true")
+		return strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(out), "\n", " ; ")), " ")
+	}
+	a.Rows = append(a.Rows,
+		l84.Row{Case: "what systemd renders: User=port49d with LoadCredential= only (l84-bare)", Observation: probe("l84-bare")},
+		l84.Row{Case: "what systemd renders: the shipped port49d.service's hardening, same LoadCredential= (l84-hard)", Observation: probe("l84-hard")})
 	a.Rows = append(a.Rows, l84.Row{Case: "stat of the credentials directory and file (owner:group mode type), when port49d was restarted", Observation: stat()})
 	// A bounded wait: a start that never becomes ready is the measurement, not an invalid run.
 	ready := func() bool {
@@ -95,7 +114,7 @@ func TestL84Credentials(t *testing.T) {
 	// refusal is a category from port49d's own error words, never the journal line.
 	refusal := func() string {
 		for _, r := range sdtest.Refusals {
-			n := strings.TrimSpace(b.sh("journalctl -u port49d --no-pager -o cat | grep -c -i -F -- '" + r.Phrase + "' || true"))
+			n := strings.TrimSpace(b.sh("journalctl -u port49d --no-pager -o cat | grep -i -F -- '" + r.Phrase + "' | grep -c -F -- '" + r.Also + "' || true"))
 			if n != "" && n != "0" {
 				return r.Category
 			}
