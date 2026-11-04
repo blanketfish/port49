@@ -122,9 +122,9 @@ const (
 	FaultCommandError = "command_error"
 	// FaultSessionError answers every session authorization ERROR;
 	// authentication is untouched, so a login port49 authenticated meets it
-	// (L87 c). No production path does (a store outage
-	// at session authorization is a FAIL); it exists for L87 (c), what SR
-	// Linux does with an ERROR there.
+	// (L87 c). No production path does (a store outage at session
+	// authorization is a FAIL); it exists to measure what SR Linux does with
+	// an ERROR there.
 	FaultSessionError = "session_error"
 	// FaultCommandFail answers every per-command authorization FAIL, the
 	// counterpart of FaultCommandError without a daemon restart.

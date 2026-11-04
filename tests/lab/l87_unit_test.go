@@ -58,8 +58,12 @@ func TestL87NoteMasksHashShapes(t *testing.T) {
 			t.Errorf("the note holds %q", h)
 		}
 	}
-	if !strings.Contains(out, "<hash>") || !strings.Contains(out, "port49_store_health_failures was 5") {
-		t.Errorf("the hashes were not masked as <hash>, or the metric name was:\n%s", out)
+	if !strings.Contains(out, "<hash>") {
+		t.Errorf("the hashes were not masked as <hash>:\n%s", out)
+	}
+	// Observations are kept through redact, whose long-run mask is the one that could eat a metric name.
+	if got := n.redact("the gauge port49_store_health_failures was 5"); !strings.Contains(got, "port49_store_health_failures") {
+		t.Errorf("redact masked a metric name: %s", got)
 	}
 }
 
