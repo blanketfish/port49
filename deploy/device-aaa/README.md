@@ -33,9 +33,9 @@ change with the route.
 
 ## Lines the lab never ran
 
-L88 loaded these files on every plain-TCP image except SR Linux and they worked (the notes
-below cite them). Still unmeasured: the SR Linux `source-address`, and every TLS reference (L88 h),
-including the Junos TLS enrolment through the PKI store.
+L88 loaded these files on every lab image, plain TCP and RFC 9887, and they worked (the notes
+below cite them). Still unshown: the Junos TLS enrolment through the PKI store, which the lab
+did through a root shell.
 
 Two device facts the lab found: the Junos `source-address` must be fxp0's own address
 (10.0.0.15 on the lab's VMs), because vrnetlab NATs it to the container's; an address the box
@@ -79,7 +79,8 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | Second server | The first server resetting at Accept, the second answering: token login succeeded in 160 to 180 ms (L88 f) | L88 notes |
 | Key retire / reload | Session survives; next login break-glass | `tests/lab/results/L29-reload-juniper_vjunos-router.md` (23.4). On 26.2R1.7 the device held no connection open across the reload; on vSRX the in-flight and second command printed, and the next token login was refused for about 5 s with break-glass working (L88 g) |
 | Largest `idle-timeout` | 4294967295 minutes; the next value fails the commit (L88 i). `platform export --classes` caps there | `tests/lab/results/L88-juniper_vsrx.md` |
-| TLS | Enrolment through the PKI store: unmeasured (L88 h). Port, `trusted-ca-group`, `mutual-authentication certificate-id`, `single-connection`. No port: dials 49. SNI: the literal server address. | `tests/lab/results/L73-juniper_vjunos-router.md` (26.2R1.7; not SRX) |
+| TLS | Enrolment through the PKI store: not shown (L73 and L88 h placed the trust files and client key through a lab-only root shell). Port, `trusted-ca-group`, `mutual-authentication certificate-id`, `single-connection`. No port: dials 49. SNI: the literal server address. | `tests/lab/results/L73-juniper_vjunos-router.md` (26.2R1.7; not SRX) |
+| Reference over TLS | vJunos 26.2R1.7: a, b, d, e, f passed. Break-glass 40 ms stopped, 200 ms dark; token login through the second server in 190 ms (L88 h). The lab placed the trust files and client key through its root shell, so the PKI-store enrolment above is still unshown | `tests/lab/results/L88-juniper_vjunos-router-vjunos26-tls.md` |
 
 ### Cisco IOS XE
 
@@ -93,6 +94,7 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | After port49d returns from a stop | The device answers locally for 30 s measured in f2, 55 s in cell e: a token login in that window is refused with nothing sent to port49, break-glass works (L88 f2) | `tests/lab/results/L88-cisco_iosxe.md` (f2) |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_iosxe.md` (17.13). On 17.18.02 the device held no connection open across the reload (L88 g, `L88-cisco_iosxe-iosxe1718.md`) |
 | TLS | `tls trustpoint server` names the root (L73 ran it). Port 6049 with none set. Two server objects need two distinct addresses (17.18.02 drops a shared one). After a refused handshake the client marks the server dead and answers locally for 57 to 67 s. SNI: none. Sends leaf and intermediate | `tests/lab/results/L73-cisco_iosxe.md` (17.18.02) |
+| Reference over TLS | IOS XE 17.18.02: a, b, d, e, f passed. Break-glass 20 ms stopped, 780 ms dark; token login through the second server in 790 ms (L88 h) | `tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md` |
 
 ### Cisco NX-OS
 
@@ -107,6 +109,7 @@ No `deadtime`: `deadtime 1` locks token logins out for its minute after the serv
 | Second server | Token login through the second in about 1.3 s (L88 f) | L88 notes |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_nxos.md` (10.4). On 10.6(2)F the commands after the reload printed, the next token login was refused for 30 s, and break-glass logged in (L88 g, `L88-cisco_nxos-nxos106.md`) |
 | TLS | `tacacs-server secure tls` is required (L73 typed it). 10.6(2)F offered no server-trustpoint keyword, so none is set. No port: dials 49. RSA key. SNI: none. Sends leaf and intermediate. With `single-connection` the login reused the probe's connection | `tests/lab/results/L73-cisco_nxos.md` (10.6(2)F); per-request commands `tests/lab/results/L80-cisco_nxos.md` |
+| Reference over TLS | NX-OS 10.6(2)F: a, b, d, e, f passed. Break-glass 220 ms stopped, 1.2 s dark; token login through the second server in 6.2 s, after five connection attempts to the first (L88 h). | `tests/lab/results/L88-cisco_nxos-nxos106-tls.md` |
 
 ### Arista EOS
 
@@ -122,6 +125,7 @@ startup config pinned none. L88 loaded the clause as shipped (default VRF) on vE
 | Second server | Token login through the second in 290 ms (L88 f) | L88 notes |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-arista_eos.md` (4.31). cEOS 4.36.3M: the commands after the reload were refused, the next token login was refused for 6 s, break-glass logged in (L88 g, `L88-arista_ceos.md`) |
 | TLS | Dials 300 with none set. SNI: none. EOS sends its leaf alone, so set `intermediates_file` under `tls_listener` in `port49d.yaml`. Refuses a server certificate that does not name the configured address | `tests/lab/results/L73-arista_ceos.md` (4.36.3M) |
+| Reference over TLS | cEOS 4.36.3M: a, b, d, e, f passed. Break-glass 1.8 s stopped, 2 s dark; token login through the second server in 2.4 s (L88 h). EOS shows a TLS host without `port 300`, the default | `tests/lab/results/L88-arista_ceos-tls.md` |
 
 ### Cisco IOS XR
 
@@ -137,6 +141,7 @@ Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name`
 | Key retire / reload | The command in flight was refused (the reset hit an authorization packet), the second after 5 s, the next token login was refused and break-glass logged in (16 s for three commands) (L88 g) | `tests/lab/results/L88-cisco_xrd.md` |
 | Named VRF | The `vrf mgmt` form of the group, with the management interface and SSH server moved into vrf mgmt: a, b, d, e, f passed (L88) | `tests/lab/results/L88-cisco_xrd-named-vrf.md` |
 | TLS | No port: dials 49. RSA key. SNI: none. Sends leaf and intermediate. `single-connection` opens its connection at commit. Refused handshake then ERROR: no local fall | `tests/lab/results/L73-cisco_xrd.md` (26.1.1) |
+| Reference over TLS | XRd 26.1.1, the reference applied unchanged over a lab enrolment: a, b, d, e, f passed. Break-glass 120 ms stopped and 470 ms dark. A token login reached the second server after 26 s (the device's dead window, as over plain TCP) (L88 h). The group `vrf` line is for a named VRF only, as over plain TCP | `tests/lab/results/L88-cisco_xrd-tls.md` |
 
 ### Nokia SR Linux
 
@@ -151,9 +156,11 @@ so an operator is read-only here.
 | What | Measured | Note |
 |---|---|---|
 | A deny | Final with `exit-on-reject true`; break-glass is refused while port49 is up and denies it | `tests/lab/results/L76-nokia_srlinux.md` (cells d, l) |
-| port49 stopped | With `exit-on-reject true`, break-glass logged in (53 ms). Under the reference: unmeasured (L88 b) | `tests/lab/results/L76-nokia_srlinux.md` (cell l) |
-| ERROR | Unmeasured (L87 a) | |
-| Dark | Unmeasured (L87 b) | |
-| Second server | Unmeasured (L88 f) | |
-| Key retire / reload | Unmeasured (L88 g) | |
+| port49 stopped | With `exit-on-reject true`, break-glass logged in (53 ms). Under the reference over a pty SSH login: 60 to 70 ms (L88 b) | `tests/lab/results/L76-nokia_srlinux.md` (cell l), `L88-nokia_srlinux.md` |
+| ERROR | Under the reference the break-glass login landed at once during a store hang, in 3.3 s (L88 c, observed; L87 a stays open) | `tests/lab/results/L88-nokia_srlinux.md` |
+| Dark | Break-glass logs in and runs a command, 2.1 to 2.4 s (L88 d; L87 b stays open) | L88 notes |
+| Commands | SR Linux asks port49 for no command, so port49 cannot deny one: the command port49's policy denies elsewhere ran, and accounting recorded START and STOP (L88 e). The roles decide what a user may run | L88 notes |
+| Second server | The first server resetting at Accept, the second answering: token login in 2.0 to 2.3 s (L88 f) | L88 notes |
+| Key retire / reload | No single-connection setting exists in the device's schema (`tree flat system aaa server-group`), so a reload has no shared connection to reset (L88 g, observed) | L88 notes |
+| Source address | `source-address` must be configured on an interface of the network instance; the commit refused the DHCP-learned management address and took it once configured statically (L88) | L88 notes |
 | TLS | No RFC 9887 reference | |

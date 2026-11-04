@@ -9,7 +9,8 @@
 #
 # exit-on-reject true makes a port49 deny final. Without it a deny falls through to
 # local (L76 cell d). Whether break-glass still logs in once port49d is dark is L87,
-# and is unmeasured until it closes (README.md, "SR Linux").
+# and stays open until it closes; L88 c and d observed a login in both, under this file
+# (README.md, "SR Linux").
 system {
     aaa {
         authentication {
@@ -61,7 +62,8 @@ system {
                 tacacs {
                     port 49
                     secret-key <KEY>
-                    # source-address is unmeasured (L88): the lab config set none.
+                    # source-address must be an address configured on an interface of the network
+                    # instance: the commit refuses a DHCP-learned one (L88 measured it so).
                     source-address <SOURCE_ADDRESS>
                 }
             }
@@ -70,7 +72,8 @@ system {
                 tacacs {
                     port 49
                     secret-key <KEY>
-                    # source-address is unmeasured (L88): the lab config set none.
+                    # source-address must be an address configured on an interface of the network
+                    # instance: the commit refuses a DHCP-learned one (L88 measured it so).
                     source-address <SOURCE_ADDRESS>
                 }
             }

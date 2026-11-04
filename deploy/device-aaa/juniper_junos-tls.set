@@ -7,9 +7,10 @@
 #
 # Classes come from port49 platform export --classes (see juniper_junos.set).
 #
-# The device certificate and trust: UNMEASURED (L88 h). In the L73 run the lab placed the
+# The device certificate and trust: NOT SHOWN. In the L73 and L88 h runs the lab placed the
 # trust material (the CA files under /var/db/aaa_certs/tacplus_tls/port49) and the client
-# key and certificate through a lab-only root shell, and the note does not record which
+# key and certificate through a lab-only root shell (L88 h then took this file unchanged and a, b, d, e, f
+# passed), and the L73 note does not record which
 # of two issued leaves the device sent. The PKI-store method below (generate-key-pair,
 # generate-certificate-request with domain-name <SERVER_NAME>, local-certificate load,
 # ca-profiles in a trusted-ca-group named port49) is the documented one and is not
@@ -25,7 +26,7 @@ set system authentication-order tacplus
 set security pki trusted-ca-group port49 ca-profiles port49-root
 #
 # A TLS server carries no secret. With no port set Junos dials 49, so the port is always set.
-# The source-address lines are unmeasured (L88): the lab pinned routing-instance only.
+# The source-address lines loaded as shipped on vJunos 26.2R1.7 (L88 h), with fxp0's own address.
 set system tacplus-server <PORT49_1> routing-instance <MGMT_VRF>
 set system tacplus-server <PORT49_1> source-address <SOURCE_ADDRESS>
 set system tacplus-server <PORT49_1> port <TLS_PORT>

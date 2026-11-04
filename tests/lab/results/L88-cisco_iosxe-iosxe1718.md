@@ -15,7 +15,7 @@ Platform: cisco_iosxe. Image: Catalyst 8000V 17.18.02. Transport: tcp. Measured 
 | f2 | MEASURED | the first one-time-credential login that port49 answered came at +30s after port49d was back; the session was still open when the loop began and was closed at +0s; a break-glass login first succeeded at +0s |
 | f3 | MEASURED | the first one-time-credential login that reached the second server came at +39s; the break-glass session was never closed in the loop |
 | g | OBSERVED | the device held no connection open across the reload that port49d reset (single-connection was on; what it sent after the reload went on connections it opened after it); single-connection: on: `single-connection` under `tacacs server port49-host`; the re-keyed phase: token session (`alice05`), `show version` before the change: ran in 300ms; first `show version` after the change, same session: refused in 300ms: `% Authorization failed.`; second `show version`, same session: refused in 300ms: `% Authorization failed.`; next token login (`alice06`): refused: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain in 4.02s; break-glass login plus three `show version`: logged in and ran them in 1.28s |
-| h | NOT MEASURED | the harness does not run cell h yet |
+| h | SEE NOTE | measured in the separate RFC 9887 pass (cells a, b, d, e, f), `tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md`; this row was a placeholder when this plain pass ran |
 
 ### Cell a evidence
 
