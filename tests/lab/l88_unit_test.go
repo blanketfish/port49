@@ -39,7 +39,17 @@ func TestL88AppliesTheShippedFileUnchanged(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s %s: %v", p.sel, transport, err)
 			}
-			want, err := deviceaaa.Render(ref, transport, l88Values(p, l88Servers), labKeyDefault)
+			renderAs := transport
+			if p.name == "nokia_srlinux" && transport == "tls" {
+				// No TLS reference exists for SR Linux (cell h): the plain one, then a tls-profile and port 300.
+				renderAs = "tcp"
+				plain, _ := deviceaaa.Render(ref, "tcp", l88Values(p, l88Servers), labKeyDefault)
+				if len(sent) != len(plain)+2*len(l88Servers) || !strings.Contains(sent[len(sent)-1], "tacacs port 300") {
+					t.Errorf("%s tls: the plain reference plus a tls-profile and port per server, got %q", p.sel, sent)
+				}
+				sent = sent[:len(plain)]
+			}
+			want, err := deviceaaa.Render(ref, renderAs, l88Values(p, l88Servers), labKeyDefault)
 			if err != nil {
 				t.Fatalf("%s %s: %v", p.sel, transport, err)
 			}
@@ -80,8 +90,12 @@ func TestL88CellsPerPlatform(t *testing.T) {
 			}
 		}
 		// The TLS pass (cell h) runs only the cells the transport changes: not c, g or i.
-		if got := strings.Join(l88Cells(p.sel, true), ","); got != "a,b,d,e,f" {
-			t.Errorf("%s: the TLS pass runs %s, want a,b,d,e,f", p.sel, got)
+		want := "a,b,d,e,f"
+		if p.name == "nokia_srlinux" {
+			want = "h" // its client does not speak TLS: the pass records that and runs nothing else
+		}
+		if got := strings.Join(l88Cells(p.sel, true), ","); got != want {
+			t.Errorf("%s: the TLS pass runs %s, want %s", p.sel, got, want)
 		}
 	}
 	// Cell h is the TLS pass itself (PORT49_L88_TLS=1), never a cell of the plain pass.

@@ -4,9 +4,11 @@ package lab
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/blanketfish/port49/tests/lab/labpcap"
 	"golang.org/x/crypto/ssh"
 	"net"
 	"os"
@@ -125,7 +127,9 @@ func l88Run(t *testing.T, l *lab) {
 		set, undo := l88XRVRFLines(name, l.p.addr)
 		push := func(lines []string) error {
 			return l88Admin(l, func(c *cliConn) error {
-				_, err := l73CiscoRun(c, l88WithCommit(l.p, l88Confirming(lines)), nil, true, l73ExtraMarks(l88Family(l.p))...)
+				items := l88WithCommit(l.p, l88Confirming(lines))
+				items[len(items)-1].Detach = true // the commit moves the SSH server the session came in on
+				_, err := l73CiscoRun(c, items, nil, true, l73ExtraMarks(l88Family(l.p))...)
 				return err
 			})
 		}
@@ -140,6 +144,7 @@ func l88Run(t *testing.T, l *lab) {
 				return
 			}
 			undone = true
+			var td strings.Builder
 			perr := push(undo)
 			// The read-back is the teardown line of the note: a device left in the VRF would
 			// skew any later XR run.
@@ -149,12 +154,19 @@ func l88Run(t *testing.T, l *lab) {
 					if err != nil {
 						return err
 					}
-					e.n.fact("teardown, `" + cmd + "`: " + oneLine(stripPrompt(e.n.redact(l88Evidence(out)))))
+					shown := oneLine(stripPrompt(e.n.redact(l88Evidence(out))))
+					td.WriteString(shown + "\n")
+					e.n.fact("teardown, `" + cmd + "`: " + shown)
 				}
 				return nil
 			})
 			if perr != nil || rerr != nil {
 				e.n.fact(fmt.Sprintf("teardown: the undo push said %v; the read-back said %v", perr, rerr))
+			}
+			// The read-back is the verdict: the interface back in default, no vrf on the ssh server.
+			facts := td.String()
+			if rerr != nil || !strings.Contains(facts, "Up Up default") || strings.Contains(facts, "ssh server vrf") {
+				e.t.Errorf("INVALID: the XR VRF undo did not take: push %v, read-back %v; the device must be restored before the next run", perr, rerr)
 			}
 		}
 		defer undoVRF()
@@ -168,11 +180,18 @@ func l88Run(t *testing.T, l *lab) {
 		e.enrolTLS()
 	}
 	e.must("applying the reference", l88Apply(l, transport))
-	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (" + transport + "), values: servers " +
+	shown := transport
+	if l.p.name == "nokia_srlinux" {
+		shown = "tcp, then tls-profile and port 300 added by the harness"
+	}
+	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (" + shown + "), values: servers " +
 		strings.Join(l88Servers, ", ") + "; the second is an address on the bridge where nothing listens")
 	e.deviceFacts()
 	e.debugOn()
 	e.cells(transport, l88Cells(l.p.sel, e.tls))
+	if e.tls && l.p.name == "nokia_srlinux" {
+		e.srEvidence()
+	}
 	undoVRF()
 	e.finish()
 }
@@ -212,6 +231,8 @@ func (e *l88Env) cells(transport string, ids []string) {
 			e.cellF()
 		case "g":
 			e.cellG()
+		case "h":
+			e.cellH()
 		case "i":
 			e.cellI()
 		default:
@@ -1405,4 +1426,85 @@ func (e *l88Env) srFacts() {
 		e.n.fact(txt)
 		e.t.Log(e.n.mask(txt))
 	}
+}
+
+// srEvidence records what SR Linux says about its TLS profile and its TACACS+ servers, and the
+// lines its debug logs hold about them, read through docker exec (setup channel). Keys are
+// masked by the note's redaction.
+func (e *l88Env) srEvidence() {
+	for _, q := range []string{
+		"info from state system aaa server-group port49",
+		"info from running system aaa server-group port49",
+		"info from state system tls",
+		"show system aaa server-group port49",
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sr_cli", "-d", q).CombinedOutput()
+		cancel()
+		txt := "`" + q + "`: " + oneLine(e.n.redact(string(out)))
+		if err != nil {
+			txt += fmt.Sprintf(" (%v)", err)
+		}
+		e.n.fact(txt)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sh", "-c",
+		"tail -n 60 /var/log/srlinux/debug/sr_aaa_mgr.log 2>&1").CombinedOutput()
+	txt := "device logs about tls and tacacs: " + oneLine(e.n.redact(string(out)))
+	if err != nil {
+		txt += fmt.Sprintf(" (%v)", err)
+	}
+	e.n.fact(txt)
+}
+
+// cellH is SR Linux's TLS pass: its server entry takes a tls-profile, the profile loads, and the
+// question is what the device then puts on port 300. One login is tried, with a capture of port
+// 300 held in memory (never written: it would carry the lab's plain TACACS+ bytes). Of the
+// device's first data packet only the first byte is read: 0x16 opens a TLS handshake record.
+func (e *l88Env) cellH() {
+	cap := exec.Command("sudo", "-n", "tcpdump", "-Z", "root", "-U", "-nn", "-i", "any", "-w", "-",
+		"host "+e.l.p.addr+" and tcp port 300")
+	var buf bytes.Buffer
+	cap.Stdout = &buf
+	e.must("starting the port 300 capture", cap.Start())
+	time.Sleep(3 * time.Second)
+	cl, err := e.l.dial("l88h", e.pw, 120*time.Second)
+	if err == nil {
+		cl.Close()
+	}
+	time.Sleep(3 * time.Second)
+	_ = cap.Process.Signal(syscall.SIGTERM)
+	_ = cap.Wait()
+	f, perr := labpcap.Parse(buf.Bytes())
+	if perr != nil {
+		e.n.cell("h", "INVALID", "the port 300 capture did not parse: "+perr.Error(), "")
+		e.t.Errorf("INVALID: %v", perr)
+		return
+	}
+	var syn, synack, first int = 0, 0, -1
+	for _, r := range f.Records {
+		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
+		if !ok {
+			continue
+		}
+		switch {
+		case fl.DstPort == 300 && fl.SYN():
+			syn++
+		case fl.SrcPort == 300 && fl.Flags&0x12 == 0x12:
+			synack++
+		case fl.DstPort == 300 && fl.PayloadLen > 0 && first < 0:
+			first = int(f.Bytes(r)[fl.PayloadOff])
+		}
+	}
+	got := fmt.Sprintf("the device opened %d connection attempts to port 300 (%d SYN-ACKs); ", syn, synack)
+	switch {
+	case first < 0:
+		got += "it sent no data on any"
+	case first == 0x16:
+		got += "its first data byte is 0x16, a TLS handshake record"
+	default:
+		got += fmt.Sprintf("its first data byte is 0x%02x, not a TLS record (0x16): a TACACS+ header's version byte is 0xc0 or 0xc1", first)
+	}
+	e.n.cell("h", "OBSERVED", got+"; the login "+map[bool]string{true: "succeeded", false: "failed"}[err == nil], "")
 }

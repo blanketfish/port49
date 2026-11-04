@@ -683,6 +683,10 @@ type l73Dialog struct {
 	Cmd   string
 	Steps []l73Step
 	Done  string
+	// Detach: the command may end the session it is typed on (a commit that moves the interface
+	// or the SSH server the session came in on). It is sent and not waited for; the caller
+	// reconnects and reads the device back.
+	Detach bool
 }
 
 func l73Lines(lines ...string) []l73Dialog {

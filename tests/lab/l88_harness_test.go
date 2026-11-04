@@ -4,7 +4,12 @@ package lab
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -38,7 +43,7 @@ var l88Refs = map[string]string{
 var l88Servers = []string{"172.100.100.1", "172.100.100.2"}
 
 // l88TLSImages are the images with an RFC 9887 client (cell h).
-var l88TLSImages = map[string]bool{"vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true, "xrd261": true}
+var l88TLSImages = map[string]bool{"srlinux": true, "vjunos26": true, "iosxe1718": true, "nxos106": true, "ceos436": true, "xrd261": true}
 
 // l88L29 are the rows whose reload behaviour L29 measured, so cell g skips them.
 var l88L29 = map[string]bool{"eos": true, "vjunos": true, "nxos": true, "iosxe": true}
@@ -47,6 +52,10 @@ func l88HasTLS(sel string) bool { return l88TLSImages[sel] }
 
 // l88Cells is the cells one pass runs. tls is cell h, the RFC 9887 pass (PORT49_L88_TLS=1).
 func l88Cells(sel string, tls bool) []string {
+	if tls && l88PlatformOf(sel) == "nokia_srlinux" {
+		// SR Linux's client never speaks TLS (cell h, measured), so a-f have nothing to run over it.
+		return []string{"h"}
+	}
 	if tls {
 		// Cell h, the cells where the transport changes what the device does (ruled 2026-11-04);
 		// c, g and i do not depend on it and are measured on the plain pass.
@@ -113,9 +122,24 @@ func l88ApplyWith(p platform, transport string, servers []string, push func(line
 	if !ok {
 		return fmt.Errorf("no reference configuration for %s", p.name)
 	}
+	srlTLS := p.name == "nokia_srlinux" && transport == "tls"
+	if srlTLS {
+		transport = "tcp" // there is no SR Linux TLS reference: the device's client does not speak TLS (cell h)
+	}
 	lines, err := deviceaaa.Render(ref, transport, l88Values(p, servers), labKeyDefault)
 	if err != nil {
 		return err
+	}
+	if srlTLS { // the plain reference, then the one change an operator would try: a tls-profile and port 300
+		if err := push(lines); err != nil {
+			return err
+		}
+		var more []string
+		for _, sv := range servers {
+			more = append(more, "set / system aaa server-group port49 server "+sv+" tls-profile "+l73CertID,
+				"set / system aaa server-group port49 server "+sv+" tacacs port 300")
+		}
+		return push(more)
 	}
 	return push(lines)
 }
@@ -591,12 +615,16 @@ func l88ReferenceNames() {
 // that config the one every restart uses. The reference is applied after this.
 func (e *l88Env) enrolTLS() {
 	l88ReferenceNames()
+	srl := e.l.p.name == "nokia_srlinux"
 	d, ok := l73Dialects[e.l.p.name]
+	if srl {
+		d, ok = l73Dialect{Family: "srl"}, true // L73 never ran SR Linux; its enrolment is written here
+	}
 	if !ok {
 		e.t.Fatalf("INVALID: no L73 dialect for %s", e.l.p.name)
 	}
 	le := newL73Env(e.t, e.l, d)
-	if !le.helpProbe() {
+	if !srl && !le.helpProbe() {
 		e.t.Fatalf("INVALID: %s lists no RFC 9887 client", e.l.p.name)
 	}
 	// Cell f has the device dial the second address too, and a device that checks the name against
@@ -604,7 +632,11 @@ func (e *l88Env) enrolTLS() {
 	now := time.Now()
 	le.writeServer("server", le.pki.Root, l73ServerLeaf{DNSNames: []string{"tacacs.l73.example"},
 		IPs: []net.IP{net.ParseIP(l73Server), net.ParseIP(l73SecondServer)}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
-	le.enrol()
+	if srl {
+		e.enrolSRLinux(le)
+	} else {
+		le.enrol()
+	}
 	le.daemon("l88", l73Daemon{Intermediates: le.files["inter.pem"]})
 	// L73's cleanup restores the device's plain servers over a break-glass login; the lab VM is
 	// destroyed after this run, and a device that answers locally for a while after the cells (IOS
@@ -623,6 +655,15 @@ func (e *l88Env) enrolTLS() {
 		l88TLSConfig = ""
 		l88TLSSplit.Block, l88TLSSplit.Inventory = "", ""
 	})
+	if e.l.p.name == "nokia_srlinux" {
+		e.n.fact("only cell h ran: SR Linux has no TLS reference because its client does not speak TLS (below). The plain reference " +
+			"(`deploy/device-aaa/nokia_srlinux.cli`) was loaded, then each server was given `tls-profile " + l73CertID +
+			"` and `tacacs port 300`, the one change an operator would try. The default CPM filter accepts a TACACS+ reply only from source port 49 " +
+			"(entry 110), so this run added entry 111 for source port 300; without it the device's SYN gets a SYN-ACK and nothing more")
+		e.n.fact("port49d's tls_listener on " + l73Server + ":" + strconv.Itoa(l73TLSPort) + " (L73's PKI; the device's profile `" + l73CertID +
+			"` holds its key, certificate and the root)")
+		return
+	}
 	e.n.fact("cells run over RFC 9887: a, b, d, e, f. c, g, i: not transport-dependent, measured on the plain pass (" +
 		l88NoteName0(e.l.p) + ")")
 	e.n.fact("port49d's server certificate carries both server addresses (" + l73Server + ", " + l73SecondServer +
@@ -630,4 +671,39 @@ func (e *l88Env) enrolTLS() {
 	e.n.fact("RFC 9887 enrolment by L73's machinery (its own PKI; the device's key and certificate id `" + l73CertID +
 		"`, the root trusted as `" + l73RootProfile + "`); port49d's tls_listener on " + l73Server + ":" + strconv.Itoa(l73TLSPort) +
 		". The reference TLS file was then applied over it unchanged.")
+}
+
+// enrolSRLinux makes the device's key and request off the box, has the lab intermediate sign
+// it, and loads a TLS profile (key, certificate with the intermediate after the leaf, the root
+// as trust anchor) through sr_cli: SR Linux's profile takes PEM text in its leaves.
+func (e *l88Env) enrolSRLinux(le *l73Env) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	e.must("making the device key", err)
+	der, err := x509.MarshalECPrivateKey(key)
+	e.must("encoding the device key", err)
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+	e.n.addSecret(keyPEM)
+	le.secrets = append(le.secrets, keyPEM)
+	node, ip := e.l.p.node, net.ParseIP(e.l.p.addr)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: node}, DNSNames: []string{node}, IPAddresses: []net.IP{ip}}, key)
+	e.must("making the device request", err)
+	csr := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	le.sign(csr, "made off the device (SR Linux's profile takes a PEM key; the lab's own request)")
+	leaf := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: le.leaf.Raw}))
+	profile := l73CertID
+	q := func(s string) string { return `"` + s + `"` }
+	// The default CPM filter lets a TACACS+ reply in only from source port 49 (entry 110).
+	e.must("accepting replies from port 300", l88SRPush([]string{
+		`set / acl acl-filter cpm type ipv4 entry 111 description "Accept incoming TACACS+ over TLS when this router initiates the TCP connection"`,
+		"set / acl acl-filter cpm type ipv4 entry 111 match ipv4 protocol tcp",
+		"set / acl acl-filter cpm type ipv4 entry 111 match transport source-port operator eq",
+		"set / acl acl-filter cpm type ipv4 entry 111 match transport source-port value 300",
+		"set / acl acl-filter cpm type ipv4 entry 111 action accept"}))
+	e.must("loading the TLS profile", l88SRPush([]string{
+		"set / system tls profile " + profile + " key " + q(keyPEM),
+		"set / system tls profile " + profile + " certificate " + q(leaf+string(le.pki.Inter.PEM())),
+		"set / system tls profile " + profile + " trust-anchor " + q(string(le.pki.Root.PEM()))}))
+	e.n.fact("SR Linux enrolment: the harness made the key and request, the lab intermediate signed it, and `system tls profile " +
+		profile + "` was loaded with the key, the leaf and intermediate, and the root as trust anchor (L73 never ran SR Linux)")
 }
