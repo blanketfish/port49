@@ -169,6 +169,12 @@ func (r *l89Run) installStoreAndVelero() {
 	t := r.t
 	t.Helper()
 	c := r.stack.Cluster()
+	// a failure while setting up leaves a diagnosis too
+	defer func() {
+		if t.Failed() {
+			r.diagnose()
+		}
+	}()
 	id, err := l89.Random(10)
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +251,7 @@ spec:
 	// no --default-volumes-to-fs-backup: the example Schedule's own setting is what is tested
 	r.velero("install", "--provider", "aws", "--plugins", os.Getenv("VELERO_AWS_PLUGIN_IMAGE"), "--image", os.Getenv("VELERO_IMAGE"),
 		"--bucket", l89Bucket, "--secret-file", r.file("velero-credentials", creds),
-		"--backup-location-config", "region="+l89Region+",s3ForcePathStyle=true,s3Url=http://seaweed."+l89Store+".svc:8333",
+		"--backup-location-config", "region="+l89Region+",s3ForcePathStyle=true,s3Url=http://seaweed."+l89Store+".svc:8333,publicUrl=http://"+addr,
 		"--use-node-agent", "--use-volume-snapshots=false", "--wait")
 	c.Kubectl("-n", "velero", "rollout", "status", "daemonset/node-agent", "--timeout=5m")
 	r.checkRepositoryKey()
@@ -358,6 +364,10 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	if _, err := c.KubectlTry(sched, "apply", "-f", "-"); err != nil {
 		t.Fatal(err)
 	}
+	// the CRD drops a field it does not know without a word: read it back
+	if got := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}")); got != "true" {
+		t.Fatalf("the Schedule's skipImmediately is %q after the apply, want true: the field was dropped or renamed", got)
+	}
 	l82Row(cell, "the lab's etcd shares the release's namespace", "yes: the Schedule names both namespaces, the lab applies it with the one")
 	r.velero("backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
 	phase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
@@ -433,7 +443,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 		a.LogBefore = logBefore
 		a.LogAfter = l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 		l82Row(cell, "the fingerprint the broker's \"issuing as\" line prints (first 12), before and after",
-			fmt.Sprintf("%s, %s", l89.Short(a.LogBefore), l89.Short(a.LogAfter)))
+			fmt.Sprintf("%s, %s", l89.FingerprintText(a.LogBefore), l89.FingerprintText(a.LogAfter)))
 		same := fpAfter[0] == fpBefore[0] && fpAfter[1] == fpBefore[1]
 		if !same {
 			a.FingerprintAfter = "changed: " + l89.Short(fpAfter[0])

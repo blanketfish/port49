@@ -77,9 +77,10 @@ type A struct {
 // JudgeA is PASS iff both StatefulSets became ready with no fence refusal and the issuing CA is the one
 // it was. A fingerprint not read is a FAIL, never an equal pair of empty ones.
 //
-// When the broker printed a fingerprint before the backup, it must print the same one after the restore.
+// The broker must have printed a fingerprint before the backup and print the same one after the
+// restore: the spec's PASS, so a line never printed (a wrong container or pattern) is a FAIL.
 func JudgeA(a A) string {
-	if a.LogBefore != "" && a.LogBefore != a.LogAfter {
+	if a.LogBefore == "" || a.LogBefore != a.LogAfter {
 		return l82.Fail
 	}
 	if a.Ready && !a.FenceRefusal && a.FingerprintBefore != "" && a.FingerprintBefore == a.FingerprintAfter {
@@ -89,6 +90,15 @@ func JudgeA(a A) string {
 }
 
 var issuingAs = regexp.MustCompile(`issuing as .* \(([^()\s]+)\), valid until `)
+
+// FingerprintText is a logged fingerprint for the results: its first 12 characters after any
+// "sha256:" prefix, or "not printed".
+func FingerprintText(fp string) string {
+	if fp == "" {
+		return "not printed"
+	}
+	return Short(strings.TrimPrefix(fp, "sha256:"))
+}
 
 // LogFingerprint is the fingerprint in the last "issuing as <subject> (<fingerprint>), valid until"
 // line of a broker's log, or "" when it printed none (internal/issuer).

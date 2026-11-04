@@ -52,14 +52,14 @@ func TestL89ResultsHoldNoKeyMaterial(t *testing.T) {
 }
 
 func TestVerdicts(t *testing.T) {
-	good := A{Ready: true, FingerprintBefore: "ab", FingerprintAfter: "ab"}
+	good := A{Ready: true, FingerprintBefore: "ab", FingerprintAfter: "ab", LogBefore: "x", LogAfter: "x"}
 	if JudgeA(good) != l82.Pass {
 		t.Error("a ready restore with the same CA is not a PASS")
 	}
 	for name, a := range map[string]A{
-		"not ready":       {Ready: false, FingerprintBefore: "ab", FingerprintAfter: "ab"},
-		"a fence refusal": {Ready: true, FenceRefusal: true, FingerprintBefore: "ab", FingerprintAfter: "ab"},
-		"a different CA":  {Ready: true, FingerprintBefore: "ab", FingerprintAfter: "cd"},
+		"not ready":       {Ready: false, FingerprintBefore: "ab", FingerprintAfter: "ab", LogBefore: "x", LogAfter: "x"},
+		"a fence refusal": {Ready: true, FenceRefusal: true, FingerprintBefore: "ab", FingerprintAfter: "ab", LogBefore: "x", LogAfter: "x"},
+		"a different CA":  {Ready: true, FingerprintBefore: "ab", FingerprintAfter: "cd", LogBefore: "x", LogAfter: "x"},
 		"no fingerprint":  {Ready: true},
 	} {
 		if JudgeA(a) != l82.Fail {
@@ -213,9 +213,12 @@ func TestBrokerLogFingerprintMustMatch(t *testing.T) {
 	if JudgeA(a) != l82.Fail {
 		t.Error("a fingerprint printed before and not after is not a FAIL")
 	}
-	a.LogBefore = ""
-	if JudgeA(a) != l82.Pass {
-		t.Error("a broker that printed none before falls back to the file's")
+	a.LogBefore, a.LogAfter = "", ""
+	if JudgeA(a) != l82.Fail {
+		t.Error("a broker that printed no fingerprint before the backup is not a FAIL: the spec's PASS needs it")
+	}
+	if FingerprintText("sha256:abcdef0123456789") != "abcdef012345" || FingerprintText("") != "not printed" {
+		t.Errorf("FingerprintText: %q, %q", FingerprintText("sha256:abcdef0123456789"), FingerprintText(""))
 	}
 	logs := "x\nissuance: issuing as CN=port49 (lab) (SHA256:abc), valid until 2027-01-01\n"
 	if got := LogFingerprint(logs); got != "SHA256:abc" {
