@@ -1529,7 +1529,7 @@ func (e *l73Env) requestEOS() ([]byte, string) {
 // certificate:, and configures the SSL profile that names them.
 func (e *l73Env) loadEOS() {
 	_, _, load, profile := l73EOSEnrol(e.l.p.node)
-	e.upload(map[string][]byte{"/mnt/flash/l73-root.crt": e.pki.Root.PEM(), "/mnt/flash/l73-inter.crt": e.pki.Inter.PEM(),
+	e.upload(map[string][]byte{"/mnt/flash/" + l73EOSRootFile: e.pki.Root.PEM(), "/mnt/flash/" + l73EOSInterFile: e.pki.Inter.PEM(),
 		"/mnt/flash/" + l73CertID + ".crt": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.leaf.Raw})})
 	e.cli(func(c *cliConn) error {
 		for _, cmd := range load {

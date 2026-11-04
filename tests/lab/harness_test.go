@@ -879,6 +879,9 @@ var platformSessionAttributes = map[string]string{
 // configPath is the daemon config this platform runs against: the checked-in
 // one unless platformSessionAttributes has something to say about it.
 func (l *lab) configPath() (string, error) {
+	if l88TLSConfig != "" { // L88 cell h: port49d keeps its RFC 9887 listener across restarts
+		return l88TLSConfig, nil
+	}
 	return l.derivedConfig("", platformSessionAttributes[l.p.name], "")
 }
 
@@ -2855,11 +2858,15 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 		}
 		return p
 	}
+	if l88TLSSplit.Block != "" { // L88 cell h: the split's daemon keeps the RFC 9887 listener
+		inventory = write("inventory.yaml", l88TLSSplit.Inventory)
+	}
 	a, err := splitDaemonYAML(string(base), splitNode{Listen: tacacsAddr, Metrics: metricsAddr,
 		Spool: spoolPath}, s.Policy, inventory, daemonStore)
 	if err != nil {
 		t.Fatal(err)
 	}
+	a += l88TLSSplit.Block
 	s.CfgA = write("port49d-a.yaml", a)
 	if cfg.SecondServer {
 		b, err := splitDaemonYAML(string(base), splitNode{Listen: splitSecondAddr + ":49", Metrics: splitMetricsB,

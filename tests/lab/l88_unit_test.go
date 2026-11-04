@@ -75,25 +75,22 @@ func TestL88CellsPerPlatform(t *testing.T) {
 			t.Errorf("%s: the TLS pass repeats cell i", p.sel)
 		}
 		for _, c := range []string{"a", "b", "c", "d", "e", "f"} {
-			if !has(cells, c) || !has(l88Cells(p.sel, true), c) {
+			if !has(cells, c) {
 				t.Errorf("%s: cell %s is missing", p.sel, c)
 			}
 		}
-	}
-	for _, sel := range []string{"vjunos26", "iosxe1718", "nxos106", "ceos436", "xrd261"} {
-		if !has(l88Cells(sel, false), "h") {
-			t.Errorf("%s: cell h is missing", sel)
-		}
-		if has(l88Cells(sel, true), "h") {
-			t.Errorf("%s: the TLS pass is cell h itself, it lists no h", sel)
+		// The TLS pass (cell h) runs only the cells the transport changes: not c, g or i.
+		if got := strings.Join(l88Cells(p.sel, true), ","); got != "a,b,d,e,f" {
+			t.Errorf("%s: the TLS pass runs %s, want a,b,d,e,f", p.sel, got)
 		}
 	}
-	for _, sel := range []string{"eos", "vjunos", "vsrx", "nxos", "iosxe", "srlinux"} {
-		if has(l88Cells(sel, false), "h") {
-			t.Errorf("%s: has no TLS image, but lists cell h", sel)
+	// Cell h is the TLS pass itself (PORT49_L88_TLS=1), never a cell of the plain pass.
+	for _, p := range platforms {
+		if _, ok := l88Refs[p.name]; ok && has(l88Cells(p.sel, false), "h") {
+			t.Errorf("%s: the plain pass lists cell h", p.sel)
 		}
 	}
-	// g is skipped where L29 measured the platform, unless TLS.
+	// g is skipped where L29 measured the platform.
 	for _, sel := range []string{"eos", "vjunos", "nxos", "iosxe"} {
 		if has(l88Cells(sel, false), "g") {
 			t.Errorf("%s: L29 measured it; cell g must be skipped", sel)
@@ -102,11 +99,6 @@ func TestL88CellsPerPlatform(t *testing.T) {
 	for _, sel := range []string{"vsrx", "xrd261", "srlinux", "vjunos26", "iosxe1718", "nxos106", "ceos436"} {
 		if !has(l88Cells(sel, false), "g") {
 			t.Errorf("%s: L29 did not measure it; cell g must run", sel)
-		}
-	}
-	for _, sel := range []string{"vjunos26", "iosxe1718", "nxos106", "ceos436", "xrd261"} {
-		if !has(l88Cells(sel, true), "g") {
-			t.Errorf("%s: cell g must run over TLS", sel)
 		}
 	}
 }

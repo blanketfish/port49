@@ -73,12 +73,19 @@ func l88Run(t *testing.T, l *lab) {
 	if err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	e := &l88Env{t: t, l: l, pw: pw, hash: hash}
-	e.n = newL88Note(l.p, "tcp", pw, hash)
+	e := &l88Env{t: t, l: l, pw: pw, hash: hash, tls: l88TLSPass()}
+	if e.tls && !l88HasTLS(l.p.sel) {
+		t.Skipf("%s has no RFC 9887 client in this lab", l.p.sel)
+	}
+	transport := "tcp"
+	if e.tls {
+		transport = "tls"
+	}
+	e.n = newL88Note(l.p, transport, pw, hash)
 	if !l88Junos(l.p) && l.p.name != "nokia_srlinux" {
 		if lines := l88Clear(l.p); len(lines) > 0 {
 			e.must("clearing the lab's own server lines", l88Admin(l, func(c *cliConn) error {
-				_, err := l73CiscoRun(c, l73Lines(lines...), nil, true, l73ExtraMarks(l88Family(l.p))...)
+				_, err := l73CiscoRun(c, l88WithCommit(l.p, l73Lines(lines...)), nil, true, l73ExtraMarks(l88Family(l.p))...)
 				if err != nil {
 					t.Logf("clear (lenient): %s", e.n.mask(oneLine(err.Error())))
 				}
@@ -157,12 +164,15 @@ func l88Run(t *testing.T, l *lab) {
 			return err
 		}))
 	}
-	e.must("applying the reference", l88Apply(l, "tcp"))
-	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (tcp), values: servers " +
+	if e.tls {
+		e.enrolTLS()
+	}
+	e.must("applying the reference", l88Apply(l, transport))
+	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (" + transport + "), values: servers " +
 		strings.Join(l88Servers, ", ") + "; the second is an address on the bridge where nothing listens")
 	e.deviceFacts()
 	e.debugOn()
-	e.cells("tcp", l88Cells(l.p.sel, false))
+	e.cells(transport, l88Cells(l.p.sel, e.tls))
 	undoVRF()
 	e.finish()
 }
@@ -228,6 +238,13 @@ func (e *l88Env) finish() {
 
 // l88NoteName is L88-<platform>.md, with the image's selector when a default row shares the name.
 func l88NoteName(p platform) string {
+	if l88TLSPass() {
+		return strings.TrimSuffix(l88NoteName0(p), ".md") + "-tls.md"
+	}
+	return l88NoteName0(p)
+}
+
+func l88NoteName0(p platform) string {
 	for _, q := range platforms {
 		if q.name == p.name && q.sel != p.sel && !optInPlatforms[q.sel] {
 			return "L88-" + p.name + "-" + p.sel + ".md"
@@ -462,13 +479,24 @@ func (e *l88Env) cellF() {
 	e.must("reading the standing config", err)
 	cfg, err := l73SetLine(string(raw), "listen: ", `listen: "`+net.JoinHostPort(l88Servers[1], "49")+`"`)
 	e.must("moving the listener", err)
+	resetPort := "49"
+	if e.tls {
+		// The device dials port 300: the RFC 9887 listener moves to the second address and the
+		// resetting listener takes the first address on 300.
+		resetPort = strconv.Itoa(l73TLSPort)
+		from := `"` + net.JoinHostPort(l88Servers[0], resetPort) + `"`
+		if strings.Count(cfg, from) != 1 {
+			e.t.Fatalf("INVALID: the TLS config holds %d copies of %s", strings.Count(cfg, from), from)
+		}
+		cfg = strings.Replace(cfg, from, `"`+net.JoinHostPort(l88Servers[1], resetPort)+`"`, 1)
+	}
 	path := filepath.Join(root, "tests", "lab", "logs", "port49d-l88f-"+e.l.p.name+".yaml")
 	e.must("writing the config", os.WriteFile(path, []byte(cfg), 0o644))
 	healthListen = net.JoinHostPort(l88Servers[1], "49") // the health gate dials where the listener moved
 	serr := e.l.startDaemonWith(path, true)
 	healthListen = ""
 	e.must("starting port49d on the second address", serr)
-	rst, err := l88ResetListener(l88Servers[0], "49")
+	rst, err := l88ResetListener(l88Servers[0], resetPort)
 	e.must("the resetting listener", err)
 	restore := func() {
 		rst.stop()
@@ -1350,6 +1378,9 @@ func (e *l88Env) cellG() {
 // the default row's (iosxe1718 and iosxe are both cisco_iosxe), and the capture file is named
 // by platform, so it carries its selector and never overwrites the default row's evidence.
 func (e *l88Env) capName(base string) string {
+	if e.tls {
+		base += "-tls"
+	}
 	if l88XRVRF() != "" && e.l.p.name == "cisco_xrd" {
 		base += "-vrf"
 	}

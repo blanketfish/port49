@@ -7,10 +7,12 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,21 +45,22 @@ var l88L29 = map[string]bool{"eos": true, "vjunos": true, "nxos": true, "iosxe":
 
 func l88HasTLS(sel string) bool { return l88TLSImages[sel] }
 
-// l88Cells is the cells one pass runs. tls is the RFC 9887 pass cell h names: (a)-(g)
-// over TLS, so it lists no h and no i. The plain pass of a TLS image ends in h.
+// l88Cells is the cells one pass runs. tls is cell h, the RFC 9887 pass (PORT49_L88_TLS=1).
 func l88Cells(sel string, tls bool) []string {
+	if tls {
+		// Cell h, the cells where the transport changes what the device does (ruled 2026-11-04);
+		// c, g and i do not depend on it and are measured on the plain pass.
+		return []string{"a", "b", "d", "e", "f"}
+	}
 	cells := []string{"a", "b", "c", "d", "e", "f"}
 	if !tls && l88PlatformOf(sel) == "cisco_iosxe" {
 		// f2: what an IOS XE does after a break-glass session ran with port49d down.
 		cells = append(cells, "f2", "f3")
 	}
-	if tls || !l88L29[sel] {
+	if !l88L29[sel] {
 		cells = append(cells, "g")
 	}
-	if !tls && l88HasTLS(sel) {
-		cells = append(cells, "h")
-	}
-	if !tls && strings.HasPrefix(l88PlatformOf(sel), "juniper_") {
+	if strings.HasPrefix(l88PlatformOf(sel), "juniper_") {
 		cells = append(cells, "i")
 	}
 	return cells
@@ -76,6 +79,9 @@ func l88PlatformOf(sel string) string {
 func l88Values(p platform, servers []string) deviceaaa.Values {
 	v := deviceaaa.Values{Servers: servers, BreakGlass: breakglassUser, TLSPort: 300,
 		ServerName: p.node, CertID: "port49-device", SourceAddress: p.addr}
+	if l88TLSPass() {
+		v.CertID = l73CertID // L73's enrolment made the device's certificate under this id
+	}
 	switch p.name {
 	case "arista_eos", "arista_ceos":
 		v.MgmtVRF, v.SourceInterface = "default", "Management1"
@@ -168,7 +174,14 @@ func l88Push(p platform, c *cliConn, lines []string) error {
 		return err
 	}
 	if missing := l88Missing(lines, shown); len(missing) > 0 {
-		return fmt.Errorf("the device lacks %d line(s) that were typed: %s", len(missing), strings.Join(missing, "; "))
+		var near []string
+		for _, ln := range strings.Split(strings.ReplaceAll(shown, "\r", ""), "\n") {
+			if l := strings.ToLower(ln); strings.Contains(l, "tacacs") || strings.Contains(l, "server ") || strings.Contains(l, "trustpoint") || strings.Contains(l, "enrollment") {
+				near = append(near, strings.TrimSpace(ln))
+			}
+		}
+		return fmt.Errorf("the device lacks %d line(s) that were typed: %s; its lines naming a server: %s", len(missing),
+			strings.Join(missing, "; "), strings.Join(near, " | "))
 	}
 	return nil
 }
@@ -182,10 +195,33 @@ func l88Push(p platform, c *cliConn, lines []string) error {
 func l88Missing(lines []string, shown string) []string {
 	norm := func(s string) string {
 		s = strings.ReplaceAll(strings.Join(strings.Fields(s), " "), " vrf default", "")
-		return strings.ReplaceAll(s, " privilege 1 ", " ") // the default level is not shown
+		s = strings.ReplaceAll(s, " privilege 1 ", " ")                             // the default level is not shown
+		s = strings.ReplaceAll(s, "enrollment url terminal", "enrollment terminal") // XR 26.1.1 spells it so
+		// EOS shows a TLS host without its port when that is 300, the RFC 9887 default, and puts
+		// `tls` last (cEOS 4.36.3M, L88 cell h).
+		if strings.Contains(s, " tls") {
+			s = strings.ReplaceAll(s, " port 300", "")
+			s = strings.ReplaceAll(s, " tls single-connection", " single-connection tls")
+		}
+		return s
 	}
 	have := map[string]bool{}
+	var host string // XR shows a server's options as lines under its `tacacs-server host` line
+	tlsUnder := false
 	for _, ln := range strings.Split(strings.ReplaceAll(shown, "\r", ""), "\n") {
+		if strings.HasPrefix(ln, "tacacs-server host ") {
+			host, tlsUnder = strings.TrimSpace(ln), false
+		} else if host != "" && strings.HasPrefix(ln, " ") {
+			child := strings.TrimSpace(ln)
+			if child == "tls" {
+				tlsUnder = true // XR 26.1.1 nests `trustpoint T` under `tls` under the host
+			} else if tlsUnder && strings.HasPrefix(ln, "  ") {
+				child = "tls " + child
+			}
+			have[norm(host+" "+child)] = true
+		} else {
+			host = ""
+		}
 		have[norm(ln)] = true
 	}
 	var missing []string
@@ -244,6 +280,17 @@ func l88Clear(p platform) []string {
 		return []string{"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1"}
 	case "cisco_iosxe":
 		return []string{"aaa group server tacacs+ port49", "no server name port49-host", "exit", "no tacacs server port49-host"}
+	case "cisco_xrd":
+		if l88TLSPass() {
+			// The startup config's plain host on port 49 beside the TLS host on 300 at the same address
+			// leaves a group member that means two servers; a TLS pass starts from none.
+			return []string{"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1 port 49"}
+		}
+	case "cisco_nxos":
+		if l88TLSPass() {
+			// The startup config's host carries a key; "No key on a TLS host" (the reference) needs it gone.
+			return []string{"aaa group server tacacs+ port49", "no server 172.100.100.1", "exit", "no tacacs-server host 172.100.100.1"}
+		}
 	}
 	return nil
 }
@@ -517,4 +564,70 @@ func l88SRPush(lines []string) error {
 		return fmt.Errorf("sr_cli refused the load (%v); it said: %s", err, oneLine(o))
 	}
 	return nil
+}
+
+// l88TLSConfig is port49d's config for the TLS pass: lab.configPath() returns it, so every
+// restart (the break-glass pushes, a cell's cleanup) runs port49d with its RFC 9887 listener.
+var l88TLSConfig string
+
+// l88TLSSplit is what the split deployment cell d starts needs of the TLS pass: the inventory
+// with the device's TLS entry, and the tls_listener block.
+var l88TLSSplit struct{ Inventory, Block string }
+
+// l88TLSPass is cell h's run: PORT49_L88_TLS=1.
+func l88TLSPass() bool { return os.Getenv("PORT49_L88_TLS") == "1" }
+
+// l88ReferenceNames gives L73's enrolment the names the shipped reference files use for the
+// root CA's trust object, so the reference is applied unchanged over the enrolment.
+func l88ReferenceNames() {
+	l73RootProfile, l73TrustGroup = "port49-root", "port49"
+	l73EOSRootFile, l73EOSInterFile = "port49-root.crt", "port49-intermediate.crt"
+	// The reference trustpoints name the key by the certificate id (eckeypair/rsakeypair <CERT_ID>).
+	l73CiscoKey = l73CertID
+}
+
+// enrolTLS runs L73's enrolment on the device (its own PKI, key and certificate, trust of
+// the root) and starts port49d on the config with an RFC 9887 listener on 300, then makes
+// that config the one every restart uses. The reference is applied after this.
+func (e *l88Env) enrolTLS() {
+	l88ReferenceNames()
+	d, ok := l73Dialects[e.l.p.name]
+	if !ok {
+		e.t.Fatalf("INVALID: no L73 dialect for %s", e.l.p.name)
+	}
+	le := newL73Env(e.t, e.l, d)
+	if !le.helpProbe() {
+		e.t.Fatalf("INVALID: %s lists no RFC 9887 client", e.l.p.name)
+	}
+	// Cell f has the device dial the second address too, and a device that checks the name against
+	// the certificate (the address it dialled) needs that address in it.
+	now := time.Now()
+	le.writeServer("server", le.pki.Root, l73ServerLeaf{DNSNames: []string{"tacacs.l73.example"},
+		IPs: []net.IP{net.ParseIP(l73Server), net.ParseIP(l73SecondServer)}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	le.enrol()
+	le.daemon("l88", l73Daemon{Intermediates: le.files["inter.pem"]})
+	// L73's cleanup restores the device's plain servers over a break-glass login; the lab VM is
+	// destroyed after this run, and a device that answers locally for a while after the cells (IOS
+	// XE) fails that login with an INVALID that says nothing about the cells.
+	le.touched = false
+	cfg, err := os.ReadFile(le.cfg)
+	e.must("reading the TLS config", err)
+	i := strings.Index(string(cfg), "\ntls_listener:")
+	if i < 0 {
+		e.t.Fatalf("INVALID: the TLS config has no tls_listener block")
+	}
+	inv, err := os.ReadFile(le.invTLS)
+	e.must("reading the TLS inventory", err)
+	l88TLSConfig, l88TLSSplit.Block, l88TLSSplit.Inventory = le.cfg, string(cfg)[i:], string(inv)
+	e.t.Cleanup(func() {
+		l88TLSConfig = ""
+		l88TLSSplit.Block, l88TLSSplit.Inventory = "", ""
+	})
+	e.n.fact("cells run over RFC 9887: a, b, d, e, f. c, g, i: not transport-dependent, measured on the plain pass (" +
+		l88NoteName0(e.l.p) + ")")
+	e.n.fact("port49d's server certificate carries both server addresses (" + l73Server + ", " + l73SecondServer +
+		") as IP names, because cell f has the device dial the second one; with the first alone, a device that checks the dialled address would refuse the second server for the certificate, not for failover")
+	e.n.fact("RFC 9887 enrolment by L73's machinery (its own PKI; the device's key and certificate id `" + l73CertID +
+		"`, the root trusted as `" + l73RootProfile + "`); port49d's tls_listener on " + l73Server + ":" + strconv.Itoa(l73TLSPort) +
+		". The reference TLS file was then applied over it unchanged.")
 }

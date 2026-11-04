@@ -299,8 +299,11 @@ const (
 	l73Group    = "port49"
 	l73XEVRF    = "clab-mgmt"
 	l73XESource = "GigabitEthernet1"
-	l73CiscoKey = "l73-key"
 )
+
+// l73CiscoKey is the label of the key a Cisco device makes for its certificate. L88's TLS pass
+// sets it to the certificate id, as the reference files' trustpoints name it.
+var l73CiscoKey = "l73-key"
 
 // l73RecoverLines is what to type when an ask's In or Out failed part way and
 // the CLI's mode is unknown: leave configuration with the dialect's own last
@@ -492,6 +495,9 @@ func l73NXOSApply(d l73DeviceTLS, has map[string]bool) []string {
 // l73EOSProfile is the SSL profile the EOS host line names.
 const l73EOSProfile = "l73-tls"
 
+// The files EOS's SSL profile names, in certificate:.
+var l73EOSRootFile, l73EOSInterFile = "l73-root.crt", "l73-inter.crt"
+
 // l73EOSHost is one host line. A TLS host takes `tls` right after the
 // address and then only the options the image lists after it (no key, so a
 // TLS host carries none); a plain host keeps the order the first help lists.
@@ -656,12 +662,12 @@ func l73EOSGroupMissing(shown string, d l73DeviceTLS, port, second int) []string
 func l73EOSEnrol(node string) (keyGen, csr string, load, profile []string) {
 	keyGen = "security pki key generate rsa 2048 " + l73CertID + ".key"
 	csr = "security pki certificate generate signing-request key " + l73CertID + ".key parameters common-name " + node
-	for _, f := range []string{"l73-root.crt", "l73-inter.crt", l73CertID + ".crt"} {
+	for _, f := range []string{l73EOSRootFile, l73EOSInterFile, l73CertID + ".crt"} {
 		load = append(load, "copy flash:"+f+" certificate:"+f)
 	}
 	profile = []string{"management security", "ssl profile " + l73EOSProfile,
 		"certificate " + l73CertID + ".crt key " + l73CertID + ".key",
-		"chain certificate l73-inter.crt", "trust certificate l73-root.crt", "exit", "exit"}
+		"chain certificate " + l73EOSInterFile, "trust certificate " + l73EOSRootFile, "exit", "exit"}
 	return keyGen, csr, load, profile
 }
 
