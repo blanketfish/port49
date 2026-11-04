@@ -599,10 +599,9 @@ kind-smoke: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KU
 
 # The chart's enrollments export CronJob, run (plan 12c, Task 17, ruling 13): the chart on a kind cluster
 # with an OpenLDAP pod (tests/lab/directory/openldap, built and loaded by the test), a directory_password
-# verifier, init-enrollments, then the CronJob's Job twice. It runs in CI only (.github/workflows/kind.yml):
+# verifier, the shipped init-enrollments Job, then the CronJob's Job twice and once more over a stale file. It runs in CI only (.github/workflows/kind.yml):
 # kind's nodes are privileged containers, so smoke-keyhost refuses on a host with a TPM or a security key.
 # kind-smoke skips it (its own cluster, its own job). The cluster is deleted afterwards whatever the result.
-# UNVERIFIED until the first CI run.
 kind-enrollments: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
 	docker build --target setup -t port49-setup:dev .
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \

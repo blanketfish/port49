@@ -186,6 +186,9 @@ func kindWorkflowProblems(lab, kind []byte, mk string) []string {
 			if _, ok := want[st.Run]; ok {
 				want[st.Run] = id
 			}
+			if strings.HasPrefix(st.Uses, "actions/checkout@") && st.With["persist-credentials"] != false {
+				add("kind.yml job %s: the checkout keeps its credentials (persist-credentials is not false)", id)
+			}
 			if st.Uses != "" && !shaPinned.MatchString(st.Uses) {
 				add("kind.yml job %s: %q is not pinned by a full commit SHA", id, st.Uses)
 			}
@@ -291,6 +294,7 @@ func TestTheKindWorkflowRulesCatchEachMistake(t *testing.T) {
 		{"an enrollments job with no override", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine, "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n", "job enrollments: the job env"},
 		{"an enrollments job that may write", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine + "    permissions: {contents: read}", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine + "    permissions: {contents: write}", "job enrollments: permissions"},
 		{"an enrollments job with no permissions", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine + "    permissions: {contents: read}\n", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine, "job enrollments: permissions"},
+		{"a checkout that keeps credentials", "kind", "with: {persist-credentials: false}\n      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0\n        with: {go-version-file: go.mod}\n      - run: make kind-enrollments", "with: {persist-credentials: true}\n      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0\n        with: {go-version-file: go.mod}\n      - run: make kind-enrollments", "keeps its credentials"},
 		{"an unpinned action", "kind", "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0\n        with: {go-version-file: go.mod}\n      - run: make kind-enrollments", "actions/setup-go@v5\n        with: {go-version-file: go.mod}\n      - run: make kind-enrollments", "not pinned"},
 		{"an enrollments target that runs the whole package", "mk", "-run '^TestEnrollmentsExportRuns$$'", "-run TestEnrollmentsExportRuns", "anchored -run"},
 		{"an enrollments target with no kind tag", "mk", "go test -tags kind ./tests/kind/ -run '^TestEnrollmentsExportRuns$$'", "go test ./tests/kind/ -run '^TestEnrollmentsExportRuns$$'", "-tags kind"},

@@ -10,7 +10,14 @@ package kind
 // human username.
 //
 // The directory's bind password is generated for the run, put in Kubernetes Secrets from files in a 0700
-// temp directory, and never committed, put on a command line or printed. UNVERIFIED until the first CI run.
+// temp directory, and never committed, put on a command line or printed.
+//
+// What it measures: the install step is the shipped one-off Job (examples/init-enrollments-job.yaml); the
+// export runs twice; the volume holds one dated, non-empty 0600 file owned by 65532 and then two; a
+// successful run's log is empty; and a stale enrollments.new fails a third Job loudly, which proves the log
+// check can see output. What it does not: an enrolled person. The store the export reads is freshly
+// initialised (the mark and no second factors), because enrolling goes through `port49 login --directory` on
+// a terminal and the person's TOTP, which no kind test drives yet.
 
 import (
 	"os"
@@ -187,16 +194,19 @@ func TestEnrollmentsExportRuns(t *testing.T) {
 		Policy:           enrollPolicy,
 		StoreRolesSecret: directoryCreds,
 	})
-	// The brokers, then the install step: init-enrollments creates the sealed store in etcd, as the
-	// README's one-off run does. A port49d pod is not needed, and its policy has no human username.
+	// The brokers, then the install step: the shipped one-off Job creates the sealed store in etcd, as the
+	// README says. A port49d pod is not needed, and its policy has no human username.
 	s.copyIssuer()
 	for _, p := range []string{"t-broker-0", "t-broker-1"} {
 		s.c.WaitReady(ns, p, 4*time.Minute)
 	}
-	out, err := s.c.KubectlTry("", "-n", ns, "exec", "t-broker-0", "-c", "port49-broker", "--",
-		"/usr/local/bin/port49-broker", "init-enrollments", "--config", "/etc/port49/config/port49-broker.yaml")
-	if err != nil || !strings.Contains(out, "created the enrollment store") {
-		t.Fatalf("init-enrollments: %v\n%s", err, kindtest.Filter(out))
+	s.c.Apply(s.example(filepath.Join(s.chart, "examples", "init-enrollments-job.yaml")))
+	if got := s.jobOutcome("port49-init-enrollments", 5*time.Minute); got != "succeeded" {
+		t.Fatalf("the init-enrollments Job %s:\n%s", got, shapetest.Filtered(s.root, s.c.PodReport(ns, jobPod(s, "port49-init-enrollments"))))
+	}
+	initLog := s.c.Kubectl("-n", ns, "logs", "job/port49-init-enrollments", "-c", "init")
+	if !strings.Contains(initLog, "created the enrollment store") {
+		t.Fatalf("init-enrollments did not say it created the store:\n%s", shapetest.Filtered(s.root, initLog))
 	}
 
 	s.c.Apply(`apiVersion: v1
@@ -219,6 +229,36 @@ spec:
 		return st
 	}
 
+	// sizes is each dated file's size in bytes: a file of no bytes is not an export.
+	sizes := func(name string) []string {
+		t.Helper()
+		return strings.Fields(s.debugPod(name, backupsPVC, "stat -c %s /v/enrollments-*.json", true))
+	}
+	nonEmpty := func(when string, sz []string) {
+		t.Helper()
+		for _, n := range sz {
+			if n == "" || n == "0" {
+				t.Errorf("%s: a dated file is %q bytes, want more than 0", when, n)
+			}
+		}
+	}
+
+	// quiet fails unless a successful run's log is empty once the tags are off: an export that succeeds says
+	// nothing, and its sealed bytes go to the file alone. The bind password's value and the words of a
+	// credential are named separately, so a failure says which. A log is printed only through the filter.
+	quiet := func(when, log string) {
+		t.Helper()
+		if strings.Contains(log, password) {
+			t.Errorf("%s: the log holds the directory's bind password (value withheld)", when)
+		}
+		if w := secretShaped.FindString(strings.ReplaceAll(log, "directory_password", "")); w != "" {
+			t.Errorf("%s: the log holds credential text (%s)", when, strings.ToLower(w[:min(len(w), 8)]))
+		}
+		if body := logLines(log); body != "" {
+			t.Errorf("%s: the log is not empty, and a successful export says nothing; filtered:\n%s", when, shapetest.Filtered(s.root, body))
+		}
+	}
+
 	// Run 1: the Job succeeds and the volume holds one dated, 0600, 65532-owned file named for today.
 	dayBefore := time.Now().UTC().Format("20060102")
 	if got := s.backup(exportCron, "enroll-run1"); got != "succeeded" {
@@ -238,19 +278,8 @@ spec:
 	}
 	sum1 := strings.TrimSpace(s.debugPod("sum-run1", backupsPVC, "sha256sum "+first[0].Path+" | cut -d' ' -f1", true))
 
-	// The job's log holds no enrollment byte or credential. The password value itself, then the words and
-	// shapes of one, checked on the raw log; what is printed on a failure has been through the filter.
-	logs := s.c.Kubectl("-n", ns, "logs", "job/enroll-run1", "--all-containers", "--prefix")
-	if strings.Contains(logs, password) {
-		t.Error("the export job's log holds the directory's bind password (value withheld)")
-	}
-	if loc := secretShaped.FindString(strings.ReplaceAll(logs, "directory_password", "")); loc != "" {
-		t.Errorf("the export job's log holds credential text (matched %q); its log, filtered:\n%s", strings.ToLower(loc[:min(len(loc), 8)]),
-			shapetest.Filtered(s.root, logs))
-	}
-	if sum1 != "" && strings.Contains(logs, sum1) {
-		t.Error("the export job's log holds the export's hash")
-	}
+	nonEmpty("after the first run", sizes("size-run1"))
+	quiet("the first run", s.c.Kubectl("-n", ns, "logs", "job/enroll-run1", "--all-containers", "--prefix"))
 
 	// Run 2, a later second: a second dated file, and the first is not touched.
 	if got := s.backup(exportCron, "enroll-run2"); got != "succeeded" {
@@ -271,8 +300,36 @@ spec:
 	if after := strings.TrimSpace(s.debugPod("sum-run1-again", backupsPVC, "sha256sum "+first[0].Path+" | cut -d' ' -f1", true)); after != sum1 {
 		t.Errorf("the second run changed %s", first[0].Path)
 	}
-	t.Logf("enrollments export: two runs, %d dated files, each 0600 65532:65532", len(second))
+	nonEmpty("after the second run", sizes("size-run2"))
+	quiet("the second run", s.c.Kubectl("-n", ns, "logs", "job/enroll-run2", "--all-containers", "--prefix"))
+
+	// The positive control: a file left from a run that did not finish fails the next Job in stale-check,
+	// whose log names it. That log is read the way the successful runs' were, and it is not empty, so the
+	// empty logs above are the export's own silence and not a log the test cannot see.
+	s.debugPod("stale-enroll", backupsPVC, "umask 077; : > /v/enrollments.new; chown 65532:65532 /v/enrollments.new", false)
+	if got := s.backup(exportCron, "enroll-run3"); got != "failed" {
+		t.Fatalf("a stale enrollments.new did not fail the job (%s)", got)
+	}
+	stale, _ := s.c.KubectlTry("", "-n", ns, "logs", "job/enroll-run3", "-c", "stale-check", "--prefix")
+	if !strings.Contains(stale, "/backup/enrollments.new is left from a run that did not finish") {
+		t.Errorf("stale-check's log does not name enrollments.new:\n%s", shapetest.Filtered(s.root, stale))
+	}
+	if logLines(stale) == "" {
+		t.Error("the log check read nothing from a failed run: it cannot be trusted to have seen the successful runs' logs")
+	}
+	if n := strings.TrimSpace(s.debugPod("count-run3", backupsPVC, "ls /v/enrollments-*.json | wc -l", true)); n != "2" {
+		t.Errorf("%s dated files after the failed run, want the two from the first", n)
+	}
+	s.debugPod("clear-enroll", backupsPVC, "rm -f /v/enrollments.new", false)
+
+	t.Logf("enrollments export: two runs, %d dated files, each 0600 65532:65532, and a stale .new fails the third", len(second))
 }
+
+// prefixTag is the `--prefix` tag kubectl puts on each log line: [pod/<name>/<container>].
+var prefixTag = regexp.MustCompile(`(?m)^\[pod/[^\]]+\] ?`)
+
+// logLines is a log with its prefix tags taken off and its white space trimmed.
+func logLines(log string) string { return strings.TrimSpace(prefixTag.ReplaceAllString(log, "")) }
 
 // jobPod is the name of a pod of the Job, for a failure's report.
 func jobPod(s *smoke, job string) string {
@@ -290,12 +347,14 @@ func TestEnrollmentsValuesAndPolicyParse(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(enrollValues), &v); err != nil {
 		t.Fatalf("the values: %v", err)
 	}
-	var p map[string]any
+	var p struct {
+		Subjects []struct{ Name string }
+	}
 	if err := yaml.Unmarshal([]byte(enrollPolicy("172.18.0.0/16")), &p); err != nil {
 		t.Fatalf("the policy: %v", err)
 	}
-	if strings.Contains(enrollPolicy("x"), "user:") {
-		t.Error("the policy has a human subject")
+	if len(p.Subjects) != 1 || p.Subjects[0].Name != "svc_backup" {
+		t.Errorf("the policy's subjects are %v, want svc_backup alone: a human subject declares a username, which a directory refuses", p.Subjects)
 	}
 	for _, want := range []string{"keytabSecret: " + directoryCreds, "file:/etc/port49/directory/bind_password", "ca_file: /etc/port49/directory/ca.pem"} {
 		if !strings.Contains(enrollValues, want) {

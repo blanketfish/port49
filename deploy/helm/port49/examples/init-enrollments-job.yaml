@@ -1,0 +1,82 @@
+# `port49-broker init-enrollments` as the one-off Job, run once per new deployment that has a
+# directory_password verifier (README, Admin calls). It creates the sealed enrollment store in etcd, which
+# the broker and the enrollments export (backup.enrollments) read. Run it beside a running broker: it
+# never execs into one, which may be the pod that is crash-looping.
+#
+#   kubectl apply -f init-enrollments-job.yaml
+#   kubectl -n port49 wait --for=condition=complete job/port49-init-enrollments --timeout=300s
+#   kubectl -n port49 logs job/port49-init-enrollments     # "created the enrollment store; ..."
+#
+# It mounts what the broker's pod does (the chart's port49.brokerMounts), so the names below are the
+# chart values' own: change `port49-broker` to `<release>-broker`, and the Secrets and the ConfigMap to
+# the ones you set (encryption.existingSecret, etcd.caSecret, etcd.broker.existingSecret,
+# broker.tls.existingSecret, broker.attestationRootsConfigMap, broker.directory.keytabSecret). Drop the
+# attestation volume if you set none. A second run is refused ("the enrollment store is already there")
+# and writes nothing. The Job's log holds no secret.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: port49-init-enrollments
+  namespace: port49
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch}
+      initContainers:
+        - name: state-dir
+          image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+          command: [sh, -c, "install -d -m 0700 -o 65532 -g 65532 /var/lib/port49-broker/state && chmod 0755 /var/lib/port49-broker"]
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [CHOWN, FOWNER, FSETID]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/port49-broker}
+      containers:
+        - name: init
+          image: ghcr.io/blanketfish/port49:0.1.0
+          command: [/usr/local/bin/port49-broker]
+          args: [init-enrollments, --config, /etc/port49/config/port49-broker.yaml]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: config, mountPath: /etc/port49/config, readOnly: true}
+            - {name: encryption, mountPath: /etc/port49/secrets, readOnly: true}
+            - {name: etcd-ca, mountPath: /etc/port49/etcd-ca, readOnly: true}
+            - {name: etcd-client, mountPath: /etc/port49/etcd, readOnly: true}
+            - {name: broker-tls, mountPath: /etc/port49/broker, readOnly: true}
+            - {name: attestation-roots, mountPath: /etc/port49/attestation, readOnly: true}
+            - {name: directory, mountPath: /etc/port49/directory, readOnly: true}
+            - {name: state, mountPath: /var/lib/port49-broker}
+      volumes:
+        - name: config
+          configMap: {name: port49-broker}
+        - name: encryption
+          secret: {secretName: port49-encryption, defaultMode: 0440}
+        - name: etcd-ca
+          secret: {secretName: port49-etcd-ca, defaultMode: 0440}
+        - name: etcd-client
+          secret: {secretName: port49-etcd-broker, defaultMode: 0440}
+        - name: broker-tls
+          secret: {secretName: port49-broker-tls, defaultMode: 0440}
+        - name: attestation-roots
+          configMap: {name: port49-attestation}
+        - name: directory
+          secret: {secretName: port49-directory, defaultMode: 0440}
+        - name: state
+          emptyDir: {}

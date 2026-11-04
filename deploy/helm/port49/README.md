@@ -178,7 +178,9 @@ workstation that can reach the `<release>-broker` Service.
 Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <release> -- --principal
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
 broker-0's volume, and scales back on every exit. `init-revocations` and `init-enrollments` are
-one-off Jobs, run once per new deployment. A broker already running when `init-enrollments` finishes
+one-off Jobs, run once per new deployment: `examples/init-enrollments-job.yaml` is the second (adapt its names to
+your values, then `kubectl apply -f` it and `kubectl -n <ns> wait --for=condition=complete job/port49-init-enrollments
+--timeout=300s`; the kind job `make kind-enrollments` applies that file as it stands). A broker already running when `init-enrollments` finishes
 finds the new store within 30 seconds; until then its sign-ins answer `enrollment_store_lost`.
 
 ## At 3am
@@ -283,7 +285,7 @@ enrollment store, `port49-broker export-enrollments --out FILE`; it mounts what 
 the same template). It exports the enrollment store of a `directory_password` verifier, so the chart refuses
 to render it unless `config.broker.broker.identity.humans` has one (otherwise the job would fail every night).
 The kind smoke runs the etcd snapshot job only: it has no directory, and a directory refuses the smoke's
-policy; the enrollments job runs in `make kind-enrollments` (an OpenLDAP pod, `init-enrollments`, then the Job twice: one dated 0600 file owned by 65532 each, and nothing sealed in the log). Neither the etcd nor the port49 image has a shell, so:
+policy. The enrollments job reads the sealed enrollment store in etcd (not the directory; the directory is only what the verifier's config needs to load). `make kind-enrollments` runs it against an OpenLDAP pod: `init-enrollments` as the example Job, then the export twice (a dated, non-empty, 0600 file owned by 65532 each, and an empty log), then once over a stale `enrollments.new` (the job fails and `stale-check`'s log names it). That run exported a freshly initialised store, the mark with no enrolled person: an export holding enrollments is unmeasured. Neither the etcd nor the port49 image has a shell, so:
 
 1. a `stale-check` init container fails the job when `<name>.new` is left from a run that did not
    finish (the failed pod stays, and `kubectl logs` names the file); remove it and the next run goes;

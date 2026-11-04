@@ -203,7 +203,7 @@ func TestNoExampleStoreIsOpenToEveryNamespace(t *testing.T) {
 // No pod an example makes calls the Kubernetes API except the workload CronJob, whose token is projected
 // for another audience: every other one drops the default token (review m-6).
 func TestExamplePodsDropTheServiceAccountToken(t *testing.T) {
-	for _, f := range []string{"backup-cronjob.yaml", "etcd/statefulset.yaml", "etcd/etcd-init-job.yaml"} {
+	for _, f := range []string{"backup-cronjob.yaml", "init-enrollments-job.yaml", "etcd/statefulset.yaml", "etcd/etcd-init-job.yaml"} {
 		var d doc
 		if err := yaml.Unmarshal([]byte(read(t, "deploy/helm/port49/examples/"+f)), &d); err != nil {
 			t.Fatal(err)
