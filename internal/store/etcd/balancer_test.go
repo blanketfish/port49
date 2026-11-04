@@ -4,17 +4,21 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/balancer/endpointsharding"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/status"
 )
 
 type okPicker struct{ addr string }
 
 func (p okPicker) Pick(balancer.PickInfo) (balancer.PickResult, error) {
-	return balancer.PickResult{}, nil
+	return balancer.PickResult{Metadata: metadata.Pairs("addr", p.addr)}, nil
 }
 
 func readyPicker(addrs ...string) *picker {
@@ -85,5 +89,100 @@ func TestTheChannelsPickerIsThePlacingOneOnceAConnectionIsUp(t *testing.T) {
 	}
 	if n := placingPickers.Load(); n == 0 {
 		t.Fatal("the balancer never installed its picker: endpointsharding's child states were not read (a grpc upgrade?)")
+	}
+}
+
+func clocked(p *picker, now *time.Time) *picker {
+	p.now = func() time.Time { return *now }
+	p.sus = &suspects{}
+	return p
+}
+
+func pick(t *testing.T, p *picker, ctx context.Context) (string, func(balancer.DoneInfo)) {
+	t.Helper()
+	res, err := p.Pick(balancer.PickInfo{Ctx: ctx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res.Metadata.Get("addr")[0], res.Done
+}
+
+func picksOver(t *testing.T, p *picker, n int) map[string]int {
+	t.Helper()
+	seen := map[string]int{}
+	for i := 0; i < n; i++ {
+		a, _ := pick(t, p, context.Background())
+		seen[a]++
+	}
+	return seen
+}
+
+// A member whose call hit its deadline is skipped for suspectFor and chosen
+// again after; a hedged copy cancelled after waiting suspectAfter is the same,
+// but one cancelled at once is not, nor is a call that was not hedged.
+func TestASuspectMemberIsSkippedUntilForgiven(t *testing.T) {
+	now := time.Unix(1000, 0)
+	p := clocked(readyPicker("a", "b", "c"), &now)
+	var marks int
+	f := func() { marks++ }
+	onSuspect.Store(&f)
+	defer onSuspect.Store(nil)
+
+	hedged := withTried(context.Background())
+	deadline := status.Error(codes.DeadlineExceeded, "")
+	canceled := status.Error(codes.Canceled, "")
+
+	// a cancelled hedged copy, at once: nothing
+	_, done := pick(t, p, hedged)
+	done(balancer.DoneInfo{Err: canceled})
+	// a plain call cancelled after a long wait: nothing (the caller gave up)
+	_, done = pick(t, p, context.Background())
+	now = now.Add(time.Second)
+	done(balancer.DoneInfo{Err: canceled})
+	if marks != 0 || len(picksOver(t, p, 30)) != 3 {
+		t.Fatalf("a member became suspect on a cancel that says nothing (%d marks)", marks)
+	}
+
+	// a deadline after 500 ms on whichever member was picked
+	addr, done := pick(t, p, context.Background())
+	now = now.Add(500 * time.Millisecond)
+	done(balancer.DoneInfo{Err: deadline})
+	if marks != 1 {
+		t.Fatalf("a deadline did not make %s suspect (%d marks)", addr, marks)
+	}
+	if got := picksOver(t, p, 30); got[addr] != 0 || len(got) != 2 {
+		t.Fatalf("picks after %s went suspect: %v", addr, got)
+	}
+	// still suspect just before it is forgiven, chosen again after
+	now = now.Add(suspectFor - 600*time.Millisecond)
+	if got := picksOver(t, p, 30); got[addr] != 0 {
+		t.Fatalf("%s chosen before it was forgiven: %v", addr, got)
+	}
+	now = now.Add(time.Second)
+	if got := picksOver(t, p, 30); got[addr] == 0 {
+		t.Fatalf("%s not chosen after it was forgiven: %v", addr, got)
+	}
+
+	// a hedged copy cancelled after suspectAfter makes its member suspect
+	addr, done = pick(t, p, hedged)
+	now = now.Add(suspectAfter)
+	done(balancer.DoneInfo{Err: canceled})
+	if marks != 2 {
+		t.Fatalf("a hedged copy cancelled after waiting did not make %s suspect (%d marks)", addr, marks)
+	}
+}
+
+// With every member suspect there is no better choice: all are used. A single
+// endpoint is never skipped.
+func TestWhenEveryMemberIsSuspectAllAreUsed(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, addrs := range [][]string{{"a", "b", "c"}, {"a"}} {
+		p := clocked(readyPicker(addrs...), &now)
+		for _, a := range addrs {
+			p.sus.mark(a, now)
+		}
+		if got := picksOver(t, p, 30); len(got) != len(addrs) {
+			t.Fatalf("%v all suspect: picks %v", addrs, got)
+		}
 	}
 }

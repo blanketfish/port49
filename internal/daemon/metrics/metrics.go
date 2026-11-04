@@ -129,6 +129,7 @@ type Metrics struct {
 	// store writer makes either. No labels:
 	// its key, which names a device, is in the log line beside it.
 	IndexRecordsUndecodable prometheus.Counter
+	StoreMemberSuspect      prometheus.Counter
 	// StoreKeyspaceHeld is 1 while this port49d holds its keyspace on etcd
 	// (plan 7d): 0 while it waits for another or for the store, and alarmed
 	// when port49d runs with it 0.
@@ -777,6 +778,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		IndexRecordsUndecodable: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "port49_store_index_records_undecodable_total",
 			Help: "etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted."}),
+		StoreMemberSuspect: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "port49_store_member_suspect_total",
+			Help: "Times the etcd client stopped choosing a member for a while because a call on it timed out; a climb with a member paused or cut off, flat otherwise."}),
 		StoreKeyspaceHeld: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
 			Help: "1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend)."}, nil),
 		StoreFeedUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_up",
@@ -1049,7 +1053,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines, m.SpoolSyncSeconds,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreMemberSuspect, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

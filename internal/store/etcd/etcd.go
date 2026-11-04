@@ -57,6 +57,10 @@ type Config struct {
 	// unread because they do not decode
 	// (metrics.IndexRecordsUndecodable); nil counts nothing.
 	IndexUndecodable prometheus.Counter
+	// MemberSuspect counts each time the client stops choosing a member
+	// because a call on it timed out (port49_store_member_suspect_total); nil
+	// counts nothing. It is the process's: the last store opened sets it.
+	MemberSuspect prometheus.Counter
 }
 
 // Store is store.Store on etcd.
@@ -193,6 +197,10 @@ func userOf(t *tls.Config) string {
 // newStore is a store on clients the caller owns: tests build many on one.
 func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	c = c.withDefaults()
+	if c.MemberSuspect != nil {
+		inc := c.MemberSuspect.Inc
+		onSuspect.Store(&inc)
+	}
 	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
 		clear: c.TLS == nil}
 	s.ctxKV = sawKV{KV: ctx, saw: s.saw}
