@@ -195,6 +195,19 @@ func (m matrix) clearTokens() {
 func (m matrix) dump() {
 	out, _ := m.s.try("logs", "--no-color", "--timestamps", "--tail", "120", "port49d")
 	m.s.t.Logf("port49d, last 120 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
+	// The credential filter withholds every line that says "token", the token
+	// pool's circuit lines among them; port49d logs no credential, and these
+	// lines name a pool, a failure count and the calls that fed it, so they are
+	// read raw here and nothing else is.
+	raw, _ := m.s.try("logs", "--no-color", "--timestamps", "port49d")
+	for _, line := range strings.Split(raw, "\n") {
+		if i := strings.Index(line, "circuit is "); i >= 0 && strings.Contains(line, "pool's circuit") {
+			if j := strings.Index(line, "port49d:"); j >= 0 {
+				line = logTS.FindString(line) + " " + line[j:]
+			}
+			m.s.t.Logf("guard: %.700s", line)
+		}
+	}
 	out, _ = m.s.try("logs", "--no-color", "--timestamps", "--tail", "40", "port49-broker")
 	m.s.t.Logf("port49-broker, last 40 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
 }
