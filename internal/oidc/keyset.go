@@ -316,11 +316,14 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 		s.saidStale, s.jwksURI, s.skipped = time.Time{}, uri, skipped
 	}
 	s.mu.Unlock()
-	close(ch)
-
 	iss := s.c.Issuer
 	if err != nil {
+		// counted before ch closes: a caller that sees the failure sees the count
 		s.c.M.OIDCKeysFetchFailures.WithLabelValues(iss).Inc()
+	}
+	close(ch)
+
+	if err != nil {
 		if stale {
 			s.sayStale(fetched, held, err, now)
 		}
