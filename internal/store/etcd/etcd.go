@@ -61,6 +61,9 @@ type Config struct {
 	// because a call on it timed out (port49_store_member_suspect_total); nil
 	// counts nothing. It is the process's: the last store opened sets it.
 	MemberSuspect prometheus.Counter
+	// FastFail is told the reason of each call the client refused at once
+	// (port49_store_fast_fail_total); nil counts nothing.
+	FastFail func(reason string)
 }
 
 // Store is store.Store on etcd.
@@ -166,7 +169,7 @@ func dial(c Config) (*clientv3.Client, error) {
 		Logger:               zap.NewNop(),
 		DialKeepAliveTime:    10 * time.Second,
 		DialKeepAliveTimeout: 2 * time.Second,
-		DialOptions:          append([]grpc.DialOption{grpc.WithChainUnaryInterceptor(hedgeReads)}, hedgeDialOptions...),
+		DialOptions:          append([]grpc.DialOption{grpc.WithChainUnaryInterceptor(hedgeReads, fastFails(c.FastFail))}, hedgeDialOptions...),
 		// Not RejectOldCluster: its version check asks every endpoint under
 		// DialTimeout and fails New when any one is down, quorum or not. New
 		// then never waits, and Ping's WithRequireLeader says an outage.
