@@ -472,6 +472,8 @@ var l88Refusals = map[string]string{
 	"cisco_xrd": "% Command authorization failed",
 	// tests/lab/results/L88-juniper_vsrx.md cell e: `error: unknown command: clear`
 	"juniper_vsrx": "unknown command",
+	// tests/lab/results/L88-arista_ceos.md cell e: `% Authorization denied for command 'show clock'`
+	"arista_ceos": "% Authorization denied for command",
 }
 
 func init() {
