@@ -60,3 +60,40 @@ func TestAFailedAttemptClosesTheClientsItOpened(t *testing.T) {
 		t.Fatalf("goroutines %d before, %d after %d failed attempts", before, after, attempts)
 	}
 }
+
+// An attempt against an endpoint that answers nothing fails at the TLS probe,
+// before any client is opened: a few hundred of them leave nothing running.
+func TestAnAttemptAgainstADeadEndpointLeavesNothingRunning(t *testing.T) {
+	cfgPath, _ := etcdSplit(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := *cfg.Stores.Session.Etcd
+	dead.Endpoints = []string{"https://127.0.0.1:1"}
+	cfg.Stores.Session.Etcd = &dead
+	m := metrics.New(prometheus.NewRegistry())
+	try := func() {
+		if s, err := attempt(context.Background(), cfg, sessionRef(cfg), m, io.Discard, true); err == nil {
+			s.Close()
+			t.Fatal("an attempt against a dead endpoint succeeded")
+		}
+	}
+	for i := 0; i < 5; i++ {
+		try()
+	}
+	settle := func() int {
+		for i := 0; i < 20; i++ {
+			runtime.GC()
+			time.Sleep(20 * time.Millisecond)
+		}
+		return runtime.NumGoroutine()
+	}
+	before := settle()
+	for i := 0; i < 300; i++ {
+		try()
+	}
+	if after := settle(); after > before+10 {
+		t.Fatalf("goroutines %d before, %d after 300 attempts on a dead endpoint", before, after)
+	}
+}
