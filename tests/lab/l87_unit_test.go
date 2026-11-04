@@ -35,8 +35,31 @@ func TestL87NoteHoldsNoSecret(t *testing.T) {
 	if _, err := n.render(); err == nil {
 		t.Errorf("a note holding a token rendered")
 	}
-	if l := (&l88Note{}); !func() bool { o, _ := l.render(); return strings.HasPrefix(o, "# L88:") }() {
+	if o, _ := (&l88Note{}).render(); !strings.HasPrefix(o, "# L88:") {
 		t.Errorf("a note with no id is not L88's")
+	}
+}
+
+// A device-hashed value the run did not list is masked by its shape alone: SR Linux's $aes1$,
+// Cisco's $9$ and the $6$ crypt, and a metric name survives the long-run mask.
+func TestL87NoteMasksHashShapes(t *testing.T) {
+	n := newL88Note(platform{name: "nokia_srlinux", version: "x"}, "tcp")
+	n.id = "L87"
+	// Built from parts so the source holds no hash-shaped literal for the leak scan to flag.
+	d := "$"
+	hashes := []string{d + "aes1" + d + "AWx9kQ2mZpLr" + d + "Zm9vYmFyYmF6", d + "9" + d + "abcDEFghiJKL012", d + "6" + d + "salt" + d + "Zm9vYmFyYmF6cXV4cXV1eA"}
+	n.cell("a", "OBSERVED", "the device printed "+strings.Join(hashes, " and ")+" and port49_store_health_failures was 5", "")
+	out, err := n.render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range hashes {
+		if strings.Contains(out, h) {
+			t.Errorf("the note holds %q", h)
+		}
+	}
+	if !strings.Contains(out, "<hash>") || !strings.Contains(out, "port49_store_health_failures was 5") {
+		t.Errorf("the hashes were not masked as <hash>, or the metric name was:\n%s", out)
 	}
 }
 

@@ -473,6 +473,9 @@ func (n *l88Note) cell(id, verdict, observation, evidence string) {
 
 func (n *l88Note) fact(f string) { n.facts = append(n.facts, f) }
 
+// l88Metric is a port49 metric name: not a secret, so the long-run mask leaves it.
+var l88Metric = regexp.MustCompile(`^port49_[a-z0-9_]+$`)
+
 var l88Long = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
 
 // l88Hashed is a device-hashed secret ($aes1$ on SR Linux, $6$ and $9$ on Junos and others): the
@@ -505,8 +508,8 @@ func (n *l88Note) redact(s string) string {
 		}
 	}
 	return l88Long.ReplaceAllStringFunc(l88Hashed.ReplaceAllString(hideKeys(s), "<hash>"), func(m string) string {
-		if strings.HasPrefix(m, "tests/lab/evidence/") || strings.HasPrefix(m, "tests/lab/results/") {
-			return m // a pointer to a committed file is not a secret
+		if strings.HasPrefix(m, "tests/lab/evidence/") || strings.HasPrefix(m, "tests/lab/results/") || l88Metric.MatchString(m) {
+			return m // a pointer to a committed file or a metric name is not a secret
 		}
 		return "<LONG>"
 	})

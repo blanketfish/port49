@@ -120,8 +120,9 @@ const (
 	// (Handler.Handle). It exists to measure what a device does with an ERROR
 	// there, which is the fall-through question L4 (b) asks.
 	FaultCommandError = "command_error"
-	// FaultSessionError answers every session authorization ERROR after the
-	// login authenticated normally. No production path does (a store outage
+	// FaultSessionError answers every session authorization ERROR;
+	// authentication is untouched, so a login port49 authenticated meets it
+	// (L87 c). No production path does (a store outage
 	// at session authorization is a FAIL); it exists for L87 (c), what SR
 	// Linux does with an ERROR there.
 	FaultSessionError = "session_error"

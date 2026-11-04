@@ -313,7 +313,8 @@ its derived config (never to `port49d-lab.yaml`, so a file left behind cannot fa
 run). port49d re-reads the file on every request; its trimmed contents name the fault:
 `store_unavailable` fails the store reads each handler starts with (authentication answers ERROR,
 authorization FAIL, accounting is spooled unattributed), `command_error` / `command_fail` answer
-every per-command authorization ERROR / FAIL, and anything else is no fault. It is what
+every per-command authorization ERROR / FAIL, `session_error` answers every session
+authorization ERROR (L87 c), and anything else is no fault. It is what
 `tests/lab/results/L4-error-*.md` measured with; `author.LabFault` holds the code.
 
 ## Tokens

@@ -11571,8 +11571,10 @@ L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01).
   that denies more".
 - **15. The restore guard's ERROR stands, bounded in time (Ryan, 2026-11-02).** After an etcd restore
   port49d refuses token logins until a runner's purge, and its refusal is an ERROR, which IOS XE
-  treats as final; Junos under `tacplus` alone (ruling 2) do the same; SR Linux does not, its login is refused only for a port49 user (L87 c, and break-glass logs in on an authentication ERROR, L87 a), so
-  break-glass is refused there until the brokers start and purge. The ERROR is kept: closing the
+  treats as final, and Junos under `tacplus` alone (ruling 2) does the same, so break-glass is
+  refused there until the brokers start and purge. SR Linux under `exit-on-reject true` does not:
+  break-glass logs in on an authentication ERROR while a port49 user's token login is refused (L87 a,
+  `tests/lab/results/L87-nokia_srlinux.md`). The ERROR is kept: closing the
   listener for the guard would hand every open session's commands to local authorization for the
   whole purge (measured L41 on EOS, NX-OS and both Junos images, refused only on IOS XE), a wider
   exposure than a delay that the brokers' start or one operator command ends. The escape is **stop

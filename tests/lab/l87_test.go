@@ -116,26 +116,55 @@ func l87Cells(e *l88Env) {
 	e.n.fact("`info from running system aaa authentication exit-on-reject`: " + oneLine(e.n.redact(string(out))))
 
 	faults := e.l87Daemon()
+	mark := e.l87AAAMark()
 	e.l87A(faults)
+	e.l87AAAFact("a", &mark)
 	e.l87C(faults)
+	e.l87AAAFact("c", &mark)
 	faults.set(e.t, "")
 	e.must("stopping port49d", e.l.stopDaemon())
 	e.restart() // the standing daemon, no fault switch
 	e.l87B()
-	e.n.fact("the device's own aaa log, `/var/log/srlinux/debug/sr_aaa_mgr.log`, lines naming reject, error, local, fallback or a server (last 60): " + e.l87AAALog())
+	e.l87AAAFact("b", &mark)
 }
 
-// l87AAALog is the end of SR Linux's aaa_mgr debug log, read through docker exec and filtered.
-func (e *l88Env) l87AAALog() string {
+const l87AAALogPath = "/var/log/srlinux/debug/sr_aaa_mgr.log"
+
+// l87AAAMark is how many lines SR Linux's aaa_mgr log holds now: a cell's own lines follow it.
+func (e *l88Env) l87AAAMark() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, "docker", "exec", l76Container, "sh", "-c", "wc -l < "+l87AAALogPath).Output()
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n
+}
+
+// l87AAAFact records the aaa_mgr event lines (authentication, "is down", failures, rejects, priv-lvl)
+// written since *mark, which is then moved to the end of the log: one fact per cell. Lines naming a
+// credential word are dropped before they are read.
+func (e *l88Env) l87AAAFact(cell string, mark *int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sh", "-c",
-		"grep -iE 'reject|error|local|fall|server' /var/log/srlinux/debug/sr_aaa_mgr.log | grep -viE 'password|token|secret|eyJ|payload' | tail -n 60").CombinedOutput()
+		fmt.Sprintf("tail -n +%d %s | grep -E 'sr_aaa_mgr: aaa/|Opened session| is down|fail|reject|priv-lvl' | grep -viE 'password|token|secret|eyJ|payload' | tail -n 40",
+			*mark+1, l87AAALogPath)).CombinedOutput()
+	*mark = e.l87AAAMark()
 	txt := oneLine(e.n.redact(string(out)))
 	if err != nil {
 		txt += fmt.Sprintf(" (%v)", err)
 	}
-	return txt
+	e.n.fact("the device's own aaa log (`" + l87AAALogPath + "`), the event lines written during cell " + cell + ": " + txt)
+}
+
+// l87Redeems is the verdict and reason of each redeem record for user.
+func l87Redeems(recs []map[string]any, user string) []string {
+	var out []string
+	for _, r := range recs {
+		if str(r, "event") == "redeem" && l88RecUser(r) == user {
+			out = append(out, str(r, "verdict")+" "+str(r, "reason"))
+		}
+	}
+	return out
 }
 
 // l87A: authentication answered ERROR (the lab fault switch, store_unavailable). The break-glass
@@ -148,18 +177,18 @@ func (e *l88Env) l87A(f l87Faults) {
 	outs, err := e.l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
 	bgTook := time.Since(t0)
 	bgRecs := e.l.waitForRecords(off, 10*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "redeem")) > 0 })
-	bgReasons := reasonsOf(bgRecs, "redeem")
+	bgReasons := l87Redeems(bgRecs, breakglassUser)
 
 	user, secret := e.l.nextLogin(e.t)
 	e.n.addSecret(secret)
 	_, terr, trecs, ttook := e.l87Login(user, secret, "show version")
-	tokenReasons := reasonsOf(trecs, "redeem")
+	tokenReasons := l87Redeems(trecs, user)
 
 	f.set(e.t, "")
 	_, cerr, crecs, _ := e.l87Login(user, secret, "show version")
 	control := redeemFor(crecs, user)
 
-	obs := fmt.Sprintf("authentication answered ERROR (fault switch store_unavailable). Break-glass login: %s in %s, `show version` output %s; port49 records for it: redeem %v. "+
+	obs := fmt.Sprintf("authentication answered ERROR (fault switch store_unavailable) by the first server; the second server in the device's list (172.100.100.2) is an address where nothing listens, so an ERROR from two real port49d is not measured. Break-glass login (logged in and ran a command): %s in %s, `show version` output %s; port49 records for it: redeem %v. "+
 		"A port49 user's token login: %s after %s; port49 records: redeem %v. Control, switch off, the same credential: %s, redeemed %v",
 		l88Err(err), bgTook.Round(10*time.Millisecond), firstOut(outs), bgReasons,
 		l88Err(terr), ttook.Round(10*time.Millisecond), tokenReasons, l88Err(cerr), control != nil && str(control, "verdict") == "permit")
@@ -238,9 +267,9 @@ func (e *l88Env) l87B() {
 		took := time.Since(t0)
 		recs := x.l.recordsSince(recMark)
 		resume()
-		obs := x.n.redact(fmt.Sprintf("port49d on etcd %s (pid %d, paused with SIGSTOP); port49d closed its listeners (its log) %v after %s; port49_store_health_failures was %v; "+
-			"break-glass login %s in %s, `show version` output %s; port49d records: redeem %v",
-			"v3.6.15", pid, wentDark, darkAfter.Round(100*time.Millisecond), gauge, l88Err(err), took.Round(10*time.Millisecond), firstOut(outs), reasonsOf(recs, "redeem")))
+		obs := x.n.redact(fmt.Sprintf("port49d on etcd %s (pid %d, paused with SIGSTOP); port49d closed its listeners (its log) %v after %s; the store health failures gauge (port49_store_health_failures) was %v; "+
+			"break-glass login (logged in and ran a command) %s in %s, `show version` output %s; port49d records: redeem %v",
+			"v3.6.15", pid, wentDark, darkAfter.Round(100*time.Millisecond), gauge, l88Err(err), took.Round(10*time.Millisecond), firstOut(outs), l87Redeems(recs, breakglassUser)))
 
 		// Back to a healthy store, as L88 c and d do.
 		time.Sleep(15 * time.Second)
