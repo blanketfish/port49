@@ -314,6 +314,9 @@ func Verify(raw, out []byte, opt Options) error {
 	if err != nil {
 		return fmt.Errorf("output: %w", err)
 	}
+	if err := checkTLSOpens(outF); err != nil {
+		return fmt.Errorf("output: %w", err)
+	}
 	if len(outD.Gaps) > 0 {
 		return fmt.Errorf("output has %d stream(s) with a sequence gap (%s)", len(outD.Gaps), strings.Join(outD.Gaps, ", "))
 	}
@@ -490,10 +493,18 @@ func checkTLSOpens(f *File) error {
 	for _, r := range f.Records {
 		pkt := f.Bytes(r)
 		fl, ok := FlowOf(f.Link, pkt)
-		if !ok || (fl.SrcPort != TLSPort && fl.DstPort != TLSPort) || fl.PayloadLen == 0 {
+		if !ok || (fl.SrcPort != TLSPort && fl.DstPort != TLSPort) {
 			continue
 		}
 		k := fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)
+		if fl.SYN() { // a new connection on a reused 4-tuple is checked from its start
+			delete(seen, k)
+			delete(seen, fmt.Sprintf("%s:%d>%s:%d", fl.Dst, fl.DstPort, fl.Src, fl.SrcPort))
+			continue
+		}
+		if fl.PayloadLen == 0 {
+			continue
+		}
 		if seen[k] {
 			continue
 		}
