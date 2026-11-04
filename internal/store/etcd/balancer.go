@@ -4,12 +4,15 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/balancer/endpointsharding"
 	"google.golang.org/grpc/balancer/pickfirst"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/status"
 )
 
 // balancerName is the load-balancing policy the client dials with: round-robin
@@ -46,6 +49,10 @@ type tried struct {
 	// two legs of a watch (twoleg.go) sit on different members.
 	peer *tried
 	last atomic.Value // string: the member the latest pick chose
+	// hedged marks the copies of a hedged call (withTried): a copy of it
+	// cancelled after waiting is a suspect member. A leg of a watch, ended by
+	// the watch itself, is not.
+	hedged bool
 }
 
 // lastMember is the member the latest pick chose, "" before any.
@@ -56,7 +63,7 @@ func (t *tried) lastMember() string {
 
 // withTried marks ctx as one hedged call's: its copies are placed apart.
 func withTried(ctx context.Context) context.Context {
-	return context.WithValue(ctx, triedKey{}, &tried{used: map[string]bool{}})
+	return context.WithValue(ctx, triedKey{}, &tried{used: map[string]bool{}, hedged: true})
 }
 
 // withTriedSet places ctx's calls apart by t, which outlives them: a
@@ -90,6 +97,7 @@ func (b *hedgeBalancer) UpdateClientConnState(ccs balancer.ClientConnState) erro
 type hedgeCC struct {
 	balancer.ClientConn
 	next atomic.Uint32
+	sus  suspects
 }
 
 func (c *hedgeCC) UpdateState(s balancer.State) {
@@ -101,7 +109,7 @@ func (c *hedgeCC) UpdateState(s balancer.State) {
 			}
 		}
 		if len(ready) > 0 {
-			s.Picker = &picker{ready: ready, next: &c.next}
+			s.Picker = &picker{ready: ready, next: &c.next, sus: &c.sus}
 			placingPickers.Add(1)
 		}
 	}
@@ -112,18 +120,115 @@ func (c *hedgeCC) UpdateState(s balancer.State) {
 // if a grpc upgrade stops them being.
 var placingPickers atomic.Int64
 
+// A member is suspect for suspectFor after a call on it hit its deadline, or a
+// hedged copy on it was cancelled after waiting suspectAfter (another copy
+// had answered): its connection is up and its answers are not coming, and
+// stays so until keepalive fails it, 10 to 12 s on. The picker skips a suspect
+// member unless that would leave none, so a call that is not re-sent (a mint,
+// a lease call) does not keep landing on it, one call in three, for those
+// seconds.
+const (
+	suspectFor   = 15 * time.Second
+	suspectAfter = 100 * time.Millisecond
+)
+
+// suspects is the channel's suspect members, by address, and when each is
+// forgiven.
+type suspects struct {
+	mu    sync.Mutex
+	until map[string]time.Time
+}
+
+func (s *suspects) is(addr string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return now.Before(s.until[addr])
+}
+
+// mark reports whether addr was not already suspect.
+func (s *suspects) mark(addr string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.until == nil {
+		s.until = map[string]time.Time{}
+	}
+	fresh := !now.Before(s.until[addr])
+	s.until[addr] = now.Add(suspectFor)
+	return fresh
+}
+
+// onSuspect is told each time a member becomes suspect
+// (port49_store_member_suspect_total). It is the process's: stores opened in
+// one process share the last one set.
+var onSuspect atomic.Pointer[func()]
+
 type picker struct {
 	ready []endpointsharding.ChildState
 	next  *atomic.Uint32 // the rotation, kept across the pickers of one channel
+	sus   *suspects
+	now   func() time.Time
+}
+
+func (p *picker) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
-	n := len(p.ready)
+	now := p.clock()
+	cands := p.ready
+	if p.sus != nil {
+		cands = make([]endpointsharding.ChildState, 0, len(p.ready))
+		for _, k := range p.ready {
+			if !p.sus.is(k.Endpoint.Addresses[0].Addr, now) {
+				cands = append(cands, k)
+			}
+		}
+		if len(cands) == 0 {
+			cands = p.ready // every member suspect: no better choice
+		}
+	}
+	n := len(cands)
 	start := int(p.next.Add(1) % uint32(n))
 	t, _ := info.Ctx.Value(triedKey{}).(*tried)
-	if t == nil {
-		return p.ready[start].State.Picker.Pick(info)
+	k := cands[start]
+	if t != nil {
+		k = p.placed(cands, start, t)
 	}
+	res, err := k.State.Picker.Pick(info)
+	if err != nil || p.sus == nil {
+		return res, err
+	}
+	addr, hedgedCopy, t0, inner := k.Endpoint.Addresses[0].Addr, t != nil && t.hedged, now, res.Done
+	res.Done = func(di balancer.DoneInfo) {
+		if inner != nil {
+			inner(di)
+		}
+		waited := p.clock().Sub(t0)
+		switch status.Code(di.Err) {
+		case codes.DeadlineExceeded:
+		case codes.Canceled:
+			if !hedgedCopy {
+				return
+			}
+		default:
+			return
+		}
+		if waited >= suspectAfter && p.sus.mark(addr, p.clock()) {
+			if f := onSuspect.Load(); f != nil {
+				(*f)()
+			}
+		}
+	}
+	return res, nil
+}
+
+// placed is the member among cands for a call with a tried-set: the first
+// from start that no earlier copy (or peer) has used.
+func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) endpointsharding.ChildState {
+	n := len(cands)
 	avoid := ""
 	if t.peer != nil {
 		avoid = t.peer.lastMember()
@@ -134,17 +239,17 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 		t.used = map[string]bool{}
 	}
 	for j := 0; j < n; j++ {
-		k := p.ready[(start+j)%n]
+		k := cands[(start+j)%n]
 		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 			t.used[addr] = true
 			t.last.Store(addr)
-			return k.State.Picker.Pick(info)
+			return k
 		}
 	}
-	// Every ready member has had a copy: begin again.
-	k := p.ready[start]
+	// Every candidate has had a copy: begin again.
+	k := cands[start]
 	addr := k.Endpoint.Addresses[0].Addr
 	t.last.Store(addr)
 	t.used = map[string]bool{addr: true}
-	return k.State.Picker.Pick(info)
+	return k
 }

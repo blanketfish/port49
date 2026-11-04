@@ -872,7 +872,7 @@ func openIdentity(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 	proc := procOf(cfg)
 	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": "+ref.what()+": "+format+"\n", args...) }
 	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace, CallTimeout: e.CallTimeout,
-		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
+		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable, MemberSuspect: m.StoreMemberSuspect})
 	if err != nil {
 		return nil, nil, &storeFault{fmt.Errorf("%s.%s: %w", at, name, err)}
 	}

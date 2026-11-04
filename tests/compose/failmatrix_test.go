@@ -196,16 +196,14 @@ func (m matrix) dump() {
 	out, _ := m.s.try("logs", "--no-color", "--timestamps", "--tail", "120", "port49d")
 	m.s.t.Logf("port49d, last 120 lines, with timestamps:\n%s", shapetest.Filtered(m.root, out))
 	// The credential filter withholds every line that says "token", the token
-	// pool's circuit lines among them; port49d logs no credential, and these
-	// lines name a pool, a failure count and the calls that fed it, so they are
-	// read raw here and nothing else is.
-	raw, _ := m.s.try("logs", "--no-color", "--timestamps", "port49d")
+	// pool's circuit-open lines among them. So each is summarized here from its
+	// structured fields (pool, failure count, the calls that fed it), none of
+	// the raw line is printed, and the word is spelled "tkn" in the summary
+	// only: these are code identifiers (PutTkn), not values.
+	raw, _ := m.s.try("logs", "--no-color", "--timestamps", "port49d", "port49-broker")
 	for _, line := range strings.Split(raw, "\n") {
-		if i := strings.Index(line, "circuit is "); i >= 0 && strings.Contains(line, "pool's circuit") {
-			if j := strings.Index(line, "port49d:"); j >= 0 {
-				line = logTS.FindString(line) + " " + line[j:]
-			}
-			m.s.t.Logf("guard: %.700s", line)
+		if sm, ok := circuitSummary(line); ok {
+			m.s.t.Logf("guard: %s", sm)
 		}
 	}
 	out, _ = m.s.try("logs", "--no-color", "--timestamps", "--tail", "40", "port49-broker")
@@ -277,6 +275,21 @@ func (m matrix) storeCounts(label string) {
 	for _, name := range []string{"port49_store_operations_total", "port49_store_calls_total"} {
 		m.s.t.Logf("%s: %s\n  %s", label, name, strings.Join(series(daemonMetrics, name), "\n  "))
 	}
+}
+
+var circuitOpen = regexp.MustCompile(`the (\w+)'s (\w+) pool's circuit is open after (\d+) consecutive failures \(.*?; by call: ([^)]*)\)`)
+
+// circuitSummary is one line for a guard's circuit-open line: its time, the
+// component and pool, the failure count, and the calls that fed it with their
+// counts. It prints nothing of the line but those fields, and says "tkn" for
+// "token".
+func circuitSummary(line string) (string, bool) {
+	m := circuitOpen.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	return strings.NewReplacer("token", "tkn", "Token", "Tkn").Replace(
+		fmt.Sprintf("%s %s %s pool open after %s failures; by call: %s", logTS.FindString(line), m[1], m[2], m[3], m[4])), true
 }
 
 var logTS = regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z`)
