@@ -13,7 +13,7 @@ var prefixTag = regexp.MustCompile(`(?m)^\[pod/[^\]]+\] ?`)
 // certWarning is the one line a successful export may log: the product's warning that the broker's etcd
 // certificate is near its end (the stack's certificates last a day). Anchored, and its date has no characters
 // a credential would need.
-var certWarning = regexp.MustCompile(`^port49-broker: directory store: the broker's etcd certificate \(CN=port49-broker\) is valid until [0-9A-Za-z:+ .,-]+ \(\d+ days?\)$`)
+var certWarning = regexp.MustCompile(`^port49-broker: directory store: the broker's etcd certificate \(CN=port49-broker\) is valid until \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \(\d+ days?\)$`)
 
 // unexpectedLines is the lines of a log, tags off, that are not certWarning, joined; "" when there are none.
 func unexpectedLines(log string) string {

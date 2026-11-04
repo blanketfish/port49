@@ -3,9 +3,9 @@
 # the broker and the enrollments export (backup.enrollments) read. Run it beside a running broker: it
 # never execs into one, which may be the pod that is crash-looping.
 #
-#   kubectl apply -f init-enrollments-job.yaml
-#   kubectl -n port49 wait --for=condition=complete job/port49-init-enrollments --timeout=300s
-#   kubectl -n port49 logs job/port49-init-enrollments     # "created the enrollment store; ..."
+#   kubectl -n <namespace> apply -f init-enrollments-job.yaml
+#   kubectl -n <namespace> wait --for=condition=complete job/port49-init-enrollments --timeout=300s
+#   kubectl -n <namespace> logs job/port49-init-enrollments     # "created the enrollment store; ..."
 #
 # It mounts what the broker's pod does (the chart's port49.brokerMounts), so the names below are the
 # chart values' own: change `port49-broker` to `<release>-broker`, and the Secrets and the ConfigMap to
@@ -17,7 +17,6 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: port49-init-enrollments
-  namespace: port49
 spec:
   backoffLimit: 0
   template:

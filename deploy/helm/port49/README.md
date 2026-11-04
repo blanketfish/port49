@@ -179,8 +179,8 @@ Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <relea
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
 broker-0's volume, and scales back on every exit. `init-revocations` and `init-enrollments` are
 one-off Jobs, run once per new deployment: `examples/init-enrollments-job.yaml` is the second (adapt its names to
-your values, then `kubectl apply -f` it and `kubectl -n <ns> wait --for=condition=complete job/port49-init-enrollments
---timeout=300s`; the kind job `make kind-enrollments` applies that file as it stands). A broker already running when `init-enrollments` finishes
+your values, then `kubectl -n <ns> apply -f` it and `kubectl -n <ns> wait --for=condition=complete job/port49-init-enrollments
+--timeout=300s`; the kind job `make kind-enrollments` applies that file with only the image and the release's ConfigMap name changed, in the namespace `-n` names). A broker already running when `init-enrollments` finishes
 finds the new store within 30 seconds; until then its sign-ins answer `enrollment_store_lost`.
 
 ## At 3am

@@ -200,7 +200,9 @@ func TestEnrollmentsExportRuns(t *testing.T) {
 	for _, p := range []string{"t-broker-0", "t-broker-1"} {
 		s.c.WaitReady(ns, p, 4*time.Minute)
 	}
-	s.c.Apply(s.example(filepath.Join(s.chart, "examples", "init-enrollments-job.yaml")))
+	if _, err := s.c.KubectlTry(s.example(filepath.Join(s.chart, "examples", "init-enrollments-job.yaml")), "-n", ns, "apply", "-f", "-"); err != nil {
+		t.Fatal(err)
+	}
 	if got := s.jobOutcome("port49-init-enrollments", 5*time.Minute); got != "succeeded" {
 		t.Fatalf("the init-enrollments Job %s:\n%s", got, shapetest.Filtered(s.root, s.c.PodReport(ns, jobPod(s, "port49-init-enrollments"))))
 	}

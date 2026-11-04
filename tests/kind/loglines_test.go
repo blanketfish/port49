@@ -10,6 +10,7 @@ func TestUnexpectedLinesAllowsOnlyTheCertificateWarning(t *testing.T) {
 		{"nothing", "", ""},
 		{"a different line", "[pod/x/export] " + warn + "\nbroker: exported 3 records\n", "broker: exported 3 records"},
 		{"a credential word", "[pod/x/export] " + warn + "\nthe password is hunter2\n", "the password is hunter2"},
+		{"an alphanumeric date", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until abc123 (0 days)", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until abc123 (0 days)"},
 		{"the line with a credential word in its date", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until password=x (0 days)", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until password=x (0 days)"},
 	} {
 		if got := unexpectedLines(c.log); got != c.want {
