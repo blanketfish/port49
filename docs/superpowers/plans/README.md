@@ -8336,13 +8336,11 @@ a signature, a bound) already rules that out, and what it costs an operator at 3
 restored tokens, though every restored token is dead within the max `token_ttl` (15m) of the
 snapshot. Plan 12c bounds the guard by the token records' latest expiry.
 
-Carried to the pre-beta review (2026-11-04): whether the store retry after a store gone should be 1 s
-rather than 5 s (`storeAttemptEvery`, `internal/port49d/store.go`). Today the listeners open up to 5 s
-after etcd answers, then after `open_after` passes (compose `store_hangs` failed on this twice in CI;
-its bound now allows one failed attempt plus the 5 s). A 1 s retry reopens sooner for devices that
-are on local auth meanwhile, but each outage line (`not answering ... waiting`) would repeat every
-second; the loop would have to say the outage once and then count, and an attempt's TLS probe and
-`Ping` to three members once a second is the other cost.
+Decided 2026-11-04 (Ryan's lead): the wait for the store after a store gone, and a cold start's, retries every
+1 s (`storeAttemptEvery`, `internal/port49d/store.go`), saying an outage once and again only when it changes;
+compose `store_hangs` failed twice in CI on the old 5 s. The other 5 s loops are untouched and carried to the
+pre-beta review as candidates: `startRetryWait` (the broker's start), the runner's hold, and the broker's late
+directory open (spec 11186).
 
 ## Plan 13 — User and admin documentation
 

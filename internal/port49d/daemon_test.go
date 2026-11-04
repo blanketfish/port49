@@ -242,7 +242,7 @@ func TestAnIdleDaemonGoesDarkOnItsHealthChecks(t *testing.T) {
 	daemonCfg, proxy := etcdSplit(t)
 	addUnderEtcd(t, daemonCfg, "    health: {interval: 200ms, close_after: 3, open_after: 2}\n")
 	tacacs := startSplitDaemon(t, daemonCfg, &out, 1)
-	waitFor(t, &out, "every listener closes after 3 consecutive failed checks; after that the store is tried every 5s, and the listeners open again once an attempt succeeds and 2 health checks pass")
+	waitFor(t, &out, "every listener closes after 3 consecutive failed checks and opens again after 2 passes")
 	held, err := net.DialTimeout("tcp", tacacs, time.Second)
 	if err != nil {
 		t.Fatal(err)

@@ -40,7 +40,7 @@ const (
 	electionTimeout = time.Second            // etcd's default --election-timeout (the compose stack sets none)
 	breakerOpenFor  = 5 * time.Second        // etcd.breaker.open_for default
 	storeAttempt    = 4 * callTimeout        // one attempt's Ping bound (port49d's attempt, store.go)
-	storeRetry      = 5 * time.Second        // port49d's storeAttemptEvery: the wait between attempts after a store gone
+	storeRetry      = time.Second            // port49d's storeAttemptEvery: the wait between attempts after a store gone
 	tacacsAddr      = "127.0.0.1:49"
 	daemonMetrics   = "127.0.0.1:9049"
 	brokerMetrics   = "127.0.0.1:9050"
@@ -407,10 +407,11 @@ func TestFailureMatrix(t *testing.T) {
 	// may fail at its bound (storeAttempt); the next is storeRetry later, and
 	// succeeds within a second or so (twice callTimeout), after which the
 	// listeners open after openAfter passes. slack is the poll and a docker
-	// call. Measured failures (compose runs 41836570465 and 41892380205): the
-	// first attempt failed 2.3 s after it began and the next came 5 s on. The
+	// call. Measured failures (compose runs 41836570465 and 41892380205, when
+	// the retry was 5 s): the first attempt failed 2.3 s after it began. The
 	// first version of this bound, openAfter passes plus 2 s, held only
-	// while the first attempt succeeded.
+	// while the first attempt succeeded; no retry makes a failed first
+	// attempt (2 s) plus a retry, an attempt and the passes fit in 5.5 s.
 	// store_stopped adds the members' own start and election, which the pause does not have.
 	// It kills the members rather than stopping them: etcd's graceful stop took
 	// 7s or more in CI, so port49d had closed its listener before `stop` returned
