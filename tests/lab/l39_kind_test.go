@@ -286,11 +286,11 @@ func (r *l39Run) cellB(t *testing.T, cell *l82.Cell, policy string, atPodNode bo
 	which := "the node running the pod"
 	if !atPodNode {
 		which = "a worker not running the pod"
-		for _, w := range r.workers {
-			if w != node {
-				node = w
-			}
+		other, err := l39.OtherWorker(r.workers, node)
+		if err != nil {
+			t.Fatal(err)
 		}
+		node = other
 	}
 	time.Sleep(5 * time.Second) // kube-proxy programs the change
 	l82Row(cell, "externalTrafficPolicy", policy)

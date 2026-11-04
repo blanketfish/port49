@@ -167,6 +167,27 @@ func Addrs(a []string) string {
 	return strings.Join(a, ", ")
 }
 
+// OtherWorker is the worker that does not run the pod. It is an error unless exactly one worker is
+// not the pod's node: a pod on a node that is not a worker, or a cluster of another size, is not the
+// shape the cells are written for. (Run 41862464658 dialled the pod's own node for b2 and b4: the
+// harness reassigned its target inside the loop, so a pod on the last worker was picked again.)
+func OtherWorker(workers []string, pod string) (string, error) {
+	other := ""
+	for _, w := range workers {
+		if w == pod {
+			continue
+		}
+		if other != "" {
+			return "", fmt.Errorf("l39: more than one worker is not the pod's node")
+		}
+		other = w
+	}
+	if other == "" || len(workers) != 2 {
+		return "", fmt.Errorf("l39: no single worker other than the pod's node among %d", len(workers))
+	}
+	return other, nil
+}
+
 // HostNetwork is the lab-only change that puts port49d on its node's network, as a JSON patch of the
 // StatefulSet's pod template (`kubectl patch --type=json`). It lives here and never in deploy/helm: the
 // chart offers no host networking (spec §13 decision 54 ruling 5). ClusterFirstWithHostNet keeps the

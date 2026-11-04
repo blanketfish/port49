@@ -134,3 +134,20 @@ func TestB4RendersObservedWithTheSource(t *testing.T) {
 		t.Errorf("no source recorded:\n%s", out)
 	}
 }
+
+func TestOtherWorkerIsNeverThePodsNode(t *testing.T) {
+	ws := []string{"w1", "w2"}
+	for pod, want := range map[string]string{"w1": "w2", "w2": "w1"} {
+		if got, err := OtherWorker(ws, pod); err != nil || got != want {
+			t.Errorf("pod on %s: other is %q, %v; want %q", pod, got, err, want)
+		}
+	}
+	for _, c := range []struct {
+		ws  []string
+		pod string
+	}{{ws, "cp"}, {[]string{"w1"}, "w1"}, {[]string{"w1", "w2", "w3"}, "w1"}} {
+		if got, err := OtherWorker(c.ws, c.pod); err == nil {
+			t.Errorf("%v with the pod on %s gave %q", c.ws, c.pod, got)
+		}
+	}
+}
