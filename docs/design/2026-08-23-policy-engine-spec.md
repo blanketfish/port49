@@ -11547,9 +11547,13 @@ each says so; ruling 9 was measured in L90. Rulings 16 and 17 are the lead's and
 - **10. Velero** is named in the chart README only if L89 passes. The example uses file-system backup
   (the node agent), because kind has no snapshot-capable CSI driver; CSI snapshots stay unmeasured
   and unnamed. The backup holds the issuing CA's private key (`state/issuing-ca.key`), the broker's
-  state and the accounting spool, and the example and the L89 note say so. Its repository password
-  comes from a Secret, never the well-known default, and its README requires bucket encryption and
-  access limited to the backup's own credentials. *Provisional on L89.*
+  state and the accounting spool, and the example and the L89 note say so. The bucket also holds the
+  namespaces' Secrets as Velero reads them, unencrypted by Velero (the TACACS+ keys, the store's
+  encryption key, the etcd CA and client identities, the TLS key): the repository key protects only the
+  volumes, and the example and the note say that too. Its repository password comes from a Secret created
+  before Velero is installed, never the well-known default (Velero writes the default into that Secret
+  itself when it finds none), and its README requires bucket encryption and access limited to the
+  backup's own credentials. *Provisional on L89.*
 - **11. The failure matrix runs on the compose stack with mock devices.** A §12 row the stack cannot
   reach is not re-measured. Every design §12 row gets evidence (design §14: "every row of the failure
   matrix"): a subtest, an existing named test, or a closed lab row (directory unavailable: L42, L43,

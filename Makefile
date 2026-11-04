@@ -744,7 +744,7 @@ lab-l89: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VELERO_BIN=$(CURDIR)/bin/velero-v$(VELERO_VERSION) \
 	  VELERO_VERSION=$(VELERO_VERSION) VELERO_IMAGE=$(VELERO_IMAGE) VELERO_AWS_PLUGIN_IMAGE=$(VELERO_AWS_PLUGIN_IMAGE) \
 	  OBJECT_STORE_IMAGE=$(OBJECT_STORE_IMAGE) PORT49_LAB_OUT=$(LAB_OUT)/l89 \
-	  PORT49_LAB_L89=1 go test -tags lab ./tests/lab/ -run '^TestL89$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  PORT49_LAB_L89=1 go test -tags lab ./tests/lab/ -run '^TestL89$$' -count=1 -v -timeout 55m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l89; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`

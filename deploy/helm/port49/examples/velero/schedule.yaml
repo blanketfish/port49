@@ -8,16 +8,24 @@
 # volume, which holds the accounting spool. Whoever can read the bucket and the repository key can issue
 # certificates this deployment trusts. See README.md for the bucket requirements.
 #
+# THE BUCKET ALONE HOLDS MORE. Velero encrypts only the volume data, under the repository key. The
+# namespaces' Secrets are stored in the bucket as Velero reads them: the TACACS+ keys, the store's
+# encryption key, the etcd CA and client identities, and the TLS key. Read access to the bucket is enough
+# to take them. Protect the bucket like the CA key.
+#
 # The repository key (Velero's repository password) comes from the Secret `velero-repo-credentials`,
-# key `repository-password`, in the `velero` namespace, made before the first backup (README.md). Velero
-# falls back to a well-known default when the Secret is absent, so a backup made first is encrypted with
-# a key everyone knows.
+# key `repository-password`, in the `velero` namespace. Velero's default is a well-known static value,
+# and Velero writes that Secret itself when it starts and finds none: create yours BEFORE installing
+# Velero, and before applying this file (README.md). `skipImmediately` keeps this file from starting a
+# backup the moment it is applied; the first one runs on the schedule.
 #
 # The volumes selected are the chart's two PVC sets, which carry the StatefulSets' selector labels:
 #   app.kubernetes.io/name=port49, app.kubernetes.io/instance=<release>, app.kubernetes.io/component=broker
 #   app.kubernetes.io/name=port49, app.kubernetes.io/instance=<release>, app.kubernetes.io/component=port49d
-# The whole namespace is backed up, not those labels alone: the Secrets and ConfigMaps the pods mount,
-# and etcd, are in it, and a restore without them starts nothing.
+# The whole namespaces are backed up, not those labels alone: the Secrets and ConfigMaps the pods mount
+# are in `port49`, and etcd is in `port49-etcd` where the shipped examples/etcd puts it (the kind lab
+# runs both in one namespace). A restore without them starts nothing. If your etcd is elsewhere, name that
+# namespace here, or restore etcd from its own snapshot (backup-cronjob.yaml) and say so in your runbook.
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:
@@ -25,7 +33,8 @@ metadata:
   namespace: velero
 spec:
   schedule: "23 2 * * *"
+  skipImmediately: true
   template:
-    includedNamespaces: [port49]
+    includedNamespaces: [port49, port49-etcd]
     defaultVolumesToFsBackup: true
     ttl: 336h0m0s

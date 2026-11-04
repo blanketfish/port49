@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
@@ -31,8 +32,9 @@ const (
 )
 
 // l89Fence is what the fence's refusals say: the broker's and port49d's data directory writable by a
-// group (internal/config), and the owner init's refusal of a volume not owned by uid 65532.
-var l89Fence = regexp.MustCompile(`writable by its group or others|not owned by uid 65532`)
+// group or owned by the wrong uid (internal/config, internal/fence), and the two init containers' refusals
+// (templates/_helpers.tpl: a symlink, a volume not owned by uid 65532, a chmod that failed).
+var l89Fence = regexp.MustCompile(`data-dir(-owner)?: |writable by its group or others|is owned by uid|not owned by uid 65532`)
 
 // TestL89 measures spec §15 L89: a Velero file-system backup (node agent) of a chart release's volumes,
 // on kind with an S3-compatible store in the cluster. `make lab-l89` runs it in CI (lab-kind.yml); kind
@@ -85,8 +87,9 @@ func TestL89(t *testing.T) {
 	}()
 
 	stack := kindstack.BringUp(t, "port49l89")
-	r := &l89Run{t: t, env: env, stack: stack, dir: t.TempDir()}
+	r := &l89Run{t: t, env: env, stack: stack, dir: t.TempDir(), out: out}
 	r.installStoreAndVelero()
+	r.first = &cells[0]
 	stack.Run(t, "a_backup_delete_restore", func(t *testing.T) { r.cellA(t, &cells[0]) })
 	stack.Run(t, "b_mint_and_login", func(t *testing.T) { r.cellB(t, &cells[1]) })
 }
@@ -96,6 +99,9 @@ type l89Run struct {
 	env   *l89.Env
 	stack *kindstack.Stack
 	dir   string // a 0700 temp directory: the credential files live here
+	out   string // the results directory: the diagnosis of a failed cell goes here
+	first *l82.Cell
+	key   string // the generated repository key, compared with the cluster's and never printed
 }
 
 func l89Env(t *testing.T) *l89.Env {
@@ -226,22 +232,72 @@ spec:
 		return exec.Command("curl", "-K", kfile).Run() == nil
 	})
 
-	r.velero("install", "--provider", "aws", "--plugins", os.Getenv("VELERO_AWS_PLUGIN_IMAGE"), "--image", os.Getenv("VELERO_IMAGE"),
-		"--bucket", l89Bucket, "--secret-file", r.file("velero-credentials", creds),
-		"--backup-location-config", "region="+l89Region+",s3ForcePathStyle=true,s3Url=http://seaweed."+l89Store+".svc:8333",
-		"--use-node-agent", "--default-volumes-to-fs-backup", "--use-volume-snapshots=false", "--wait")
-	c.Kubectl("-n", "velero", "rollout", "status", "daemonset/node-agent", "--timeout=5m")
-
-	// The repository key, from a Secret, before the first backup (ruling 10): Velero's default is well known.
+	// The repository key first (ruling 10): Velero writes its well-known default into this Secret itself
+	// when it starts and finds none, and a repository made under that key keeps it.
 	key, err := l89.Random(32)
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.key = key
+	c.Kubectl("create", "namespace", "velero")
 	c.Kubectl("-n", "velero", "create", "secret", "generic", "velero-repo-credentials", "--from-file=repository-password="+r.file("repository-password", key))
+
+	// no --default-volumes-to-fs-backup: the example Schedule's own setting is what is tested
+	r.velero("install", "--provider", "aws", "--plugins", os.Getenv("VELERO_AWS_PLUGIN_IMAGE"), "--image", os.Getenv("VELERO_IMAGE"),
+		"--bucket", l89Bucket, "--secret-file", r.file("velero-credentials", creds),
+		"--backup-location-config", "region="+l89Region+",s3ForcePathStyle=true,s3Url=http://seaweed."+l89Store+".svc:8333",
+		"--use-node-agent", "--use-volume-snapshots=false", "--wait")
+	c.Kubectl("-n", "velero", "rollout", "status", "daemonset/node-agent", "--timeout=5m")
+	r.checkRepositoryKey()
 	shapetest.WaitFor(t, "the backup location to be available", 3*time.Minute, func() bool {
 		ph, err := c.KubectlTry("", "-n", "velero", "get", "backupstoragelocation", "default", "-o", "jsonpath={.status.phase}")
 		return err == nil && strings.TrimSpace(ph) == "Available"
 	})
+}
+
+// checkRepositoryKey fails unless the Secret holds the generated key. The comparison is made here and
+// nothing of either value is printed.
+func (r *l89Run) checkRepositoryKey() {
+	t := r.t
+	t.Helper()
+	b64 := r.stack.Cluster().Kubectl("-n", "velero", "get", "secret", "velero-repo-credentials", "-o", `jsonpath={.data.repository-password}`)
+	got, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	if err != nil || string(got) != r.key {
+		t.Fatalf("the repository key in the cluster is not the one this run generated (decode error: %v)", err)
+	}
+}
+
+// diagnose keeps what explains a failed backup or restore, each piece through Scrub and the standard
+// filter: Velero's own descriptions and logs, the pod volume operations' messages, and the server's and
+// node agent's logs. No Secret is read, and the velero namespace is still never dumped.
+func (r *l89Run) diagnose() {
+	t := r.t
+	c := r.stack.Cluster()
+	var b strings.Builder
+	add := func(what, out string) { fmt.Fprintf(&b, "== %s\n%s\n", what, l89.Scrub(kindtest.Filter(out))) }
+	vel := func(args ...string) string {
+		full := append([]string{"--kubeconfig", c.Kubeconfig, "--kubecontext", c.Context(), "-n", "velero"}, args...)
+		out, _ := exec.Command(os.Getenv("VELERO_BIN"), full...).CombinedOutput()
+		return string(out)
+	}
+	add("velero backup describe --details", vel("backup", "describe", l89Backup, "--details"))
+	add("velero backup logs", vel("backup", "logs", l89Backup))
+	add("velero restore describe --details", vel("restore", "describe", l89Restore, "--details"))
+	add("velero restore logs", vel("restore", "logs", l89Restore))
+	for _, kind := range []string{"podvolumebackups", "podvolumerestores"} {
+		out, _ := c.KubectlTry("", "-n", "velero", "get", kind, "-o",
+			`jsonpath={range .items[*]}{.metadata.name} {.status.phase} {.spec.pod.name} {.spec.volume}: {.status.message}{"\n"}{end}`)
+		add(kind, out)
+	}
+	for _, sel := range []string{"component=velero"} { // the server and the node agent
+		out, _ := c.KubectlTry("", "-n", "velero", "logs", "-l", sel, "--all-containers=true", "--tail=300", "--prefix=true")
+		add("logs of "+sel, out)
+	}
+	text := b.String()
+	if err := os.MkdirAll(r.out, 0o755); err == nil {
+		_ = os.WriteFile(filepath.Join(r.out, "l89-diagnosis.txt"), []byte(text), 0o644)
+	}
+	t.Logf("L89 diagnosis (scrubbed):\n%s", text)
 }
 
 // chart's volumes and the paths whose owner, group and mode the cell records.
@@ -276,14 +332,33 @@ func (r *l89Run) snapshot() (map[string][]l89.Stat, []string) {
 
 func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	c, ns := r.stack.Cluster(), r.stack.Namespace()
+	defer func() {
+		if t.Failed() || cell.Verdict != l82.Pass {
+			r.diagnose()
+		}
+	}()
+	r.checkRepositoryKey()
+	l82Row(cell, "the repository key in the cluster is the one generated for this run", "yes")
 	before, fpBefore := r.snapshot()
+	logBefore := l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
 		t.Fatalf("the brokers do not hold one CA before the backup")
 	}
 
 	// the chart's example, as shipped
-	example := filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero", "schedule.yaml")
-	c.Kubectl("apply", "-f", example)
+	// but for etcd's namespace: the kind stack runs etcd in the release's (l89.LabSchedule)
+	shipped, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero", "schedule.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sched, err := l89.LabSchedule(string(shipped))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.KubectlTry(sched, "apply", "-f", "-"); err != nil {
+		t.Fatal(err)
+	}
+	l82Row(cell, "the lab's etcd shares the release's namespace", "yes: the Schedule names both namespaces, the lab applies it with the one")
 	r.velero("backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
 	phase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
 	l82Row(cell, "the backup's phase", phase)
@@ -291,7 +366,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 		t.Fatalf("the backup ended %s: nothing to restore", phase)
 	}
 	// which volumes the node agent backed up, by pod and volume name, and how
-	pvb := c.Kubectl("-n", "velero", "get", "podvolumebackups", "-o",
+	pvb := c.Kubectl("-n", "velero", "get", "podvolumebackups", "-l", "velero.io/backup-name="+l89Backup, "-o",
 		`jsonpath={range .items[*]}{.status.phase} {.spec.pod.name} {.spec.volume}{"\n"}{end}`)
 	data, all := 0, 0
 	for _, ln := range strings.Split(strings.TrimSpace(pvb), "\n") {
@@ -306,12 +381,12 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	}
 	r.env.VolumeBackups = fmt.Sprintf("%d of the chart's 4 data volumes, %d in all", data, all)
 	l82Row(cell, "pod volume backups completed", r.env.VolumeBackups)
-	if data != 4 {
-		t.Fatalf("the node agent backed up %d of the chart's 4 data volumes", data)
+	if data == 0 || data != len(l89Volumes) {
+		t.Fatalf("the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
 	}
 
 	// delete the namespace, and wait for its volumes to go before restoring over the names
-	c.Kubectl("delete", "namespace", ns, "--wait=true", "--timeout=10m")
+	c.Kubectl("delete", "namespace", ns, "--wait=true", "--timeout=5m")
 	shapetest.WaitFor(t, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
 		out, err := c.KubectlTry("", "get", "pv", "-o", `jsonpath={range .items[*]}{.spec.claimRef.namespace}{"\n"}{end}`)
 		return err == nil && !strings.Contains(out, ns)
@@ -326,7 +401,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	a := l89.A{FingerprintBefore: l89.Short(fpBefore[0])}
 	ready := true
 	for _, sts := range []string{"statefulset/t-broker", "statefulset/t-port49d"} {
-		if _, err := c.KubectlTry("", "-n", ns, "rollout", "status", sts, "--timeout=10m"); err != nil {
+		if _, err := c.KubectlTry("", "-n", ns, "rollout", "status", sts, "--timeout=8m"); err != nil {
 			ready = false
 			l82Row(cell, sts+" became ready", "no")
 		}
@@ -355,6 +430,10 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	if ready {
 		after, fpAfter := r.snapshot()
 		a.FingerprintAfter = l89.Short(fpAfter[0])
+		a.LogBefore = logBefore
+		a.LogAfter = l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
+		l82Row(cell, "the fingerprint the broker's \"issuing as\" line prints (first 12), before and after",
+			fmt.Sprintf("%s, %s", l89.Short(a.LogBefore), l89.Short(a.LogAfter)))
 		same := fpAfter[0] == fpBefore[0] && fpAfter[1] == fpBefore[1]
 		if !same {
 			a.FingerprintAfter = "changed: " + l89.Short(fpAfter[0])
@@ -378,6 +457,17 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 }
 
 func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
+	// a restore that was never read leaves this cell NOT RUN, which fails the test: FAIL is a measured answer
+	read := false
+	for _, row := range r.first.Rows {
+		if row.Case == "the restore's phase" {
+			read = true
+		}
+	}
+	if !read {
+		t.Errorf("cell (a) never read a restore, so a mint and a login after one cannot be measured")
+		return
+	}
 	// FAIL stands until both succeed: a refused mint ends the subtest in shapetest.Mint
 	cell.Verdict = l82.Fail
 	broker := r.stack.Forward("svc/"+r.stack.Release()+"-broker", 8443)

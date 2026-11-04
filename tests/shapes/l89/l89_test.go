@@ -123,34 +123,52 @@ func TestTheVeleroExampleBacksUpBothStatefulSets(t *testing.T) {
 	var sch struct {
 		Kind string `yaml:"kind"`
 		Spec struct {
-			Template struct {
-				IncludedNamespaces       []string `yaml:"includedNamespaces"`
-				DefaultVolumesToFsBackup bool     `yaml:"defaultVolumesToFsBackup"`
-			} `yaml:"template"`
+			SkipImmediately bool           `yaml:"skipImmediately"`
+			Template        map[string]any `yaml:"template"`
 		} `yaml:"spec"`
 	}
 	text := example(t, "schedule.yaml")
 	if err := yaml.Unmarshal([]byte(text), &sch); err != nil {
 		t.Fatal(err)
 	}
+	tpl := sch.Spec.Template
 	if sch.Kind != "Schedule" {
 		t.Errorf("kind %q", sch.Kind)
 	}
-	if !sch.Spec.Template.DefaultVolumesToFsBackup {
+	if tpl["defaultVolumesToFsBackup"] != true {
 		t.Error("the Schedule does not back volumes up by file system (defaultVolumesToFsBackup: true)")
 	}
-	if len(sch.Spec.Template.IncludedNamespaces) != 1 {
-		t.Errorf("includedNamespaces %v", sch.Spec.Template.IncludedNamespaces)
-	}
-	// the chart's PVC labels, as the StatefulSets' selectors give them, named for both components
-	for _, c := range []string{"component=broker", "component=port49d"} {
-		if !strings.Contains(text, "app.kubernetes.io/name=port49") || !strings.Contains(text, c) {
-			t.Errorf("the example does not name the %s volumes' label selector", c)
+	// the whole namespaces, never a label selector: the Secrets, ConfigMaps and etcd would be left out
+	for _, k := range []string{"labelSelector", "orLabelSelectors"} {
+		if _, ok := tpl[k]; ok {
+			t.Errorf("the template has %s: a restore without the Secrets and etcd starts nothing", k)
 		}
 	}
-	for _, want := range []string{"issuing-ca.key", "PRIVATE key"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("the example does not say that the backup holds %q", want)
+	ns, _ := tpl["includedNamespaces"].([]any)
+	if len(ns) != 2 || ns[0] != "port49" || ns[1] != "port49-etcd" {
+		t.Errorf("includedNamespaces %v, want the release's and the shipped etcd example's", ns)
+	}
+	if !sch.Spec.SkipImmediately {
+		t.Error("applying the file starts a backup at once")
+	}
+}
+
+func TestTheVeleroExampleSaysWhatItHolds(t *testing.T) {
+	text := example(t, "schedule.yaml")
+	for _, c := range []string{"component=broker", "component=port49d"} {
+		if !strings.Contains(text, "app.kubernetes.io/name=port49") || !strings.Contains(text, c) {
+			t.Errorf("the example does not name the %s volumes' labels", c)
+		}
+	}
+	readme := example(t, "README.md")
+	for _, f := range []string{text, readme} {
+		for _, want := range []string{"issuing-ca.key", "TACACS+ keys", "Read access to the bucket is enough", "BEFORE"} {
+			if !strings.Contains(f, want) {
+				t.Errorf("a file lacks %q", want)
+			}
+		}
+		if strings.Contains(f, "when the Secret is absent") {
+			t.Error("a file says the default is used when the Secret is absent: Velero writes it into the Secret")
 		}
 	}
 }
@@ -169,7 +187,9 @@ func TestTheVeleroExampleNamesARepositoryPassword(t *testing.T) {
 		"the spool":         "accounting spool",
 		"bucket encryption": "must be encrypted",
 		"access limited to the backup's own credentials": "limited to the backup's own credentials",
-		"the well-known default":                         "default is well\n   known",
+		"the order, Secret before install":               "created before velero is installed",
+		"the order, Secret before the Schedule":          "apply `schedule.yaml` only after step 1",
+		"the well-known default":                         "well-known static value",
 	} {
 		if !strings.Contains(lower, strings.ToLower(want)) {
 			t.Errorf("the README does not state %s (%q)", what, want)
@@ -177,5 +197,67 @@ func TestTheVeleroExampleNamesARepositoryPassword(t *testing.T) {
 	}
 	if strings.Contains(readme, "--from-literal") || strings.Contains(readme, "static-passw0rd") {
 		t.Error("the README puts a password on a command line or names the default as a value")
+	}
+}
+
+func TestBrokerLogFingerprintMustMatch(t *testing.T) {
+	a := A{Ready: true, FingerprintBefore: "ab", FingerprintAfter: "ab", LogBefore: "SHA256:xyz", LogAfter: "SHA256:xyz"}
+	if JudgeA(a) != l82.Pass {
+		t.Error("the same logged fingerprint is not a PASS")
+	}
+	a.LogAfter = "SHA256:other"
+	if JudgeA(a) != l82.Fail {
+		t.Error("a different logged fingerprint is not a FAIL")
+	}
+	a.LogAfter = ""
+	if JudgeA(a) != l82.Fail {
+		t.Error("a fingerprint printed before and not after is not a FAIL")
+	}
+	a.LogBefore = ""
+	if JudgeA(a) != l82.Pass {
+		t.Error("a broker that printed none before falls back to the file's")
+	}
+	logs := "x\nissuance: issuing as CN=port49 (lab) (SHA256:abc), valid until 2027-01-01\n"
+	if got := LogFingerprint(logs); got != "SHA256:abc" {
+		t.Errorf("LogFingerprint = %q", got)
+	}
+	if LogFingerprint("nothing here") != "" {
+		t.Error("a log with no line gives a fingerprint")
+	}
+}
+
+func TestScrubDropsCredentialLinesAndLongRuns(t *testing.T) {
+	in := "ok line\nthe password is x\nSecret thing\nBearer eyJhbGci\nkey " + strings.Repeat("a", 30) + " end\n"
+	got := Scrub(in)
+	if strings.Contains(got, "password") || strings.Contains(got, "Secret") || strings.Contains(got, "eyJ") || strings.Contains(got, strings.Repeat("a", 24)) {
+		t.Errorf("not scrubbed: %q", got)
+	}
+	if !strings.Contains(got, "ok line") || !strings.Contains(got, "key <LONG> end") {
+		t.Errorf("over-scrubbed: %q", got)
+	}
+}
+
+func TestLabSchedulePutsEtcdInTheReleaseNamespace(t *testing.T) {
+	got, err := LabSchedule(example(t, "schedule.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "includedNamespaces: [port49]\n") || strings.Contains(got, "port49-etcd]") {
+		t.Errorf("not folded:\n%s", got)
+	}
+	if _, err := LabSchedule("includedNamespaces: [port49]"); err == nil {
+		t.Error("a file without the shipped line is accepted")
+	}
+}
+
+func TestL89ResultsSayWhatTheBucketHolds(t *testing.T) {
+	out, err := Results(Env{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"issuing-ca.key", "in the clear", "TACACS+ keys", "protects only the volumes"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the results do not say %q", want)
+		}
 	}
 }
