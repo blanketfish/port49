@@ -304,6 +304,14 @@ entries:
     env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
     timeout_minutes: 90
     notes: [tests/lab/results/L49-oxidized-cisco_iosxe.md]
+  - id: L90
+    measured_minutes: 3.2
+    run: '^TestL90$'
+    platforms: eos
+    rows: [L90]
+    env: {PORT49_LAB_REMEASURE: "L90,L90-oxidized"}
+    timeout_minutes: 60
+    notes: [tests/lab/results/L90-oxidized-arista_eos.md]
   - id: L53
     measured_minutes: 28.6
     run: '^TestL53HostKeyScan$'

@@ -7453,8 +7453,8 @@ when Task 14's review found a security-relevant device fact.
   - Fleet mode: a reload that changes the answer clears only the changed keys (§5.1.3), which is why the
     fleet asserts no `projection_fail_closed` in any phase.
 - **Lab.**
-  - **`make lab-regress` in full: 733.6 minutes** (the sum of the 59 `measured_minutes` in
-    `tests/lab/regress.yaml`, Task 4's first run plus the L35, L37, L66, L79 and L80 entries; the first
+  - **`make lab-regress` in full: 736.8 minutes** (the sum of the 60 `measured_minutes` in
+    `tests/lab/regress.yaml`, Task 4's first run plus the L35, L37, L66, L79, L80 and L90 entries; the first
     full run took 723.5 minutes of passing entries and about 18 h 45 min of wall time with NX-OS boot
     retries). Slowest: L34 (103), L36 (67), L22 (44). Routine use needs `-only=` subsets.
   - **`TestQual`'s wall time: 11.1 s** (Task 14's final run, all ten platforms then vetted); `make qual`
@@ -7783,7 +7783,7 @@ reference config waits on the measurement.
   port49 was never asked; port49 now offers single-connect and the device honors it
   (`tests/lab/results/L80-cisco_nxos.md`). A §12 warning or
   refusing those logins is no longer pending (resolved above).
-- The pre-beta review runs `make lab-regress` in full (733.6 minutes).
+- The pre-beta review runs `make lab-regress` in full (736.8 minutes).
 
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
 required. Supporting every shape well matters for adoption. So "supported" means each shape has:
