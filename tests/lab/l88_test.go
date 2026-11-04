@@ -142,6 +142,8 @@ func (e *l88Env) cells(transport string, ids []string) {
 			}
 		case "f2":
 			e.cellF2()
+		case "f3":
+			e.cellF3()
 		case "e":
 			e.cellE()
 		case "f":
@@ -1072,4 +1074,108 @@ func (e *l88Env) debugRead() string {
 		fmt.Fprintf(&b, "(the debug read failed: %s)\n", e.n.redact(err.Error()))
 	}
 	return b.String()
+}
+
+// cellF3 (MEASURED, IOS XE): a 3am sequence. port49d's first address is down (resetting every
+// connection), the second answers, and an operator has just used break-glass with port49d
+// stopped. The break-glass session stays open 60 s; token logins run every 10 s for up to 5
+// minutes. It records when the first reached the second server, what the user saw until
+// then, whether ending the session cleared it, and the device's state at the first failure.
+func (e *l88Env) cellF3() {
+	e.must("stopping port49d", e.l.stopDaemon())
+	c, err := l88Opener(e.l.p)(e.l)
+	e.must("opening the break-glass CLI", err)
+	run := func(cmd string) string {
+		out, err := c.sendExpect(cmd, 90*time.Second, "xe1#")
+		if err != nil {
+			out += "\n(" + err.Error() + ")"
+		}
+		return out
+	}
+	run("terminal length 0")
+	run("debug tacacs")
+	cmds := []string{"show version", "show clock", "show ip interface brief", "show tacacs", "show processes | include TACACS"}
+	for _, cmd := range cmds {
+		run(cmd)
+	}
+	base, err := e.l.configPath()
+	e.must("reading the standing config", err)
+	raw, err := os.ReadFile(base)
+	e.must("reading the standing config", err)
+	cfg, err := l73SetLine(string(raw), "listen: ", `listen: "`+net.JoinHostPort(l88Servers[1], "49")+`"`)
+	e.must("moving the listener", err)
+	path := filepath.Join(root, "tests", "lab", "logs", "port49d-l88f3-"+e.l.p.name+".yaml")
+	e.must("writing the config", os.WriteFile(path, []byte(cfg), 0o644))
+	healthListen = net.JoinHostPort(l88Servers[1], "49")
+	serr := e.l.startDaemonWith(path, true)
+	healthListen = ""
+	e.must("starting port49d on the second address", serr)
+	rst, err := l88ResetListener(l88Servers[0], "49")
+	e.must("the resetting listener", err)
+	defer func() {
+		rst.stop()
+		e.must("stopping the second-address daemon", e.l.stopDaemon())
+		e.restart()
+	}()
+	user, secret := e.l.nextLogin(e.t)
+	e.n.addSecret(secret)
+	stopCap := e.l.capture(e.t, "L88-f3")
+	defer stopCap()
+	mark := e.l.mark()
+	var b strings.Builder
+	fmt.Fprintf(&b, "break-glass session ran %d commands with port49d stopped; port49d was then started on the second address (%s) while the first (%s) reset every connection; the session stayed open 60 s\n", len(cmds), l88Servers[1], l88Servers[0])
+	t0 := time.Now()
+	closedAt := time.Duration(-1)
+	reached := time.Duration(-1)
+	atFirstFailure := ""
+	for time.Since(t0) < 5*time.Minute {
+		at := time.Since(t0)
+		if closedAt < 0 && at >= 60*time.Second {
+			c.Close()
+			c = nil
+			closedAt = at
+			fmt.Fprintf(&b, "+%s: the break-glass session was closed\n", at.Round(time.Second))
+		}
+		off := e.l.mark()
+		_, terr := e.l.loginWithin(user, secret, 20*time.Second, "show version")
+		recs := e.l.waitForRecords(off, 5*time.Second, func(rs []map[string]any) bool { return redeemFor(rs, user) != nil })
+		seen := redeemFor(recs, user) != nil
+		fmt.Fprintf(&b, "+%s: one-time-credential login: %s; port49 saw it: %v\n", at.Round(time.Second), e.n.redact(l88Err(terr)), seen)
+		if terr != nil && atFirstFailure == "" && c != nil {
+			var fb strings.Builder
+			for _, cmd := range []string{"show tacacs", "show logging | include Authentication start|Using server|Opening TCP|Socket I/O|Choosing next"} {
+				out := run(cmd)
+				lines := strings.Split(e.n.redact(l88Evidence(out)), "\n")
+				if len(lines) > 80 {
+					lines = lines[len(lines)-80:]
+				}
+				fmt.Fprintf(&fb, "`%s`:\n%s\n", cmd, strings.Join(lines, "\n"))
+			}
+			atFirstFailure = fb.String()
+		}
+		if terr == nil && seen {
+			reached = at
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+	end := time.Now()
+	if c != nil {
+		c.Close()
+	}
+	e.l.flushCapture(e.t)
+	wire := l88Wire(e.l, t0, end)
+	after := e.afterEvidenceWith("show logging | include Authentication start|Using server|Opening TCP|Socket I/O|Choosing next")
+	verdict := fmt.Sprintf("the first one-time-credential login that reached the second server came at +%s", reached.Round(time.Second))
+	if reached < 0 {
+		verdict = "no one-time-credential login reached the second server within 5 minutes"
+	}
+	closed := "the break-glass session was closed at +" + closedAt.Round(time.Second).String()
+	if closedAt < 0 {
+		closed = "the break-glass session was never closed in the loop"
+	}
+	recs := e.l.recordsSince(mark)
+	e.n.cell("f3", "MEASURED", verdict+"; "+closed,
+		b.String()+"\ndevice state at the first failed login (read over the still-open session):\n"+atFirstFailure+
+			"\n"+summarize(recs)+"\nthe wire (headers only):\n"+wire+"\n"+after)
 }

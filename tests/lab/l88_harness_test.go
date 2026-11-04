@@ -48,7 +48,7 @@ func l88Cells(sel string, tls bool) []string {
 	cells := []string{"a", "b", "c", "d", "e", "f"}
 	if !tls && l88PlatformOf(sel) == "cisco_iosxe" {
 		// f2: what an IOS XE does after a break-glass session ran with port49d down.
-		cells = append(cells, "f2")
+		cells = append(cells, "f2", "f3")
 	}
 	if tls || !l88L29[sel] {
 		cells = append(cells, "g")
