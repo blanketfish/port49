@@ -843,3 +843,33 @@ func TestTheStaleLineNamesTheProcessToRestart(t *testing.T) {
 		}
 	}
 }
+
+// Run is the key set's lifetime: when it returns, nothing of the key set is
+// still running, so a fetch in flight at shutdown is ended and writes nothing
+// afterwards (port49d's state_dir is removed once the broker has stopped; a
+// late oidc-*.json broke TempDir cleanup, "directory not empty").
+func TestAFetchInFlightWhenRunEndsWritesNothingAfterwards(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	kp := newKeep()
+	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: metrics.New(prometheus.NewRegistry()), Save: kp.Save})
+	arrived, release := iss.Hold()
+	ctx, cancel := context.WithCancel(context.Background())
+	ran := make(chan struct{})
+	go func() { ks.Run(ctx); close(ran) }()
+	<-arrived // the first fetch is at the provider
+	cancel()
+	select {
+	case <-ran:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+	release()
+	time.Sleep(300 * time.Millisecond)
+	kp.mu.Lock()
+	n := kp.n
+	kp.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("the key set saved %d file(s) after Run returned", n)
+	}
+}
