@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -608,6 +608,14 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 	bin/gitleaks-$(GITLEAKS_VERSION) git $(GITLEAKS_FLAGS) --log-opts=HEAD .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --pre-commit $(GITLEAKS_FLAGS) .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
+
+# The index only: what .githooks/pre-commit runs on every commit.
+leaks-staged: bin/gitleaks-$(GITLEAKS_VERSION)
+	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
+
+# Once per clone: every worktree of it then runs .githooks/pre-commit.
+hooks:
+	git config core.hooksPath .githooks
 
 # The fsGroup cell's red run: the same install with the first design's 2755 volume root, by the
 # test-only post-renderer. The test PASSES only when the kubelet's walk
