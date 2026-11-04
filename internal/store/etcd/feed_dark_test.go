@@ -19,12 +19,24 @@ type legTrace_ struct {
 	begun time.Time
 	mu    sync.Mutex
 	lines []string
+	apart bool   // the last placement put the legs on different members
+	last  string // the last placement's detail, for a failure message
 }
 
 func traceLegs(t *testing.T) *legTrace_ {
 	tr := &legTrace_{begun: time.Now()}
 	hook := func(ev string, leg, gen int, detail string) {
 		tr.note("leg %d opening %d: %s %s", leg, gen, ev, detail)
+		tr.mu.Lock()
+		defer tr.mu.Unlock()
+		switch ev {
+		case "together":
+			tr.apart, tr.last = false, detail
+		case "open": // "on A, the other on B"
+			if a, b, ok := strings.Cut(strings.TrimPrefix(detail, "on "), ", the other on "); ok {
+				tr.apart, tr.last = a != "" && b != "" && a != b, detail
+			}
+		}
 	}
 	legTrace.Store(&hook)
 	t.Cleanup(func() { legTrace.Store(nil) })
@@ -35,6 +47,28 @@ func (tr *legTrace_) note(format string, args ...any) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	tr.lines = append(tr.lines, fmt.Sprintf("+%v ", time.Since(tr.begun).Round(time.Millisecond))+fmt.Sprintf(format, args...))
+}
+
+// waitApart waits up to d for the legs to be placed on different members, and
+// fails the test naming where they are if they are not: a test of a member
+// going dark needs the legs apart, which a watch that began with one member
+// ready reaches only after its relocation wait.
+func (tr *legTrace_) waitApart(t *testing.T, d time.Duration) {
+	t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		tr.mu.Lock()
+		ok := tr.apart
+		tr.mu.Unlock()
+		if ok {
+			tr.note("legs apart")
+			return
+		}
+	}
+	tr.mu.Lock()
+	last := tr.last
+	tr.mu.Unlock()
+	tr.dump(t)
+	t.Fatalf("the legs were not on different members within %v (last placement: %s)", d, last)
 }
 
 func (tr *legTrace_) dump(t *testing.T) {
@@ -276,6 +310,7 @@ func TestAFeedFollowsTheLastTrustedMemberGoingDarkWhileTheOthersAreSuspect(t *te
 	if !delivered("warm", 5*time.Second) {
 		t.Fatal("the watch delivered nothing on a healthy cluster")
 	}
+	tr.waitApart(t, 6*time.Second)
 	for _, i := range []int{0, 1} { // each is hung until a call on it has timed out, then answers again
 		ps[i].Hang(true)
 		for n := 0; n < 30; n++ {
