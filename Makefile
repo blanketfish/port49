@@ -296,6 +296,7 @@ lab-l84-systemd: smoke-keyhost packages
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
 
 lab-l84-host:
+	@test "$$GITHUB_ACTIONS" = true -a "$$RUNNER_ENVIRONMENT" = github-hosted || { echo "INVALID: TestL84Host changes the machine's users and units; it runs only on a GitHub-hosted runner"; exit 2; }
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-host CELLS_OUT=/path/cells.json"; exit 2; }
 	PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT)) go test -tags systemdhost ./tests/systemd/ -run '^TestL84Host$$' -count=1 -v -timeout 20m
 

@@ -36,6 +36,9 @@ import (
 //
 // The keys are generated here and written through stdin; nothing prints them.
 func TestL84Host(t *testing.T) {
+	if !sdtest.HostedRunner(os.Getenv) {
+		t.Fatal("INVALID: TestL84Host changes the machine's users and units; it runs only on a GitHub-hosted runner")
+	}
 	out := os.Getenv("PORT49_L84_CELLS_OUT")
 	if out == "" {
 		t.Fatal("INVALID: PORT49_L84_CELLS_OUT names the JSON file the cells are added to")

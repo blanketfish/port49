@@ -945,3 +945,28 @@ func TestReportDescribesTheDirectoryAndTheFileAndNeverTheBytes(t *testing.T) {
 		t.Errorf("a refusal is reported as its category only:\n%s", bad)
 	}
 }
+
+func TestHostedRunnerIsOnlyAGitHubHostedRunner(t *testing.T) {
+	env := func(kv ...string) func(string) string {
+		m := map[string]string{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return func(k string) string { return m[k] }
+	}
+	for name, tc := range map[string]struct {
+		get  func(string) string
+		want bool
+	}{
+		"hosted":            {env("GITHUB_ACTIONS", "true", "RUNNER_ENVIRONMENT", "github-hosted"), true},
+		"self-hosted":       {env("GITHUB_ACTIONS", "true", "RUNNER_ENVIRONMENT", "self-hosted"), false},
+		"actions unset":     {env("RUNNER_ENVIRONMENT", "github-hosted"), false},
+		"environment unset": {env("GITHUB_ACTIONS", "true"), false},
+		"a dev box":         {env(), false},
+		"actions false":     {env("GITHUB_ACTIONS", "false", "RUNNER_ENVIRONMENT", "github-hosted"), false},
+	} {
+		if got := HostedRunner(tc.get); got != tc.want {
+			t.Errorf("%s: HostedRunner = %v, want %v", name, got, tc.want)
+		}
+	}
+}

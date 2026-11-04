@@ -81,3 +81,9 @@ func describe(fi fs.FileInfo, path string) string {
 	}
 	return fmt.Sprintf("owner %s mode %s acl=%s", owner, fi.Mode().String(), acl)
 }
+
+// HostedRunner reports whether getenv describes a GitHub-hosted runner, the only machine
+// TestL84Host may run on: it creates a system user, writes keys under /etc and installs units.
+func HostedRunner(getenv func(string) string) bool {
+	return getenv("GITHUB_ACTIONS") == "true" && getenv("RUNNER_ENVIRONMENT") == "github-hosted"
+}
