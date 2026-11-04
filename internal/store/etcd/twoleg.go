@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
@@ -177,6 +178,9 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 				}
 				l.heard = time.Now()
 				r := m.resp
+				if len(r.Events) > 0 {
+					traceLeg("events", m.leg, m.gen, fmt.Sprintf("through revision %d", r.Events[len(r.Events)-1].Kv.ModRevision))
+				}
 				saw(r.Header.Revision)
 				if err := r.Err(); err != nil {
 					if r.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {
@@ -261,6 +265,17 @@ type clientLegs struct {
 	ctxs     [2]context.Context
 }
 
+// legTrace, when set by a test, is told each opening of a leg (with the member
+// it was placed on) and each response of events a leg delivers (with their
+// highest revision, never a key or a value). Nil in production.
+var legTrace atomic.Pointer[func(ev string, leg, gen int, detail string)]
+
+func traceLeg(ev string, leg, gen int, detail string) {
+	if f := legTrace.Load(); f != nil {
+		(*f)(ev, leg, gen, detail)
+	}
+}
+
 func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
 	tr := &tried{used: map[string]bool{}}
 	if prev := c.trs[i]; prev != nil && prev.lastMember() != "" {
@@ -279,6 +294,11 @@ func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan c
 	for end := time.Now().Add(300 * time.Millisecond); tr.lastMember() == "" && time.Now().Before(end); {
 		time.Sleep(5 * time.Millisecond)
 	}
+	peer := ""
+	if p := c.trs[1-i]; p != nil {
+		peer = p.lastMember()
+	}
+	traceLeg("open", i, gen, "on "+tr.lastMember()+", the other on "+peer)
 	return ch, cancel
 }
 

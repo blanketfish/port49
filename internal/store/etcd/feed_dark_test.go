@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -118,6 +119,20 @@ func TestAContextWatchIsLeftAloneWhileEveryMemberIsDark(t *testing.T) {
 // reaches the process at once, whichever member the feed's legs were on.
 func TestTheMarksFeedFollowsWhicheverMemberGoesDark(t *testing.T) {
 	s, _, ps := threeBehindProxies(t)
+	// What a failed round needs to name its cause: where each leg was placed
+	// and reopened, when each leg delivered, and how long the write took. It is
+	// logged only when a round fails, and holds revisions and members, no keys.
+	begun := time.Now()
+	var tmu sync.Mutex
+	var trace []string
+	note := func(format string, args ...any) {
+		tmu.Lock()
+		defer tmu.Unlock()
+		trace = append(trace, fmt.Sprintf("+%v ", time.Since(begun).Round(time.Millisecond))+fmt.Sprintf(format, args...))
+	}
+	hook := func(ev string, leg, gen int, detail string) { note("leg %d opening %d: %s %s", leg, gen, ev, detail) }
+	legTrace.Store(&hook)
+	t.Cleanup(func() { legTrace.Store(nil) })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var mu sync.Mutex
@@ -166,9 +181,17 @@ func TestTheMarksFeedFollowsWhicheverMemberGoesDark(t *testing.T) {
 	for i, p := range ps {
 		name := fmt.Sprintf("dark%d", i)
 		p.Hang(true)
+		note("member %d hung", i)
+		putStart := time.Now()
 		put(name)
+		note("%s written in %v", name, time.Since(putStart).Round(time.Millisecond))
 		if !delivered(name, 1500*time.Millisecond) {
 			t.Errorf("member %d dark: the marks feed had not brought a mark written after it went dark in 1.5s", i)
+			tmu.Lock()
+			t.Logf("placement and delivery since the test began:\n  %s", strings.Join(trace, "\n  "))
+			tmu.Unlock()
+		} else {
+			note("%s delivered", name)
 		}
 		p.Hang(false)
 		time.Sleep(3 * time.Second)
