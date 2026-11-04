@@ -138,7 +138,7 @@ func Read(path string, max int64, what string) ([]byte, error) {
 // must be ours. Naming any user but this process's or root, any group it is not in, anyone with
 // write, or other with anything is refused (acl_linux.go); on the directory, only a write entry is.
 // A file with group:: empty and only this process's user named (the shape systemd's
-// LoadCredential= is expected to render; L84 measures it) is accepted. An unparseable ACL is refused.
+// LoadCredential= renders, measured in L84 on systemd 255: tests/lab/results/L84-systemd-docker.md) is accepted. An unparseable ACL is refused.
 // NFSv4 and CIFS ACLs are not read: there the mode rule alone applies.
 // No error carries the file's bytes.
 func ReadSecret(path, within string, max int64) ([]byte, error) {

@@ -1,0 +1,98 @@
+[
+  {
+    "ID": "a",
+    "Title": "",
+    "Verdict": "INVALID",
+    "Rows": [
+      {
+        "Case": "systemd",
+        "Observation": "systemd 257 (257.13-1~deb13u1)"
+      },
+      {
+        "Case": "what systemd renders: User=port49d with LoadCredential= only (l84-bare)",
+        "Observation": "start result: success status 0 ; Starting l84-bare.service... ; CREDENTIALS_DIRECTORY=[/run/credentials/l84-bare.service] ; cred_dir=no ; cred_file=no ; ls: cannot access '/run/credentials/*': No such file or directory ; drwxr-xr-x 2 0 0 40 Nov 4 23:12 /run/credentials ; ls: cannot access '/run/credentials/l84-bare.service': No such file or directory ; uid=996(port49d) gid=996(port49d) groups=996(port49d) ; l84-bare.service: Deactivated successfully. ; Finished l84-bare.service."
+      },
+      {
+        "Case": "what systemd renders: the shipped port49d.service's hardening, same LoadCredential= (l84-hard)",
+        "Observation": "start result: success status 0 ; Starting l84-hard.service - port49 TACACS+ server... ; CREDENTIALS_DIRECTORY=[/run/credentials/l84-hard.service] ; cred_dir=no ; cred_file=no ; ls: cannot access '/run/credentials/*': No such file or directory ; drwxr-xr-x 2 0 0 40 Nov 4 23:12 /run/credentials ; ls: cannot access '/run/credentials/l84-hard.service': No such file or directory ; uid=996(port49d) gid=996(port49d) groups=996(port49d) ; l84-hard.service: Deactivated successfully. ; Finished l84-hard.service - port49 TACACS+ server."
+      },
+      {
+        "Case": "verdict",
+        "Observation": "INVALID: the platform renders no credentials (l84-bare): systemd sets CREDENTIALS_DIRECTORY and the directory or file is not there; port49d was not started with it"
+      }
+    ]
+  },
+  {
+    "ID": "c-systemd",
+    "Title": "",
+    "Verdict": "INVALID",
+    "Rows": [
+      {
+        "Case": "state",
+        "Observation": "INVALID: the platform renders no credentials (l84-bare)"
+      }
+    ]
+  },
+  {
+    "ID": "a-host",
+    "Title": "",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "the machine",
+        "Observation": "Ubuntu 24.04.5 LTS; systemd 255 (255.4-1ubuntu8.18); kernel 7.0.0-1017-azure; PID 1 is systemd"
+      },
+      {
+        "Case": "properties applied",
+        "Observation": "24 [Service] properties of the shipped port49d.service (User=, Group=, the hardening), less ExecStart, ExecReload, Restart, RestartSec, Type; plus LoadCredential=tacacs_v1"
+      },
+      {
+        "Case": "reference: User=port49d, no hardening",
+        "Observation": "CREDENTIALS_DIRECTORY=/run/credentials/run-u218.service ; process: uid=999 gid=987 ; read: ok ; dir: owner 0:0 mode dr-xr-x--- acl=user::r-x, user:999:r-x, group::---, mask::r-x, other::--- ; file: owner 0:0 mode -r--r----- acl=user::r--, user:999:r--, group::---, mask::r--, other::--- ; systemd-run: Main processes terminated with: code=exited/status=0"
+      },
+      {
+        "Case": "first start, the shipped unit's shape",
+        "Observation": "CREDENTIALS_DIRECTORY=/run/credentials/run-u219.service ; process: uid=999 gid=987 ; read: ok ; dir: owner 0:0 mode dr-xr-x--- acl=user::r-x, user:999:r-x, group::---, mask::r-x, other::--- ; file: owner 0:0 mode -r--r----- acl=user::r--, user:999:r--, group::---, mask::r--, other::--- ; systemd-run: Main processes terminated with: code=exited/status=0"
+      },
+      {
+        "Case": "second start",
+        "Observation": "CREDENTIALS_DIRECTORY=/run/credentials/run-u220.service ; process: uid=999 gid=987 ; read: ok ; dir: owner 0:0 mode dr-xr-x--- acl=user::r-x, user:999:r-x, group::---, mask::r-x, other::--- ; file: owner 0:0 mode -r--r----- acl=user::r--, user:999:r--, group::---, mask::r--, other::--- ; systemd-run: Main processes terminated with: code=exited/status=0"
+      }
+    ]
+  },
+  {
+    "ID": "c-host",
+    "Title": "",
+    "Verdict": "FAIL",
+    "Rows": [
+      {
+        "Case": "the machine",
+        "Observation": "Ubuntu 24.04.5 LTS; systemd 255 (255.4-1ubuntu8.18); kernel 7.0.0-1017-azure; PID 1 is systemd"
+      },
+      {
+        "Case": "the long-running unit, one credential",
+        "Observation": "active; in its credentials directory: tacacs_v1: present ; tacacs_v2: absent"
+      },
+      {
+        "Case": "systemctl set-property LoadCredential= (the second credential)",
+        "Observation": "refused by systemctl: Failed to set unit properties on l84-long.service: Cannot set property LoadCredential, or unknown property. (exit 1)"
+      },
+      {
+        "Case": "after the drop-in and daemon-reload, no restart: the manager's LoadCredential= for the unit names the second credential",
+        "Observation": "no"
+      },
+      {
+        "Case": "the second file in the running unit's credentials directory within 30 s",
+        "Observation": "no; now: tacacs_v1: present ; tacacs_v2: absent"
+      },
+      {
+        "Case": "main PID and ExecMainStartTimestamp",
+        "Observation": "before 23234 Wed 2026-11-04 23:12:53 UTC, after 23234 Wed 2026-11-04 23:12:53 UTC; unchanged: yes"
+      },
+      {
+        "Case": "after systemctl restart (the way a credential is added)",
+        "Observation": "tacacs_v1: present ; tacacs_v2: present"
+      }
+    ]
+  }
+]

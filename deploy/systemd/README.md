@@ -327,7 +327,25 @@ check on a read-only mount, since nothing there can change. `ProtectSystem=stric
 read-only. The units set `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes` and a capability
 bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of these.
 
-`LoadCredential=` is unmeasured (L84, whose systemd cells are written and not yet run): it is not offered for a device key.
+### `LoadCredential=` for a device key
+
+Measured (lab L84, `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
+unit's hardening): port49d reads a device key that systemd renders from `LoadCredential=`. systemd
+gives the credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL
+too, and the fence reads the ACL's entries, so it passes. To use it:
+
+1. In `/etc/port49/port49d.yaml`, **change** the one shipped line's directory (do not add a second
+   `key_secret_refs`; the file would not load):
+   `key_secret_refs: {file_dir: /run/credentials/port49d.service}`.
+2. In a drop-in (`systemctl edit port49d`), add `LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1`,
+   one line per key, the source file readable by root alone (`root:root 0600` is enough).
+3. In the policy, name the key `file:/run/credentials/port49d.service/tacacs_v1`.
+
+Adding a credential needs `systemctl restart port49d`. systemd refuses `systemctl set-property
+LoadCredential=`, and a drop-in with `systemctl daemon-reload` does not reach the running unit: its
+credentials directory keeps the files it started with. A restart closes every TACACS+ session in
+flight, so add keys in a window. A host whose systemd renders no credentials directory (a container's
+systemd did not) cannot use this.
 
 ## Rotating the `encryption:` key
 

@@ -1149,8 +1149,8 @@ func TestAnACLGrantingAnotherUserReadIsRefused(t *testing.T) {
 }
 
 // A root:root 0440 file with an ACL granting the service user read and group:: empty: the owning
-// group has no access, so it need not be ours (the shape systemd's LoadCredential= is expected to
-// render; whether it does is for L84's host run to measure).
+// group has no access, so it need not be ours (the shape systemd's LoadCredential= renders on
+// systemd 255, measured in L84: tests/lab/results/L84-systemd-docker.md).
 func TestTheSystemdCredentialShapeIsAccepted(t *testing.T) {
 	p, dir := secretWithACL(t, fmt.Sprintf("u:%d:r", os.Geteuid()), "g::---")
 	defer func(f func(fs.FileInfo) (uint32, bool)) { FileGroup = f }(FileGroup)

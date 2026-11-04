@@ -360,7 +360,7 @@ and lab row L91; nineteen tasks. Ruled 2026-11-02 (Ryan): the least ceiling per 
 ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the largest `ExpiresAt` among the token records on port49d's
 clock; fail closed on a scan that fails, a bad record or an expiry far ahead); L91 stays open "needs Ryan at the SER8", and Task 18 tests
 from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish). Measured 2026-11-04: L39 (b, c) and L89 closed on kind in CI (`tests/lab/results/L39-kind.md`, `tests/lab/results/L89-kind.md`: Velero's file-system backup restored a working port49; it skips a hostPath volume with only a warning, so the chart README gives the every-claim check).
-**12c executed 2026-11-02 to 2026-11-04** on `feature/12c-reference-configs-alarms-load` (Plan 12c — As built, below; draft PR #40): done, pending merge. L39 (b, c), L87, L88, L89 and L90 closed; L84 partial (systemd cells unrun); L91 open (Ryan, SER8); L92 opened. Next are the pre-beta review, then plan 13.
+**12c executed 2026-11-02 to 2026-11-04** on `feature/12c-reference-configs-alarms-load` (Plan 12c — As built, below; draft PR #40): done, pending merge. L39 (b, c), L84, L87, L88, L89 and L90 closed (L84 2026-11-04, hosted run 41930879677); L91 open (Ryan, SER8); L92 opened. Next are the pre-beta review, then plan 13.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -8134,7 +8134,7 @@ and no result is asserted for it until its results note and spec §15 row exist.
     `examples/oxidized` or say why not;
   - **an alert on `port49_admin_touch_total{outcome="refused"}`** and the `admin_touch_refused` decision (spec §5.7): a refused admin proof is a stolen token or a broken key;
   - **a Velero example** for the chart's PVCs, with a measurement behind it (pre-flight M10);
-  - L84 (a) and the systemd (c) cells, run in CI or on a systemd host, to close the row; whatever L83 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
+  - Whatever L83 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
 - **Plan 13:** install pages from each README, the "When it will not start" tables, and the `encryption:` rotation runbook; `--version` and
   `healthcheck`.
   - **Versioning (Ryan 2026-10-30): SemVer.** `v0.1.0` is the beta, and 0.x may break config with loud notes. `1.0.0` is the compatibility promise. Bumps come from Conventional Commits, and there is one version across every artifact. Tags are manual and carry no pre-release suffix unless it is mapped to PEP 440. The release docs state this.
@@ -8151,7 +8151,7 @@ Executed 2026-11-02 to 2026-11-04 on `feature/12c-reference-configs-alarms-load`
 `main` at `edeee2c3`). Twenty tasks as written (Tasks 1–18 and 9a, Task 19 this record), plus work the lab forced: Task 6b (fleet-size
 `Parse`), the load fix waves under Task 7 and Task 8, the two-leg watches under Task 9, a macOS admin-group lane and a CI-test lane. Every task was
 reviewed by Opus (spec, then quality) and every finding closed or ruled before the next; implementers were Sonnet 5.5. **Lab states:** L39 (b, c),
-L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/lab/results/`); L84 is partial (below); L91 is open and waits for Ryan
+L84, L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/lab/results/`); L91 is open and waits for Ryan
 (`TODO(L91)`); **L92 opened** (SR Linux over RFC 9887). **Done, pending merge:** next are the pre-beta review, then plan 13.
 
 #### Commits per task
@@ -8227,8 +8227,7 @@ L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/lab/res
   - **Closed 2026-11-04:** L39 (b, c) (`L39-kind.md`: under `externalTrafficPolicy: Cluster` the source address is lost, `Local` and host networking keep
     it); L87 (`L87-nokia_srlinux.md`); L88 on every platform (`L88-*.md`; SR Linux cells c, e, g are observed, not passed; over RFC 9887 cells a, b, d, e, f
     on five images); L89 (`L89-kind.md`: Velero's file-system backup restored a working port49); L90 (`L90-oxidized-arista_eos.md`).
-  - **L84 stays open.** Compose `secrets:` is measured (`L84-systemd-docker.md`); the systemd cells are written and have not run, because PR #40 does not
-    carry the `lab-hosted` label (Task 14's steps 2 and 3 wait on it). `LoadCredential=` stays unnamed for a device key.
+  - **L84 closed 2026-11-04** (`tests/lab/results/L84-systemd-docker.md`, hosted run 41930879677). Compose `secrets:` is measured (a new secret needs `up -d`). The systemd cells ran on the runner's own systemd 255 (Ubuntu 24.04): (a) PASS once the fence read a POSIX ACL's entries (the first run, 41915756204, was refused because the fence judged the ACL's mask as the owning group's permission; f14e9152); (c) FAIL, a credential is added only by `systemctl restart`. The Debian container's systemd rendered no credentials, so its cells are INVALID. The systemd README names `LoadCredential=` for the TACACS+ key, with the one-line `file_dir` change and the restart stated.
   - **L91 stays open** and needs Ryan at the SER8 (`TODO(L91)`); Task 18's tests run on fixtures derived from his captured token facts with the serial masked.
   - **L92 is new:** SR Linux over RFC 9887. 26.7.2 loads a `tls-profile` and was seen sending plain TACACS+ to port 300; no SR Linux enrolment dialect exists for L73.
 - **Standing FAILs a later version bump could reopen** (from 12b; re-run at each pin bump through `lab-kind`): L83 (b), the Secrets Store CSI driver, and
@@ -8286,7 +8285,7 @@ Each is true of the code as built; the load, alert and matrix figures come from 
   - **A disk error can repeat accounting lines** (a short write repeats a batch, at-least-once, the same `task_id`): dedupe on `task_id`.
 - **The failure matrix** is `deploy/failure-matrix.md`: a 3am table (what you see, what the devices do, what to do, which alert) and one row per design §12 failure, each naming a `TestFailureMatrix/<row>` subtest, an existing test or a closed lab row; `make failure-matrix` runs it and `TestEveryMatrixRowHasEvidence` fails on a row without evidence. Measured on the compose stack in CI (run 41769703556): one etcd follower dark refused 0 of 30 logins, slowest 271 ms; a raft leader dark refused for at most 8.2 s over 36 rounds, most under 3 s, with one 17.5 s round in about 54 unexplained (pre-beta list); a store that hangs closes the listener in 5.5 s at the defaults.
 - **The restore guard:** after an etcd restore port49d refuses token logins (`store_unavailable`, an ERROR) until a runner's purge, or until port49d's own clock passes the latest `ExpiresAt` among the token records the restored store holds, whichever comes first. `port49_redemption_restore_guard_until_timestamp_seconds` says when (and port49d's guard line); `port49_redemption_restore_guarded` is 1 while it holds and pages at 10m. That is at most one token lifetime (15m) after the snapshot's last mint, so a snapshot older than that is not guarded. If the scan fails, a record does not decode, or the latest expiry is more than 15m plus 5m ahead of port49d's clock, no bound is armed (the gauge reads 0) and only the purge lifts it. A restore still loses the revocations and marks made after the snapshot: re-issue them (the runbook). The lift does not let break-glass in on IOS XE or Junos while the brokers are down (port49d's FAIL is final there too); "stop port49d" is the escape. **Task 9a's two bad-day traces:** (1) a snapshot 5 minutes old restored with the brokers crash-looping: the latest token expires about 10 minutes later, port49d's first read finds the drop, scans and guards, token logins are refused, the 10m page fires with the lift time in its summary, and the guard lifts on its own at that expiry with no broker running; (2) a quiet store: the witness last written at 02:00, a token minted at 03:00 and the snapshot at 03:00:00.4, so a witness-time bound would have lifted at 02:20 and left a replay window, while the scan reads 03:15 and the guard holds to it.
-- **Velero is named; `LoadCredential=` is not.** The chart README's "Velero" section and `examples/velero/` carry the measured file-system backup (kind, Velero 1.18.4; the backup holds the issuing CA's private key and the bucket holds the namespaces' Secrets unencrypted; Velero skips a `hostPath` volume with only a warning, so check that every claim has a `PodVolumeBackup`, the README gives the commands). `LoadCredential=` is unmeasured (L84) and not offered for a device key.
+- **Velero and `LoadCredential=` are named.** The chart README's "Velero" section and `examples/velero/` carry the measured file-system backup (kind, Velero 1.18.4; the backup holds the issuing CA's private key and the bucket holds the namespaces' Secrets unencrypted; Velero skips a `hostPath` volume with only a warning, so check that every claim has a `PodVolumeBackup`, the README gives the commands). `LoadCredential=` is measured (L84, closed 2026-11-04) and offered for a device key in the systemd README, with a restart to add a credential.
 - **The Oxidized change:** Oxidized keeps `secure: true`, which refuses an unknown host key and sends no token (L90 a); it has no accept-new of its own (L90 d FAIL). `port49-oxidized-run` therefore visits each node absent from `known_hosts` once with OpenSSH's `StrictHostKeyChecking=accept-new` and no authentication, before it mints (parallel, cap 32, a 600 s budget, skipped nodes named and retried next window, exit 1), then mints again if it visited a node. A changed key is still refused (b).
 - **`port49 hwkey setup` and `port49 hwkey status`:** both read the token and write nothing to it (no PIN is asked, no object is written); the serial is masked on every line, `--json` included.
   - **Roots:** from the broker's `/v1/config` (TLS 1.3 against the configured broker CA, `--broker URL` to name one), or `--roots FILE` offline, which wins. Every run's first line says which: `roots: from broker <host>` or `roots: --roots <file>`.
@@ -8301,7 +8300,7 @@ Each is true of the code as built; the load, alert and matrix figures come from 
 
 #### Hand-offs
 
-- **Pre-beta review:** the load note (`tests/lab/results/load-beehive-gates.md` and its three notes), the failure matrix, every open row (L84, L91, L92) and the pre-beta list above, with these asks: a guard or wait whose protection a simpler fact already supplies (Ryan's 2026-11-02 rule); the principal cap against every shipped client (the workload client ran 20 of 20 processes clean under idle-only eviction, but does any other open more than 4 connections per principal?).
+- **Pre-beta review:** the load note (`tests/lab/results/load-beehive-gates.md` and its three notes), the failure matrix, every open row (L91, L92) and the pre-beta list above, with these asks: a guard or wait whose protection a simpler fact already supplies (Ryan's 2026-11-02 rule); the principal cap against every shipped client (the workload client ran 20 of 20 processes clean under idle-only eviction, but does any other open more than 4 connections per principal?).
 - **Plan 13:**
   - one device page per platform from `deploy/device-aaa/README.md`, with its measured dead windows;
   - the alerts page from `deploy/alerts/README.md`;
@@ -8318,7 +8317,6 @@ Each is true of the code as built; the load, alert and matrix figures come from 
 - **Ryan:**
   - L91 on the SER8 (`tests/lab/L91-runbook.md`);
   - applying the `main` ruleset;
-  - the `lab-hosted` label on the PR to run L84's systemd cells (a hosted runner with systemd), which closes L84 and decides whether `LoadCredential=` is named;
   - the one-time release setup from 12b is still open.
 
 ## Pre-beta review (between plan 12c and plan 13)
