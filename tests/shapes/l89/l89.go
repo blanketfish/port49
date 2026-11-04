@@ -167,6 +167,30 @@ func JudgeB(mint, login bool) string {
 	return l82.Fail
 }
 
+var imageDigest = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
+// ImageDigest is the sha256 digest in an image reference or a pod's imageID, or "" when it has none.
+func ImageDigest(ref string) string { return imageDigest.FindString(ref) }
+
+// CheckDigest is nil iff at least one imageID carries the pinned digest, and every imageID that carries a
+// digest of a different one is reported: the image that ran is the image that was pinned. An empty pin is
+// an error, never a pass.
+func CheckDigest(what string, imageIDs []string, pinned string) error {
+	if ImageDigest(pinned) != pinned || pinned == "" {
+		return fmt.Errorf("l89: the pinned digest of %s is %q", what, pinned)
+	}
+	found := false
+	for _, id := range imageIDs {
+		if d := ImageDigest(id); d == pinned {
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("l89: no running container of %s has the pinned digest %s (imageIDs: %s)", what, pinned, strings.Join(imageIDs, ", "))
+	}
+	return nil
+}
+
 // Short is the first characters of a fingerprint, enough to compare and too short to be a key.
 func Short(fp string) string {
 	if len(fp) < 12 {

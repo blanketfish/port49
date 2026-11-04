@@ -111,7 +111,7 @@ func l89Env(t *testing.T) *l89.Env {
 	e := l82Env(t)
 	return &l89.Env{Date: e.Date, Runner: e.Runner, Run: e.Run, Docker: e.Docker, Kernel: e.Kernel, Kind: e.Kind,
 		NodeImage: e.NodeImage, Kubectl: e.Kubectl, Helm: e.Helm, Velero: os.Getenv("VELERO_VERSION"),
-		VeleroImage: os.Getenv("VELERO_IMAGE"), AWSPlugin: os.Getenv("VELERO_AWS_PLUGIN_IMAGE"), ObjectStore: os.Getenv("OBJECT_STORE_IMAGE")}
+		VeleroImage: os.Getenv("VELERO_IMAGE"), AWSPlugin: os.Getenv("VELERO_AWS_PLUGIN_IMAGE") + "@" + os.Getenv("VELERO_AWS_PLUGIN_DIGEST"), ObjectStore: os.Getenv("OBJECT_STORE_IMAGE")}
 }
 
 // file writes a 0600 file in the credentials' directory and returns its path.
@@ -268,10 +268,35 @@ spec:
 		"--use-node-agent", "--use-volume-snapshots=false", "--wait")
 	c.Kubectl("-n", "velero", "rollout", "status", "daemonset/node-agent", "--timeout=5m")
 	r.checkRepositoryKey()
+	r.checkImages()
 	shapetest.WaitFor(t, "the backup location to be available", 3*time.Minute, func() bool {
 		ph, err := c.KubectlTry("", "-n", "velero", "get", "backupstoragelocation", "default", "-o", "jsonpath={.status.phase}")
 		return err == nil && strings.TrimSpace(ph) == "Available"
 	})
+}
+
+// checkImages fails unless the running Velero server, node agent and AWS plugin are the pinned digests.
+// The plugin is installed by tag (a digest in --plugins makes an invalid init container name), so the
+// pin is checked here, on the imageID the kubelet reports.
+func (r *l89Run) checkImages() {
+	t := r.t
+	t.Helper()
+	c := r.stack.Cluster()
+	ids := func(selector, field string) []string {
+		out := c.Kubectl("-n", "velero", "get", "pods", "-l", selector, "-o", "jsonpath={range .items[*]}{."+field+"[*].imageID}{\"\\n\"}{end}")
+		return strings.Fields(out)
+	}
+	server := l89.ImageDigest(os.Getenv("VELERO_IMAGE"))
+	for what, got := range map[string][]string{
+		"the Velero server and node agent": append(ids("component=velero", "status.containerStatuses"), ids("component=velero", "status.initContainerStatuses")...),
+	} {
+		if err := l89.CheckDigest(what, got, server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l89.CheckDigest("the Velero AWS plugin", ids("component=velero", "status.initContainerStatuses"), os.Getenv("VELERO_AWS_PLUGIN_DIGEST")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // checkRepositoryKey fails unless the Secret holds the generated key. The comparison is made here and

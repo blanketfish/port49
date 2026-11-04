@@ -732,7 +732,11 @@ VELERO_VERSION ?= 1.18.4
 VELERO_SHA256_LINUX_AMD64 = e520c17d8997e1c9d0a28ae013592e4473ca3bd82cb3acd132e51286263f74bf
 VELERO_IMAGE = velero/velero:v$(VELERO_VERSION)@sha256:c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b
 VELERO_AWS_PLUGIN_VERSION = 1.14.4
-VELERO_AWS_PLUGIN_IMAGE = velero/velero-plugin-for-aws:v$(VELERO_AWS_PLUGIN_VERSION)@sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
+# The plugin is given to `velero install --plugins` by tag: Velero names the plugin's init container after the
+# reference, and a digest in it is an invalid name. The digest is the integrity check, read back from the
+# running pod's imageID by the harness.
+VELERO_AWS_PLUGIN_IMAGE = velero/velero-plugin-for-aws:v$(VELERO_AWS_PLUGIN_VERSION)
+VELERO_AWS_PLUGIN_DIGEST = sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
 OBJECT_STORE_VERSION = 4.52
 OBJECT_STORE_IMAGE = chrislusf/seaweedfs:$(OBJECT_STORE_VERSION)@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
 
@@ -750,7 +754,7 @@ lab-l89: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	mkdir -p $(LAB_OUT)/l89
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VELERO_BIN=$(CURDIR)/bin/velero-v$(VELERO_VERSION) \
-	  VELERO_VERSION=$(VELERO_VERSION) VELERO_IMAGE=$(VELERO_IMAGE) VELERO_AWS_PLUGIN_IMAGE=$(VELERO_AWS_PLUGIN_IMAGE) \
+	  VELERO_VERSION=$(VELERO_VERSION) VELERO_IMAGE=$(VELERO_IMAGE) VELERO_AWS_PLUGIN_IMAGE=$(VELERO_AWS_PLUGIN_IMAGE) VELERO_AWS_PLUGIN_DIGEST=$(VELERO_AWS_PLUGIN_DIGEST) \
 	  OBJECT_STORE_IMAGE=$(OBJECT_STORE_IMAGE) PORT49_LAB_OUT=$(LAB_OUT)/l89 \
 	  PORT49_LAB_L89=1 go test -tags lab ./tests/lab/ -run '^TestL89$$' -count=1 -v -timeout 55m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l89; exit $$rc

@@ -36,6 +36,13 @@ repository key protects the volumes and nothing else. Protect the bucket like th
 4. Access to the bucket is limited to the backup's own credentials: no other principal, no public access,
    no credentials shared with another workload.
 
+## Pinning the plugin
+
+`velero install --plugins` cannot take an image by digest: Velero names the plugin's init container after
+the reference, and a digest makes that name invalid. Give it the tag, then check the running pod's
+`imageID` (`kubectl -n velero get pods -o jsonpath='{..initContainerStatuses[*].imageID}'`) against the
+digest you reviewed, or mirror the plugin by tag into a registry you control.
+
 ## Restore
 
 ```sh

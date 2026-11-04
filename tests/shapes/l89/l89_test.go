@@ -265,6 +265,22 @@ func TestL89ResultsSayWhatTheBucketHolds(t *testing.T) {
 	}
 }
 
+func TestCheckDigest(t *testing.T) {
+	d := "sha256:" + strings.Repeat("ab", 32)
+	other := "sha256:" + strings.Repeat("cd", 32)
+	if err := CheckDigest("x", []string{"docker.io/velero/velero@" + other, "docker.io/velero/velero-plugin-for-aws@" + d}, d); err != nil {
+		t.Errorf("a matching imageID: %v", err)
+	}
+	for name, ids := range map[string][]string{"a different digest": {"r@" + other}, "no imageID": nil, "no digest in it": {"r:latest"}} {
+		if CheckDigest("x", ids, d) == nil {
+			t.Errorf("%s passes", name)
+		}
+	}
+	if CheckDigest("x", []string{"r@" + d}, "") == nil || CheckDigest("x", []string{"r@" + d}, "v1") == nil {
+		t.Error("an empty or malformed pin passes")
+	}
+}
+
 func TestScrubWithDropsTheRunsOwnValues(t *testing.T) {
 	got := ScrubWith("fine\nidentity ab12cd34ef56ab12cd34 loaded\nalso fine", "ab12cd34ef56ab12cd34")
 	if strings.Contains(got, "ab12cd34") || !strings.Contains(got, "fine") || !strings.Contains(got, "also fine") {
