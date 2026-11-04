@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l84-host lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -271,6 +271,8 @@ lab-l80:
 # cells on the local images (nothing is pulled or built) and writes the note from the cells; with
 # A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
 # Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
+# lab-l84-host runs the same two questions on the machine's own systemd (a GitHub-hosted runner, root through
+# sudo, a real systemd as PID 1) and adds cells a-host and c-host to CELLS_OUT; the container renders no credentials.
 L84_NOTE ?= $(CURDIR)/tests/lab/results/L84-systemd-docker.md
 # go test runs in the package's directory, so the three paths are made absolute.
 # L88 (plan 12c, Task 12): the reference AAA configurations on the lab images. One image per run:
@@ -292,6 +294,10 @@ lab-l84-systemd: smoke-keyhost packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
 	rc=0; PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT)) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
+
+lab-l84-host:
+	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-host CELLS_OUT=/path/cells.json"; exit 2; }
+	PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT)) go test -tags systemdhost ./tests/systemd/ -run '^TestL84Host$$' -count=1 -v -timeout 20m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+

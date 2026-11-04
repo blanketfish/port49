@@ -41,7 +41,13 @@ jobs:
       - run: docker tag gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1 gcr.io/etcd-development/etcd:v3.6.15
       - run: mkdir -p bin/lab-out/l84
       - run: make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
-      - run: make lab-l84 L84_NOTE="$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker.md" A_CELLS=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
+      # The container's systemd renders no credentials (run 41912096808), so cells a and c-systemd there are
+      # INVALID; a-host and c-host run on the runner's own systemd, as root through sudo, and are what L84 closes on.
+      # They add to the container step's cells.json, and run even if that step failed: the host cells are the register's answer.
+      - if: always() && !cancelled()
+        run: make lab-l84-host CELLS_OUT=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
+      - if: always() && !cancelled()
+        run: make lab-l84 L84_NOTE="$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker.md" A_CELLS=bin/lab-out/l84/cells.json 2>&1 | bash tests/qual/secret-filter.sh
       - if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

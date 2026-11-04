@@ -56,6 +56,46 @@ func TestL84Credentials(t *testing.T) {
 	a := l84.Cell{ID: "a", Verdict: l84.Fail}
 	a.Rows = append(a.Rows, l84.Row{Case: "systemd", Observation: strings.SplitN(b.sh("systemctl --version"), "\n", 2)[0]})
 
+	// What systemd renders for User=port49d, measured apart from port49d by two one-shot units that
+	// print the credentials directory they are given: l84-bare (User= and LoadCredential= only) and
+	// l84-hard (the shipped port49d.service, its ExecStart replaced, with the same LoadCredential=).
+	// If bare shows the directory and hard does not, the shipped hardening hides it; if neither does,
+	// this systemd cannot render credentials here. The output holds paths, owners and modes only.
+	b.put("/usr/local/bin/l84-probe.sh", "root:root", "0755", `#!/bin/sh
+echo "CREDENTIALS_DIRECTORY=[$CREDENTIALS_DIRECTORY]"
+[ -d "$CREDENTIALS_DIRECTORY" ] && echo cred_dir=yes || echo cred_dir=no
+[ -e "$CREDENTIALS_DIRECTORY/tacacs_v1" ] && echo cred_file=yes || echo cred_file=no
+ls -ldn /run/credentials /run/credentials/* 2>&1
+ls -ln "$CREDENTIALS_DIRECTORY" 2>&1
+id
+`)
+	b.put("/etc/systemd/system/l84-bare.service", "root:root", "0644", "[Service]\nType=oneshot\nUser=port49d\nGroup=port49d\n"+
+		"LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\nExecStart=/bin/sh /usr/local/bin/l84-probe.sh\n")
+	b.sh(`frag=$(systemctl show port49d -p FragmentPath --value) && sed -e 's|^ExecStart=.*|ExecStart=/bin/sh /usr/local/bin/l84-probe.sh|' ` +
+		`-e 's|^Type=simple|Type=oneshot|' -e '/^ExecReload=/d;/^Restart=/d;/^RestartSec=/d;/^\[Install\]/,$d' "$frag" ` +
+		`> /etc/systemd/system/l84-hard.service && echo 'LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1' >> /etc/systemd/system/l84-hard.service`)
+	probe := func(name string) string {
+		out := b.sh("systemctl daemon-reload; systemctl start " + name + ".service 2>&1; " +
+			"echo \"start result: $(systemctl show " + name + " -p Result --value) status $(systemctl show " + name + " -p ExecMainStatus --value)\"; " +
+			"journalctl -u " + name + ".service --no-pager -o cat 2>&1 || true")
+		return strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(out), "\n", " ; ")), " ")
+	}
+	bareOut := probe("l84-bare")
+	a.Rows = append(a.Rows,
+		l84.Row{Case: "what systemd renders: User=port49d with LoadCredential= only (l84-bare)", Observation: bareOut},
+		l84.Row{Case: "what systemd renders: the shipped port49d.service's hardening, same LoadCredential= (l84-hard)", Observation: probe("l84-hard")})
+	// A systemd that renders no credentials here (a container's) cannot answer L84: the cells are
+	// INVALID for the platform, not FAIL for the product, and the runner's own systemd is measured
+	// instead (TestL84Host). A container that does render them goes on to measure.
+	if !sdtest.Rendered(bareOut) {
+		a.Verdict = l84.Invalid
+		a.Rows = append(a.Rows, l84.Row{Case: "verdict", Observation: "INVALID: the platform renders no credentials (l84-bare): systemd sets CREDENTIALS_DIRECTORY and the directory or file is not there; port49d was not started with it"})
+		c := l84.Cell{ID: "c-systemd", Verdict: l84.Invalid, Rows: []l84.Row{{Case: "state", Observation: "INVALID: the platform renders no credentials (l84-bare)"}}}
+		if err := l84.Save(out, []l84.Cell{a, c}); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	// The config and the policy name the credentials directory, once, before the first start. The
 	// shipped config already names key_secret_refs (file_dir /etc/port49/keys): that one line's
 	// directory is replaced, and a drift in the shipped line is INVALID.
@@ -72,31 +112,6 @@ func TestL84Credentials(t *testing.T) {
 	b.put("/etc/port49/policy.yaml", "root:root", "0644", policy)
 	b.put(dropIn+"/l84.conf", "root:root", "0644", "[Service]\nLoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\n")
 	b.sh("systemctl daemon-reload && systemctl restart port49d")
-	// What systemd renders for User=port49d, measured apart from port49d by two one-shot units that
-	// print the credentials directory they are given: l84-bare (User= and LoadCredential= only) and
-	// l84-hard (the shipped port49d.service, its ExecStart replaced, with the same LoadCredential=).
-	// If bare shows the directory and hard does not, the shipped hardening hides it; if neither does,
-	// this systemd cannot render credentials here. The output holds paths, owners and modes only.
-	b.put("/usr/local/bin/l84-probe.sh", "root:root", "0755", `#!/bin/sh
-echo "CREDENTIALS_DIRECTORY=[$CREDENTIALS_DIRECTORY]"
-ls -ldn /run/credentials /run/credentials/* 2>&1
-ls -ln "$CREDENTIALS_DIRECTORY" 2>&1
-id
-`)
-	b.put("/etc/systemd/system/l84-bare.service", "root:root", "0644", "[Service]\nType=oneshot\nUser=port49d\nGroup=port49d\n"+
-		"LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\nExecStart=/bin/sh /usr/local/bin/l84-probe.sh\n")
-	b.sh(`frag=$(systemctl show port49d -p FragmentPath --value) && sed -e 's|^ExecStart=.*|ExecStart=/bin/sh /usr/local/bin/l84-probe.sh|' ` +
-		`-e 's|^Type=simple|Type=oneshot|' -e '/^ExecReload=/d;/^Restart=/d;/^RestartSec=/d;/^\[Install\]/,$d' "$frag" ` +
-		`> /etc/systemd/system/l84-hard.service && echo 'LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1' >> /etc/systemd/system/l84-hard.service`)
-	probe := func(name string) string {
-		out := b.sh("systemctl daemon-reload; systemctl start " + name + ".service 2>&1; " +
-			"echo \"start result: $(systemctl show " + name + " -p Result --value) status $(systemctl show " + name + " -p ExecMainStatus --value)\"; " +
-			"journalctl -u " + name + ".service --no-pager -o cat 2>&1 || true")
-		return strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(out), "\n", " ; ")), " ")
-	}
-	a.Rows = append(a.Rows,
-		l84.Row{Case: "what systemd renders: User=port49d with LoadCredential= only (l84-bare)", Observation: probe("l84-bare")},
-		l84.Row{Case: "what systemd renders: the shipped port49d.service's hardening, same LoadCredential= (l84-hard)", Observation: probe("l84-hard")})
 	a.Rows = append(a.Rows, l84.Row{Case: "stat of the credentials directory and file (owner:group mode type), when port49d was restarted", Observation: stat()})
 	// A bounded wait: a start that never becomes ready is the measurement, not an invalid run.
 	ready := func() bool {

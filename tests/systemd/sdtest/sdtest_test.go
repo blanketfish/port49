@@ -1,6 +1,7 @@
 package sdtest
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -863,5 +864,84 @@ func TestRefusalPhrasesAreTheProductsOwnWords(t *testing.T) {
 		if !strings.Contains(string(b), r.Phrase) {
 			t.Errorf("%q is not in %s: the category %q would never match", r.Phrase, r.Source, r.Category)
 		}
+	}
+}
+
+func TestRenderedNeedsTheDirectoryAndTheFile(t *testing.T) {
+	for out, want := range map[string]bool{
+		"cred_dir=yes\ncred_file=yes\n":                        true,
+		"cred_dir=yes\ncred_file=no\n":                         false,
+		"cred_dir=no\ncred_file=no\n":                          false,
+		"CREDENTIALS_DIRECTORY=[/run/credentials/x.service]\n": false,
+		"": false,
+	} {
+		if got := Rendered(out); got != want {
+			t.Errorf("Rendered(%q) = %v, want %v", out, got, want)
+		}
+	}
+}
+
+func TestUnitPropertiesAreTheServiceKeysWithoutTheCommandsAndTheRestartPolicy(t *testing.T) {
+	got := UnitProperties("# c\n[Unit]\nAfter=x\n[Service]\nType=simple\nUser=port49d\nExecStart=/bin/x\nExecReload=/bin/y\n" +
+		"Restart=on-failure\nRestartSec=10s\n# a comment\nNoNewPrivileges=yes\nRestrictAddressFamilies=AF_INET AF_INET6\n[Install]\nWantedBy=multi-user.target\n")
+	want := []string{"User=port49d", "NoNewPrivileges=yes", "RestrictAddressFamilies=AF_INET AF_INET6"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("UnitProperties = %q, want %q", got, want)
+	}
+	shipped := UnitProperties(shipped(t, "port49d.service"))
+	has := func(p string) bool {
+		for _, g := range shipped {
+			if g == p {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("ProtectSystem=true") || !has("PrivateTmp=yes") || has("ExecStart=/usr/bin/port49d --config /etc/port49/port49d.yaml") {
+		t.Errorf("the shipped unit's properties: %q", shipped)
+	}
+}
+
+func TestCategoryNamesTheRefusalFromTheProductsWords(t *testing.T) {
+	for msg, want := range map[string]string{
+		"open /x/k: permission denied":                        "unreadable: permission denied",
+		"/x/k is owned by uid 5; whoever can write it":        "refused: the owner is neither port49d nor root",
+		"/x/k is group-readable by gid 0, which this process": "refused: the file's group is not one port49d is in",
+		"something else": "other",
+	} {
+		if got := Category(msg); got != want {
+			t.Errorf("Category(%q) = %q, want %q", msg, got, want)
+		}
+	}
+}
+
+func TestReportDescribesTheDirectoryAndTheFileAndNeverTheBytes(t *testing.T) {
+	dir := t.TempDir()
+	const bytesOfTheFile = "THE-KEY-BYTES-0123456789"
+	if err := os.WriteFile(filepath.Join(dir, "tacacs_v1"), []byte(bytesOfTheFile), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	var within string
+	lines := Report(dir, "tacacs_v1", func(path, w string, max int64) ([]byte, error) {
+		within = w
+		return []byte(bytesOfTheFile), nil
+	})
+	out := strings.Join(lines, "\n")
+	if strings.Contains(out, bytesOfTheFile) {
+		t.Fatalf("the report holds the key bytes:\n%s", out)
+	}
+	for _, want := range []string{"read: ok", "dir: ", "file: ", "mode -r--------", "acl=no", "uid="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report lacks %q:\n%s", want, out)
+		}
+	}
+	if within != dir {
+		t.Errorf("read within %q, want the credentials directory itself %q (livekeys passes file_dir)", within, dir)
+	}
+	bad := strings.Join(Report(dir, "tacacs_v1", func(string, string, int64) ([]byte, error) {
+		return nil, errors.New("open " + dir + "/tacacs_v1: permission denied")
+	}), "\n")
+	if !strings.Contains(bad, "read: unreadable: permission denied") || strings.Contains(bad, dir+"/tacacs_v1: ") {
+		t.Errorf("a refusal is reported as its category only:\n%s", bad)
 	}
 }

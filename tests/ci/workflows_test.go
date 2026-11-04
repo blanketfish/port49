@@ -21,6 +21,7 @@ type step struct {
 	Name string            `yaml:"name"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
+	If   string            `yaml:"if"`
 	With map[string]any    `yaml:"with"`
 	Env  map[string]string `yaml:"env"`
 }
@@ -708,10 +709,21 @@ func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
 	pull := at(`docker pull gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64}\b`)
 	tag := at(`docker tag gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64} gcr\.io/etcd-development/etcd:v3\.6\.15$`)
 	sys := at(`make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	host := at(`make lab-l84-host CELLS_OUT=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
 	merge := at(`make lab-l84 L84_NOTE="\$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker\.md" A_CELLS=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
-	if img >= 0 && setup >= 0 && pull >= 0 && tag >= 0 && sys >= 0 && merge >= 0 {
-		if tag < pull || max(img, setup, tag) > sys || sys > merge {
-			t.Errorf("order is image %d, setup %d, pull %d, tag %d, systemd %d, merge %d; want the three images (pull before tag), then the systemd cells, then lab-l84", img, setup, pull, tag, sys, merge)
+	if img >= 0 && setup >= 0 && pull >= 0 && tag >= 0 && sys >= 0 && host >= 0 && merge >= 0 {
+		if tag < pull || max(img, setup, tag) > sys || sys > host || host > merge {
+			t.Errorf("order is image %d, setup %d, pull %d, tag %d, systemd %d, host %d, merge %d; want the three images (pull before tag), then the container's cells, then the host cells (they add to the same cells.json), then lab-l84", img, setup, pull, tag, sys, host, merge)
+		}
+	}
+	// the host cells and the note still run when the container step fails: they are the register's answer
+	for _, j := range f.Jobs {
+		for _, s := range j.Steps {
+			if strings.Contains(s.Run, "make lab-l84-host") || strings.Contains(s.Run, "make lab-l84 ") {
+				if s.If != "always() && !cancelled()" {
+					t.Errorf("step %q: its if is %q, want always() && !cancelled()", s.Run, s.If)
+				}
+			}
 		}
 	}
 	// the note is written where the artifact picks it up (an absolute path: go test runs in tests/lab)
