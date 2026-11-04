@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -86,6 +87,9 @@ func l88Values(p platform, servers []string) deviceaaa.Values {
 		v.MgmtVRF, v.SourceInterface = "management", "mgmt0"
 	case "cisco_xrd":
 		v.MgmtVRF, v.SourceInterface = "default", "MgmtEth0/RP0/CPU0/0"
+		if n := l88XRVRF(); n != "" {
+			v.MgmtVRF = n
+		}
 	case "nokia_srlinux":
 		v.MgmtVRF = "mgmt"
 	default:
@@ -442,4 +446,21 @@ func l88WithCommit(p platform, items []l73Dialog) []l73Dialog {
 		items = append(items, l73Dialog{Cmd: "commit"})
 	}
 	return items
+}
+
+// l88XRVRF is the named VRF the XR named-VRF pass builds for the management interface
+// (PORT49_L88_XR_VRF=<name>); empty is the default-VRF pass. XR reserves the name default.
+func l88XRVRF() string { return os.Getenv("PORT49_L88_XR_VRF") }
+
+// l88XRVRFLines move the lab's management interface (and the SSH server the harness reaches
+// it by) into the named VRF in one commit, and back. They are lab scaffolding, not the
+// shipped file; the interface keeps its address and is on the lab subnet, so the TACACS+
+// servers are directly connected.
+func l88XRVRFLines(name, addr string) (set, undo []string) {
+	set = []string{"vrf " + name, " address-family ipv4 unicast", "exit", "exit",
+		"interface MgmtEth0/RP0/CPU0/0", " vrf " + name, " ipv4 address " + addr + " 255.255.255.0", "exit",
+		"ssh server vrf " + name}
+	undo = []string{"no ssh server vrf " + name, "interface MgmtEth0/RP0/CPU0/0", " no vrf " + name,
+		" ipv4 address " + addr + " 255.255.255.0", "exit", "no vrf " + name}
+	return set, undo
 }

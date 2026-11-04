@@ -86,6 +86,26 @@ func l88Run(t *testing.T, l *lab) {
 		}
 	}
 	e.addSecondAddress()
+	if name := l88XRVRF(); name != "" && l.p.name == "cisco_xrd" {
+		set, undo := l88XRVRFLines(name, l.p.addr)
+		push := func(lines []string) error {
+			return l88Admin(l, func(c *cliConn) error {
+				_, err := l73CiscoRun(c, l88WithCommit(l.p, l88Confirming(lines)), nil, true, l73ExtraMarks(l88Family(l.p))...)
+				return err
+			})
+		}
+		// The commit moves the interface the session came in on, so the session may end
+		// with it; the reconnect below is the check. docker exec into the node's XR CLI is the
+		// recovery if it does not come back.
+		_ = push(set)
+		e.n.fact("named-VRF pass: the management interface and the SSH server moved into vrf " + name + " by the lab scaffolding (`" + strings.Join(set, "; ") + "`)")
+		defer func() { _ = push(undo) }()
+		e.must("reaching the device in the new VRF", l88Admin(l, func(c *cliConn) error {
+			out, err := c.sendExpect("show vrf all", 60*time.Second, "xrd1#")
+			e.n.fact("`show vrf all` after the move: " + oneLine(stripPrompt(e.n.redact(l88Evidence(out)))))
+			return err
+		}))
+	}
 	e.must("applying the reference", l88Apply(l, "tcp"))
 	e.n.fact("the reference loaded: `deploy/device-aaa/" + l88Refs[l.p.name] + "` (tcp), values: servers " +
 		strings.Join(l88Servers, ", ") + "; the second is an address on the bridge where nothing listens")
@@ -156,6 +176,9 @@ func l88NoteName(p platform) string {
 		if q.name == p.name && q.sel != p.sel && !optInPlatforms[q.sel] {
 			return "L88-" + p.name + "-" + p.sel + ".md"
 		}
+	}
+	if p.name == "cisco_xrd" && l88XRVRF() != "" {
+		return "L88-" + p.name + "-named-vrf.md"
 	}
 	return "L88-" + p.name + ".md"
 }
@@ -244,6 +267,11 @@ func (e *l88Env) cellA() {
 		before = append(before, fmt.Sprintf("+%s logged in %v without port49 seeing it", time.Since(start).Round(time.Second), err == nil))
 		time.Sleep(10 * time.Second)
 	}
+	seenAt := time.Since(start).Round(time.Second)
+	window := fmt.Sprintf("attempts %d, port49 first saw one at +%s", len(before)+1, seenAt)
+	if redeemFor(recs, l88DenyUser) == nil {
+		window = fmt.Sprintf("attempts %d, port49 saw none in %s (the 5 minute cap)", len(before)+1, seenAt)
+	}
 	if len(before) > 0 {
 		e.n.fact("cell a: before an attempt reached port49 the denied user was tried " + fmt.Sprint(len(before)) + " times: " + strings.Join(before, "; "))
 	}
@@ -252,7 +280,7 @@ func (e *l88Env) cellA() {
 		verdict, reason = str(r, "verdict"), str(r, "reason")
 	}
 	obs := fmt.Sprintf("control (port49d stopped, the local account): logged in %v (%s). With port49d answering: logged in %v after %s (%s); "+
-		"port49 decision for the attempt: verdict=%q reason=%q", cerr == nil, l73Err(cerr), err == nil, took.Round(time.Millisecond), l73Err(err), verdict, reason)
+		"port49 decision for the attempt: verdict=%q reason=%q; %s", cerr == nil, l73Err(cerr), err == nil, took.Round(time.Millisecond), l73Err(err), verdict, reason, window)
 	switch {
 	case cerr != nil:
 		e.n.cell("a", "INVALID", obs+": the control failed, so the refusal says nothing", summarize(recs))
@@ -260,6 +288,9 @@ func (e *l88Env) cellA() {
 	case err == nil:
 		e.n.cell("a", "FAIL", obs, summarize(recs))
 		e.t.Errorf("cell a FAIL: a port49-denied user logged in on the local account")
+	case verdict == "":
+		e.n.cell("a", "FAIL", obs+": the device answered locally for the whole cap", summarize(recs))
+		e.t.Errorf("cell a FAIL: the device never asked port49 within the cap")
 	case verdict != "deny":
 		e.n.cell("a", "INVALID", obs+": port49 did not deny the attempt", summarize(recs))
 		e.t.Errorf("cell a: no port49 denial for the attempt")
@@ -408,8 +439,8 @@ func (e *l88Env) cellF() {
 	restore()
 	red := redeemFor(recs, user)
 	obs := fmt.Sprintf("login with a one-time credential, the first server (%s) resetting every connection at Accept and port49d on the second (%s): %s in %s; "+
-		"connections the first server reset: %d; port49 redeemed the credential: %v; first command output: %s",
-		l88Servers[0], l88Servers[1], e.n.redact(l88Err(lerr)), took.Round(10*time.Millisecond), n, red != nil, oneLine(stripPrompt(firstOut(outs))))
+		"connections the first server reset: %d; port49 redeemed the credential: %v; tries %d, the login reached port49 after %s; first command output: %s",
+		l88Servers[0], l88Servers[1], e.n.redact(l88Err(lerr)), took.Round(10*time.Millisecond), n, red != nil, tries, took.Round(time.Second), oneLine(stripPrompt(firstOut(outs))))
 	evidence := summarize(recs) + "\nthe wire during the login (headers only):\n" + wire + e.debugRead()
 	if e.l.p.name == "cisco_iosxe" {
 		// The device's own state, read after f: a break-glass login with port49d stopped made
@@ -549,6 +580,20 @@ func l88Confirming(lines []string) []l73Dialog {
 // deviceFacts records what the device holds after the reference is on: on Junos the
 // authentication order (a `set` on a list adds to it) and fxp0's address (the source pin).
 func (e *l88Env) deviceFacts() {
+	if e.l.p.name == "cisco_xrd" {
+		_ = l88Admin(e.l, func(c *cliConn) error {
+			for _, cmd := range []string{"terminal length 0", "show running-config interface MgmtEth0/RP0/CPU0/0", "show ipv4 vrf all interface brief",
+				"show running-config router static", "show running-config ssh", "show vrf all"} {
+				out, err := c.sendExpect(cmd, 60*time.Second, "xrd1#")
+				if err != nil {
+					continue
+				}
+				e.n.fact("`" + cmd + "`: " + oneLine(stripPrompt(e.n.redact(l88Evidence(out)))))
+			}
+			return nil
+		})
+		return
+	}
 	if !l88Junos(e.l.p) {
 		return
 	}
