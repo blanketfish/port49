@@ -157,18 +157,45 @@ func TestDeadIdleConnectionsNeverLockTheOwnerOut(t *testing.T) {
 	}
 }
 
-// A flood from one certificate churns only its own idle slots.
+// A flood from one certificate churns only its own idle slots. Each flood
+// connection is waited idle before the next binds: a connection is marked idle
+// from ConnState, a moment after the client has its answer, and a bind in that
+// gap finds no idle connection of its own certificate and (spec section 8) takes
+// the principal's oldest idle one, which is the renewed certificate's.
 func TestAFloodChurnsOnlyItsOwnIdleSlots(t *testing.T) {
 	f := newFixture(t, 8)
 	lim := DefaultListenerLimits
 	lim.MaxPerPrincipal = 2
-	addr, _ := serveThrough(t, f, lim, nil)
+	addr, bl := serveThrough(t, f, lim, nil)
 	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
 	rc, rbr := held(t, f, addr, renewed)
+	eventually(t, "the renewed connection idle", func() bool { return activeHeld(bl) == 0 })
 	for i := 0; i < 6; i++ {
 		held(t, f, addr, f.alice)
+		eventually(t, "the flood connection idle", func() bool { return activeHeld(bl) == 0 })
 	}
 	ask(t, rc, rbr)
+}
+
+// The other side of the same rule, deterministic: a bind while the flooding
+// certificate's own connection is still in a request has no idle one of its
+// own to take, so it takes the principal's oldest idle connection, the renewed
+// certificate's. This is what TestAFloodChurnsOnlyItsOwnIdleSlots must not
+// race into.
+func TestABindWithNoIdleConnectionOfItsOwnTakesThePrincipalsOldestIdle(t *testing.T) {
+	f := newFixture(t, 8)
+	lim := DefaultListenerLimits
+	lim.MaxPerPrincipal = 2
+	addr, bl := serveThrough(t, f, lim, nil)
+	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
+	rc, _ := held(t, f, addr, renewed)
+	eventually(t, "the renewed connection idle", func() bool { return activeHeld(bl) == 0 })
+	_, fin := busy(t, f, bl, addr, f.alice, 1)
+	held(t, f, addr, f.alice)
+	if !closedByPeer(rc) {
+		t.Fatal("the renewed certificate's idle connection was kept while the flooder had none idle of its own")
+	}
+	fin()
 }
 
 func pendingTotal(l *Listener) int {
