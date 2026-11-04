@@ -340,8 +340,9 @@ func TestANewerRestoreWhileGuardedExtendsTheBound(t *testing.T) {
 	}
 }
 
-// After a time lift the pre-restore record stays, so a later restore is still
-// told: a read below it with live tokens guards again (review C2, variant).
+// After a drop is judged, the witness at the drop is the baseline: a read below
+// it is a second restore and guards again if live tokens came back with it
+// (review C2, variant; final review I2).
 func TestARestoreAfterATimeLiftIsDetected(t *testing.T) {
 	b := newBound(t)
 	first := b.now.Add(5 * time.Minute)
@@ -352,7 +353,7 @@ func TestARestoreAfterATimeLiftIsDetected(t *testing.T) {
 		t.Fatal("not lifted")
 	}
 	second := b.now.Add(10 * time.Minute)
-	b.read(15, 0, second) // a newer snapshot restored: its witness is above the first's, below the old 20
+	b.read(10, 0, second) // a second restore: its witness is below the first drop's baseline of 12
 	if b.g.Allows() {
 		t.Fatalf("a restore after a time lift was not guarded: %q", b.out.String())
 	}
@@ -360,9 +361,81 @@ func TestARestoreAfterATimeLiftIsDetected(t *testing.T) {
 		t.Fatalf("the bound is %v", u)
 	}
 	b.now = second
-	b.read(15, 0, second)
+	b.read(10, 0, second)
 	if !b.g.Allows() {
 		t.Fatal("not lifted at the second bound")
+	}
+}
+
+// A second restore after an all-expired drop re-arms too: the baseline is the
+// witness at that drop, not the pre-restore record.
+func TestASecondRestoreAfterAnAllExpiredDropIsDetected(t *testing.T) {
+	b := newBound(t)
+	b.read(12, 0, b.now.Add(-2*time.Hour))
+	if !b.g.Allows() {
+		t.Fatal("guarded for an all-expired snapshot")
+	}
+	b.read(9, 0, b.now.Add(4*time.Minute)) // below the drop's 12, with live tokens
+	if b.g.Allows() {
+		t.Fatalf("a second restore was not guarded: %q", b.out.String())
+	}
+}
+
+// A restore without --bump-revision from an old snapshot leaves the witness
+// below the old record while brokers mint: the drop was judged, so a fresh
+// token never arms the guard (final review I2).
+func TestAFreshMintAfterAnAllExpiredDropNeverArmsTheGuard(t *testing.T) {
+	b := newBound(t)
+	b.read(12, 0, b.now.Add(-2*time.Hour))
+	for i := 0; i < 3; i++ {
+		b.now = b.now.Add(time.Second)
+		b.read(12+uint64(i), 0, b.now.Add(10*time.Minute)) // a broker minted; the witness still below the old 20
+		if !b.g.Allows() {
+			t.Fatalf("pass %d: a fresh mint guarded: %q", i, b.out.String())
+		}
+	}
+}
+
+// fakeTokens is the token family as the guard's scan reads it.
+type fakeTokens struct {
+	recs []fakeTok
+}
+
+type fakeTok struct{ minted, expires time.Time }
+
+// latest is the store's answer: only records minted by the cutoff count.
+func (f *fakeTokens) latest(_ context.Context, mintedBy time.Time) (time.Time, error) {
+	var m time.Time
+	for _, r := range f.recs {
+		if !r.minted.After(mintedBy) {
+			m = laterOf(m, r.expires)
+		}
+	}
+	return m, nil
+}
+
+// A token minted after the drop never extends the bound past the restored
+// tokens' latest expiry (final review I2).
+func TestAMintAfterTheDropDoesNotExtendTheBound(t *testing.T) {
+	b := newBound(t)
+	restored := b.now.Add(8 * time.Minute)
+	f := &fakeTokens{recs: []fakeTok{{minted: b.now.Add(-9 * time.Minute), expires: restored}}}
+	pass := func(w uint64) {
+		b.header++
+		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+			return etcdstore.RestoreRead{Witness: w, Header: b.header}, nil
+		}, f.latest)
+	}
+	pass(12)
+	if _, u := b.gauges(); u != float64(restored.Unix()) {
+		t.Fatalf("the bound is %v, want the restored expiry", u)
+	}
+	b.now = b.now.Add(restoreSkew + time.Second) // a mint within the skew of the read still counts, by design
+	f.recs = append(f.recs, fakeTok{minted: b.now, expires: b.now.Add(15 * time.Minute)}) // a running broker's mint
+	pass(12)
+	pass(13)
+	if _, u := b.gauges(); u != float64(restored.Unix()) {
+		t.Fatalf("a mint after the drop moved the bound to %v", u)
 	}
 }
 
@@ -468,7 +541,7 @@ func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
 	read := func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 12, Header: 99}, nil
 	}
-	b.g.pass(context.Background(), time.Second, read, func(context.Context) (time.Time, error) { scans++; return latest, nil })
+	b.g.pass(context.Background(), time.Second, read, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil })
 	if scans != 1 || b.g.Allows() {
 		t.Fatalf("scans %d, allows %v", scans, b.g.Allows())
 	}
@@ -479,7 +552,7 @@ func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
 	noDrop.Saw(5)
 	noDrop.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 5, Header: 9}, nil
-	}, func(context.Context) (time.Time, error) { scans++; return latest, nil })
+	}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil })
 	if scans != 1 {
 		t.Fatal("scanned with nothing restored")
 	}

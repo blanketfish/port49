@@ -307,7 +307,13 @@ var ErrTokenRecord = errors.New("etcd store: a token record does not decode")
 // restore guard (plan 12c, Task 9a) lifts only once this time has passed, and a
 // record it could not read might be the latest. The time is the minting
 // broker's, to be compared with the caller's clock as redemption compares it.
-func (s *Store) LatestTokenExpiry(ctx context.Context) (time.Time, error) {
+//
+// mintedBy bounds the records counted to those minted at or before it (zero:
+// every record): only a token minted before a restore can have been restored,
+// and one a running broker minted after it must not move the bound. A record
+// with no MintedAt cannot be shown to be later, so it counts. A record that
+// does not decode is an error whatever its age.
+func (s *Store) LatestTokenExpiry(ctx context.Context, mintedBy time.Time) (time.Time, error) {
 	end := clientv3.GetPrefixRangeEnd(s.k.family(famToken))
 	from := s.k.family(famToken)
 	var latest time.Time
@@ -320,6 +326,9 @@ func (s *Store) LatestTokenExpiry(ctx context.Context) (time.Time, error) {
 			var r tokenRec
 			if json.Unmarshal(kv.Value, &r) != nil {
 				return time.Time{}, ErrTokenRecord
+			}
+			if !mintedBy.IsZero() && r.MintedAt.After(mintedBy) {
+				continue
 			}
 			if r.ExpiresAt.After(latest) {
 				latest = r.ExpiresAt
