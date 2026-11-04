@@ -72,8 +72,15 @@ func progressAt(rev int64) clientv3.WatchResponse {
 func runLegs(t *testing.T, src *scripted, after uint64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	out := watchLegs(ctx, src, after, nil, func(int64) {}, func(string, ...any) {})
+	// The controller is over (its output closed) before the next test runs, so
+	// a test that sets feedIdle or feedStall never races a controller left by
+	// an earlier one.
+	t.Cleanup(func() {
+		cancel()
+		for range out {
+		}
+	})
 	for i := 0; i < 2; i++ {
 		<-src.opened
 	}
@@ -241,7 +248,9 @@ func TestACompactedLegEndsTheWatch(t *testing.T) {
 func TestAQuietLegIsOpenedAgainOnlyWhileTheStoreAnswers(t *testing.T) {
 	oi, os := feedIdle, feedStall
 	feedIdle, feedStall = 40*time.Millisecond, 120*time.Millisecond
-	defer func() { feedIdle, feedStall = oi, os }()
+	// Registered before runLegs, so it runs after the watch has ended (runLegs),
+	// the controller never reads the variables while they are put back.
+	t.Cleanup(func() { feedIdle, feedStall = oi, os })
 	src := newScripted()
 	src.probeOK.Store(false)
 	_, _ = runLegs(t, src, 5)

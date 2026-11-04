@@ -186,3 +186,34 @@ func TestWhenEveryMemberIsSuspectAllAreUsed(t *testing.T) {
 		}
 	}
 }
+
+// During an election every member is suspect, and the picker falls back to all
+// of them. The members that then answer are forgiven on their first success;
+// the one still hung stays skipped, instead of keeping one call in three until
+// its mark expires (the leader_dark tail, 17.5 s).
+func TestAMemberThatAnswersIsForgivenAndTheHungOneStaysSkipped(t *testing.T) {
+	now := time.Unix(1000, 0)
+	p := clocked(readyPicker("a", "b", "c"), &now)
+	deadline := status.Error(codes.DeadlineExceeded, "")
+	for _, a := range []string{"a", "b", "c"} { // all three time out: an election
+		p.sus.mark(a, now)
+	}
+	if got := picksOver(t, p, 30); len(got) != 3 {
+		t.Fatalf("with every member suspect all are used: %v", got)
+	}
+	// a and b answer (the first to be picked is forgiven and then takes the
+	// calls; the other stays suspect until it is picked again or its mark
+	// expires); c is still hung (its calls time out)
+	for i := 0; i < 60; i++ {
+		addr, done := pick(t, p, context.Background())
+		if addr == "c" {
+			now = now.Add(500 * time.Millisecond)
+			done(balancer.DoneInfo{Err: deadline})
+			continue
+		}
+		done(balancer.DoneInfo{})
+	}
+	if got := picksOver(t, p, 60); got["c"] != 0 || got["a"]+got["b"] != 60 {
+		t.Fatalf("after a and b answered: %v, want c skipped and every call on a or b", got)
+	}
+}
