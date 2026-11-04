@@ -430,7 +430,7 @@ func TestAMintAfterTheDropDoesNotExtendTheBound(t *testing.T) {
 	if _, u := b.gauges(); u != float64(restored.Unix()) {
 		t.Fatalf("the bound is %v, want the restored expiry", u)
 	}
-	b.now = b.now.Add(restoreSkew + time.Second) // a mint within the skew of the read still counts, by design
+	b.now = b.now.Add(restoreSkew + time.Second)                                          // a mint within the skew of the read still counts, by design
 	f.recs = append(f.recs, fakeTok{minted: b.now, expires: b.now.Add(15 * time.Minute)}) // a running broker's mint
 	pass(12)
 	pass(13)
