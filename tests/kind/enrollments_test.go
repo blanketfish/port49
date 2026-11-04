@@ -326,28 +326,6 @@ spec:
 	t.Logf("enrollments export: two runs, %d dated files, each 0600 65532:65532, and a stale .new fails the third", len(second))
 }
 
-// prefixTag is the `--prefix` tag kubectl puts on each log line: [pod/<name>/<container>].
-var prefixTag = regexp.MustCompile(`(?m)^\[pod/[^\]]+\] ?`)
-
-// certWarning is the one line a successful export may log: the product's warning that the broker's etcd
-// certificate is near its end (the stack's certificates last a day). Anchored, and its date has no characters
-// a credential would need.
-var certWarning = regexp.MustCompile(`^port49-broker: directory store: the broker's etcd certificate \(CN=port49-broker\) is valid until [0-9A-Za-z:+ .,-]+ \(\d+ days?\)$`)
-
-// unexpectedLines is the lines of a log, tags off, that are not certWarning, joined; "" when there are none.
-func unexpectedLines(log string) string {
-	var extra []string
-	for _, ln := range strings.Split(prefixTag.ReplaceAllString(log, ""), "\n") {
-		if ln = strings.TrimSpace(ln); ln != "" && !certWarning.MatchString(ln) {
-			extra = append(extra, ln)
-		}
-	}
-	return strings.Join(extra, "\n")
-}
-
-// logLines is a log with its prefix tags taken off and its white space trimmed.
-func logLines(log string) string { return strings.TrimSpace(prefixTag.ReplaceAllString(log, "")) }
-
 // jobPod is the name of a pod of the Job, for a failure's report.
 func jobPod(s *smoke, job string) string {
 	out, err := s.c.KubectlTry("", "-n", ns, "get", "pods", "-l", "job-name="+job, "-o", "jsonpath={.items[0].metadata.name}")
@@ -376,22 +354,6 @@ func TestEnrollmentsValuesAndPolicyParse(t *testing.T) {
 	for _, want := range []string{"keytabSecret: " + directoryCreds, "file:/etc/port49/directory/bind_password", "ca_file: /etc/port49/directory/ca.pem"} {
 		if !strings.Contains(enrollValues, want) {
 			t.Errorf("the values lack %q", want)
-		}
-	}
-}
-
-func TestUnexpectedLinesAllowsOnlyTheCertificateWarning(t *testing.T) {
-	const warn = "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-11-05T17:40:00Z (0 days)"
-	for _, c := range []struct{ name, log, want string }{
-		{"the real line, tagged", "[pod/x/export] " + warn + "\n", ""},
-		{"the real line twice", warn + "\n" + warn + "\n", ""},
-		{"nothing", "", ""},
-		{"a different line", "[pod/x/export] " + warn + "\nbroker: exported 3 records\n", "broker: exported 3 records"},
-		{"a credential word", "[pod/x/export] " + warn + "\nthe password is hunter2\n", "the password is hunter2"},
-		{"the line with a credential word in its date", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until password=x (0 days)", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until password=x (0 days)"},
-	} {
-		if got := unexpectedLines(c.log); got != c.want {
-			t.Errorf("%s: unexpected %q, want %q", c.name, got, c.want)
 		}
 	}
 }
