@@ -45,6 +45,8 @@ type smoke struct {
 	subnet    string
 	values    string // the values file helm installs with
 	brokerDir string // testpki.WriteKind's broker/ directory: the lab CA and the people's certificates
+	// rolesSecret is a Secret store-roles' pod mounts at /etc/port49/directory (Options.StoreRolesSecret).
+	rolesSecret string
 }
 
 // oldRoot is the red run of the fsGroup cell: KIND_OLD_ROOT=1 installs the first design's chart.
@@ -214,6 +216,15 @@ func (s *smoke) applyRoles() {
 {"name":"enc","secret":{"secretName":"port49-encryption","defaultMode":288}},{"name":"ca","secret":{"secretName":"port49-etcd-ca","defaultMode":288}},
 {"name":"ep","secret":{"secretName":"port49-etcd-port49d","defaultMode":288}},{"name":"tls","secret":{"secretName":"port49-broker-tls","defaultMode":288}},
 {"name":"att","configMap":{"name":"port49-attestation"}},{"name":"keys","secret":{"secretName":"port49-device-keys","defaultMode":288}}]}}`
+	if s.rolesSecret != "" {
+		pod = strings.Replace(pod, `{"name":"keys","mountPath":"/run/port49/keys"}]`,
+			`{"name":"keys","mountPath":"/run/port49/keys"},{"name":"dir","mountPath":"/etc/port49/directory"}]`, 1)
+		pod = strings.Replace(pod, `{"name":"keys","secret":{"secretName":"port49-device-keys","defaultMode":288}}]`,
+			`{"name":"keys","secret":{"secretName":"port49-device-keys","defaultMode":288}},{"name":"dir","secret":{"secretName":"`+s.rolesSecret+`","defaultMode":288}}]`, 1)
+		if strings.Count(pod, `"name":"dir"`) != 2 {
+			s.t.Fatal("the store-roles pod's volume lists changed: the directory Secret was not mounted")
+		}
+	}
 	s.t.Cleanup(func() {
 		s.c.KubectlTry("", "-n", ns, "delete", "pod", "store-roles", "--ignore-not-found", "--wait=false")
 		s.c.KubectlTry("", "-n", ns, "delete", "configmap", "store-roles-broker", "--ignore-not-found")
@@ -299,7 +310,7 @@ func (s *smoke) mint(brokerAddr string) func() string {
 func bringUp(t *testing.T, name string, o Options) *smoke {
 	t.Helper()
 	root := kindtest.Root()
-	s := &smoke{t: t, root: root, chart: filepath.Join(root, "deploy", "helm", "port49"), helm: "helm"}
+	s := &smoke{t: t, root: root, chart: filepath.Join(root, "deploy", "helm", "port49"), helm: "helm", rolesSecret: o.StoreRolesSecret}
 	s.pki = t.TempDir()
 	if err := testpki.WriteKind(s.pki, ns, 3, "alice@example.com", time.Now()); err != nil {
 		t.Fatal(err)
@@ -396,6 +407,9 @@ reclaimPolicy: Delete
 		pol = strings.ReplaceAll(pol, "keys/tacacs_v1", "keys/core_v1")
 	}
 	pol = strings.Replace(pol, "\ngrants:\n", "\ngrants:\n  - {subject: svc_backup, scope: all_devices, roles: [network_admin]}\n", 1)
+	if o.Policy != nil {
+		pol = o.Policy(deviceNet)
+	}
 	s.policy = filepath.Join(cfgDir, "policy.yaml")
 	writeFile(t, s.policy, pol)
 	writeFile(t, filepath.Join(cfgDir, "inventory.yaml"),
@@ -436,7 +450,11 @@ config:
              jwks: https://kubernetes.default.svc.cluster.local/openid/v1/jwks,
              ca_file: /etc/port49/attestation/cluster-ca.pem, audience: port49, namespaces: [`+ns+`]}
 `)
-	s.install()
+	if o.Values != "" {
+		s.install("-f", s.writeTemp("values-extra.yaml", o.Values, 0o600))
+	} else {
+		s.install()
+	}
 
 	// store-roles from the rendered configs, in one pod that mounts what the broker's does, then
 	// etcd-init applies them. The roles are etcdctl commands naming roles and key prefixes.
@@ -528,6 +546,15 @@ type Options struct {
 	// DeviceFrom, when set, is called after Before and gives DeviceAddr and DeviceNet: a device made in
 	// Before, whose address the kind network assigned, is known only then.
 	DeviceFrom func() (addr, net string)
+	// Values is YAML helm installs with after the stack's own values file: a map merges into the
+	// stack's, a list replaces it.
+	Values string
+	// Policy, when set, is the policy in place of the stack's: it is given the network the device key
+	// group admits. A policy for a broker with a directory declares no human usernames.
+	Policy func(deviceNet string) string
+	// StoreRolesSecret, when set, is a Secret store-roles' pod mounts at /etc/port49/directory, where the
+	// chart mounts the broker's directory Secret: a broker config that reads files there loads in that pod too.
+	StoreRolesSecret string
 }
 
 func (o Options) kindConfig() string {

@@ -19,10 +19,11 @@ import (
 type kindWorkflow struct {
 	On   yaml.Node `yaml:"on"`
 	Jobs map[string]struct {
-		If             string         `yaml:"if"`
-		RunsOn         any            `yaml:"runs-on"`
-		TimeoutMinutes int            `yaml:"timeout-minutes"`
-		Env            map[string]any `yaml:"env"`
+		If             string            `yaml:"if"`
+		RunsOn         any               `yaml:"runs-on"`
+		TimeoutMinutes int               `yaml:"timeout-minutes"`
+		Env            map[string]any    `yaml:"env"`
+		Permissions    map[string]string `yaml:"permissions"`
 		Defaults       struct {
 			Run struct {
 				Shell string `yaml:"shell"`
@@ -172,15 +173,21 @@ func kindWorkflowProblems(lab, kind []byte, mk string) []string {
 	if got := triggers(k.On); strings.Join(got, ",") != "pull_request,push" {
 		add("kind.yml: triggers %v, want pull_request and push", got)
 	}
-	want := map[string]string{"make kind-smoke": "", "make kind-smoke-red": ""}
+	want := map[string]string{"make kind-smoke": "", "make kind-smoke-red": "", "make kind-enrollments": ""}
 	for id, j := range k.Jobs {
 		hosted("kind.yml", id, j.RunsOn, j.Env)
 		if j.TimeoutMinutes != 45 {
 			add("kind.yml job %s: timeout-minutes %d, want 45", id, j.TimeoutMinutes)
 		}
+		if j.Permissions["contents"] != "read" || len(j.Permissions) != 1 {
+			add("kind.yml job %s: permissions %v, want contents: read alone", id, j.Permissions)
+		}
 		for _, st := range j.Steps {
 			if _, ok := want[st.Run]; ok {
 				want[st.Run] = id
+			}
+			if st.Uses != "" && !shaPinned.MatchString(st.Uses) {
+				add("kind.yml job %s: %q is not pinned by a full commit SHA", id, st.Uses)
 			}
 		}
 	}
@@ -189,8 +196,29 @@ func kindWorkflowProblems(lab, kind []byte, mk string) []string {
 			add("kind.yml runs no %q", run)
 		}
 	}
+
+	// the enrollments export's target: kind-only, anchored, behind the key-host guard, deleting its cluster
+	// whatever the result, and kept out of the smoke's own run (which has no -run and would otherwise run it)
+	enr := makeRecipe(mk, "kind-enrollments")
+	switch {
+	case enr == "":
+		add("Makefile has no kind-enrollments target")
+	case !strings.Contains(enr, "-tags kind") || !strings.Contains(enr, "-run '^TestEnrollmentsExportRuns$$'"):
+		add("Makefile kind-enrollments does not run `-tags kind` with the anchored -run '^TestEnrollmentsExportRuns$$': %s", enr)
+	case !strings.Contains(enr, "delete cluster --name port49enroll"):
+		add("Makefile kind-enrollments does not delete its cluster port49enroll whatever the result: %s", enr)
+	}
+	if !strings.Contains(mk, "\nkind-enrollments: smoke-keyhost ") {
+		add("Makefile kind-enrollments does not depend on smoke-keyhost, so it would run on a machine that holds a key")
+	}
+	if !strings.Contains(makeRecipe(mk, "kind-smoke"), "-skip '^TestEnrollmentsExportRuns$$'") {
+		add("Makefile kind-smoke does not skip TestEnrollmentsExportRuns, so the smoke's job would run it a second time")
+	}
 	return p
 }
+
+// shaPinned is an action pinned by a full commit SHA.
+var shaPinned = regexp.MustCompile(`^[\w.-]+/[\w./-]+@[0-9a-f]{40}$`)
 
 func contains(l []string, s string) bool {
 	for _, x := range l {
@@ -257,6 +285,18 @@ func TestTheKindWorkflowRulesCatchEachMistake(t *testing.T) {
 		{"the smoke job without its override", "kind", envLine, "", "override"},
 		{"no red run", "kind", "- run: make kind-smoke-red", "- run: make kind-smoke", "runs no"},
 		{"kind.yml on push only", "kind", "  pull_request:\n", "", "triggers"},
+		{"no enrollments run", "kind", "- run: make kind-enrollments", "- run: make kind-smoke", "runs no \"make kind-enrollments\""},
+		{"an enrollments job on a self-hosted runner", "kind", "  enrollments:\n    runs-on: ubuntu-24.04", "  enrollments:\n    runs-on: self-hosted", "job enrollments: runs-on"},
+		{"an enrollments job with a short timeout", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 30", "job enrollments: timeout-minutes 30"},
+		{"an enrollments job with no override", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine, "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n", "job enrollments: the job env"},
+		{"an enrollments job that may write", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine + "    permissions: {contents: read}", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine + "    permissions: {contents: write}", "job enrollments: permissions"},
+		{"an enrollments job with no permissions", "kind", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine + "    permissions: {contents: read}\n", "  enrollments:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 45\n    env:\n" + envLine, "job enrollments: permissions"},
+		{"an unpinned action", "kind", "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0\n        with: {go-version-file: go.mod}\n      - run: make kind-enrollments", "actions/setup-go@v5\n        with: {go-version-file: go.mod}\n      - run: make kind-enrollments", "not pinned"},
+		{"an enrollments target that runs the whole package", "mk", "-run '^TestEnrollmentsExportRuns$$'", "-run TestEnrollmentsExportRuns", "anchored -run"},
+		{"an enrollments target with no kind tag", "mk", "go test -tags kind ./tests/kind/ -run '^TestEnrollmentsExportRuns$$'", "go test ./tests/kind/ -run '^TestEnrollmentsExportRuns$$'", "-tags kind"},
+		{"an enrollments target that leaves its cluster", "mk", "delete cluster --name port49enroll", "delete cluster --name other", "does not delete its cluster"},
+		{"an enrollments target with no key-host guard", "mk", "\nkind-enrollments: smoke-keyhost ", "\nkind-enrollments: ", "smoke-keyhost"},
+		{"a smoke that runs the enrollments test too", "mk", " -skip '^TestEnrollmentsExportRuns$$'", "", "kind-smoke does not skip"},
 		{"an unanchored lab target", "mk", "-run '^TestL82$$'", "-run TestL82", "anchored"},
 		{"a lab target with no tag", "mk", "go test -tags lab ./tests/lab/ -run '^TestL82$$'", "go test ./tests/lab/ -run '^TestL82$$'", "-tags lab"},
 		{"a lab target that writes elsewhere", "mk", "PORT49_LAB_OUT=$(LAB_OUT)/l82", "PORT49_LAB_OUT=/tmp/out", "LAB_OUT"},

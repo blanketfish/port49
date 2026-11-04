@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -594,8 +594,21 @@ kind-smoke: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KU
 	go build -o bin/oldroot ./tests/kind/cmd/oldroot
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
-	  go test -tags kind ./tests/kind/ -count=1 -v -timeout 40m || rc=$$?; \
+	  go test -tags kind ./tests/kind/ -skip '^TestEnrollmentsExportRuns$$' -count=1 -v -timeout 40m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
+
+# The chart's enrollments export CronJob, run (plan 12c, Task 17, ruling 13): the chart on a kind cluster
+# with an OpenLDAP pod (tests/lab/directory/openldap, built and loaded by the test), a directory_password
+# verifier, init-enrollments, then the CronJob's Job twice. It runs in CI only (.github/workflows/kind.yml):
+# kind's nodes are privileged containers, so smoke-keyhost refuses on a host with a TPM or a security key.
+# kind-smoke skips it (its own cluster, its own job). The cluster is deleted afterwards whatever the result.
+# UNVERIFIED until the first CI run.
+kind-enrollments: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) \
+	  go test -tags kind ./tests/kind/ -run '^TestEnrollmentsExportRuns$$' -count=1 -v -timeout 40m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49enroll; exit $$rc
 
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v

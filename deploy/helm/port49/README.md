@@ -276,14 +276,14 @@ for the cluster, which is a cluster-wide change: enable it in one release per cl
 
 ## Backups
 
-Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke; the enrollments job's run is unmeasured): `examples/backup-cronjob.yaml` (the etcd
+Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke, the enrollments job in its own kind job against a directory, `make kind-enrollments`): `examples/backup-cronjob.yaml` (the etcd
 snapshot, which needs etcd's root certificate and is yours to adapt) and the chart's own, off by default:
 `--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<your PVC>` (the sealed
 enrollment store, `port49-broker export-enrollments --out FILE`; it mounts what the broker does, from
 the same template). It exports the enrollment store of a `directory_password` verifier, so the chart refuses
 to render it unless `config.broker.broker.identity.humans` has one (otherwise the job would fail every night).
 The kind smoke runs the etcd snapshot job only: it has no directory, and a directory refuses the smoke's
-policy; the enrollments job's run is unmeasured. Neither the etcd nor the port49 image has a shell, so:
+policy; the enrollments job runs in `make kind-enrollments` (an OpenLDAP pod, `init-enrollments`, then the Job twice: one dated 0600 file owned by 65532 each, and nothing sealed in the log). Neither the etcd nor the port49 image has a shell, so:
 
 1. a `stale-check` init container fails the job when `<name>.new` is left from a run that did not
    finish (the failed pod stays, and `kubectl logs` names the file); remove it and the next run goes;
