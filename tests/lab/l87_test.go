@@ -119,6 +119,7 @@ func l87Cells(e *l88Env) {
 	e.l87A(faults)
 	e.l87C(faults)
 	faults.set(e.t, "")
+	e.must("stopping port49d", e.l.stopDaemon())
 	e.restart() // the standing daemon, no fault switch
 	e.l87B()
 	e.n.fact("the device's own aaa log, `/var/log/srlinux/debug/sr_aaa_mgr.log`, lines naming reject, error, local, fallback or a server (last 60): " + e.l87AAALog())

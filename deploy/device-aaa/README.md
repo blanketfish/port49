@@ -168,15 +168,15 @@ restores the dhcp-client at the end.
 required (L76): with the default, port49 is never asked. The operator level maps to priv-lvl 1,
 so an operator is read-only here.
 
-**Provisional on L87:** whether break-glass logs in on ERROR and once port49d is dark under
-`exit-on-reject true` is open. This file may change when L87 closes.
+**Measured (L87, 2026-11-04):** with `exit-on-reject true` the break-glass account still logs in
+when port49d answers ERROR and once port49d is dark. In 3am terms: break-glass logs in at once.
 
 | What | Measured | Note |
 |---|---|---|
 | A deny | Final with `exit-on-reject true`; break-glass is refused while port49 is up and denies it | `tests/lab/results/L76-nokia_srlinux.md` (cells d, l) |
 | port49 stopped | With `exit-on-reject true`, break-glass logged in (53 ms). Under the reference over a pty SSH login: 60 to 70 ms (L88 b) | `tests/lab/results/L76-nokia_srlinux.md` (cell l), `L88-nokia_srlinux.md` |
-| ERROR | Under the reference the break-glass login landed at once during a store hang, in 3.3 s (L88 c, observed; L87 a stays open) | `tests/lab/results/L88-nokia_srlinux.md` |
-| Dark | Break-glass logs in and runs a command, 2.1 to 2.4 s (L88 d; L87 b stays open) | L88 notes |
+| ERROR | Under the reference the break-glass login landed at once during a store hang, in 3.3 s (L88 c). With authentication answered ERROR by the lab fault switch it logged in in 2.4 s while a port49 user's token login was refused (L87 a). A login port49 authenticated whose session authorization is answered ERROR is refused (L87 c) | `tests/lab/results/L87-nokia_srlinux.md`, `L88-nokia_srlinux.md` |
+| Dark | Break-glass logs in and runs a command, 2.1 to 2.4 s (L88 d); with port49d on a real etcd paused until it closed its listeners, 2.3 s (L87 b, PASS) | `L87-nokia_srlinux.md`, L88 notes |
 | Commands | SR Linux asks port49 for no command, so port49 cannot deny one: the command port49's policy denies elsewhere ran, and accounting recorded START and STOP (L88 e). The roles decide what a user may run | L88 notes |
 | Second server | The first server resetting at Accept, the second answering: token login in 2.0 to 2.3 s (L88 f) | L88 notes |
 | Key retire / reload | No single-connection setting exists in the device's schema (`tree flat system aaa server-group`), so a reload has no shared connection to reset (L88 g, observed) | L88 notes |

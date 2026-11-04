@@ -9,9 +9,8 @@
 # a platforms block for SR Linux: see policy-platforms.yaml in this directory.
 #
 # exit-on-reject true makes a port49 deny final. Without it a deny falls through to
-# local (L76 cell d). Whether break-glass still logs in once port49d is dark is L87,
-# and stays open until it closes; L88 c and d observed a login in both, under this file
-# (README.md, "SR Linux").
+# local (L76 cell d). Break-glass still logs in on an authentication ERROR and once port49d
+# is dark (L87 a, b: tests/lab/results/L87-nokia_srlinux.md; README.md, "SR Linux").
 system {
     aaa {
         authentication {
