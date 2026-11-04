@@ -1811,7 +1811,7 @@ func (e *notObserved) Error() string {
 // it are not run. Either way the error is a *notObserved naming each command
 // that did not finish; outs holds what arrived, one entry per command sent.
 func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
-	if l.p.name == "cisco_iosxe" {
+	if l.p.name == "cisco_iosxe" || l.p.name == "nokia_srlinux" { // SR Linux's sshd does not run an exec command in sr_cli (L76)
 		return l.ptyCommands(user, password, per, commands...)
 	}
 	return l.loginWithinDial(l.p.addr+":22", user, password, 45*time.Second, per, commands...)

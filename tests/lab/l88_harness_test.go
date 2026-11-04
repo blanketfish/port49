@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -120,6 +121,9 @@ func l88Opener(p platform) func(*lab) (*cliConn, error) {
 		return func(l *lab) (*cliConn, error) { return l.eosCLI(breakglassUser, breakglassPassword) }
 	case "juniper_vsrx":
 		return func(l *lab) (*cliConn, error) { return l.junosCLI(breakglassUser, breakglassPassword) }
+	case "nokia_srlinux":
+		// Setup goes through sr_cli (l88SRPush); no break-glass CLI is opened for it.
+		return func(*lab) (*cliConn, error) { return nil, nil }
 	}
 	return l73Opener(p.name)
 }
@@ -131,6 +135,9 @@ func l88Family(p platform) string { return l73Dialects[p.name].Family }
 
 // l88Push types lines on the device over c and reads them back.
 func l88Push(p platform, c *cliConn, lines []string) error {
+	if p.name == "nokia_srlinux" {
+		return l88SRPush(lines)
+	}
 	if l88Junos(p) {
 		// A long line (a password hash) wraps at the pty's width, and the wrap reads as an answer.
 		if _, err := c.sendExpect("set cli screen-width 1000", 45*time.Second, junosOpPrompt); err != nil {
@@ -217,7 +224,9 @@ func l88Admin(l *lab, fn func(c *cliConn) error) error {
 	var fnErr error
 	if err == nil {
 		fnErr = fn(c)
-		c.Close()
+		if c != nil {
+			c.Close()
+		}
 	}
 	base, cerr := l.configPath()
 	if cerr == nil {
@@ -310,6 +319,10 @@ func l88LocalAccount(name, user, hash string) (add, del []string) {
 		return []string{"username " + user + " privilege 1 secret 9 " + hash}, []string{"no username " + user}
 	case "cisco_nxos":
 		return []string{"username " + user + " password 5 " + hash + " role network-operator"}, []string{"no username " + user}
+	case "nokia_srlinux":
+		// Brace form, as the reference file is; the role p49-read exists in the lab config and the reference.
+		return []string{"system {", "aaa {", "authentication {", "user " + user + " {", "password " + hash, "role [", "p49-read", "]", "}", "}", "}", "}"},
+			[]string{"delete system aaa authentication user " + user}
 	case "cisco_xrd":
 		// XR takes the group and the secret in the user's own submode (the one-line form is refused).
 		return []string{"username " + user, "group root-lr", "secret 10 " + hash, "exit"}, []string{"no username " + user}
@@ -482,4 +495,24 @@ func init() {
 			l29Refusals[k] = v
 		}
 	}
+}
+
+// l88SRPush loads lines into SR Linux's candidate datastore and commits, through sr_cli in
+// the node as the container's root (outside TACACS+, as L76 did). It is setup, not
+// break-glass: the break-glass logins the cells measure are pty logins over SSH.
+func l88SRPush(lines []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "exec", "-i", l76Container, "sr_cli", "-d")
+	cmd.Stdin = strings.NewReader("enter candidate\n" + strings.Join(lines, "\n") + "\ncommit now\n")
+	out, err := cmd.CombinedOutput()
+	low := strings.ToLower(string(out))
+	if err != nil || strings.Contains(low, "error") || strings.Contains(low, "invalid") || strings.Contains(low, "unknown") {
+		o := string(out)
+		if len(o) > 2500 {
+			o = o[len(o)-2500:]
+		}
+		return fmt.Errorf("sr_cli refused the load (%v); it said: %s", err, oneLine(o))
+	}
+	return nil
 }

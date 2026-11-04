@@ -86,6 +86,7 @@ func l88Run(t *testing.T, l *lab) {
 		}
 	}
 	e.addSecondAddress()
+	undoVRF := func() {}
 	if name := l88XRVRF(); name != "" && l.p.name == "cisco_xrd" {
 		set, undo := l88XRVRFLines(name, l.p.addr)
 		push := func(lines []string) error {
@@ -99,7 +100,30 @@ func l88Run(t *testing.T, l *lab) {
 		// recovery if it does not come back.
 		_ = push(set)
 		e.n.fact("named-VRF pass: the management interface and the SSH server moved into vrf " + name + " by the lab scaffolding (`" + strings.Join(set, "; ") + "`)")
-		defer func() { _ = push(undo) }()
+		undone := false
+		undoVRF = func() {
+			if undone {
+				return
+			}
+			undone = true
+			perr := push(undo)
+			// The read-back is the teardown line of the note: a device left in the VRF would
+			// skew any later XR run.
+			rerr := l88Admin(l, func(c *cliConn) error {
+				for _, cmd := range []string{"show ipv4 vrf all interface brief", "show running-config ssh"} {
+					out, err := c.sendExpect(cmd, 60*time.Second, "xrd1#")
+					if err != nil {
+						return err
+					}
+					e.n.fact("teardown, `" + cmd + "`: " + oneLine(stripPrompt(e.n.redact(l88Evidence(out)))))
+				}
+				return nil
+			})
+			if perr != nil || rerr != nil {
+				e.n.fact(fmt.Sprintf("teardown: the undo push said %v; the read-back said %v", perr, rerr))
+			}
+		}
+		defer undoVRF()
 		e.must("reaching the device in the new VRF", l88Admin(l, func(c *cliConn) error {
 			out, err := c.sendExpect("show vrf all", 60*time.Second, "xrd1#")
 			e.n.fact("`show vrf all` after the move: " + oneLine(stripPrompt(e.n.redact(l88Evidence(out)))))
@@ -112,6 +136,7 @@ func l88Run(t *testing.T, l *lab) {
 	e.deviceFacts()
 	e.debugOn()
 	e.cells("tcp", l88Cells(l.p.sel, false))
+	undoVRF()
 	e.finish()
 }
 
@@ -232,6 +257,9 @@ func (e *l88Env) cellA() {
 			if l88Junos(e.l.p) {
 				_, err := junosConfigure(c, del...)
 				return err
+			}
+			if e.l.p.name == "nokia_srlinux" {
+				return l88SRPush(del)
 			}
 			_, err := l73CiscoRun(c, l88WithCommit(e.l.p, l88Confirming(del)), nil, true, l73ExtraMarks(l88Family(e.l.p))...)
 			return err
