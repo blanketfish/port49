@@ -217,3 +217,22 @@ func TestAMemberThatAnswersIsForgivenAndTheHungOneStaysSkipped(t *testing.T) {
 		t.Fatalf("after a and b answered: %v, want c skipped and every call on a or b", got)
 	}
 }
+
+// The two legs of a watch sit on different members even when the others are
+// suspect: with two members recently timed out, the second leg goes to one of
+// them rather than to the member the first is on, or one member going dark
+// stalls both legs (TestTheMarksFeedFollowsWhicheverMemberGoesDark, CI).
+func TestTheSecondLegIsNotPlacedOnTheFirstsMemberWhenTheOthersAreSuspect(t *testing.T) {
+	now := time.Unix(1000, 0)
+	p := clocked(readyPicker("a", "b", "c"), &now)
+	p.sus.mark("a", now)
+	p.sus.mark("b", now)
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("c")
+	second := &tried{used: map[string]bool{}, peer: first}
+	for i := 0; i < 20; i++ {
+		if addr, _ := pick(t, p, withTriedSet(context.Background(), second)); addr == "c" {
+			t.Fatalf("pick %d put the second leg on the first leg's member", i)
+		}
+	}
+}

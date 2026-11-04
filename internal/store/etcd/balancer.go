@@ -260,6 +260,26 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 			return k
 		}
 	}
+	// No candidate is free of the other leg and of this one's earlier members:
+	// suspect members were left out of cands, but two legs on one member go
+	// dark together, so a suspect member (it may have come back) is better than
+	// the peer's.
+	if avoid != "" {
+		for _, k := range p.ready {
+			if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
+				t.used[addr] = true
+				t.last.Store(addr)
+				return k
+			}
+		}
+		for _, k := range p.ready {
+			if addr := k.Endpoint.Addresses[0].Addr; addr != avoid {
+				t.last.Store(addr)
+				t.used = map[string]bool{addr: true}
+				return k
+			}
+		}
+	}
 	// Every candidate has had a copy: begin again.
 	k := cands[start]
 	addr := k.Endpoint.Addresses[0].Addr
