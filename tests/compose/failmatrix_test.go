@@ -465,11 +465,11 @@ func TestFailureMatrix(t *testing.T) {
 		// healthInterval apart (health.close_after, health.interval), the last
 		// of them taking up to call_timeout; they open again after openAfter
 		// passes (health.open_after); and the breaker may hold its circuit
-		// open for open_for (etcd.breaker.open_for) on top. A watch left on the
-		// dark leader is what puts the health check behind (the feed lag);
-		// WatchContexts ends it after feedStall and FollowContexts opens it
-		// again after a second, which falls inside the close term. slack is
-		// the poll interval and a docker call.
+		// open for open_for (etcd.breaker.open_for) on top. The context feed
+		// runs as two legs on two members, so a leader dark leaves one
+		// following once the others elect (twoleg.go); a fence wait that times
+		// out is not counted by the breaker. slack is the poll interval and a
+		// docker call.
 		const slack = 2 * time.Second
 		bound := electionTimeout + closeAfter*healthInterval + callTimeout + openAfter*healthInterval + breakerOpenFor + slack
 		t.Cleanup(m.clearTokens)

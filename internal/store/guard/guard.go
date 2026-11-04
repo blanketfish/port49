@@ -251,7 +251,7 @@ func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error,
 		p.lastRefused = now
 		p.refused++
 		return false, p.open
-	case "canceled", "saturated":
+	case "canceled", "saturated", "feed_behind":
 		return false, p.open
 	case "timeout", "deadline", "unavailable":
 		p.fails++
@@ -376,6 +376,12 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 		g.c.Metrics.Seconds.WithLabelValues(g.c.Component, string(p)).Observe(time.Since(start).Seconds())
 	}
 	outcome := classify(ctx, cctx, err)
+	if outcome == "timeout" && errors.Is(err, store.ErrFeedBehind) {
+		// The store answered with a record this process's feed has not reached:
+		// not a failed store call, so the circuit does not count it. A feed that
+		// stays behind is the health check's to see, and closes the listeners.
+		outcome = "feed_behind"
+	}
 	if outcome == "timeout" {
 		// The inner error stays wrapped: the context cache tells a fence
 		// timeout (crypt.ErrFeedBehind: the store answered with a later

@@ -53,6 +53,11 @@ var ErrRefused = errors.New("store: refused this identity")
 // was done" where an unanswered call must say "may or may not have been".
 var ErrNotSent = errors.New("nothing was sent")
 
+// ErrFeedBehind is a read the store answered with a record this process's
+// context feed has not yet delivered (crypt.ErrFeedBehind is this). It is
+// ErrUnavailable to a caller; the guard does not count it as a failed call.
+var ErrFeedBehind = fmt.Errorf("%w: this process's context feed has not delivered the record's revision", ErrUnavailable)
+
 // ErrPinHeld is a write that would move a principal's pin to another entry:
 // refused, since only a forget frees a principal (Ruling 3). It is no
 // access-control refusal (ErrRefused): the store is fine, and the operator's

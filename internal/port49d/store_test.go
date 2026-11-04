@@ -651,7 +651,7 @@ func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
 // (final review 7e-1 M-4). The health check waits on the same fence, below
 // the guard (plan 7f, Ruling 1), so with the feed stopped it fails too, and
-// the guard does not count it. The broker's half is
+// the guard counts it feed_behind (not a failed call). The broker's half is
 // TestTheBrokersStoreIsFencedUnderItsGuard.
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
@@ -685,8 +685,8 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	if got, err := sts.daemon.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("the daemon read %q with the feed not running: %v", got.CtxID, err)
 	}
-	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
-		t.Fatalf("the daemon's guard counted %v context timeouts", n)
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "feed_behind")); n != 1 {
+		t.Fatalf("the daemon's guard counted %v feed_behind outcomes", n)
 	}
 	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
 		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)

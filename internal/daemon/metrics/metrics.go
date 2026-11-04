@@ -105,7 +105,7 @@ type Metrics struct {
 	// (internal/store/guard; plan 7d): every store call by component
 	// (daemon, broker), pool (token, context, bulk) and outcome (ok,
 	// not_found, conflict, error, timeout, deadline, unavailable, refused,
-	// canceled, saturated, circuit_open); how long they took; and whether
+	// canceled, saturated, feed_behind, circuit_open); how long they took; and whether
 	// each pool's circuit is open, design §15's circuit-breaker state. The
 	// gauge moves only when a call ends, so a pool no one calls keeps the
 	// value of its last call, open included, and never goes dark on it:
