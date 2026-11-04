@@ -17,7 +17,7 @@
       },
       {
         "Case": "dialled",
-        "Observation": "172.18.0.3:32265 (the Service's NodePort)"
+        "Observation": "172.18.0.3:31903 (the Service's NodePort)"
       },
       {
         "Case": "the device's client",
@@ -55,7 +55,7 @@
       },
       {
         "Case": "dialled",
-        "Observation": "172.18.0.2:32265 (the Service's NodePort)"
+        "Observation": "172.18.0.2:31903 (the Service's NodePort)"
       },
       {
         "Case": "the device's client",
@@ -93,7 +93,7 @@
       },
       {
         "Case": "dialled",
-        "Observation": "172.18.0.3:32265 (the Service's NodePort)"
+        "Observation": "172.18.0.3:31903 (the Service's NodePort)"
       },
       {
         "Case": "the device's client",
@@ -131,7 +131,7 @@
       },
       {
         "Case": "dialled",
-        "Observation": "172.18.0.2:32265 (the Service's NodePort)"
+        "Observation": "172.18.0.2:31903 (the Service's NodePort)"
       },
       {
         "Case": "the device's client",
