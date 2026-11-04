@@ -1,6 +1,6 @@
 # Velero, file-system backup of a release's volumes
 
-UNVERIFIED until lab entry L89 closes (`tests/lab/results/L89-kind.md`). Read the note before relying on this.
+Measured on kind (lab entry L89, `tests/lab/results/L89-kind.md`): the chart README's "Velero" section has the result. Velero skips a hostPath volume with only a warning: check every claim has a pod volume backup after each backup (chart README).
 
 ## What the backup holds
 
@@ -51,5 +51,6 @@ velero restore create --from-backup <backup> --wait
 ```
 
 The data-directory init containers refuse a volume whose files are not owned by uid 65532 (see the
-chart README), so what a restore does to ownership, group and mode matters: L89 (a) measures it, and the
-note is the answer.
+chart README), so what a restore does to ownership, group and mode matters. L89 (a) measured it on kind:
+owner, group and mode of `state/`, `issuing-ca.key` and the spool directory were unchanged, and both
+StatefulSets became ready with no fence refusal.

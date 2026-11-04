@@ -480,5 +480,7 @@ excluded:
     reason: one image per run (`make lab-l88 PLATFORM=<selector>`, with PORT49_L88_TLS=1 for the RFC 9887 pass and PORT49_L88_XR_VRF=mgmt for XRd's named VRF), about twenty images and passes at up to an hour each; the runner has no per-image entry shape for it yet. Run by hand before a release.
   - rows: [L39]
     reason: (a) is the compose stack's source-address test (`TestL39DockerSourceAddress`), run by hand with the userland proxy on and off; (b) and (c) are kind clusters whose nodes are privileged containers, run in CI only (`make lab-l39` in .github/workflows/lab-kind.yml). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.
+  - rows: [L89]
+    reason: a kind cluster whose nodes are privileged containers, run in CI only (the lab-kind label and .github/workflows/lab-kind.yml, which runs make lab-l89). smoke-keyhost refuses it on this machine, so the runner cannot rerun it here.
   - rows: [L82, L83, L85]
     reason: kind clusters whose nodes are privileged containers, run in CI only (the lab-kind label and .github/workflows/lab-kind.yml, which run make lab-l82, lab-l83 and lab-l85). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.

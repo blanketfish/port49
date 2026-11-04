@@ -359,7 +359,7 @@ after its pre-flight (I1–I13 and M1–M22 applied). Amended 2026-11-01 (Ryan):
 and lab row L91; nineteen tasks. Ruled 2026-11-02 (Ryan): the least ceiling per Junos class; `authentication-order tacplus` alone; the restore guard's
 ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the largest `ExpiresAt` among the token records on port49d's
 clock; fail closed on a scan that fails, a bad record or an expiry far ahead); L91 stays open "needs Ryan at the SER8", and Task 18 tests
-from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish).
+from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish). Measured 2026-11-04: L39 (b, c) and L89 closed on kind in CI (`tests/lab/results/L39-kind.md`, `tests/lab/results/L89-kind.md`: Velero's file-system backup restored a working port49; it skips a hostPath volume with only a warning, so the chart README gives the every-claim check).
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context

@@ -294,6 +294,40 @@ policy; the enrollments job's run is unmeasured. Neither the etcd nor the port49
 Nothing sealed is written to a log. The snapshot holds sealed data but is still sensitive; give its
 PVC a restrictive access mode. Restore enrollments with `port49 directory import`.
 
+### Velero (file-system backup of the volumes)
+
+`examples/velero/` is a Velero `Schedule` with the steps around it. Measured on kind (Velero 1.18.4 with
+its node agent, an S3-compatible store in the cluster; `tests/lab/results/L89-kind.md`, 2026-11-04): after a
+backup, deleting the namespace and a restore, both StatefulSets became ready with no fence refusal, the
+issuing CA's fingerprint was unchanged, the owner, group and mode of `state/`, `issuing-ca.key` and the
+spool directory were unchanged (65532:65532, 0700 and 0600), and a mint and a login succeeded. The
+measurement used file-system backup because kind has no snapshot-capable CSI driver; CSI snapshots are
+not measured here.
+
+- **The backup holds the issuing CA's private key** (`state/issuing-ca.key`), each broker's state and the
+  accounting spool. **The bucket alone also holds the namespaces' Secrets**, unencrypted by Velero: the
+  TACACS+ keys, the store's encryption key, the etcd CA and client identities and the TLS key. The
+  repository key protects only the volumes. Protect the bucket like the CA key: server-side encryption, and
+  access limited to the backup's own credentials.
+- **Set the repository key from your own Secret before installing Velero.** Velero's default repository
+  password is a well-known static value, and Velero writes it into `velero-repo-credentials` itself when
+  it finds no Secret (`examples/velero/README.md` has the order).
+- **Velero skips a hostPath volume with only a warning, and the backup still reads Completed.** The first
+  measured run backed up 4 of the namespace's 7 claims: etcd's volumes were hostPath (kind's default
+  class), and the backup said "Volume data in pod port49/etcd-0 is a hostPath volume which is not
+  supported for pod volume backup, skipping" (lab-kind run 41855911600). The restore then brought etcd back
+  empty and port49d never became ready. Put etcd on volumes the node agent can read, and after every backup
+  check that each claim in both namespaces has a completed pod volume backup:
+
+  ```sh
+  backup=<the backup's name>
+  # the claims to be backed up, then the pod volume backups the node agent completed: the counts must match
+  kubectl get pvc --namespace port49 --no-headers | wc -l; kubectl get pvc --namespace port49-etcd --no-headers | wc -l
+  kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \
+    -o jsonpath='{range .items[*]}{.status.phase} {.spec.pod.name} {.spec.volume}{"\n"}{end}'
+  velero backup describe $backup --details | grep -i -A6 warnings
+  ```
+
 ## Multi-region
 
 `examples/values-multi-region.yaml` gives the session store its own etcd per region with a 500 ms call

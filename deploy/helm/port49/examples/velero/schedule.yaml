@@ -1,6 +1,5 @@
-# A Velero Schedule for a port49 release's namespace, file-system backup (the node agent). UNVERIFIED
-# until lab entry L89 (tests/lab/results/L89-kind.md) closes: nothing here is named in the chart README
-# until it does. Every name is fake: the namespace `port49`, Velero's `velero` namespace and its
+# A Velero Schedule for a port49 release's namespace, file-system backup (the node agent). Measured on
+# kind: lab entry L89 (tests/lab/results/L89-kind.md) and the chart README's "Velero" section. Every name is fake: the namespace `port49`, Velero's `velero` namespace and its
 # BackupStorageLocation `default` are yours.
 #
 # WHAT THE BACKUP HOLDS. Both StatefulSets' volumes: each broker's `data` volume, which holds
