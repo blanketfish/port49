@@ -850,3 +850,18 @@ func TestKeyDirIsTheShippedLineWithItsDirectoryReplaced(t *testing.T) {
 		}
 	}
 }
+
+func TestRefusalPhrasesAreTheProductsOwnWords(t *testing.T) {
+	for _, r := range Refusals {
+		if r.Source == "" {
+			continue // the operating system's words
+		}
+		b, err := os.ReadFile(filepath.Join(kindtest.Root(), r.Source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), r.Phrase) {
+			t.Errorf("%q is not in %s: the category %q would never match", r.Phrase, r.Source, r.Category)
+		}
+	}
+}
