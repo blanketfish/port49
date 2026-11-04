@@ -262,14 +262,15 @@ func TestL88OnlyCellsKeepsEveryCellByDefault(t *testing.T) {
 // `key $aes1$<salt>=$<base64>`; no form of it, not even the salt, reaches a note.
 func TestL88NoteNeverHoldsAHashedKey(t *testing.T) {
 	n := newL88Note(platform{name: "nokia_srlinux", version: "x"}, "tls", "pw", "hash")
-	in := "profile l73-dev {\n    key $aes1$AWWGR+cgIqEYU28=$abcdefghijklmnopqrstuvwxyz0123456789ABCD\n    secret-key $aes1$AW+lB33r5=$short\n}"
+	// The second key line holds a short value no mask would hide: only dropping the line removes it.
+	in := "profile l73-dev {\n    key $aes1$AWWGR+cgIqEYU28=$abcdefghijklmnopqrstuvwxyz0123456789ABCD\n    key c2hvcnRrZXk=\n    secret-key $aes1$AW+lB33r5=$short\n}"
 	n.fact(n.redact(l88DropKeyLines(in)))
-	n.fact(n.mask(in))
+	n.fact(n.mask(strings.Replace(in, "    key c2hvcnRrZXk=\n", "", 1))) // the mask path alone hides the hashed forms
 	out, err := n.render()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "$aes1$") || strings.Contains(out, "AWWGR") {
+	if strings.Contains(out, "$aes1$") || strings.Contains(out, "AWWGR") || strings.Contains(out, "c2hvcnRrZXk") {
 		t.Errorf("a hashed key survived:\n%s", out)
 	}
 }
