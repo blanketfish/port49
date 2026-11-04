@@ -13,7 +13,7 @@ Platform: cisco_nxos. Image: Nexus 9300v 10.6(2)F. Transport: tcp. Measured 2026
 | e | PASS | login with a one-time credential (login attempt 1, 1s after the first) no error: 3 command authorizations permitted, 1 denied by port49; accounting START 2, STOP 1; port49 authorized one command and denied the other; command output: [0] TAC support: http://www.cisco.com/tac Documents: http://www.cisco.com/en/US/products/ps9372/tsd_products_support_series_home.html Copyright (c) 2002-2025, Cisco... [1] Cmd exec error.  |
 | f | PASS | login with a one-time credential, the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 1.24s; connections the first server reset: 5; port49 redeemed the credential: true; tries 1, the login reached port49 after 1s; first command output:  |
 | g | OBSERVED | single-connection: on: `tacacs-server host 172.100.100.1 key 0 <key> single-connection`; the re-keyed phase: token session (`alice03`), `show version` before the change: ran in 800ms; first `show version` after the change, same session: printed its output in 800ms (the reset's packet: `type=author`); second `show version`, same session: printed its output in 800ms; next token login (`alice04`): refused: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain in 30.43s; break-glass login plus three `show version`: logged in and ran them in 2.94s |
-| h | SEE NOTE | measured in the separate RFC 9887 pass (cells a, b, d, e, f), `tests/lab/results/L88-cisco_nxos-nxos106-tls.md`; this row was a placeholder when this plain pass ran |
+| h | NOT MEASURED | the harness does not run cell h yet |
 
 ### Cell a evidence
 
