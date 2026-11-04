@@ -839,11 +839,18 @@ func TestIDPNames(t *testing.T) {
 // it saves the host key and sends no credential and no signature.
 func TestL90PrepopulateLineSendsNoCredential(t *testing.T) {
 	args := l90PrepopulateArgs("192.0.2.7", "/h/known_hosts")
-	if n := len(args); args[n-2] != "192.0.2.7" || args[n-1] != "exit" {
-		t.Fatalf("the line must end `<address> exit`: %v", args)
+	if n := len(args); args[n-3] != "--" || args[n-2] != "192.0.2.7" || args[n-1] != "exit" {
+		t.Fatalf("the line must end `-- <address> exit`: %v", args)
+	}
+	// the same list examples/oxidized/run_test.go pins for the wrapper: the line measured is the line shipped
+	want := "-F /dev/null -o UserKnownHostsFile=/h/known_hosts -o StrictHostKeyChecking=accept-new -o BatchMode=yes " +
+		"-o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes " +
+		"-o ConnectTimeout=15 -- 192.0.2.7 exit"
+	if got := strings.Join(args, " "); got != want {
+		t.Fatalf("the measured line changed:\n got %s\nwant %s", got, want)
 	}
 	var opts []string
-	for i := 0; i < len(args)-2; i++ {
+	for i := 0; i < len(args)-3; i++ {
 		if args[i] == "-o" {
 			i++
 			opts = append(opts, args[i])

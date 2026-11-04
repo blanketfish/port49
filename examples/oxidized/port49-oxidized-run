@@ -25,6 +25,8 @@
 #   PORT49_BIN          the port49 binary (default port49 on PATH)
 #   OXIDIZED_KNOWN_HOSTS  the known_hosts Oxidized reads (default ~/.ssh/known_hosts)
 #   OXIDIZED_SSH        the ssh to save host keys with (default ssh on PATH)
+#   OXIDIZED_HOSTKEY_JOBS    host-key visits at once (default 32)
+#   OXIDIZED_HOSTKEY_BUDGET  seconds after which no host-key visit starts or runs (default 600)
 #
 # Exit: 0 every node minted and queued; 1 some node not permitted, left out of
 # the output, or skipped here for an unknown platform or an unsafe name, or a node whose host key
@@ -77,72 +79,137 @@ fi
 
 targets=(--devices-file "$nodes")
 if [ -n "${PORT49_SCOPE:-}" ]; then targets=(--scope "$PORT49_SCOPE"); fi
-status=0
-"$port49" workload token --broker "$PORT49_BROKER" --broker-ca "$PORT49_BROKER_CA" \
-  --cert "$PORT49_CERT" --key "$PORT49_KEY" "${targets[@]}" \
-  --ttl "${PORT49_TTL:-15m}" --purpose "oxidized backup" --format tsv --out "$tsv" || status=$?
-case $status in
-0 | 1 | 75) ;; # 75 may carry the pages minted before the deadline
-*)
-  echo "port49-oxidized-run: no tokens minted (port49 workload token exited $status); Oxidized keeps its last router.db and was not reloaded" >&2
-  exit "$status"
-  ;;
-esac
 
-# port49's platform names to Oxidized's models (L49). A node name goes into a
-# REST path, so one outside A-Z a-z 0-9 . _ - is skipped, never escaped. The
-# TSV never holds a tab or newline inside a field, so splitting on tabs is safe.
-# A skipped node is exit 1, like port49's own left-out device.
-awk_status=0
-awk -F'\t' 'BEGIN { OFS = "\t"
-    m["arista_eos"] = "eos"; m["cisco_nxos"] = "nxos"; m["cisco_iosxe"] = "ios"; m["juniper_junos"] = "junos" }
-  $1 !~ /^[A-Za-z0-9._-]+$/ { printf "port49-oxidized-run: %s: a node name outside A-Z a-z 0-9 . _ - is never put in a REST path; skipped\n", $1 > "/dev/stderr"; skipped = 1; next }
-  !($3 in m) { printf "port49-oxidized-run: %s: platform %s has no Oxidized model in this script; skipped\n", $1, $3 > "/dev/stderr"; skipped = 1; next }
-  { print $1, $2, m[$3], $4, $5 }
-  END { if (skipped) exit 3 }' "$tsv" >"$db" || awk_status=$?
-if [ "$awk_status" -ne 0 ] && [ "$awk_status" -ne 3 ]; then
-  echo "port49-oxidized-run: awk failed ($awk_status); nothing changed" >&2
-  exit "$awk_status"
-fi
-
-# Only a router.db with a node in it replaces the last one: an empty one
-# would drop every node from Oxidized.
-if [ ! -s "$db" ]; then
-  if [ ! -s "$tsv" ]; then
+# mint_nodes mints a token per node into $tsv and writes the router.db lines to $db. It sets
+# status and awk_status, and exits for the cases where Oxidized is left as it was.
+mint_nodes() {
+  status=0
+  : >"$tsv"
+  : >"$db"
+  "$port49" workload token --broker "$PORT49_BROKER" --broker-ca "$PORT49_BROKER_CA" \
+    --cert "$PORT49_CERT" --key "$PORT49_KEY" "${targets[@]}" \
+    --ttl "${PORT49_TTL:-15m}" --purpose "oxidized backup" --format tsv --out "$tsv" || status=$?
+  case $status in
+  0 | 1 | 75) ;; # 75 may carry the pages minted before the deadline
+  *)
     echo "port49-oxidized-run: no tokens minted (port49 workload token exited $status); Oxidized keeps its last router.db and was not reloaded" >&2
-  else
-    echo "port49-oxidized-run: no minted node has a name and a model this script can use; Oxidized keeps its last router.db and was not reloaded" >&2
+    exit "$status"
+    ;;
+  esac
+
+  # port49's platform names to Oxidized's models (L49). A node name goes into a
+  # REST path, so one outside A-Z a-z 0-9 . _ - is skipped, never escaped. The
+  # TSV never holds a tab or newline inside a field, so splitting on tabs is safe.
+  # A skipped node is exit 1, like port49's own left-out device.
+  awk_status=0
+  awk -F'\t' 'BEGIN { OFS = "\t"
+      m["arista_eos"] = "eos"; m["cisco_nxos"] = "nxos"; m["cisco_iosxe"] = "ios"; m["juniper_junos"] = "junos" }
+    $1 !~ /^[A-Za-z0-9._-]+$/ { printf "port49-oxidized-run: %s: a node name outside A-Z a-z 0-9 . _ - is never put in a REST path; skipped\n", $1 > "/dev/stderr"; skipped = 1; next }
+    !($3 in m) { printf "port49-oxidized-run: %s: platform %s has no Oxidized model in this script; skipped\n", $1, $3 > "/dev/stderr"; skipped = 1; next }
+    { print $1, $2, m[$3], $4, $5 }
+    END { if (skipped) exit 3 }' "$tsv" >"$db" || awk_status=$?
+  if [ "$awk_status" -ne 0 ] && [ "$awk_status" -ne 3 ]; then
+    echo "port49-oxidized-run: awk failed ($awk_status); nothing changed" >&2
+    exit "$awk_status"
   fi
-  if [ "$status" -eq 0 ]; then status=1; fi
-  exit "$status"
-fi
-mv -f "$db" "$routerdb"
-if [ "$status" -eq 0 ] && [ "$awk_status" -eq 3 ]; then status=1; fi
-if [ "$status" -eq 75 ]; then
-  echo "port49-oxidized-run: not every node was minted (port49 workload token exited 75: the broker did not answer in time or the output could not be written); the minted nodes are queued, the rest are absent from Oxidized's list until a later run mints them" >&2
-fi
-if [ "$status" -eq 1 ] && [ -n "${PORT49_SCOPE:-}" ]; then
-  echo "port49-oxidized-run: port49 workload token exited 1 for scope $PORT49_SCOPE: the sweep may have stopped early (a line above says if so); the minted nodes are queued, any beyond the stop are absent from Oxidized's list until a later run mints them" >&2
-fi
+
+  # Only a router.db with a node in it replaces the last one: an empty one
+  # would drop every node from Oxidized.
+  if [ ! -s "$db" ]; then
+    if [ ! -s "$tsv" ]; then
+      echo "port49-oxidized-run: no tokens minted (port49 workload token exited $status); Oxidized keeps its last router.db and was not reloaded" >&2
+    else
+      echo "port49-oxidized-run: no minted node has a name and a model this script can use; Oxidized keeps its last router.db and was not reloaded" >&2
+    fi
+    if [ "$status" -eq 0 ]; then status=1; fi
+    exit "$status"
+  fi
+}
+
+mint_nodes
 
 # Host keys (lab L90, spec §13 decision 55 ruling 9). Oxidized runs with secure: true, so it
 # refuses a host key that is not in known_hosts and sends no token (L90 a). One that OpenSSH's
 # accept-new wrote it reads, hashed or not (L90 c). Oxidized has no accept-new of its own
 # (L90 d). So each node absent from known_hosts is visited once with the line below: the host
 # key is saved at key exchange, before authentication, and the flags stop every method that
-# would sign or send, so no credential leaves this host. A node already listed is never visited
-# (a changed key stays refused), and StrictHostKeyChecking=no is never used.
-mkdir -p "$(dirname "$known_hosts")"
+# would sign or send, so no credential leaves this host (L90 c: no port49d record). The line
+# ignores the user's ssh config (-F /dev/null), as the measured line did. A node already
+# listed is never visited (a changed key stays refused), and StrictHostKeyChecking=no is
+# never used.
+# The addresses come from the mint, so the sweep follows a first mint; tokens must not age
+# through it, so a run that visited any node mints again after it and uses that mint. The
+# visits run OXIDIZED_HOSTKEY_JOBS at a time (default 32), and no visit starts after
+# OXIDIZED_HOSTKEY_BUDGET seconds (default 600) from the sweep's start, nor outlasts it: a node
+# not reached is named, exits 1, and is retried at the next window. Its backup this window
+# fails at the host key (no token is sent), and the nodes with a known key are backed up.
+sweep_args=(-F /dev/null)
+hostkey_jobs=${OXIDIZED_HOSTKEY_JOBS:-32}
+hostkey_budget=${OXIDIZED_HOSTKEY_BUDGET:-600}
+visited=0
+sweep_unsaved=0
+unknown_nodes=()
+unknown_addrs=()
 while IFS=$'\t' read -r node addr _; do
   if ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then continue; fi
-  timeout 60 "$ssh_bin" -o UserKnownHostsFile="$known_hosts" -o StrictHostKeyChecking=accept-new \
-    -o BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none \
-    -o IdentitiesOnly=yes -o ConnectTimeout=15 "$addr" exit </dev/null >/dev/null 2>&1 || true
-  if ! ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then
-    echo "port49-oxidized-run: $node: no host key for $addr was saved to $known_hosts; Oxidized will refuse the node" >&2
-    if [ "$status" -eq 0 ]; then status=1; fi
+  if [[ ! $addr =~ ^[0-9A-Fa-f:.]+$ ]]; then
+    echo "port49-oxidized-run: $node: the address is not an IP literal, so no host key is saved for it; Oxidized will refuse the node" >&2
+    sweep_unsaved=1
+    continue
   fi
-done <"$routerdb"
+  unknown_nodes+=("$node")
+  unknown_addrs+=("$addr")
+done <"$db"
+if [ "${#unknown_addrs[@]}" -gt 0 ]; then
+  for tool in ssh-keygen timeout "$ssh_bin"; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      echo "port49-oxidized-run: $tool is not installed: the host-key step needs it; nothing changed" >&2
+      exit 2
+    fi
+  done
+  if ! mkdir -p "$(dirname "$known_hosts")"; then
+    echo "port49-oxidized-run: cannot make the directory of $known_hosts; nothing changed" >&2
+    exit 75
+  fi
+  start=$SECONDS
+  not_reached=()
+  for i in "${!unknown_addrs[@]}"; do
+    left=$((hostkey_budget - (SECONDS - start)))
+    if [ "$left" -le 0 ]; then
+      not_reached+=("$i")
+      continue
+    fi
+    while [ "$(jobs -rp | wc -l)" -ge "$hostkey_jobs" ]; do wait -n || true; done
+    timeout "$((left < 60 ? left : 60))" "$ssh_bin" "${sweep_args[@]}" -o UserKnownHostsFile="$known_hosts" \
+      -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o PreferredAuthentications=none \
+      -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes -o ConnectTimeout=15 \
+      -- "${unknown_addrs[$i]}" exit </dev/null >/dev/null 2>&1 &
+    visited=1
+  done
+  wait || true
+  for i in "${!unknown_addrs[@]}"; do
+    addr=${unknown_addrs[$i]}
+    if ! ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then
+      if [[ " ${not_reached[*]-} " == *" $i "* ]]; then
+        echo "port49-oxidized-run: ${unknown_nodes[$i]}: not reached within the ${hostkey_budget}s host-key budget; no key saved, retried at the next window; Oxidized will refuse the node until then" >&2
+      else
+        echo "port49-oxidized-run: ${unknown_nodes[$i]}: no host key for $addr was saved to $known_hosts; Oxidized will refuse the node" >&2
+      fi
+      sweep_unsaved=1
+    fi
+  done
+  if [ "$visited" -eq 1 ]; then mint_nodes; fi
+fi
+
+mv -f "$db" "$routerdb"
+if [ "$status" -eq 0 ] && [ "$awk_status" -eq 3 ]; then status=1; fi
+if [ "$status" -eq 0 ] && [ "$sweep_unsaved" -eq 1 ]; then status=1; fi
+if [ "$status" -eq 75 ]; then
+  echo "port49-oxidized-run: not every node was minted (port49 workload token exited 75: the broker did not answer in time or the output could not be written); the minted nodes are queued, the rest are absent from Oxidized's list until a later run mints them" >&2
+fi
+if [ "$status" -eq 1 ] && [ -n "${PORT49_SCOPE:-}" ]; then
+  echo "port49-oxidized-run: port49 workload token exited 1 for scope $PORT49_SCOPE: the sweep may have stopped early (a line above says if so); the minted nodes are queued, any beyond the stop are absent from Oxidized's list until a later run mints them" >&2
+fi
 
 # A request Oxidized refuses or does not answer in 10s is said and the run
 # goes on to the next node; the run then exits 75. The queue request's body

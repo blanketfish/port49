@@ -11465,8 +11465,8 @@ shapes; Kubernetes is native and never required.
 
 **55. Reference device configuration, alarms, load and the failure matrix (plan 12c; Ryan, the
 team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. Rulings 2,
-14 and 15 are Ryan's and none is provisional; rulings 5, 9 and 10 are provisional on L39, L90 and
-L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01). Rows L89–L91 and L39's cells are open.
+14 and 15 are Ryan's and none is provisional; rulings 5 and 10 are provisional on L39 and L89, and
+each says so; ruling 9 was measured in L90. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01). Rows L89, L91 and L39's cells are open.
 
 - **1. The Junos and NX-OS "ERROR disagreement" is two method lists and two questions, not a
   contradiction.** On Junos, `tests/lab/results/L73-juniper_vjunos-router.md` cell (i) ran
@@ -11540,7 +11540,10 @@ L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01).
   (vEOS, Oxidized 0.37.0): (d) fails, because Oxidized's one setting, `secure`, is a boolean and any other
   value, `accept_new` included, turns verification off; (b) a changed key is refused and (c) an entry
   OpenSSH's accept-new wrote, hashed or not, is read and the backup runs, so the pre-population
-  line is the example's.*
+  line is the example's. The shipped line is the measured one, `ssh -F /dev/null -o
+  UserKnownHostsFile=<file> -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o
+  PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes
+  -o ConnectTimeout=15 -- <address> exit`, so it ignores the operator's ssh configuration.*
 - **10. Velero** is named in the chart README only if L89 passes. The example uses file-system backup
   (the node agent), because kind has no snapshot-capable CSI driver; CSI snapshots stay unmeasured
   and unnamed. The backup holds the issuing CA's private key (`state/issuing-ca.key`), the broker's
@@ -11730,7 +11733,7 @@ L89, and each says so. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01).
   an unreachable broker or another CA's included). `--json` is status's only form and prints `{"token": "...",
   "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys
   snake_case, the serial masked, no secret.
-- **Open.** L89, L90, L91 and L39 (b) and (c) are provisional until they close.
+- **Open.** L89, L91 and L39 (b) and (c) are provisional until they close.
 
 ---
 

@@ -865,7 +865,7 @@ func l90PrepopulateArgs(addr, knownHosts string) []string {
 	return []string{"-F", "/dev/null", "-o", "UserKnownHostsFile=" + knownHosts,
 		"-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "-o", "PreferredAuthentications=none",
 		"-o", "PubkeyAuthentication=no", "-o", "IdentityAgent=none", "-o", "IdentitiesOnly=yes",
-		"-o", "ConnectTimeout=15", addr, "exit"}
+		"-o", "ConnectTimeout=15", "--", addr, "exit"}
 }
 
 // swapHostKeys is a keyscan's output with every key replaced by newKey(type),
@@ -1101,7 +1101,7 @@ func TestL90(t *testing.T) {
 			t.Fatal(err)
 		}
 		hargs := l90PrepopulateArgs(addr, khPath)
-		hargs = append(hargs[:len(hargs)-2:len(hargs)-2], "-o", "HashKnownHosts=yes", addr, "exit")
+		hargs = append(hargs[:len(hargs)-3:len(hargs)-3], "-o", "HashKnownHosts=yes", "--", addr, "exit")
 		hctx, hcancel := context.WithTimeout(context.Background(), 60*time.Second)
 		_, _ = exec.CommandContext(hctx, "ssh", hargs...).CombinedOutput()
 		hcancel()
@@ -1114,6 +1114,19 @@ func TestL90(t *testing.T) {
 		r.say("  - The entry's host field is hashed (`|1|`): %s.", yesNo(strings.HasPrefix(strings.TrimSpace(hraw), "|1|")))
 		r.l90Say("c2_hashed_entry", hc)
 		r.say("  - **(c2) %s**: the backup runs with a hashed entry; status `%s`.", l90Verdict(hc.Status == "success"), hc.Status)
+
+		// (c3) the wrapper's own sweep: it finds the address absent from the (empty) known_hosts
+		// Oxidized reads, saves the key with its own line, mints again, and the backup runs. The
+		// known_hosts is the run's, never the operator's ~/.ssh.
+		decoy := o.wrapperKnownHosts
+		o.wrapperKnownHosts = ""
+		r.say("- **(c3) the wrapper itself sweeps an empty `known_hosts`** (`port49-oxidized-run` with `OXIDIZED_KNOWN_HOSTS` the file Oxidized reads):")
+		c3 := r.l90Run(t, o, "")
+		r.l90Say("c3_wrapper_sweep", c3)
+		c3Pass := c3.Status == "success" && c3.KnownHostsAft > 0
+		r.say("  - **(c3) %s**: PASS iff the wrapper saved the key (lines after: %d) and the backup runs; status `%s`.",
+			l90Verdict(c3Pass), c3.KnownHostsAft, c3.Status)
+		o.wrapperKnownHosts = decoy
 
 		// (d) a setting for accept_new.
 		r.say("- **(d) A setting that maps to net-ssh's `verify_host_key: :accept_new`:**")
@@ -1159,7 +1172,7 @@ func TestL90(t *testing.T) {
 		dPass := d1.Status == "success" && d1.KnownHostsAft > 0 && l90Refused(d2.Status, d2.Redeems)
 		r.say("  - **(d) %s**: PASS iff an unknown key is saved (saved: %s) and a changed key refused (refused: %s).",
 			l90Verdict(dPass), yesNo(d1.KnownHostsAft > 0), yesNo(l90Refused(d2.Status, d2.Redeems)))
-		r.ev.add("verdicts", map[string]string{"b": l90Verdict(bPass), "c": l90Verdict(cPass), "d": l90Verdict(dPass)})
+		r.ev.add("verdicts", map[string]string{"b": l90Verdict(bPass), "c": l90Verdict(cPass), "c3": l90Verdict(c3Pass), "d": l90Verdict(dPass)})
 		r.finish(o, "L90")
 		r.say("- **Logs:** %s", strings.Join(r.logs, " "))
 		r.writeNote(t, "L90", "L90-oxidized-"+l.p.name, l90Claim, l.captureLine(t))
