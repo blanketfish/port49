@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,14 @@ var (
 // legRetry is how long a leg that failed waits before it is opened again.
 var legRetry = time.Second
 
+// relocateMin and relocateMax bound the wait before legs found on one member
+// are moved apart: relocateMin after they are first found together, doubling
+// at each move that leaves them together, to relocateMax.
+var (
+	relocateMin = 2 * time.Second
+	relocateMax = 30 * time.Second
+)
+
 // legOpts are the options of one leg, built here and nowhere else.
 func legOpts(from int64, keysOnly bool) []clientv3.OpOption {
 	o := []clientv3.OpOption{clientv3.WithPrefix(), clientv3.WithRev(from), clientv3.WithProgressNotify()}
@@ -70,6 +79,8 @@ type legSource interface {
 	open(ctx context.Context, i, gen int, from int64) (<-chan clientv3.WatchResponse, context.CancelFunc)
 	progress(i int) error
 	probe(ctx context.Context) error
+	// member is the member leg i is on, "" while it is not placed.
+	member(i int) string
 }
 
 type legMsg struct {
@@ -84,6 +95,9 @@ type leg struct {
 	heard    time.Time
 	failed   bool
 	reopenAt time.Time
+	// placed is set once the leg's opening has returned: until then it has no
+	// stream to ask for progress on.
+	placed *atomic.Bool
 }
 
 // watchLegs merges two legs of one watch into one channel of responses, which
@@ -94,26 +108,38 @@ type leg struct {
 // after is the revision the watch follows from, as WatchContexts has it; saw
 // is told every response's header revision, those it drops included.
 func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan struct{}, saw func(int64),
-	logf func(string, ...any)) <-chan clientv3.WatchResponse {
+	logf func(string, ...any), colo func(on bool, member string)) <-chan clientv3.WatchResponse {
 	out := make(chan clientv3.WatchResponse)
 	go func() {
 		defer close(out)
 		defer func() { traceLeg("watch", 0, 0, "ended") }()
 		in := make(chan legMsg)
 		var legs [2]leg
+		notify := func(on bool, member string) {
+			if colo != nil {
+				colo(on, member)
+			}
+		}
 		through := int64(after)
 		start := func(i int) {
 			l := &legs[i]
 			l.gen++
 			l.failed, l.heard = false, time.Now()
-			ch, cancel := src.open(ctx, i, l.gen, through+1)
+			// The opening runs apart from this goroutine: a Watch waits for a
+			// connection, and the other leg's events must not wait with it.
+			lctx, cancel := context.WithCancel(ctx)
 			l.cancel = cancel
-			gen := l.gen
+			l.placed = new(atomic.Bool)
+			placed, gen, from := l.placed, l.gen, through+1
 			go func() {
+				defer cancel()
+				ch, ocancel := src.open(lctx, i, gen, from)
+				defer ocancel()
+				placed.Store(true)
 				for resp := range ch {
 					select {
 					case in <- legMsg{i, gen, resp, true}:
-					case <-ctx.Done():
+					case <-lctx.Done():
 						return
 					}
 				}
@@ -153,6 +179,47 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			logf("etcd: a leg of a watch ended (%s); the other follows, and it is opened again in %v", why, legRetry)
 			return true
 		}
+		// Both legs on one member go dark together. The balancer shares a
+		// member only when it has no other to give (one was up first), so a
+		// pair found on one is opened apart again: leg 1, from through+1, on
+		// whichever member is then free, and if none is, on the same again.
+		// The tries back off, so a cluster with one live member is not churned.
+		var (
+			together bool
+			wait     = relocateMin
+			tryAt    time.Time
+			apartAt  time.Time
+		)
+		defer func() {
+			if together {
+				notify(false, "") // the watch is over: the gauge does not stay at 1
+			}
+		}()
+		check := func(now time.Time) {
+			if !legs[0].placed.Load() || !legs[1].placed.Load() {
+				return // a leg is being opened: where it lands is not yet known
+			}
+			m0, m1 := src.member(0), src.member(1)
+			on := !legs[0].failed && !legs[1].failed && m0 != "" && m0 == m1
+			switch {
+			case on && !together:
+				together, tryAt = true, now.Add(wait)
+				traceLeg("together", 1, legs[1].gen, "on "+m0)
+				notify(true, m0)
+			case !on && together:
+				together, apartAt = false, now
+				notify(false, m1)
+			case on && !now.Before(tryAt):
+				wait = min(wait*2, relocateMax)
+				tryAt = now.Add(wait)
+				l := &legs[1]
+				l.cancel()
+				traceLeg("moved", 1, l.gen, "off "+m0)
+				start(1)
+			case !on && !together && !apartAt.IsZero() && now.Sub(apartAt) >= relocateMax:
+				wait = relocateMin // apart for long: the next time is a new one
+			}
+		}
 		start(0)
 		start(1)
 		tick := time.NewTicker(feedIdle / 2)
@@ -163,7 +230,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 				return
 			case <-asks:
 				for i := range legs {
-					if !legs[i].failed {
+					if !legs[i].failed && legs[i].placed.Load() {
 						src.progress(i)
 					}
 				}
@@ -244,10 +311,11 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 							traceLeg("quiet, opened again", i, l.gen, fmt.Sprintf("after %v", quiet.Round(10*time.Millisecond)))
 							start(i)
 						}
-					case quiet >= feedIdle:
+					case quiet >= feedIdle && l.placed.Load():
 						src.progress(i)
 					}
 				}
+				check(now)
 			}
 		}
 	}()
@@ -264,8 +332,14 @@ type clientLegs struct {
 	key      string
 	keysOnly bool
 	probeFn  func(context.Context) error
-	trs      [2]*tried
-	ctxs     [2]context.Context
+	// openMu serializes the openings, so that the second leg's pick comes
+	// after the first's placement is recorded; an opening can wait on a
+	// connection, and holds it meanwhile. mu guards trs and ctxs, briefly: the
+	// merge loop reads them.
+	openMu sync.Mutex
+	mu     sync.Mutex
+	trs    [2]*tried
+	ctxs   [2]context.Context
 }
 
 // legTrace, when set by a test, is told each opening of a leg (with the member
@@ -280,43 +354,73 @@ func traceLeg(ev string, leg, gen int, detail string) {
 }
 
 func (c *clientLegs) open(ctx context.Context, i, gen int, from int64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
+	c.openMu.Lock()
+	defer c.openMu.Unlock()
 	tr := &tried{used: map[string]bool{}}
+	c.mu.Lock()
 	if prev := c.trs[i]; prev != nil && prev.lastMember() != "" {
 		tr.used[prev.lastMember()] = true
 	}
-	tr.peer = c.trs[1-i]
+	other := c.trs[1-i]
 	wctx, cancel := context.WithCancel(withTriedSet(clientv3.WithRequireLeader(ctx), tr))
 	wctx = metadata.AppendToOutgoingContext(wctx, "port49-leg", strconv.Itoa(i)+"."+strconv.Itoa(gen))
 	c.trs[i], c.ctxs[i] = tr, wctx
-	if p := c.trs[1-i]; p != nil {
-		p.peer = tr
+	c.mu.Unlock()
+	tr.peer.Store(other)
+	if other != nil {
+		other.peer.Store(tr)
 	}
+	// Watch returns when the stream's pick has been made, which records the
+	// placement; if it returns early the wait is at most 300 ms.
 	ch := c.cl.Watch(wctx, c.key, legOpts(from, c.keysOnly)...)
-	// The next opening waits for this one's placement, so the two legs do not
-	// both pick before either has: at most 300 ms.
 	for end := time.Now().Add(300 * time.Millisecond); tr.lastMember() == "" && time.Now().Before(end); {
 		time.Sleep(5 * time.Millisecond)
 	}
 	peer := ""
-	if p := c.trs[1-i]; p != nil {
-		peer = p.lastMember()
+	if other != nil {
+		peer = other.lastMember()
 	}
 	traceLeg("open", i, gen, "on "+tr.lastMember()+", the other on "+peer)
 	return ch, cancel
 }
 
-func (c *clientLegs) progress(i int) error { return c.cl.RequestProgress(c.ctxs[i]) }
+func (c *clientLegs) progress(i int) error {
+	c.mu.Lock()
+	ctx := c.ctxs[i]
+	c.mu.Unlock()
+	return c.cl.RequestProgress(ctx)
+}
 
 func (c *clientLegs) probe(ctx context.Context) error { return c.probeFn(ctx) }
 
-// followLegs is the two-leg watch of key's range on client cl, from revision
+func (c *clientLegs) member(i int) string {
+	c.mu.Lock()
+	tr := c.trs[i]
+	c.mu.Unlock()
+	if tr != nil {
+		return tr.lastMember()
+	}
+	return ""
+}
+
+// followLegs is the two-leg watch of feed (contexts or marks), of key's range on client cl, from revision
 // after: the channel of merged responses a handler ranges over as it would a
 // single Watch's. probe is a one-key read on cl.
-func (s *Store) followLegs(ctx context.Context, cl *clientv3.Client, key string, after uint64, keysOnly bool,
+func (s *Store) followLegs(ctx context.Context, feed string, cl *clientv3.Client, key string, after uint64, keysOnly bool,
 	probe func(context.Context) error, asks <-chan struct{}) (<-chan clientv3.WatchResponse, error) {
 	if !notFragmented(legOpts(1, keysOnly)) {
 		return nil, fmt.Errorf("%w: a watch leg is set to fragment its responses, which the merge cannot drop", store.ErrUnavailable)
 	}
 	src := &clientLegs{cl: cl, key: key, keysOnly: keysOnly, probeFn: probe}
-	return watchLegs(ctx, src, after, asks, s.saw, s.logf), nil
+	colo := func(on bool, member string) {
+		if on {
+			s.logf("etcd: both legs of the %s watch are on one member (%s): it going dark would stall the feed; one leg is moved when another member is ready", feed, member)
+		} else if member != "" {
+			s.logf("etcd: the legs of the %s watch are on different members again", feed)
+		}
+		if s.legsColocated != nil {
+			s.legsColocated(feed, on)
+		}
+	}
+	return watchLegs(ctx, src, after, asks, s.saw, s.logf, colo), nil
 }

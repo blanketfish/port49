@@ -104,7 +104,7 @@ func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.C
 	progress func(uint64), asks <-chan struct{}) error {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ch, err := s.followLegs(wctx, s.ctx, s.k.family(famContext), after, false, s.probeCtx, asks)
+	ch, err := s.followLegs(wctx, "contexts", s.ctx, s.k.family(famContext), after, false, s.probeCtx, asks)
 	if err != nil {
 		return err
 	}
@@ -233,7 +233,7 @@ func (s *Store) WatchRevocations(ctx context.Context, after uint64,
 	fn func(r store.Revocation, lifted bool, rev uint64), progress func(uint64)) error {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ch, err := s.followLegs(wctx, s.tok, s.k.family(famMark), after, false, s.probeTok, nil)
+	ch, err := s.followLegs(wctx, "marks", s.tok, s.k.family(famMark), after, false, s.probeTok, nil)
 	if err != nil {
 		return err
 	}

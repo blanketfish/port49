@@ -139,6 +139,10 @@ type Metrics struct {
 	// "contexts" or "marks". 0 for longer than hold_ttl is an alarm: this
 	// process's ledger or marks are not following the store.
 	StoreFeedUp *prometheus.GaugeVec
+	// StoreFeedLegsColocated is 1 while both legs of a feed's watch are on one
+	// etcd member (no redundancy against that member going dark); feed is
+	// contexts or marks.
+	StoreFeedLegsColocated *prometheus.GaugeVec
 	// StoreFeedRescans counts a feed's rescans after a compacted watch.
 	StoreFeedRescans *prometheus.CounterVec
 	// StoreFenceTimeouts counts context reads denied because this
@@ -788,6 +792,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend)."}, nil),
 		StoreFeedUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_up",
 			Help: "1 while a feed's watch on the store runs, by feed (contexts or marks)."}, []string{"feed"}),
+		StoreFeedLegsColocated: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_legs_colocated",
+			Help: "1 while both legs of a feed's watch are on one etcd member, so that member going dark would stall the feed until a leg is moved; by feed (contexts or marks)."}, []string{"feed"}),
 		StoreFeedRescans: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_feed_rescans_total",
 			Help: "Rescans of the store after a feed's watch was compacted, by feed."}, []string{"feed"}),
 		StoreFenceTimeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_store_fence_timeouts_total",
@@ -1056,7 +1062,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines, m.SpoolSyncSeconds,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreMemberSuspect, m.StoreFastFail, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreMemberSuspect, m.StoreFastFail, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedLegsColocated, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

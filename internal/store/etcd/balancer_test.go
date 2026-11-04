@@ -56,7 +56,8 @@ func TestAHedgedCallsCopiesAreEachPlacedOnAMemberNotYetUsed(t *testing.T) {
 	// The legs of a watch avoid each other's member, and a leg reopened avoids
 	// the member it was on.
 	a, b := &tried{}, &tried{}
-	a.peer, b.peer = b, a
+	a.peer.Store(b)
+	b.peer.Store(a)
 	ca, cb := withTriedSet(context.Background(), a), withTriedSet(context.Background(), b)
 	for i := 0; i < 12; i++ {
 		p.Pick(balancer.PickInfo{Ctx: ca})
@@ -67,7 +68,8 @@ func TestAHedgedCallsCopiesAreEachPlacedOnAMemberNotYetUsed(t *testing.T) {
 		a.used, b.used = nil, nil
 	}
 	was := a.lastMember()
-	re := &tried{used: map[string]bool{was: true}, peer: b}
+	re := &tried{used: map[string]bool{was: true}}
+	re.peer.Store(b)
 	for i := 0; i < 6; i++ {
 		p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), re)})
 		if m := re.lastMember(); m == was || m == b.lastMember() {
@@ -229,7 +231,8 @@ func TestTheSecondLegIsNotPlacedOnTheFirstsMemberWhenTheOthersAreSuspect(t *test
 	p.sus.mark("b", now)
 	first := &tried{used: map[string]bool{}}
 	first.last.Store("c")
-	second := &tried{used: map[string]bool{}, peer: first}
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
 	for i := 0; i < 20; i++ {
 		if addr, _ := pick(t, p, withTriedSet(context.Background(), second)); addr == "c" {
 			t.Fatalf("pick %d put the second leg on the first leg's member", i)
@@ -237,29 +240,16 @@ func TestTheSecondLegIsNotPlacedOnTheFirstsMemberWhenTheOthersAreSuspect(t *test
 	}
 }
 
-// At startup a channel can have one member ready while the others are still
-// connecting: the second leg waits for one of them rather than sharing the
-// first leg's member, which would take both legs down together. With the
-// others failed (not coming), it shares rather than stall.
-func TestTheSecondLegWaitsForAnotherMemberWhileOthersAreConnecting(t *testing.T) {
+// With one member ready (the others still connecting, or failed) the second
+// leg shares the first's rather than wait: a pick never blocks, and
+// watchLegs moves a leg apart once another member is ready.
+func TestTheSecondLegSharesTheOnlyReadyMember(t *testing.T) {
 	first := &tried{used: map[string]bool{}}
 	first.last.Store("a")
-	for _, tc := range []struct {
-		pending bool
-		wantErr bool
-	}{{true, true}, {false, false}} {
-		p := readyPicker("a")
-		p.pending = tc.pending
-		second := &tried{used: map[string]bool{}, peer: first}
-		res, err := p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)})
-		if tc.wantErr && err != balancer.ErrNoSubConnAvailable {
-			t.Fatalf("others connecting: got %v (%v), want ErrNoSubConnAvailable", res.Metadata, err)
-		}
-		if !tc.wantErr && err != nil {
-			t.Fatalf("others failed: got %v, want the only member", err)
-		}
-		if tc.wantErr && second.lastMember() != "" {
-			t.Fatalf("a deferred pick recorded a placement: %q", second.lastMember())
-		}
+	second := &tried{used: map[string]bool{}}
+	second.peer.Store(first)
+	addr, _ := pick(t, readyPicker("a"), withTriedSet(context.Background(), second))
+	if addr != "a" {
+		t.Fatalf("placed on %q, want the only member a", addr)
 	}
 }

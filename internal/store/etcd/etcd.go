@@ -61,6 +61,10 @@ type Config struct {
 	// because a call on it timed out (port49_store_member_suspect_total); nil
 	// counts nothing. It is the process's: the last store opened sets it.
 	MemberSuspect prometheus.Counter
+	// LegsColocated is told when both legs of a feed's watch come to be on one
+	// member (on) and when they are on different ones again, by feed
+	// (port49_store_feed_legs_colocated); nil tells nothing.
+	LegsColocated func(feed string, on bool)
 	// FastFail is told the reason of each call the client refused at once
 	// (port49_store_fast_fail_total); nil counts nothing.
 	FastFail func(reason string)
@@ -84,6 +88,7 @@ type Store struct {
 	ownLifts             ownLifts           // this process's own lifts, by key (marks.go)
 	seenRev              atomic.Uint64      // Seen: the highest revision a response carried
 	logf                 func(format string, args ...any)
+	legsColocated        func(feed string, on bool)
 	idxUndecodable       prometheus.Counter // nil counts nothing
 	// user is the etcd user this identity authenticates as, its client
 	// certificate's CN, or "" when Open could not read one. CheckIdentity
@@ -204,7 +209,7 @@ func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 		inc := c.MemberSuspect.Inc
 		onSuspect.Store(&inc)
 	}
-	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
+	s := &Store{legsColocated: c.LegsColocated, k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
 		clear: c.TLS == nil}
 	s.ctxKV = sawKV{KV: ctx, saw: s.saw}
 	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace, c.CallTimeout)

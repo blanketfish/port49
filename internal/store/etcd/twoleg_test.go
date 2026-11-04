@@ -2,6 +2,8 @@ package etcd
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +23,13 @@ type scripted struct {
 	opened  chan [2]int
 	probeOK atomic.Bool
 	asked   atomic.Int64
+	// place says which member leg i's opening number gen is placed on; nil
+	// places every opening on "a". block, when set for a leg, holds that leg's
+	// openings until it is closed, as a Watch does that waits for a connection.
+	place    func(i, gen int) string
+	block    [2]chan struct{}
+	opens    [2]atomic.Int64
+	memberOf [2]atomic.Value
 }
 
 func newScripted() *scripted {
@@ -30,12 +39,28 @@ func newScripted() *scripted {
 }
 
 func (s *scripted) open(ctx context.Context, i, gen int, from int64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
+	s.opens[i].Add(1)
+	if b := s.block[i]; b != nil {
+		select {
+		case <-b:
+		case <-ctx.Done():
+		}
+	}
+	m := "a"
+	if s.place != nil {
+		m = s.place(i, gen)
+	}
+	s.memberOf[i].Store(m)
 	s.mu.Lock()
 	ch := make(chan clientv3.WatchResponse, 16)
 	s.chans[[2]int{i, gen}], s.from[[2]int{i, gen}] = ch, from
 	s.mu.Unlock()
 	s.opened <- [2]int{i, gen}
 	return ch, func() {}
+}
+func (s *scripted) member(i int) string {
+	m, _ := s.memberOf[i].Load().(string)
+	return m
 }
 func (s *scripted) progress(i int) error { s.asked.Add(1); return nil }
 func (s *scripted) probe(context.Context) error {
@@ -72,7 +97,7 @@ func progressAt(rev int64) clientv3.WatchResponse {
 func runLegs(t *testing.T, src *scripted, after uint64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	out := watchLegs(ctx, src, after, nil, func(int64) {}, func(string, ...any) {})
+	out := watchLegs(ctx, src, after, nil, func(int64) {}, func(string, ...any) {}, func(bool, string) {})
 	// The controller is over (its output closed) before the next test runs, so
 	// a test that sets feedIdle or feedStall never races a controller left by
 	// an earlier one.
@@ -280,5 +305,119 @@ func TestTheLegsAreNotFragmented(t *testing.T) {
 	}
 	if notFragmented(append(legOpts(7, false), clientv3.WithFragment())) {
 		t.Fatal("notFragmented does not see WithFragment (clientv3 renamed its flag?)")
+	}
+}
+
+// One leg's opening that does not return (a Watch waiting for a connection)
+// stops nothing else: the other leg's events still reach the feed.
+func TestALegWhoseOpeningBlocksDoesNotStopTheOther(t *testing.T) {
+	src := newScripted()
+	src.block[1] = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, func(bool, string) {})
+	t.Cleanup(func() {
+		close(src.block[1])
+		cancel()
+		for range out {
+		}
+	})
+	<-src.opened
+	src.send(0, 1, evs(10))
+	if revs, ok, _ := next(out, 500*time.Millisecond); !ok || len(revs) != 1 || revs[0] != 10 {
+		t.Fatalf("leg 0's event, with leg 1's opening blocked: %v %v", revs, ok)
+	}
+}
+
+func fastLegs(t *testing.T, idle, min, max time.Duration) {
+	t.Helper()
+	oi, os, omin, omax := feedIdle, feedStall, relocateMin, relocateMax
+	feedIdle, feedStall, relocateMin, relocateMax = idle, time.Hour, min, max
+	t.Cleanup(func() { feedIdle, feedStall, relocateMin, relocateMax = oi, os, omin, omax })
+}
+
+type togetherLog struct {
+	mu  sync.Mutex
+	seq []string
+}
+
+func (l *togetherLog) note(on bool, member string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.seq = append(l.seq, fmt.Sprintf("%v@%s", on, member))
+}
+func (l *togetherLog) get() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.seq, ",")
+}
+
+// Both legs start on one member (only one was ready); when another member is
+// ready the later leg is opened again there, from the revision delivered, and
+// nothing is lost or delivered twice.
+func TestLegsOnOneMemberAreMovedApartWhenAnotherIsReady(t *testing.T) {
+	fastLegs(t, 100*time.Millisecond, 100*time.Millisecond, time.Second)
+	src := newScripted()
+	src.place = func(i, gen int) string {
+		if i == 1 && gen >= 2 {
+			return "b"
+		}
+		return "a"
+	}
+	var tl togetherLog
+	ctx, cancel := context.WithCancel(context.Background())
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, tl.note)
+	t.Cleanup(func() {
+		cancel()
+		for range out {
+		}
+	})
+	<-src.opened
+	<-src.opened
+	src.send(0, 1, evs(10))
+	if revs, ok, _ := next(out, time.Second); !ok || revs[0] != 10 {
+		t.Fatalf("first delivery %v %v", revs, ok)
+	}
+	select {
+	case o := <-src.opened:
+		if o != [2]int{1, 2} {
+			t.Fatalf("opened %v, want leg 1's second opening", o)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the legs shared a member and neither was moved")
+	}
+	src.mu.Lock()
+	from := src.from[[2]int{1, 2}]
+	src.mu.Unlock()
+	if from != 11 {
+		t.Fatalf("the moved leg opened from %d, want 11 (after the delivered 10)", from)
+	}
+	src.send(1, 2, evs(11))
+	if revs, ok, _ := next(out, time.Second); !ok || revs[0] != 11 {
+		t.Fatalf("the moved leg's delivery %v %v", revs, ok)
+	}
+	src.send(0, 1, evs(11))
+	if revs, ok, _ := next(out, 300*time.Millisecond); ok {
+		t.Fatalf("revision 11 was delivered twice: %v", revs)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if got := tl.get(); got != "true@a,false@a" && got != "true@a,false@b" {
+		t.Fatalf("colocation reports %q, want one rising and one falling", got)
+	}
+}
+
+// With one member only the legs stay together, the feed runs, and the moves
+// back off: from relocateMin, doubling to relocateMax.
+func TestTheMoveOfLegsOnOneMemberBacksOff(t *testing.T) {
+	fastLegs(t, 100*time.Millisecond, 100*time.Millisecond, 400*time.Millisecond)
+	src := newScripted()
+	out, _ := runLegs(t, src, 5)
+	src.send(1, 1, evs(10))
+	if revs, ok, _ := next(out, time.Second); !ok || revs[0] != 10 {
+		t.Fatalf("delivery from the leg on the shared member %v %v", revs, ok)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	// attempts at about 100, 300, 700, 1100 ms; unbacked, one every 50 ms
+	if n := src.opens[1].Load() - 1; n < 2 || n > 6 {
+		t.Fatalf("leg 1 was opened again %d times in 1.5 s, want 2 to 6", n)
 	}
 }
