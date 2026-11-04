@@ -147,6 +147,25 @@ than one sweep's TTL mints in waves (design §17).
 
 The wrapper never prints a token. If you edit it, do not add `set -x` or an `echo` of one.
 
+## 7a. Host keys
+
+Oxidized runs with `secure: true` and never `secure: false`. It has no accept-new of its own, and
+the one setting it reads, `secure`, is a boolean (lab L90, vEOS 4.31.2F, Oxidized 0.37.0): with
+`secure: true` and no `known_hosts` entry it raises `Net::SSH::HostKeyUnknown` and sends no token; with
+a changed key, `HostKeyMismatch` and no token; any other value of `secure`, `accept_new` included,
+turns verification off, so a changed key is accepted. An entry OpenSSH's accept-new wrote, hashed or
+not, is read and the backup runs.
+
+So the wrapper saves a key for each node absent from `known_hosts` (`~/.ssh/known_hosts` of the user
+Oxidized runs as; `OXIDIZED_KNOWN_HOSTS` moves it), once, with
+`ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o PreferredAuthentications=none -o
+PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes <address> exit`. The key is saved
+at key exchange, before authentication, and the flags stop every method that would sign or send, so no
+credential leaves the host. A node already listed is never visited: a changed key stays refused until
+you remove its line (`ssh-keygen -R <address>`) after checking the change. A node whose key could not
+be saved is named on stderr, the run exits 1, and Oxidized will refuse that node. This needs `ssh`,
+`ssh-keygen` and `timeout` (60 s per node) on the wrapper's host.
+
 ## 8. On a bad day
 
 - **Exit 75**: the broker or its store did not answer within the deadline, or the broker could not

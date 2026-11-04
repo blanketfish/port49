@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l87 lab-l88 failure-matrix
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -344,6 +344,10 @@ lab-workload:
 # Oxidized end to end (plan 8, L49): the compose stack with one platform, as
 # `make lab` runs one at a time. Needs containerlab, the platform's image and
 # `make build`.
+# L90: Oxidized's host-key handling against accept-new, on vEOS.
+lab-l90: build
+	PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run '^TestL90$$' -count=1 -v -timeout 60m
+
 lab-oxidized:
 	@set -e; \
 	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \

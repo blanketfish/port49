@@ -23,10 +23,12 @@
 #   PORT49_TTL          the tokens' lifetime: about one backup run (default 15m);
 #                       size it to the whole sweep, since every node is queued at once
 #   PORT49_BIN          the port49 binary (default port49 on PATH)
+#   OXIDIZED_KNOWN_HOSTS  the known_hosts Oxidized reads (default ~/.ssh/known_hosts)
+#   OXIDIZED_SSH        the ssh to save host keys with (default ssh on PATH)
 #
 # Exit: 0 every node minted and queued; 1 some node not permitted, left out of
-# the output, or skipped here for an unknown platform or an unsafe name (a line
-# on stderr says which, and the rest are queued), or, with PORT49_SCOPE, a sweep
+# the output, or skipped here for an unknown platform or an unsafe name, or a node whose host key
+# could not be saved (a line on stderr says which, and the rest are queued), or, with PORT49_SCOPE, a sweep
 # a final broker answer stopped (the pages before it are queued, the rest absent
 # until a later run); 75 the broker did not answer
 # in time (or could not establish the certificate's revocation status: a stale
@@ -51,6 +53,8 @@ nodes=${OXIDIZED_NODES:-/etc/port49/oxidized-nodes}
 routerdb=${OXIDIZED_ROUTER_DB:-$HOME/.config/oxidized/router.db}
 rest=${OXIDIZED_REST:-http://127.0.0.1:8888}
 port49=${PORT49_BIN:-port49}
+known_hosts=${OXIDIZED_KNOWN_HOSTS:-$HOME/.ssh/known_hosts}
+ssh_bin=${OXIDIZED_SSH:-ssh}
 
 # A fresh --out file each run: if port49 could not write it (exit 75) it is
 # still empty, and the nothing-minted path below leaves the last router.db.
@@ -120,6 +124,25 @@ fi
 if [ "$status" -eq 1 ] && [ -n "${PORT49_SCOPE:-}" ]; then
   echo "port49-oxidized-run: port49 workload token exited 1 for scope $PORT49_SCOPE: the sweep may have stopped early (a line above says if so); the minted nodes are queued, any beyond the stop are absent from Oxidized's list until a later run mints them" >&2
 fi
+
+# Host keys (lab L90, spec §13 decision 55 ruling 9). Oxidized runs with secure: true, so it
+# refuses a host key that is not in known_hosts and sends no token (L90 a). One that OpenSSH's
+# accept-new wrote it reads, hashed or not (L90 c). Oxidized has no accept-new of its own
+# (L90 d). So each node absent from known_hosts is visited once with the line below: the host
+# key is saved at key exchange, before authentication, and the flags stop every method that
+# would sign or send, so no credential leaves this host. A node already listed is never visited
+# (a changed key stays refused), and StrictHostKeyChecking=no is never used.
+mkdir -p "$(dirname "$known_hosts")"
+while IFS=$'\t' read -r node addr _; do
+  if ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then continue; fi
+  timeout 60 "$ssh_bin" -o UserKnownHostsFile="$known_hosts" -o StrictHostKeyChecking=accept-new \
+    -o BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none \
+    -o IdentitiesOnly=yes -o ConnectTimeout=15 "$addr" exit </dev/null >/dev/null 2>&1 || true
+  if ! ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then
+    echo "port49-oxidized-run: $node: no host key for $addr was saved to $known_hosts; Oxidized will refuse the node" >&2
+    if [ "$status" -eq 0 ]; then status=1; fi
+  fi
+done <"$routerdb"
 
 # A request Oxidized refuses or does not answer in 10s is said and the run
 # goes on to the next node; the run then exits 75. The queue request's body

@@ -55,6 +55,17 @@ type scenario struct {
 	hold    bool            // another run holds the lock beside router.db
 	noDir   bool            // router.db's directory does not exist
 	scope   string          // PORT49_SCOPE, when set
+	// known_hosts: the addresses it lists before the run, what the fake ssh does with
+	// an unknown one, and where runCase puts what it saw
+	seed      []string
+	sshNoSave bool
+	res       *sshResult
+}
+
+// sshResult is what the fake ssh and known_hosts held after a run.
+type sshResult struct {
+	calls      [][]string // one slice of arguments per ssh call
+	knownHosts string
 }
 
 // run runs the wrapper with a fake port49 that writes tsv to --out and exits
@@ -75,7 +86,7 @@ func runWith(t *testing.T, tsv string, exit int, oldDB string, write bool) (int,
 func runCase(t *testing.T, c scenario) (int, string, []string, string) {
 	t.Helper()
 	tsv, exit, oldDB, write := c.tsv, c.exit, c.oldDB, !c.noWrite
-	for _, tool := range []string{"bash", "curl", "awk", "flock"} {
+	for _, tool := range []string{"bash", "curl", "awk", "flock", "ssh-keygen"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s is not installed: the wrapper needs it", tool)
 		}
@@ -90,6 +101,38 @@ if [ "$FAKE_WRITE" = 1 ]; then printf '%s' "$FAKE_TSV" > "$out"; fi
 exit $FAKE_EXIT
 `
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// a fake ssh: it records its arguments and, like OpenSSH under accept-new, saves the
+	// host key it was pointed at into UserKnownHostsFile (unless the scenario says it cannot)
+	keyBase := filepath.Join(dir, "hostkey")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", keyBase).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v: %s", err, out)
+	}
+	pub, rerr := os.ReadFile(keyBase + ".pub")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	keyFields := strings.Join(strings.Fields(string(pub))[:2], " ")
+	khPath := filepath.Join(dir, "known_hosts")
+	var seeded strings.Builder
+	for _, a := range c.seed {
+		seeded.WriteString(a + " " + keyFields + "\n")
+	}
+	if err := os.WriteFile(khPath, []byte(seeded.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sshLog := filepath.Join(dir, "ssh-calls")
+	fakeSSH := filepath.Join(dir, "ssh")
+	sshScript := `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_SSH_LOG"
+kh=""
+for a in "$@"; do case $a in UserKnownHostsFile=*) kh=${a#UserKnownHostsFile=} ;; esac; done
+addr=${@: -2:1}
+if [ "$FAKE_SSH_SAVE" = 1 ]; then printf '%s %s\n' "$addr" "$FAKE_KEY" >> "$kh"; fi
+exit 255
+`
+	if err := os.WriteFile(fakeSSH, []byte(sshScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	db := filepath.Join(dir, "router.db")
@@ -126,7 +169,8 @@ exit $FAKE_EXIT
 	cmd.Env = append(os.Environ(), "PORT49_BIN="+fake, "PORT49_BROKER=https://broker.example:8443",
 		"PORT49_BROKER_CA=/ca.pem", "PORT49_CERT=/w.pem", "PORT49_KEY=/w-key.pem", "OXIDIZED_NODES="+nodes,
 		"OXIDIZED_ROUTER_DB="+db, "OXIDIZED_REST="+srv.URL, "FAKE_TSV="+tsv, "FAKE_EXIT="+strconv.Itoa(exit),
-		"FAKE_WRITE="+fakeWrite, "FAKE_ARGS="+filepath.Join(dir, "args"))
+		"FAKE_WRITE="+fakeWrite, "FAKE_ARGS="+filepath.Join(dir, "args"), "OXIDIZED_SSH="+fakeSSH,
+		"OXIDIZED_KNOWN_HOSTS="+khPath, "FAKE_SSH_LOG="+sshLog, "FAKE_KEY="+keyFields, "FAKE_SSH_SAVE="+map[bool]string{true: "0", false: "1"}[c.sshNoSave])
 	if c.scope != "" {
 		cmd.Env = append(cmd.Env, "PORT49_SCOPE="+c.scope)
 	}
@@ -138,6 +182,16 @@ exit $FAKE_EXIT
 		code = ee.ExitCode()
 	} else if err != nil {
 		t.Fatal(err)
+	}
+	if c.res != nil {
+		raw, _ := os.ReadFile(sshLog)
+		for _, ln := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			if ln != "" {
+				c.res.calls = append(c.res.calls, strings.Fields(ln))
+			}
+		}
+		kh, _ := os.ReadFile(khPath)
+		c.res.knownHosts = string(kh)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -319,5 +373,66 @@ func TestAMissingRouterDBDirectoryExits75(t *testing.T) {
 	code, stderr, calls, _ := runCase(t, scenario{tsv: leafAndJunos, noDir: true})
 	if code != 75 || len(calls) != 0 || !strings.Contains(stderr, "cannot make files beside") {
 		t.Fatalf("exit %d calls %v stderr %s", code, calls, stderr)
+	}
+}
+
+// Ruling 9 (L90): Oxidized with secure: true refuses a host key not in known_hosts and sends no
+// token (cell a); one OpenSSH's accept-new wrote it reads (cells c, c2). The wrapper writes that
+// entry for each node absent from known_hosts, with a line that sends no credential and no
+// signature, and never for a node already there and never with StrictHostKeyChecking=no.
+func TestTheWrapperPrepopulatesUnknownNodes(t *testing.T) {
+	res := &sshResult{}
+	code, stderr, calls, _ := runCase(t, scenario{tsv: minted, oldDB: "", seed: []string{"10.0.0.11"}, res: res})
+	if code != 1 { // fw7 skipped
+		t.Fatalf("exit %d stderr %s", code, stderr)
+	}
+	if len(res.calls) != 1 {
+		t.Fatalf("want one ssh call, for the one node absent from known_hosts: %v", res.calls)
+	}
+	args := res.calls[0]
+	if args[len(args)-2] != "10.0.0.21" || args[len(args)-1] != "exit" {
+		t.Fatalf("the line must end `<address> exit` for the unknown node: %v", args)
+	}
+	joined := " " + strings.Join(args, " ") + " "
+	for _, flag := range []string{"StrictHostKeyChecking=accept-new", "BatchMode=yes", "PreferredAuthentications=none",
+		"PubkeyAuthentication=no", "IdentityAgent=none", "IdentitiesOnly=yes"} {
+		if !strings.Contains(joined, " -o "+flag+" ") {
+			t.Errorf("the line lacks -o %s: %v", flag, args)
+		}
+	}
+	for _, bad := range []string{"StrictHostKeyChecking=no", "StrictHostKeyChecking=off", "UserKnownHostsFile=/dev/null", " -i ", "password"} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("the line holds %q: %v", bad, args)
+		}
+	}
+	if !strings.Contains(res.knownHosts, "10.0.0.21 ") {
+		t.Errorf("known_hosts lacks the saved entry: %q", res.knownHosts)
+	}
+	if strings.Join(calls, ",") != "GET /reload,PUT /node/next/leaf1,PUT /node/next/vjunos1" {
+		t.Errorf("calls %v", calls)
+	}
+	if strings.Contains(stderr, "TOKEN") {
+		t.Errorf("a token on stderr: %s", stderr)
+	}
+}
+
+func TestTheWrapperLeavesAKnownNodeAlone(t *testing.T) {
+	res := &sshResult{}
+	code, stderr, _, _ := runCase(t, scenario{tsv: minted, seed: []string{"10.0.0.11", "10.0.0.21"}, res: res})
+	if code != 1 || len(res.calls) != 0 {
+		t.Fatalf("exit %d, ssh calls %v, stderr %s", code, res.calls, stderr)
+	}
+}
+
+// An entry that was not saved means Oxidized will refuse the node: the run says so and exits 1.
+func TestAnEntryThatWasNotSavedIsSaid(t *testing.T) {
+	res := &sshResult{}
+	code, stderr, calls, _ := runCase(t, scenario{tsv: minted[:strings.Index(minted, "vjunos1")], sshNoSave: true, res: res})
+	if code != 1 || !strings.Contains(stderr, "leaf1: no host key for 10.0.0.11 was saved to ") ||
+		!strings.Contains(stderr, "Oxidized will refuse the node") {
+		t.Fatalf("exit %d stderr %s", code, stderr)
+	}
+	if strings.Join(calls, ",") != "GET /reload,PUT /node/next/leaf1" {
+		t.Fatalf("the node is still queued: %v", calls)
 	}
 }
