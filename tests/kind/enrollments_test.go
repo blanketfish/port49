@@ -243,8 +243,9 @@ spec:
 		}
 	}
 
-	// quiet fails unless a successful run's log is empty once the tags are off: an export that succeeds says
-	// nothing, and its sealed bytes go to the file alone. The bind password's value and the words of a
+	// quiet fails unless a successful run's log is, once the tags are off, the broker's certificate-validity
+	// warning alone (the kind stack issues one-day certificates, so the product says so): an export that
+	// succeeds says nothing else, and its sealed bytes go to the file alone. The bind password's value and the words of a
 	// credential are named separately, so a failure says which. A log is printed only through the filter.
 	quiet := func(when, log string) {
 		t.Helper()
@@ -254,8 +255,8 @@ spec:
 		if w := secretShaped.FindString(strings.ReplaceAll(log, "directory_password", "")); w != "" {
 			t.Errorf("%s: the log holds credential text (%s)", when, strings.ToLower(w[:min(len(w), 8)]))
 		}
-		if body := logLines(log); body != "" {
-			t.Errorf("%s: the log is not empty, and a successful export says nothing; filtered:\n%s", when, shapetest.Filtered(s.root, body))
+		if extra := unexpectedLines(log); extra != "" {
+			t.Errorf("%s: the log holds more than the certificate-validity warning; filtered:\n%s", when, shapetest.Filtered(s.root, extra))
 		}
 	}
 
@@ -328,6 +329,22 @@ spec:
 // prefixTag is the `--prefix` tag kubectl puts on each log line: [pod/<name>/<container>].
 var prefixTag = regexp.MustCompile(`(?m)^\[pod/[^\]]+\] ?`)
 
+// certWarning is the one line a successful export may log: the product's warning that the broker's etcd
+// certificate is near its end (the stack's certificates last a day). Anchored, and its date has no characters
+// a credential would need.
+var certWarning = regexp.MustCompile(`^port49-broker: directory store: the broker's etcd certificate \(CN=port49-broker\) is valid until [0-9A-Za-z:+ .,-]+ \(\d+ days?\)$`)
+
+// unexpectedLines is the lines of a log, tags off, that are not certWarning, joined; "" when there are none.
+func unexpectedLines(log string) string {
+	var extra []string
+	for _, ln := range strings.Split(prefixTag.ReplaceAllString(log, ""), "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" && !certWarning.MatchString(ln) {
+			extra = append(extra, ln)
+		}
+	}
+	return strings.Join(extra, "\n")
+}
+
 // logLines is a log with its prefix tags taken off and its white space trimmed.
 func logLines(log string) string { return strings.TrimSpace(prefixTag.ReplaceAllString(log, "")) }
 
@@ -359,6 +376,22 @@ func TestEnrollmentsValuesAndPolicyParse(t *testing.T) {
 	for _, want := range []string{"keytabSecret: " + directoryCreds, "file:/etc/port49/directory/bind_password", "ca_file: /etc/port49/directory/ca.pem"} {
 		if !strings.Contains(enrollValues, want) {
 			t.Errorf("the values lack %q", want)
+		}
+	}
+}
+
+func TestUnexpectedLinesAllowsOnlyTheCertificateWarning(t *testing.T) {
+	const warn = "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until 2026-11-05T17:40:00Z (0 days)"
+	for _, c := range []struct{ name, log, want string }{
+		{"the real line, tagged", "[pod/x/export] " + warn + "\n", ""},
+		{"the real line twice", warn + "\n" + warn + "\n", ""},
+		{"nothing", "", ""},
+		{"a different line", "[pod/x/export] " + warn + "\nbroker: exported 3 records\n", "broker: exported 3 records"},
+		{"a credential word", "[pod/x/export] " + warn + "\nthe password is hunter2\n", "the password is hunter2"},
+		{"the line with a credential word in its date", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until password=x (0 days)", "port49-broker: directory store: the broker's etcd certificate (CN=port49-broker) is valid until password=x (0 days)"},
+	} {
+		if got := unexpectedLines(c.log); got != c.want {
+			t.Errorf("%s: unexpected %q, want %q", c.name, got, c.want)
 		}
 	}
 }
