@@ -66,6 +66,19 @@ func activeHeld(l *Listener) int {
 	return n
 }
 
+// heldIdle is held, then waits until the listener has marked every connection
+// but the busy ones idle. A connection is marked idle from ConnState, a moment
+// after its client has the answer; a bind in that gap sees no idle connection
+// of its own certificate and takes the principal's oldest idle one (spec
+// section 8), so a test that binds one after another and asserts which was
+// closed must not race it.
+func heldIdle(t *testing.T, f *fixture, bl *Listener, addr string, cert tls.Certificate, busy int) (*tls.Conn, *bufio.Reader) {
+	t.Helper()
+	c, br := held(t, f, addr, cert)
+	eventually(t, "the connection idle", func() bool { return activeHeld(bl) <= busy })
+	return c, br
+}
+
 func event(f *fixture, name string) float64 {
 	return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues(name))
 }
@@ -168,11 +181,9 @@ func TestAFloodChurnsOnlyItsOwnIdleSlots(t *testing.T) {
 	lim.MaxPerPrincipal = 2
 	addr, bl := serveThrough(t, f, lim, nil)
 	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
-	rc, rbr := held(t, f, addr, renewed)
-	eventually(t, "the renewed connection idle", func() bool { return activeHeld(bl) == 0 })
+	rc, rbr := heldIdle(t, f, bl, addr, renewed, 0)
 	for i := 0; i < 6; i++ {
-		held(t, f, addr, f.alice)
-		eventually(t, "the flood connection idle", func() bool { return activeHeld(bl) == 0 })
+		heldIdle(t, f, bl, addr, f.alice, 0)
 	}
 	ask(t, rc, rbr)
 }
@@ -188,8 +199,7 @@ func TestABindWithNoIdleConnectionOfItsOwnTakesThePrincipalsOldestIdle(t *testin
 	lim.MaxPerPrincipal = 2
 	addr, bl := serveThrough(t, f, lim, nil)
 	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
-	rc, _ := held(t, f, addr, renewed)
-	eventually(t, "the renewed connection idle", func() bool { return activeHeld(bl) == 0 })
+	rc, _ := heldIdle(t, f, bl, addr, renewed, 0)
 	_, fin := busy(t, f, bl, addr, f.alice, 1)
 	held(t, f, addr, f.alice)
 	if !closedByPeer(rc) {

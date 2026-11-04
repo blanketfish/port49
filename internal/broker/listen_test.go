@@ -359,11 +359,11 @@ func TestAPrincipalPastItsCapLosesItsOldest(t *testing.T) {
 	f := newFixture(t, 8)
 	lim := DefaultListenerLimits
 	lim.MaxPerPrincipal = 2
-	addr, _ := serveThrough(t, f, lim, nil)
+	addr, bl := serveThrough(t, f, lim, nil)
 	carol := f.client(t, "carol@example.com", f.now.Add(time.Hour))
-	cc, cbr := held(t, f, addr, carol)
-	first, _ := held(t, f, addr, f.alice)
-	second, sbr := held(t, f, addr, f.alice)
+	cc, cbr := heldIdle(t, f, bl, addr, carol, 0)
+	first, _ := heldIdle(t, f, bl, addr, f.alice, 0)
+	second, sbr := heldIdle(t, f, bl, addr, f.alice, 0)
 	third, tbr := held(t, f, addr, f.alice)
 	if !closedByPeer(first) {
 		t.Fatal("alice's oldest connection was not closed")
@@ -387,10 +387,10 @@ func TestARevokedCertificateNeverEvictsItsOwner(t *testing.T) {
 	lim.MaxPerPrincipal = 2
 	addr, bl := serveThrough(t, f, lim, nil)
 	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
-	rc, rbr := held(t, f, addr, renewed)
+	rc, rbr := heldIdle(t, f, bl, addr, renewed, 0)
 	// Before any mark: the stolen certificate's flood churns its own slots.
 	for i := 0; i < 5; i++ {
-		held(t, f, addr, f.alice)
+		heldIdle(t, f, bl, addr, f.alice, 0)
 	}
 	ask(t, rc, rbr)
 	stolenKey := certKey(f.alice)
