@@ -4,14 +4,20 @@ Platform: cisco_iosxe. Image: Catalyst 8000V 17.13.01a. Transport: tcp. Measured
 
 - the reference loaded: `deploy/device-aaa/cisco_iosxe` (tcp), values: servers 172.100.100.1, 172.100.100.2; the second is an address on the bridge where nothing listens
 
+Capture: `tests/lab/evidence/L88-f-cisco_iosxe.pcap` (redacted copy of the run's capture)
+
+Capture: `tests/lab/evidence/L88-f2-cisco_iosxe.pcap` (redacted copy of the run's capture)
+
+Capture: `tests/lab/evidence/L88-f3-cisco_iosxe.pcap` (redacted copy of the run's capture)
+
 | Cell | Verdict | Observation |
 |---|---|---|
-| a | PASS | control (port49d stopped, the local account): logged in true (no error). With port49d answering: logged in false after 5.521s (); port49 decision for the attempt: verdict="deny" reason="token_not_found"; attempts 1, port49 first saw one at +6s |
-| b | PASS | break-glass login with port49d stopped: ok true in 20ms (no error) |
-| c | OBSERVED | the store hung (the proxy to etcd held); break-glass first logged in at +6s; port49d's own close line appeared at +4.8s: port49d: store: 5 consecutive store health checks failed over 4s (the last: the context pool: store: unavailable: context deadline exceeded); closing every listener so that devices use their local method; port49d records: authorize_session [], authorize_command [], accounting []; tries: try at +0s took 5s: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain; try at +6s took 800ms: logged in, `show version` printed "'Cisco IOS XE Software, Version 17.13.01a'" |
+| a | PASS | control (port49d stopped, the local account): logged in true (no error). With port49d answering: logged in false after 5.522s (); port49 decision for the attempt: verdict="deny" reason="token_not_found"; attempts 1, port49 first saw one at +6s |
+| b | PASS | break-glass login with port49d stopped: ok true in 30ms (no error) |
+| c | OBSERVED | the store hung (the proxy to etcd held); break-glass first logged in at +6s; port49d's own close line appeared at +5s: port49d: store: 5 consecutive store health checks failed over 4s (the last: the context pool: store: unavailable: context deadline exceeded); closing every listener so that devices use their local method; port49d records: authorize_session [], authorize_command [], accounting []; tries: try at +0s took 5s: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain; try at +6s took 800ms: logged in, `show version` printed "'Cisco IOS XE Software, Version 17.13.01a'" |
 | d | PASS | port49d dark (its log shows it closed its listeners: true): break-glass login no error in 780ms, `show version` output "'Cisco IOS XE Software, Version 17.13.01a'" |
 | e | PASS | login with a one-time credential (login attempt 1, 1s after the first) no error: 2 command authorizations permitted, 1 denied by port49; accounting START 1, STOP 2; port49 authorized one command and denied the other; command output: [0] Cisco IOS Software [IOSXE], Virtual XE Software (X86_64_LINUX_IOSD-UNIVERSALK9-M), Version 17.13.1a, RELEASE SOFTWARE (fc3) Technical Support: http://www.cisco.... [1]   |
-| f | PASS | login with a one-time credential, the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 770ms; connections the first server reset: 1; port49 redeemed the credential: true; tries 1, the login reached port49 after 1s; first command output:  |
+| f | PASS | login with a one-time credential, the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 2.78s; connections the first server reset: 2; port49 redeemed the credential: true; tries 1, the login reached port49 after 3s; first command output:  |
 | f2 | MEASURED | the first one-time-credential login that port49 answered came at +30s after port49d was back; the session was still open when the loop began and was closed at +0s; a break-glass login first succeeded at +0s |
 | f3 | MEASURED | the first one-time-credential login that reached the second server came at +39s; the break-glass session was never closed in the loop |
 
@@ -49,16 +55,17 @@ Platform: cisco_iosxe. Image: Catalyst 8000V 17.13.01a. Transport: tcp. Measured
   event=authorize_command verdict=permit reason=permit_dominates flags= user=alice02 port=tty434
   event=account verdict= reason= flags=stop user=alice02 port=tty434
 the wire during the login (headers only):
-9 connections from the device in the window: 9 with a SYN, 9 answered SYN-ACK, 1 with an RST
-+0s 172.100.100.1 sport 59122: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
-+0s 172.100.100.2 sport 36388: SYN true SYN-ACK true; device packets 12, server packets 12; FIN dev true srv true; RST dev false srv false
-+0s 172.100.100.2 sport 36402: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+0s 172.100.100.2 sport 36406: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+300ms 172.100.100.2 sport 36422: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+500ms 172.100.100.2 sport 36430: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+500ms 172.100.100.2 sport 36440: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+700ms 172.100.100.2 sport 36450: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+800ms 172.100.100.2 sport 36460: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
+10 connections from the device in the window: 10 with a SYN, 10 answered SYN-ACK, 2 with an RST
++0s 172.100.100.1 sport 43450: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
++2s 172.100.100.1 sport 43464: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
++2s 172.100.100.2 sport 34290: SYN true SYN-ACK true; device packets 12, server packets 12; FIN dev true srv true; RST dev false srv false
++2s 172.100.100.2 sport 34304: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++2s 172.100.100.2 sport 34320: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++2.3s 172.100.100.2 sport 45320: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++2.5s 172.100.100.2 sport 45336: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++2.5s 172.100.100.2 sport 45344: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++2.7s 172.100.100.2 sport 45358: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++2.8s 172.100.100.2 sport 45370: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
 
 `terminal length 0` after f:
 terminal length 0
@@ -70,13 +77,13 @@ Tacacs+ Server -  public  :
                Server name: port49-1
             Server address: 172.100.100.1
                Server port: 49
-              Socket opens:        234
-             Socket closes:        234
+              Socket opens:        239
+             Socket closes:        239
              Socket aborts:          0
              Socket errors:          0
            Socket Timeouts:          0
-   Failed Connect Attempts:         33
-        Total Packets Sent:         34
+   Failed Connect Attempts:         34
+        Total Packets Sent:         35
         Total Packets Recv:         34
              Server Status: Alive
 Continous Authc fail count:          0
@@ -87,12 +94,12 @@ Tacacs+ Server -  public  :
                Server name: port49-2
             Server address: 172.100.100.2
                Server port: 49
-              Socket opens:        219
-             Socket closes:        219
+              Socket opens:        223
+             Socket closes:        223
              Socket aborts:          0
              Socket errors:          0
            Socket Timeouts:          0
-   Failed Connect Attempts:         32
+   Failed Connect Attempts:         33
         Total Packets Sent:          9
         Total Packets Recv:          9
              Server Status: Alive
@@ -103,14 +110,13 @@ xe1#
 `show tcp brief` after f:
 show tcp brief
 TCB       Local Address               Foreign Address             (state)
-7FC89CBEFFD0  10.0.0.15.18875            172.100.100.1.49            TIMEWAIT
-7FC89CB21158  10.0.0.15.22               172.100.100.1.60372         ESTAB
+7F7804950FA0  10.0.0.15.22               172.100.100.1.55272         ESTAB
 ------------  0.0.0.0.22                 *.*                         LISTEN
 ------------  ::.22                      *.*                         LISTEN
 xe1#
 `show processes | include TACACS` after f:
 show processes | include TACACS
- 374 Mwe 64ADCD8F3FE5             1         11      90  21120/24000  0 TACACS+         
+ 374 Mwe 5E624309DFE5             1         11      90  21120/24000  0 TACACS+         
 xe1#
 
 ```
@@ -754,103 +760,103 @@ port49d's own view of the window: 627 decision records; its stderr lines: port49
   event=mint verdict=permit reason=grants_matched flags=
 `ss -tn` on port 49 before port49d restarted:
 State     Recv-Q Send-Q Local Address:Port    Peer Address:Port 
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:58978
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36440
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59016
-TIME-WAIT 0      0      172.100.100.1:41390  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:41424  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36402
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59042
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59068
-TIME-WAIT 0      0      172.100.100.1:59326  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:59348  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59028
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36406
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36430
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59058
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36450
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:57450
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59038
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59000
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36460
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:57454
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59050
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36422
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36388
-TIME-WAIT 0      0      172.100.100.1:47028  172.100.100.2:49   
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:58988
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43342
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45358
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43376
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43398
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:34320
+TIME-WAIT 0      0      172.100.100.1:47384  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:47422  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43382
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:34290
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40812
+TIME-WAIT 0      0      172.100.100.1:60950  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:60982  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40824
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43362
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43420
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:34304
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43406
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40800
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45336
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45320
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45344
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43358
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45370
+TIME-WAIT 0      0      172.100.100.1:45952  172.100.100.2:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43348
 
 mid-window:
 
 after:
 State     Recv-Q Send-Q Local Address:Port    Peer Address:Port 
 LISTEN    0      4096   172.100.100.1:49           0.0.0.0:*    
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:35088
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:35082
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:48316
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:58978
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:56020
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36440
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59016
-TIME-WAIT 0      0      172.100.100.1:41390  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:41424  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36402
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:55988
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59042
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:56038
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59068
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:56004
-TIME-WAIT 0      0      172.100.100.1:59326  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:59348  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:59378  172.100.100.1:49   
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59028
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:55986
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36406
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36430
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59058
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36450
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:57450
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:35092
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:55976
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59038
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:48284
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:45068
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59000
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:56050
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36460
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:57454
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:56002
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:59050
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:48288
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36422
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:48300
-TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:36388
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:55962
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:56022
-TIME-WAIT 0      0      172.100.100.1:47028  172.100.100.2:49   
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:58988
-TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:54612
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43342
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45358
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43376
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43398
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52866
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:60530
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52944
+TIME-WAIT 0      0      172.100.100.1:32772  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52932
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52896
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:34320
+TIME-WAIT 0      0      172.100.100.1:47384  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:47422  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40956
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:44444
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43382
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:34290
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40812
+TIME-WAIT 0      0      172.100.100.1:60950  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:60982  172.100.100.1:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40824
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52872
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43362
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52900
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:60532
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40962
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43420
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:34304
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40946
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43406
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52922
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52882
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:60524
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:60548
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40800
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45336
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45320
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45344
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52906
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43358
+TIME-WAIT 0      0      172.100.100.2:49    172.100.100.41:45370
+TIME-WAIT 0      0      172.100.100.1:45952  172.100.100.2:49   
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:43348
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:40966
+TIME-WAIT 0      0      172.100.100.1:49    172.100.100.41:52942
 
 the wire (headers only):
 18 connections from the device in the window: 18 with a SYN, 18 answered SYN-ACK, 0 with an RST
-+4.1s 172.100.100.1 sport 54612: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+4.3s 172.100.100.1 sport 35082: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+4.6s 172.100.100.1 sport 35088: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+4.8s 172.100.100.1 sport 35092: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+18.9s 172.100.100.1 sport 48284: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+19.2s 172.100.100.1 sport 48288: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+19.4s 172.100.100.1 sport 48300: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+19.7s 172.100.100.1 sport 48316: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+29.7s 172.100.100.1 sport 55962: SYN true SYN-ACK true; device packets 12, server packets 12; FIN dev true srv true; RST dev false srv false
-+29.7s 172.100.100.1 sport 55976: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+29.7s 172.100.100.1 sport 55986: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+29.9s 172.100.100.1 sport 55988: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+30.1s 172.100.100.1 sport 56002: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+30.2s 172.100.100.1 sport 56004: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+30.4s 172.100.100.1 sport 56020: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+30.4s 172.100.100.1 sport 56022: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+30.4s 172.100.100.1 sport 56038: SYN true SYN-ACK true; device packets 12, server packets 14; FIN dev true srv true; RST dev false srv false
-+32.9s 172.100.100.1 sport 56050: SYN true SYN-ACK true; device packets 12, server packets 14; FIN dev true srv true; RST dev false srv false
++4s 172.100.100.1 sport 40946: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++4.3s 172.100.100.1 sport 40956: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++4.5s 172.100.100.1 sport 40962: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++4.8s 172.100.100.1 sport 40966: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++18.8s 172.100.100.1 sport 60524: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++19.1s 172.100.100.1 sport 60530: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++19.3s 172.100.100.1 sport 60532: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++19.6s 172.100.100.1 sport 60548: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++29.6s 172.100.100.1 sport 52866: SYN true SYN-ACK true; device packets 12, server packets 12; FIN dev true srv true; RST dev false srv false
++29.6s 172.100.100.1 sport 52872: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++29.7s 172.100.100.1 sport 52882: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++29.9s 172.100.100.1 sport 52896: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++30.1s 172.100.100.1 sport 52900: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++30.2s 172.100.100.1 sport 52906: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++30.4s 172.100.100.1 sport 52922: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++30.4s 172.100.100.1 sport 52932: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++30.4s 172.100.100.1 sport 52942: SYN true SYN-ACK true; device packets 12, server packets 14; FIN dev true srv true; RST dev false srv false
++32.9s 172.100.100.1 sport 52944: SYN true SYN-ACK true; device packets 12, server packets 14; FIN dev true srv true; RST dev false srv false
 
 `terminal length 0`:
 terminal length 0
@@ -862,13 +868,13 @@ Tacacs+ Server -  public  :
                Server name: port49-1
             Server address: 172.100.100.1
                Server port: 49
-              Socket opens:        327
-             Socket closes:        327
+              Socket opens:        332
+             Socket closes:        332
              Socket aborts:          0
              Socket errors:          0
            Socket Timeouts:          0
-   Failed Connect Attempts:         46
-        Total Packets Sent:         56
+   Failed Connect Attempts:         47
+        Total Packets Sent:         57
         Total Packets Recv:         56
              Server Status: Alive
 Continous Authc fail count:          0
@@ -879,12 +885,12 @@ Tacacs+ Server -  public  :
                Server name: port49-2
             Server address: 172.100.100.2
                Server port: 49
-              Socket opens:        293
-             Socket closes:        293
+              Socket opens:        297
+             Socket closes:        297
              Socket aborts:          0
              Socket errors:          0
            Socket Timeouts:          0
-   Failed Connect Attempts:         45
+   Failed Connect Attempts:         46
         Total Packets Sent:          9
         Total Packets Recv:          9
              Server Status: Alive
@@ -895,162 +901,164 @@ xe1#
 `show tcp brief`:
 show tcp brief
 TCB       Local Address               Foreign Address             (state)
-7FC89CB21158  10.0.0.15.22               172.100.100.1.56344         ESTAB
-7FC89CBEFFD0  10.0.0.15.18875            172.100.100.1.49            TIMEWAIT
+7F787098BB18  10.0.0.15.53467            172.100.100.1.49            TIMEWAIT
+7F7804950FA0  10.0.0.15.22               172.100.100.1.48814         ESTAB
+7F7804945000  10.0.0.15.48002            172.100.100.1.49            TIMEWAIT
 ------------  0.0.0.0.22                 *.*                         LISTEN
 ------------  ::.22                      *.*                         LISTEN
 xe1#
 `show processes | include TACACS`:
 show processes | include TACACS
- 374 Mwe 64ADCD8F3FE5             2         23      86  21120/24000  0 TACACS+         
+ 374 Mwe 5E624309DFE5             1         23      43  21120/24000  0 TACACS+         
 xe1#
 `show logging | include Authentication start|Using server|Opening TCP|Socket I/O|Choosing next`:
 show logging | include Authentication start|Using server|Opening TCP|Socket I/O|Choosing next
-*Nov  4 00:18:00.514: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:00.515: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:00.516: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.517: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:00.518: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.519: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:00.520: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.521: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:00.522: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.760: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:00.761: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:00.763: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:00.764: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.765: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:00.766: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.767: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:00.768: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:00.769: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:00.770: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:01.014: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:01.015: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:01.024: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:01.025: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:01.026: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:01.027: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:01.028: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:01.029: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:01.030: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:01.031: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:02.542: TPLUS: Authentication start packet created for 4037(alice03)
-*Nov  4 00:18:04.543: TPLUS: Authentication start packet created for 4037(alice03)
-*Nov  4 00:18:06.576:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:06.587: TPLUS: Authentication start packet created for 4038(breakglass)
-*Nov  4 00:18:06.598: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:06.854: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:07.105: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:07.352:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:17.408: TPLUS: Authentication start packet created for 4039(alice03)
-*Nov  4 00:18:19.409: TPLUS: Authentication start packet created for 4039(alice03)
-*Nov  4 00:18:21.410:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:21.421: TPLUS: Authentication start packet created for 4040(breakglass)
-*Nov  4 00:18:21.432: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:21.687: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:21.939: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:22.186:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:32.206: TPLUS: Authentication start packet created for 4041(alice03)
-*Nov  4 00:18:32.206: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:32.469: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:32.718: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:32.969:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:32.976: TPLUS: Authentication start packet created for 4042(breakglass)
-*Nov  4 00:18:32.976: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:35.480: TPLUS: Authentication start packet created for 4042(breakglass)
-*Nov  4 00:18:35.480: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:38.485:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:38.485: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:38.487:  Socket I/O cleanup message sent to TACACS
-*Nov  4 00:18:38.810: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.810: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:38.811: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.812: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.812: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.812: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.813: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.813: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.814: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.814: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.815: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.815: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.816: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.816: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.817: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.817: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.818: TPLUS: Authentication start packet created for 4043(breakglass)
-*Nov  4 00:18:38.829: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:38.830: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.831: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.831: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.833: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.834: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.835: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.836: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.837: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:38.838: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.838: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.840: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.841: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.841: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.842: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.844: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.845: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.846: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:38.847: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:38.848: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.086: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:39.086: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:39.088: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:39.089: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.089: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.091: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.092: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.093: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.094: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.095: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.336: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:39.337: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:39.338: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:39.339: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.340: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.341: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.342: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.342: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.344: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.345: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.589: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:39.590: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:39.591: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:39.593: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.594: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.594: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.596: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.597: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.598: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.599: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.839: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:39.841: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:39.844: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:39.845: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.846: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.847: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.848: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.849: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:39.850: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:39.851: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:40.114: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
-*Nov  4 00:18:40.115: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
-*Nov  4 00:18:40.123: TPLUS: Using server 172.100.100.1
-*Nov  4 00:18:40.125: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:40.126: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:40.127: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:40.128: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:40.129: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:40.130: TPLUS: Choosing next server 172.100.100.1
-*Nov  4 00:18:40.131: TPLUS: Choosing next server 172.100.100.2
-*Nov  4 00:18:40.357: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+1: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:31.412: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:12:31.413: TPLUS: Using server 172.100.100.1
+*Nov  4 08:12:31.414: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.415: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.416: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.417: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.418: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.419: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.420: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.621: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:31.622: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:12:31.624: TPLUS: Using server 172.100.100.1
+*Nov  4 08:12:31.625: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.626: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.627: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.628: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.629: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.630: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.631: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.875: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:31.876: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:12:31.885: TPLUS: Using server 172.100.100.1
+*Nov  4 08:12:31.886: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.887: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.888: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.889: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.890: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:31.891: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:12:31.892: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:12:33.407: TPLUS: Authentication start packet created for 4037(alice03)
+*Nov  4 08:12:35.408: TPLUS: Authentication start packet created for 4037(alice03)
+*Nov  4 08:12:37.409:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:12:37.420: TPLUS: Authentication start packet created for 4038(breakglass)
+*Nov  4 08:12:37.431: TPLUS: Using server 172.100.100.1
+*Nov  4 08:12:37.686: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:37.935: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:38.185:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:12:48.202: TPLUS: Authentication start packet created for 4039(alice03)
+*Nov  4 08:12:50.203: TPLUS: Authentication start packet created for 4039(alice03)
+*Nov  4 08:12:52.204:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:12:52.215: TPLUS: Authentication start packet created for 4040(breakglass)
+*Nov  4 08:12:52.226: TPLUS: Using server 172.100.100.1
+*Nov  4 08:12:52.483: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:52.733: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:12:52.981:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:13:03.039: TPLUS: Authentication start packet created for 4041(alice03)
+*Nov  4 08:13:03.039: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:03.301: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:03.549: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:03.807:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:13:03.807: TPLUS: Authentication start packet created for 4042(breakglass)
+*Nov  4 08:13:03.807: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:06.312: TPLUS: Authentication start packet created for 4042(breakglass)
+*Nov  4 08:13:06.312: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:09.317:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:13:09.317: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:09.320:  Socket I/O cleanup message sent to TACACS
+*Nov  4 08:13:09.541: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.541: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:09.542: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.542: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.542: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.543: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.544: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.544: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.545: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.545: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.546: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.546: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.547: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.547: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.547: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.548: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.549: TPLUS: Authentication start packet created for 4043(breakglass)
+*Nov  4 08:13:09.559: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:09.560: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.561: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.562: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.563: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.564: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.565: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.566: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.567: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:09.568: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.569: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.570: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.571: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.572: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.573: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.574: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.575: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.576: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.577: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.578: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.818: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:09.819: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:13:09.820: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:09.821: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.822: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.823: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.824: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.825: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:09.826: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:09.827: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.069: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:10.070: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:13:10.071: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:10.072: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.073: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.074: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.075: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.076: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.077: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.078: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.321: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:10.322: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:13:10.323: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:10.325: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.326: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.327: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.328: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.329: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.330: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.331: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.572: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:10.573: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:13:10.577: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:10.578: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.579: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.580: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.581: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.582: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.583: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.584: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.824: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
+*Nov  4 08:13:10.826: TAC+: Opening TCP/IP to 172.100.100.2/49 timeout=5
+*Nov  4 08:13:10.834: TPLUS: Using server 172.100.100.1
+*Nov  4 08:13:10.836: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.837: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.838: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.839: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.840: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:10.841: TPLUS: Choosing next server 172.100.100.1
+*Nov  4 08:13:10.842: TPLUS: Choosing next server 172.100.100.2
+*Nov  4 08:13:11.086: TAC+: Opening TCP/IP to 172.100.100.1/49 timeout=5
 xe1#
 
 ```
@@ -1083,22 +1091,22 @@ xe1#
   event=account verdict= reason= flags=stop user=alice04 port=tty435
   event=authorize_command verdict=permit reason=permit_dominates flags= user=alice04 port=tty435
   event=account verdict= reason= flags=stop user=alice04 port=tty435
-  event=account verdict= reason= flags=stop user=breakglass port=tty434
   event=account verdict= reason= flags=stop user=alice04 port=tty435
+  event=account verdict= reason= flags=stop user=breakglass port=tty434
 the wire (headers only):
 12 connections from the device in the window: 12 with a SYN, 12 answered SYN-ACK, 3 with an RST
-+9s 172.100.100.1 sport 60466: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
-+9.1s 172.100.100.2 sport 49568: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+9.5s 172.100.100.1 sport 60470: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
-+9.5s 172.100.100.2 sport 49578: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+38.9s 172.100.100.1 sport 53094: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
-+38.9s 172.100.100.2 sport 42098: SYN true SYN-ACK true; device packets 12, server packets 12; FIN dev true srv true; RST dev false srv false
-+38.9s 172.100.100.2 sport 42110: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+38.9s 172.100.100.2 sport 42126: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+39.2s 172.100.100.2 sport 42138: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+39.4s 172.100.100.2 sport 42150: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
-+39.4s 172.100.100.2 sport 42154: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
-+39.6s 172.100.100.2 sport 42162: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++9.1s 172.100.100.1 sport 36252: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
++9.1s 172.100.100.2 sport 51270: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++9.3s 172.100.100.1 sport 36260: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
++9.3s 172.100.100.2 sport 51272: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++38.7s 172.100.100.1 sport 37758: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
++38.7s 172.100.100.2 sport 47786: SYN true SYN-ACK true; device packets 12, server packets 12; FIN dev true srv true; RST dev false srv false
++38.7s 172.100.100.2 sport 47788: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++38.7s 172.100.100.2 sport 47802: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++39s 172.100.100.2 sport 47818: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++39.2s 172.100.100.2 sport 47832: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
++39.2s 172.100.100.2 sport 47838: SYN true SYN-ACK true; device packets 12, server packets 10; FIN dev true srv true; RST dev false srv false
++39.4s 172.100.100.2 sport 47842: SYN true SYN-ACK true; device packets 10, server packets 10; FIN dev true srv true; RST dev false srv false
 
 (the evidence session failed: port49d was stopped but something is still listening on 172.100.100.1:49 after 30s)
 

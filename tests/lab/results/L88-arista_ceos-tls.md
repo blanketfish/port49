@@ -7,13 +7,15 @@ Platform: arista_ceos. Image: cEOS-lab 4.36.3M. Transport: tls. Measured 2026-11
 - RFC 9887 enrolment by L73's machinery (its own PKI; the device's key and certificate id `l73-dev`, the root trusted as `port49-root`); port49d's tls_listener on 172.100.100.1:300. The reference TLS file was then applied over it unchanged.
 - the reference loaded: `deploy/device-aaa/arista_eos` (tls), values: servers 172.100.100.1, 172.100.100.2; the second is an address on the bridge where nothing listens
 
+Capture: `tests/lab/evidence/L88-f-tls-ceos436-arista_ceos.pcap` (redacted copy of the run's capture)
+
 | Cell | Verdict | Observation |
 |---|---|---|
-| a | PASS | control (port49d stopped, the local account): logged in true (no error). With port49d answering: logged in false after 832ms (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none keyboard-interactive], no supported methods remain); port49 decision for the attempt: verdict="deny" reason="token_not_found"; attempts 1, port49 first saw one at +1s |
-| b | PASS | break-glass login with port49d stopped: ok true in 1.83s (no error) |
-| d | PASS | port49d dark (its log shows it closed its listeners: true): break-glass login no error in 2s, `show version` output "'Arista cEOSLab'" |
-| e | PASS | login with a one-time credential (login attempt 1, 2s after the first) no error: 1 command authorizations permitted, 1 denied by port49; accounting START 1, STOP 1; port49 authorized one command and denied the other; command output: [0] Hardware version: Serial number: 1CBEA85094F628AABFCF3B015A90F05D Hardware MAC address: 001c.73b7.3c2d System MAC address: 001c.73b7.3c2d Software image version... [1] > show clock % Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); see 'port49 explain' at line 1  |
-| f | PASS | login with a one-time credential, the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 2.41s; connections the first server reset: 1; port49 redeemed the credential: true; tries 1, the login reached port49 after 2s; first command output:  |
+| a | PASS | control (port49d stopped, the local account): logged in true (no error). With port49d answering: logged in false after 613ms (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none keyboard-interactive], no supported methods remain); port49 decision for the attempt: verdict="deny" reason="token_not_found"; attempts 1, port49 first saw one at +1s |
+| b | PASS | break-glass login with port49d stopped: ok true in 2.27s (no error) |
+| d | PASS | port49d dark (its log shows it closed its listeners: true): break-glass login no error in 2.43s, `show version` output "'Arista cEOSLab'" |
+| e | PASS | login with a one-time credential (login attempt 1, 2s after the first) no error: 1 command authorizations permitted, 1 denied by port49; accounting START 1, STOP 1; port49 authorized one command and denied the other; command output: [0] Hardware version: Serial number: 4A7865ADC40E1788FE6579D2B5BAE800 Hardware MAC address: 001c.7353.7026 System MAC address: 001c.7353.7026 Software image version... [1] > show clock % Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); see 'port49 explain' at line 1  |
+| f | PASS | login with a one-time credential, the first server (172.100.100.1) resetting every connection at Accept and port49d on the second (172.100.100.2): no error in 2.89s; connections the first server reset: 1; port49 redeemed the credential: true; tries 1, the login reached port49 after 3s; first command output:  |
 
 ### Cell a evidence
 
@@ -45,6 +47,8 @@ Platform: arista_ceos. Image: cEOS-lab 4.36.3M. Transport: tls. Measured 2026-11
   event=authorize_command verdict=permit reason=permit_dominates flags= user=alice02 port=ssh
   event=account verdict= reason= flags=stop user=alice02 port=ssh
 the wire during the login (headers only):
-0 connections from the device in the window: 0 with a SYN, 0 answered SYN-ACK, 0 with an RST
+2 connections from the device in the window: 2 with a SYN, 2 answered SYN-ACK, 1 with an RST
++0s 172.100.100.1 sport 36349: SYN true SYN-ACK true; device packets 4, server packets 4; FIN dev false srv false; RST dev false srv true
++0s 172.100.100.2 sport 35389: SYN true SYN-ACK true; device packets 34, server packets 22; FIN dev false srv false; RST dev false srv false
 
 ```
