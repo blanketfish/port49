@@ -8,7 +8,7 @@
       "port49d_records": 0,
       "known_hosts_lines_before": 0,
       "known_hosts_lines_after": 0,
-      "oxidized_log_excerpt": "oxidized-1 | 2026-11-04 12:52:09.882725 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyUnknown with msg \"fingerprint SHA256:zuWYQZ64dRlOPGWvBZRNvU4Ga84a2w2zz7oPUkufbUs is unknown for \"172.100...."
+      "oxidized_log_excerpt": "oxidized-1 | 2026-11-04 13:05:39.082171 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyUnknown with msg \"fingerprint SHA256:6foLfrz28xwGc88rDFmttgKL6eNTJludiQKSpGVBqXI is unknown for \"172.100...."
     }
   },
   {
@@ -18,9 +18,9 @@
       "ended": true,
       "redeems": 0,
       "port49d_records": 0,
-      "known_hosts_lines_before": 3,
-      "known_hosts_lines_after": 3,
-      "oxidized_log_excerpt": "oxidized-1 | 2026-11-04 12:52:17.888554 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyMismatch (rescued RuntimeError) with msg \"fingerprint SHA256:Dw8fY+kt+0/qIAPu9wZw+0HgbPs/HsNETJrt/2Xkkd4 ..."
+      "known_hosts_lines_before": 2,
+      "known_hosts_lines_after": 2,
+      "oxidized_log_excerpt": "oxidized-1 | 2026-11-04 13:05:47.086606 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyMismatch (rescued RuntimeError) with msg \"fingerprint SHA256:PTHATZvTgY+bWh/TVhl+nFb/aqLQQM9iga4gn3zHEVw ..."
     }
   },
   {
@@ -88,8 +88,8 @@
       "ended": true,
       "redeems": 1,
       "port49d_records": 9,
-      "known_hosts_lines_before": 3,
-      "known_hosts_lines_after": 3,
+      "known_hosts_lines_before": 2,
+      "known_hosts_lines_after": 2,
       "oxidized_log_excerpt": ""
     }
   },

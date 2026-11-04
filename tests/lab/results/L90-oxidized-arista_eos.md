@@ -1,7 +1,7 @@
 # L90 — arista_eos
 
 - **Date measured:** 2026-11-04
-- **Run:** commit `e4ab387b24ca3f4be95c3fb7d4b44d8b8c771a80`, `PORT49_LAB_PLATFORMS=eos`, `-run ^TestL90$`
+- **Run:** commit `d68eb1e854fa99c8349ace3010887cd6103b414a`, `PORT49_LAB_PLATFORMS=eos`, `-run ^TestL90$`
 - **Platform:** arista_eos
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`), Oxidized 0.37.0-101-g65125713 (image `oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc`, oxidized/oxidized@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc)
 - **Capture:** `tests/lab/evidence/L90-oxidized-arista_eos.json`
@@ -13,17 +13,17 @@ Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `sec
 
 ## Observation
 
-- **Device capture:** `tests/lab/evidence/L90-oxidized-arista_eos.pcap` — 2535 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L90-oxidized-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Device capture:** `tests/lab/evidence/L90-oxidized-arista_eos.pcap` — 2484 packets to or from the device when this note was written (the finished file holds a few more: stopping the capture adds a probe pair), countable with `tcpdump -r tests/lab/evidence/L90-oxidized-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Oxidized** `oxidized --version`: 0.37.0-101-g65125713 (image `oxidized/oxidized:latest@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc`, oxidized/oxidized@sha256:b58a2db261be348990a2345ad3cec8dba03b373ac817865ef1080bd7db7d2ccc); `examples/oxidized/config` with `secure: true`. `known_hosts` is the run's temp home's, mounted read-only at Oxidized's `~/.ssh/known_hosts`; nothing of the operator's `~/.ssh` is read or written.
 - **(a) `secure: true`, no `known_hosts` entry:**
   - the run ended with status `no_connection`; 0 authentications reached port49d (0 port49d records in all); `known_hosts` held 0 key line(s) before and 0 after.
   - Oxidized's log for that run (class and message lines only):
-    - `oxidized-1 | 2026-11-04 12:52:09.882725 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyUnknown with msg "fingerprint SHA256:zuWYQZ64dRlOPGWvBZRNvU4Ga84a2w2zz7oPUkufbUs is unknown for "172.100....`
+    - `oxidized-1 | 2026-11-04 13:05:39.082171 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyUnknown with msg "fingerprint SHA256:6foLfrz28xwGc88rDFmttgKL6eNTJludiQKSpGVBqXI is unknown for "172.100....`
   - Refused at the host key (no token sent): yes.
 - **(b) `secure: true`, a changed key** (the device's address with a fresh public key of each type it offers):
-  - the run ended with status `no_connection`; 0 authentications reached port49d (0 port49d records in all); `known_hosts` held 3 key line(s) before and 3 after.
+  - the run ended with status `no_connection`; 0 authentications reached port49d (0 port49d records in all); `known_hosts` held 2 key line(s) before and 2 after.
   - Oxidized's log for that run (class and message lines only):
-    - `oxidized-1 | 2026-11-04 12:52:17.888554 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyMismatch (rescued RuntimeError) with msg "fingerprint SHA256:Dw8fY+kt+0/qIAPu9wZw+0HgbPs/HsNETJrt/2Xkkd4 ...`
+    - `oxidized-1 | 2026-11-04 13:05:47.086606 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyMismatch (rescued RuntimeError) with msg "fingerprint SHA256:PTHATZvTgY+bWh/TVhl+nFb/aqLQQM9iga4gn3zHEVw ...`
   - **(b) PASS**: PASS iff refused; refused: yes.
 - **(c) `secure: true`, after ruling 9's line wrote the entry:**
   - The line: `ssh -F /dev/null -o UserKnownHostsFile=<known_hosts> -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes -o ConnectTimeout=15 -- <address> exit`. It exited 255 (a refusal of `none` is expected: methods listed `publickey,keyboard-interactive`); it wrote 1 key line(s) to `known_hosts` (hostnames hashed: no); 0 port49d records arrived during it (no credential sent).
@@ -47,7 +47,7 @@ Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `sec
   - Unknown key (empty `known_hosts`):
   - the run ended with status `success`; 1 authentications reached port49d (9 port49d records in all); `known_hosts` held 0 key line(s) before and 0 after.
   - Changed key:
-  - the run ended with status `success`; 1 authentications reached port49d (9 port49d records in all); `known_hosts` held 3 key line(s) before and 3 after.
+  - the run ended with status `success`; 1 authentications reached port49d (9 port49d records in all); `known_hosts` held 2 key line(s) before and 2 after.
   - **(d) FAIL**: PASS iff an unknown key is saved (saved: no) and a changed key refused (refused: no).
 - **Logs:** L90: Oxidized's log (4162 bytes, default level) holds none of the 12 tokens minted so far and no compact JWS.
 
