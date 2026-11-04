@@ -60,7 +60,7 @@ func TestParseLogReadsReasonsAndSourcesOnly(t *testing.T) {
 }
 
 func TestVerdicts(t *testing.T) {
-	pass := Outcome{Client: "pass", Redeemed: true}
+	pass := Outcome{Client: "pass", Redeemed: true, Device: "172.18.0.5", Sources: []string{"172.18.0.5"}}
 	for _, id := range []string{"b1", "b2", "b3", "c"} {
 		if Judge(id, pass) != l82.Pass {
 			t.Errorf("%s: a redeem is not PASS", id)
@@ -68,8 +68,15 @@ func TestVerdicts(t *testing.T) {
 		if Judge(id, Outcome{Client: "fail:status_2", Reasons: []string{"device_unknown"}}) != l82.Fail {
 			t.Errorf("%s: a refusal is not FAIL", id)
 		}
-		if Judge(id, Outcome{Client: "pass"}) != l82.Fail {
+		if Judge(id, Outcome{Client: "pass", Device: "172.18.0.5"}) != l82.Fail {
 			t.Errorf("%s: a pass the log does not show is not FAIL", id)
+		}
+		for _, srcs := range [][]string{{"10.244.2.1"}, {"172.18.0.5", "10.244.2.1"}, nil} {
+			o := pass
+			o.Sources = srcs
+			if Judge(id, o) != l82.Fail {
+				t.Errorf("%s: a redeem with sources %v is not FAIL", id, srcs)
+			}
 		}
 	}
 	if Judge("b4", Outcome{Client: "fail:timeout"}) != Observed {

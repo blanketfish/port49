@@ -216,15 +216,22 @@ address must reach port49d unrewritten, because port49d admits a device by that 
 | `Cluster`, a node running the pod | fails: the source port49d sees is a pod-network address, not the device's |
 | `Cluster`, a node not running the pod | fails: the source is that node's own address |
 | `Local`, a node running the pod | works: port49d sees the device's own address |
-| `Local`, a node not running the pod | the connection times out; point devices at nodes that run a pod |
+| `Local`, a node not running the pod | the connection times out, and port49d logs nothing, since the connection never reaches it |
 | host networking, the pod's node | works, but the chart does not offer it |
 
-Keep `Local`; `Cluster` breaks device binding. With a cloud load balancer or MetalLB, keep `Local` and let
-the balancer send only to nodes with a ready pod (L85 measured that with MetalLB in BGP mode). Host
-networking passed in the lab, on a namespace relabelled `privileged`; the chart offers none because its
-namespace runs at Pod Security `baseline`, and Kubernetes refuses the pod's `net.ipv4.ip_unprivileged_port_start`
-sysctl on the host network, so a host-network pod needs that sysctl removed and a node whose own value lets
-port 49 bind (a kind node's is 0). The TLS listener's Service has the same policy; its port was not dialled. `tlsListener.enabled` adds port 300 and requires `tlsListener.existingSecret`.
+Keep `Local`; `Cluster` breaks device binding. Under `Local`, give devices the LoadBalancer address, not a
+node's address: a pod that moves leaves its old node answering nothing, and the symptom is a device whose
+logins time out while port49d's log shows no attempt from it. MetalLB in BGP mode advertises the address
+only from nodes with a ready pod (L85 measured that); a cloud load balancer is unmeasured.
+
+Host networking passed in the lab, on a namespace relabelled `privileged`. The chart offers none: its namespace
+runs at Pod Security `baseline`. Kubernetes also refuses a pod's `net.ipv4.ip_unprivileged_port_start`
+sysctl on the host network, so a host-network pod needs that sysctl removed. Binding port 49 as the non-root
+user then depends on the node's own value, which is 1024 on an ordinary host: set it to 0 there or give
+the container a capability to bind. A kind node's value is inferred to be 0, not read.
+
+The TLS listener's Service has the same policy; its port was not dialled. `tlsListener.enabled` adds port 300
+and requires `tlsListener.existingSecret`.
 The pod sets `net.ipv4.ip_unprivileged_port_start` to 0 so the non-root process can bind 49; clusters
 that forbid that sysctl need a different arrangement (not offered here).
 

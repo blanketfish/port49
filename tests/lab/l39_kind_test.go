@@ -206,15 +206,18 @@ func (r *l39Run) rolled(t *testing.T, sts string) {
 	if _, err := cl.KubectlTry("", "-n", ns, "rollout", "status", sts, "--timeout=8m"); err != nil {
 		t.Fatalf("the rollout of %s: %v", sts, err)
 	}
-	cl.WaitReady(ns, "t-port49d-0", 4*time.Minute)
+	cl.WaitReady(ns, r.pod(), 4*time.Minute)
 }
+
+// pod is the name of port49d's one pod.
+func (r *l39Run) pod() string { return r.stack.Release() + "-port49d-0" }
 
 // podNode is the worker that runs the pod.
 func (r *l39Run) podNode(t *testing.T) string {
 	t.Helper()
-	p, err := r.stack.Cluster().Pod(r.stack.Namespace(), "t-port49d-0")
+	p, err := r.stack.Cluster().Pod(r.stack.Namespace(), r.pod())
 	if err != nil || p.HostIP == "" {
-		t.Fatalf("t-port49d-0 has no node: %v", err)
+		t.Fatalf("%s has no node: %v", r.pod(), err)
 	}
 	for n, ip := range r.addrs {
 		if ip == p.HostIP {
@@ -241,10 +244,10 @@ func (r *l39Run) dial(t *testing.T, addr string) l39.Outcome {
 	if !l39Answer.MatchString(ans) {
 		ans = "fail:error"
 	}
-	o := l39.Outcome{Client: ans}
+	o := l39.Outcome{Client: ans, Device: r.devAddr}
 	// the record is written as the reply goes; a dial that never arrives writes none, so the wait is bounded
 	for deadline := time.Now().Add(8 * time.Second); ; time.Sleep(time.Second) {
-		logs, _ := cl.KubectlTry("", "-n", ns, "logs", "t-port49d-0", "-c", "port49d", "--since-time="+t0.Format(time.RFC3339))
+		logs, _ := cl.KubectlTry("", "-n", ns, "logs", r.pod(), "-c", "port49d", "--since-time="+t0.Format(time.RFC3339))
 		o.Reasons, o.Sources = l39.ParseLog(logs)
 		o.Redeemed = l39.Redeemed(o.Reasons)
 		if len(o.Reasons) > 0 || time.Now().After(deadline) {
@@ -303,7 +306,7 @@ func (r *l39Run) cellC(t *testing.T, cell *l82.Cell) {
 	cl.Kubectl("-n", ns, "patch", sts, "--type=json", "-p", l39.HostNetwork())
 	r.rolled(t, sts)
 	node := r.podNode(t)
-	hn := strings.TrimSpace(cl.Kubectl("-n", ns, "get", "pod", "t-port49d-0", "-o", "jsonpath={.spec.hostNetwork}"))
+	hn := strings.TrimSpace(cl.Kubectl("-n", ns, "get", "pod", r.pod(), "-o", "jsonpath={.spec.hostNetwork}"))
 	if hn != "true" {
 		t.Fatalf("the pod is not on the host network: %q", hn)
 	}
