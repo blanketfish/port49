@@ -656,7 +656,7 @@ func (e *l88Env) enrolTLS() {
 		l88TLSSplit.Block, l88TLSSplit.Inventory = "", ""
 	})
 	if e.l.p.name == "nokia_srlinux" {
-		e.n.fact("only cell h ran: SR Linux has no TLS reference because its client does not speak TLS (below). The plain reference " +
+		e.n.fact("only cell h ran: SR Linux over RFC 9887 is not measured (the schema has `server tls-profile`; L73 has no SR Linux enrolment dialect, register entry L92). This run is one observation of what the client does with a profile set. The plain reference " +
 			"(`deploy/device-aaa/nokia_srlinux.cli`) was loaded, then each server was given `tls-profile " + l73CertID +
 			"` and `tacacs port 300`, the one change an operator would try. The default CPM filter accepts a TACACS+ reply only from source port 49 " +
 			"(entry 110), so this run added entry 111 for source port 300; without it the device's SYN gets a SYN-ACK and nothing more")
