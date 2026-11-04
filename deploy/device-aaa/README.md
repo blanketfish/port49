@@ -145,6 +145,17 @@ Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name`
 
 ### Nokia SR Linux
 
+**SR Linux sends no command authorization to port49**, so port49's command policy does not apply
+on SR Linux: a command the policy would deny still runs, and the roles on the device decide what a
+user may run. Accounting START and STOP still reach port49 (L76; `tests/lab/results/L88-nokia_srlinux.md`,
+cell e).
+
+**`source-address` needs a statically configured address.** The management address is
+DHCP-learned, and the commit refuses a `source-address` that is not configured on an interface of
+the network instance. A static address cannot be set while the `dhcp-client` is present, so one
+commit deletes the dhcp-client and sets the address. The lab harness does this for the run and
+restores the dhcp-client at the end.
+
 `exit-on-reject true` makes a port49 deny final. Without it a deny falls through to local
 (L76 cell d). `priv-lvl-authorization true` and `services [ cli ]` on each mapped role are
 required (L76): with the default, port49 is never asked. The operator level maps to priv-lvl 1,
@@ -163,4 +174,4 @@ so an operator is read-only here.
 | Second server | The first server resetting at Accept, the second answering: token login in 2.0 to 2.3 s (L88 f) | L88 notes |
 | Key retire / reload | No single-connection setting exists in the device's schema (`tree flat system aaa server-group`), so a reload has no shared connection to reset (L88 g, observed) | L88 notes |
 | Source address | `source-address` must be configured on an interface of the network instance; the commit refused the DHCP-learned management address and took it once configured statically (L88) | L88 notes |
-| TLS | No RFC 9887 reference | |
+| TLS | No RFC 9887 reference. The server entry takes a `tls-profile` and the profile loads, but on 26.7.2 the client then sends plain TACACS+ to port 300 (first byte `0xc0`, a TACACS+ version byte, not `0x16`). The default CPM filter also accepts a TACACS+ reply only from source port 49 (entry 110), so a handshake to port 300 would need its own entry (L88 h) | `tests/lab/results/L88-nokia_srlinux-tls.md` |

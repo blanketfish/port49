@@ -1,5 +1,6 @@
 # port49 reference AAA configuration: Nokia SR Linux, TACACS+ over TCP (RFC 8907).
-# There is no TLS reference for SR Linux.
+# There is no TLS reference for SR Linux: on 26.7.2 a server given a tls-profile still sends plain
+# TACACS+ (L88 h, tests/lab/results/L88-nokia_srlinux-tls.md).
 #
 # Replace each angle-bracket placeholder before you load this. README.md in this
 # directory says what each one is.
