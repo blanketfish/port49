@@ -151,3 +151,36 @@ func TestOtherWorkerIsNeverThePodsNode(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckTargetCatchesASelectionBug(t *testing.T) {
+	const pod, other = "172.18.0.4", "172.18.0.2"
+	for id, c := range map[string]struct {
+		dialled string
+		ok      bool
+	}{
+		"b1": {pod, true}, "b1x": {other, false},
+		"b2": {other, true}, "b2x": {pod, false},
+		"b3": {pod, true}, "b3x": {other, false},
+		"b4": {other, true}, "b4x": {pod, false},
+		"c": {pod, true}, "cx": {other, false},
+	} {
+		cell := strings.TrimSuffix(id, "x")
+		err := CheckTarget(cell, c.dialled, pod)
+		if (err == nil) != c.ok {
+			t.Errorf("%s dialled %s: err %v, want ok=%v", id, c.dialled, err, c.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), Invalid) {
+			t.Errorf("%s: the error does not say %s: %v", id, Invalid, err)
+		}
+	}
+	if err := CheckTarget("b2", other, ""); err == nil {
+		t.Error("an unknown pod node is accepted")
+	}
+}
+
+func TestInvalidIsRenderedAndNeverAVerdict(t *testing.T) {
+	out, err := Results(Env{}, []l82.Cell{{ID: "b2", Verdict: Invalid}})
+	if err != nil || !strings.Contains(out, "| INVALID |") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}

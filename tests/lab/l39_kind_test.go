@@ -256,6 +256,21 @@ func (r *l39Run) dial(t *testing.T, addr string) l39.Outcome {
 	}
 }
 
+// checkTarget fails the test, marking the cell INVALID, when the node it is about to dial is not the
+// one its name says, judged against the pod's host address as Kubernetes reports it now.
+func (r *l39Run) checkTarget(t *testing.T, cell *l82.Cell, dialledIP string) {
+	t.Helper()
+	p, err := r.stack.Cluster().Pod(r.stack.Namespace(), r.pod())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l39.CheckTarget(cell.ID, dialledIP, p.HostIP); err != nil {
+		cell.Verdict = l39.Invalid
+		l82Row(cell, "the cell's self-check", err.Error())
+		t.Fatal(err)
+	}
+}
+
 func (r *l39Run) record(cell *l82.Cell, o l39.Outcome, target string) {
 	l82Row(cell, "the device's address (the inventory's one device)", r.devAddr)
 	l82Row(cell, "dialled", target)
@@ -292,6 +307,7 @@ func (r *l39Run) cellB(t *testing.T, cell *l82.Cell, policy string, atPodNode bo
 		}
 		node = other
 	}
+	r.checkTarget(t, cell, r.addrs[node])
 	time.Sleep(5 * time.Second) // kube-proxy programs the change
 	l82Row(cell, "externalTrafficPolicy", policy)
 	l82Row(cell, "dialled at", which)
@@ -312,6 +328,7 @@ func (r *l39Run) cellC(t *testing.T, cell *l82.Cell) {
 	}
 	l82Row(cell, "the pod's spec.hostNetwork", hn)
 	l82Row(cell, "the namespace's Pod Security level for this cell only", "privileged (the chart's is baseline)")
+	r.checkTarget(t, cell, r.addrs[node])
 	time.Sleep(3 * time.Second)
 	r.record(cell, r.dial(t, r.addrs[node]+":49"), r.addrs[node]+":49 (the pod's own port on its node)")
 }

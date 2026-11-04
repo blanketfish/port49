@@ -167,6 +167,33 @@ func Addrs(a []string) string {
 	return strings.Join(a, ", ")
 }
 
+// Invalid is the verdict of a cell that did not measure what it is named for: it dialled the wrong node.
+// It is never a result; the harness fails the test with it.
+const Invalid = "INVALID"
+
+// CheckTarget is a cell's self-check, made from the addresses the harness recorded and not from the
+// code that chose the target: b1, b3 and c must dial the node running the pod, b2 and b4 a node that
+// does not. A selection bug then cannot give a plausible verdict for the wrong node.
+func CheckTarget(id, dialled, podNode string) error {
+	if dialled == "" || podNode == "" {
+		return fmt.Errorf("l39: %s: %s, the dialled node %q and the pod's node %q are not both known", id, Invalid, dialled, podNode)
+	}
+	atPod := dialled == podNode
+	switch id {
+	case "b1", "b3", "c":
+		if !atPod {
+			return fmt.Errorf("l39: cell %s: %s, it dialled %s but the pod runs on %s", id, Invalid, dialled, podNode)
+		}
+	case "b2", "b4":
+		if atPod {
+			return fmt.Errorf("l39: cell %s: %s, it dialled %s, the node running the pod", id, Invalid, dialled)
+		}
+	default:
+		return fmt.Errorf("l39: %s: no cell %q", Invalid, id)
+	}
+	return nil
+}
+
 // OtherWorker is the worker that does not run the pod. It is an error unless exactly one worker is
 // not the pod's node: a pod on a node that is not a worker, or a cluster of another size, is not the
 // shape the cells are written for. (Run 41862464658 dialled the pod's own node for b2 and b4: the
