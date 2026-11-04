@@ -96,8 +96,9 @@ var AfterResolve = func() {}
 // bytes come from the file descriptor checked. A rename after the checks
 // changes nothing that was checked or read. Every directory above them is
 // held to the same rule, a sticky one (/tmp) and one on a read-only mount
-// excused (decision 53 ruling 11); POSIX ACLs show in the mode's group bits,
-// NFSv4 ACLs are not read. Those ancestors are checked by path, not by
+// excused (decision 53 ruling 11). Read judges by mode alone, where a POSIX ACL shows its mask in
+// the group bits; only ReadSecret reads the ACL's entries. NFSv4 ACLs are not read.
+// Those ancestors are checked by path, not by
 // descriptor: that is sound because swapping a component needs write on its
 // parent, which the rule has just limited to root and this process's user
 // (and, on a read-only mount, to whoever writes the mount's source, whom the
@@ -132,6 +133,11 @@ func Read(path string, max int64, what string) ([]byte, error) {
 // fsGroup and an agent's perms = "0440" give, but only to a group this
 // process is in (its gid, or a supplementary group such as fsGroup), so a
 // group it is not in, like Debian's ssl-cert, cannot read the secret too.
+// A file or directory carrying a POSIX ACL (system.posix_acl_access) is judged by its entries, not
+// the mode: with an ACL the group bits are the mask, so the owning group's own entry decides whether
+// its gid must be ours. Naming any user but this process's or root, any group it is not in, anyone
+// with write, or other with anything is refused (acl_linux.go); systemd's LoadCredential= file, root:root
+// 0440 with an ACL granting only this process's user, is accepted. An unparseable ACL is refused.
 // No error carries the file's bytes.
 func ReadSecret(path, within string, max int64) ([]byte, error) {
 	if !filepath.IsAbs(within) || filepath.Clean(within) != within {
@@ -175,9 +181,32 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 				"writable by anyone but its owner - chmod 0440 or 0600 it, or, on a mounted volume, set the "+
 				"mode where it is rendered (Kubernetes defaultMode and fsGroup, Vault Agent's perms)", target, perm)
 		}
-		if fi.Mode().Perm()&0o040 != 0 {
+		acl, hasACL, err := readACL(f)
+		if err != nil {
+			return fmt.Errorf("the secret file %s: %w", target, err)
+		}
+		if hasACL {
+			// The mode's group bits are the ACL mask here, not the owning group's permission:
+			// the entries decide.
+			gid, ok := FileGroup(fi)
+			if !ok {
+				return fmt.Errorf("the secret file %s: cannot read its group", target)
+			}
+			if err := secretACLRefusal(acl, uint32(Geteuid()), gid, gidIsOurs); err != nil {
+				return fmt.Errorf("the secret file %s %w", target, err)
+			}
+		} else if fi.Mode().Perm()&0o040 != 0 {
 			if err := groupIsOurs("the secret file "+target, fi); err != nil {
 				return err
+			}
+		}
+		dacl, hasDACL, err := readDirACL(d)
+		if err != nil {
+			return fmt.Errorf("the directory %s: %w", dir, err)
+		}
+		if hasDACL {
+			if err := dirACLRefusal(dacl, uint32(Geteuid()), gidIsOurs); err != nil {
+				return fmt.Errorf("the directory %s %w", dir, err)
 			}
 		}
 		excused, err := secretDirWritableByUsAlone("the directory "+dir, di)
@@ -508,15 +537,8 @@ func groupIsOurs(what string, fi fs.FileInfo) error {
 	if !ok {
 		return fmt.Errorf("%s: cannot read its group", what)
 	}
-	if int(gid) == getegid() {
+	if gidIsOurs(gid) {
 		return nil
-	}
-	if groups, err := getgroups(); err == nil {
-		for _, g := range groups {
-			if int(gid) == g {
-				return nil
-			}
-		}
 	}
 	fix := "chgrp it to the service's group (on Kubernetes, fsGroup does)"
 	// chmod 0600 only helps a file this process's user owns; on a file root owns it would leave the
@@ -526,6 +548,21 @@ func groupIsOurs(what string, fi fs.FileInfo) error {
 	}
 	return fmt.Errorf("%s is group-readable by gid %d, which this process is not in (gid %d); members of that group "+
 		"could read the secret too - %s", what, gid, getegid(), fix)
+}
+
+// gidIsOurs is whether gid is the process's gid or one of its supplementary groups.
+func gidIsOurs(gid uint32) bool {
+	if int(gid) == getegid() {
+		return true
+	}
+	if groups, err := getgroups(); err == nil {
+		for _, g := range groups {
+			if int(gid) == g {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {

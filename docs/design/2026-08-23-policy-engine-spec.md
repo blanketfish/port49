@@ -11122,7 +11122,12 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   fence's rule, and the file is owned by port49's user or root, writable by its owner alone, with
   no world bit; group-read is allowed for a group the process is in (its gid or a supplementary group;
   decision 54 ruling 16 narrows this: a group-readable file of any other group is refused), which Kubernetes
-  Secret volumes (fsGroup) and agents' `perms` give. A
+  Secret volumes (fsGroup) and agents' `perms` give. A POSIX ACL on the file or its directory is read
+  (`system.posix_acl_access`), not the mode: with one, the mode's group bits are the ACL mask, so the
+  entries decide. A named user other than port49d's or root, a named group port49d is not in, an
+  owning-group read when that group is not ours, any write, or any `other` access is refused, naming the
+  entry by numeric id with its `setfacl -x`; an unparseable ACL is refused; so a systemd `LoadCredential=`
+  file (`root:root 0440`, an ACL granting only port49d) is accepted. A
   reference that does not parse is refused by its key and never printed, and an `env:` error names
   the key that holds the reference and never the variable: a secret pasted where a name goes parses
   as one (a 40-character hex token starting with a letter does). A reference outside ruling 12's

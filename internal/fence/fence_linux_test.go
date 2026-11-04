@@ -5,6 +5,7 @@ package fence
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/blanketfish/port49/internal/edkey"
+	"golang.org/x/sys/unix"
 )
 
 // maxPolicySize and maxInventorySize are port49d's bounds for its two files
@@ -1111,5 +1113,107 @@ func TestTheGroupRefusalOffersChmodOnlyToTheFilesOwner(t *testing.T) {
 		if got := strings.Contains(err.Error(), "chmod 0600"); got != tc.chmod {
 			t.Errorf("%s: the refusal offers chmod 0600 = %v, want %v: %v", tc.name, got, tc.chmod, err)
 		}
+	}
+}
+
+// secretWithACL writes a 0440 secret in a fresh directory and applies the setfacl specs to it,
+// skipping where setfacl is absent or the filesystem takes no ACL.
+func secretWithACL(t *testing.T, specs ...string) (path, dir string) {
+	t.Helper()
+	setfacl, err := exec.LookPath("setfacl")
+	if err != nil {
+		t.Skip("setfacl is not installed")
+	}
+	dir = safeDir(t)
+	path = filepath.Join(dir, "k")
+	if err := os.WriteFile(path, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if out, err := exec.Command(setfacl, "-m", s, path).CombinedOutput(); err != nil {
+			t.Skipf("this filesystem takes no ACL: %v %s", err, out)
+		}
+	}
+	return path, dir
+}
+
+// The mask in the mode's group bits is not the owning group's permission: a named user the ACL
+// lets read is a reader of the secret the mode check cannot see.
+func TestAnACLGrantingAnotherUserReadIsRefused(t *testing.T) {
+	p, dir := secretWithACL(t, "u:nobody:r")
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "user:65534") || !strings.Contains(err.Error(), "setfacl") ||
+		strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("an ACL granting another user read: %v", err)
+	}
+}
+
+// systemd's LoadCredential= renders root:root 0440 with an ACL granting the service user read and
+// group:: empty (lab entry L84): the owning group has no access, so it need not be ours.
+func TestTheSystemdCredentialShapeIsAccepted(t *testing.T) {
+	p, dir := secretWithACL(t, fmt.Sprintf("u:%d:r", os.Geteuid()), "g::---")
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileGroup = f }(FileGroup)
+	FileGroup = func(fs.FileInfo) (uint32, bool) { return 4242, true }
+	defer func(e func() int, g func() ([]int, error)) { getegid, getgroups = e, g }(getegid, getgroups)
+	getegid = func() int { return 1 << 20 }
+	getgroups = func() ([]int, error) { return nil, nil }
+	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the systemd credential shape: %v", err)
+	}
+}
+
+// The same two cases with the ACL set as raw xattr bytes, so they run where setfacl is absent.
+func setRawACL(t *testing.T, path string, es ...aclEntry) {
+	t.Helper()
+	if err := unix.Setxattr(path, "system.posix_acl_access", aclBytes(2, es...), 0); err != nil {
+		t.Skipf("this filesystem takes no ACL: %v", err)
+	}
+}
+
+func TestAnACLXattrGrantingAnotherUserReadIsRefused(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	setRawACL(t, p, aclEntry{tUserObj, 4, none}, aclEntry{tUser, 4, 65534}, aclEntry{tGroupObj, 0, none},
+		aclEntry{tMask, 4, none}, aclEntry{tOther, 0, none})
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "user:65534") || strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("an ACL xattr granting another user read: %v", err)
+	}
+}
+
+func TestTheSystemdCredentialShapeXattrIsAccepted(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	setRawACL(t, p, aclEntry{tUserObj, 4, none}, aclEntry{tUser, 4, uint32(os.Geteuid())}, aclEntry{tGroupObj, 0, none},
+		aclEntry{tMask, 4, none}, aclEntry{tOther, 0, none})
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileGroup = f }(FileGroup)
+	FileGroup = func(fs.FileInfo) (uint32, bool) { return 4242, true }
+	defer func(e func() int, g func() ([]int, error)) { getegid, getgroups = e, g }(getegid, getgroups)
+	getegid = func() int { return 1 << 20 }
+	getgroups = func() ([]int, error) { return nil, nil }
+	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the systemd credential shape: %v", err)
+	}
+}
+
+// An ACL on the secret's directory granting another user write is refused, as the mode's would be.
+func TestAnACLXattrGrantingAnotherUserWriteOnTheDirIsRefused(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	// mask stays r-x so the mode check passes: only the ACL read can see the entry
+	setRawACL(t, dir, aclEntry{tUserObj, 7, none}, aclEntry{tUser, 2, 65534}, aclEntry{tGroupObj, 5, none},
+		aclEntry{tMask, 5, none}, aclEntry{tOther, 5, none})
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "user:65534") {
+		t.Fatalf("a directory ACL granting another user write: %v", err)
 	}
 }
