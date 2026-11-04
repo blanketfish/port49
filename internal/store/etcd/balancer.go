@@ -103,13 +103,18 @@ type hedgeCC struct {
 func (c *hedgeCC) UpdateState(s balancer.State) {
 	if kids := endpointsharding.ChildStatesFromPicker(s.Picker); len(kids) > 0 {
 		var ready []endpointsharding.ChildState
+		pending := false
 		for _, k := range kids {
-			if k.State.ConnectivityState == connectivity.Ready && len(k.Endpoint.Addresses) > 0 {
+			switch {
+			case len(k.Endpoint.Addresses) == 0:
+			case k.State.ConnectivityState == connectivity.Ready:
 				ready = append(ready, k)
+			case k.State.ConnectivityState != connectivity.TransientFailure:
+				pending = true
 			}
 		}
 		if len(ready) > 0 {
-			s.Picker = &picker{ready: ready, next: &c.next, sus: &c.sus}
+			s.Picker = &picker{ready: ready, pending: pending, next: &c.next, sus: &c.sus}
 			placingPickers.Add(1)
 		}
 	}
@@ -171,9 +176,12 @@ var onSuspect atomic.Pointer[func()]
 
 type picker struct {
 	ready []endpointsharding.ChildState
-	next  *atomic.Uint32 // the rotation, kept across the pickers of one channel
-	sus   *suspects
-	now   func() time.Time
+	// pending is that a member not ready may yet be (connecting or idle, not
+	// failed).
+	pending bool
+	next    *atomic.Uint32 // the rotation, kept across the pickers of one channel
+	sus     *suspects
+	now     func() time.Time
 }
 
 func (p *picker) clock() time.Time {
@@ -202,7 +210,10 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	t, _ := info.Ctx.Value(triedKey{}).(*tried)
 	k := cands[start]
 	if t != nil {
-		k = p.placed(cands, start, t)
+		var ok bool
+		if k, ok = p.placed(cands, start, t); !ok {
+			return balancer.PickResult{}, balancer.ErrNoSubConnAvailable
+		}
 	}
 	res, err := k.State.Picker.Pick(info)
 	if err != nil || p.sus == nil {
@@ -240,8 +251,11 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 }
 
 // placed is the member among cands for a call with a tried-set: the first
-// from start that no earlier copy (or peer) has used.
-func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) endpointsharding.ChildState {
+// from start that no earlier copy (or peer) has used. It reports false, and
+// records nothing, when the only member free of the peer is one still
+// connecting: the pick waits for the next picker, so that the two legs of a
+// watch are not both on the one member that was up first.
+func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried) (endpointsharding.ChildState, bool) {
 	n := len(cands)
 	avoid := ""
 	if t.peer != nil {
@@ -257,7 +271,7 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 			t.used[addr] = true
 			t.last.Store(addr)
-			return k
+			return k, true
 		}
 	}
 	// No candidate is free of the other leg and of this one's earlier members:
@@ -269,14 +283,17 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 			if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 				t.used[addr] = true
 				t.last.Store(addr)
-				return k
+				return k, true
 			}
+		}
+		if p.pending {
+			return endpointsharding.ChildState{}, false
 		}
 		for _, k := range p.ready {
 			if addr := k.Endpoint.Addresses[0].Addr; addr != avoid {
 				t.last.Store(addr)
 				t.used = map[string]bool{addr: true}
-				return k
+				return k, true
 			}
 		}
 	}
@@ -285,5 +302,5 @@ func (p *picker) placed(cands []endpointsharding.ChildState, start int, t *tried
 	addr := k.Endpoint.Addresses[0].Addr
 	t.last.Store(addr)
 	t.used = map[string]bool{addr: true}
-	return k
+	return k, true
 }

@@ -236,3 +236,30 @@ func TestTheSecondLegIsNotPlacedOnTheFirstsMemberWhenTheOthersAreSuspect(t *test
 		}
 	}
 }
+
+// At startup a channel can have one member ready while the others are still
+// connecting: the second leg waits for one of them rather than sharing the
+// first leg's member, which would take both legs down together. With the
+// others failed (not coming), it shares rather than stall.
+func TestTheSecondLegWaitsForAnotherMemberWhileOthersAreConnecting(t *testing.T) {
+	first := &tried{used: map[string]bool{}}
+	first.last.Store("a")
+	for _, tc := range []struct {
+		pending bool
+		wantErr bool
+	}{{true, true}, {false, false}} {
+		p := readyPicker("a")
+		p.pending = tc.pending
+		second := &tried{used: map[string]bool{}, peer: first}
+		res, err := p.Pick(balancer.PickInfo{Ctx: withTriedSet(context.Background(), second)})
+		if tc.wantErr && err != balancer.ErrNoSubConnAvailable {
+			t.Fatalf("others connecting: got %v (%v), want ErrNoSubConnAvailable", res.Metadata, err)
+		}
+		if !tc.wantErr && err != nil {
+			t.Fatalf("others failed: got %v, want the only member", err)
+		}
+		if tc.wantErr && second.lastMember() != "" {
+			t.Fatalf("a deferred pick recorded a placement: %q", second.lastMember())
+		}
+	}
+}
