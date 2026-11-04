@@ -1250,7 +1250,7 @@ func TestASecretNeedsProcOnlyWhereTheDirectoryCannotBeReopened(t *testing.T) {
 	}
 }
 
-// The systemd directory shape, r-x for the service user by ACL, passes through the /proc read.
+// The systemd directory shape, r-x for the service user by ACL, is read through the reopened descriptor.
 func TestTheSystemdDirectoryShapeXattrIsAccepted(t *testing.T) {
 	dir := safeDir(t)
 	p := filepath.Join(dir, "k")
@@ -1262,5 +1262,20 @@ func TestTheSystemdDirectoryShapeXattrIsAccepted(t *testing.T) {
 		aclEntry{tMask, 5, none}, aclEntry{tOther, 0, none})
 	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
 		t.Fatalf("the systemd directory shape: %v", err)
+	}
+}
+
+// A reopen that lands on another directory than the one walked is refused, not read.
+func TestAReopenOfAnotherDirectoryIsRefused(t *testing.T) {
+	dir, other := safeDir(t), safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(r func(*os.File) (*os.File, error)) { reopenDir = r }(reopenDir)
+	reopenDir = func(*os.File) (*os.File, error) { return os.Open(other) }
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "the directory "+dir) || !strings.Contains(err.Error(), "not the directory") {
+		t.Fatalf("a reopen of another directory: %v", err)
 	}
 }

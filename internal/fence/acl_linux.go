@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 	"syscall"
@@ -236,10 +237,19 @@ var reopenDir = func(d *os.File) (*os.File, error) {
 // readDirACL is readACL for a directory held open with O_PATH, which fgetxattr refuses. It reopens
 // the directory with fgetxattr's kind of descriptor, and only when that is denied (EACCES: search
 // without read) asks for the descriptor's /proc/self/fd entry. If both fail it refuses, naming why.
-func readDirACL(d *os.File) ([]aclEntry, bool, error) {
+func readDirACL(d *os.File, di fs.FileInfo) ([]aclEntry, bool, error) {
 	f, err := reopenDir(d)
 	if err == nil {
 		defer f.Close()
+		fi, serr := f.Stat()
+		if serr != nil {
+			return nil, false, serr
+		}
+		a, ok1 := fi.Sys().(*syscall.Stat_t)
+		b, ok2 := di.Sys().(*syscall.Stat_t)
+		if !ok1 || !ok2 || a.Dev != b.Dev || a.Ino != b.Ino {
+			return nil, false, errors.New("reopened as not the directory that was walked, so its POSIX ACL is not trusted")
+		}
 		return readACL(f)
 	}
 	if !errors.Is(err, syscall.EACCES) {

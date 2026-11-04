@@ -133,10 +133,11 @@ func Read(path string, max int64, what string) ([]byte, error) {
 // fsGroup and an agent's perms = "0440" give, but only to a group this
 // process is in (its gid, or a supplementary group such as fsGroup), so a
 // group it is not in, like Debian's ssl-cert, cannot read the secret too.
-// A file or directory carrying a POSIX ACL (system.posix_acl_access) is judged by its entries, not
-// the mode: with an ACL the group bits are the mask, so the owning group's own entry decides whether
-// its gid must be ours. Naming any user but this process's or root, any group it is not in, anyone
-// with write, or other with anything is refused (acl_linux.go); A file with group:: empty and only this process's user named (the shape systemd's
+// A file carrying a POSIX ACL (system.posix_acl_access) is judged by its entries, not the mode:
+// with an ACL the group bits are the mask, so the owning group's own entry decides whether its gid
+// must be ours. Naming any user but this process's or root, any group it is not in, anyone with
+// write, or other with anything is refused (acl_linux.go); on the directory, only a write entry is.
+// A file with group:: empty and only this process's user named (the shape systemd's
 // LoadCredential= is expected to render; L84 measures it) is accepted. An unparseable ACL is refused.
 // NFSv4 and CIFS ACLs are not read: there the mode rule alone applies.
 // No error carries the file's bytes.
@@ -201,7 +202,7 @@ func ReadSecret(path, within string, max int64) ([]byte, error) {
 				return err
 			}
 		}
-		dacl, hasDACL, err := readDirACL(d)
+		dacl, hasDACL, err := readDirACL(d, di)
 		if err != nil {
 			return fmt.Errorf("the directory %s: %w", dir, err)
 		}
