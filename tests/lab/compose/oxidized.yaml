@@ -37,8 +37,33 @@ services:
       - ${PORT49_COMPOSE_LOCAL}/oxidized:/oxhome/.config/oxidized
       - ${PORT49_COMPOSE_LOCAL}/oxidized/known_hosts:/oxhome/.ssh/known_hosts:ro
 
-  # the workload CA the broker's machine verifier trusts: a public certificate,
-  # mode 0644 so the broker's uid (65532) can read it
+  # One-shot, as root, as setup is: the workload CA the broker's machine verifier
+  # trusts, into a volume of its own owned by the broker's user (uid 65532). The
+  # broker refuses a trust anchor owned by any other uid, and a bind mount of the
+  # host user's file is owned by that user.
+  workload-pki:
+    image: port49-setup:dev
+    # setup builds this tag
+    pull_policy: never
+    network_mode: none
+    # the image's entrypoint is /bin/sh
+    command:
+      - -c
+      - |
+        set -eu
+        install -d -o 0 -g 0 -m 0755 /vol
+        install -o 65532 -g 65532 -m 0444 /src/workload-ca.pem /vol/workload-ca.pem
+    volumes:
+      - ${PORT49_COMPOSE_LOCAL}/workload:/src:ro
+      - workload-pki:/vol
+    depends_on:
+      setup: {condition: service_completed_successfully}
+
   port49-broker:
     volumes:
-      - ${PORT49_COMPOSE_LOCAL}/workload/workload-ca.pem:/etc/port49-workload/workload-ca.pem:ro
+      - workload-pki:/etc/port49-workload:ro
+    depends_on:
+      workload-pki: {condition: service_completed_successfully}
+
+volumes:
+  workload-pki: {}
