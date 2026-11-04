@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -72,10 +71,17 @@ func (s *Store) ScanContexts(ctx context.Context, fn func(store.ContextKey, stor
 	}
 }
 
-const (
-	feedIdle  = time.Second     // a context watch this quiet asks for its progress
-	feedStall = 2 * time.Second // and one this quiet ends
-)
+// probeCtx and probeTok are a one-key read on the context and token clients:
+// answered while the store has a quorum (twoleg.go).
+func (s *Store) probeCtx(ctx context.Context) error {
+	_, err := s.ctxKV.Get(ctx, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
+	return err
+}
+
+func (s *Store) probeTok(ctx context.Context) error {
+	_, err := s.tok.Get(ctx, s.k.family(famMark), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
+	return err
+}
 
 // WatchContexts calls fn for every change to the context family after
 // `after` (store.ContextFeed), on the context client, requiring a leader so
@@ -84,8 +90,9 @@ const (
 // default, against the 10m compaction retention design §13 prescribes: a resume
 // that lands under a compaction is ErrCompacted and rescans), so a quiet
 // family's re-watch usually resumes above one (final review 7e-1 I-1).
-// A request on asks is sent with RequestProgress on the watch's own
-// context, which names its stream: etcd answers it with a progress
+// It runs as two legs on two members (twoleg.go), so a member gone dark
+// leaves the feed following. A request on asks is sent with RequestProgress on
+// each leg's own context, which names its stream: etcd answers it with a progress
 // notification once the stream's watchers are synced, and that header
 // revision is told to progress. An event batch tells progress its highest
 // event's revision, never the batch header's, which a catching-up watcher
@@ -95,56 +102,13 @@ const (
 // (unavailable).
 func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange),
 	progress func(uint64), asks <-chan struct{}) error {
-	wctx, cancel := context.WithCancel(withTriedSet(clientv3.WithRequireLeader(ctx), &s.feedTried))
+	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ch := s.ctx.Watch(wctx, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1),
-		clientv3.WithProgressNotify())
-	// A paused or partitioned member keeps its connection up until keepalive
-	// fails it, 10 to 12 s on, and the watch on it goes quiet with nothing to
-	// say so: a quiet family looks the same. So a watch that has heard nothing
-	// for feedIdle asks for its progress, and one that has heard nothing for
-	// feedStall ends, to be opened again on another member (feedTried): its
-	// fence otherwise holds every login behind the feed until keepalive acts.
-	heard := time.Now()
-	probe := time.NewTicker(feedIdle / 2)
-	defer probe.Stop()
-	for {
-		var resp clientv3.WatchResponse
-		var ok bool
-		select {
-		case <-asks: // nil: never ready
-			if err := s.ctx.RequestProgress(wctx); err != nil && ctx.Err() == nil {
-				s.logf("etcd: asking the context watch for its progress: %v", err)
-			}
-			continue
-		case <-probe.C:
-			switch quiet := time.Since(heard); {
-			case quiet >= feedStall:
-				// Only when the store answers elsewhere: with every member dark
-				// (no quorum, a network out) every watch is as quiet as this one,
-				// the stream revives the moment the store returns, and ending it
-				// would only add a retry's second to the recovery.
-				pc, pcancel := context.WithTimeout(ctx, feedStall/2)
-				_, err := s.ctxKV.Get(pc, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
-				pcancel()
-				if err != nil {
-					continue
-				}
-				return fmt.Errorf("%w: the context watch's member has not answered for %v while the store has", store.ErrUnavailable,
-					quiet.Round(100*time.Millisecond))
-			case quiet >= feedIdle:
-				if err := s.ctx.RequestProgress(wctx); err != nil && ctx.Err() == nil {
-					s.logf("etcd: probing the context watch: %v", err)
-				}
-			}
-			continue
-		case resp, ok = <-ch:
-		}
-		if !ok {
-			break
-		}
-		heard = time.Now()
-		s.feedTried.keepLast()
+	ch, err := s.followLegs(wctx, s.ctx, s.k.family(famContext), after, false, s.probeCtx, asks)
+	if err != nil {
+		return err
+	}
+	for resp := range ch {
 		s.saw(resp.Header.Revision)
 		if err := resp.Err(); err != nil {
 			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {
@@ -260,16 +224,19 @@ func (s *Store) Revocations(ctx context.Context) (uint64, []store.Revocation, er
 // names, at the time it was seen, and says so by its key: a revocation
 // left out would be one not enforced. Revocations stands it the same
 // way. A key that does not parse names nothing, and is said and skipped.
-// A progress notification's header revision is told to progress, as
+// It runs as two legs on two members (twoleg.go), so a revocation does not
+// wait on a member gone dark. A progress notification's header revision is told to progress, as
 // WatchContexts asks for and tells them. A watch that fails is
 // ErrUnavailable, or ErrRefused when etcd refuses this identity
 // (unavailable).
 func (s *Store) WatchRevocations(ctx context.Context, after uint64,
 	fn func(r store.Revocation, lifted bool, rev uint64), progress func(uint64)) error {
-	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ch := s.tok.Watch(wctx, s.k.family(famMark), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1),
-		clientv3.WithProgressNotify())
+	ch, err := s.followLegs(wctx, s.tok, s.k.family(famMark), after, false, s.probeTok, nil)
+	if err != nil {
+		return err
+	}
 	for resp := range ch {
 		if err := resp.Err(); err != nil {
 			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {

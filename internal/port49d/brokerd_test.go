@@ -796,8 +796,8 @@ func TestTheBrokersStoreIsFencedUnderItsGuard(t *testing.T) {
 	if got, err := bs.st.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("the broker read %q with its feed not running: %v", got.CtxID, err)
 	}
-	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("broker", "context", "timeout")); n != 1 {
-		t.Fatalf("the broker's guard counted %v context timeouts", n)
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("broker", "context", "feed_behind")); n != 1 {
+		t.Fatalf("the broker's guard counted %v feed_behind outcomes", n)
 	}
 	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
 		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)

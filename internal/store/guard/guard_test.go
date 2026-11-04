@@ -815,7 +815,7 @@ func (f feedBehind) GetContext(ctx context.Context, _ store.ContextKey) (store.C
 }
 
 // A guarded timeout is store.ErrUnavailable and still wraps what the inner call
-// said (plan 7f, I-2): the context cache reads crypt.ErrFeedBehind through it
+// said (plan 7f, I-2): the context cache reads store.ErrFeedBehind through it
 // to tell a fence timeout, where etcd answered, from an outage. It is still
 // counted a timeout.
 func TestAGuardedTimeoutKeepsTheInnerError(t *testing.T) {
@@ -829,5 +829,38 @@ func TestAGuardedTimeoutKeepsTheInnerError(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
 		t.Fatalf("timeout outcomes: %v, want 1", n)
+	}
+}
+
+// fenceTimeout answers a context read, after the call's deadline, as the fence
+// does when this process's feed has not reached the record's revision.
+type fenceTimeout struct{ store.Store }
+
+func (fenceTimeout) GetContext(ctx context.Context, _ store.ContextKey) (store.Context, error) {
+	<-ctx.Done()
+	return store.Context{}, fmt.Errorf("%w (the feed at revision 332, the record at 346)", store.ErrFeedBehind)
+}
+
+// A fence timeout is the store having answered with a record this process's
+// feed has not reached, not a failed store call: it does not count toward the
+// circuit however many there are (the health check handles a feed that is
+// behind), and is counted as its own outcome.
+func TestAFenceTimeoutDoesNotOpenTheCircuit(t *testing.T) {
+	var said, gone told
+	c := config(&said, &gone)
+	g := Wrap(fenceTimeout{}, c)
+	for i := 0; i < 3*c.Failures; i++ {
+		if _, err := g.GetContext(context.Background(), k); !errors.Is(err, store.ErrFeedBehind) || errors.Is(err, store.ErrNotSent) {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
+		t.Fatalf("the circuit opened on fence timeouts (gauge %v)", v)
+	}
+	if l := said.all(); len(l) != 0 {
+		t.Fatalf("said %q", l)
+	}
+	if v := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "feed_behind")); v != float64(3*c.Failures) {
+		t.Fatalf("feed_behind outcomes counted %v, want %d", v, 3*c.Failures)
 	}
 }

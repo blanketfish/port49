@@ -8198,6 +8198,24 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     mint's transaction (a second copy would write a second token), `ExtendReceipt`, `DeleteToken`,
     and the other single-key swaps. The matrix's `one_member_dark` (`deploy/failure-matrix.md`) logs
     in thirty times with a member paused, tokens minted before the pause.
+  - **The feeds run as two legs.** A watch is one gRPC stream on one member, and a member that is
+    paused or cut off with its connection up stays silent until keepalive fails it (10 to 12 s):
+    the context feed on it left the fence behind and refused every login for that long, and the
+    marks feed on it would have delayed a revocation as long. So the context feed and the marks
+    feed each open the same watch on two different members and merge them
+    (`internal/store/etcd/twoleg.go`): an event at or below the highest revision already delivered
+    (an event's, or a progress notification's, which says every event through it was sent) is
+    dropped, so nothing is applied twice and nothing goes back; the merge relies on etcd sending a
+    revision's events in one response, which holds because no leg is opened `WithFragment`
+    (checked in code before a watch starts, and by `TestTheLegsAreNotFragmented`). A leg that
+    fails alone is opened again after a second and the watch goes on; the watch ends only when
+    both legs are down at once, or on a compaction. A leg that hears nothing for 1 s asks for its
+    progress, and one silent for 2 s is opened again on a member neither leg is on, but only while
+    a one-key read is answered: with every member dark (no quorum) a stream is left to revive when
+    the store returns. The token pool's other watches (memberships, logouts) are one leg still.
+    A fence wait that times out is outcome `feed_behind` in `port49_store_calls_total`, not a
+    failed call to the circuit: the store answered, and a feed that stays behind is the health
+    check's to see (below).
   - **Feed lag is a trigger.** The context connection's read waits for the context feed, so a
     feed more than `call_timeout` behind (a mass refresh burst, for example) fails the check,
     and `close_after` of them close every replica. The same reads are denied

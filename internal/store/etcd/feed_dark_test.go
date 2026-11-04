@@ -10,13 +10,13 @@ import (
 	"github.com/blanketfish/port49/internal/store"
 )
 
-// A context watch on a member that goes dark ends and is opened on another,
-// so the feed keeps following the store: the fence holds a login behind the
-// feed, and a feed left on a paused member (its connection stays up until
-// keepalive fails it, 10 to 12 s on) refused logins for that long. Each
-// member goes dark in turn, so the watch is on it once; the loop is
-// FollowContexts's, which opens a failed watch again every second.
-func TestAContextWatchOnADarkMemberMovesToAnother(t *testing.T) {
+// The context feed has a leg on two of the three members, so one going dark
+// leaves it following: the fence holds a login behind the feed, and a feed on
+// a paused member (its connection stays up until keepalive fails it, 10 to 12
+// s on) refused logins for that long. Each member goes dark in turn, so one is
+// a leg's; the change written after must still arrive at once. The loop is
+// FollowContexts's.
+func TestAContextFeedFollowsWhicheverMemberGoesDark(t *testing.T) {
 	s, _, ps := threeBehindProxies(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -68,8 +68,8 @@ func TestAContextWatchOnADarkMemberMovesToAnother(t *testing.T) {
 		name := fmt.Sprintf("dark%d", i)
 		p.Hang(true)
 		put(name)
-		if !delivered(name, 6*time.Second) {
-			t.Errorf("member %d dark: the watch had not brought a change written after it went dark in 6s", i)
+		if !delivered(name, 1500*time.Millisecond) {
+			t.Errorf("member %d dark: the feed had not brought a change written after it went dark in 1.5s", i)
 		}
 		p.Hang(false)
 		time.Sleep(3 * time.Second) // reconnect settles
@@ -111,5 +111,66 @@ func TestAContextWatchIsLeftAloneWhileEveryMemberIsDark(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("the watch was ended and opened %d times in 8s with every member dark", n)
+	}
+}
+
+// The marks feed carries revocations, so a mark written with a member dark
+// reaches the process at once, whichever member the feed's legs were on.
+func TestTheMarksFeedFollowsWhicheverMemberGoesDark(t *testing.T) {
+	s, _, ps := threeBehindProxies(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	from := uint64(0)
+	go func() {
+		for ctx.Err() == nil {
+			mu.Lock()
+			after := from
+			mu.Unlock()
+			s.WatchRevocations(ctx, after, func(r store.Revocation, lifted bool, rev uint64) {
+				mu.Lock()
+				seen[r.Key] = true
+				from = max(from, rev)
+				mu.Unlock()
+			}, func(rev uint64) { mu.Lock(); from = max(from, rev); mu.Unlock() })
+			time.Sleep(time.Second)
+		}
+	}()
+	put := func(name string) {
+		for i := 0; i < 20; i++ {
+			c, cc := context.WithTimeout(ctx, 500*time.Millisecond)
+			err := s.PutRevocation(c, store.Revocation{Kind: store.RevocationPrincipal, Key: name, At: time.Now(), Origin: "test"})
+			cc()
+			if err == nil {
+				return
+			}
+		}
+		t.Fatalf("could not write %s", name)
+	}
+	delivered := func(name string, within time.Duration) bool {
+		for end := time.Now().Add(within); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+			mu.Lock()
+			ok := seen[name]
+			mu.Unlock()
+			if ok {
+				return true
+			}
+		}
+		return false
+	}
+	put("warm")
+	if !delivered("warm", 5*time.Second) {
+		t.Fatal("the marks feed delivered nothing on a healthy cluster")
+	}
+	for i, p := range ps {
+		name := fmt.Sprintf("dark%d", i)
+		p.Hang(true)
+		put(name)
+		if !delivered(name, 1500*time.Millisecond) {
+			t.Errorf("member %d dark: the marks feed had not brought a mark written after it went dark in 1.5s", i)
+		}
+		p.Hang(false)
+		time.Sleep(3 * time.Second)
 	}
 }

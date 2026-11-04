@@ -37,19 +37,21 @@ func init() {
 // triedKey carries a *tried through a hedged call's copies.
 type triedKey struct{}
 
-// tried is the members (by address) a hedged call's copies have been placed on.
+// tried is the members (by address) a hedged call's copies, or a long-lived
+// stream's openings, have been placed on.
 type tried struct {
 	mu   sync.Mutex
 	used map[string]bool
-	last string // the member the latest pick chose
+	// peer is another tried whose latest member this one also avoids: the
+	// two legs of a watch (twoleg.go) sit on different members.
+	peer *tried
+	last atomic.Value // string: the member the latest pick chose
 }
 
-// keepLast forgets every member but the latest pick: that one answered, so
-// the next placement made with t goes elsewhere and the rest are fair game.
-func (t *tried) keepLast() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.used = map[string]bool{t.last: t.last != ""}
+// lastMember is the member the latest pick chose, "" before any.
+func (t *tried) lastMember() string {
+	s, _ := t.last.Load().(string)
+	return s
 }
 
 // withTried marks ctx as one hedged call's: its copies are placed apart.
@@ -122,6 +124,10 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	if t == nil {
 		return p.ready[start].State.Picker.Pick(info)
 	}
+	avoid := ""
+	if t.peer != nil {
+		avoid = t.peer.lastMember()
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.used == nil {
@@ -129,15 +135,16 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	}
 	for j := 0; j < n; j++ {
 		k := p.ready[(start+j)%n]
-		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] {
+		if addr := k.Endpoint.Addresses[0].Addr; !t.used[addr] && addr != avoid {
 			t.used[addr] = true
-			t.last = addr
+			t.last.Store(addr)
 			return k.State.Picker.Pick(info)
 		}
 	}
 	// Every ready member has had a copy: begin again.
 	k := p.ready[start]
-	t.last = k.Endpoint.Addresses[0].Addr
-	t.used = map[string]bool{t.last: true}
+	addr := k.Endpoint.Addresses[0].Addr
+	t.last.Store(addr)
+	t.used = map[string]bool{addr: true}
 	return k.State.Picker.Pick(info)
 }
