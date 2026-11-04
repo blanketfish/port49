@@ -148,6 +148,8 @@ func (e *l88Env) cells(transport string, ids []string) {
 			e.cellE()
 		case "f":
 			e.cellF()
+		case "g":
+			e.cellG()
 		case "i":
 			e.cellI()
 		default:
@@ -1178,4 +1180,66 @@ func (e *l88Env) cellF3() {
 	e.n.cell("f3", "MEASURED", verdict+"; "+closed,
 		b.String()+"\ndevice state at the first failed login (read over the still-open session):\n"+atFirstFailure+
 			"\n"+summarize(recs)+"\nthe wire (headers only):\n"+wire+"\n"+after)
+}
+
+// cellG (OBSERVED, the platforms L29 did not measure): single-connection on, a token session
+// open, a reload that retires the open connection's key version (L29's re-keyed phase: the
+// device's reviewed pin moves onto a key it does not hold), then the command in flight, a
+// second command, the next token login and break-glass. It runs L29's own phase code, so the
+// observation is L29's; a failed premise check is INVALID, never a result.
+func (e *l88Env) cellG() {
+	var failed []string
+	fail := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		failed = append(failed, msg)
+		e.t.Error(e.n.mask(msg))
+	}
+	if _, ok := l29Refusals[e.l.p.name]; !ok {
+		e.n.cell("g", "INVALID", "no measured refusal text for "+e.l.p.name+" in l29Refusals, so a refusal could not be told from output", "")
+		e.t.Errorf("cell g: no l29Refusals entry for %s", e.l.p.name)
+		return
+	}
+	pr := l29Heartbeat(e.t)
+	defer pr.end()
+	src := labSourceFrom(e.t)
+	policy := filepath.Join(privateDir(e.t, "l88g-"+e.l.p.name), "policy.yaml")
+	single := e.l.singleConnection(e.t)
+	if !l29SingleSet(single) {
+		fail("single-connection was not set on the device (its `?` offered it nowhere): no connection stays open across a reload")
+	}
+	li := e.l.startInventory(e.t, src, filepath.Join(root, "tests", "lab", "l29", "policy.yaml"))
+	var section string
+	for _, ph := range l29Phases(src) {
+		if ph.name == "rekeyed" {
+			section = e.l.l29ReloadPhase(e.t, li, src, policy, ph, pr, fail)
+		}
+	}
+	// The standing daemon is put back before the next cell.
+	if err := e.l.stopDaemon(); err == nil {
+		e.restart()
+	}
+	// The phase's first table (step | outcome) is the observation; the connection table that
+	// follows is evidence.
+	var rows []string
+	inTable := false
+	for _, ln := range strings.Split(section, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "| step"):
+			inTable = true
+		case inTable && strings.HasPrefix(ln, "|---"):
+		case inTable && strings.HasPrefix(ln, "| "):
+			rows = append(rows, strings.ReplaceAll(strings.Trim(ln, "| "), " | ", ": "))
+		case inTable:
+			inTable = false
+		}
+		if !inTable && len(rows) > 0 {
+			break
+		}
+	}
+	obs := "single-connection: " + oneLine(single) + "; the re-keyed phase: " + strings.Join(rows, "; ")
+	if len(failed) > 0 {
+		e.n.cell("g", "INVALID", obs+"; premise checks failed: "+oneLine(strings.Join(failed, " / ")), e.n.redact(section))
+		return
+	}
+	e.n.cell("g", "OBSERVED", obs, e.n.redact(section))
 }

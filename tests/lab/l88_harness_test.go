@@ -464,3 +464,20 @@ func l88XRVRFLines(name, addr string) (set, undo []string) {
 		" ipv4 address " + addr + " 255.255.255.0", "exit", "no vrf " + name}
 	return set, undo
 }
+
+// l88Refusals are the refusal texts of the platforms L29 did not measure, as L88's cell e
+// recorded them, so that cell g can use L29's phase code on them.
+var l88Refusals = map[string]string{
+	// tests/lab/results/L88-cisco_xrd.md cell e: `% Command authorization failed`
+	"cisco_xrd": "% Command authorization failed",
+	// tests/lab/results/L88-juniper_vsrx.md cell e: `error: unknown command: clear`
+	"juniper_vsrx": "unknown command",
+}
+
+func init() {
+	for k, v := range l88Refusals {
+		if _, ok := l29Refusals[k]; !ok {
+			l29Refusals[k] = v
+		}
+	}
+}
