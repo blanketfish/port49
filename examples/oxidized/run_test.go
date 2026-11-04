@@ -63,6 +63,9 @@ type scenario struct {
 	sshSleep  string // seconds the fake ssh sleeps, as sleep takes it
 	jobs      int    // OXIDIZED_HOSTKEY_JOBS, when set
 	budget    int    // OXIDIZED_HOSTKEY_BUDGET seconds, when set
+	sshBin    string // OXIDIZED_SSH, when set (the fake otherwise)
+	khPath    string // OXIDIZED_KNOWN_HOSTS, when set
+	tsv2      string // what the fake port49 writes from its second call on, when set
 	res       *sshResult
 }
 
@@ -105,7 +108,9 @@ echo mint >> "$FAKE_ORDER"
 printf '%s\n' "$@" > "$FAKE_ARGS"
 out=""
 while [ $# -gt 0 ]; do [ "$1" = --out ] && out=$2; shift; done
-if [ "$FAKE_WRITE" = 1 ]; then printf '%s' "$FAKE_TSV" > "$out"; fi
+body=$FAKE_TSV
+if [ -n "$FAKE_TSV2" ] && [ "$(grep -c mint "$FAKE_ORDER")" -ge 2 ]; then body=$FAKE_TSV2; fi
+if [ "$FAKE_WRITE" = 1 ]; then printf '%s' "$body" > "$out"; fi
 exit $FAKE_EXIT
 `
 	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
@@ -186,8 +191,8 @@ exit 255
 	cmd.Env = append(os.Environ(), "PORT49_BIN="+fake, "PORT49_BROKER=https://broker.example:8443",
 		"PORT49_BROKER_CA=/ca.pem", "PORT49_CERT=/w.pem", "PORT49_KEY=/w-key.pem", "OXIDIZED_NODES="+nodes,
 		"OXIDIZED_ROUTER_DB="+db, "OXIDIZED_REST="+srv.URL, "FAKE_TSV="+tsv, "FAKE_EXIT="+strconv.Itoa(exit),
-		"FAKE_WRITE="+fakeWrite, "FAKE_ARGS="+filepath.Join(dir, "args"), "OXIDIZED_SSH="+fakeSSH,
-		"OXIDIZED_KNOWN_HOSTS="+khPath, "FAKE_SSH_LOG="+sshLog, "FAKE_ORDER="+filepath.Join(dir, "order"), "FAKE_CONC="+conc, "FAKE_SSH_SLEEP="+c.sshSleep, "FAKE_KEY="+keyFields, "FAKE_SSH_SAVE="+map[bool]string{true: "0", false: "1"}[c.sshNoSave])
+		"FAKE_WRITE="+fakeWrite, "FAKE_ARGS="+filepath.Join(dir, "args"), "OXIDIZED_SSH="+firstNonEmpty(c.sshBin, fakeSSH),
+		"OXIDIZED_KNOWN_HOSTS="+firstNonEmpty(c.khPath, khPath), "FAKE_TSV2="+c.tsv2, "FAKE_SSH_LOG="+sshLog, "FAKE_ORDER="+filepath.Join(dir, "order"), "FAKE_CONC="+conc, "FAKE_SSH_SLEEP="+c.sshSleep, "FAKE_KEY="+keyFields, "FAKE_SSH_SAVE="+map[bool]string{true: "0", false: "1"}[c.sshNoSave])
 	if c.scope != "" {
 		cmd.Env = append(cmd.Env, "PORT49_SCOPE="+c.scope)
 	}
@@ -228,6 +233,13 @@ exit 255
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return code, stderr.String(), append([]string(nil), f.calls...), db
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 const minted = "leaf1\t10.0.0.11\tarista_eos\tsvc-oxidized\tTOKENLEAF1\t2026-10-08T03:00:00Z\n" +
@@ -527,5 +539,43 @@ func TestAnAddressThatIsNotAnIPLiteralIsNeverVisited(t *testing.T) {
 	code, stderr, _, _ := runCase(t, scenario{tsv: tsv, res: res})
 	if code != 1 || len(res.calls) != 0 || !strings.Contains(stderr, "n1: the address is not an IP literal") {
 		t.Fatalf("exit %d, ssh calls %v, stderr %s", code, res.calls, stderr)
+	}
+}
+
+// A missing ssh is named, the run exits 2 and Oxidized is left as it was (no router.db, no reload).
+func TestAMissingSSHLeavesOxidizedAlone(t *testing.T) {
+	code, stderr, calls, db := runCase(t, scenario{tsv: nodes(2), sshBin: "/nonexistent/ssh"})
+	if code != 2 || !strings.Contains(stderr, "/nonexistent/ssh is not installed: the host-key step needs it; nothing changed") {
+		t.Fatalf("exit %d stderr %s", code, stderr)
+	}
+	if _, err := os.Stat(db); err == nil || len(calls) != 0 {
+		t.Fatalf("router.db written (%v) or Oxidized called: %v", err, calls)
+	}
+}
+
+// A known_hosts directory that cannot be made is the cannot-make-files exit.
+func TestAnUnmakeableKnownHostsDirectoryExits75(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, stderr, calls, db := runCase(t, scenario{tsv: nodes(2), khPath: filepath.Join(file, "sub", "known_hosts")})
+	if code != 75 || !strings.Contains(stderr, "cannot make the directory of") {
+		t.Fatalf("exit %d stderr %s", code, stderr)
+	}
+	if _, err := os.Stat(db); err == nil || len(calls) != 0 {
+		t.Fatalf("router.db written (%v) or Oxidized called: %v", err, calls)
+	}
+}
+
+// A scope that grew between the two mints: its new node is visited too, without a third mint.
+func TestANodeFirstSeenInTheSecondMintIsVisited(t *testing.T) {
+	res := &sshResult{}
+	code, stderr, _, _ := runCase(t, scenario{tsv: nodes(2), tsv2: nodes(3), res: res})
+	if code != 0 || len(res.calls) != 3 {
+		t.Fatalf("exit %d, %d ssh calls, stderr %s", code, len(res.calls), stderr)
+	}
+	if got := strings.Join(res.order, ","); got != "mint,ssh,ssh,mint,ssh" {
+		t.Fatalf("order %s", got)
 	}
 }

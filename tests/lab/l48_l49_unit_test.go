@@ -907,3 +907,13 @@ func TestL90RefusedMeansNoTokenSent(t *testing.T) {
 		t.Error("refused is a failed run with no authentication at port49d")
 	}
 }
+
+// A note's Run line says "-dirty" when the tree measured was not the commit named.
+func TestRunLineSaysWhenTheTreeWasDirty(t *testing.T) {
+	if got, want := runLineOf("abc123", false, "eos", "^TestL90$"), "commit `abc123`, `PORT49_LAB_PLATFORMS=eos`, `-run ^TestL90$`"; got != want {
+		t.Errorf("clean: got %q want %q", got, want)
+	}
+	if got := runLineOf("abc123", true, "eos", "^TestL90$"); !strings.HasPrefix(got, "commit `abc123-dirty`") {
+		t.Errorf("dirty: got %q", got)
+	}
+}

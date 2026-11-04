@@ -41,7 +41,8 @@
 # certificate, a revoked principal, every node denied, a scope that selects
 # nothing this host holds a grant on, a certificate status
 # nothing covers, a TLS trust failure), and Oxidized was left as it was; anything else, a fault,
-# said on stderr. router.db is replaced, and Oxidized reloaded, only when there
+# said on stderr (a missing ssh, ssh-keygen or timeout for the host-key step is exit 2, router.db
+# untouched). router.db is replaced, and Oxidized reloaded, only when there
 # is a node to write: never with an empty file. A partial run drops the
 # unminted nodes from Oxidized's list until a later run mints them. 75 takes
 # precedence over 1; the stderr lines name every node either way.
@@ -146,21 +147,28 @@ mint_nodes
 sweep_args=(-F /dev/null)
 hostkey_jobs=${OXIDIZED_HOSTKEY_JOBS:-32}
 hostkey_budget=${OXIDIZED_HOSTKEY_BUDGET:-600}
-visited=0
 sweep_unsaved=0
-unknown_nodes=()
-unknown_addrs=()
-while IFS=$'\t' read -r node addr _; do
-  if ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then continue; fi
-  if [[ ! $addr =~ ^[0-9A-Fa-f:.]+$ ]]; then
-    echo "port49-oxidized-run: $node: the address is not an IP literal, so no host key is saved for it; Oxidized will refuse the node" >&2
-    sweep_unsaved=1
-    continue
-  fi
-  unknown_nodes+=("$node")
-  unknown_addrs+=("$addr")
-done <"$db"
-if [ "${#unknown_addrs[@]}" -gt 0 ]; then
+visited=0
+seen_addrs=" "
+
+# sweep_pass visits the nodes of $db whose key is not in known_hosts and whose address no earlier
+# pass looked at, in parallel, and names each one whose key is still absent.
+sweep_pass() {
+  local node addr i left tool start
+  local unknown_nodes=() unknown_addrs=() not_reached=()
+  while IFS=$'\t' read -r node addr _; do
+    case $seen_addrs in *" $addr "*) continue ;; esac
+    seen_addrs+="$addr "
+    if ssh-keygen -F "$addr" -f "$known_hosts" >/dev/null 2>&1; then continue; fi
+    if [[ ! $addr =~ ^[0-9A-Fa-f:.]+$ ]]; then
+      echo "port49-oxidized-run: $node: the address is not an IP literal, so no host key is saved for it; Oxidized will refuse the node" >&2
+      sweep_unsaved=1
+      continue
+    fi
+    unknown_nodes+=("$node")
+    unknown_addrs+=("$addr")
+  done <"$db"
+  [ "${#unknown_addrs[@]}" -gt 0 ] || return 0
   for tool in ssh-keygen timeout "$ssh_bin"; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       echo "port49-oxidized-run: $tool is not installed: the host-key step needs it; nothing changed" >&2
@@ -172,7 +180,6 @@ if [ "${#unknown_addrs[@]}" -gt 0 ]; then
     exit 75
   fi
   start=$SECONDS
-  not_reached=()
   for i in "${!unknown_addrs[@]}"; do
     left=$((hostkey_budget - (SECONDS - start)))
     if [ "$left" -le 0 ]; then
@@ -198,7 +205,14 @@ if [ "${#unknown_addrs[@]}" -gt 0 ]; then
       sweep_unsaved=1
     fi
   done
-  if [ "$visited" -eq 1 ]; then mint_nodes; fi
+}
+
+sweep_pass
+if [ "$visited" -eq 1 ]; then
+  mint_nodes
+  # a scope that grew between the two mints: its new nodes are visited too, without a third mint
+  # (the budget restarts, a few visits at most are expected)
+  sweep_pass
 fi
 
 mv -f "$db" "$routerdb"

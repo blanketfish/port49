@@ -2281,17 +2281,32 @@ func (f negativeFinding) render(t *testing.T) string {
 }
 
 // runLine is the commit the lab ran at and the test selection, for a note's
-// Run line: the commit of the working tree the test binary ran from.
+// Run line: the commit of the working tree the test binary ran from, with
+// "-dirty" when a tracked file differs from it (the note then does not name
+// the code that was measured). Untracked files do not count: the run's own
+// outputs are untracked.
 func runLine() string {
 	sha := "unknown"
 	if out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); err == nil {
 		sha = strings.TrimSpace(string(out))
 	}
+	dirty := true
+	if out, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=no").Output(); err == nil {
+		dirty = strings.TrimSpace(string(out)) != ""
+	}
 	run := ""
 	if f := flag.Lookup("test.run"); f != nil {
 		run = f.Value.String()
 	}
-	return fmt.Sprintf("commit `%s`, `PORT49_LAB_PLATFORMS=%s`, `-run %s`", sha, os.Getenv("PORT49_LAB_PLATFORMS"), run)
+	return runLineOf(sha, dirty, os.Getenv("PORT49_LAB_PLATFORMS"), run)
+}
+
+// runLineOf is runLine's text.
+func runLineOf(sha string, dirty bool, platforms, run string) string {
+	if dirty {
+		sha += "-dirty"
+	}
+	return fmt.Sprintf("commit `%s`, `PORT49_LAB_PLATFORMS=%s`, `-run %s`", sha, platforms, run)
 }
 
 // result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule

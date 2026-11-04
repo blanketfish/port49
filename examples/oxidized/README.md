@@ -179,7 +179,12 @@ it listed and leaves it alone. Only IP literals are visited.
 - **Tokens do not age through it.** The addresses come from the mint, so the sweep follows a first mint
   and a run that visited any node mints again after it: the tokens Oxidized gets are minted after the
   sweep. A window with nothing to visit mints once. The first mint's tokens are never used and lapse at
-  their TTL.
+  their TTL. A node that stays unreachable
+  makes every window mint the whole fleet twice, which doubles the broker's mint load and audit records
+  for that window: fix or remove the node. A node that first appears in the second mint is visited too.
+- **Concurrency is unmeasured.** L90 swept one device; up to 32 visits append to `known_hosts` at once,
+  which OpenSSH does with one small append each. A lost line fails closed: the node is named and tried
+  again at the next window.
 - **Needs** `ssh`, `ssh-keygen` and `timeout` on the wrapper's host. A missing one is named and the run
   exits 2 with `router.db` untouched.
 - **Measured on vEOS only** (Oxidized 0.37.0). That Oxidized reads what OpenSSH saved for the host-key
