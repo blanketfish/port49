@@ -112,6 +112,24 @@ func LogFingerprint(logs string) string {
 	return got
 }
 
+// ScrubWith is Scrub that also drops each line holding one of the run's own generated values (a pod's
+// log may echo the identity it was configured with, and a 20-character key is under Scrub's run length).
+func ScrubWith(s string, own ...string) string {
+	var keep []string
+	for _, ln := range strings.Split(s, "\n") {
+		hit := false
+		for _, o := range own {
+			if o != "" && strings.Contains(ln, o) {
+				hit = true
+			}
+		}
+		if !hit {
+			keep = append(keep, ln)
+		}
+	}
+	return Scrub(strings.Join(keep, "\n"))
+}
+
 var longRun = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
 var credWords = regexp.MustCompile(`(?i)password|token|secret|eyJ`)
 
@@ -202,7 +220,7 @@ func CurlConfig(id, secret, url, region string) (string, error) {
 	if !regexp.MustCompile(`^http://127\.0\.0\.1:[0-9]+/[a-z0-9-]+$`).MatchString(url) || !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(region) {
 		return "", fmt.Errorf("l89: the bucket URL or region")
 	}
-	return "silent\nfail\nrequest = \"PUT\"\nurl = \"" + url + "\"\nuser = \"" + id + ":" + secret + "\"\naws-sigv4 = \"aws:amz:" + region + ":s3\"\n", nil
+	return "silent\nshow-error\nfail\nmax-time = 10\nrequest = \"PUT\"\nurl = \"" + url + "\"\nuser = \"" + id + ":" + secret + "\"\naws-sigv4 = \"aws:amz:" + region + ":s3\"\n", nil
 }
 
 // Env is what the results record about the run.

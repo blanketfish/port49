@@ -95,13 +95,15 @@ func TestL89(t *testing.T) {
 }
 
 type l89Run struct {
-	t     *testing.T
-	env   *l89.Env
-	stack *kindstack.Stack
-	dir   string // a 0700 temp directory: the credential files live here
-	out   string // the results directory: the diagnosis of a failed cell goes here
-	first *l82.Cell
-	key   string // the generated repository key, compared with the cluster's and never printed
+	t         *testing.T
+	env       *l89.Env
+	stack     *kindstack.Stack
+	dir       string // a 0700 temp directory: the credential files live here
+	out       string // the results directory: the diagnosis of a failed cell goes here
+	first     *l82.Cell
+	bucketLog string   // the last curl attempt at the bucket
+	own       []string // the store credentials, which a diagnosis line must not hold
+	key       string   // the generated repository key, compared with the cluster's and never printed
 }
 
 func l89Env(t *testing.T) *l89.Env {
@@ -183,6 +185,7 @@ func (r *l89Run) installStoreAndVelero() {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.own = []string{id, secret}
 	cfg, err := l89.StoreConfig(id, secret)
 	if err != nil {
 		t.Fatal(err)
@@ -211,6 +214,7 @@ spec:
           image: ` + image + `
           args: [server, -dir=/data, -s3, -s3.config=/cfg/s3.json, -s3.port=8333, -master.volumeSizeLimitMB=64, -volume.max=30]
           ports: [{containerPort: 8333}]
+          readinessProbe: {tcpSocket: {port: 8333}, periodSeconds: 3}
           volumeMounts:
             - {name: data, mountPath: /data}
             - {name: cfg, mountPath: /cfg, readOnly: true}
@@ -234,8 +238,16 @@ spec:
 		t.Fatal(err)
 	}
 	kfile := r.file("bucket.curl", curlCfg)
-	shapetest.WaitFor(t, "the bucket", 2*time.Minute, func() bool {
-		return exec.Command("curl", "-K", kfile).Run() == nil
+	// curl's own message (show-error) is kept: the cause of a refusal is in it, and it holds no credential
+	var last string
+	shapetest.WaitFor(t, "the bucket (last curl: see the diagnosis)", 4*time.Minute, func() bool {
+		out, err := exec.Command("curl", "-K", kfile).CombinedOutput()
+		last = strings.TrimSpace(string(out))
+		if err != nil {
+			last += " (" + err.Error() + ")"
+		}
+		r.bucketLog = last
+		return err == nil
 	})
 
 	// The repository key first (ruling 10): Velero writes its well-known default into this Secret itself
@@ -245,6 +257,7 @@ spec:
 		t.Fatal(err)
 	}
 	r.key = key
+	r.own = append(r.own, key)
 	c.Kubectl("create", "namespace", "velero")
 	c.Kubectl("-n", "velero", "create", "secret", "generic", "velero-repo-credentials", "--from-file=repository-password="+r.file("repository-password", key))
 
@@ -280,7 +293,20 @@ func (r *l89Run) diagnose() {
 	t := r.t
 	c := r.stack.Cluster()
 	var b strings.Builder
-	add := func(what, out string) { fmt.Fprintf(&b, "== %s\n%s\n", what, l89.Scrub(kindtest.Filter(out))) }
+	add := func(what, out string) {
+		fmt.Fprintf(&b, "== %s\n%s\n", what, l89.ScrubWith(kindtest.Filter(out), r.own...))
+	}
+	add("the last attempt at the bucket", r.bucketLog)
+	// the object store's own pod: events, description and logs (no Secret is read)
+	for _, args := range [][]string{
+		{"-n", l89Store, "get", "pods,events", "-o", "wide"},
+		{"-n", l89Store, "describe", "pods"},
+		{"-n", l89Store, "logs", "deploy/seaweed", "--all-containers=true", "--tail=300"},
+		{"-n", l89Store, "logs", "deploy/seaweed", "--all-containers=true", "--previous", "--tail=100"},
+	} {
+		out, _ := c.KubectlTry("", args...)
+		add(strings.Join(args[2:], " "), out)
+	}
 	vel := func(args ...string) string {
 		full := append([]string{"--kubeconfig", c.Kubeconfig, "--kubecontext", c.Context(), "-n", "velero"}, args...)
 		out, _ := exec.Command(os.Getenv("VELERO_BIN"), full...).CombinedOutput()

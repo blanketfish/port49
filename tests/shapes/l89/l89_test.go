@@ -99,7 +99,7 @@ func TestCredentialFiles(t *testing.T) {
 		}
 	}
 	c, err := CurlConfig(id, secret, "http://127.0.0.1:9999/bucket", "us-east-1")
-	if err != nil || strings.Contains(c, "\n\n") || !strings.Contains(c, `user = "`+id+":"+secret+`"`) {
+	if err != nil || strings.Contains(c, "\n\n") || !strings.Contains(c, "show-error") || !strings.Contains(c, `user = "`+id+":"+secret+`"`) {
 		t.Errorf("curl config: %q, %v", c, err)
 	}
 	r1, _ := Random(16)
@@ -262,5 +262,15 @@ func TestL89ResultsSayWhatTheBucketHolds(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("the results do not say %q", want)
 		}
+	}
+}
+
+func TestScrubWithDropsTheRunsOwnValues(t *testing.T) {
+	got := ScrubWith("fine\nidentity ab12cd34ef56ab12cd34 loaded\nalso fine", "ab12cd34ef56ab12cd34")
+	if strings.Contains(got, "ab12cd34") || !strings.Contains(got, "fine") || !strings.Contains(got, "also fine") {
+		t.Errorf("ScrubWith: %q", got)
+	}
+	if got := ScrubWith("a line", ""); got != "a line" {
+		t.Errorf("an empty own value drops lines: %q", got)
 	}
 }
