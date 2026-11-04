@@ -358,6 +358,24 @@ tests:
       - eval_time: 6m
         alertname: port49_store_marks_feed_down
         exp_alerts: []
+  # port49_store_feed_legs_colocated
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_feed_legs_colocated{instance=\"a\",feed=\"marks\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: port49_store_feed_legs_colocated
+        exp_alerts:
+          - exp_labels: {instance: "a", feed: "marks", severity: "ticket"}
+            exp_annotations:
+              summary: "Both legs of the marks feed's watch are on one etcd member: port49 reaches only one etcd member for this feed, so check the other members; that member going dark stalls the feed."
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_feed_legs_colocated{instance=\"a\",feed=\"marks\"}", values: "1+0x5 0+0x25"}
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: port49_store_feed_legs_colocated
+        exp_alerts: []
   # port49_store_feed_down
   - interval: 1m
     input_series:

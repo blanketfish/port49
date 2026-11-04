@@ -136,6 +136,12 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "A store feed other than marks is down (contexts, or a split broker's pins or logouts): this process misses other replicas' writes, and its directory copy is not confirmed."
+      - alert: port49_store_feed_legs_colocated
+        expr: "port49_store_feed_legs_colocated == 1"
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Both legs of the {{ $labels.feed }} feed's watch are on one etcd member: port49 reaches only one etcd member for this feed, so check the other members; that member going dark stalls the feed."
       - alert: port49_store_circuit_open
         expr: "port49_store_circuit_open == 1"
         for: 1m
