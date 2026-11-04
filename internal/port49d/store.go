@@ -154,6 +154,12 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, dc, d, say)
 }
 
+// storeAttemptEvery is how long a wait for the store (waitForStore, and the
+// start's reads after it) lets pass between attempts. After a store gone the
+// listeners reopen through these attempts, so they open up to this long after
+// etcd answers again, then after open_after passes.
+const storeAttemptEvery = 5 * time.Second
+
 // waitForStore is a start's wait for etcd (pre-flight I9, I13, M33), on
 // the identity cfg's role names (attempt): the feeds' series made first,
 // then an attempt every 5s, each outage said with what stays shut
@@ -200,7 +206,7 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 		case errors.As(err, &fault) && !again:
 			return nil, err // the operator's to fix; named, exit 1
 		case errors.As(err, &fault):
-			fmt.Fprintf(out, "%s: %v; %s; trying again in 5s\n", proc, err, closed)
+			fmt.Fprintf(out, "%s: %v; %s; trying again in %v\n", proc, err, closed, storeAttemptEvery)
 		case !deadline.IsZero() && time.Now().After(deadline):
 			return nil, fmt.Errorf("%s: etcd at %s did not answer within %s.start_timeout (%v); not "+
 				"starting", ref.what(), eps, ref.at+".etcd", e.StartTimeout)
@@ -209,13 +215,13 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 			if !deadline.IsZero() {
 				wait = fmt.Sprintf("up to %v", e.StartTimeout)
 			}
-			fmt.Fprintf(out, "%s: %s: etcd at %s not answering (%v); %s; waiting %s\n", proc, ref.what(), eps, err, closed,
-				wait)
+			fmt.Fprintf(out, "%s: %s: etcd at %s not answering (%v); %s; waiting %s, an attempt every %v\n", proc, ref.what(), eps, err, closed,
+				wait, storeAttemptEvery)
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-time.After(storeAttemptEvery):
 		}
 	}
 }
@@ -266,11 +272,11 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			if !wait {
 				return err
 			}
-			fmt.Fprintf(out, "port49d: %v; the listeners stay closed; trying again in 5s\n", err)
+			fmt.Fprintf(out, "port49d: %v; the listeners stay closed; trying again in %v\n", err, storeAttemptEvery)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(5 * time.Second):
+			case <-time.After(storeAttemptEvery):
 			}
 		}
 	}
@@ -481,7 +487,8 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	gd := guard.WrapRev(fd, guardConfig(procOf(cfg), "daemon", cfg.Stores.SessionPath(), e, m, out, gone))
 	h := e.Health
 	fmt.Fprintf(out, "port49d: store: health checked every %v; every listener closes after %d consecutive failed "+
-		"checks and opens again after %d passes (%s.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter,
+		"checks; after that the store is tried every %v, and the listeners open again once an attempt succeeds and "+
+		"%d health checks pass (%s.etcd.health)\n", h.Interval, h.CloseAfter, storeAttemptEvery, h.OpenAfter,
 		cfg.Stores.SessionPath())
 	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
 	if !cfg.Stores.Shared {

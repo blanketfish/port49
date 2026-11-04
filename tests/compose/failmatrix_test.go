@@ -39,6 +39,8 @@ const (
 	holdTTL         = 15 * time.Second       // etcd.hold_ttl default
 	electionTimeout = time.Second            // etcd's default --election-timeout (the compose stack sets none)
 	breakerOpenFor  = 5 * time.Second        // etcd.breaker.open_for default
+	storeAttempt    = 4 * callTimeout        // one attempt's Ping bound (port49d's attempt, store.go)
+	storeRetry      = 5 * time.Second        // port49d's storeAttemptEvery: the wait between attempts after a store gone
 	tacacsAddr      = "127.0.0.1:49"
 	daemonMetrics   = "127.0.0.1:9049"
 	brokerMetrics   = "127.0.0.1:9050"
@@ -398,12 +400,23 @@ func TestFailureMatrix(t *testing.T) {
 			shapetest.WaitFor(t, "a login", 10*time.Second, func() bool { return m.passes(next) })
 		})
 	}
-	// store_hangs: the brief's bound, open_after passes plus 2s. store_stopped
-	// adds the members' own start and election, which the pause does not have.
+	// store_hangs reopens as waitForStore does (internal/port49d/store.go): the
+	// run restarted by the store gone makes its first attempt as the listeners
+	// close, while the members are still paused, and the unpause lands during
+	// it. etcd's re-election takes 1 to 3 s from the unpause, so that attempt
+	// may fail at its bound (storeAttempt); the next is storeRetry later, and
+	// succeeds within a second or so (twice callTimeout), after which the
+	// listeners open after openAfter passes. slack is the poll and a docker
+	// call. Measured failures (compose runs 41836570465 and 41892380205): the
+	// first attempt failed 2.3 s after it began and the next came 5 s on. The
+	// first version of this bound, openAfter passes plus 2 s, held only
+	// while the first attempt succeeded.
+	// store_stopped adds the members' own start and election, which the pause does not have.
 	// It kills the members rather than stopping them: etcd's graceful stop took
 	// 7s or more in CI, so port49d had closed its listener before `stop` returned
 	// and the statuses of the 5.5s window could not be probed.
-	dark("store_hangs", openAfter*healthInterval+2*time.Second+callTimeout,
+	const storeHangsReopen = storeAttempt + storeRetry + 2*callTimeout + openAfter*healthInterval + 2*time.Second
+	dark("store_hangs", storeHangsReopen,
 		func(m matrix) { m.s.run("pause", "etcd-2", "etcd-3") },
 		func(m matrix) { m.s.run("unpause", "etcd-2", "etcd-3") })
 	dark("store_stopped", 30*time.Second,

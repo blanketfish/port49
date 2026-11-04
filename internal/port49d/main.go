@@ -768,7 +768,7 @@ func run(parent context.Context, cfgPath string) error {
 	hs := &healthState{}
 	return runLoop(parent, func(again bool) error {
 		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, dc, restored, hs)
-	}, 5*time.Second)
+	}, storeAttemptEvery)
 }
 
 // runLoop runs once until a run ends for a reason other than a store
@@ -794,7 +794,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 		case errors.As(err, &fault):
 			return err // a deferred check's fault ends the process in every mode (N2)
 		case errors.As(err, &gone):
-			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
+			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start (an attempt every %v)\n", gone, storeAttemptEvery)
 			again = true
 			continue
 		case err == nil, !again:

@@ -8222,7 +8222,9 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     `store_unavailable` then. An operator who sees dark with etcd healthy looks at
     `port49_store_fence_timeouts_total`.
 - **Reopening.** A run after a store gone waits for the store as at a start, re-reading its
-  files. It binds TACACS+ only after `open_after` consecutive checks pass (default 3, 1 to 60);
+  files. It tries the store every 5s (no sooner after an attempt that failed, however quickly etcd
+  recovers: the listeners open up to 5s after etcd answers), and binds TACACS+ only after `open_after`
+  consecutive checks pass (default 3, 1 to 60);
   a failure starts the count again. A cold start is not gated.
 - **Break-glass.** Nothing port49 answers changes. On IOS-XE, whose authentication `ERROR` is
   final (§15 L4, L35), break-glass is refused until port49d is dark, now at most
