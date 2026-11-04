@@ -250,15 +250,15 @@ func TestAJustBoundConnectionIsNotEvicted(t *testing.T) {
 	f := newFixture(t, 8)
 	lim := DefaultListenerLimits
 	lim.MaxPerPrincipal = 2
-	addr, _ := serveThrough(t, f, lim, nil)
+	addr, bl := serveThrough(t, f, lim, nil)
 	fresh, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
 		MinVersion: tls.VersionTLS13})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer fresh.Close()
-	time.Sleep(200 * time.Millisecond) // bound, and the server's StateNew has fired
-	idle, _ := held(t, f, addr, f.alice)
+	time.Sleep(200 * time.Millisecond)              // bound, and the server's StateNew has fired
+	idle, _ := heldIdle(t, f, bl, addr, f.alice, 1) // fresh is busy until its request; idle must not be
 	third, tbr := held(t, f, addr, f.alice)
 	if !closedByPeer(idle) {
 		t.Fatal("the idle connection was not the one closed")
