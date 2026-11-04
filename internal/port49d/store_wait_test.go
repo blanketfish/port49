@@ -182,3 +182,26 @@ func TestAnUnchangedOutageIsRepeatedEveryTenMinutes(t *testing.T) {
 		t.Fatalf("a changed outage was not said at once: %q", out.String())
 	}
 }
+
+// A cold start's waits are cut at its start_timeout deadline: the backoff
+// (2, 4, 8 s after ten attempts) never carries the wait past it.
+func TestAColdStartNeverOutlastsItsStartTimeout(t *testing.T) {
+	clock := time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)
+	begun := clock
+	w := testWait(time.Second, false, 15*time.Second)
+	w.rnd = func() float64 { return 0.5 }
+	w.now = func() time.Time { return clock }
+	w.after = func(d time.Duration) <-chan time.Time {
+		clock = clock.Add(d)
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}
+	_, err := awaitStore(context.Background(), func() (*etcdstore.Store, error) { return nil, unavailable("dark") }, w, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "did not answer within") {
+		t.Fatalf("got %v, want the start_timeout error", err)
+	}
+	if over := clock.Sub(begun) - 15*time.Second; over > 0 {
+		t.Fatalf("the cold start ended %v after its start_timeout", over)
+	}
+}

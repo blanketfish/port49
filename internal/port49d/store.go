@@ -237,14 +237,28 @@ type storeWait struct {
 	closed       string                               // what stays shut meanwhile
 	rnd          func() float64                       // jitter's source in [0, 1); math/rand/v2 when nil
 	after        func(time.Duration) <-chan time.Time // the wait; time.After when nil
+	now          func() time.Time                     // the clock; time.Now when nil
 }
 
-func (w storeWait) wait(failed int) <-chan time.Time {
+func (w storeWait) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
+}
+
+// wait is the channel that fires after the failed-th failed attempt's wait,
+// cut to limit when that is more than 0: a cold start's wait ends at its
+// deadline, not after it.
+func (w storeWait) wait(failed int, limit time.Duration) <-chan time.Time {
 	r := rand.Float64
 	if w.rnd != nil {
 		r = w.rnd
 	}
 	d := jittered(storeWaitAfter(w.every, failed), r())
+	if limit > 0 && d > limit {
+		d = limit
+	}
 	if w.after != nil {
 		return w.after(d)
 	}
@@ -291,7 +305,7 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w storeWait, out io.Writer) (*etcdstore.Store, error) {
 	var deadline time.Time
 	if !w.again && w.startTimeout > 0 {
-		deadline = time.Now().Add(w.startTimeout)
+		deadline = w.clock().Add(w.startTimeout)
 	}
 	var said outageSayer
 	for failed := 1; ; failed++ {
@@ -308,7 +322,7 @@ func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w sto
 			return nil, err // the operator's to fix; named, exit 1
 		case errors.As(err, &fault):
 			said.say(out, fmt.Sprintf("%s: %v; %s; trying again (%s)", w.proc, err, w.closed, storeScheduleText))
-		case !deadline.IsZero() && time.Now().After(deadline):
+		case !deadline.IsZero() && !w.clock().Before(deadline):
 			return nil, fmt.Errorf("%s: etcd at %s did not answer within %s.start_timeout (%v); not "+
 				"starting", w.what, w.eps, w.at, w.startTimeout)
 		default:
@@ -319,10 +333,14 @@ func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w sto
 			said.say(out, fmt.Sprintf("%s: %s: etcd at %s not answering (%v); %s; waiting %s, %s",
 				w.proc, w.what, w.eps, err, w.closed, wait, storeScheduleText))
 		}
+		var limit time.Duration
+		if !deadline.IsZero() {
+			limit = max(deadline.Sub(w.clock()), time.Nanosecond)
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-w.wait(failed):
+		case <-w.wait(failed, limit):
 		}
 	}
 }
@@ -380,7 +398,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-w.wait(failed):
+			case <-w.wait(failed, 0):
 			}
 		}
 	}

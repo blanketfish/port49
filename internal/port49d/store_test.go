@@ -914,3 +914,34 @@ func TestARepeatedStartFaultIsSaidOnce(t *testing.T) {
 		t.Fatalf("a start that fails for another reason is retried every %v, want 5s", startAgainEvery)
 	}
 }
+
+// A fault said before a run that served is said again after the next store
+// gone, at once, with a since of its own: the sayer starts over with each.
+func TestAFaultIsSaidAgainAfterTheNextStoreGone(t *testing.T) {
+	var out bytes.Buffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fault := errors.New("test: the policy file is half-written")
+	steps := []error{
+		&storeGone{why: "test: the store went"}, fault, fault, // said once
+		&storeGone{why: "test: the store went again"}, fault, // a run served in between: said again
+	}
+	n := 0
+	once := func(bool) error {
+		if n < len(steps) {
+			n++
+			return steps[n-1]
+		}
+		cancel()
+		return nil
+	}
+	if err := runLoop(ctx, once, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out.String(), "half-written"); got != 2 {
+		t.Fatalf("the fault was said %d times across two stores gone, want 2:\n%s", got, out.String())
+	}
+}

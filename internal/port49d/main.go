@@ -802,6 +802,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 		case errors.As(err, &gone):
 			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start (%s)\n", gone, storeScheduleText)
 			again = true
+			said = outageSayer{} // a fault said before this run served is news again, with a since of its own
 			continue
 		case err == nil, !again:
 			return err
