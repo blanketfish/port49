@@ -415,10 +415,22 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	if _, err := c.KubectlTry(sched, "apply", "-f", "-"); err != nil {
 		t.Fatal(err)
 	}
-	// the CRD drops a field it does not know without a word: read it back
-	if got := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}")); got != "true" {
-		t.Fatalf("the Schedule's skipImmediately is %q after the apply, want true: the field was dropped or renamed", got)
+	// skipImmediately must have been honoured. The CRD drops a field it does not know (the read-back would
+	// be empty), and Velero's schedule controller resets the field to false once it has skipped the first
+	// run, recording status.lastSkipped: so the proof is a known field plus lastSkipped, and no backup.
+	var spec, skipped string
+	shapetest.WaitFor(t, "the schedule controller to skip the immediate run", 90*time.Second, func() bool {
+		spec = strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}"))
+		skipped = strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.status.lastSkipped}"))
+		return skipped != ""
+	})
+	if spec != "true" && spec != "false" {
+		t.Fatalf("the Schedule's skipImmediately reads %q: the field was dropped or renamed", spec)
 	}
+	if n := strings.Fields(c.Kubectl("-n", "velero", "get", "backups", "-l", "velero.io/schedule-name=port49-daily", "-o", "name")); len(n) != 0 {
+		t.Fatalf("the Schedule started %d backup(s) before the test asked for one: skipImmediately was not honoured", len(n))
+	}
+	l82Row(cell, "applying the example Schedule started no backup (skipImmediately skipped the first run)", "yes")
 	l82Row(cell, "the lab's etcd shares the release's namespace", "yes: the Schedule names both namespaces, the lab applies it with the one")
 	r.velero("backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
 	phase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
