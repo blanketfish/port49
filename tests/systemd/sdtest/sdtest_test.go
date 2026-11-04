@@ -820,3 +820,33 @@ func TestTheSmokesPolicyGrantsBob(t *testing.T) {
 		t.Error("the loaded policy does not name bob")
 	}
 }
+
+func TestKeyDirIsTheShippedLineWithItsDirectoryReplaced(t *testing.T) {
+	out, err := KeyDir(shipped(t, "config", "port49d.yaml"), "/run/credentials/port49d.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Refs struct {
+			FileDir string `yaml:"file_dir"`
+		} `yaml:"key_secret_refs"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("the result is not YAML (a second key_secret_refs would be a duplicate key): %v", err)
+	}
+	if doc.Refs.FileDir != "/run/credentials/port49d.service" {
+		t.Errorf("file_dir = %q", doc.Refs.FileDir)
+	}
+	if strings.Count(out, "key_secret_refs") != 1 {
+		t.Errorf("key_secret_refs appears %d times", strings.Count(out, "key_secret_refs"))
+	}
+	for _, drift := range []string{
+		"listen: \":49\"\n",
+		"key_secret_refs: {file_dir: /etc/port49/keys, extra: x}\n",
+		"key_secret_refs: {file_dir: /somewhere/else}\n",
+	} {
+		if _, err := KeyDir(drift, "/d"); err == nil {
+			t.Errorf("a config of %q was accepted", drift)
+		}
+	}
+}

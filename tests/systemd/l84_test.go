@@ -13,6 +13,7 @@ import (
 	"github.com/blanketfish/port49/internal/testpki"
 	"github.com/blanketfish/port49/tests/shapes/l84"
 	"github.com/blanketfish/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/tests/systemd/sdtest"
 )
 
 // TestL84Credentials is spec §15 L84 cell (a) and its (c): systemd LoadCredential= against
@@ -21,8 +22,8 @@ import (
 // It writes its cells to the JSON file named by PORT49_L84_CELLS_OUT, which the lab test
 // (tests/lab/l84_test.go, PORT49_L84_A_CELLS) merges into the note; `make lab-l84-systemd` runs it.
 //
-// (a) A drop-in gives port49d LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1, port49d.yaml names
-// key_secret_refs.file_dir /run/credentials/port49d.service and the policy names the file there. It
+// (a) A drop-in gives port49d LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1, port49d.yaml's key_secret_refs.file_dir is
+// /run/credentials/port49d.service (the shipped line, its directory replaced) and the policy names the file there. It
 // records stat of the directory and the file, the start's result and a second start's; PASS iff both
 // starts are ready and a login keyed with the credential passes.
 // (c) tacacs_v2 as a second LoadCredential= line, a policy naming it, systemctl daemon-reload and no
@@ -54,12 +55,14 @@ func TestL84Credentials(t *testing.T) {
 	a := l84.Cell{ID: "a", Verdict: l84.Fail}
 	a.Rows = append(a.Rows, l84.Row{Case: "systemd", Observation: strings.SplitN(b.sh("systemctl --version"), "\n", 2)[0]})
 
-	// The config and the policy name the credentials directory, once, before the first start.
-	daemon := b.sh("cat /etc/port49/port49d.yaml")
-	if strings.Contains(daemon, "key_secret_refs") {
-		t.Fatal("INVALID: the shipped port49d.yaml already names key_secret_refs")
+	// The config and the policy name the credentials directory, once, before the first start. The
+	// shipped config already names key_secret_refs (file_dir /etc/port49/keys): that one line's
+	// directory is replaced, and a drift in the shipped line is INVALID.
+	daemon, err := sdtest.KeyDir(b.sh("cat /etc/port49/port49d.yaml"), credDir)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
 	}
-	b.put("/etc/port49/port49d.yaml", "root:root", "0644", daemon+"\nkey_secret_refs: {file_dir: "+credDir+"}\n")
+	b.put("/etc/port49/port49d.yaml", "root:root", "0644", daemon)
 	const oldRef = "file:/etc/port49/keys/tacacs_v1"
 	if !strings.Contains(u.policy, oldRef) {
 		t.Fatalf("INVALID: the policy no longer names %s", oldRef)
