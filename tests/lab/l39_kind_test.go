@@ -300,7 +300,7 @@ func (r *l39Run) cellC(t *testing.T, cell *l82.Cell) {
 	cl, ns := r.stack.Cluster(), r.stack.Namespace()
 	cl.Kubectl("label", "namespace", ns, "pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 	sts := "statefulset/" + r.stack.Release() + "-port49d"
-	cl.Kubectl("-n", ns, "patch", sts, "--type=strategic", "-p", l39.HostNetwork())
+	cl.Kubectl("-n", ns, "patch", sts, "--type=json", "-p", l39.HostNetwork())
 	r.rolled(t, sts)
 	node := r.podNode(t)
 	hn := strings.TrimSpace(cl.Kubectl("-n", ns, "get", "pod", "t-port49d-0", "-o", "jsonpath={.spec.hostNetwork}"))

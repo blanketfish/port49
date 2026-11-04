@@ -1,6 +1,7 @@
 package l39
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -86,8 +87,23 @@ func TestPatchesAndValues(t *testing.T) {
 	if p, err := PinToNode("port49l39-worker"); err != nil || !strings.Contains(p, `"kubernetes.io/hostname":"port49l39-worker"`) {
 		t.Errorf("%q %v", p, err)
 	}
-	if !strings.Contains(HostNetwork(), `"hostNetwork":true`) {
-		t.Error("host network")
+	var ops []struct {
+		Op, Path string
+		Value    any
+	}
+	if err := json.Unmarshal([]byte(HostNetwork()), &ops); err != nil {
+		t.Fatalf("the host network patch is not a JSON patch: %v", err)
+	}
+	want := map[string]string{"/spec/template/spec/hostNetwork": "add", "/spec/template/spec/dnsPolicy": "add",
+		"/spec/template/spec/securityContext/sysctls": "remove"}
+	for _, o := range ops {
+		if want[o.Path] != o.Op {
+			t.Errorf("unexpected op %s %s", o.Op, o.Path)
+		}
+		delete(want, o.Path)
+	}
+	if len(want) != 0 {
+		t.Errorf("the host network patch lacks %v: Kubernetes refuses sysctls on the host network", want)
 	}
 	if v, err := ServiceValues("Local"); err != nil || !strings.Contains(v, "type: NodePort") || !strings.Contains(v, "externalTrafficPolicy: Local") {
 		t.Errorf("%q %v", v, err)

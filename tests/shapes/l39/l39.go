@@ -163,12 +163,17 @@ func Addrs(a []string) string {
 	return strings.Join(a, ", ")
 }
 
-// HostNetwork is the lab-only change that puts port49d on its node's network, as a strategic merge
-// patch of the StatefulSet's pod template. It lives here and never in deploy/helm: the chart offers no
-// host networking (spec §13 decision 54 ruling 5). ClusterFirstWithHostNet keeps the etcd Service
-// names resolvable.
+// HostNetwork is the lab-only change that puts port49d on its node's network, as a JSON patch of the
+// StatefulSet's pod template (`kubectl patch --type=json`). It lives here and never in deploy/helm: the
+// chart offers no host networking (spec §13 decision 54 ruling 5). ClusterFirstWithHostNet keeps the
+// etcd Service names resolvable. The chart's pod-level sysctl (net.ipv4.ip_unprivileged_port_start) is
+// removed: Kubernetes refuses a pod with sysctls on the host network (run 41844736221: "sysctls[0].name:
+// may not be specified when 'hostNetwork' is true"). The node's own value then governs binding port 49
+// as the non-root user; a kind node's is 0, and if it is not the pod fails to bind and the cell says so.
 func HostNetwork() string {
-	return `{"spec":{"template":{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}}}`
+	return `[{"op":"add","path":"/spec/template/spec/hostNetwork","value":true},` +
+		`{"op":"add","path":"/spec/template/spec/dnsPolicy","value":"ClusterFirstWithHostNet"},` +
+		`{"op":"remove","path":"/spec/template/spec/securityContext/sysctls"}]`
 }
 
 // PinToNode is the patch that pins the pod template to the node named host.
