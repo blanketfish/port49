@@ -99,7 +99,7 @@ func l84Env(t *testing.T) l84.Env {
 		Docker:  l84Out("docker", "version", "--format", "{{.Server.Version}}"),
 		Compose: l84Out("docker", "compose", "version", "--short"),
 		Kernel:  l84Out("uname", "-r"),
-		Systemd: "see cell (a)'s first row (the Debian container of tests/systemd); not run unless PORT49_L84_A_CELLS is given",
+		Systemd: "each systemd cell records its own: the Debian container's in the container cell (a)'s first row, the runner's in the first row of the host cells; none is run unless PORT49_L84_A_CELLS is given",
 		Images: strings.Join([]string{img("port49:dev"), img("port49-setup:dev"), img("gcr.io/etcd-development/etcd:v3.6.15")}, "; ") +
 			" (Docker, Compose and the kernel are the lab host's)",
 	}

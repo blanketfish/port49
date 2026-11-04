@@ -327,25 +327,25 @@ check on a read-only mount, since nothing there can change. `ProtectSystem=stric
 read-only. The units set `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes` and a capability
 bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of these.
 
-### `LoadCredential=` for a device key
+### `LoadCredential=` for the encryption key
 
 Measured (lab L84, `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
-unit's hardening): port49d reads a device key that systemd renders from `LoadCredential=`. systemd
-gives the credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL
-too, and the fence reads the ACL's entries, so it passes. To use it:
+unit's hardening): port49d reads a file that systemd renders from `LoadCredential=`. systemd gives the
+credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL too, and
+the fence reads the ACL's entries, so it passes. Use it for the encryption key, so the file on disk
+need not be readable by `port49d`:
 
-1. In `/etc/port49/port49d.yaml`, **change** the one shipped line's directory (do not add a second
-   `key_secret_refs`; the file would not load):
-   `key_secret_refs: {file_dir: /run/credentials/port49d.service}`.
-2. In a drop-in (`systemctl edit port49d`), add `LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1`,
-   one line per key, the source file readable by root alone (`root:root 0600` is enough).
-3. In the policy, name the key `file:/run/credentials/port49d.service/tacacs_v1`.
+1. In a drop-in (`systemctl edit port49d`), add
+   `LoadCredential=encryption.key:/etc/port49/secrets/encryption.key`; systemd reads the source as root.
+2. In `/etc/port49/port49d.yaml`, set `encryption.current.secret_ref` to
+   `file:/run/credentials/port49d.service/encryption.key`. Leave `key_secret_refs.file_dir` as
+   shipped: the credentials directory is not a place a policy may name a device key from.
 
-Adding a credential needs `systemctl restart port49d`. systemd refuses `systemctl set-property
-LoadCredential=`, and a drop-in with `systemctl daemon-reload` does not reach the running unit: its
-credentials directory keeps the files it started with. A restart closes every TACACS+ session in
-flight, so add keys in a window. A host whose systemd renders no credentials directory (a container's
-systemd did not) cannot use this.
+Device keys stay in `/etc/port49/keys`: adding a credential needs `systemctl restart port49d`. systemd
+refuses `systemctl set-property LoadCredential=`, and a drop-in with `systemctl daemon-reload` does
+not reach the running unit (its credentials directory keeps the files it started with). A restart
+closes every session in flight, so adding a device credential that way would cost those sessions
+each time. A host whose systemd renders no credentials directory (a container's did not) cannot use this.
 
 ## Rotating the `encryption:` key
 
