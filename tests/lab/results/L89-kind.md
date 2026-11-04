@@ -8,7 +8,7 @@ The lab's etcd shares the release's namespace; the example Schedule names the re
 
 - Date: 2026-11-04
 - Platform: ubuntu24 20261101.360.1
-- Run: run 41862464658, attempt 1
+- Run: run 41870212174, attempt 1
 - Docker: 28.0.4
 - Kernel: 7.0.0-1017-azure
 - kind: kind v0.29.0 go1.24.2 linux/amd64
@@ -37,12 +37,15 @@ The lab's etcd shares the release's namespace; the example Schedule names the re
 | the lab's etcd shares the release's namespace | yes: the Schedule names both namespaces, the lab applies it with the one |
 | the backup's phase | Completed |
 | pod volume backups completed | 4 of the chart's 4 data volumes, 7 in all |
+| the README's hostPath check (run verbatim) printed | nothing |
+| the README's per-claim check (run verbatim) printed | nothing |
+| the README's per-claim check with a claim no pod mounts printed | that claim and nothing else |
 | the namespace was deleted | yes, and its volumes |
 | the restore's phase | Completed |
 | both StatefulSets became ready | yes |
 | a fence refusal in a pod's log (the data directory writable by a group, or not owned by uid 65532) | no |
-| the fingerprint the broker's "issuing as" line prints (first 12), before and after | d7a64d267ac2, d7a64d267ac2 |
-| the issuing CA's fingerprint (first 12 hex) before the backup, and after the restore | 35deb2ce871b, 35deb2ce871b |
+| the fingerprint the broker's "issuing as" line prints (first 12), before and after | 3827e78a397f, 3827e78a397f |
+| the issuing CA's fingerprint (first 12 hex) before the backup, and after the restore | f2e63f159d4d, f2e63f159d4d |
 | data-t-broker-0: before the backup | /v/state 700 65532:65532; /v/state/issuing-ca.key 600 65532:65532 |
 | data-t-broker-0: after the restore | unchanged |
 | data-t-broker-1: before the backup | /v/state 700 65532:65532; /v/state/issuing-ca.key 600 65532:65532 |

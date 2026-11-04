@@ -341,6 +341,8 @@ not measured here.
   ```
   <!-- l89:claims:end -->
 
+  L89 runs these two commands verbatim, from this file, in CI after its backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.
+
   The backup's own warnings, which name a volume Velero skipped:
 
   ```sh
