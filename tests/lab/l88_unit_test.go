@@ -3,10 +3,13 @@
 package lab
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanketfish/port49/tests/deviceaaa"
 )
@@ -92,7 +95,7 @@ func TestL88CellsPerPlatform(t *testing.T) {
 		// The TLS pass (cell h) runs only the cells the transport changes: not c, g or i.
 		want := "a,b,d,e,f"
 		if p.name == "nokia_srlinux" {
-			want = "h" // its client does not speak TLS: the pass records that and runs nothing else
+			want = "h" // SR Linux over RFC 9887 is not measured (L92): the pass records one observation and runs nothing else
 		}
 		if got := strings.Join(l88Cells(p.sel, true), ","); got != want {
 			t.Errorf("%s: the TLS pass runs %s, want %s", p.sel, got, want)
@@ -268,5 +271,63 @@ func TestL88NoteNeverHoldsAHashedKey(t *testing.T) {
 	}
 	if strings.Contains(out, "$aes1$") || strings.Contains(out, "AWWGR") {
 		t.Errorf("a hashed key survived:\n%s", out)
+	}
+}
+
+// TestL88NoteAlwaysPointsAtACapture: CLAUDE.md rule 3 needs a capture pointer in every closed
+// note; a note without one says why, and the pointer survives the 24-character masking.
+func TestL88NoteAlwaysPointsAtACapture(t *testing.T) {
+	n := newL88Note(platform{name: "arista_eos", version: "x"}, "tcp", "pw", "hash")
+	out, err := n.render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Capture: none kept: ") {
+		t.Errorf("a note with no capture does not say so:\n%s", out)
+	}
+	n.capture("tests/lab/evidence/L88-f-arista_eos-vEOS-4.31.2F-arista_eos.pcap")
+	n.fact(n.redact("Capture: tests/lab/evidence/L88-g-arista_eos-vEOS-4.31.2F-arista_eos.pcap"))
+	out, err = n.render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Capture: `tests/lab/evidence/L88-f-arista_eos-vEOS-4.31.2F-arista_eos.pcap`") {
+		t.Errorf("the cited capture is missing:\n%s", out)
+	}
+	if strings.Contains(out, "<LONG>") {
+		t.Errorf("a committed-file pointer was masked:\n%s", out)
+	}
+}
+
+// TestL88WireSeesThePortTheDeviceDials: over RFC 9887 the device dials 300, so a reader that
+// keeps port 49 only prints "0 connections" for a pass in which the device connected.
+func TestL88WireSeesThePortTheDeviceDials(t *testing.T) {
+	at := time.Date(2026, 11, 4, 8, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "tls.pcap")
+	pcap := l73FakePcap(40000, 300, []l73FakeSeg{
+		{fromDevice: true, flags: 0x02, at: at},
+		{fromDevice: false, flags: 0x12, at: at.Add(time.Millisecond)},
+		{fromDevice: false, flags: 0x04, at: at.Add(2 * time.Millisecond)},
+	})
+	if err := os.WriteFile(path, pcap, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := l88WireFile(path, l73TDevice, 300, at.Add(-time.Second), at.Add(time.Second))
+	if !strings.Contains(got, "1 connections from the device in the window: 1 with a SYN, 1 answered SYN-ACK, 1 with an RST") {
+		t.Errorf("port 300 not read:\n%s", got)
+	}
+	if got := l88WireFile(path, l73TDevice, 49, at.Add(-time.Second), at.Add(time.Second)); !strings.Contains(got, "0 connections") {
+		t.Errorf("port 49 should see nothing here:\n%s", got)
+	}
+}
+
+func TestL88AccountGone(t *testing.T) {
+	if err := l88AccountGone("l88deny", "show running-config | include username\nusername admin privilege 15\n"); err != nil {
+		t.Errorf("an absent account read as present: %v", err)
+	}
+	for _, still := range []string{"username l88deny privilege 1 secret 9 x", "set system login user l88deny class read-only", "    l88deny {\n        password x"} {
+		if l88AccountGone("l88deny", still) == nil {
+			t.Errorf("a present account read as gone: %q", still)
+		}
 	}
 }

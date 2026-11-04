@@ -865,7 +865,10 @@ type l29Packet struct {
 
 // l29Packets reads the capture at path for every TCP packet between addr and
 // port 49, in capture order.
-func l29Packets(path, addr string) ([]l29Packet, error) {
+func l29Packets(path, addr string) ([]l29Packet, error) { return l29PacketsOn(path, addr, 49) }
+
+// l29PacketsOn is l29Packets for a server port other than 49: L88's RFC 9887 pass dials 300.
+func l29PacketsOn(path, addr string, port uint16) ([]l29Packet, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -881,11 +884,11 @@ func l29Packets(path, addr string) ([]l29Packet, error) {
 		if !ok {
 			continue
 		}
-		p := l29Packet{fl: fl, fromDevice: fl.Src.String() == addr && fl.DstPort == 49}
+		p := l29Packet{fl: fl, fromDevice: fl.Src.String() == addr && fl.DstPort == port}
 		switch {
 		case p.fromDevice:
 			p.port = fl.SrcPort
-		case fl.Dst.String() == addr && fl.SrcPort == 49:
+		case fl.Dst.String() == addr && fl.SrcPort == port:
 			p.port = fl.DstPort
 		default:
 			continue

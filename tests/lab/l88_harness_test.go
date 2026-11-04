@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"golang.org/x/crypto/scrypt"
@@ -124,7 +125,7 @@ func l88ApplyWith(p platform, transport string, servers []string, push func(line
 	}
 	srlTLS := p.name == "nokia_srlinux" && transport == "tls"
 	if srlTLS {
-		transport = "tcp" // there is no SR Linux TLS reference: the device's client does not speak TLS (cell h)
+		transport = "tcp" // SR Linux over RFC 9887 is not measured (L92): the plain reference, then a tls-profile and port 300 (cell h)
 	}
 	lines, err := deviceaaa.Render(ref, transport, l88Values(p, servers), labKeyDefault)
 	if err != nil {
@@ -449,6 +450,15 @@ type l88Note struct {
 	cells     []l88Cell
 	facts     []string
 	raw       string // text added after masking: only the unit test uses it
+	captures  []string
+	noCapture string // why a run kept no capture, written when it took none
+}
+
+// capture records the evidence file a cell's capture is committed as; render cites each.
+func (n *l88Note) capture(path string) {
+	if path != "" && !slices.Contains(n.captures, path) {
+		n.captures = append(n.captures, path)
+	}
 }
 
 func newL88Note(p platform, transport string, secrets ...string) *l88Note {
@@ -492,7 +502,12 @@ func (n *l88Note) redact(s string) string {
 			s = strings.ReplaceAll(s, sec, "<redacted>")
 		}
 	}
-	return l88Long.ReplaceAllString(l88Hashed.ReplaceAllString(hideKeys(s), "<hash>"), "<LONG>")
+	return l88Long.ReplaceAllStringFunc(l88Hashed.ReplaceAllString(hideKeys(s), "<hash>"), func(m string) string {
+		if strings.HasPrefix(m, "tests/lab/evidence/") || strings.HasPrefix(m, "tests/lab/results/") {
+			return m // a pointer to a committed file is not a secret
+		}
+		return "<LONG>"
+	})
 }
 
 // mask is s with every secret of the run replaced.
@@ -507,6 +522,17 @@ func (n *l88Note) render() (string, error) {
 		time.Now().UTC().Format("2006-01-02"))
 	for _, f := range n.facts {
 		b.WriteString("- " + n.mask(f) + "\n")
+	}
+	// CLAUDE.md rule 3: every note points at a capture, or says why none was kept.
+	for _, c := range n.captures {
+		fmt.Fprintf(&b, "\nCapture: `%s` (redacted copy of the run's capture)\n", c)
+	}
+	if len(n.captures) == 0 {
+		why := n.noCapture
+		if why == "" {
+			why = "no cell of this run took a capture"
+		}
+		fmt.Fprintf(&b, "\nCapture: none kept: %s\n", why)
 	}
 	b.WriteString("\n| Cell | Verdict | Observation |\n|---|---|---|\n")
 	for _, c := range n.cells {
@@ -623,7 +649,11 @@ func l88TLSPass() bool { return os.Getenv("PORT49_L88_TLS") == "1" }
 
 // l88ReferenceNames gives L73's enrolment the names the shipped reference files use for the
 // root CA's trust object, so the reference is applied unchanged over the enrolment.
-func l88ReferenceNames() {
+func l88ReferenceNames(t *testing.T) {
+	was := [...]string{l73RootProfile, l73TrustGroup, l73EOSRootFile, l73EOSInterFile, l73CiscoKey}
+	t.Cleanup(func() { // L73's own tests share these
+		l73RootProfile, l73TrustGroup, l73EOSRootFile, l73EOSInterFile, l73CiscoKey = was[0], was[1], was[2], was[3], was[4]
+	})
 	l73RootProfile, l73TrustGroup = "port49-root", "port49"
 	l73EOSRootFile, l73EOSInterFile = "port49-root.crt", "port49-intermediate.crt"
 	// The reference trustpoints name the key by the certificate id (eckeypair/rsakeypair <CERT_ID>).
@@ -634,7 +664,7 @@ func l88ReferenceNames() {
 // the root) and starts port49d on the config with an RFC 9887 listener on 300, then makes
 // that config the one every restart uses. The reference is applied after this.
 func (e *l88Env) enrolTLS() {
-	l88ReferenceNames()
+	l88ReferenceNames(e.t)
 	srl := e.l.p.name == "nokia_srlinux"
 	d, ok := l73Dialects[e.l.p.name]
 	if srl {
@@ -703,6 +733,7 @@ func (e *l88Env) enrolSRLinux(le *l73Env) {
 	e.must("encoding the device key", err)
 	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
 	e.n.addSecret(keyPEM)
+	e.n.addSecret(oneLine(keyPEM)) // sr_cli's refusal text is one-lined before it is masked
 	le.secrets = append(le.secrets, keyPEM)
 	node, ip := e.l.p.node, net.ParseIP(e.l.p.addr)
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{

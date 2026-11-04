@@ -115,11 +115,29 @@ func l88Run(t *testing.T, l *lab) {
 				return
 			}
 			srDone = true
-			if err := l88SRPush([]string{"delete interface mgmt0 subinterface 0 ipv4 address " + addr, "interface mgmt0 {", "subinterface 0 {", "ipv4 {", "dhcp-client {", "}", "}", "}", "}"}); err != nil {
-				e.n.fact("teardown: removing the static management address said " + e.n.redact(err.Error()))
-			} else {
-				e.n.fact("teardown: the static management address was removed")
+			// The servers' source-address names the static address, so it goes in the same commit.
+			undo := []string{}
+			for _, sv := range l88Servers {
+				undo = append(undo, "delete system aaa server-group port49 server "+sv+" tacacs source-address")
 			}
+			undo = append(undo, "delete interface mgmt0 subinterface 0 ipv4 address "+addr,
+				"interface mgmt0 {", "subinterface 0 {", "ipv4 {", "dhcp-client {", "}", "}", "}", "}")
+			if err := l88SRPush(undo); err != nil {
+				e.n.fact("teardown: removing the static management address said " + e.n.redact(err.Error()))
+				e.t.Errorf("INVALID: the SR Linux undo was refused: %s", e.n.mask(oneLine(err.Error())))
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			out, _ := exec.CommandContext(ctx, "docker", "exec", l76Container, "sr_cli", "-d",
+				"info from running interface mgmt0 subinterface 0 ipv4").CombinedOutput()
+			back := e.n.redact(string(out))
+			e.n.fact("teardown, `info from running interface mgmt0 subinterface 0 ipv4`: " + oneLine(back))
+			if !strings.Contains(string(out), "dhcp-client") || strings.Contains(string(out), addr) {
+				e.t.Errorf("INVALID: the SR Linux undo did not take: mgmt0 is not back on the DHCP client:\n%s", back)
+				return
+			}
+			e.n.fact("teardown: the static management address was removed and mgmt0 is back on the DHCP client (read back)")
 		}
 		defer undoVRF()
 	}
@@ -319,15 +337,34 @@ func (e *l88Env) cellA() {
 	e.must("creating the local account", l88Admin(e.l, func(c *cliConn) error { return l88Push(e.l.p, c, add) }))
 	defer func() {
 		e.must("removing the local account", l88Admin(e.l, func(c *cliConn) error {
+			if e.l.p.name == "nokia_srlinux" {
+				if err := l88SRPush(del); err != nil {
+					return err
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				out, _ := exec.CommandContext(ctx, "docker", "exec", l76Container, "sr_cli", "-d",
+					"info from running system aaa authentication").CombinedOutput()
+				return l88AccountGone(l88DenyUser, string(out))
+			}
 			if l88Junos(e.l.p) {
-				_, err := junosConfigure(c, del...)
+				if _, err := junosConfigure(c, del...); err != nil {
+					return err
+				}
+				out, err := junosShow(c, "show configuration system login | display set")
+				if err != nil {
+					return err
+				}
+				return l88AccountGone(l88DenyUser, out)
+			}
+			if _, err := l73CiscoRun(c, l88WithCommit(e.l.p, l88Confirming(del)), nil, true, l73ExtraMarks(l88Family(e.l.p))...); err != nil {
 				return err
 			}
-			if e.l.p.name == "nokia_srlinux" {
-				return l88SRPush(del)
+			out, err := c.sendExpect("show running-config | include username", 60*time.Second, c.prompt)
+			if err != nil {
+				return err
 			}
-			_, err := l73CiscoRun(c, l88WithCommit(e.l.p, l88Confirming(del)), nil, true, l73ExtraMarks(l88Family(e.l.p))...)
-			return err
+			return l88AccountGone(l88DenyUser, out)
 		}))
 	}()
 	// The control.
@@ -527,6 +564,7 @@ func (e *l88Env) cellF() {
 	user, secret := e.l.nextLogin(e.t)
 	e.n.addSecret(secret)
 	stopCap := e.l.capture(e.t, e.capName("L88-f"))
+	e.n.capture(e.l.evidencePath)
 	defer stopCap()
 	// A device that marked both servers dead earlier (XR 26.1.1 and IOS XE, cell e) fails the
 	// login at once without sending a packet until its dead time runs out: the login is
@@ -963,6 +1001,7 @@ func (e *l88Env) cellF2() {
 		run(cmd)
 	}
 	stopCap := e.l.capture(e.t, e.capName("L88-f2"))
+	e.n.capture(e.l.evidencePath)
 	defer stopCap()
 	errOff := e.l.errLogSize()
 	mark := e.l.mark()
@@ -1038,7 +1077,15 @@ func l88Sockets() string {
 // l88Wire reads the capture's headers only: for each connection the device opened to port 49
 // in [from, to], what flags crossed in each direction. It never reads a payload.
 func l88Wire(l *lab, from, to time.Time) string {
-	pkts, err := l29Packets(l.capAbs, l.p.addr)
+	port := uint16(49)
+	if l88TLSPass() {
+		port = l73TLSPort // the RFC 9887 pass: the device dials 300, which the capture filter includes
+	}
+	return l88WireFile(l.capAbs, l.p.addr, port, from, to)
+}
+
+func l88WireFile(path, addr string, port uint16, from, to time.Time) string {
+	pkts, err := l29PacketsOn(path, addr, port)
 	if err != nil {
 		return "(the capture could not be read: " + err.Error() + ")"
 	}
@@ -1237,6 +1284,7 @@ func (e *l88Env) cellF3() {
 	user, secret := e.l.nextLogin(e.t)
 	e.n.addSecret(secret)
 	stopCap := e.l.capture(e.t, e.capName("L88-f3"))
+	e.n.capture(e.l.evidencePath)
 	defer stopCap()
 	mark := e.l.mark()
 	var b strings.Builder
@@ -1465,6 +1513,7 @@ func (e *l88Env) srEvidence() {
 // 300 held in memory (never written: it would carry the lab's plain TACACS+ bytes). Of the
 // device's first data packet only the first byte is read: 0x16 opens a TLS handshake record.
 func (e *l88Env) cellH() {
+	e.n.noCapture = "the port 300 capture is held in memory by design (it carries plain TACACS+ bytes); only the first data byte and the SYN and SYN-ACK counts are kept"
 	cap := exec.Command("sudo", "-n", "tcpdump", "-Z", "root", "-U", "-nn", "-i", "any", "-w", "-",
 		"host "+e.l.p.addr+" and tcp port 300")
 	var buf bytes.Buffer
@@ -1509,4 +1558,21 @@ func (e *l88Env) cellH() {
 		got += fmt.Sprintf("its first data byte is 0x%02x, not a TLS record (0x16): a TACACS+ header's version byte is 0xc0 or 0xc1", first)
 	}
 	e.n.cell("h", "OBSERVED", got+"; the login "+map[bool]string{true: "succeeded", false: "failed"}[err == nil], "")
+}
+
+// l88AccountGone is nil when no line of a device's account listing names user as an account.
+// The command's own echo ("... | include username") does not start a line with it.
+func l88AccountGone(user, listing string) error {
+	for _, ln := range strings.Split(strings.ReplaceAll(listing, "\r", ""), "\n") {
+		f := strings.Fields(ln)
+		for i, w := range f {
+			if (w == "user" || w == "username") && i+1 < len(f) && f[i+1] == user && !strings.HasPrefix(strings.TrimSpace(ln), "show ") {
+				return fmt.Errorf("INVALID: the local account %s is still on the device after its removal: %s", user, strings.TrimSpace(ln))
+			}
+		}
+		if strings.HasPrefix(strings.TrimSpace(ln), user+" {") { // SR Linux's `info` form: the account is a list entry
+			return fmt.Errorf("INVALID: the local account %s is still on the device after its removal", user)
+		}
+	}
+	return nil
 }
