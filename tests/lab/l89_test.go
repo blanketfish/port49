@@ -86,7 +86,7 @@ func TestL89(t *testing.T) {
 		}
 	}()
 
-	stack := kindstack.BringUp(t, "port49l89")
+	stack := kindstack.BringUpWith(t, "port49l89", kindstack.Options{EtcdOnLocalVolumes: true})
 	r := &l89Run{t: t, env: env, stack: stack, dir: t.TempDir(), out: out}
 	r.installStoreAndVelero()
 	r.first = &cells[0]
@@ -337,6 +337,20 @@ func (r *l89Run) diagnose() {
 		out, _ := exec.Command(os.Getenv("VELERO_BIN"), full...).CombinedOutput()
 		return string(out)
 	}
+	// the release's own namespace: why a pod is not ready (no Secret is read)
+	for _, args := range [][]string{
+		{"-n", "port49", "get", "pods,pvc,pv,events", "-o", "wide"},
+		{"-n", "port49", "describe", "pods"},
+	} {
+		out, _ := c.KubectlTry("", args...)
+		add("port49 "+strings.Join(args[2:], " "), out)
+	}
+	for _, p := range []string{"t-port49d-0", "t-port49d-1", "t-broker-0", "etcd-0"} {
+		for _, extra := range [][]string{{}, {"--previous"}} {
+			out, _ := c.KubectlTry("", append([]string{"-n", "port49", "logs", p, "--all-containers=true", "--tail=100"}, extra...)...)
+			add("logs of "+p+" "+strings.Join(extra, " "), out)
+		}
+	}
 	add("velero backup describe --details", vel("backup", "describe", l89Backup, "--details"))
 	add("velero backup logs", vel("backup", "logs", l89Backup))
 	add("velero restore describe --details", vel("restore", "describe", l89Restore, "--details"))
@@ -454,6 +468,12 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	}
 	r.env.VolumeBackups = fmt.Sprintf("%d of the chart's 4 data volumes, %d in all", data, all)
 	l82Row(cell, "pod volume backups completed", r.env.VolumeBackups)
+	// every volume claim in the namespace must be in the backup, etcd's too: Velero skips a hostPath volume
+	// with a warning and the restore then holds an empty store
+	pvcs := len(strings.Fields(c.Kubectl("-n", ns, "get", "pvc", "-o", "name")))
+	if all != pvcs {
+		t.Fatalf("the node agent backed up %d of the namespace's %d volume claims (see the backup's warnings in the diagnosis)", all, pvcs)
+	}
 	if data == 0 || data != len(l89Volumes) {
 		t.Fatalf("the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
 	}

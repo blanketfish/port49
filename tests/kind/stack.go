@@ -370,7 +370,11 @@ reclaimPolicy: Delete
 
 	// etcd: examples/etcd with its namespace made port49 (the PKI's SANs name .port49.svc).
 	s.applyExample("examples/etcd/service.yaml", nil)
-	s.applyExample("examples/etcd/statefulset.yaml", nil)
+	etcdSTS := map[string]string{}
+	if o.EtcdOnLocalVolumes {
+		etcdSTS["accessModes: [ReadWriteOnce]"] = "accessModes: [ReadWriteOnce]\n        storageClassName: " + scName
+	}
+	s.applyExample("examples/etcd/statefulset.yaml", etcdSTS)
 	for i := 0; i < 3; i++ {
 		s.c.WaitReady(ns, fmt.Sprintf("etcd-%d", i), 3*time.Minute)
 	}
@@ -511,6 +515,9 @@ type Options struct {
 	// it, with the kind network's subnet and gateway: a LoadBalancer Service needs its address
 	// provider in place first, or helm's wait never ends.
 	Before func(c *kindtest.Cluster, subnet, gateway string)
+	// EtcdOnLocalVolumes puts etcd's volume claims on the stack's `local` StorageClass, as the chart's are.
+	// kind's default class provisions hostPath volumes, which Velero's file-system backup skips (L89).
+	EtcdOnLocalVolumes bool
 	// KindConfig is the cluster's config under tests/kind; empty is kind.yaml.
 	KindConfig string
 	// Service is the chart values' `service:` block, with its newline; empty is a NodePort Service.
