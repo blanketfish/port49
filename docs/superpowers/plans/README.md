@@ -8337,8 +8337,8 @@ restored tokens, though every restored token is dead within the max `token_ttl` 
 snapshot. Plan 12c bounds the guard by the token records' latest expiry.
 
 Decided 2026-11-04 (Ryan's lead): the wait for the store after a store gone, and a cold start's, retries every
-1 s (`storeAttemptEvery`, `internal/port49d/store.go`), saying an outage once and again only when it changes;
-compose `store_hangs` failed twice in CI on the old 5 s. The other 5 s loops are untouched and carried to the
+1 s for ten attempts, then backing off to 10 s with 20% jitter (`storeAttemptEvery`, `internal/port49d/store.go`), saying an outage once and again only when it changes;
+compose `store_hangs` failed twice in CI on the old 5 s. The other 5 s loops are untouched (`runLoop`'s start-again, now `startAgainEvery`, says a fault once) and carried to the
 pre-beta review as candidates: `startRetryWait` (the broker's start), the runner's hold, and the broker's late
 directory open (spec 11186).
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/url"
 	"regexp"
 	"strings"
@@ -154,15 +155,41 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, dc, d, say)
 }
 
-// storeAttemptEvery is how long a wait for the store (waitForStore, and the
-// start's reads after it) lets pass between attempts. After a store gone the
-// listeners reopen through these attempts, so they open up to this long after
-// etcd answers again, then after open_after passes: a second keeps devices on
-// their local method no longer than the outage plus the passes. An attempt
-// costs a TLS probe and a read, so the cost of a second is small; what a
-// second must not cost is a log line each, so an outage is said once and then
-// only when what is said changes (outageSayer).
-const storeAttemptEvery = time.Second
+// The wait for the store (waitForStore, and the start's reads after it) lets
+// storeAttemptEvery pass between attempts for the first storeFastAttempts,
+// then doubles to storeAttemptMax, each wait with storeJitter either way. After
+// a store gone the listeners reopen through these attempts, so they open up to
+// a second (1.2 with the jitter) after etcd answers during the first ten, then
+// after open_after passes; a re-election is over within them. An attempt is a
+// TLS probe, two clients dialling every member, and a read (about seven
+// handshakes against members that are up without a leader), so a fleet in an
+// hours-long outage backs off to one in ten seconds, spread by the jitter, and
+// an outage is said once and then only when what is said changes (outageSayer).
+const (
+	storeAttemptEvery = time.Second
+	storeFastAttempts = 10
+	storeAttemptMax   = 10 * time.Second
+	storeJitter       = 0.2
+	storeScheduleText = "an attempt every second at first, backing off to every 10s"
+)
+
+// storeWaitAfter is the wait, before jitter, after the failed-th failed
+// attempt (1 is the first) at base: base for the first storeFastAttempts,
+// then doubling, to ten times base.
+func storeWaitAfter(base time.Duration, failed int) time.Duration {
+	limit := storeAttemptMax / storeAttemptEvery * base
+	d := base
+	for i := storeFastAttempts; i < failed && d < limit; i++ {
+		d *= 2
+	}
+	return min(d, limit)
+}
+
+// jittered spreads d by storeJitter either way, by r in [0, 1): from
+// (1-storeJitter)d, never 0, to just under (1+storeJitter)d.
+func jittered(d time.Duration, r float64) time.Duration {
+	return time.Duration(float64(d) * (1 - storeJitter + 2*storeJitter*r))
+}
 
 // outageSayer prints an outage's line once and again only when it changes,
 // so a wait of hours at storeAttemptEvery is one line, not thousands. Its
@@ -178,12 +205,26 @@ func (o *outageSayer) say(out io.Writer, line string) {
 
 // storeWait is what awaitStore needs to say about the store it waits for.
 type storeWait struct {
-	every        time.Duration // between attempts
-	again        bool          // a run after a store gone: no deadline, a fault is tried again
-	startTimeout time.Duration // a cold start's bound; 0 is for as long as it takes
-	proc, what   string        // "port49d", "stores.session"
-	eps, at      string        // the endpoints, joined; the config block ("stores.session.etcd")
-	closed       string        // what stays shut meanwhile
+	every        time.Duration                        // between attempts
+	again        bool                                 // a run after a store gone: no deadline, a fault is tried again
+	startTimeout time.Duration                        // a cold start's bound; 0 is for as long as it takes
+	proc, what   string                               // "port49d", "stores.session"
+	eps, at      string                               // the endpoints, joined; the config block ("stores.session.etcd")
+	closed       string                               // what stays shut meanwhile
+	rnd          func() float64                       // jitter's source in [0, 1); math/rand/v2 when nil
+	after        func(time.Duration) <-chan time.Time // the wait; time.After when nil
+}
+
+func (w storeWait) wait(failed int) <-chan time.Time {
+	r := rand.Float64
+	if w.rnd != nil {
+		r = w.rnd
+	}
+	d := jittered(storeWaitAfter(w.every, failed), r())
+	if w.after != nil {
+		return w.after(d)
+	}
+	return time.After(d)
 }
 
 // waitForStore is a start's wait for etcd (pre-flight I9, I13, M33), on
@@ -229,7 +270,7 @@ func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w sto
 		deadline = time.Now().Add(w.startTimeout)
 	}
 	var said outageSayer
-	for {
+	for failed := 1; ; failed++ {
 		s, err := try()
 		if err == nil {
 			return s, nil
@@ -242,7 +283,7 @@ func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w sto
 		case errors.As(err, &fault) && !w.again:
 			return nil, err // the operator's to fix; named, exit 1
 		case errors.As(err, &fault):
-			said.say(out, fmt.Sprintf("%s: %v; %s; trying again every %v", w.proc, err, w.closed, w.every))
+			said.say(out, fmt.Sprintf("%s: %v; %s; trying again (%s)", w.proc, err, w.closed, storeScheduleText))
 		case !deadline.IsZero() && time.Now().After(deadline):
 			return nil, fmt.Errorf("%s: etcd at %s did not answer within %s.start_timeout (%v); not "+
 				"starting", w.what, w.eps, w.at, w.startTimeout)
@@ -251,13 +292,13 @@ func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w sto
 			if !deadline.IsZero() {
 				wait = fmt.Sprintf("up to %v", w.startTimeout)
 			}
-			said.say(out, fmt.Sprintf("%s: %s: etcd at %s not answering (%v); %s; waiting %s, an attempt every %v",
-				w.proc, w.what, w.eps, err, w.closed, wait, w.every))
+			said.say(out, fmt.Sprintf("%s: %s: etcd at %s not answering (%v); %s; waiting %s, %s",
+				w.proc, w.what, w.eps, err, w.closed, wait, storeScheduleText))
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(w.every):
+		case <-w.wait(failed):
 		}
 	}
 }
@@ -298,7 +339,8 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// ends it.
 	retry := func(f func() error, also ...error) error {
 		var said outageSayer
-		for {
+		w := storeWait{every: storeAttemptEvery}
+		for failed := 1; ; failed++ {
 			err := f()
 			if err == nil || ctx.Err() != nil {
 				return err
@@ -310,11 +352,11 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			if !wait {
 				return err
 			}
-			said.say(out, fmt.Sprintf("port49d: %v; the listeners stay closed; trying again every %v", err, storeAttemptEvery))
+			said.say(out, fmt.Sprintf("port49d: %v; the listeners stay closed; trying again (%s)", err, storeScheduleText))
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(storeAttemptEvery):
+			case <-w.wait(failed):
 			}
 		}
 	}

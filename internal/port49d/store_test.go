@@ -212,7 +212,7 @@ func TestAStartAfterAStoreGoneRetriesEveryError(t *testing.T) {
 	if len(calls) != 4 || calls[0] || !calls[1] || !calls[3] {
 		t.Fatalf("runs %v; want a cold start, then three after the store gone", calls)
 	}
-	if strings.Count(out.String(), "starting again after a store gone: test: the policy file is half-written") != 2 {
+	if strings.Count(out.String(), "starting again after a store gone: test: the policy file is half-written") != 1 {
 		t.Fatalf("said %q", out.String())
 	}
 	cold := errors.New("test: a bad config")
@@ -878,5 +878,39 @@ func TestAFullEtcdIsNotReportedAsARolesProblem(t *testing.T) {
 	got = brokerRolesError("stores.session.etcd", "broker", other).Error()
 	if strings.Contains(got, roles) || strings.Contains(got, "NOSPACE") {
 		t.Errorf("an unavailable store got a hint: %s", got)
+	}
+}
+
+// runLoop's retry of a start that failed for another reason says one fault
+// once, however many runs it takes, and a different fault again; and its
+// wait is its own, not the store wait's.
+func TestARepeatedStartFaultIsSaidOnce(t *testing.T) {
+	var out bytes.Buffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := 0
+	once := func(bool) error {
+		switch n++; {
+		case n == 1:
+			return &storeGone{why: "test: the store went"}
+		case n <= 7:
+			return errors.New("test: the policy file is half-written")
+		case n == 8:
+			return errors.New("test: the broker's role is refused")
+		}
+		cancel()
+		return nil
+	}
+	if err := runLoop(ctx, once, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := strings.Count(out.String(), "half-written"), strings.Count(out.String(), "role is refused"); a != 1 || b != 1 {
+		t.Fatalf("6 runs of one fault and 1 of another said %d and %d lines:\n%s", a, b, out.String())
+	}
+	if startAgainEvery != 5*time.Second {
+		t.Fatalf("a start that fails for another reason is retried every %v, want 5s", startAgainEvery)
 	}
 }

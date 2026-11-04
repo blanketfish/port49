@@ -985,7 +985,7 @@ func TestADaemonServesNothingBeforeItsMarksLoad(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, f.daemon) }()
 	t.Cleanup(func() { cancel(); <-done })
-	const still = "the listeners stay closed; trying again every 1s"
+	const still = "the listeners stay closed; trying again (an attempt every second at first, backing off to every 10s)"
 	waitWithin(t, &out, still, 30*time.Second)
 	if strings.Contains(out.String(), "port49d: listening on ") {
 		t.Fatalf("served before the marks loaded:\n%s", out.String())

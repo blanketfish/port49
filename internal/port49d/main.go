@@ -768,8 +768,13 @@ func run(parent context.Context, cfgPath string) error {
 	hs := &healthState{}
 	return runLoop(parent, func(again bool) error {
 		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, dc, restored, hs)
-	}, storeAttemptEvery)
+	}, startAgainEvery)
 }
+
+// startAgainEvery is the wait between runs of a start that fails for a reason
+// other than the store (runLoop): an operator's fault gains nothing from a
+// quicker retry, and each run repeats the whole start.
+const startAgainEvery = 5 * time.Second
 
 // runLoop runs once until a run ends for a reason other than a store
 // gone, or, once a store gone has happened, until parent ends (re-check
@@ -783,6 +788,7 @@ func run(parent context.Context, cfgPath string) error {
 // returns its error, for exit 1 and a supervisor.
 func runLoop(parent context.Context, once func(again bool) error, every time.Duration) error {
 	again := false
+	var said outageSayer // across the runs: an hour of one fault is one line
 	for {
 		err := once(again)
 		if parent.Err() != nil {
@@ -794,14 +800,14 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 		case errors.As(err, &fault):
 			return err // a deferred check's fault ends the process in every mode (N2)
 		case errors.As(err, &gone):
-			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start (an attempt every %v)\n", gone, storeAttemptEvery)
+			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start (%s)\n", gone, storeScheduleText)
 			again = true
 			continue
 		case err == nil, !again:
 			return err
 		}
-		fmt.Fprintf(stderr, "port49d: starting again after a store gone: %v; the listeners stay closed; trying "+
-			"again in %v\n", err, every)
+		said.say(stderr, fmt.Sprintf("port49d: starting again after a store gone: %v; the listeners stay closed; trying "+
+			"again every %v", err, every))
 		select {
 		case <-parent.Done():
 			return nil

@@ -32,15 +32,15 @@ import (
 
 // The settings deploy/compose/config/port49d.yaml states and the defaults it leaves.
 const (
-	healthInterval  = time.Second            // stores.directory.etcd.health.interval
-	closeAfter      = 5                      // health.close_after
-	openAfter       = 3                      // health.open_after
-	callTimeout     = 500 * time.Millisecond // etcd.call_timeout default
-	holdTTL         = 15 * time.Second       // etcd.hold_ttl default
-	electionTimeout = time.Second            // etcd's default --election-timeout (the compose stack sets none)
-	breakerOpenFor  = 5 * time.Second        // etcd.breaker.open_for default
-	storeAttempt    = 4 * callTimeout        // one attempt's Ping bound (port49d's attempt, store.go)
-	storeRetry      = time.Second            // port49d's storeAttemptEvery: the wait between attempts after a store gone
+	healthInterval  = time.Second             // stores.directory.etcd.health.interval
+	closeAfter      = 5                       // health.close_after
+	openAfter       = 3                       // health.open_after
+	callTimeout     = 500 * time.Millisecond  // etcd.call_timeout default
+	holdTTL         = 15 * time.Second        // etcd.hold_ttl default
+	electionTimeout = time.Second             // etcd's default --election-timeout (the compose stack sets none)
+	breakerOpenFor  = 5 * time.Second         // etcd.breaker.open_for default
+	storeAttempt    = 4 * callTimeout         // one attempt's Ping bound (port49d's attempt, store.go)
+	storeRetry      = 1200 * time.Millisecond // port49d's storeAttemptEvery with its 20% jitter: the wait between the first ten attempts after a store gone
 	tacacsAddr      = "127.0.0.1:49"
 	daemonMetrics   = "127.0.0.1:9049"
 	brokerMetrics   = "127.0.0.1:9050"
@@ -404,7 +404,7 @@ func TestFailureMatrix(t *testing.T) {
 	// run restarted by the store gone makes its first attempt as the listeners
 	// close, while the members are still paused, and the unpause lands during
 	// it. etcd's re-election takes 1 to 3 s from the unpause, so that attempt
-	// may fail at its bound (storeAttempt); the next is storeRetry later, and
+	// may fail at its bound (storeAttempt); the next is storeRetry later (a recovery within the first ten attempts: 1 s plus up to 20% jitter), and
 	// succeeds within a second or so (twice callTimeout), after which the
 	// listeners open after openAfter passes. slack is the poll and a docker
 	// call. Measured failures (compose runs 41836570465 and 41892380205, when

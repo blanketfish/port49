@@ -8222,8 +8222,9 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     `store_unavailable` then. An operator who sees dark with etcd healthy looks at
     `port49_store_fence_timeouts_total`.
 - **Reopening.** A run after a store gone waits for the store as at a start, re-reading its
-  files. It tries the store every second (`storeAttemptEvery`: the listeners open up to 1s after etcd
-  answers, and an outage is said once, then only when it changes), and binds TACACS+ only after `open_after`
+  files. It tries the store every second for ten attempts, then backs off to every 10s, each wait with 20%
+  jitter (`storeAttemptEvery`: the listeners open up to about 1.2s after etcd answers during the
+  first ten, and an outage is said once, then only when it changes), and binds TACACS+ only after `open_after`
   consecutive checks pass (default 3, 1 to 60);
   a failure starts the count again. A cold start is not gated.
 - **Break-glass.** Nothing port49 answers changes. On IOS-XE, whose authentication `ERROR` is
