@@ -66,8 +66,8 @@ tlsListener:
 
 service:
   type: LoadBalancer
-  # Local keeps the device's source address. Whether it does on a given cluster is unmeasured
-  # (spec §15 L39 b, c).
+  # Local keeps the device's source address when the device dials a node running a pod; Cluster does not,
+  # and device binding then fails (spec §15 L39 b, measured on kind with kube-proxy in iptables mode).
   externalTrafficPolicy: Local
   annotations: {}
   # An anycast address advertised by MetalLB in BGP mode (spec §15 L85, measured on kind with an FRR

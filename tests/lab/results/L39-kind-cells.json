@@ -1,0 +1,192 @@
+[
+  {
+    "ID": "b1",
+    "Verdict": "FAIL",
+    "Rows": [
+      {
+        "Case": "externalTrafficPolicy",
+        "Observation": "Cluster"
+      },
+      {
+        "Case": "dialled at",
+        "Observation": "the node running the pod"
+      },
+      {
+        "Case": "the device's address (the inventory's one device)",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "dialled",
+        "Observation": "172.18.0.3:32265 (the Service's NodePort)"
+      },
+      {
+        "Case": "the device's client",
+        "Observation": "fail:reset"
+      },
+      {
+        "Case": "port49d's decision log: reasons",
+        "Observation": "none"
+      },
+      {
+        "Case": "port49d's decision log: source addresses recorded",
+        "Observation": "10.244.2.1"
+      },
+      {
+        "Case": "the source port49d recorded is the device's own address",
+        "Observation": "no"
+      }
+    ]
+  },
+  {
+    "ID": "b2",
+    "Verdict": "FAIL",
+    "Rows": [
+      {
+        "Case": "externalTrafficPolicy",
+        "Observation": "Cluster"
+      },
+      {
+        "Case": "dialled at",
+        "Observation": "a worker not running the pod"
+      },
+      {
+        "Case": "the device's address (the inventory's one device)",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "dialled",
+        "Observation": "172.18.0.2:32265 (the Service's NodePort)"
+      },
+      {
+        "Case": "the device's client",
+        "Observation": "fail:reset"
+      },
+      {
+        "Case": "port49d's decision log: reasons",
+        "Observation": "none"
+      },
+      {
+        "Case": "port49d's decision log: source addresses recorded",
+        "Observation": "172.18.0.2"
+      },
+      {
+        "Case": "the source port49d recorded is the device's own address",
+        "Observation": "no"
+      }
+    ]
+  },
+  {
+    "ID": "b3",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "externalTrafficPolicy",
+        "Observation": "Local"
+      },
+      {
+        "Case": "dialled at",
+        "Observation": "the node running the pod"
+      },
+      {
+        "Case": "the device's address (the inventory's one device)",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "dialled",
+        "Observation": "172.18.0.3:32265 (the Service's NodePort)"
+      },
+      {
+        "Case": "the device's client",
+        "Observation": "pass"
+      },
+      {
+        "Case": "port49d's decision log: reasons",
+        "Observation": "redeemed"
+      },
+      {
+        "Case": "port49d's decision log: source addresses recorded",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "the source port49d recorded is the device's own address",
+        "Observation": "yes"
+      }
+    ]
+  },
+  {
+    "ID": "b4",
+    "Verdict": "OBSERVED",
+    "Rows": [
+      {
+        "Case": "externalTrafficPolicy",
+        "Observation": "Local"
+      },
+      {
+        "Case": "dialled at",
+        "Observation": "a worker not running the pod"
+      },
+      {
+        "Case": "the device's address (the inventory's one device)",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "dialled",
+        "Observation": "172.18.0.2:32265 (the Service's NodePort)"
+      },
+      {
+        "Case": "the device's client",
+        "Observation": "fail:timeout"
+      },
+      {
+        "Case": "port49d's decision log: reasons",
+        "Observation": "none"
+      },
+      {
+        "Case": "port49d's decision log: source addresses recorded",
+        "Observation": "none recorded"
+      },
+      {
+        "Case": "the source port49d recorded is the device's own address",
+        "Observation": "no"
+      }
+    ]
+  },
+  {
+    "ID": "c",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "the pod's spec.hostNetwork",
+        "Observation": "true"
+      },
+      {
+        "Case": "the namespace's Pod Security level for this cell only",
+        "Observation": "privileged (the chart's is baseline)"
+      },
+      {
+        "Case": "the device's address (the inventory's one device)",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "dialled",
+        "Observation": "172.18.0.3:49 (the pod's own port on its node)"
+      },
+      {
+        "Case": "the device's client",
+        "Observation": "pass"
+      },
+      {
+        "Case": "port49d's decision log: reasons",
+        "Observation": "redeemed"
+      },
+      {
+        "Case": "port49d's decision log: source addresses recorded",
+        "Observation": "172.18.0.5"
+      },
+      {
+        "Case": "the source port49d recorded is the device's own address",
+        "Observation": "yes"
+      }
+    ]
+  }
+]

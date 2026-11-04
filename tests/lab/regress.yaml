@@ -478,5 +478,7 @@ excluded:
     reason: needs PORT49_LAB_ETCD_BIN (a real etcd to pause) and the SR Linux image, and runs on the L88 plumbing, which the runner has no entry shape for. Run by hand before a release with `make lab-l87 PORT49_LAB_ETCD_BIN=<dir>` (about a minute).
   - rows: [L88]
     reason: one image per run (`make lab-l88 PLATFORM=<selector>`, with PORT49_L88_TLS=1 for the RFC 9887 pass and PORT49_L88_XR_VRF=mgmt for XRd's named VRF), about twenty images and passes at up to an hour each; the runner has no per-image entry shape for it yet. Run by hand before a release.
+  - rows: [L39]
+    reason: (a) is the compose stack's source-address test (`TestL39DockerSourceAddress`), run by hand with the userland proxy on and off; (b) and (c) are kind clusters whose nodes are privileged containers, run in CI only (`make lab-l39` in .github/workflows/lab-kind.yml). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.
   - rows: [L82, L83, L85]
     reason: kind clusters whose nodes are privileged containers, run in CI only (the lab-kind label and .github/workflows/lab-kind.yml, which run make lab-l82, lab-l83 and lab-l85). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.

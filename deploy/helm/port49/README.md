@@ -207,9 +207,24 @@ A scale-down leaves the spool of the removed pod on its PVC, so drain or collect
 
 ## Network
 
-`service.type` defaults to LoadBalancer with `externalTrafficPolicy: Local`. Whether the device's
-source address is preserved on Kubernetes is unmeasured (L39 b, c): do not write source-based policy
-on the strength of it. `tlsListener.enabled` adds port 300 and requires `tlsListener.existingSecret`.
+`service.type` defaults to LoadBalancer with `externalTrafficPolicy: Local`, and the device's source
+address must reach port49d unrewritten, because port49d admits a device by that address. Measured on kind
+(spec §15 L39, 2026-11-04, kube-proxy in iptables mode, a device outside every node, a NodePort Service):
+
+| Setting, and where the device dials | Result |
+|---|---|
+| `Cluster`, a node running the pod | fails: the source port49d sees is a pod-network address, not the device's |
+| `Cluster`, a node not running the pod | fails: the source is that node's own address |
+| `Local`, a node running the pod | works: port49d sees the device's own address |
+| `Local`, a node not running the pod | the connection times out; point devices at nodes that run a pod |
+| host networking, the pod's node | works, but the chart does not offer it |
+
+Keep `Local`; `Cluster` breaks device binding. With a cloud load balancer or MetalLB, keep `Local` and let
+the balancer send only to nodes with a ready pod (L85 measured that with MetalLB in BGP mode). Host
+networking passed in the lab, on a namespace relabelled `privileged`; the chart offers none because its
+namespace runs at Pod Security `baseline`, and Kubernetes refuses the pod's `net.ipv4.ip_unprivileged_port_start`
+sysctl on the host network, so a host-network pod needs that sysctl removed and a node whose own value lets
+port 49 bind (a kind node's is 0). The TLS listener's Service has the same policy; its port was not dialled. `tlsListener.enabled` adds port 300 and requires `tlsListener.existingSecret`.
 The pod sets `net.ipv4.ip_unprivileged_port_start` to 0 so the non-root process can bind 49; clusters
 that forbid that sysctl need a different arrangement (not offered here).
 

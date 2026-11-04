@@ -7807,10 +7807,10 @@ container's install page:
 Every shape states the same four requirements:
 
 - **The device's source address reaches port49d unrewritten** (design §13). On Kubernetes that means
-  `externalTrafficPolicy: Local` or host networking is expected to be needed (L39 (b), (c), open). Under Docker, for a device off the Docker host, a published port left it
+  `externalTrafficPolicy: Local` with the device dialling a node that runs a pod, or host networking (L39 (b), (c), measured on kind 2026-11-04, `tests/lab/results/L39-kind.md`: `Cluster` lost the source and device binding failed; `Local` and host networking kept it). Under Docker, for a device off the Docker host, a published port left it
   unchanged with the userland proxy on and off (L39 (a), 2026-10-05; modelled: a device on the clab bridge with an iptables RETURN rule keeping
   that bridge's own masquerade off its traffic, `tests/lab/results/L39-docker-proxy-*-arista_eos.md`). A device on another Docker network on the same
-  host is masqueraded to the compose gateway by Docker's rule for its own network (the notes' first run). Kubernetes is unmeasured until plan 12.
+  host is masqueraded to the compose gateway by Docker's rule for its own network (the notes' first run). Kubernetes: see L39 (b), (c) above.
 - **On etcd, two processes.** port49d and port49-broker run apart (plan 7e). The memory store stays one
   process.
 - **`broker.state_dir` survives a restart** (plan 7e Rulings 12 and 18). It holds `marks.json` and
