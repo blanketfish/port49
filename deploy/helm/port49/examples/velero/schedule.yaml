@@ -1,0 +1,31 @@
+# A Velero Schedule for a port49 release's namespace, file-system backup (the node agent). UNVERIFIED
+# until lab entry L89 (tests/lab/results/L89-kind.md) closes: nothing here is named in the chart README
+# until it does. Every name is fake: the namespace `port49`, Velero's `velero` namespace and its
+# BackupStorageLocation `default` are yours.
+#
+# WHAT THE BACKUP HOLDS. Both StatefulSets' volumes: each broker's `data` volume, which holds
+# `state/issuing-ca.key` (the issuing CA's PRIVATE key), the broker's state, and each port49d's `data`
+# volume, which holds the accounting spool. Whoever can read the bucket and the repository key can issue
+# certificates this deployment trusts. See README.md for the bucket requirements.
+#
+# The repository key (Velero's repository password) comes from the Secret `velero-repo-credentials`,
+# key `repository-password`, in the `velero` namespace, made before the first backup (README.md). Velero
+# falls back to a well-known default when the Secret is absent, so a backup made first is encrypted with
+# a key everyone knows.
+#
+# The volumes selected are the chart's two PVC sets, which carry the StatefulSets' selector labels:
+#   app.kubernetes.io/name=port49, app.kubernetes.io/instance=<release>, app.kubernetes.io/component=broker
+#   app.kubernetes.io/name=port49, app.kubernetes.io/instance=<release>, app.kubernetes.io/component=port49d
+# The whole namespace is backed up, not those labels alone: the Secrets and ConfigMaps the pods mount,
+# and etcd, are in it, and a restore without them starts nothing.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: port49-daily
+  namespace: velero
+spec:
+  schedule: "23 2 * * *"
+  template:
+    includedNamespaces: [port49]
+    defaultVolumesToFsBackup: true
+    ttl: 336h0m0s

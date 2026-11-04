@@ -576,5 +576,13 @@ func (k *Stack) Device(pod string) shapetest.Device { return k.s.device(pod) }
 // Mint is a function giving a fresh token for the broker at brokerAddr.
 func (k *Stack) Mint(brokerAddr string) func() string { return k.s.mint(brokerAddr) }
 
+// DebugPod runs one root pod on pvc's volume (mounted at /v) with sh -c script, and returns its log.
+func (k *Stack) DebugPod(name, pvc, script string, readOnly bool) string {
+	return k.s.debugPod(name, pvc, script, readOnly)
+}
+
+// StatOn is `stat -c '%a %u %g %n'` of paths on pvc's volume, which is mounted at /v.
+func (k *Stack) StatOn(pvc string, paths ...string) []kindtest.Stat { return k.s.statOn(pvc, paths...) }
+
 // Run is one cell as a subtest.
 func (k *Stack) Run(t *testing.T, name string, f func(*testing.T)) { k.s.run(t, name, f) }

@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l87 lab-l88 lab-l90 failure-matrix
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -713,6 +713,39 @@ lab-l39: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  PORT49_LAB_L39=1 go test -tags lab ./tests/lab/ -run '^TestL39$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l39; \
 	  docker rm -f port49l39-client >/dev/null 2>&1; exit $$rc
+
+# Lab entry L89 (plan 12c, Task 15): a Velero file-system backup (node agent) of the chart's volumes,
+# a deleted namespace, a restore, and a mint and a login after it. Runs in CI like L39 (the lab-kind
+# label, cell l89). Velero's CLI is pinned by the sha256 its release publishes (CHECKSUM); its server and
+# the AWS plugin are pinned by image index digest. The object store is SeaweedFS's S3 gateway, not
+# MinIO: MinIO stopped publishing community images in 2025. It is lab-only and the chart never names
+# it. The store's credentials and the repository key are generated per run and never printed.
+VELERO_VERSION ?= 1.18.4
+VELERO_SHA256_LINUX_AMD64 = e520c17d8997e1c9d0a28ae013592e4473ca3bd82cb3acd132e51286263f74bf
+VELERO_IMAGE = velero/velero:v$(VELERO_VERSION)@sha256:c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b
+VELERO_AWS_PLUGIN_VERSION = 1.14.4
+VELERO_AWS_PLUGIN_IMAGE = velero/velero-plugin-for-aws:v$(VELERO_AWS_PLUGIN_VERSION)@sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
+OBJECT_STORE_VERSION = 4.52
+OBJECT_STORE_IMAGE = chrislusf/seaweedfs:$(OBJECT_STORE_VERSION)@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
+
+bin/velero-v$(VELERO_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install velero v$(VELERO_VERSION) yourself and put it at bin/velero-v$(VELERO_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/velero.tar.gz https://github.com/vmware-tanzu/velero/releases/download/v$(VELERO_VERSION)/velero-v$(VELERO_VERSION)-linux-amd64.tar.gz
+	echo "$(VELERO_SHA256_LINUX_AMD64)  bin/velero.tar.gz" | sha256sum -c -
+	tar -xzf bin/velero.tar.gz -C bin --strip-components=1 velero-v$(VELERO_VERSION)-linux-amd64/velero
+	mv bin/velero bin/velero-v$(VELERO_VERSION)
+	rm bin/velero.tar.gz
+
+lab-l89: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/velero-v$(VELERO_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l89
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VELERO_BIN=$(CURDIR)/bin/velero-v$(VELERO_VERSION) \
+	  VELERO_VERSION=$(VELERO_VERSION) VELERO_IMAGE=$(VELERO_IMAGE) VELERO_AWS_PLUGIN_IMAGE=$(VELERO_AWS_PLUGIN_IMAGE) \
+	  OBJECT_STORE_IMAGE=$(OBJECT_STORE_IMAGE) PORT49_LAB_OUT=$(LAB_OUT)/l89 \
+	  PORT49_LAB_L89=1 go test -tags lab ./tests/lab/ -run '^TestL89$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l89; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2
