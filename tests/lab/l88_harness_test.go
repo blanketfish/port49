@@ -463,6 +463,24 @@ func (n *l88Note) fact(f string) { n.facts = append(n.facts, f) }
 
 var l88Long = regexp.MustCompile(`[A-Za-z0-9_+/=.-]{24,}`)
 
+// l88Hashed is a device-hashed secret ($aes1$ on SR Linux, $6$ and $9$ on Junos and others): the
+// salt prefix alone is not shown either.
+var l88Hashed = regexp.MustCompile(`\$(?:aes1|6|9)\$\S*`)
+
+// l88DropKeyLines is s without the lines whose first word is `key`: an SR Linux TLS profile's
+// private key, which the harness never writes whatever its form.
+func l88DropKeyLines(s string) string {
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		if f := strings.Fields(ln); len(f) > 0 && f[0] == "key" {
+			out = append(out, "    key <removed>")
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
 // addSecret registers a credential the run used (a token) for masking.
 func (n *l88Note) addSecret(s string) { n.secrets = append(n.secrets, s) }
 
@@ -474,11 +492,13 @@ func (n *l88Note) redact(s string) string {
 			s = strings.ReplaceAll(s, sec, "<redacted>")
 		}
 	}
-	return l88Long.ReplaceAllString(hideKeys(s), "<LONG>")
+	return l88Long.ReplaceAllString(l88Hashed.ReplaceAllString(hideKeys(s), "<hash>"), "<LONG>")
 }
 
 // mask is s with every secret of the run replaced.
-func (n *l88Note) mask(s string) string { return hideKeys(l73MaskAll(s, n.secrets...)) }
+func (n *l88Note) mask(s string) string {
+	return l88Hashed.ReplaceAllString(hideKeys(l73MaskAll(s, n.secrets...)), "<hash>")
+}
 
 func (n *l88Note) render() (string, error) {
 	var b strings.Builder

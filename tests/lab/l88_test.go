@@ -1429,8 +1429,8 @@ func (e *l88Env) srFacts() {
 }
 
 // srEvidence records what SR Linux says about its TLS profile and its TACACS+ servers, and the
-// lines its debug logs hold about them, read through docker exec (setup channel). Keys are
-// masked by the note's redaction.
+// lines its debug logs hold about them, read through docker exec (setup channel). A `key` line is
+// dropped and a hashed value masked before anything is kept (l88DropKeyLines, l88Hashed).
 func (e *l88Env) srEvidence() {
 	for _, q := range []string{
 		"info from state system aaa server-group port49",
@@ -1441,7 +1441,7 @@ func (e *l88Env) srEvidence() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sr_cli", "-d", q).CombinedOutput()
 		cancel()
-		txt := "`" + q + "`: " + oneLine(e.n.redact(string(out)))
+		txt := "`" + q + "`: " + oneLine(e.n.redact(l88DropKeyLines(string(out))))
 		if err != nil {
 			txt += fmt.Sprintf(" (%v)", err)
 		}
