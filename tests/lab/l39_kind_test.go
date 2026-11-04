@@ -27,7 +27,7 @@ const l39Client = "port49l39-client"
 // TestL39 measures spec §15 L39 (b) and (c): which source address port49d sees when a device dials it
 // behind a Kubernetes NodePort Service, and on the host network. `make lab-l39` runs it, locally or in
 // CI (lab-kind.yml). The cluster has a control plane and two workers; the chart is installed as the
-// kind stack installs it, then port49d is cut to one replica and pinned to the first worker. The
+// kind stack installs it, then port49d is cut to one replica and pinned to the worker its volume is on. The
 // device is a container on the kind network whose address is the inventory's one device, and its
 // client is tests/lab/l85client, copied in. Each dial is a fresh login, and the verdict is port49d's
 // decision log: token_redeemed, or the refusal, with the source address port49d recorded.
@@ -111,7 +111,7 @@ type l39Run struct {
 	devAddr string // the device's address on the kind network
 	mint    func() string
 	key     []byte
-	workers []string          // the worker nodes' names, sorted; the pod is on workers[0]
+	workers []string          // the worker nodes' names
 	addrs   map[string]string // node name to InternalIP
 }
 
@@ -154,7 +154,7 @@ func (r *l39Run) before(cl *kindtest.Cluster, subnet, gateway string) {
 // deviceFrom is the inventory's device: this one address alone, not the network.
 func (r *l39Run) deviceFrom() (string, string) { return r.devAddr, r.devAddr + "/32" }
 
-// pinOneReplica cuts port49d to one replica on the first worker and waits for it, then records the
+// pinOneReplica cuts port49d to one replica on the worker its volume is on and waits for it, then records the
 // nodes' addresses.
 func (r *l39Run) pinOneReplica(t *testing.T) {
 	t.Helper()
@@ -175,7 +175,9 @@ func (r *l39Run) pinOneReplica(t *testing.T) {
 	}
 	sts := "statefulset/" + r.stack.Release() + "-port49d"
 	cl.Kubectl("-n", ns, "scale", sts, "--replicas=1")
-	r.pinTo(t, r.workers[0])
+	// pod 0's volume is a local PV on the node the pod first ran on (WaitForFirstConsumer), so the pod
+	// is pinned to that node, not to a chosen one: a pin elsewhere never schedules (run 41838617627).
+	r.pinTo(t, r.podNode(t))
 	if v, err := cl.KubectlTry("", "-n", "kube-system", "get", "cm", "kube-proxy", "-o", "jsonpath={.data.config\\.conf}"); err == nil {
 		mode := "iptables (the default)"
 		if m := regexp.MustCompile(`(?m)^mode:\s*"?([a-z]+)"?`).FindStringSubmatch(v); m != nil {
