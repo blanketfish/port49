@@ -930,7 +930,7 @@ func TestReportDescribesTheDirectoryAndTheFileAndNeverTheBytes(t *testing.T) {
 	if strings.Contains(out, bytesOfTheFile) {
 		t.Fatalf("the report holds the key bytes:\n%s", out)
 	}
-	for _, want := range []string{"read: ok", "dir: ", "file: ", "mode -r--------", "acl=no", "uid="} {
+	for _, want := range []string{"read: ok", "dir: ", "file: ", "mode -r--------", "acl=none", "uid="} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the report lacks %q:\n%s", want, out)
 		}
@@ -967,6 +967,28 @@ func TestHostedRunnerIsOnlyAGitHubHostedRunner(t *testing.T) {
 	} {
 		if got := HostedRunner(tc.get); got != tc.want {
 			t.Errorf("%s: HostedRunner = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestFormatACLWritesNumericTagIDPerms(t *testing.T) {
+	entry := func(tag, perm uint16, id uint32) []byte {
+		return []byte{byte(tag), byte(tag >> 8), byte(perm), byte(perm >> 8), byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24)}
+	}
+	raw := []byte{2, 0, 0, 0}
+	for _, e := range [][]byte{entry(1, 4, 0xffffffff), entry(2, 4, 999), entry(4, 0, 0xffffffff), entry(8, 5, 1001), entry(0x10, 4, 0xffffffff), entry(0x20, 0, 0xffffffff)} {
+		raw = append(raw, e...)
+	}
+	got, err := FormatACL(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "user::r--, user:999:r--, group::---, group:1001:r-x, mask::r--, other::---"; got != want {
+		t.Errorf("FormatACL = %q, want %q", got, want)
+	}
+	for name, bad := range map[string][]byte{"empty": nil, "version 1": {1, 0, 0, 0}, "truncated": append([]byte{2, 0, 0, 0}, 1, 0, 4), "unknown tag": append([]byte{2, 0, 0, 0}, entry(3, 4, 0)...), "perm past rwx": append([]byte{2, 0, 0, 0}, entry(1, 8, 0)...)} {
+		if _, err := FormatACL(bad); err == nil {
+			t.Errorf("%s was accepted", name)
 		}
 	}
 }

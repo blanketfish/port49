@@ -1,10 +1,13 @@
 package sdtest
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -75,11 +78,54 @@ func describe(fi fs.FileInfo, path string) string {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		owner = fmt.Sprintf("%d:%d", st.Uid, st.Gid)
 	}
-	acl := "no"
-	if hasACL(path) {
-		acl = "yes"
+	return fmt.Sprintf("owner %s mode %s acl=%s", owner, fi.Mode().String(), aclText(path))
+}
+
+// aclText is path's POSIX access ACL as FormatACL writes it, "none" when it has none and "unreadable"
+// when the xattr is there and not understood. Only the entries are read, never the file.
+func aclText(path string) string {
+	raw, ok := accessACL(path)
+	if !ok {
+		return "none"
 	}
-	return fmt.Sprintf("owner %s mode %s acl=%s", owner, fi.Mode().String(), acl)
+	text, err := FormatACL(raw)
+	if err != nil {
+		return "unreadable (" + err.Error() + ")"
+	}
+	return text
+}
+
+// FormatACL writes the system.posix_acl_access xattr (a u32 version 2, then 8-byte little-endian
+// entries of u16 tag, u16 perm, u32 id) as tag:id:perms with numeric ids, e.g.
+// "user::r--, user:999:r--, group::---, mask::r--, other::---". The owner entries and mask carry no id.
+func FormatACL(b []byte) (string, error) {
+	if len(b) < 4 || binary.LittleEndian.Uint32(b) != 2 {
+		return "", errors.New("not a version 2 POSIX ACL")
+	}
+	b = b[4:]
+	if len(b)%8 != 0 {
+		return "", errors.New("truncated POSIX ACL")
+	}
+	var out []string
+	for ; len(b) > 0; b = b[8:] {
+		tag, perm, id := binary.LittleEndian.Uint16(b), binary.LittleEndian.Uint16(b[2:]), binary.LittleEndian.Uint32(b[4:])
+		name, named := map[uint16]string{1: "user", 2: "user", 4: "group", 8: "group", 0x10: "mask", 0x20: "other"}[tag], tag == 2 || tag == 8
+		if name == "" || perm > 7 {
+			return "", fmt.Errorf("unknown POSIX ACL entry (tag %#x, perm %#x)", tag, perm)
+		}
+		who := ""
+		if named {
+			who = strconv.FormatUint(uint64(id), 10)
+		}
+		p := []byte("---")
+		for i, bit := range []uint16{4, 2, 1} {
+			if perm&bit != 0 {
+				p[i] = "rwx"[i]
+			}
+		}
+		out = append(out, name+":"+who+":"+string(p))
+	}
+	return strings.Join(out, ", "), nil
 }
 
 // HostedRunner reports whether getenv describes a GitHub-hosted runner, the only machine

@@ -2,4 +2,4 @@
 
 package sdtest
 
-func hasACL(string) bool { return false }
+func accessACL(string) ([]byte, bool) { return nil, false }
