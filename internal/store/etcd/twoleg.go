@@ -98,6 +98,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 	out := make(chan clientv3.WatchResponse)
 	go func() {
 		defer close(out)
+		defer func() { traceLeg("watch", 0, 0, "ended") }()
 		in := make(chan legMsg)
 		var legs [2]leg
 		through := int64(after)
@@ -142,6 +143,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			l := &legs[i]
 			l.failed, l.reopenAt = true, time.Now().Add(legRetry)
 			l.cancel()
+			traceLeg("ended", i, l.gen, why)
 			if legs[1-i].failed {
 				if r.Err() != nil {
 					emit(r)
@@ -239,6 +241,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 							logf("etcd: a leg of a watch heard nothing for %v while the store answers; it is opened again on another member",
 								quiet.Round(100*time.Millisecond))
 							l.cancel()
+							traceLeg("quiet, opened again", i, l.gen, fmt.Sprintf("after %v", quiet.Round(10*time.Millisecond)))
 							start(i)
 						}
 					case quiet >= feedIdle:
