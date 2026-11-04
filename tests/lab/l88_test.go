@@ -1450,8 +1450,10 @@ func (e *l88Env) srEvidence() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sh", "-c",
-		"tail -n 60 /var/log/srlinux/debug/sr_aaa_mgr.log 2>&1").CombinedOutput()
-	txt := "device logs about tls and tacacs: " + oneLine(e.n.redact(string(out)))
+		"cd /var/log/srlinux/debug && echo 'files naming tls or tacacs or l73-dev:'; grep -ilE 'tls|tacacs|l73-dev' *.log; "+
+			"echo 'sr_aaa_mgr.log lines naming server, tls, tacacs, handshake, ssl, certificate or profile:'; "+
+			"grep -iE 'server|tls|tacacs|handshake|ssl|certificate|profile' sr_aaa_mgr.log | tail -n 40; echo '(end)'").CombinedOutput()
+	txt := "the device's own aaa log (/var/log/srlinux/debug), read after the h login: " + oneLine(e.n.redact(string(out)))
 	if err != nil {
 		txt += fmt.Sprintf(" (%v)", err)
 	}

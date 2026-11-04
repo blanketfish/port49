@@ -145,6 +145,11 @@ Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name`
 
 ### Nokia SR Linux
 
+**Warning: on 26.7.2 setting a `tls-profile` does NOT encrypt TACACS+.** With a profile set and port
+300, the device sends plain TACACS+ to the TLS port, with no error and no log line about TLS in its
+aaa log (L88 h, `tests/lab/results/L88-nokia_srlinux-tls.md`). Do not count on it for
+confidentiality. Keep SR Linux on port 49 with the shared key, as this reference does.
+
 **SR Linux sends no command authorization to port49**, so port49's command policy does not apply
 on SR Linux: a command the policy would deny still runs, and the roles on the device decide what a
 user may run. Accounting START and STOP still reach port49 (L76; `tests/lab/results/L88-nokia_srlinux.md`,
