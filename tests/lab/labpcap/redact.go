@@ -181,6 +181,10 @@ func Redact(raw []byte, opt Options) ([]byte, Stats, error) {
 		}
 	}
 
+	if err := checkTLSOpens(f); err != nil {
+		return nil, st, err
+	}
+
 	out := make([]byte, 0, len(raw))
 	out = append(out, raw[:FileHeaderLen]...)
 	for i, r := range f.Records {
@@ -195,7 +199,7 @@ func Redact(raw []byte, opt Options) ([]byte, Stats, error) {
 					"dropping it would make the evidence hold fewer device packets than the results note counts", i)
 			}
 			continue
-		case fl.SrcPort != Port && fl.DstPort != Port:
+		case fl.SrcPort != Port && fl.DstPort != Port && fl.SrcPort != TLSPort && fl.DstPort != TLSPort:
 			st.Dropped["not_port_49"]++
 			if opt.Subnet != nil && (opt.Subnet.Contains(fl.Src) || opt.Subnet.Contains(fl.Dst)) {
 				return nil, st, fmt.Errorf("record %d is to or from the lab subnet on ports %d->%d, not TACACS+; "+
@@ -426,7 +430,7 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 	var kept []Record
 	for _, r := range inF.Records {
 		fl, ok := FlowOf(inF.Link, inF.Bytes(r))
-		if !ok || (fl.SrcPort != Port && fl.DstPort != Port) {
+		if !ok || (fl.SrcPort != Port && fl.DstPort != Port && fl.SrcPort != TLSPort && fl.DstPort != TLSPort) {
 			continue
 		}
 		kept = append(kept, r)
@@ -474,6 +478,29 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 			if !checksumOK(fl.Src, fl.Dst, op[fl.TCPOff:]) {
 				return fmt.Errorf("record %d: the TCP checksum was rewritten and is still wrong", i)
 			}
+		}
+	}
+	return nil
+}
+
+// checkTLSOpens refuses a capture in which a connection to or from TLSPort carries data that does
+// not open with a TLS handshake record in some direction. It names the connection, never bytes.
+func checkTLSOpens(f *File) error {
+	seen := map[string]bool{}
+	for _, r := range f.Records {
+		pkt := f.Bytes(r)
+		fl, ok := FlowOf(f.Link, pkt)
+		if !ok || (fl.SrcPort != TLSPort && fl.DstPort != TLSPort) || fl.PayloadLen == 0 {
+			continue
+		}
+		k := fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if fl.PayloadLen < 2 || pkt[fl.PayloadOff] != 0x16 || pkt[fl.PayloadOff+1] != 0x03 {
+			return fmt.Errorf("the connection %s carries data on port %d that does not open with a TLS handshake record; "+
+				"it may be plain TACACS+, which this tool would not redact there", k, TLSPort)
 		}
 	}
 	return nil
