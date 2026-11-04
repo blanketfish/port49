@@ -1811,7 +1811,22 @@ func (e *notObserved) Error() string {
 // it are not run. Either way the error is a *notObserved naming each command
 // that did not finish; outs holds what arrived, one entry per command sent.
 func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
-	if l.p.name == "cisco_iosxe" || l.p.name == "nokia_srlinux" { // SR Linux's sshd does not run an exec command in sr_cli (L76)
+	if l.p.name == "nokia_srlinux" {
+		// SR Linux's sshd does not run an exec command in sr_cli (L76), so this is a pty shell. Its
+		// prompt is redrawn before a command's output arrives, so the prompt ptyCommands waits for
+		// is the one that came before the output: each command's output is in the next command's
+		// slot (measured: L88 cell e). One trailing command takes the last output, and the slots
+		// shift back by one.
+		outs, err := l.ptyCommands(user, password, per, append(slices.Clone(commands), "echo l88-end")...)
+		if len(outs) > 0 {
+			outs = outs[1:]
+		}
+		if len(outs) > len(commands) {
+			outs = outs[:len(commands)]
+		}
+		return outs, err
+	}
+	if l.p.name == "cisco_iosxe" {
 		return l.ptyCommands(user, password, per, commands...)
 	}
 	return l.loginWithinDial(l.p.addr+":22", user, password, 45*time.Second, per, commands...)

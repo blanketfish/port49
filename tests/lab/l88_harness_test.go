@@ -487,6 +487,8 @@ var l88Refusals = map[string]string{
 	"juniper_vsrx": "unknown command",
 	// tests/lab/results/L88-arista_ceos.md cell e: `% Authorization denied for command 'show clock'`
 	"arista_ceos": "% Authorization denied for command",
+	// tests/lab/results/L76-nokia_srlinux.md: the role rules refuse with `No authorization to execute command`
+	"nokia_srlinux": "No authorization to execute command",
 }
 
 func init() {

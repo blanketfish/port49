@@ -4,6 +4,7 @@ package lab
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"golang.org/x/crypto/ssh"
@@ -87,6 +88,32 @@ func l88Run(t *testing.T, l *lab) {
 	}
 	e.addSecondAddress()
 	undoVRF := func() {}
+	if l.p.name == "nokia_srlinux" {
+		e.srFacts()
+		// SR Linux commits a server's source-address only when the address is configured on an
+		// interface of the network instance; the management address is learned by DHCP, which
+		// does not count (the first run's commit failure, in the note). The lab scaffolding
+		// configures the same address statically for the run and takes it off after.
+		addr := l.p.addr + "/24"
+		// The device refuses a configured address while the DHCP client is present ("ipv4 address
+		// not configurable while ipv4 dhcp-client present"), so the client goes in the same commit.
+		set := []string{"delete interface mgmt0 subinterface 0 ipv4 dhcp-client", "interface mgmt0 {", "subinterface 0 {", "ipv4 {", "address " + addr + " {", "}", "}", "}", "}"}
+		e.must("configuring the management address statically", l88SRPush(set))
+		e.n.fact("the lab scaffolding configured `" + addr + "` statically on mgmt0.0 in place of the DHCP client (the address is DHCP-learned; the commit of a source-address needs a configured one)")
+		srDone := false
+		undoVRF = func() {
+			if srDone {
+				return
+			}
+			srDone = true
+			if err := l88SRPush([]string{"delete interface mgmt0 subinterface 0 ipv4 address " + addr, "interface mgmt0 {", "subinterface 0 {", "ipv4 {", "dhcp-client {", "}", "}", "}", "}"}); err != nil {
+				e.n.fact("teardown: removing the static management address said " + e.n.redact(err.Error()))
+			} else {
+				e.n.fact("teardown: the static management address was removed")
+			}
+		}
+		defer undoVRF()
+	}
 	if name := l88XRVRF(); name != "" && l.p.name == "cisco_xrd" {
 		set, undo := l88XRVRFLines(name, l.p.addr)
 		push := func(lines []string) error {
@@ -402,6 +429,17 @@ func (e *l88Env) cellE() {
 		// Junos authorizes a command by the login class, locally: port49 sees no command request.
 		judged = len(outs) == 2 && strings.TrimSpace(outs[0]) != "" && !l88Refused(outs[0]) && l88Refused(outs[1])
 		how = "judged on the device output: Junos authorizes a command by the login class and asks port49 for none"
+	}
+	if e.l.p.name == "nokia_srlinux" && err == nil && starts > 0 && stops > 0 && permits+denies == 0 && len(outs) == 2 &&
+		strings.TrimSpace(outs[0]) != "" && strings.TrimSpace(outs[1]) != "" && !l88Refused(outs[1]) {
+		// SR Linux asks port49 for no command (L76: its native schema has no TACACS+ authorization
+		// method; the role rules decide), so port49 cannot deny a command here. The login, both
+		// commands and the accounting are measured; the denial is not enforceable and is recorded as such.
+		obs := fmt.Sprintf("login with a one-time credential (%s) %s: port49 received 0 command authorizations (SR Linux asks for none, L76); "+
+			"the command port49's policy denies on other platforms (`%s`) ran and printed output, so no command denial through port49 exists on SR Linux; "+
+			"accounting START %d, STOP %d; command output: %s", waited, e.n.redact(l88Err(err)), l88DenyCommand(e.l.p), starts, stops, shown)
+		e.n.cell("e", "OBSERVED", obs, summarize(recs))
+		return
 	}
 	obs := fmt.Sprintf("login with a one-time credential (%s) %s: %d command authorizations permitted, %d denied by port49; accounting START %d, STOP %d; %s; command output: %s",
 		waited, e.n.redact(l88Err(err)), permits, denies, starts, stops, how, shown)
@@ -1221,6 +1259,26 @@ func (e *l88Env) cellG() {
 		msg := fmt.Sprintf(format, args...)
 		failed = append(failed, msg)
 	}
+	if e.l.p.name == "nokia_srlinux" {
+		// The schema, read from the device, says whether a TACACS+ single-connection leaf exists.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sr_cli", "-d", "tree flat system aaa server-group").CombinedOutput()
+		cancel()
+		low := strings.ToLower(string(out))
+		obs := "`tree flat system aaa server-group`, read from the device: " + oneLine(e.n.redact(string(out)))
+		if err != nil || len(strings.TrimSpace(low)) == 0 {
+			e.n.cell("g", "INVALID", fmt.Sprintf("the schema read failed (%v): %s", err, obs), "")
+			e.t.Errorf("cell g: schema read failed: %v", err)
+			return
+		}
+		if strings.Contains(low, "single") || strings.Contains(low, "multiplex") || strings.Contains(low, "persist") {
+			e.n.cell("g", "INVALID", "the schema offers a connection-sharing leaf the harness does not drive yet: "+obs, "")
+			e.t.Errorf("cell g: SR Linux schema has a connection-sharing leaf")
+			return
+		}
+		e.n.cell("g", "OBSERVED", "SR Linux has no single-connection setting, so a key-retiring reload has no open shared connection to reset. "+obs, "")
+		return
+	}
 	if _, ok := l29Refusals[e.l.p.name]; !ok {
 		e.n.cell("g", "INVALID", "no measured refusal text for "+e.l.p.name+" in l29Refusals, so a refusal could not be told from output", "")
 		e.t.Errorf("cell g: no l29Refusals entry for %s", e.l.p.name)
@@ -1299,4 +1357,21 @@ func (e *l88Env) capName(base string) string {
 		return base + "-" + e.l.p.sel
 	}
 	return base
+}
+
+// srFacts logs what SR Linux says about its management addressing, read through sr_cli (setup
+// channel), before the reference goes on: the source-address must be one the node holds in the
+// management network instance.
+func (e *l88Env) srFacts() {
+	for _, q := range []string{"info from state interface mgmt0 subinterface 0 ipv4", "info from state network-instance mgmt interface", "info from running network-instance mgmt"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		out, err := exec.CommandContext(ctx, "docker", "exec", l76Container, "sr_cli", "-d", q).CombinedOutput()
+		cancel()
+		txt := "`" + q + "`: " + oneLine(e.n.redact(l88Evidence(string(out))))
+		if err != nil {
+			txt += fmt.Sprintf(" (%v)", err)
+		}
+		e.n.fact(txt)
+		e.t.Log(e.n.mask(txt))
+	}
 }
