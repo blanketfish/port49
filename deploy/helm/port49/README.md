@@ -316,15 +316,25 @@ not measured here.
   measured run backed up 4 of the namespace's 7 claims: etcd's volumes were hostPath (kind's default
   class), and the backup said "Volume data in pod port49/etcd-0 is a hostPath volume which is not
   supported for pod volume backup, skipping" (lab-kind run 41855911600). The restore then brought etcd back
-  empty and port49d never became ready. Put etcd on volumes the node agent can read, and after every backup
-  check that each claim in both namespaces has a completed pod volume backup:
+  empty and port49d never became ready. Put etcd on volumes the node agent can read: list the volumes
+  backed by hostPath (a claim and its path per line; no output means none), and move any that appear:
+
+  ```sh
+  kubectl get pv -o jsonpath='{range .items[*]}{.spec.claimRef.namespace}/{.spec.claimRef.name} {.spec.hostPath.path}{"\n"}{end}' \
+    | grep -E '^(port49|port49-etcd)/' | awk 'NF == 2'
+  ```
+
+  A claim that no pod mounts (a spool kept after a scale-down, say) is never copied: file-system backup
+  reads a volume through the pod that mounts it. So after every backup check each claim in both namespaces
+  by name, not by count. This prints every claim without a completed pod volume backup (it assumes
+  StatefulSet claim names, `<volume>-<pod>`, as the chart and the etcd example use), and nothing is the pass:
 
   ```sh
   backup=<the backup's name>
-  # the claims to be backed up, then the pod volume backups the node agent completed: the counts must match
-  kubectl get pvc --namespace port49 --no-headers | wc -l; kubectl get pvc --namespace port49-etcd --no-headers | wc -l
-  kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \
-    -o jsonpath='{range .items[*]}{.status.phase} {.spec.pod.name} {.spec.volume}{"\n"}{end}'
+  comm -23 \
+    <(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' | grep -E '^(port49|port49-etcd)/' | sort) \
+    <(kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \
+        -o jsonpath='{range .items[?(@.status.phase=="Completed")]}{.spec.pod.namespace}/{.spec.volume}-{.spec.pod.name}{"\n"}{end}' | sort)
   velero backup describe $backup --details | grep -i -A6 warnings
   ```
 

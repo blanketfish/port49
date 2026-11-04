@@ -275,7 +275,8 @@ spec:
 	})
 }
 
-// checkImages fails unless the running Velero server, node agent and AWS plugin are the pinned digests.
+// checkImages fails unless every running Velero server and node agent container is the pinned server
+// digest, and every init container (the AWS plugin's) the pinned plugin digest.
 // The plugin is installed by tag (a digest in --plugins makes an invalid init container name), so the
 // pin is checked here, on the imageID the kubelet reports.
 func (r *l89Run) checkImages() {
@@ -287,12 +288,8 @@ func (r *l89Run) checkImages() {
 		return strings.Fields(out)
 	}
 	server := l89.ImageDigest(os.Getenv("VELERO_IMAGE"))
-	for what, got := range map[string][]string{
-		"the Velero server and node agent": append(ids("component=velero", "status.containerStatuses"), ids("component=velero", "status.initContainerStatuses")...),
-	} {
-		if err := l89.CheckDigest(what, got, server); err != nil {
-			t.Fatal(err)
-		}
+	if err := l89.CheckDigest("the Velero server and node agent", ids("component=velero", "status.containerStatuses"), server); err != nil {
+		t.Fatal(err)
 	}
 	if err := l89.CheckDigest("the Velero AWS plugin", ids("component=velero", "status.initContainerStatuses"), os.Getenv("VELERO_AWS_PLUGIN_DIGEST")); err != nil {
 		t.Fatal(err)

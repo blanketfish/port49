@@ -172,21 +172,20 @@ var imageDigest = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
 // ImageDigest is the sha256 digest in an image reference or a pod's imageID, or "" when it has none.
 func ImageDigest(ref string) string { return imageDigest.FindString(ref) }
 
-// CheckDigest is nil iff at least one imageID carries the pinned digest, and every imageID that carries a
-// digest of a different one is reported: the image that ran is the image that was pinned. An empty pin is
-// an error, never a pass.
+// CheckDigest is nil iff there is at least one imageID and every one carries the pinned digest: the image
+// that ran is the image that was pinned. A different digest, an imageID with none, no imageID and an empty
+// or malformed pin are errors, never a pass.
 func CheckDigest(what string, imageIDs []string, pinned string) error {
 	if ImageDigest(pinned) != pinned || pinned == "" {
 		return fmt.Errorf("l89: the pinned digest of %s is %q", what, pinned)
 	}
-	found := false
-	for _, id := range imageIDs {
-		if d := ImageDigest(id); d == pinned {
-			found = true
-		}
+	if len(imageIDs) == 0 {
+		return fmt.Errorf("l89: no running container of %s to check against the pinned digest %s", what, pinned)
 	}
-	if !found {
-		return fmt.Errorf("l89: no running container of %s has the pinned digest %s (imageIDs: %s)", what, pinned, strings.Join(imageIDs, ", "))
+	for _, id := range imageIDs {
+		if ImageDigest(id) != pinned {
+			return fmt.Errorf("l89: a running container of %s is %q, not the pinned digest %s", what, id, pinned)
+		}
 	}
 	return nil
 }

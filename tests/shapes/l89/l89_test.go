@@ -268,10 +268,11 @@ func TestL89ResultsSayWhatTheBucketHolds(t *testing.T) {
 func TestCheckDigest(t *testing.T) {
 	d := "sha256:" + strings.Repeat("ab", 32)
 	other := "sha256:" + strings.Repeat("cd", 32)
-	if err := CheckDigest("x", []string{"docker.io/velero/velero@" + other, "docker.io/velero/velero-plugin-for-aws@" + d}, d); err != nil {
-		t.Errorf("a matching imageID: %v", err)
+	if err := CheckDigest("x", []string{"docker.io/velero/velero@" + d, "docker.io/velero/velero@" + d}, d); err != nil {
+		t.Errorf("every imageID matching: %v", err)
 	}
-	for name, ids := range map[string][]string{"a different digest": {"r@" + other}, "no imageID": nil, "no digest in it": {"r:latest"}} {
+	for name, ids := range map[string][]string{"a different digest": {"r@" + other}, "no imageID": nil, "no digest in it": {"r:latest"},
+		"one of two different": {"r@" + d, "r@" + other}} {
 		if CheckDigest("x", ids, d) == nil {
 			t.Errorf("%s passes", name)
 		}
