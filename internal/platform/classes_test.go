@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -500,5 +501,25 @@ func TestTemplateDriftHoldsIdleTimeoutAsACeiling(t *testing.T) {
 	}
 	if c := capture("p49-readonly", "30"); !strings.Contains(string(c), "idle-timeout 30") {
 		t.Fatal("fixture lost the shorter line")
+	}
+}
+
+// Junos accepts an idle-timeout up to 4294967295 minutes (lab entry L88 cell i, measured by
+// bisection on vSRX 21.4R3.15 and vJunos-router); a larger value fails the commit. A
+// time.Duration reaches only about 1.5e8 minutes, so no age can pass the ceiling today, and
+// the cap holds the reference to it should a longer unit or type ever feed idleMinutes.
+func TestAClassAgePastTheDeviceMaximumIsCapped(t *testing.T) {
+	const deviceMax = 4294967295
+	if got := clampIdleMinutes(deviceMax + 1); got != deviceMax {
+		t.Errorf("clampIdleMinutes(%d) = %d, want the device maximum %d", int64(deviceMax)+1, got, int64(deviceMax))
+	}
+	if got := clampIdleMinutes(deviceMax); got != deviceMax {
+		t.Errorf("clampIdleMinutes(%d) = %d, want it unchanged", int64(deviceMax), got)
+	}
+	if got := clampIdleMinutes(90); got != 90 {
+		t.Errorf("clampIdleMinutes(90) = %d, want it unchanged", got)
+	}
+	if got := idleMinutes(time.Duration(math.MaxInt64)); got > deviceMax {
+		t.Errorf("idleMinutes of the largest Duration = %d, past the device maximum %d", got, int64(deviceMax))
 	}
 }

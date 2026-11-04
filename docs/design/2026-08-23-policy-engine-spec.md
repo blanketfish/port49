@@ -14026,8 +14026,11 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   and both images. So a class's `idle-timeout` binds a session a TACACS+ reply lands in, which is
   what `platform export --classes` writes from `session.max_session_age_default` (decision 21).
   Both images committed `idle-timeout 720` (a 12h `max_session_age`) in plan 5b's Task 19
-  (`L12-projection-juniper_*.md`). *Unmeasured:* the largest `idle-timeout` the device takes, so
-  an export of a longer `max_session_age` may write a value the commit checker refuses.
+  (`L12-projection-juniper_*.md`). The largest `idle-timeout` the device takes is 4294967295
+  minutes, measured by bisection on both images (L88 cell i;
+  `L88-juniper_vjunos-router.md`, `L88-juniper_vsrx.md`), and `platform export --classes` caps the
+  value there (`internal/platform/classes.go`). A `time.Duration` reaches only about 1.5e8
+  minutes, so no `max_session_age` passes the cap today.
 - **L26** — added by plan 5b and measured 2026-09-25 (`tests/lab/results/L26-juniper_*.md`,
   trees in `L26-keywords-juniper_*.yaml`; `tests/lab/junos_keywords_test.go`). Over the
   break-glass CLI, `| display xml rpc` showed the RPCs of `show system uptime` and `show version`

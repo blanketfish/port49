@@ -40,9 +40,17 @@ func (a ClassAges) of(class string) time.Duration {
 	return a.Default
 }
 
-// idleMinutes is an idle-timeout in whole minutes rounded down and at least
-// one.
-func idleMinutes(age time.Duration) int64 { return max(int64(age/time.Minute), 1) }
+// junosMaxIdleMinutes is the largest idle-timeout Junos accepts, in minutes: lab entry L88
+// cell i found it by bisection on vSRX 21.4R3.15 and vJunos-router (the next value is
+// refused with "not within range (0..4294967295)").
+const junosMaxIdleMinutes = 4294967295
+
+// clampIdleMinutes holds minutes to what a Junos commit accepts.
+func clampIdleMinutes(minutes int64) int64 { return min(minutes, junosMaxIdleMinutes) }
+
+// idleMinutes is an idle-timeout in whole minutes rounded down, at least one and at most
+// what Junos accepts.
+func idleMinutes(age time.Duration) int64 { return clampIdleMinutes(max(int64(age/time.Minute), 1)) }
 
 // ReferenceClasses is the device configuration a projected platform's
 // replies rest on, as `set` lines (spec §8, "publish the reference class per
@@ -157,9 +165,7 @@ func (t template) lines(age time.Duration) []string {
 		out = append(out, fmt.Sprintf("set system login class %s permissions %s", t.class, b))
 	}
 	if age != 0 {
-		// Unbounded above: Junos's largest idle-timeout is unmeasured, and a
-		// reference it refuses fails the load where the operator sees it
-		// (task 13 review M5; open for the lab).
+		// Capped at Junos's measured largest idle-timeout (idleMinutes).
 		out = append(out, fmt.Sprintf("set system login class %s idle-timeout %d", t.class, idleMinutes(age)))
 	}
 	out = append(out, "delete system login user "+t.user, fmt.Sprintf("set system login user %s class %s", t.user, t.class))
