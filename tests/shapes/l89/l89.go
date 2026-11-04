@@ -167,6 +167,53 @@ func JudgeB(mint, login bool) string {
 	return l82.Fail
 }
 
+var markerName = regexp.MustCompile(`^[a-z]+$`)
+
+// Command is the shell command the document marks between `<!-- l89:<name>:begin -->` and
+// `<!-- l89:<name>:end -->`: the one fenced block between them, without its fence and its indent. The
+// lab runs the README's own text, so a command that does not work cannot stay in it. Each marker must
+// occur exactly once.
+func Command(doc, name string) (string, error) {
+	if !markerName.MatchString(name) {
+		return "", fmt.Errorf("l89: the marker name %q", name)
+	}
+	begin, end := "<!-- l89:"+name+":begin -->", "<!-- l89:"+name+":end -->"
+	if strings.Count(doc, begin) != 1 || strings.Count(doc, end) != 1 {
+		return "", fmt.Errorf("l89: the document must hold each of %q and %q exactly once", begin, end)
+	}
+	i, j := strings.Index(doc, begin)+len(begin), strings.Index(doc, end)
+	if j < i {
+		return "", fmt.Errorf("l89: %q is before %q", end, begin)
+	}
+	var out []string
+	indent, in, closed := "", false, false
+	for _, ln := range strings.Split(doc[i:j], "\n") {
+		t := strings.TrimSpace(ln)
+		switch {
+		case !in && strings.HasPrefix(t, "```sh"):
+			in, indent = true, ln[:len(ln)-len(strings.TrimLeft(ln, " "))]
+		case in && t == "```":
+			in, closed = false, true
+		case in:
+			out = append(out, strings.TrimPrefix(ln, indent))
+		}
+	}
+	if !closed || len(out) == 0 {
+		return "", fmt.Errorf("l89: no closed sh block between the markers for %q", name)
+	}
+	return strings.Join(out, "\n") + "\n", nil
+}
+
+const backupPlaceholder = "<the backup's name>"
+
+// Fill names the backup in a command that holds the README's placeholder, exactly once.
+func Fill(cmd, backup string) (string, error) {
+	if strings.Count(cmd, backupPlaceholder) != 1 || !regexp.MustCompile(`^[a-z0-9-]+$`).MatchString(backup) {
+		return "", fmt.Errorf("l89: the command holds %q %d times, or the backup name %q", backupPlaceholder, strings.Count(cmd, backupPlaceholder), backup)
+	}
+	return strings.Replace(cmd, backupPlaceholder, backup, 1), nil
+}
+
 var imageDigest = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
 
 // ImageDigest is the sha256 digest in an image reference or a pod's imageID, or "" when it has none.

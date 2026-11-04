@@ -265,6 +265,59 @@ func TestL89ResultsSayWhatTheBucketHolds(t *testing.T) {
 	}
 }
 
+func readme(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestCommandExtractsTheMarkedBlock(t *testing.T) {
+	doc := "x\n  <!-- l89:one:begin -->\n  ```sh\n  a \\\n    b\n  ```\n  <!-- l89:one:end -->\ny ```sh\nz\n```\n"
+	got, err := Command(doc, "one")
+	if err != nil || got != "a \\\n  b\n" {
+		t.Errorf("Command = %q, %v", got, err)
+	}
+	for name, d := range map[string]string{
+		"no markers": "```sh\na\n```\n",
+		"no block":   "<!-- l89:one:begin -->\ntext\n<!-- l89:one:end -->",
+		"unclosed":   "<!-- l89:one:begin -->\n```sh\na\n<!-- l89:one:end -->",
+		"twice":      doc + doc,
+		"end first":  "<!-- l89:one:end -->\n```sh\na\n```\n<!-- l89:one:begin -->",
+	} {
+		if _, err := Command(d, "one"); err == nil {
+			t.Errorf("%s is accepted", name)
+		}
+	}
+	if _, err := Command(doc, "o ne"); err == nil {
+		t.Error("a marker name with a space is accepted")
+	}
+}
+
+func TestTheREADMEsCheckCommandsAreMarkedAndRunnable(t *testing.T) {
+	doc := readme(t)
+	host, err := Command(doc, "hostpath")
+	if err != nil || !strings.Contains(host, "kubectl get pv") || !strings.Contains(host, "hostPath") {
+		t.Fatalf("hostpath: %q, %v", host, err)
+	}
+	claims, err := Command(doc, "claims")
+	if err != nil || !strings.Contains(claims, "podvolumebackups") || !strings.Contains(claims, "comm -23") {
+		t.Fatalf("claims: %q, %v", claims, err)
+	}
+	filled, err := Fill(claims, "l89-backup")
+	if err != nil || !strings.Contains(filled, "backup=l89-backup\n") || strings.Contains(filled, "<the backup") {
+		t.Errorf("Fill: %q, %v", filled, err)
+	}
+	if _, err := Fill(host, "l89-backup"); err == nil {
+		t.Error("Fill accepts a command with no placeholder")
+	}
+	if _, err := Fill(claims, "Bad Name"); err == nil {
+		t.Error("Fill accepts a bad backup name")
+	}
+}
+
 func TestCheckDigest(t *testing.T) {
 	d := "sha256:" + strings.Repeat("ab", 32)
 	other := "sha256:" + strings.Repeat("cd", 32)

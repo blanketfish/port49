@@ -319,23 +319,32 @@ not measured here.
   empty and port49d never became ready. Put etcd on volumes the node agent can read: list the volumes
   backed by hostPath (a claim and its path per line; no output means none), and move any that appear:
 
+  <!-- l89:hostpath:begin -->
   ```sh
   kubectl get pv -o jsonpath='{range .items[*]}{.spec.claimRef.namespace}/{.spec.claimRef.name} {.spec.hostPath.path}{"\n"}{end}' \
     | grep -E '^(port49|port49-etcd)/' | awk 'NF == 2'
   ```
+  <!-- l89:hostpath:end -->
 
   A claim that no pod mounts (a spool kept after a scale-down, say) is never copied: file-system backup
   reads a volume through the pod that mounts it. So after every backup check each claim in both namespaces
   by name, not by count. This prints every claim without a completed pod volume backup (it assumes
   StatefulSet claim names, `<volume>-<pod>`, as the chart and the etcd example use), and nothing is the pass:
 
+  <!-- l89:claims:begin -->
   ```sh
   backup=<the backup's name>
   comm -23 \
     <(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' | grep -E '^(port49|port49-etcd)/' | sort) \
     <(kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \
         -o jsonpath='{range .items[?(@.status.phase=="Completed")]}{.spec.pod.namespace}/{.spec.volume}-{.spec.pod.name}{"\n"}{end}' | sort)
-  velero backup describe $backup --details | grep -i -A6 warnings
+  ```
+  <!-- l89:claims:end -->
+
+  The backup's own warnings, which name a volume Velero skipped:
+
+  ```sh
+  velero backup describe <the backup's name> --details | grep -i -A6 warnings
   ```
 
 ## Multi-region

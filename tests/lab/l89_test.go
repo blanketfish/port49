@@ -308,6 +308,67 @@ func (r *l89Run) checkRepositoryKey() {
 	}
 }
 
+// runREADMEChecks runs the chart README's two backup checks, extracted verbatim (l89.Command), with the
+// pinned kubectl first on the PATH. No pipefail: grep exits 1 when the hostPath check finds nothing, and a
+// broken command prints its error, which is not "nothing". Right after the backup both must print nothing. Then a claim that no
+// pod mounts is made, which the per-claim check must name and nothing else: the check has teeth.
+func (r *l89Run) runREADMEChecks(t *testing.T, cell *l82.Cell) {
+	t.Helper()
+	c, ns := r.stack.Cluster(), r.stack.Namespace()
+	doc, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := l89.Command(string(doc), "hostpath")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := l89.Command(string(doc), "claims")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims, err = l89.Fill(claims, l89Backup); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(kindtest.Bin(t, "KUBECTL_BIN"), filepath.Join(bin, "kubectl")); err != nil {
+		t.Fatal(err)
+	}
+	run := func(script string) string {
+		cmd := exec.Command("bash", "-c", script)
+		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("a README command failed: %v\n%s", err, kindtest.Filter(string(out)))
+		}
+		return string(out)
+	}
+	if out := run(host); strings.TrimSpace(out) != "" {
+		t.Fatalf("the README's hostPath check lists volumes (etcd is on local volumes):\n%s", kindtest.Filter(out))
+	}
+	l82Row(cell, "the README's hostPath check (run verbatim) printed", "nothing")
+	if out := run(claims); strings.TrimSpace(out) != "" {
+		t.Fatalf("the README's per-claim check names claims with no completed pod volume backup:\n%s", kindtest.Filter(out))
+	}
+	l82Row(cell, "the README's per-claim check (run verbatim) printed", "nothing")
+
+	// the counter-case: a claim no pod mounts is never copied, and the check must say so
+	c.Apply(`apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: l89-orphan, namespace: ` + ns + `}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: port49-fsgroup
+  resources: {requests: {storage: 1Mi}}
+`)
+	got := strings.TrimSpace(run(claims))
+	c.Kubectl("-n", ns, "delete", "pvc", "l89-orphan", "--wait=false")
+	if got != ns+"/l89-orphan" {
+		t.Fatalf("the per-claim check on a claim no pod mounts printed %q, want %q", got, ns+"/l89-orphan")
+	}
+	l82Row(cell, "the README's per-claim check with a claim no pod mounts printed", "that claim and nothing else")
+}
+
 // diagnose keeps what explains a failed backup or restore, each piece through Scrub and the standard
 // filter: Velero's own descriptions and logs, the pod volume operations' messages, and the server's and
 // node agent's logs. No Secret is read, and the velero namespace is still never dumped.
@@ -474,6 +535,8 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	if data == 0 || data != len(l89Volumes) {
 		t.Fatalf("the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
 	}
+
+	r.runREADMEChecks(t, cell)
 
 	// delete the namespace, and wait for its volumes to go before restoring over the names
 	c.Kubectl("delete", "namespace", ns, "--wait=true", "--timeout=5m")
