@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l87 lab-l88 failure-matrix
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l87 lab-l88 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -697,6 +697,18 @@ lab-l85: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  PORT49_LAB_L85=1 go test -tags lab ./tests/lab/ -run '^TestL85$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l85; \
 	  docker rm -f port49l85-frr port49l85-client >/dev/null 2>&1; docker network rm port49l85dev >/dev/null 2>&1; exit $$rc
+
+# Lab entry L39 (b) and (c) (plan 12c, Task 13): the source address port49d sees behind a NodePort Service
+# under each externalTrafficPolicy, and on the host network, on kind. Runs locally or in CI like L85. The
+# test makes one container by a fixed name, removed afterwards whatever the result, as is the cluster.
+lab-l39: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l39
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l39 \
+	  PORT49_LAB_L39=1 go test -tags lab ./tests/lab/ -run '^TestL39$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l39; \
+	  docker rm -f port49l39-client >/dev/null 2>&1; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2

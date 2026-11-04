@@ -379,6 +379,9 @@ reclaimPolicy: Delete
 	cfgDir := t.TempDir()
 	pol := readFile(t, filepath.Join(root, "deploy", "compose", "config", "policy.yaml"))
 	deviceNet, deviceAddr := s.subnet, s.gateway
+	if o.DeviceFrom != nil {
+		o.DeviceAddr, o.DeviceNet = o.DeviceFrom()
+	}
 	if o.DeviceAddr != "" {
 		deviceNet, deviceAddr = o.DeviceNet, o.DeviceAddr
 	}
@@ -515,6 +518,9 @@ type Options struct {
 	// DeviceAddr and DeviceNet make the inventory's one device that address, and the key group
 	// that admits it that network, in place of the kind network's gateway: a device behind a router.
 	DeviceAddr, DeviceNet string
+	// DeviceFrom, when set, is called after Before and gives DeviceAddr and DeviceNet: a device made in
+	// Before, whose address the kind network assigned, is known only then.
+	DeviceFrom func() (addr, net string)
 }
 
 func (o Options) kindConfig() string {
