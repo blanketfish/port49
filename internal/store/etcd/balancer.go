@@ -123,10 +123,10 @@ var placingPickers atomic.Int64
 // A member is suspect for suspectFor after a call on it hit its deadline, or a
 // hedged copy on it was cancelled after waiting suspectAfter (another copy
 // had answered): its connection is up and its answers are not coming, and
-// stays so until keepalive fails it, 10 to 12 s on. The picker skips a suspect
-// member unless that would leave none, so a call that is not re-sent (a mint,
-// a lease call) does not keep landing on it, one call in three, for those
-// seconds.
+// stays so until keepalive fails it, 10 to 12 s on, or until a call on it
+// succeeds. The picker skips a suspect member unless that would leave none, so
+// a call that is not re-sent (a mint, a lease call) does not keep landing on
+// it, one call in three, for those seconds.
 const (
 	suspectFor   = 15 * time.Second
 	suspectAfter = 100 * time.Millisecond
@@ -143,6 +143,13 @@ func (s *suspects) is(addr string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return now.Before(s.until[addr])
+}
+
+// forgive ends addr's suspicion: it answered.
+func (s *suspects) forgive(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.until, addr)
 }
 
 // mark reports whether addr was not already suspect.
@@ -205,6 +212,13 @@ func (p *picker) Pick(info balancer.PickInfo) (balancer.PickResult, error) {
 	res.Done = func(di balancer.DoneInfo) {
 		if inner != nil {
 			inner(di)
+		}
+		if di.Err == nil {
+			// It answered: during an election every member is suspect, and the
+			// ones that come back must not stay skipped (or the one still hung
+			// keeps a call in three) until the marks expire.
+			p.sus.forgive(addr)
+			return
 		}
 		waited := p.clock().Sub(t0)
 		switch status.Code(di.Err) {
