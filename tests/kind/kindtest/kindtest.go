@@ -209,7 +209,6 @@ func (c *Cluster) KubectlTry(stdin string, args ...string) (string, error) {
 	return out.String(), nil
 }
 
-// Kubectl runs kubectl and fails the test on an error.
 // KubectlUnfiltered is KubectlTry with kubectl's stderr returned apart and unfiltered, for a caller that
 // masks it line by line itself (l89.KubectlFailure): the filter drops a line naming a Secret whole. The
 // caller never prints stderr as it is.
@@ -221,6 +220,7 @@ func (c *Cluster) KubectlUnfiltered(args ...string) (stdout, stderr string, err 
 	return out.String(), errb.String(), err
 }
 
+// Kubectl runs kubectl and fails the test on an error.
 func (c *Cluster) Kubectl(args ...string) string {
 	c.T.Helper()
 	out, err := c.KubectlTry("", args...)

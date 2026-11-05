@@ -312,10 +312,9 @@ func StepScript(script string) string {
 	return "trap 'echo \"l89-failed: $BASH_COMMAND\" >&2' ERR\ntrap 'echo \"l89-running: $BASH_COMMAND\" >&2' DEBUG\n" + script
 }
 
-// FailedCommand is the command StepScript's ERR trap named in a step's output, for a results row. It is
-// the README's text after Subst, but a word Results refuses (the token delete's Job is named for what it
-// deletes) is shown as <word>, a long run as <LONG> (Scrub), and a line that still looks like it holds a
-// credential (Leak) is withheld.
+// FailedCommand is the command StepScript's ERR trap named in a step's output, for a results row: the
+// README's text after Subst, through Reason (a long run as <LONG>, a line with a credential word
+// withheld unless an allowed name is all that holds it).
 func FailedCommand(out string) string { return trapLine(out, "l89-failed: ") }
 
 // RunningCommand is the last command StepScript's DEBUG trap named: the one a step stopped at its bound
@@ -349,16 +348,26 @@ func trapLine(out, prefix string) string {
 // Reason is ReasonWith with no values of the run's own.
 func Reason(msg string) string { return ReasonWith(msg) }
 
-// allowNames are the harness's own names that hold a word the job log's filter drops a line for (run
-// 42047911635 lost its reason to one): each is masked to <word> and its line kept. Nothing else is
-// masked. The step and bound names hold none (TestReasonKeepsASetupFailureReadable).
+// DeleteJob is the delete Job of design §13 step 3 in the Velero README, and DeleteJobFile its example.
+// The name holds no word the job log's filter drops a line for: run 42058930263 lost every line about
+// the Job under its former name, its describe and logs among them.
+const DeleteJob, DeleteJobFile = "restore-unspent", "restore-unspent.yaml"
+
+// allowNames are the harness's own names that hold a word the job log's filter drops a line for: a
+// port49 Secret named by its kind (run 42047911635 lost its reason to one). It is masked to <word>, and
+// its line kept only when it is kubectl's own error or the harness's command line (kubectlShape), so no
+// data after the name passes (m1r5e). Nothing else is masked. The step and bound names hold none
+// (TestReasonKeepsASetupFailureReadable).
 var allowNames = []struct {
 	re   *regexp.Regexp
 	with string
 }{
-	{regexp.MustCompile(`restore-token-delete`), "restore-<word>-delete"},            // the delete Job, its file
-	{regexp.MustCompile(`\bsecret(s?)( "| |/)(port49-[a-z0-9.-]+)`), "<word>$1$2$3"}, // a port49 Secret, by kind
+	{regexp.MustCompile(`\bsecret(s?)( "| |/)(port49-[a-z0-9.-]+)`), "<word>$1$2$3"},
 }
+
+// kubectlShape is a line an allowed name may keep: kubectl's NotFound, Forbidden or AlreadyExists error,
+// or the harness's own redacted kubectl command.
+var kubectlShape = regexp.MustCompile(`^kubectl |\((NotFound|Forbidden|AlreadyExists)\)|" not found$|" is forbidden:|" already exists$`)
 
 // keyValue is a credential word, or an allowed Secret's name, followed by : or = and a value.
 var keyValue = regexp.MustCompile(`(?i)(password|token|secret)[\w-]*(\s+"?port49-[a-z0-9.-]+)?["']?\s*[:=]\s*\S`)
@@ -383,6 +392,9 @@ next:
 			continue
 		}
 		for _, a := range allowNames {
+			if a.re.MatchString(ln) && !kubectlShape.MatchString(ln) {
+				continue next
+			}
 			ln = a.re.ReplaceAllString(ln, a.with)
 		}
 		if credWords.MatchString(ln) {
@@ -398,6 +410,51 @@ next:
 		got = got[:400] + " ..."
 	}
 	return got
+}
+
+// JobProbe is the script the harness runs, bounded, when the README's wait for job in ns fails: the
+// Job's conditions, each of its pods' phase and exit code, and the pods' last log lines. Each line is
+// tagged (cond, pod, log) for JobRows; nothing is printed that JobRows does not pass through ReasonWith.
+func JobProbe(ns, job string) string {
+	return "kubectl -n " + ns + " get job " + job + ` -o jsonpath='{range .status.conditions[*]}cond {.type}={.status} {.reason}{"\n"}{end}'` + "\n" +
+		"kubectl -n " + ns + " get pods -l job-name=" + job +
+		` -o jsonpath='{range .items[*]}pod {.metadata.name} {.status.phase} {.status.containerStatuses[0].state.terminated.exitCode}{"\n"}{end}'` + "\n" +
+		"kubectl -n " + ns + " logs -l job-name=" + job + " --tail=10 --prefix=false | sed 's/^/log /'\n"
+}
+
+// JobRows is JobProbe's output as rows: the conditions, one row per pod, and the log lines through
+// ReasonWith with the run's own values (own).
+func JobRows(out string, own ...string) []l82.Row {
+	var conds, logs []string
+	var rows []l82.Row
+	for _, ln := range strings.Split(out, "\n") {
+		tag, rest, _ := strings.Cut(ln, " ")
+		switch tag {
+		case "cond":
+			conds = append(conds, strings.TrimSpace(rest))
+		case "pod":
+			f := strings.Fields(rest)
+			if len(f) >= 2 {
+				obs := f[1]
+				if len(f) == 3 {
+					obs += ", exit " + f[2]
+				}
+				rows = append(rows, l82.Row{Case: "the delete Job's pod " + f[0], Observation: obs})
+			}
+		case "log":
+			logs = append(logs, rest)
+		}
+	}
+	cond := "none"
+	if len(conds) > 0 {
+		cond = ReasonWith(strings.Join(conds, "\n"), own...)
+	}
+	log := "none"
+	if len(logs) > 0 {
+		log = ReasonWith(strings.Join(logs, "\n"), own...)
+	}
+	return append([]l82.Row{{Case: "the delete Job's conditions", Observation: cond}}, append(rows,
+		l82.Row{Case: "the delete Job's pods' last log lines", Observation: log})...)
 }
 
 // KubectlFailure is a failed kubectl call as a reason: the command (redacted by the caller), kubectl's
@@ -542,7 +599,7 @@ func Subst(cmd string, repl map[string]string) (string, error) {
 // two StatefulSets (named t-broker and t-port49d there), so the README's order is otherwise run as written.
 const shippedModifier = "      groupResource: statefulsets.apps\n"
 
-// LabDeleteJob is the shipped delete Job (restore-token-delete.yaml) pointed at the lab's one namespace:
+// LabDeleteJob is the shipped delete Job (DeleteJobFile) pointed at the lab's one namespace:
 // its namespace and etcd's service names move to ns. The Secret port49-etcd-root keeps its name, which
 // the lab's stack creates in ns; any other port49-etcd left is an error, so the lab never runs a Job
 // that still reaches for a namespace it does not have.

@@ -185,7 +185,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	work := t.TempDir()
 	// the messages name the delete Job, never its file: the job log's filter drops every line with the
 	// file's name in it, and run 42047911635 lost this cell's reason that way
-	deleteFile, err := os.ReadFile(filepath.Join(example, "restore-token-delete.yaml"))
+	deleteFile, err := os.ReadFile(filepath.Join(example, l89.DeleteJobFile))
 	if err != nil {
 		r.setupFail(t, cell, "reading the delete Job's example: %v", errors.Unwrap(err))
 	}
@@ -202,7 +202,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if err != nil {
 		r.setupFail(t, cell, "%v", err)
 	}
-	for f, body := range map[string]string{"restore-token-delete.yaml": tok, "restore-scale-zero.yaml": labMod} {
+	for f, body := range map[string]string{l89.DeleteJobFile: tok, "restore-scale-zero.yaml": labMod} {
 		if err := os.WriteFile(filepath.Join(work, f), []byte(body), 0o600); err != nil {
 			r.setupFail(t, cell, "writing an example into the working directory: %v", errors.Unwrap(err))
 		}
@@ -243,6 +243,9 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 			t.Fatalf("%s: did not end within the harness's bound of %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
 		case err != nil:
 			l82Row(cell, what+": the README command that failed, and how", l89.FailedCommand(out)+" ("+err.Error()+")")
+			if step == "deletejob" {
+				r.jobFailed(t, cell, dir, env)
+			}
 			l82SetVerdict(cell, l82.Fail)
 			t.Fatalf("%s: a README command failed: %v\n%s", what, err, kindtest.Filter(l89.Scrub(out)))
 		}
@@ -392,6 +395,22 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 // phaseWait waits until the restore has ended and none of its pod volume restores is still running, so
 // the README's volume check reads where they ended. A restore that made none at all (the suspected
 // failure of cell c) ends too, and the check then lists nothing.
+// jobFailed records why the README's delete Job did not complete (l89.JobProbe, bounded at 30s inside
+// the cell): its conditions, its pods' phase and exit code, and their last log lines through
+// l89.ReasonWith with the run's own values. Run 42058930263's FAIL left none of that readable.
+func (r *l89Run) jobFailed(t *testing.T, cell *l82.Cell, dir string, env []string) {
+	within, _ := r.bound(30 * time.Second)
+	out, timedOut, err := l89.RunBounded(dir, env, l89.JobProbe(r.stack.Namespace(), l89.DeleteJob), within)
+	if timedOut || err != nil {
+		l82Row(cell, "the harness's read of the delete Job when its wait failed", "failed: not a measurement")
+		t.Logf("the delete Job probe: %v\n%s", err, l89.ReasonWith(out, r.own...))
+		return
+	}
+	for _, row := range l89.JobRows(out, r.own...) {
+		l82Row(cell, row.Case, row.Observation)
+	}
+}
+
 // hung reads why a restore's --wait did not end within the harness's bound (l89.HangProbe, bounded at
 // 30s inside the cell): a pod volume restore not yet ended whose pod does not exist is the README's
 // outcome, a measured FAIL with those rows (l89.HangCause); anything else leaves the cell NOT RUN, with

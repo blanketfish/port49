@@ -53,7 +53,7 @@ every token redeemed since, redeemable again while it has not expired. The backu
 delete (design §13 step 3) is required, and it must land before port49d or a broker reaches the restored
 store. So the restore is made in this order, with nothing reaching the store until the end.
 
-Run step 2 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-token-delete.yaml`;
+Run step 2 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-unspent.yaml`;
 step 8 from the repository root. `<release>` is your Helm release name, `<backup>` the Velero backup,
 `<brokers>` and `<port49d>` the `broker.replicas` and `port49d.replicas` you run, `<prefix>` the store
 prefix (`/port49/` by default), and `<restore>` a name for the restore of `port49`, new each time you make
@@ -87,21 +87,28 @@ kubectl -n port49-etcd wait --for=condition=Ready pod -l app.kubernetes.io/name=
 
 <!-- l89:deletejob:begin -->
 ```sh
-kubectl apply -f restore-token-delete.yaml
-kubectl -n port49-etcd wait --for=condition=complete job/restore-token-delete --timeout=3m
-kubectl -n port49-etcd logs job/restore-token-delete
-kubectl -n port49-etcd delete job/restore-token-delete
+kubectl apply -f restore-unspent.yaml
+kubectl -n port49-etcd wait --for=condition=complete job/restore-unspent --timeout=3m
+kubectl -n port49-etcd logs job/restore-unspent
+kubectl -n port49-etcd delete job/restore-unspent
 ```
 <!-- l89:deletejob:end -->
 
+   If the wait fails, the Job's log says why (`kubectl -n port49-etcd logs job/restore-unspent`,
+   and `kubectl -n port49-etcd describe job/restore-unspent`); delete the Job before applying it
+   again.
+
 3. Hold etcd down: `kubectl -n port49-etcd scale statefulset/etcd --replicas=0`.
-4. Restore `port49`. Its pods start, so the node agent can restore their volumes, and with etcd down they
+4. Restore `port49`, without the HorizontalPodAutoscaler (the chart's `autoscaling.enabled`): a pod it
+   added while the pods run would have a claim with no backup, and step 5 would find a pod with no line.
+   Re-apply the chart after step 9 to bring it back. Its pods start, so the node agent can restore their volumes, and with etcd down they
    cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
    L89 (d) runs this command with its etcd up.
 
 <!-- l89:restore:begin -->
 ```sh
-velero restore create <restore> --from-backup <backup> --include-namespaces port49 --wait
+velero restore create <restore> --from-backup <backup> --include-namespaces port49 \
+  --exclude-resources horizontalpodautoscalers.autoscaling --wait
 ```
 <!-- l89:restore:end -->
 
@@ -159,16 +166,16 @@ kubectl -n port49 rollout status statefulset/<release>-port49d --timeout=10m
 
 10. Lift again what was lifted since (design §13 step 6).
 
-With the chart's `autoscaling.enabled`, the HPA does nothing while port49d is at 0 replicas and resumes once step 9
-scales it up.
+With the chart's `autoscaling.enabled`, the HPA is not restored (step 4); re-applying the chart after step 9
+brings it back.
 
 ### Recovering from a restore at 0 replicas
 
 A restore made with the StatefulSets at 0 replicas waits for pods that never start, and Velero restores
 one at a time, so it holds up every restore after it. No broker or port49d ran, so nothing reached the
-store. Restart Velero, which ends a restore it finds `InProgress` when it starts, delete that restore
-(`<restore>` here is its name), then start over from the first command above with a new `<restore>`. L89
-(d) runs this after (c)'s hung restore.
+store. Restart Velero, delete that restore (`<restore>` here is its name), then start over from the first
+command above with a new `<restore>`. Measured on kind in L89 cell (d), run 42058930263, on (c)'s hung
+restore: after these commands the restore was gone and no restore was `New` or `InProgress`.
 
 <!-- l89:recover:begin -->
 ```sh

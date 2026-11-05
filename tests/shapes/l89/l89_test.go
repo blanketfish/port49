@@ -481,7 +481,7 @@ func TestReasonKeepsASetupFailureReadable(t *testing.T) {
 			t.Errorf("the reason %q lacks %q", got, want)
 		}
 	}
-	if got := Reason("reading restore-token-delete.yaml: no such file"); got != "reading restore-<word>-delete.yaml: no such file" {
+	if got := Reason("reading restore-unspent.yaml: no such file"); got != "reading restore-unspent.yaml: no such file" {
 		t.Errorf("Reason = %q", got)
 	}
 	// the review's probe (I1r5d): a key and its value, a word outside the allowlist, the run's own key.
@@ -549,11 +549,11 @@ func TestReasonKeepsASetupFailureReadable(t *testing.T) {
 }
 
 func TestFailedCommandIsTheTrapsLineScrubbed(t *testing.T) {
-	out := "some output\nl89-failed: kubectl -n port49 wait --for=condition=complete job/restore-token-delete --timeout=3m\nError: timed out\n"
+	out := "some output\nl89-failed: kubectl -n port49 wait --for=condition=complete job/restore-unspent --timeout=3m\nError: timed out\n"
 	// the token delete's own lines hold a word Results refuses: the row shows it masked, and stays writable
 	got := FailedCommand(out)
 	// --for=condition=complete is 24 key characters, so Scrub shortens it
-	if got != "kubectl -n port49 wait <LONG> job/restore-<word>-delete --timeout=3m" {
+	if got != "kubectl -n port49 wait <LONG> job/restore-unspent --timeout=3m" {
 		t.Errorf("FailedCommand = %q", got)
 	}
 	if _, err := Results(Env{}, []l82.Cell{{ID: "c", Verdict: l82.Fail, Rows: []l82.Row{{Case: "README step 2", Observation: got}}}}); err != nil {
@@ -976,6 +976,10 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	if !strings.Contains(steps["scalezero"], "--replicas=0") || !strings.Contains(steps["scalezero"], "--for=delete") {
 		t.Errorf("the scale to 0 does not wait for the pods to go:\n%s", steps["scalezero"])
 	}
+	// m2r6: an HPA restored with the release could add a port49d pod with no backup while the pods run
+	if !strings.Contains(steps["restore"], "--exclude-resources horizontalpodautoscalers.autoscaling") {
+		t.Errorf("the README's restore brings back the HPA:\n%s", steps["restore"])
+	}
 	if strings.Contains(steps["restore"], "resource-modifier") || !strings.Contains(steps["restorezero"], "--resource-modifier-configmap restore-scale-zero") {
 		t.Errorf("the README's restore holds a resource modifier, or (c)'s lacks it:\n%s\n%s", steps["restore"], steps["restorezero"])
 	}
@@ -984,6 +988,120 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	}
 	if _, err := Steps(string(b), "other", "t", "l89-backup", "r", 2, 2); err == nil {
 		t.Error("a namespace the README's port49 commands do not name is accepted")
+	}
+}
+
+// Run 42058930263: (d)'s delete Job failed, and the job log's filter dropped every line about it (its
+// name held a credential word). The Job's name holds none now, it retries the members' health as
+// etcd-init does, and a failure is recorded as rows (JobRows).
+func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
+	filter := regexp.MustCompile(`(?i)password|token|secret|eyJ`)
+	root := filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero")
+	b, err := os.ReadFile(filepath.Join(root, DeleteJobFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job struct {
+		Metadata struct{ Name string }
+		Spec     struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name    string
+						Command []string
+					}
+				}
+			}
+		}
+	}
+	if err := yaml.Unmarshal(b, &job); err != nil {
+		t.Fatal(err)
+	}
+	if job.Metadata.Name != DeleteJob || filter.MatchString(DeleteJob) || filter.MatchString(DeleteJobFile) {
+		t.Errorf("the Job is %q (file %s), want %q with no word the filter drops", job.Metadata.Name, DeleteJobFile, DeleteJob)
+	}
+	for _, c := range job.Spec.Template.Spec.Containers {
+		if filter.MatchString(c.Name) {
+			t.Errorf("the container %q is named with a word the filter drops", c.Name)
+		}
+		script := strings.Join(c.Command, "\n")
+		if !strings.Contains(script, "until etcdctl endpoint health; do") || !strings.Contains(script, `[ "$i" -lt 120 ]`) {
+			t.Errorf("the Job does not wait for every member's health as etcd-init does:\n%s", script)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "restore-token-delete.yaml")); !os.IsNotExist(err) {
+		t.Errorf("the old file is still shipped: %v", err)
+	}
+	doc, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), "restore-token-delete") || !strings.Contains(string(doc), "job/"+DeleteJob) {
+		t.Error("the README does not run the renamed Job")
+	}
+
+	// the rows of a failed delete Job, from JobProbe's output: the conditions, each pod, its last lines
+	access := func() string {
+		v, err := Random(10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}()
+	out := "cond Failed=True BackoffLimitExceeded\ncond Complete=False\n" +
+		"pod restore-unspent-abcde Failed 1\npod restore-unspent-fghij Failed 1\n" +
+		"log {\"level\":\"warn\",\"msg\":\"retrying of unary invoker failed\",\"target\":\"etcd-endpoints\"}\n" +
+		"log https://etcd-1.etcd.port49.svc:2379 is unhealthy: failed to commit proposal: context deadline exceeded\n" +
+		"log password: " + access + "\n" +
+		"log the key " + access + " was refused\n" +
+		"log Error: unhealthy cluster\n"
+	rows := JobRows(out, access)
+	joined := fmt.Sprint(rows)
+	for _, want := range []string{"Failed=True BackoffLimitExceeded", "Complete=False", "restore-unspent-abcde", "Failed, exit 1", "is unhealthy", "Error: unhealthy cluster"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the rows lack %q: %v", want, rows)
+		}
+	}
+	if strings.Contains(joined, access) || filter.MatchString(joined) {
+		t.Errorf("the rows hold a value of the run's or a filtered word: %v", rows)
+	}
+	for _, r := range rows {
+		if Leak(r.Case) != "" || Leak(r.Observation) != "" {
+			t.Errorf("Results would refuse the row %v", r)
+		}
+	}
+	if rows := JobRows("", access); len(rows) == 0 || !strings.Contains(fmt.Sprint(rows), "none") {
+		t.Errorf("an empty probe gives %v", rows)
+	}
+	if p := JobProbe("port49", DeleteJob); !strings.Contains(p, "get job "+DeleteJob) || !strings.Contains(p, "job-name="+DeleteJob) || !strings.Contains(p, "--tail=") {
+		t.Errorf("JobProbe = %q", p)
+	}
+}
+
+// m1r5e: an allowed Secret name keeps its line only in kubectl's own error shapes or the harness's
+// command line; anything else that names one is dropped, so data after the name cannot pass.
+func TestAnAllowedSecretNameKeepsOnlyKubectlsErrorShapes(t *testing.T) {
+	v, err := Random(6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{
+		"secret/port49-etcd-root data " + v,
+		"secrets port49-etcd-root tls.key " + v,
+	} {
+		if got := Reason("the harness stopped\n" + in); got != "the harness stopped" {
+			t.Errorf("Reason(%q) = %q, want the other line alone", in, got)
+		}
+	}
+	for in, want := range map[string]string{
+		`Error from server (NotFound): secrets "port49-etcd-root" not found`:                      `<word>s "port49-etcd-root" not found`,
+		`Error from server (Forbidden): secrets "port49-etcd-root" is forbidden: User cannot get`: `is forbidden`,
+		`Error from server (AlreadyExists): secrets "port49-etcd-root" already exists`:            `already exists`,
+		"kubectl -n port49 get secret port49-etcd-root":                                           "get <word> port49-etcd-root",
+	} {
+		if got := Reason(in); !strings.Contains(got, want) {
+			t.Errorf("Reason(%q) = %q, want it to keep %q", in, got, want)
+		}
 	}
 }
 
@@ -1045,7 +1163,7 @@ func TestTheREADMEsOrderRestoresWithThePodsRunning(t *testing.T) {
 // delete Job for still naming port49-etcd, which it does as the Secret port49-etcd-root, one the lab
 // creates in its own namespace. Only the namespace and the service names move.
 func TestLabDeleteJobMovesOnlyTheNamespace(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "restore-token-delete.yaml"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", DeleteJobFile))
 	if err != nil {
 		t.Fatal(err)
 	}
