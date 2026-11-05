@@ -55,7 +55,9 @@ store. So the restore is made in this order, with nothing running against the st
 
 Run steps 2 and 3 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-token-delete.yaml` and
 `restore-scale-zero.yaml`; step 4 from the repository root. `<release>` is your Helm release name, `<backup>` the Velero backup, `<brokers>` and `<port49d>` the
-`broker.replicas` and `port49d.replicas` you run, and `<prefix>` the store prefix (`/port49/` by default).
+`broker.replicas` and `port49d.replicas` you run, `<prefix>` the store prefix (`/port49/` by default), and
+`<restore>` a name for the restore of `port49`, new each time you make one (`port49-restore-1`, then
+`port49-restore-2` in the fallback).
 
 ```sh
 kubectl delete namespace port49 port49-etcd
@@ -88,19 +90,18 @@ kubectl -n port49-etcd delete job/restore-token-delete
 <!-- l89:restorezero:begin -->
 ```sh
 kubectl -n velero create configmap restore-scale-zero --from-file=restore-scale-zero.yaml
-velero restore create --from-backup <backup> --include-namespaces port49 \
+velero restore create <restore> --from-backup <backup> --include-namespaces port49 \
   --resource-modifier-configmap restore-scale-zero --wait
 ```
 <!-- l89:restorezero:end -->
 
-   Then check that the volumes came back. This prints the restore's phase, then one line per pod volume
-   restore:
+   Then check that the volumes came back, by the restore's name. This prints the restore's phase, then one
+   line per pod volume restore:
 
 <!-- l89:volumes:begin -->
 ```sh
-restore=$(kubectl -n velero get restores --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}')
-kubectl -n velero get restore "$restore" -o jsonpath='{.status.phase}{"\n"}'
-kubectl -n velero get podvolumerestores -l velero.io/restore-name="$restore" -o custom-columns=PHASE:.status.phase,POD:.spec.pod.name,VOLUME:.spec.volume
+kubectl -n velero get restore <restore> -o jsonpath='{.status.phase}{"\n"}'
+kubectl -n velero get podvolumerestores -l velero.io/restore-name=<restore> -o custom-columns=PHASE:.status.phase,POD:.spec.pod.name,VOLUME:.spec.volume
 ```
 <!-- l89:volumes:end -->
 
@@ -144,12 +145,26 @@ No broker or port49d has run yet, so start over:
 1. Delete both namespaces again, with the first command above.
 2. Do steps 1 and 2.
 3. Hold etcd down: `kubectl -n port49-etcd scale statefulset/etcd --replicas=0`.
-4. Restore `port49` normally: `velero restore create --from-backup <backup> --include-namespaces port49 --wait`.
-   Its pods start, and with etcd down they cannot reach the store. The lab cannot hold its etcd down
-   apart from the release (one namespace), so L89 (d) does not measure this step as written.
-5. Run the volume check again. Every line must be `Completed`.
-6. Scale both StatefulSets to 0: `kubectl -n port49 scale statefulset/<release>-broker statefulset/<release>-port49d --replicas=0`,
-   and wait until no port49 pod is left: `kubectl -n port49 wait --for=delete pod -l app.kubernetes.io/name=port49 --timeout=3m`.
+4. Restore `port49` normally, under a new `<restore>` name. Its pods start, and with etcd down they
+   cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
+   L89 (d) runs this command with its etcd up.
+
+<!-- l89:fallbackrestore:begin -->
+```sh
+velero restore create <restore> --from-backup <backup> --include-namespaces port49 --wait
+```
+<!-- l89:fallbackrestore:end -->
+
+5. Run the volume check again, with this `<restore>`. Every line must be `Completed`.
+6. Scale both StatefulSets to 0, and wait until no port49 pod is left.
+
+<!-- l89:fallbackzero:begin -->
+```sh
+kubectl -n port49 scale statefulset/<release>-broker statefulset/<release>-port49d --replicas=0
+kubectl -n port49 wait --for=delete pod -l app.kubernetes.io/name=port49 --timeout=3m
+```
+<!-- l89:fallbackzero:end -->
+
 7. Bring etcd back: `kubectl -n port49-etcd scale statefulset/etcd --replicas=3`, and wait for it as
    step 1 does.
 8. Do steps 4, 5 and 6.
