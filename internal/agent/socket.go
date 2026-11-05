@@ -142,7 +142,13 @@ func dialOwned(ctx context.Context, socket string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cred, ok := peerOf(conn); ok && cred.uid != getuid() {
+	cred, ok := peerOf(conn)
+	switch {
+	case !ok && peerCredsReported:
+		conn.Close()
+		return nil, fmt.Errorf("agent: the kernel reported no credentials for the process listening at %s; it is "+
+			"refused rather than asked for a token", socket)
+	case ok && cred.uid != getuid():
 		conn.Close()
 		return nil, fmt.Errorf("agent: the process listening at %s runs as uid %d, not you (uid %d); it is "+
 			"refused rather than asked for a token", socket, cred.uid, getuid())

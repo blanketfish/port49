@@ -2806,13 +2806,7 @@ func TestTheTestSocketVariableIsRefusedForASocketAnotherUserOwns(t *testing.T) {
 	// The process actually reached is checked after the dial, whatever the path said: seen as
 	// another uid, the listener (this process) is refused.
 	getuid = func() int { return os.Getuid() + 1 }
-	probe, perr := net.Dial("unix", sock)
-	if perr != nil {
-		t.Fatal(perr)
-	}
-	_, reports := peerOf(probe)
-	probe.Close()
-	if reports { // a platform that cannot report a peer's credentials has nothing to refuse on
+	if peerCredsReported { // elsewhere the dial rests on the path checks alone
 		conn, err := dialOwned(context.Background(), sock)
 		if err == nil || !strings.Contains(err.Error(), "not you") {
 			if conn != nil {
@@ -2822,11 +2816,7 @@ func TestTheTestSocketVariableIsRefusedForASocketAnotherUserOwns(t *testing.T) {
 		}
 	}
 	getuid = func() int { return os.Getuid() }
-	time.Sleep(200 * time.Millisecond) // let the listener count the probe dials above
-	for len(served) > 0 {
-		<-served
-	}
-	if _, err := NewClient(plain).Status(context.Background()); err == nil || len(served) != 0 {
+	if _, err := NewClient(plain).Status(context.Background()); err == nil || !strings.Contains(err.Error(), "not a socket") {
 		t.Fatalf("a non-socket was dialled: %v", err)
 	}
 }

@@ -10023,8 +10023,9 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
   direct dial past a jump host (plan 9a final review I-1) goes with it. It is an unknown
   command: usage, exit 2, and no word of where it went (no deprecation before beta).
 - **5. Plan 9a's pins file** is never read and no longer named: `port49 ssh` says nothing of it, and
-  `--known-hosts` is not a flag. Nothing port49 keeps reads a file under `~/.config` through decision 42 ruling 6's walk, so a
-  group-writable `~/.config` stops nothing (plan 9b pre-flight 2, m5).
+  `--known-hosts` is not a flag. Nothing port49 keeps reads a file under `~/.config` through
+  decision 42 ruling 6's walk, so a group-writable `~/.config` stops nothing (plan 9b pre-flight 2,
+  m5).
 - **6. The OpenSSH floor** stays 8.5 unless an 8.5p1 under `accept-new` accepts a key of another
   type for an alias that holds one; then it rises to the earliest version measured refusing it
   (data: `tests/ssh-compat/2026-10-13-openssh-accept-new.md`, a server offering only Ed25519
