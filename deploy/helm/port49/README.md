@@ -211,11 +211,14 @@ A scale-down leaves the spool of the removed pod on its PVC, so drain or collect
 
 `prometheusRule.enabled: true` renders the alert rules as a `PrometheusRule` and a `PodMonitor` for each
 workload's `metrics` port. The monitors set `job` to `port49d` and `port49-broker`, the two names the
-`port49_target_down` and `port49_target_absent` rules key on (`deploy/alerts/README.md`). Both need the
-Prometheus Operator's CRDs, and `prometheusRule.labels` must be the ones your Prometheus selects on.
+`port49_target_down`, `port49_target_absent` and `port49_broker_target_absent` rules key on
+(`deploy/alerts/README.md`). Both need the Prometheus Operator's CRDs, and `prometheusRule.labels` must be
+the ones your Prometheus selects on. The same labels go on the monitors; if your Prometheus selects
+PodMonitors on different labels from rules, set them on the monitors yourself.
 
-The metrics ports (9049 for port49d, 9050 for the broker) listen on every pod address. Restrict them with a NetworkPolicy that admits only your Prometheus (and the kubelet,
-for the probes on the same port); the chart does not render one.
+The metrics ports (9049 for port49d, 9050 for the broker) listen on every pod address. Restrict them with
+a NetworkPolicy that admits only your Prometheus (and the kubelet, for the probes on the same port); the
+chart does not render one.
 
 ## Network
 

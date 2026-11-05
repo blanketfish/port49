@@ -22,24 +22,58 @@ tests:
       - eval_time: 5m
         alertname: port49_target_down
         exp_alerts: []
-  # port49_target_absent
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "0+0x10"}
+      - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "1+0x10"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_target_down
+        exp_alerts:
+          - exp_labels: {job: "port49d", instance: "a", severity: "page"}
+            exp_annotations:
+              summary: "A port49d or broker target is not answering its scrape: up is 0 for it."
+  # port49_target_absent: port49d only, a page
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "1+0x20"}
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: port49_target_absent
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: port49_target_absent
+        exp_alerts:
+          - exp_labels: {job: "port49d", severity: "page"}
+            exp_annotations:
+              summary: "Prometheus has no up series for port49d: no port49d target exists at all, so every device has lost port49 and falls to local authentication, and no other port49d rule can fire."
   - interval: 1m
     input_series:
       - {series: "up{job=\"port49d\",instance=\"a\"}", values: "1+0x20"}
     alert_rule_test:
       - eval_time: 15m
         alertname: port49_target_absent
+        exp_alerts: []
+  # port49_broker_target_absent: the broker only, a ticket
+  - interval: 1m
+    input_series:
+      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "1+0x20"}
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: port49_broker_target_absent
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: port49_broker_target_absent
         exp_alerts:
           - exp_labels: {job: "port49-broker", severity: "ticket"}
             exp_annotations:
-              summary: "Prometheus has no up series for port49d or for the broker: the target is not scraped at all, so no other rule can fire for it."
+              summary: "Prometheus has no up series for the broker: no broker target exists at all, so no token can be minted and no other broker rule can fire."
   - interval: 1m
     input_series:
-      - {series: "up{job=\"port49d\",instance=\"a\"}", values: "1+0x20"}
       - {series: "up{job=\"port49-broker\",instance=\"b\"}", values: "1+0x20"}
     alert_rule_test:
       - eval_time: 15m
-        alertname: port49_target_absent
+        alertname: port49_broker_target_absent
         exp_alerts: []
   # port49_global_cap_shedding
   - interval: 1m
