@@ -1,0 +1,179 @@
+package labpcap
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/tests/lab/labcreds"
+)
+
+// The committed evidence audited on its own, as CI runs it: no capture is needed, because the
+// invariants (every credential field all Fill, no token-shaped string, no password hash in an
+// accounting or authorization argument) are properties of the evidence file. Counts only; a
+// failure names a file and numbers, never a byte of a body.
+
+func TestAuditEvidenceCountsANonFillCredential(t *testing.T) {
+	s := newSynth()
+	papLogin(s, 50002, 0x22222222, "alice02", "xxxxAbcdxxxx", true) // not all Fill, not token-shaped
+	r, err := AuditEvidence(s.buf, Options{Key: synthKey})
+	if r.NotFill != 1 {
+		t.Fatalf("NotFill = %d, want 1 (report %+v)", r.NotFill, r)
+	}
+	if err == nil {
+		t.Fatal("a credential field that is not all Fill is not an error")
+	}
+	if !strings.Contains(err.Error(), "authen_start.data") || strings.Contains(err.Error(), "Abcd") {
+		t.Errorf("the error should name the field kind and nothing of its bytes: %v", err)
+	}
+}
+
+func TestAuditEvidenceCountsAHashInAnAccountingArg(t *testing.T) {
+	// Built from fragments: the shapes are the point, and a literal would trip the secret scanner.
+	d := "$"
+	for _, arg := range []string{
+		"cmd=username bob secret 5 x " + d + "6" + d + "salt" + d + "abcdefgh",
+		"cmd=snmp-server " + "key 7 " + "0822455D0A16",
+		"cmd=enable " + "secret 0 " + "word",
+		"cmd=set system root-authentication encrypted-password " + d + "9" + d + "abcdef",
+		"cmd=x " + d + "aes1" + d + "abcdef",
+	} {
+		s := newSynth()
+		req := wire.AcctRequest{
+			Flags: wire.AcctFlagStart, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+			AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+			User: []byte("alice01"), Port: []byte("ssh"), RemAddr: []byte("192.0.2.9"),
+			Args: [][]byte{[]byte("task_id=42"), []byte(arg)},
+		}
+		reply := wire.AcctReply{Status: 0x01}
+		s.exchange(50004, [][]byte{
+			tacacs(0x44444444, wire.TypeAcct, 1, req.Encode()),
+			tacacs(0x44444444, wire.TypeAcct, 2, reply.Encode()),
+		}, []bool{true, false}, true)
+		r, err := AuditEvidence(s.buf, Options{Key: synthKey})
+		if r.HashShaped != 1 || err == nil {
+			t.Errorf("a hash-shaped argument: HashShaped = %d, err = %v (report %+v)", r.HashShaped, err, r)
+		}
+		if err != nil && strings.Contains(err.Error(), "abcdefgh") {
+			t.Errorf("the error carries argument bytes: %v", err)
+		}
+	}
+}
+
+func TestAuditEvidenceAcceptsTheRedactedRun(t *testing.T) {
+	out, _, err := Redact(fullRun(t, true), synthOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := AuditEvidence(out, Options{Key: synthKey})
+	if err != nil {
+		t.Fatalf("redacted evidence failed its audit: %v (%+v)", err, r)
+	}
+	if r.CredentialFields == 0 || r.Unaudited != 0 {
+		t.Errorf("report %+v: want credential fields counted and nothing unaudited", r)
+	}
+}
+
+func TestCommittedEvidenceHoldsNoCredential(t *testing.T) {
+	root, err := repoRootForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, _ := filepath.Glob(filepath.Join(root, "tests", "lab", "evidence", "*.pcap"))
+	if len(names) == 0 {
+		t.Fatal("no committed evidence in tests/lab/evidence: the evidence is committed, so this never skips")
+	}
+	seenTLS := map[string]bool{}
+	for _, n := range names {
+		base := filepath.Base(n)
+		raw, err := os.ReadFile(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opt := Options{Key: labcreds.Key}
+		if k := labcreds.CaptureKey(base); k != "" {
+			opt.Key = k
+		}
+		problems, r := auditCommitted(base, raw, opt, tlsEvidence)
+		t.Logf("%s: %+v", base, r)
+		if r.TLS > 0 {
+			seenTLS[base] = true
+		}
+		for _, p := range problems {
+			t.Errorf("%s", p)
+		}
+	}
+	for name := range tlsEvidence {
+		if !seenTLS[name] {
+			t.Errorf("%s is on the TLS allowlist but is not committed or holds no TLS run: remove it", name)
+		}
+	}
+}
+
+// tlsEvidence names the committed files that are RFC 9887 TLS runs. Ciphertext cannot be audited
+// without the session keys, and the lab keeps none (no keylog), so each file is exempt by name and
+// reason; a TLS file not listed here fails.
+var tlsEvidence = tlsFiles("RFC 9887 TLS 1.3 on port 300; ciphertext, the lab keeps nothing that decrypts it",
+	"ceos436-arista_ceos", "iosxe1718-cisco_iosxe", "nxos106-cisco_nxos", "vjunos26-juniper_vjunos-router", "xrd261-cisco_xrd")
+
+func tlsFiles(reason string, platforms ...string) map[string]string {
+	m := map[string]string{}
+	for _, p := range platforms {
+		m["L88-f-tls-"+p+".pcap"] = reason
+	}
+	return m
+}
+
+// auditCommitted is the rule for one committed file: any credential finding fails; plaintext
+// port-49 data that frames nothing fails; a TLS run fails unless the file is on allow; a file with
+// no port-49 payload at all is vacuous and passes (the caller logs its counts). It returns names
+// and counts, never bytes.
+func auditCommitted(base string, raw []byte, opt Options, allow map[string]string) ([]string, EvidenceReport) {
+	r, err := AuditEvidence(raw, opt)
+	var out []string
+	if err != nil {
+		out = append(out, fmt.Sprintf("%s: %v (counts %+v)", base, err, r))
+	}
+	if r.Unframed > 0 {
+		out = append(out, fmt.Sprintf("%s: %d port-49 stream(s) carry data that is not TACACS+ and cannot be audited (counts %+v)", base, r.Unframed, r))
+	}
+	if _, ok := allow[base]; r.TLS > 0 && !ok {
+		out = append(out, fmt.Sprintf("%s: %d TLS stream(s) and the file is not on the RFC 9887 allowlist (counts %+v)", base, r.TLS, r))
+	}
+	return out, r
+}
+
+func TestAuditCommittedFailsAPlaintextStreamThatFramesNothing(t *testing.T) {
+	s := newSynth()
+	// port 49, not TACACS+: the bytes cannot be audited.
+	s.exchange(50009, [][]byte{[]byte("GET / HTTP/1.1\r\n\r\n")}, []bool{true}, true)
+	problems, r := auditCommitted("synthetic.pcap", s.buf, Options{Key: synthKey}, nil)
+	if r.Unframed != 1 || len(problems) != 1 {
+		t.Fatalf("report %+v, problems %d: want one unframed stream failing", r, len(problems))
+	}
+}
+
+func TestAuditCommittedFailsATLSFileNotOnTheAllowlist(t *testing.T) {
+	s := newSynth()
+	hello := []byte{0x16, 0x03, 0x03, 0x00, 0x02, 0x01, 0x00}
+	s.segment(synthDevice, synthServer, 50010, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50010, TLSPort, 1001, flagACK, hello, true)
+	problems, r := auditCommitted("tls.pcap", s.buf, Options{Key: synthKey}, nil)
+	if r.TLS != 1 || len(problems) != 1 {
+		t.Fatalf("report %+v, problems %d: want one unlisted TLS file failing", r, len(problems))
+	}
+	if problems, _ := auditCommitted("tls.pcap", s.buf, Options{Key: synthKey}, map[string]string{"tls.pcap": "x"}); len(problems) != 0 {
+		t.Errorf("an allowlisted TLS file failed: %v", problems)
+	}
+}
+
+func TestAuditCommittedPassesAFileWithNoPort49Payload(t *testing.T) {
+	s := newSynth()
+	s.segment(synthDevice, synthServer, 50011, Port, 1000, flagSYN, nil, true)
+	if problems, r := auditCommitted("empty.pcap", s.buf, Options{Key: synthKey}, nil); len(problems) != 0 {
+		t.Errorf("a file with no payload failed: %v (%+v)", problems, r)
+	}
+}
