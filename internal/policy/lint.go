@@ -80,6 +80,10 @@ const (
 	// pkcs11 key and a touch key on one token. Warnings, never failures.
 	FindingPerLoginMFAExclude  = "per_login_mfa_on_missing_exclude"
 	FindingPerLoginMFAMachines = "per_login_mfa_machines"
+	// FindingDenyScopeUnlogged is an attribute scope that delivers a deny and
+	// says security_log: false, so an edit of the attribute that lifts the deny
+	// leaves no record (spec §5.5). A warning, since the file chose it.
+	FindingDenyScopeUnlogged = "deny_scope_unlogged"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -110,6 +114,12 @@ func (p *Policy) Lint(now time.Time) []Finding {
 			add(FindingPerLoginMFAExclude, "scope %q carries per_login_mfa with on_missing: exclude: a sync that drops "+
 				"%s lifts this requirement from the device; security_log records it (spec §5.1.5)", name,
 				strings.Join(sortedKeys(s.Match), " or "))
+		}
+	}
+	for _, name := range sortedKeys(p.scopes) {
+		if s := p.scopes[name]; s.deliversDeny && s.securityLogOff {
+			add(FindingDenyScopeUnlogged, "scope %q delivers a deny and says security_log: false: an edit of %s "+
+				"that lifts the deny leaves no record (spec §5.5)", name, strings.Join(sortedKeys(s.Match), " or "))
 		}
 	}
 	if m := p.defaults.PerLoginMFA; m != nil && m.AppliesToMachines {

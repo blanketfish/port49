@@ -1755,10 +1755,14 @@ vulnerable); for a permit-bearing scope it means *exclude*. A broken inventory s
 lifting a mitigation is the failure to design against. So a scope with at least one match
 key that delivers a deny — it attaches a role carrying one, or a grant on it holds one — MUST
 declare `on_missing`, and omitting it is a load error; any other scope defaults to `exclude`.
-A grant on a scope with `on_missing: include`, whose roles carry a permit or which sets
-`max_privilege`, is a load error too (decision 56 ruling 5): a grant carries permits, and the
-safe direction for a permit is *exclude*, so a missing attribute would hand it to a device the
-inventory could not describe. Put a mitigation's deny in `attached_roles` on an include scope.
+A grant on a scope with `on_missing: include` and a match key (not `all_devices`, not a scope
+pinned by `name` alone) is a load error, whatever its roles carry (decision 56 ruling 5). A grant
+is what lets a login reach a device, even one whose roles only deny, and the safe direction for
+access is *exclude*: a missing attribute would hand a session to a device the inventory could not
+describe. Put the grant on a separate scope with the same match and `on_missing: exclude`, and
+put the mitigation's deny in the include scope's `attached_roles`. An include scope with a match
+key may attach only roles that cannot widen access, with no `permit`, no `privilege` and no
+`attributes`; any other is a load error. (`attached_permit` stays a lint on exclude scopes.)
 A scope with no match key, `all_devices`, selects every device and needs neither (plan 4).
 
 `security_log: true` marks a scope whose membership changes are security events. This is
@@ -2494,7 +2498,9 @@ swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
 true` (§5.5, §10), `key_ref_changed` with `"from"` and `"to"` for a device's key assignment
 changing, `transport_changed` with `"from"` and `"to"` for a device's `transport` changing (its
-`key_ref_changed` is then not also written), `admission_changed` with `"to": "admitted"` for a
+`key_ref_changed` is then not also written), `platform_changed` with `"from"` and `"to"` for a
+device's `platform` changing (decision 56 ruling 6: it moves the device between platform-keyed
+scopes and rule sets, so it can lift a deny), `admission_changed` with `"to": "admitted"` for a
 device already in inventory becoming admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
 addresses are new capture targets. Its `device` block names the device. It is what makes a
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
@@ -6055,6 +6061,10 @@ scopes:
     attached_roles:
       humans:   [cve_2026_xxxx]
       machines: [cve_2026_xxxx]
+  # IR's grant is earned by data: a grant that admits a session on an include scope is a load error (§5.5).
+  - name: srx_unpatched_known
+    match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
+    on_missing: exclude
 
 roles:
   - name: read_only
@@ -6131,7 +6141,7 @@ grants:
   - {subject: noc_tier1,     scope: all_devices,   roles: [read_only, no_disruptive]}
   - {subject: noc_tier1,     scope: dc_fabric,     roles: [interface_tech], expires: 2026-12-01}
   - {subject: svc_oxidized,  scope: all_devices,   roles: [read_only, elevated_session]}
-  - {subject: security_ir,   scope: srx_unpatched, roles: [cve_2026_xxxx_assess]}
+  - {subject: security_ir,   scope: srx_unpatched_known, roles: [cve_2026_xxxx_assess]}
 
 tests:
   - {subject: noc_tier1,    device: leaf-01, command: "show version",   expect: permit}
@@ -11830,8 +11840,11 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
    `POST /v1/certificate` (with `issuance`) and at `POST /v1/mfa` as an `idp_mfa` proof
    (decision 45 ruling 20). This amends decision 43 ruling 13 and retires plan 7h's bearer path
    for people (identity I4, Q1).
-5. **A grant on an `on_missing: include` scope whose roles carry a permit, or which sets
-   `max_privilege`, is a load error** (§5.5; policy I1).
+5. **A grant on an `on_missing: include` scope with a match key is a load error** (§5.5; policy
+   I1). Any grant, deny-only ones included, lets a login reach a device the inventory could not
+   describe, and on a platform that sends no command rules the deny is not even sent. A mitigation's
+   deny goes in the include scope's `attached_roles`, which may carry only roles with no permit,
+   `privilege` or `attributes`.
 6. **An attribute scope that delivers a deny defaults to `security_log: true`, and
    `platform_changed` is a security change** (§10; policy I2).
 7. **A passing store health check closes the token and context pools' circuits** (amends

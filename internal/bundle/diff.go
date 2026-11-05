@@ -44,7 +44,8 @@ type Change struct {
 	// an address added to a device already in inventory — the mint response
 	// hands it to an SSH client, so a rogue one is a credential-capture path —
 	// a device joining or leaving a scope with security_log: true (spec §5.5,
-	// §10), a device's key_ref changing, and a device becoming admitted.
+	// §10) or one that delivers a deny, a platform change, a device's key_ref
+	// changing, and a device becoming admitted.
 	Security bool `json:"security"`
 }
 
@@ -120,7 +121,10 @@ func Diff(old, new *policy.Policy, now time.Time) Report {
 			add(Change{Kind: DeviceRemoved, Device: name, Platform: o.Platform})
 		default:
 			if o.Platform != n.Platform {
-				add(Change{Kind: PlatformChanged, Device: name, Platform: n.Platform, From: o.Platform, To: n.Platform})
+				// A platform decides which adapter, rules and platform-keyed
+				// scopes apply, so moving a device between them can lift a deny.
+				add(Change{Kind: PlatformChanged, Device: name, Platform: n.Platform, From: o.Platform, To: n.Platform,
+					Security: true})
 			}
 			if !maps.Equal(o.Attributes, n.Attributes) {
 				add(Change{Kind: AttributesChanged, Device: name, Platform: n.Platform, From: attrs(o.Attributes),

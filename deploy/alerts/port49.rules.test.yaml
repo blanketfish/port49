@@ -1328,7 +1328,26 @@ tests:
         exp_alerts:
           - exp_labels: {instance: "a", kind: "key_ref_changed", severity: "ticket"}
             exp_annotations:
-              summary: "A source-of-truth edit moved privilege: a device changed key, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+              summary: "A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"platform_changed\"}", values: "0+1x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts:
+          - exp_labels: {instance: "a", kind: "platform_changed", severity: "ticket"}
+            exp_annotations:
+              summary: "A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+  # transport_changed has its own alert (port49_inventory_transport_changed); the privilege-changes
+  # alert does not also fire on it.
+  - interval: 1m
+    input_series:
+      - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"transport_changed\"}", values: "0+1x80"}
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: port49_inventory_privilege_changes
+        exp_alerts: []
   - interval: 1m
     input_series:
       - {series: "port49_inventory_changes_total{instance=\"a\",kind=\"key_ref_changed\"}", values: "2+0x80"}

@@ -678,3 +678,57 @@ func TestATLSToTCPFlipIsOneSecurityChange(t *testing.T) {
 		t.Fatalf("changes for leaf-01: %+v, want one security transport_changed tls to tcp", got)
 	}
 }
+
+const withDenyScope = `
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: srx_unpatched, match: {site: dc1}, on_missing: exclude, attached_roles: {humans: [no_reload]}}
+roles:
+  - {name: r, privilege: readonly, permit: [show **]}
+  - {name: no_reload, deny: [reload **]}
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]
+`
+
+func TestAScopeLeftByADenyScopeIsASecurityChange(t *testing.T) {
+	parse := func(site string) *policy.Policy {
+		p, err := Parse([]byte(withDenyScope), admission.Inventory{Devices: []admission.Device{
+			dev("srx-01", "10.0.1.1", map[string]string{"site": site})}}, policy.Env{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	rep := Diff(parse("dc1"), parse("lab"), time.Now())
+	for _, c := range rep.Changes {
+		if c.Kind == ScopeLeft && c.Scope == "srx_unpatched" {
+			if !c.Security {
+				t.Errorf("a device leaving a deny-bearing scope is not a security change: %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("no scope_left: %+v", rep.Changes)
+}
+
+func TestAPlatformChangeIsASecurityChange(t *testing.T) {
+	a, b := dev("sw-01", "10.0.1.1", nil), dev("sw-01", "10.0.1.1", nil)
+	b.Platform = "cisco_nxos"
+	parse := func(d admission.Device) *policy.Policy {
+		p, err := Parse([]byte(withScopes), admission.Inventory{Devices: []admission.Device{d}}, policy.Env{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, c := range Diff(parse(a), parse(b), time.Now()).Changes {
+		if c.Kind == PlatformChanged {
+			if !c.Security {
+				t.Errorf("a platform change is not a security change: %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatal("no platform_changed")
+}
