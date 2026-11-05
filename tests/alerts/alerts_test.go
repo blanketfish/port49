@@ -69,7 +69,8 @@ func TestEveryAlertNamesARegisteredMetric(t *testing.T) {
 	tok := regexp.MustCompile(`port49_[a-z0-9_]+`)
 	for _, r := range allRules(t) {
 		found := tok.FindAllString(r.Expr, -1)
-		if strings.HasPrefix(r.Alert, "port49_") && len(found) == 0 {
+		// The target rules read Prometheus's own up series, which port49 does not register.
+		if strings.HasPrefix(r.Alert, "port49_") && len(found) == 0 && !strings.Contains(r.Expr, "up{") {
 			t.Errorf("%s: its expression names no port49 metric: %s", r.Alert, r.Expr)
 		}
 		for _, n := range found {

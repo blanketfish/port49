@@ -1,0 +1,25 @@
+{{- if .Values.prometheusRule.enabled }}
+{{- /* The rules key on up{job="port49d"} and up{job="port49-broker"} (deploy/alerts/README.md), so the chart
+       that renders them sets those job names on the scrape. Needs the Prometheus Operator's CRD, as the
+       PrometheusRule does. */ -}}
+{{- range $component, $job := dict "port49d" "port49d" "broker" "port49-broker" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $.Release.Name }}-{{ $component }}
+  labels:
+    {{- include "port49.labels" (dict "root" $ "component" $component) | nindent 4 }}
+    {{- with $.Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "port49.selector" (dict "root" $ "component" $component) | nindent 6 }}
+  podMetricsEndpoints:
+    - port: metrics
+      relabelings:
+        - {targetLabel: job, replacement: {{ $job }}}
+{{- end }}
+{{- end }}

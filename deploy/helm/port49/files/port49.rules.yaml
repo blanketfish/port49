@@ -4,6 +4,20 @@
 # deploy/helm/port49/files/port49.rules.yaml is a byte copy (Helm cannot read outside the chart);
 # tests/alerts pins the two equal.
 groups:
+  - name: port49_scrape
+    rules:
+      - alert: port49_target_down
+        expr: "up{job=~\"port49d|port49-broker\"} == 0"
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "A port49d or broker target is not answering its scrape: up is 0 for it."
+      - alert: port49_target_absent
+        expr: "absent(up{job=\"port49d\"}) or absent(up{job=\"port49-broker\"})"
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Prometheus has no up series for port49d or for the broker: the target is not scraped at all, so no other rule can fire for it."
   - name: port49_listener
     rules:
       - alert: port49_global_cap_shedding
@@ -222,7 +236,7 @@ groups:
         expr: "port49_tls_device_certificate_lifetime_left_ratio < 0.33"
         labels: {severity: ticket}
         annotations:
-          summary: "A device certificate is past two thirds of its own lifetime: its renewal is late."
+          summary: "A device certificate is past two thirds of its own lifetime: its renewal is late. The ratio is the least over certificates verified in the last 24h, so it clears up to a day after the device renews."
       - alert: port49_tls_server_certificate_renewal_late
         expr: "port49_tls_server_certificate_lifetime_left_ratio < 0.33"
         labels: {severity: ticket}
@@ -255,7 +269,7 @@ groups:
         for: 5m
         labels: {severity: ticket}
         annotations:
-          summary: "An OIDC issuer's keys were last fetched over 12 hours ago, half of jwks_max_age at its default; tokens are refused once they are 24."
+          summary: "An OIDC issuer's keys were never fetched since this process started, or last fetched over 12h ago, half of jwks_max_age at its default; tokens are refused once they are 24."
       - alert: port49_oidc_logouts_failing
         expr: "increase(port49_oidc_logouts_total{outcome=~\"store_error|partial\"}[10m]) > 0"
         labels: {severity: ticket}

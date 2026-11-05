@@ -92,7 +92,8 @@ autoscaling:
 
 # The alert rules (files/port49.rules.yaml, a copy of deploy/alerts/port49.rules.yaml) as a
 # Prometheus Operator PrometheusRule. Off: it needs the operator's CRD. labels are the ones your
-# Prometheus selects rules on.
+# Prometheus selects rules on. Enabled, it also renders a PodMonitor for each workload's metrics port
+# (the same labels), which sets job to port49d or port49-broker: the job names the target rules key on.
 prometheusRule:
   enabled: false
   labels: {}
