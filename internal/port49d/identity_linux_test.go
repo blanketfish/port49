@@ -218,7 +218,8 @@ func TestReadinessNeverFollowsTheProvider(t *testing.T) {
 	}
 	identity := fmt.Sprintf("  identity:\n    humans:\n      - {type: x509, trust_anchor_file: %s}\n"+
 		"      - {type: oidc, issuer: %q, client_id: port49-cli, principal_claim: email, "+
-		"principal_domains: [example.com], ca_file: %s}\n", b.ClientCAFile, issuer, ca)
+		"principal_domains: [example.com], ca_file: %s}\n"+
+		"    per_login_mfa:\n      idp_mfa: {}\n", b.ClientCAFile, issuer, ca)
 	if err := os.WriteFile(cfgPath, clientCA.ReplaceAllLiteral(raw, []byte(identity)), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -291,6 +291,18 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 			}
 		}
 	}
+	// A person's ID token is taken to issue a certificate or as an idp_mfa
+	// proof and nowhere else (decision 56 ruling 4): a human oidc verifier
+	// with neither could sign no one in.
+	if out.Issuance == nil && (y.PerLoginMFA == nil || y.PerLoginMFA.IdPMFA == nil) {
+		for i, h := range y.Humans {
+			if h.Type == "oidc" {
+				return nil, fmt.Errorf("config: broker.identity.humans[%d] (oidc): a person's ID token is taken only "+
+					"to issue a certificate or as a per_login_mfa.idp_mfa proof; set issuance (`issuance: {}` takes "+
+					"its defaults) or idp_mfa, or remove this verifier (decision 56 ruling 4)", i)
+			}
+		}
+	}
 	return out, nil
 }
 

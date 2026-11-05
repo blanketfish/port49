@@ -39,6 +39,7 @@ func brokerWithIdentity(t *testing.T, f *fleet, cfg string, iss *oidctest.Issuer
 	}
 	identity += fmt.Sprintf("      - {type: oidc, issuer: %q, client_id: port49-cli, principal_claim: email, "+
 		"principal_domains: [example.com], ca_file: %s}\n", iss.URL, ca)
+	identity += "    per_login_mfa:\n      idp_mfa: {}\n"
 	body := regexp.MustCompile(`(?m)^  client_ca_file: .*\n`).ReplaceAllLiteral(raw, []byte(identity))
 	if !withX509 {
 		body = regexp.MustCompile(`(?m)^  certificate_status: .*\n`).ReplaceAllLiteral(body, nil)
@@ -99,7 +100,8 @@ func TestAnOIDCOnlyPort49dStartsAndSaysItChecksNoCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := fmt.Sprintf("  identity:\n    humans:\n      - {type: oidc, issuer: %q, client_id: port49-cli, "+
-		"principal_claim: email, principal_domains: [example.com], ca_file: %s}\n", iss.URL, ca)
+		"principal_claim: email, principal_domains: [example.com], ca_file: %s}\n"+
+		"    per_login_mfa:\n      idp_mfa: {}\n", iss.URL, ca)
 	body := regexp.MustCompile(`(?m)^  client_ca_file: .*\n`).ReplaceAllLiteral(raw, []byte(identity))
 	body = regexp.MustCompile(`(?m)^  certificate_status:\n(    .*\n)*`).ReplaceAllLiteral(body, nil)
 	if err := os.WriteFile(cfgPath, body, 0o600); err != nil {

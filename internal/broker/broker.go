@@ -783,7 +783,8 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	case b.NoX509 && !(hasCert && (b.Workload != nil || b.Issuer != nil)):
 		// An OIDC-only broker has no anchor and asks for no certificate: say
 		// what it does take rather than blame a certificate.
-		detail := "this broker accepts an OIDC ID token only (Authorization: Bearer); run `port49 login`"
+		detail := "this broker accepts a machine's OIDC or k8s token (Authorization: Bearer) only; a person's ID " +
+			"token is exchanged for a certificate where the broker issues them (`port49 login`)"
 		switch {
 		case b.Issuer != nil:
 			detail = "this broker takes the certificate it issues at `port49 login`, or a workload's where " +

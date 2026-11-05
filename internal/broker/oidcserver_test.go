@@ -98,8 +98,8 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 	w = f.rawBearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "")
 	var e api.Error
 	if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil ||
-		e.Error != "trust_domain_unresolved" || !strings.Contains(e.Detail, "OIDC ID token only") ||
-		strings.Contains(e.Detail, "certificate") {
+		e.Error != "trust_domain_unresolved" || !strings.Contains(e.Detail, "machine's OIDC or k8s token") ||
+		strings.Contains(e.Detail, "your client certificate") {
 		t.Fatalf("no bearer on an OIDC-only broker: %s", shown(w))
 	}
 	recs := eventsOf(f.records(t), decision.EventMint)
