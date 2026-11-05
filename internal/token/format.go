@@ -194,10 +194,16 @@ func LoggedUsername(raw string) (name string, redacted bool) {
 // as part of a pasted token.
 const nearTokenRun = 20
 
+// nearTokenDigitlessRun is the shortest run that needs no digit. About 0.6% of
+// tokens have none in their first 29 characters, so a truncated paste of one
+// would pass the digit rule; at this length both letter cases are enough.
+const nearTokenDigitlessRun = 24
+
 // nearToken reports whether s holds a run of at least nearTokenRun base62
-// characters containing a digit, an uppercase and a lowercase letter. A real
-// username almost never has all three in a run that long; when it does, the cost
-// is a redacted name in the log and nothing else.
+// characters containing a digit, an uppercase and a lowercase letter, or a run
+// of at least nearTokenDigitlessRun with both letter cases. A real username
+// almost never has either shape; when one does, the cost is a redacted name in
+// the log and nothing else.
 func nearToken(s string) bool {
 	run, digit, upper, lower := 0, false, false, false
 	for i := 0; i <= len(s); i++ {
@@ -209,7 +215,7 @@ func nearToken(s string) bool {
 			lower = lower || (c >= 'a' && c <= 'z')
 			continue
 		}
-		if run >= nearTokenRun && digit && upper && lower {
+		if upper && lower && (run >= nearTokenDigitlessRun || run >= nearTokenRun && digit) {
 			return true
 		}
 		run, digit, upper, lower = 0, false, false, false

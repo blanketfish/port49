@@ -641,8 +641,9 @@ func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply 
 	case wire.TypeAuthen:
 		return s.authenticate(ctx, h, body, peer)
 	case wire.TypeAuthor:
-		// Authorization is one request and one response (RFC 8907 §4.1: a client's first packet is seq_no 1, and these exchanges have no second): any
-		// seq_no but 1 is a packet this exchange cannot answer.
+		// Authorization is one request and one response (RFC 8907 §4.1: a
+		// client's first packet is seq_no 1, and these exchanges have no
+		// second): any seq_no but 1 is a packet this exchange cannot answer.
 		if h.SeqNo != 1 {
 			return nil, true, true
 		}

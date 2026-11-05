@@ -11846,10 +11846,12 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
     alike (devices I1). The name is tested with its control characters removed, and both as sent
     and in its canonical form (so `corp\<token>` and `<token>@host` are caught). It is redacted when
     it is a token (30 base62 characters) or a *near-token*: a run of 20 or more base62 characters
-    holding at least one digit, one uppercase and one lowercase letter, which covers a truncated
-    paste, an over-long paste and a token followed by a stray byte. A real username almost never
-    has that shape; when one does, the cost is a redacted name in the log and never a change to
-    access.
+    holding at least one digit, one uppercase and one lowercase letter, or a run of 24 or more
+    holding both cases with no digit required (about 0.6% of tokens have no digit in their first 29
+    characters). That covers a truncated paste, an over-long paste and a token followed by a stray
+    byte. A real username almost never has that shape; when one does, the cost is a redacted name
+    in the log and never a change to access. **Operator note:** a redacted name cannot be searched
+    for by username; search the log by `principal` or `ctx_id` instead.
 11. **An enable token is refused `credential_mismatch` unless its principal is the escalated
     context's** (devices M2).
 12. **An authorization or accounting packet with `seq_no` other than 1 is a protocol error**

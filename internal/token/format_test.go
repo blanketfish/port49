@@ -153,6 +153,14 @@ func TestLoggedUsernameRedactsWrappedAndNearTokenShapes(t *testing.T) {
 		"trailing_nul":         tok + "\x00",
 		"leading_nul":          "\x00" + tok,
 		"interior_control":     tok[:10] + "\x01" + tok[10:],
+		// No digit in the first 24 characters: only the digitless run rule
+		// sees these.
+		"digitless_truncated_paste":        tok[:24],
+		"digitless_truncated_paste_domain": `corp\` + tok[:24],
+		// A 30-character lower-case token with no digit and no upper case:
+		// only the canonical form's exact check sees it behind a prefix.
+		"digitless_lower_token_domain": `corp\abcdefghijklmnopqrstuvwxyzabcd`,
+		"digitless_lower_token_host":   `abcdefghijklmnopqrstuvwxyzabcd@example`,
 	}
 	for name, in := range redacted {
 		t.Run("redacted_"+name, func(t *testing.T) {
@@ -163,7 +171,7 @@ func TestLoggedUsernameRedactsWrappedAndNearTokenShapes(t *testing.T) {
 		})
 	}
 	clear := []string{"alice", "firstname.lastname.contractor", "svc_backup_nightly_runner", `corp\alice`, "alice@example.com",
-		"administratorsecondaccount"}
+		"administratorsecondaccount", "FirstnameLastnameContractor"[:20]}
 	for _, in := range clear {
 		t.Run("clear_"+in, func(t *testing.T) {
 			got, red := LoggedUsername(in)
