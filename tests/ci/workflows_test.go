@@ -379,21 +379,33 @@ func TestTheImageJobTagsAndAttests(t *testing.T) {
 
 // Every publishing job waits for check, and check refuses a tag that is not on main and a tag
 // that disagrees with the version files: a release from an unreviewed commit never publishes.
+// jobNeeds is the job's needs as a list; an entry that is not a string fails the test.
+func jobNeeds(t *testing.T, id string, j job) []string {
+	t.Helper()
+	switch n := j.Needs.(type) {
+	case string:
+		return []string{n}
+	case []any:
+		var out []string
+		for _, x := range n {
+			s, ok := x.(string)
+			if !ok {
+				t.Fatalf("release.yml job %s has a needs entry that is not a string: %T", id, x)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	return nil
+}
+
 func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
 	f, _ := release(t)
 	for id, j := range f.Jobs {
 		if id == "check" {
 			continue
 		}
-		var needs []string
-		switch n := j.Needs.(type) {
-		case string:
-			needs = []string{n}
-		case []any:
-			for _, x := range n {
-				needs = append(needs, x.(string))
-			}
-		}
+		needs := jobNeeds(t, id, j)
 		found := false
 		for _, n := range needs {
 			found = found || n == "check"

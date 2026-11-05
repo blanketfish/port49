@@ -132,12 +132,7 @@ func TestNoPublicPushPrecedesTheArtifactBuilds(t *testing.T) {
 	f, _ := release(t)
 	for _, id := range []string{"image", "chart"} {
 		have := map[string]bool{}
-		switch n := f.Jobs[id].Needs.(type) {
-		case []any:
-			for _, x := range n {
-				have[x.(string)] = true
-			}
-		case string:
+		for _, n := range jobNeeds(t, id, f.Jobs[id]) {
 			have[n] = true
 		}
 		for _, w := range []string{"build-python", "build-galaxy"} {
