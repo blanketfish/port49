@@ -178,6 +178,9 @@ nfpms:
       - src: clients/ansible/ansible_collections/port49/client/README.md
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/README.md
         file_info: {mode: 0644, owner: root, group: root}
+      - src: clients/ansible/ansible_collections/port49/client/LICENSE
+        dst: /usr/share/ansible/collections/ansible_collections/port49/client/LICENSE
+        file_info: {mode: 0644, owner: root, group: root}
       - src: clients/ansible/ansible_collections/port49/client/meta/*
         dst: /usr/share/ansible/collections/ansible_collections/port49/client/meta/
         file_info: {mode: 0644, owner: root, group: root}
