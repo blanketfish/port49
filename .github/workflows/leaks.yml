@@ -5,6 +5,9 @@ name: leaks
 on:
   push: {branches: [main]}
   pull_request: {types: [opened, edited, synchronize, reopened]}
+  # Weekly, over main since the baseline: scheduled runs ignore [skip ci] tokens, which a merge message
+  # edited on GitHub could carry.
+  schedule: [{cron: '17 4 * * 1'}]
 permissions: {contents: read}
 jobs:
   gitleaks:
@@ -36,3 +39,9 @@ jobs:
         env:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.event.after }}
+      # What neither of those can see: a push whose message skipped CI. Everything on main since the
+      # baseline (the last commit before this check merged; older history keeps its trailers).
+      - if: github.event_name == 'schedule'
+        run: go run ./tests/ci/cmd/sessionmsg -range "$BASELINE_SHA..origin/main"
+        env:
+          BASELINE_SHA: be92d427163ae242dd958f6f28a3aa549bba9a57

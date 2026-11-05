@@ -35,8 +35,16 @@ func main() {
 		os.Exit(2)
 	}
 	fail := false
+	if *before != "" && *after == "" {
+		fmt.Fprintln(os.Stderr, "sessionmsg: -before without -after")
+		os.Exit(2)
+	}
 	if *after != "" {
 		*rng = sessionlink.PushRev(*before, *after)
+	}
+	if *rng == "" && len(envs) == 0 && flag.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "sessionmsg: nothing to check: give a message file, -range, -before/-after or -env")
+		os.Exit(2)
 	}
 	for _, name := range envs {
 		if sessionlink.CheckText(os.Getenv(name), rx) {

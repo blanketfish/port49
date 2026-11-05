@@ -82,24 +82,18 @@ func PushRev(before, after string) string {
 // CheckText reports whether free text, such as a pull request body or title, matches rx.
 func CheckText(text string, rx *regexp.Regexp) bool { return rx.MatchString(text) }
 
-// stored is a commit-msg file as git will store it: lines starting with # dropped, and everything
-// from the scissors line (which commit -v follows with the diff) cut.
+// stored is a commit-msg file with the scissors line and everything after it cut: commit -v follows
+// the scissors with the diff. Lines starting with # are kept, because git keeps them when the message
+// came from -m and the hook cannot tell; a comment that mentions a session link fails closed.
 func stored(msg string) string {
-	var out []string
-	for _, l := range strings.Split(msg, "\n") {
-		if strings.HasPrefix(l, "# ------------------------ >8 ------------------------") {
-			break
-		}
-		if strings.HasPrefix(l, "#") {
-			continue
-		}
-		out = append(out, l)
+	if i := strings.Index(msg, "# ------------------------ >8 ------------------------"); i >= 0 {
+		return msg[:i]
 	}
-	return strings.Join(out, "\n")
+	return msg
 }
 
-// CheckFile reports whether the message file (a commit-msg hook's argument), as git will store it,
-// matches rx.
+// CheckFile reports whether the message file (a commit-msg hook's argument), below any scissors
+// line, matches rx.
 func CheckFile(path string, rx *regexp.Regexp) (bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

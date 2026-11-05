@@ -25,7 +25,7 @@ var (
 
 // allowedTriggers are the events a workflow may run on. pull_request_target and workflow_run
 // run with a write token and secrets on a fork's code.
-var allowedTriggers = map[string]bool{"push": true, "pull_request": true, "workflow_dispatch": true}
+var allowedTriggers = map[string]bool{"push": true, "pull_request": true, "workflow_dispatch": true, "schedule": true}
 
 type workflow struct {
 	On          yaml.Node `yaml:"on"`
@@ -115,7 +115,7 @@ func workflowProblems(name string, raw []byte) []string {
 	add := func(format string, a ...any) { p = append(p, name+": "+fmt.Sprintf(format, a...)) }
 	for _, t := range triggers(w.On) {
 		if !allowedTriggers[t] {
-			add("trigger %q is not one of push, pull_request, workflow_dispatch", t)
+			add("trigger %q is not one of push, pull_request, workflow_dispatch, schedule", t)
 		}
 	}
 	if !readOnly(w.Permissions) {
