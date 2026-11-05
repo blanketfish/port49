@@ -94,6 +94,10 @@ func TestEveryMatrixRowHasEvidence(t *testing.T) {
 				if !closed[m[2]] {
 					t.Errorf("%q: evidence cites %s, which spec §15 does not show closed (an open row is unmeasured; cite its results note or a test)", name, m[2])
 				}
+				// A closed row is a long list of cells; the claim rests on one of them, or on a note.
+				if !strings.Contains(evidence, m[2]+" (") && !strings.Contains(evidence, "tests/lab/results/"+m[2]+"-") {
+					t.Errorf("%q: evidence cites %s bare: quote the cell it rests on (%s (c)) or cite its results note", name, m[2], m[2])
+				}
 			case strings.HasPrefix(r, "tests/lab/results/"):
 				if _, err := os.Stat(filepath.Join(root, r)); err != nil {
 					t.Errorf("%q: evidence cites %s, which does not exist", name, r)

@@ -51,7 +51,8 @@ Cells cite the note that measured them. A cell that says "not measured" cites it
 
 **How long a device keeps answering locally after its servers failed** (measured by the
 retries in L88 cells a, f, e, f2, f3): vJunos, vSRX, vEOS, cEOS and NX-OS: none beyond the
-go-dark bound; XR 26.1.1: about 24 to 46 s; IOS XE: 30 to 65 s, the device's own dead-time
+go-dark bound; XR 26.1.1: about 24 to 46 s; IOS XE: 30 to 39 s over TCP (L88 f2, f3), 57 to 67 s over TLS after a refused
+handshake (L73), the device's own dead-time
 (it has no configurable `deadtime`: `deadtime 1` is "Invalid input" and `aaa dead-criteria` is
 "Unrecognized", L4-error-cisco_iosxe.md). Inside that window a token login is refused with nothing
 sent to port49, and break-glass works. After port49d returns from a stop expect it. On XR, in that window any
@@ -75,9 +76,9 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | What | Measured | Note |
 |---|---|---|
 | A deny | Falls through only when `password` is listed, so final under `tacplus` alone | `tests/lab/results/L4-juniper_vjunos-router.md`; under the reference: refused, no fall-through (L88 a; `tests/lab/results/L88-juniper_vjunos-router.md`, `L88-juniper_vsrx.md`, `L88-juniper_vjunos-router-vjunos26.md`) |
-| port49 stopped | Break-glass logs in | `tests/lab/results/L4-juniper_vjunos-router.md`, under the reference: break-glass in 20 to 40 ms (L88 b) |
+| port49 stopped | Break-glass logs in. While port49 is dark, commands in sessions already open run under local authorization: port49's denies do not apply (L41) | `tests/lab/results/L41-juniper_vjunos-router.md`, `L41-juniper_vsrx.md`, `tests/lab/results/L4-juniper_vjunos-router.md`, under the reference: break-glass in 20 to 40 ms (L88 b) |
 | ERROR | Final until go-dark, then break-glass. Under the reference the first break-glass login succeeded at +7 s on 23.4 and vSRX (port49d closed its listener at +5.5 s); on 26.2R1.7 at once (L88 c) | `tests/lab/results/L4-error-juniper_vjunos-router.md`; bound from L41; L88 notes |
-| Dark | Break-glass logs in | L4, L17; under the reference: break-glass logs in and runs a command, 160 to 190 ms (L88 d) |
+| Dark | Break-glass logs in. While port49 is dark, commands in sessions already open run under local authorization: port49's denies do not apply (L41) | L4, L17, `L41-juniper_vjunos-router.md`, `L41-juniper_vsrx.md`; under the reference: break-glass logs in and runs a command, 160 to 190 ms (L88 d) |
 | Second server | The first server resetting at Accept, the second answering: token login succeeded in 160 to 180 ms (L88 f) | L88 notes |
 | Key retire / reload | Session survives; next login break-glass | `tests/lab/results/L29-reload-juniper_vjunos-router.md` (23.4). On 26.2R1.7 the device held no connection open across the reload; on vSRX the in-flight and second command printed, and the next token login was refused for about 5 s with break-glass working (L88 g) |
 | Largest `idle-timeout` | 4294967295 minutes; the next value fails the commit (L88 i). `platform export --classes` caps there | `tests/lab/results/L88-juniper_vsrx.md` |
@@ -89,11 +90,11 @@ each class's `idle-timeout` is the least ceiling of the sessions landing in it.
 | What | Measured | Note |
 |---|---|---|
 | A deny | Never falls through | `tests/lab/results/L4-cisco_iosxe.md` |
-| port49 stopped | Break-glass in 20 to 30 ms under the reference (L88 b) | `tests/lab/results/L88-cisco_iosxe.md` |
+| port49 stopped | Break-glass in 20 to 30 ms under the reference (L88 b). Commands in sessions already open are refused `% Authorization failed.` (L35, L41) | `tests/lab/results/L88-cisco_iosxe.md`, `L41-cisco_iosxe.md`, `L35-cisco_iosxe.md` |
 | ERROR | Final: the login is refused, not tried locally. Keep a console path. During a store hang the local account works once port49d closes its listener: +6 s (L88 c) | `tests/lab/results/L4-error-cisco_iosxe.md`. Over TLS it was final too (L73 cell i) |
-| Dark | Break-glass logs in, 780 ms (L88 d) | L88 notes |
+| Dark | Break-glass logs in, 780 ms (L88 d). Commands in sessions already open are refused `% Authorization failed.` (L35, L41) | L88 notes, `L41-cisco_iosxe.md`, `L35-cisco_iosxe.md` |
 | Second server | Token login through the second in under 3 s on a fresh device (L88 f). After a break-glass session with port49d stopped, the next token login took 39 s to reach the second (L88 f3, the device's dead window); a session opened before f made f choose no server and f FAILed, which is why the evidence is read after f (`L88-cisco_iosxe-f-evidence-run.md`). One earlier full run failed f unexplained and did not repeat in the three after it; that stays open (L52 is the intermittent-skip entry) | `tests/lab/results/L88-cisco_iosxe.md` (f, f3), `L88-cisco_iosxe-f-evidence-run.md` |
-| After port49d returns from a stop | The device answers locally for 30 s measured in f2, 55 s in cell e: a token login in that window is refused with nothing sent to port49, break-glass works (L88 f2) | `tests/lab/results/L88-cisco_iosxe.md` (f2) |
+| After port49d returns from a stop | The device answers locally for 30 s measured in f2 (and 39 s in f3): a token login in that window is refused with nothing sent to port49, break-glass works (L88 f2) | `tests/lab/results/L88-cisco_iosxe.md` (f2) |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_iosxe.md` (17.13). On 17.18.02 the device held no connection open across the reload (L88 g, `L88-cisco_iosxe-iosxe1718.md`) |
 | TLS | `tls trustpoint server` names the root (L73 ran it). Port 6049 with none set. Two server objects need two distinct addresses (17.18.02 drops a shared one). After a refused handshake the client marks the server dead and answers locally for 57 to 67 s. SNI: none. Sends leaf and intermediate | `tests/lab/results/L73-cisco_iosxe.md` (17.18.02) |
 | Reference over TLS | IOS XE 17.18.02: a, b, d, e, f passed. Break-glass 20 ms stopped, 780 ms dark; token login through the second server in 790 ms (L88 h) | `tests/lab/results/L88-cisco_iosxe-iosxe1718-tls.md` |
@@ -105,9 +106,9 @@ No `deadtime`: `deadtime 1` locks token logins out for its minute after the serv
 | What | Measured | Note |
 |---|---|---|
 | A deny | Never falls through | `tests/lab/results/L4-cisco_nxos.md` |
-| port49 stopped | Break-glass in 140 to 210 ms under the reference (L88 b) | `tests/lab/results/L88-cisco_nxos.md` |
+| port49 stopped | Break-glass in 140 to 210 ms under the reference (L88 b). While port49 is dark, commands in sessions already open run under local authorization: port49's denies do not apply (L41) | `tests/lab/results/L88-cisco_nxos.md`, `L41-cisco_nxos.md` |
 | ERROR | The break-glass login lands (5.2 s over TLS), then port49's authorization FAIL `store_unavailable` refuses its commands. Under the reference the login landed at once, in 2.3 s (L88 c) | `tests/lab/results/L4-error-cisco_nxos.md`, `tests/lab/results/L73-cisco_nxos.md` |
-| Dark | Break-glass logs in, about 1.1 to 1.3 s (L88 d) | L88 notes |
+| Dark | Break-glass logs in, about 1.1 to 1.3 s (L88 d). While port49 is dark, commands in sessions already open run under local authorization: port49's denies do not apply (L41) | L88 notes, `L41-cisco_nxos.md` |
 | Second server | Token login through the second in about 1.3 s (L88 f) | L88 notes |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-cisco_nxos.md` (10.4). On 10.6(2)F the commands after the reload printed, the next token login was refused for 30 s, and break-glass logged in (L88 g, `L88-cisco_nxos-nxos106.md`) |
 | TLS | `tacacs-server secure tls` is required (L73 typed it). 10.6(2)F offered no server-trustpoint keyword, so none is set. No port: dials 49. RSA key. SNI: none. Sends leaf and intermediate. With `single-connection` the login reused the probe's connection | `tests/lab/results/L73-cisco_nxos.md` (10.6(2)F); per-request commands `tests/lab/results/L80-cisco_nxos.md` |
@@ -121,9 +122,9 @@ startup config pinned none. L88 loaded the clause as shipped (default VRF) on vE
 | What | Measured | Note |
 |---|---|---|
 | A deny | Never falls through | `tests/lab/results/L4-arista_eos.md` |
-| port49 stopped | Break-glass in 40 ms under the reference (L88 b) | `tests/lab/results/L88-arista_eos.md` |
+| port49 stopped | Break-glass in 40 ms under the reference (L88 b). While port49 is dark, commands in sessions already open run under local authorization: port49's denies do not apply (L41) | `tests/lab/results/L88-arista_eos.md`, `L41-arista_eos.md` |
 | ERROR | The login falls to local, then exec authorization goes to port49, gets FAIL `store_unavailable`, and does not go on to local. Under the reference the login landed at once (1.1 s) (L88 c) | `tests/lab/results/L4-error-arista_eos.md` |
-| Dark | Break-glass logs in, 140 ms (L88 d) | L88 notes |
+| Dark | Break-glass logs in, 140 ms (L88 d). While port49 is dark, commands in sessions already open run under local authorization: port49's denies do not apply (L41) | L88 notes, `L41-arista_eos.md` |
 | Second server | Token login through the second in 290 ms (L88 f) | L88 notes |
 | Key retire / reload | Session survives; a served device's FAIL is final | `tests/lab/results/L29-reload-arista_eos.md` (4.31). cEOS 4.36.3M: the commands after the reload were refused, the next token login was refused for 6 s, break-glass logged in (L88 g, `L88-arista_ceos.md`) |
 | TLS | Dials 300 with none set. SNI: none. EOS sends its leaf alone, so set `intermediates_file` under `tls_listener` in `port49d.yaml`. Refuses a server certificate that does not name the configured address | `tests/lab/results/L73-arista_ceos.md` (4.36.3M) |
@@ -136,9 +137,9 @@ Needs the `policy-platforms.yaml` block. XR enrols nothing until a `domain name`
 | What | Measured | Note |
 |---|---|---|
 | A deny | A deny port49 answers is refused (L88 a). After earlier failures XR answers locally for about 24 to 46 s and asks port49 nothing: a login at +12 s succeeded on a local account while port49d was up and saw no request. In that window any local account's password logs in, including one whose user port49 denies, so keep local accounts to break-glass only | `tests/lab/results/L88-cisco_xrd.md`, `L88-cisco_xrd-named-vrf.md` |
-| port49 stopped | Break-glass in 110 ms (L88 b) | L88 notes |
-| ERROR | Over TLS (L73) final: no fall to local, and break-glass fails; keep a console or second path. Under the reference over plain TCP the break-glass login landed at once during a store hang (L88 c) | `tests/qual/profiles/cisco_iosxr/XRd-control-plane-26.1.1.yaml`, `tests/lab/results/L73-cisco_xrd.md` |
-| Dark | Break-glass logs in, 5.6 s (L88 d) | L88 notes |
+| port49 stopped | Break-glass in 110 ms (L88 b). Commands in sessions already open: unmeasured | L88 notes |
+| ERROR | Over TLS final: a refused handshake then an ERROR gives no fall to local, and break-glass fails; keep a console or second path (L73, `L73-cisco_xrd.md`). Over plain TCP: the qualification vet saw break-glass refused after the ERROR (`QUAL-XRd-control-plane-26.1.1-cisco_xrd.md`, `store_unavailable`), and no closed register row measured it: unmeasured (L93, open). L88 c ran inside the device's dead window and did not exercise an ERROR, so it shows nothing about one | `tests/lab/results/L73-cisco_xrd.md`, `tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd.md`, `tests/qual/profiles/cisco_iosxr/XRd-control-plane-26.1.1.yaml` |
+| Dark | Break-glass logs in, 5.6 s (L88 d). Commands in sessions already open: unmeasured | L88 notes |
 | Second server | Token login through the second after 31 s of local answers (L88 f; XR's dead window runs 24 to 46 s) | L88 notes |
 | Key retire / reload | The command in flight was refused (the reset hit an authorization packet), the second after 5 s, the next token login was refused and break-glass logged in (16 s for three commands) (L88 g) | `tests/lab/results/L88-cisco_xrd.md` |
 | Named VRF | The `vrf mgmt` form of the group, with the management interface and SSH server moved into vrf mgmt: a, b, d, e, f passed (L88) | `tests/lab/results/L88-cisco_xrd-named-vrf.md` |
@@ -174,9 +175,9 @@ when port49d answers ERROR and once port49d is dark. In 3am terms: break-glass l
 | What | Measured | Note |
 |---|---|---|
 | A deny | Final with `exit-on-reject true`; break-glass is refused while port49 is up and denies it | `tests/lab/results/L76-nokia_srlinux.md` (cells d, l) |
-| port49 stopped | With `exit-on-reject true`, break-glass logged in (53 ms). Under the reference over a pty SSH login: 60 to 70 ms (L88 b) | `tests/lab/results/L76-nokia_srlinux.md` (cell l), `L88-nokia_srlinux.md` |
+| port49 stopped | With `exit-on-reject true`, break-glass logged in (53 ms). Under the reference over a pty SSH login: 60 to 70 ms (L88 b). Commands in sessions already open: unmeasured | `tests/lab/results/L76-nokia_srlinux.md` (cell l), `L88-nokia_srlinux.md` |
 | ERROR | Under the reference the break-glass login landed at once during a store hang, in 3.3 s (L88 c). With authentication answered ERROR by the lab fault switch it logged in and ran a command in 2.4 s while a port49 user's token login was refused (L87 a). A login port49 authenticated whose session authorization is answered ERROR is refused (L87 c) | `tests/lab/results/L87-nokia_srlinux.md`, `L88-nokia_srlinux.md` |
-| Dark | Break-glass logs in and runs a command, 2.1 to 2.4 s (L88 d); with port49d on a real etcd paused until it closed its listeners, it logged in and ran a command in 2.3 s (L87 b, PASS) | `L87-nokia_srlinux.md`, L88 notes |
+| Dark | Break-glass logs in and runs a command, 2.1 to 2.4 s (L88 d); with port49d on a real etcd paused until it closed its listeners, it logged in and ran a command in 2.3 s (L87 b, PASS). Commands in sessions already open: unmeasured | `L87-nokia_srlinux.md`, L88 notes |
 | Commands | SR Linux asks port49 for no command, so port49 cannot deny one: the command port49's policy denies elsewhere ran, and accounting recorded START and STOP (L88 e). The roles decide what a user may run | L88 notes |
 | Second server | The first server resetting at Accept, the second answering: token login in 2.0 to 2.3 s (L88 f) | L88 notes |
 | Key retire / reload | No single-connection setting exists in the device's schema (`tree flat system aaa server-group`), so a reload has no shared connection to reset (L88 g, observed) | L88 notes |
