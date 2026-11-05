@@ -106,7 +106,37 @@ func TestEveryMatrixRowHasEvidence(t *testing.T) {
 				t.Errorf("%q: evidence names %s, which no _test.go file declares", name, r)
 			}
 		}
+		// A quoted cell is one that a results note of that row has a table row for.
+		for _, m := range quotedCell.FindAllStringSubmatch(evidence, -1) {
+			if !noteHasCell(t, root, m[1], m[2]) {
+				t.Errorf("%q: evidence cites %s (%s), but no tests/lab/results/%s-*.md has a table row for cell %s", name, m[1], m[2], m[1], m[2])
+			}
+		}
 	}
+}
+
+// quotedCell is `L74 (c)`: a lab row and the cell a claim rests on.
+var quotedCell = regexp.MustCompile(`\b(L[0-9]+) \(([a-z0-9]+)\)`)
+
+// noteHasCell reports whether a results note of lab row l has a table row for cell: a line that starts
+// `| <cell> |`, `| <cell>. ` or `| <cell> beside `.
+func noteHasCell(t *testing.T, root, l, cell string) bool {
+	t.Helper()
+	notes, err := filepath.Glob(filepath.Join(root, "tests", "lab", "results", l+"-*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := regexp.MustCompile(`(?m)^\| ` + regexp.QuoteMeta(cell) + `(?: \||\. | beside )`)
+	for _, n := range notes {
+		b, err := os.ReadFile(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.Match(b) {
+			return true
+		}
+	}
+	return false
 }
 
 // closedLabRows is the set of lab register entries (L<N>) whose row in spec
