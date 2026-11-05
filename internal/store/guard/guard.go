@@ -150,6 +150,36 @@ type guarded struct {
 	pools map[Pool]*pool
 }
 
+// Closer is what Wrap and WrapRev return besides a store: a passing store
+// health check closes the token and context circuits through it (stores I2).
+type Closer interface{ CloseCircuits(why string) }
+
+// CloseCircuits closes the token and context pools' circuits, and leaves
+// the bulk pool's alone: a health check that passed reads both hot
+// connections, so there is nothing for a probe to learn, and the probe
+// window (OpenFor) is the time a recovered store would be refused for. A
+// pool already closed is untouched; one that was open has its failure run
+// ended, is gauged 0 and says why it closed.
+func (g *guarded) CloseCircuits(why string) {
+	for _, p := range []Pool{Token, Context} {
+		pl := g.pools[p]
+		pl.mu.Lock()
+		was := pl.open
+		if was {
+			pl.open, pl.fails, pl.probe = false, 0, false
+			clear(pl.ops)
+		}
+		pl.mu.Unlock()
+		if was {
+			g.changed(p, false, errClosedBy)
+			if g.c.Say != nil {
+				g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is closed: %s", g.c.Proc, g.noun(),
+					g.c.Component, p, why))
+			}
+		}
+	}
+}
+
 // Wrap guards inner.
 func Wrap(inner store.Store, c Config) store.Store {
 	if c.Now == nil {
@@ -498,9 +528,15 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 			g.c.Failures, cause, ops, g.c.OpenFor, impact, closes))
 		return
 	}
+	if cause == errClosedBy {
+		return // CloseCircuits says its own line, with its reason
+	}
 	g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,
 		g.noun(), g.c.Component, p))
 }
+
+// errClosedBy marks changed's call from CloseCircuits.
+var errClosedBy = errors.New("closed by a passing health check")
 
 // noun is what the guard's lines call the store.
 func (g *guarded) noun() string {

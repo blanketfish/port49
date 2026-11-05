@@ -864,3 +864,53 @@ func TestAFenceTimeoutDoesNotOpenTheCircuit(t *testing.T) {
 		t.Fatalf("feed_behind outcomes counted %v, want %d", v, 3*c.Failures)
 	}
 }
+
+// A passing health check closes the token and context circuits at once, the
+// close said and gauged as a probe's is, and leaves the bulk pool's alone
+// (stores I2).
+func TestCloseCircuitsClosesTokenAndContextNotBulk(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.OpenFor = time.Hour // only CloseCircuits can let a call through
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ {
+		g.GetContext(context.Background(), k)
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+		g.ActivePrincipals(context.Background())
+	}
+	for _, p := range []string{"token", "context", "bulk"} {
+		if testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", p)) != 1 {
+			t.Fatalf("the %s circuit did not open", p)
+		}
+	}
+	g.(Closer).CloseCircuits("a store health check passed")
+	for p, want := range map[string]float64{"token": 0, "context": 0, "bulk": 1} {
+		if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", p)); v != want {
+			t.Fatalf("%s gauge %v, want %v", p, v, want)
+		}
+	}
+	before := inner.count()
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	g.GetContext(context.Background(), k)
+	if inner.count() != before+2 {
+		t.Fatalf("a closed circuit did not send its calls to the store: %d calls", inner.count()-before)
+	}
+	// Closed means fails=0: two more failures do not reopen a threshold of 3.
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	if testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "token")) != 0 {
+		t.Fatal("the failure count survived the close")
+	}
+	if _, err := g.ActivePrincipals(context.Background()); !errors.Is(err, store.ErrNotSent) {
+		t.Fatalf("the bulk pool should still refuse: %v", err)
+	}
+	closed := 0
+	for _, l := range said.all() {
+		if strings.Contains(l, "circuit is closed") && strings.Contains(l, "a store health check passed") {
+			closed++
+		}
+	}
+	if closed != 2 {
+		t.Fatalf("said %q", said.all())
+	}
+}
