@@ -298,7 +298,12 @@ PVC a restrictive access mode. Restore enrollments with `port49 directory import
 
 ### Velero (file-system backup of the volumes)
 
-`examples/velero/` is a Velero `Schedule` with the steps around it. Measured on kind (Velero 1.18.4 with
+`examples/velero/` is a Velero `Schedule` with the steps around it. **A Velero restore that includes
+`port49-etcd` is a store restore under design §13**: it loses the revocations and lifts made since the backup
+and brings back redeemed tokens, so follow that runbook (delete `v1/t/` and `meta/judged`/`meta/judged_bundle`
+before the members serve clients, re-issue revocations with `port49 revoke --offline`, lift again). Prefer
+restoring etcd from the `etcdctl snapshot` CronJob with `--bump-revision`; a file-system copy of a live member
+is crash-consistent at best and unmeasured under load (L89 measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with
 its node agent, an S3-compatible store in the cluster; `tests/lab/results/L89-kind.md`, 2026-11-04): after a
 backup, deleting the namespace and a restore, both StatefulSets became ready with no fence refusal, the
 issuing CA's fingerprint was unchanged, the owner, group and mode of `state/`, `issuing-ca.key` and the

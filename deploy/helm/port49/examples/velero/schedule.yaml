@@ -24,7 +24,10 @@
 # The whole namespaces are backed up, not those labels alone: the Secrets and ConfigMaps the pods mount
 # are in `port49`, and etcd is in `port49-etcd` where the shipped examples/etcd puts it (the kind lab
 # runs both in one namespace). A restore without them starts nothing. If your etcd is elsewhere, name that
-# namespace here, or restore etcd from its own snapshot (backup-cronjob.yaml) and say so in your runbook.
+# namespace here, or restore etcd from its own snapshot (backup-cronjob.yaml). A restore of `port49-etcd`
+# from THIS backup is a store restore (design §13, "A restore rolls the marks back too"): it loses
+# revocations and lifts made since and brings back redeemed tokens; README.md gives the steps. Prefer
+# the snapshot CronJob with --bump-revision for etcd, and this backup for the other volumes.
 apiVersion: velero.io/v1
 kind: Schedule
 metadata:

@@ -50,6 +50,22 @@ kubectl delete namespace port49
 velero restore create --from-backup <backup> --wait
 ```
 
+**A Velero restore that includes `port49-etcd` is a store restore** under design §13 (Deployment
+requirements, "A restore rolls the marks back too"). It loses every revocation and lift made since the
+backup, so a revoked principal or certificate is admitted again until it is re-issued, and it brings back
+every token redeemed since, redeemable again while it has not expired. Run the runbook's steps that apply
+before the members serve clients or the brokers start:
+
+1. Delete `v1/t/` (the token family) and `meta/judged` and `meta/judged_bundle`, with the members on
+   loopback only.
+2. Re-issue the revocations made since the backup with `port49 revoke --offline`.
+3. Lift again what was lifted since.
+
+Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
+as design §13 gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
+crash-consistent at best, and the three members are copied at different moments; whether a busy member's
+database survives that is unmeasured. L89 measured one restore on an idle cluster.
+
 The data-directory init containers refuse a volume whose files are not owned by uid 65532 (see the
 chart README), so what a restore does to ownership, group and mode matters. L89 (a) measured it on kind:
 owner, group and mode of `state/`, `issuing-ca.key` and the spool directory were unchanged, and both
