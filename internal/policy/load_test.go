@@ -691,3 +691,67 @@ func TestEveryShippedPolicyLoads(t *testing.T) {
 		}
 	}
 }
+
+// unloggedDenyScope is the reviewer's srx_unpatched: an attribute scope that
+// attaches a deny and says nothing of security_log.
+const unloggedDenyScope = `
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: srx_unpatched, match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}, on_missing: include%s,
+     attached_roles: {humans: [no_reload]}}
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: no_reload, deny: [reload **]}
+subjects:
+  - {name: s, identity: ["user:s@example.com"], username: s, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+`
+
+func TestADenyBearingAttributeScopeIsSecurityLoggedByDefault(t *testing.T) {
+	p := mustParse(t, fmt.Sprintf(unloggedDenyScope, ""))
+	if !p.scopes["srx_unpatched"].SecurityLog {
+		t.Error("a deny-bearing attribute scope with no security_log is not security-logged")
+	}
+	if p.scopes["all_devices"].SecurityLog {
+		t.Error("a scope with no match key is logged")
+	}
+	// A grant that carries the deny delivers it as surely as attached_roles.
+	g := mustParse(t, `
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: dc, match: {site: dc1}, on_missing: exclude}
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: no_reload, deny: [reload **]}
+subjects:
+  - {name: s, identity: ["user:s@example.com"], username: s, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+  - {subject: s, scope: dc, roles: [no_reload]}
+`)
+	if !g.scopes["dc"].SecurityLog {
+		t.Error("a scope a grant delivers a deny through is not security-logged")
+	}
+}
+
+func TestAnExplicitFalseLoadsAndIsLinted(t *testing.T) {
+	p := mustParse(t, fmt.Sprintf(unloggedDenyScope, ", security_log: false"))
+	if p.scopes["srx_unpatched"].SecurityLog {
+		t.Error("an explicit security_log: false was overridden")
+	}
+	found := false
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingDenyScopeUnlogged && strings.Contains(f.Message, "srx_unpatched") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no deny_scope_unlogged finding")
+	}
+	for _, f := range mustParse(t, fmt.Sprintf(unloggedDenyScope, "")).Lint(noon) {
+		if f.Kind == FindingDenyScopeUnlogged {
+			t.Errorf("a defaulted scope is linted: %s", f.Message)
+		}
+	}
+}

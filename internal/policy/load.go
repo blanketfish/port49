@@ -162,15 +162,24 @@ type Policy struct {
 
 // Scope selects devices by their inventory attributes (spec §5.5).
 type Scope struct {
-	Name        string
-	Match       map[string]matchValue
-	OnMissing   string // "include" | "exclude"
+	Name      string
+	Match     map[string]matchValue
+	OnMissing string // "include" | "exclude"
+	// SecurityLog is whether a device joining or leaving the scope is a
+	// security record. A scope with a match key that delivers a deny is logged
+	// unless the file says security_log: false (spec §5.5).
 	SecurityLog bool
-	Attached    map[string][]string // "humans" | "machines" → roles
-	res         map[string]*regexp.Regexp
+	// securityLogOff is an explicit security_log: false, which lint reports on
+	// a scope that delivers a deny.
+	securityLogOff bool
+	Attached       map[string][]string // "humans" | "machines" → roles
+	res            map[string]*regexp.Regexp
 	// onMissingDeclared is whether the file wrote on_missing rather than
 	// taking the default, which a deny-bearing scope must (spec §5.5).
 	onMissingDeclared bool
+	// deliversDeny is whether the scope has a match key and attaches a role
+	// carrying a deny, or a grant on it holds one.
+	deliversDeny bool
 	// PerLoginMFA is the scope's per-login requirement, nil for none (spec
 	// §5.1.5).
 	PerLoginMFA *PerLoginMFA
@@ -1350,9 +1359,10 @@ func (p *Policy) buildScopes(f file) error {
 		if _, dup := p.scopes[s.Name]; dup {
 			return fmt.Errorf("scope %q is declared twice", s.Name)
 		}
-		sc := &Scope{Name: s.Name, Match: s.Match, OnMissing: s.OnMissing, SecurityLog: s.SecurityLog,
-			Attached: map[string][]string{"humans": s.AttachedRoles.Humans, "machines": s.AttachedRoles.Machines},
-			res:      map[string]*regexp.Regexp{}, onMissingDeclared: s.OnMissing != ""}
+		sc := &Scope{Name: s.Name, Match: s.Match, OnMissing: s.OnMissing, SecurityLog: s.SecurityLog != nil && *s.SecurityLog,
+			securityLogOff: s.SecurityLog != nil && !*s.SecurityLog,
+			Attached:       map[string][]string{"humans": s.AttachedRoles.Humans, "machines": s.AttachedRoles.Machines},
+			res:            map[string]*regexp.Regexp{}, onMissingDeclared: s.OnMissing != ""}
 		// Keys and comparisons in a fixed order, so a scope with several
 		// faults is refused for the same one on every load.
 		for _, key := range sortedKeys(s.Match) {
@@ -1391,6 +1401,9 @@ func (p *Policy) buildScopes(f file) error {
 				deny = deny || len(role.Deny) > 0
 			}
 		}
+		if deny && len(s.Match) > 0 {
+			sc.deliversDeny = true
+		}
 		switch s.OnMissing {
 		case "include", "exclude":
 		case "":
@@ -1421,7 +1434,7 @@ func (p *Policy) buildScopes(f file) error {
 			case !sc.onMissingDeclared:
 				return fmt.Errorf("scope %q carries per_login_mfa: declare on_missing (a restriction, read as a deny "+
 					"is: a device with no value for the match is, with include, held to it; spec §5.5)", s.Name)
-			case !s.SecurityLog:
+			case s.SecurityLog == nil || !*s.SecurityLog:
 				return fmt.Errorf("scope %q carries per_login_mfa: declare security_log: true, so the log says who "+
 					"edits an attribute that lifts the requirement (spec §5.1.5)", s.Name)
 			}
@@ -1638,9 +1651,12 @@ func (p *Policy) buildGrants(f file) error {
 		// A deny reaches a scope through a grant as surely as through
 		// attached_roles, and a broken sync that drops the device from the
 		// scope lifts it the same way (spec §5.5).
-		if sc := p.scopes[g.Scope]; len(sc.Match) > 0 && !sc.onMissingDeclared {
+		if sc := p.scopes[g.Scope]; len(sc.Match) > 0 {
 			for _, r := range g.Roles {
 				if len(p.roles[r].Deny) > 0 {
+					sc.deliversDeny = true
+				}
+				if len(p.roles[r].Deny) > 0 && !sc.onMissingDeclared {
 					return fmt.Errorf("%s: role %q carries a deny onto scope %q: declare on_missing on the "+
 						"scope (include assumes a device with no data for the match is affected, the safe direction "+
 						"for a mitigation; exclude says the grant must be earned by data: write exclude for a grant; "+
@@ -1690,6 +1706,13 @@ func (p *Policy) buildGrants(f file) error {
 		}
 		p.grantsOf[g.Subject] = append(p.grantsOf[g.Subject], len(p.grants))
 		p.grants = append(p.grants, grant)
+	}
+	// Whoever edits an attribute that lifts a deny lifts it, so a scope that
+	// delivers one is a security record unless the file says otherwise.
+	for _, sc := range p.scopes {
+		if sc.deliversDeny && !sc.securityLogOff {
+			sc.SecurityLog = true
+		}
 	}
 	return nil
 }

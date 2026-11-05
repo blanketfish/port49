@@ -73,7 +73,7 @@ type fileScope struct {
 	Name          string                `yaml:"name"`
 	Match         map[string]matchValue `yaml:"match"`
 	OnMissing     string                `yaml:"on_missing"`
-	SecurityLog   bool                  `yaml:"security_log"`
+	SecurityLog   *bool                 `yaml:"security_log"`
 	AttachedRoles fileAttached          `yaml:"attached_roles"`
 	PerLoginMFA   *fileMFA              `yaml:"per_login_mfa"`
 }
