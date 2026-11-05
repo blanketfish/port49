@@ -665,8 +665,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if !cfg.Stores.Shared {
 		rn.dir = bs.dir
 		rn.followed = make(chan store.Revocation, 1024)
-		rn.followedLogouts = make(chan store.LogoutEntry, logoutQueueSize)
-		rn.wakeLogouts = make(chan struct{}, 1)
+		rn.openLogoutQueue()
 		rn.logouts = bs.logouts
 	}
 	// A replica's start and each of its swaps while it does not run ask the

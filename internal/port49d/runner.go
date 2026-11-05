@@ -1172,8 +1172,10 @@ var reachFailuresSeen func(n int)
 // takeover reaches every standing logout once more.
 func (r *runner) reachFollowed(ctx context.Context) {
 	failed := map[string]failedReach{}
-	// reachOne reaches one logout; false once the duties have ended.
-	reachOne := func(l store.LogoutEntry) bool {
+	// reachOne reaches one logout and says so (a rescan says only its failures,
+	// and one line for the pass). It returns false once the duties have ended,
+	// and the reach's error.
+	reachOne := func(l store.LogoutEntry, quiet bool) (bool, error) {
 		now := time.Now()
 		for k, f := range failed {
 			if !f.until.IsZero() && now.After(f.until) {
@@ -1182,7 +1184,7 @@ func (r *runner) reachFollowed(ctx context.Context) {
 		}
 		rep, err := r.reachLogout(ctx, l.Logout)
 		if err != nil && ctx.Err() != nil {
-			return false // the duties ended mid-reach: the next takeover reaches it
+			return false, err // the duties ended mid-reach: the next takeover reaches it
 		}
 		line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
 			"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
@@ -1208,11 +1210,13 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			r.retryLogout(ctx, l, wait)
 		}
-		fmt.Fprintln(stderr, line)
+		if !quiet || err != nil {
+			fmt.Fprintln(stderr, line)
+		}
 		if reachFailuresSeen != nil {
 			reachFailuresSeen(len(failed))
 		}
-		return true
+		return true, err
 	}
 	for {
 		select {
@@ -1228,7 +1232,7 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			fmt.Fprintln(stderr, line)
 		case l := <-r.followedLogouts:
-			if !reachOne(l) {
+			if ok, _ := reachOne(l, false); !ok {
 				return
 			}
 		case <-r.wakeLogouts:
@@ -1237,11 +1241,25 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			if !r.logoutRescanOwed.CompareAndSwap(true, false) || r.logouts == nil {
 				continue
 			}
+			var reached, unfinished, waiting int
 			for _, e := range r.logouts.All() {
-				if !reachOne(e) {
+				if _, retrying := failed[e.Key]; retrying {
+					waiting++ // a retry timer already holds it
+					continue
+				}
+				ok, err := reachOne(e, true)
+				if !ok {
 					return
 				}
+				if err != nil {
+					unfinished++
+				} else {
+					reached++
+				}
 			}
+			fmt.Fprintf(stderr, "port49-broker: runner: the pass over the whole logout set reached %d logout(s) here; "+
+				"%d did not finish (each says why above), and %d already wait to be tried again\n", reached,
+				unfinished, waiting)
 		}
 	}
 }
@@ -1258,6 +1276,14 @@ func (r *runner) madeBy(mark store.Revocation) string {
 
 // logoutQueueSize is followedLogouts' capacity.
 var logoutQueueSize = 1024
+
+// openLogoutQueue makes the queue followedLogouts and the wake that a full
+// one rings, together: a runner with one and not the other would drop a
+// logout's reach again, so every runner that follows logouts gets both here.
+func (r *runner) openLogoutQueue() {
+	r.followedLogouts = make(chan store.LogoutEntry, logoutQueueSize)
+	r.wakeLogouts = make(chan struct{}, 1)
+}
 
 // logoutRetryFirst is the wait before a failed logout reach is tried again;
 // each failure in a row doubles it, up to 64 times it.

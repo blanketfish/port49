@@ -1120,8 +1120,11 @@ func TestAFullLogoutQueueOwesARescanThatReachesEverySession(t *testing.T) {
 	var mu sync.Mutex
 	reached := map[string]bool{}
 	r := &runner{brk: &broker.Broker{}, m: m, followed: make(chan store.Revocation, 1),
-		followedLogouts: make(chan store.LogoutEntry, 2), logouts: store.NewLogoutSet(time.Now),
-		wakeLogouts: make(chan struct{}, 1)}
+		logouts: store.NewLogoutSet(time.Now)}
+	was := logoutQueueSize
+	logoutQueueSize = 2
+	t.Cleanup(func() { logoutQueueSize = was })
+	r.openLogoutQueue()
 	r.taking.Store(true)
 	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
 		mu.Lock()
@@ -1150,5 +1153,70 @@ func TestAFullLogoutQueueOwesARescanThatReachesEverySession(t *testing.T) {
 	}
 	if got := strings.Count(out.String(), "the logout queue is full"); got != 1 {
 		t.Fatalf("the full queue was said on %d lines, want 1:\n%s", got, out.String())
+	}
+	// The pass is one line, not one per entry (Task 9 review m1).
+	waitWithin(t, &out, "the pass over the whole logout set reached 5 logout(s) here", 5*time.Second)
+	if got := strings.Count(out.String(), "the pass over the whole logout set"); got != 1 {
+		t.Fatalf("the rescan was said on %d lines, want 1:\n%s", got, out.String())
+	}
+}
+
+// A rescan leaves alone a logout whose failed reach already waits on a retry
+// timer, so its backoff and its count are not run twice (Task 9 review m2).
+func TestARescanSkipsALogoutAlreadyWaitingToBeTriedAgain(t *testing.T) {
+	was, wasWait := logoutQueueSize, logoutRetryFirst
+	logoutQueueSize, logoutRetryFirst = 1, time.Hour
+	t.Cleanup(func() { logoutQueueSize, logoutRetryFirst = was, wasWait })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	var mu sync.Mutex
+	tries := map[string]int{}
+	hold, held := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	r := &runner{brk: &broker.Broker{}, m: metrics.New(prometheus.NewRegistry()), followed: make(chan store.Revocation, 1),
+		logouts: store.NewLogoutSet(time.Now)}
+	r.openLogoutQueue()
+	r.taking.Store(true)
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		if l.Key == "a" { // the first reach blocks the consumer, so the queue fills and overflows
+			once.Do(func() { close(held); <-hold })
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		tries[l.Key]++
+		if l.Key == "slow" {
+			return broker.RevokeReport{}, fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+		}
+		return broker.RevokeReport{TokenKeys: 1}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	entry := func(k string) store.LogoutEntry {
+		return store.LogoutEntry{Logout: store.Logout{Key: k, At: time.Now(), Origin: "origin-" + k},
+			Until: time.Now().Add(time.Hour)}
+	}
+	slow := entry("slow")
+	r.logouts.Put(slow)
+	r.followLogout(slow)
+	waitWithin(t, &out, "a logout made elsewhere (origin-slow) reached", 5*time.Second)
+	// The consumer blocks on "a"; "b" fills the queue and "c" overflows it: a
+	// rescan follows once it is released.
+	r.logouts.Put(entry("a"))
+	r.followLogout(entry("a"))
+	<-held
+	for _, k := range []string{"b", "c"} {
+		r.logouts.Put(entry(k))
+		r.followLogout(entry(k))
+	}
+	close(hold)
+	waitWithin(t, &out, "1 already wait to be tried again", 5*time.Second)
+	mu.Lock()
+	defer mu.Unlock()
+	if tries["slow"] != 1 {
+		t.Fatalf("the waiting logout was reached %d times, want 1", tries["slow"])
 	}
 }
