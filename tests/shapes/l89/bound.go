@@ -2,20 +2,25 @@ package l89
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/blanketfish/port49/tests/shapes/l82"
 )
 
-// The time L89 plans for under `make lab-l89`'s 55m -timeout (TestTheCellCapsFitTheTestTimeout): the
-// bring-up before the first cell (the kind stack, the object store and Velero), each cell's cap, and the
-// reserve kept at the end for the diagnosis, the results and the cluster's deletion, the guard's 45s
-// inside it. A cell ends at its cap or at the test's deadline less the reserve, whichever comes first.
+// The time L89 plans for under `make lab-l89`'s -timeout, TestTimeout (TestTheCellCapsFitTheTestTimeout,
+// which also reads the Makefile and lab-kind.yml's l89 job): the bring-up before the first cell (the kind
+// stack, the object store and Velero), each cell's cap, and the reserve kept at the end for the diagnosis,
+// the results and the cluster's deletion, the guard's 45s inside it. A cell ends at its cap or at the
+// test's deadline less the reserve, whichever comes first.
 const (
-	BringUp      = 9 * time.Minute
-	ReserveAtEnd = 4 * time.Minute
+	TestTimeout  = 85 * time.Minute
+	BringUp      = 12 * time.Minute
+	ReserveAtEnd = 5 * time.Minute
 )
 
 // CellCap is a cell's cap, and the time it needs left to be worth starting: a cell started with less
@@ -23,13 +28,103 @@ const (
 func CellCap(id string) (cap, need time.Duration) {
 	switch id {
 	case "a":
-		return 14 * time.Minute, 8 * time.Minute
+		return 18 * time.Minute, 10 * time.Minute
 	case "b":
-		return 3 * time.Minute, 1 * time.Minute
+		return 4 * time.Minute, 1 * time.Minute
 	case "c", "d":
-		return 12 * time.Minute, 8 * time.Minute
+		return 20 * time.Minute, 12 * time.Minute
 	}
 	return 0, 0
+}
+
+// StepBounds is each README step's own bound in cells (c) and (d), by its name in Steps: a backstop for
+// a hang, at least the README's own --timeouts in the step plus BoundSlack
+// (TestEachStepsBoundCoversItsREADMETimeouts), so a step the README's text lets finish is never cut.
+// A step past it is NOT RUN, unless HangCause sees the README's cause; a README timeout fails the
+// command itself, which is a measured FAIL.
+var StepBounds = map[string]time.Duration{
+	"restorezero":     8 * time.Minute, // velero --wait has no timeout of its own
+	"fallbackrestore": 8 * time.Minute,
+	"etcdwait":        6 * time.Minute,
+	"volumes":         time.Minute,
+	"fallbackzero":    4 * time.Minute,
+	"tokendelete":     4 * time.Minute,
+	"revoke":          6 * time.Minute,
+	"scaleup":         22 * time.Minute, // two rollouts of 10m each
+}
+
+// BoundSlack is what a step's bound keeps above its README timeouts: the commands around them.
+const BoundSlack = time.Minute
+
+var timeoutFlag = regexp.MustCompile(`--timeout[= ](\S+)`)
+
+// READMETimeouts is the sum of the --timeout values in a step's commands.
+func READMETimeouts(cmd string) (time.Duration, error) {
+	var sum time.Duration
+	for _, m := range timeoutFlag.FindAllStringSubmatch(cmd, -1) {
+		d, err := time.ParseDuration(m[1])
+		if err != nil {
+			return 0, fmt.Errorf("l89: the timeout %q: %w", m[1], err)
+		}
+		sum += d
+	}
+	return sum, nil
+}
+
+// PVR is one pod volume restore as HangProbe prints it: its phase ("New" while unset), pod and volume.
+type PVR struct{ Phase, Pod, Volume string }
+
+// HangProbe is the script the harness runs, bounded, when a restore's --wait did not end: the restore's
+// phase, its pod volume restores, and the pods in ns. It names no Secret and prints no data.
+func HangProbe(ns, restore string) string {
+	return "kubectl -n velero get restore " + restore + ` -o jsonpath='phase {.status.phase}{"\n"}'` + "\n" +
+		"kubectl -n velero get podvolumerestores -l velero.io/restore-name=" + restore +
+		` -o jsonpath='{range .items[*]}pvr {.status.phase} {.spec.pod.name} {.spec.volume}{"\n"}{end}'` + "\n" +
+		"kubectl -n " + ns + ` get pods -o jsonpath='{range .items[*]}pod {.metadata.name}{"\n"}{end}'` + "\n"
+}
+
+// ParseHang reads HangProbe's output.
+func ParseHang(out string) (pvrs []PVR, pods map[string]bool, phase string) {
+	pods = map[string]bool{}
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Fields(ln)
+		switch {
+		case len(f) >= 1 && f[0] == "phase":
+			if len(f) == 2 {
+				phase = f[1]
+			}
+		case len(f) == 4 && f[0] == "pvr":
+			pvrs = append(pvrs, PVR{f[1], f[2], f[3]})
+		case len(f) == 3 && f[0] == "pvr": // no phase yet
+			pvrs = append(pvrs, PVR{"New", f[1], f[2]})
+		case len(f) == 2 && f[0] == "pod":
+			pods[f[1]] = true
+		}
+	}
+	return pvrs, pods, phase
+}
+
+var pvrEnded = map[string]bool{"Completed": true, "Failed": true, "Canceled": true}
+
+// HangCause says whether a restore that did not end is the README's measured outcome: a pod volume
+// restore not yet ended whose pod does not exist, which no wait can end (the suspected mechanism of c).
+// rows are each unended pod volume restore and its pod, or that there was none.
+func HangCause(pvrs []PVR, pods map[string]bool) (measured bool, rows []l82.Row) {
+	for _, p := range pvrs {
+		if pvrEnded[p.Phase] {
+			continue
+		}
+		where := "present"
+		if !pods[p.Pod] {
+			where, measured = "absent", true
+		}
+		rows = append(rows, l82.Row{Case: "the pod volume restore of " + p.Pod + "/" + p.Volume + " when the restore's wait was stopped",
+			Observation: p.Phase + "; pod " + p.Pod + " " + where})
+	}
+	if len(rows) == 0 {
+		rows = append(rows, l82.Row{Case: "pod volume restores not ended when the restore's wait was stopped", Observation: "none"})
+	}
+	return measured, rows
 }
 
 // Budget is the test's deadline (zero when go test has no -timeout) and the reserve kept before it.

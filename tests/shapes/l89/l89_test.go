@@ -609,8 +609,9 @@ func TestBudgetKeepsTheCellsInsideTheTestsDeadline(t *testing.T) {
 	}
 }
 
-// The cells' caps, the bring-up and the reserve fit the 55m test timeout (make lab-l89), so the guard's
-// kill, which writes NOT RUN for the cell it stops, is the exception and not the end of every slow run.
+// The cells' caps, the bring-up and the reserve fit the test timeout, so the guard's kill, which writes
+// NOT RUN for the cell it stops, is the exception and not the end of every slow run. The timeout is the
+// one make lab-l89 passes, and CI's job for l89 leaves room for the builds before it.
 func TestTheCellCapsFitTheTestTimeout(t *testing.T) {
 	var sum time.Duration
 	for _, id := range Order {
@@ -620,8 +621,119 @@ func TestTheCellCapsFitTheTestTimeout(t *testing.T) {
 		}
 		sum += cap
 	}
-	if total := BringUp + sum + ReserveAtEnd; total > 55*time.Minute {
-		t.Errorf("the bring-up, the cells' caps and the reserve are %v, over the 55m timeout", total)
+	if total := BringUp + sum + ReserveAtEnd; total > TestTimeout {
+		t.Errorf("the bring-up, the cells' caps and the reserve are %v, over the %v timeout", total, TestTimeout)
+	}
+	mk, err := os.ReadFile(filepath.Join("..", "..", "..", "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "-run '^TestL89$$' -count=1 -v -timeout " + fmt.Sprintf("%dm", int(TestTimeout.Minutes())); !strings.Contains(string(mk), want) {
+		t.Errorf("make lab-l89 does not run with %q", want)
+	}
+	wf, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "lab-kind.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job struct {
+		Jobs map[string]struct {
+			Timeout string `yaml:"timeout-minutes"`
+		}
+	}
+	if err := yaml.Unmarshal(wf, &job); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, j := range job.Jobs {
+		if j.Timeout == "${{ matrix.cell == 'l89' && 100 || 60 }}" {
+			found = true
+		}
+	}
+	if !found || 100*time.Minute < TestTimeout+10*time.Minute {
+		t.Errorf("no job gives l89 100 minutes (the test's %v and the builds before it): %+v", TestTimeout, job.Jobs)
+	}
+}
+
+// I1r5b: a step's own bound is a backstop for a hang, never shorter than the README's own --timeouts in
+// it (with a minute's slack): the scale-up's two 10m rollouts were bounded at 10m, a false FAIL.
+func TestEachStepsBoundCoversItsREADMETimeouts(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps, err := Steps(string(b), "port49", "t", "l89-backup", "l89-restore-c", 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, cmd := range steps {
+		if name == "etcdrestore" { // never run whole in the lab: its restore is folded, its wait is etcdwait
+			continue
+		}
+		bound, ok := StepBounds[name]
+		if !ok {
+			t.Errorf("step %s has no bound", name)
+			continue
+		}
+		sum, err := READMETimeouts(cmd)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if bound < sum+BoundSlack {
+			t.Errorf("step %s is bounded at %v, under its README timeouts %v plus %v", name, bound, sum, BoundSlack)
+		}
+	}
+	if got, _ := READMETimeouts(steps["scaleup"]); got != 20*time.Minute {
+		t.Errorf("the scale-up's README timeouts sum to %v, want 20m", got)
+	}
+	if !strings.Contains(steps["etcdwait"], "wait --for=condition=Ready") || strings.Contains(steps["etcdwait"], "velero") {
+		t.Errorf("etcdwait is not step 1's wait alone: %q", steps["etcdwait"])
+	}
+	if _, err := READMETimeouts("kubectl wait --timeout=soon"); err == nil {
+		t.Error("a --timeout that is not a duration is accepted")
+	}
+}
+
+// I1r5b: a restore --wait that does not end is the README's outcome only when its cause is seen: a pod
+// volume restore not yet ended whose pod is gone (the suspected mechanism of c). Anything else is the
+// runner's slowness, NOT RUN.
+func TestHangCauseIsMeasuredOnlyForAVolumeRestoreWaitingOnAMissingPod(t *testing.T) {
+	out := "phase InProgress\npvr New t-broker-0 data\npvr Completed etcd-0 data\npvr InProgress t-port49d-0 data\npod etcd-0\npod t-port49d-0\n"
+	pvrs, pods, phase := ParseHang(out)
+	if phase != "InProgress" || len(pvrs) != 3 || !pods["etcd-0"] || pods["t-broker-0"] {
+		t.Fatalf("ParseHang = %v, %v, %q", pvrs, pods, phase)
+	}
+	measured, rows := HangCause(pvrs, pods)
+	if !measured {
+		t.Error("a New pod volume restore whose pod is gone is not measured")
+	}
+	joined := fmt.Sprint(rows)
+	if !strings.Contains(joined, "t-broker-0/data") || !strings.Contains(joined, "New; pod t-broker-0 absent") || !strings.Contains(joined, "InProgress; pod t-port49d-0 present") {
+		t.Errorf("rows = %v", rows)
+	}
+	if strings.Contains(joined, "etcd-0") {
+		t.Errorf("an ended pod volume restore is a row: %v", rows)
+	}
+	// progressing on a pod that is there: slow, not the README
+	pvrs, pods, _ = ParseHang("phase InProgress\npvr InProgress t-broker-0 data\npod t-broker-0\n")
+	if m, _ := HangCause(pvrs, pods); m {
+		t.Error("a progressing pod volume restore on a present pod is measured")
+	}
+	// ended, failed or canceled, on pods that are gone: the wait can end, so the hang is not theirs
+	pvrs, pods, _ = ParseHang("pvr Failed t-broker-0 data\npvr Canceled t-broker-1 data\npvr Completed t-port49d-0 data\n")
+	if m, rows := HangCause(pvrs, pods); m || len(rows) != 1 {
+		t.Errorf("ended pod volume restores: %v, %v", m, rows)
+	}
+	// none at all: nothing seen, so nothing measured
+	if m, rows := HangCause(nil, map[string]bool{}); m || len(rows) != 1 {
+		t.Errorf("no pod volume restore: %v, %v", m, rows)
+	}
+	// a phase not yet set is not ended
+	pvrs, pods, _ = ParseHang("pvr  t-broker-1 data\n")
+	if m, _ := HangCause(pvrs, pods); !m || pvrs[0].Phase != "New" {
+		t.Errorf("an unset phase: %v, %v", m, pvrs)
+	}
+	if s := HangProbe("port49", "l89-restore-c"); !strings.Contains(s, "velero.io/restore-name=l89-restore-c") || !strings.Contains(s, "-n port49 get pods") {
+		t.Errorf("HangProbe = %q", s)
 	}
 }
 

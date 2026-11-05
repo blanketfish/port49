@@ -212,25 +212,33 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if err := os.WriteFile(filepath.Join(bin, "velero"), []byte(wrapper), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// readme runs one README step, bounded by own (l89.RunBounded, inside the cell's end). Its failure is
-	// the measurement: the row names the command the ERR trap caught and the exit status, the output goes
-	// to the test log, and the cell is a FAIL and ends. A step past its own bound is a measured FAIL too,
-	// its row naming the command it was in; a step stopped by the cell's end is the budget, NOT RUN.
-	readme := func(what, dir, script string, own time.Duration) string {
+	// readme runs one README step, by its name in steps, bounded by l89.StepBounds (inside the cell's
+	// end). Its failure is the measurement: the row names the command the ERR trap caught and the exit
+	// status, the output goes to the test log, and the cell is a FAIL and ends. A README --timeout that
+	// runs out fails its command, so it is that FAIL too. A step past the harness's own bound (a backstop,
+	// never under the README's timeouts) is NOT RUN, with the command it was in; for a restore's --wait,
+	// which has no timeout of its own, r.hung reads why first, and a cause the README owns is a FAIL.
+	readme := func(what, dir, step string) string {
+		own, ok := l89.StepBounds[step]
+		if !ok {
+			t.Fatalf("README step %s has no bound", step)
+		}
 		within, capped := r.bound(own)
 		env := append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
-		out, timedOut, err := l89.RunBounded(dir, env, l89.StepScript(script), within)
+		out, timedOut, err := l89.RunBounded(dir, env, l89.StepScript(steps[step]), within)
 		switch {
 		case timedOut && capped:
 			l82Row(cell, what+": stopped when the cell's time ran out, not a measurement", "it was in: "+l89.RunningCommand(out))
 			t.Fatalf("%s: stopped at the cell's end, after %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
 		case timedOut:
-			l82Row(cell, what+": did not end within "+within.Round(time.Second).String(), "it was in: "+l89.RunningCommand(out))
-			cell.Verdict = l82.Fail
-			t.Fatalf("%s: a README command did not end within %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
+			l82Row(cell, what+": did not end within the harness's own bound of "+within.Round(time.Second).String()+", not a measurement", "it was in: "+l89.RunningCommand(out))
+			if step == "restorezero" || step == "fallbackrestore" {
+				r.hung(t, cell, dir, env, restore)
+			}
+			t.Fatalf("%s: did not end within the harness's bound of %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
 		case err != nil:
 			l82Row(cell, what+": the README command that failed, and how", l89.FailedCommand(out)+" ("+err.Error()+")")
-			cell.Verdict = l82.Fail
+			l82SetVerdict(cell, l82.Fail)
 			t.Fatalf("%s: a README command failed: %v\n%s", what, err, kindtest.Filter(l89.Scrub(out)))
 		}
 		return l89.StepOutput(out)
@@ -238,7 +246,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	// measured ends the cell with a measured FAIL on a check that does not hold
 	measured := func(what, observation string) {
 		l82Row(cell, what, observation)
-		cell.Verdict = l82.Fail
+		l82SetVerdict(cell, l82.Fail)
 		t.FailNow()
 	}
 
@@ -255,17 +263,12 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	})
 	l82Row(cell, "the namespace was deleted", "yes, and its volumes")
 
-	// each README step's own bound: a velero --wait has none, and a restore whose pod volume restores wait
-	// on pods that are gone (the suspected failure of c) would otherwise wait out the test
-	const restoreBound, etcdBound, checkBound, zeroBound, deleteBound, revokeBound, scaleBound = 8 * time.Minute,
-		6 * time.Minute, time.Minute, 4 * time.Minute, 4 * time.Minute, 6 * time.Minute, 10 * time.Minute
 	if !fallback {
 		l82Row(cell, "the resource modifier as the lab runs it", "restore-scale-zero.yaml with a resourceNameRegex the lab adds (its etcd shares the namespace), so the shipped file is not run as shipped")
 		c.Kubectl("-n", "velero", "delete", "configmap", "restore-scale-zero", "--ignore-not-found")
-		readme("README step 3 (the restore with the resource modifier)", work, steps["restorezero"], restoreBound)
+		readme("README step 3 (the restore with the resource modifier)", work, "restorezero")
 		l82Row(cell, "README step 3 (the restore "+restore+" with the resource modifier, both StatefulSets at 0 replicas) ran from its own text", "yes")
-		readme("README step 1's wait for etcd", work,
-			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns), etcdBound)
+		readme("README step 1's wait for etcd", work, "etcdwait")
 		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by step 3's restore)", "ready")
 		replicas := strings.TrimSpace(c.Kubectl("-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
 		if replicas != "0 0" {
@@ -273,17 +276,16 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		}
 		l82Row(cell, "the two StatefulSets' replicas after the restore", replicas)
 	} else {
-		readme("README fallback step 4 (the restore of port49)", work, steps["fallbackrestore"], restoreBound)
+		readme("README fallback step 4 (the restore of port49)", work, "fallbackrestore")
 		l82Row(cell, "README fallback step 4 (the restore "+restore+" of port49, normally) ran from its own text", "yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2")
 		l82Row(cell, "what (d) cannot show", "that port49 pods restored while etcd is held at 0 (the README's fallback steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release")
-		readme("README step 1's wait for etcd", work,
-			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns), etcdBound)
+		readme("README step 1's wait for etcd", work, "etcdwait")
 		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by the fallback's restore)", "ready")
 	}
 
 	// the README's volume check on the named restore, once Velero has finished with the volumes
 	r.phaseWait(t, cell, restore)
-	phase, vols := l89.ParseVolumes(readme("the README's volume check", work, steps["volumes"], checkBound))
+	phase, vols := l89.ParseVolumes(readme("the README's volume check", work, "volumes"))
 	cs := l89.C{RestorePhase: phase, Volumes: vols, FingerprintBefore: l89.Short(fpBefore[0]), Before: r.before.Hashes,
 		MarksBefore: r.before.Marks, Fallback: fallback}
 	for _, v := range l89Volumes {
@@ -301,7 +303,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 
 	if fallback {
-		readme("README fallback step 6 (both StatefulSets to 0)", work, steps["fallbackzero"], zeroBound)
+		readme("README fallback step 6 (both StatefulSets to 0)", work, "fallbackzero")
 		l82Row(cell, "README fallback step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text", "yes")
 	} else {
 		// a restore at 0 replicas whose pods outlive it: the README's order relies on there being none
@@ -332,16 +334,16 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	l82Row(cell, "each broker's marks with both StatefulSets at 0", l89MarksText(cs.MarksAtZero))
 	if !complete {
 		// the README: never run step 5 while a volume is not Completed; the operator stops here, and so does the cell
-		cell.Verdict = l89.JudgeC(cs)
+		l82SetVerdict(cell, l89.JudgeC(cs))
 		l82Row(cell, "the README says never to scale up while a volume is not Completed", "so the cell stopped before steps 2, 4 and 5, as an operator would")
 		return
 	}
 
-	readme("README step 2 (the delete Job of design 13 step 3)", work, steps["tokendelete"], deleteBound)
+	readme("README step 2 (the delete Job of design 13 step 3)", work, "tokendelete")
 	l82Row(cell, "README step 2 (the delete Job of design 13 step 3) ran from its own text and completed", "yes")
-	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), steps["revoke"], revokeBound)
+	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), "revoke")
 	l82Row(cell, "README step 4 (revoke-offline.sh) ran from its own text", "yes")
-	readme("README step 5 (the scale-up)", work, steps["scaleup"], scaleBound)
+	readme("README step 5 (the scale-up)", work, "scaleup")
 	l82Row(cell, "README step 5 (the scale-up, brokers then port49d) ran from its own text and both rolled out", "yes")
 
 	_, fpAfter := r.snapshot()
@@ -353,12 +355,39 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		cs.FreshCopy = cs.FreshCopy || fresh
 		l82Row(cell, p+"'s log after the scale-up says it had no marks.json at this start", map[bool]string{true: "yes", false: "no"}[fresh])
 	}
-	cell.Verdict = l89.JudgeC(cs)
+	l82SetVerdict(cell, l89.JudgeC(cs))
 }
 
 // phaseWait waits until the restore has ended and none of its pod volume restores is still running, so
 // the README's volume check reads where they ended. A restore that made none at all (the suspected
 // failure of cell c) ends too, and the check then lists nothing.
+// hung reads why a restore's --wait did not end within the harness's bound (l89.HangProbe, bounded at
+// 30s inside the cell): a pod volume restore not yet ended whose pod does not exist is the README's
+// outcome, a measured FAIL with those rows (l89.HangCause); anything else leaves the cell NOT RUN, with
+// the rows. The probe prints only phases and pod and volume names; its output reaches the log filtered.
+func (r *l89Run) hung(t *testing.T, cell *l82.Cell, dir string, env []string, restore string) {
+	within, _ := r.bound(30 * time.Second)
+	out, timedOut, err := l89.RunBounded(dir, env, l89.HangProbe(r.stack.Namespace(), restore), within)
+	if timedOut || err != nil {
+		l82Row(cell, "the harness's read of the restore when its wait was stopped", "failed: not a measurement")
+		t.Logf("the hang probe: %v\n%s", err, kindtest.Filter(l89.Scrub(out)))
+		return
+	}
+	pvrs, pods, phase := l89.ParseHang(out)
+	if phase == "" {
+		phase = "unset"
+	}
+	l82Row(cell, "the restore's phase when its wait was stopped", phase)
+	measured, rows := l89.HangCause(pvrs, pods)
+	for _, row := range rows {
+		l82Row(cell, row.Case, row.Observation)
+	}
+	if measured {
+		l82Row(cell, "the restore's wait cannot end", "a pod volume restore waits on a pod that does not exist: the README's outcome, measured")
+		l82SetVerdict(cell, l82.Fail)
+	}
+}
+
 func (r *l89Run) phaseWait(t *testing.T, cell *l82.Cell, name string) {
 	t.Helper()
 	c := r.stack.Cluster()

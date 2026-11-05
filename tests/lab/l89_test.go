@@ -125,8 +125,10 @@ func TestL89(t *testing.T) {
 	r.running.Store("")
 	// registered after the cluster's deletion, so the guard runs it first
 	stack.Cluster().Guard.OnKill(func() {
-		write(l89.Stopped(cells, r.running.Load().(string), "the test's deadline was "+shapetest.KillGrace.String()+" away, and the guard stopped the run"),
-			func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) })
+		cellsMu.Lock() // the copy, taken while no row or verdict is half written
+		stopped := l89.Stopped(cells, r.running.Load().(string), "the test's deadline was "+shapetest.KillGrace.String()+" away, and the guard stopped the run")
+		cellsMu.Unlock()
+		write(stopped, func(f string, a ...any) { fmt.Fprintf(os.Stderr, f+"\n", a...) })
 	})
 	r.installStoreAndVelero()
 	r.first = &cells[0]
@@ -759,7 +761,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 			l82Row(cell, v.pvc+": after the restore", obs)
 		}
 	}
-	cell.Verdict = l89.JudgeA(a)
+	l82SetVerdict(cell, l89.JudgeA(a))
 }
 
 func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
@@ -775,7 +777,7 @@ func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
 		return
 	}
 	// FAIL stands until both succeed: a refused mint ends the subtest in shapetest.Mint
-	cell.Verdict = l82.Fail
+	l82SetVerdict(cell, l82.Fail)
 	broker := r.stack.Forward("svc/"+r.stack.Release()+"-broker", 8443)
 	minted := false
 	token := r.stack.Mint(broker)()
@@ -784,5 +786,5 @@ func (r *l89Run) cellB(t *testing.T, cell *l82.Cell) {
 	st, err := r.stack.Device("t-port49d-0").TryLogin("alice", token)
 	login := err == nil && st == wire.AuthenStatusPass
 	l82Row(cell, "a login after the restore", map[bool]string{true: "succeeded", false: fmt.Sprintf("failed, status %d", st)}[login])
-	cell.Verdict = l89.JudgeB(minted, login)
+	l82SetVerdict(cell, l89.JudgeB(minted, login))
 }

@@ -427,6 +427,16 @@ func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[
 		}
 		out[name] = cmd
 	}
+	// step 1's wait for etcd, alone: the lab's etcd is restored with the release, so the restore line is
+	// folded and only the wait is run
+	for _, ln := range strings.Split(out["etcdrestore"], "\n") {
+		if strings.HasPrefix(ln, "kubectl ") && strings.Contains(ln, " wait ") {
+			out["etcdwait"] = ln + "\n"
+		}
+	}
+	if out["etcdwait"] == "" {
+		return nil, fmt.Errorf("l89: step 1 has no kubectl wait for etcd")
+	}
 	return out, nil
 }
 
