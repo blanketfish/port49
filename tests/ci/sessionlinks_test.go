@@ -2,15 +2,16 @@ package ci
 
 import (
 	"bytes"
-	"gopkg.in/yaml.v3"
-
-	"github.com/blanketfish/port49/tests/ci/sessionlink"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/blanketfish/port49/tests/ci/sessionlink"
 )
 
 // This repository is going public: no Claude Code session link or session trailer may sit in a
@@ -199,7 +200,23 @@ func TestTheMessageCheckIsWiredIn(t *testing.T) {
 		if j.If != "" {
 			t.Errorf("job %s has an if (%q): a job-level condition can skip every check below", id, j.If)
 		}
+		if j.ContinueOnError != nil {
+			t.Errorf("job %s sets continue-on-error (%v): a failing check would not fail the job", id, j.ContinueOnError)
+		}
 		steps = j.Steps
+	}
+	// The history is needed: the range and the weekly run read commits the checkout must hold.
+	checkedOut := false
+	for _, st := range steps {
+		if strings.HasPrefix(st.Uses, "actions/checkout@") {
+			checkedOut = true
+			if st.With["fetch-depth"] != 0 {
+				t.Errorf("the checkout has fetch-depth %v, want 0", st.With["fetch-depth"])
+			}
+		}
+	}
+	if !checkedOut {
+		t.Error("leaks.yml has no checkout")
 	}
 	find := func(cond string) *step {
 		var got *step
@@ -217,6 +234,9 @@ func TestTheMessageCheckIsWiredIn(t *testing.T) {
 		return got
 	}
 	run := func(st *step, want string) {
+		if st.ContinueOnError != nil {
+			t.Errorf("step %q sets continue-on-error (%v): a failing check would not fail the job", st.If, st.ContinueOnError)
+		}
 		if !strings.Contains(st.Run, "go run ./tests/ci/cmd/sessionmsg") || !strings.Contains(st.Run, want) {
 			t.Errorf("step %q does not run sessionmsg with %s: %q", st.If, want, st.Run)
 		}

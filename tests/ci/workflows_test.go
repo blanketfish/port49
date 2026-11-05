@@ -24,15 +24,19 @@ type step struct {
 	If   string            `yaml:"if"`
 	With map[string]any    `yaml:"with"`
 	Env  map[string]string `yaml:"env"`
+
+	ContinueOnError any `yaml:"continue-on-error"`
 }
 
 type job struct {
-	If          string            `yaml:"if"`
-	Env         map[string]string `yaml:"env"`
-	Needs       any               `yaml:"needs"`
-	Environment any               `yaml:"environment"`
-	Permissions map[string]any    `yaml:"permissions"`
-	Steps       []step            `yaml:"steps"`
+	If string `yaml:"if"`
+
+	ContinueOnError any               `yaml:"continue-on-error"`
+	Env             map[string]string `yaml:"env"`
+	Needs           any               `yaml:"needs"`
+	Environment     any               `yaml:"environment"`
+	Permissions     map[string]any    `yaml:"permissions"`
+	Steps           []step            `yaml:"steps"`
 }
 
 type flow struct {
