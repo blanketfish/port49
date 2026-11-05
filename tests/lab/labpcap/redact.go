@@ -530,7 +530,7 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 // not open with a TLS handshake record in some direction. It names the connection, never bytes.
 func checkTLSOpens(f *File) error {
 	streams := map[string]*Stream{}
-	var order []string
+	var order []*Stream
 	for i, r := range f.Records {
 		pkt := f.Bytes(r)
 		fl, ok := FlowOf(f.Link, pkt)
@@ -538,7 +538,9 @@ func checkTLSOpens(f *File) error {
 			continue
 		}
 		k := fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)
-		if fl.SYN() { // a new connection on a reused 4-tuple is checked from its start
+		if fl.SYN() {
+			// A new connection on a reused 4-tuple: its predecessor stays in order, and is walked
+			// with the rest, so every connection on the tuple is checked.
 			delete(streams, k)
 			delete(streams, fmt.Sprintf("%s:%d>%s:%d", fl.Dst, fl.DstPort, fl.Src, fl.SrcPort))
 			continue
@@ -550,33 +552,42 @@ func checkTLSOpens(f *File) error {
 		if s == nil {
 			s = &Stream{Key: k}
 			streams[k] = s
-			order = append(order, k)
+			order = append(order, s)
 		}
 		s.add(fl.Seq, i, fl.PayloadOff, f.Payload(r, fl))
 	}
-	// Each direction, reassembled, is a run of TLS records: a known content type, version 3.x, and a
-	// length that leads to the next record. The first must be a handshake. A stream that only stops
-	// short (a capture cut mid-record) is fine; one that leaves the framing is not.
-	for _, k := range order {
-		s := streams[k]
-		if s == nil {
-			continue
+	for _, s := range order {
+		if err := walkTLS(s); err != nil {
+			return err
 		}
-		p := s.Payload
-		if len(p) < 2 || p[0] != 0x16 || p[1] != 0x03 {
-			return fmt.Errorf("the connection %s carries data on port %d that does not open with a TLS handshake record; "+
-				"it may be plain TACACS+, which this tool would not redact there", k, TLSPort)
+	}
+	return nil
+}
+
+// maxTLSRecord is the longest ciphertext a TLS 1.3 record may carry: 2^14 bytes of plaintext plus
+// 256 of expansion (RFC 8446 section 5.2).
+const maxTLSRecord = 16640
+
+// walkTLS checks one direction of a port-300 connection: reassembled, it is a run of TLS records
+// (a known content type, version 3.x, a length within maxTLSRecord that leads to the next record),
+// the first a handshake. A stream that only stops short (a capture cut mid-record) is fine; one with
+// a sequence gap, or that leaves the framing, is not. It names the connection, never bytes.
+func walkTLS(s *Stream) error {
+	if s.Gap {
+		return fmt.Errorf("the connection %s has a sequence gap on port %d, so part of it was never checked as TLS", s.Key, TLSPort)
+	}
+	p := s.Payload
+	if len(p) < 2 || p[0] != 0x16 || p[1] != 0x03 {
+		return fmt.Errorf("the connection %s carries data on port %d that does not open with a TLS handshake record; "+
+			"it may be plain TACACS+, which this tool would not redact there", s.Key, TLSPort)
+	}
+	for i := 0; len(p)-i >= 5; {
+		n := int(p[i+3])<<8 | int(p[i+4])
+		if p[i] < 0x14 || p[i] > 0x17 || p[i+1] != 0x03 || n > maxTLSRecord {
+			return fmt.Errorf("the connection %s carries data on port %d that leaves the TLS record framing at stream offset %d; "+
+				"it may be plain TACACS+, which this tool would not redact there", s.Key, TLSPort, i)
 		}
-		for i := 0; i < len(p); {
-			if len(p)-i < 5 {
-				break
-			}
-			if p[i] < 0x14 || p[i] > 0x17 || p[i+1] != 0x03 {
-				return fmt.Errorf("the connection %s carries data on port %d that leaves the TLS record framing at stream offset %d; "+
-					"it may be plain TACACS+, which this tool would not redact there", k, TLSPort, i)
-			}
-			i += 5 + int(p[i+3])<<8 + int(p[i+4])
-		}
+		i += 5 + n
 	}
 	return nil
 }

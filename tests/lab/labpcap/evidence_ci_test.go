@@ -252,3 +252,42 @@ func TestAuditEvidenceReportsTailBytes(t *testing.T) {
 		t.Fatalf("report %+v, %v: want the filled 6-byte tail visible as TailBytes", r, err)
 	}
 }
+
+func tlsHello() []byte { return []byte{0x16, 0x03, 0x03, 0x00, 0x02, 0x01, 0x00} }
+
+func TestCheckTLSOpensChecksEveryConnectionOnAReusedTuple(t *testing.T) {
+	s := newSynth()
+	plain := tacacs(0x99999999, wire.TypeAcct, 1, []byte{1, 2, 3, 4})
+	s.segment(synthDevice, synthServer, 50040, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50040, TLSPort, 1001, flagACK, plain, true) // plaintext, first connection
+	s.segment(synthDevice, synthServer, 50040, TLSPort, 5000, flagSYN, nil, true)   // the tuple is reused
+	s.segment(synthDevice, synthServer, 50040, TLSPort, 5001, flagACK, tlsHello(), true)
+	f, _ := Parse(s.buf)
+	if err := checkTLSOpens(f); err == nil {
+		t.Fatal("plaintext on the first connection of a reused tuple passed")
+	}
+}
+
+func TestCheckTLSOpensFailsAGap(t *testing.T) {
+	s := newSynth()
+	hello := tlsHello()
+	plain := tacacs(0x99999998, wire.TypeAcct, 1, []byte{1, 2, 3, 4})
+	s.segment(synthDevice, synthServer, 50041, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50041, TLSPort, 1001, flagACK, hello, true)
+	s.segment(synthDevice, synthServer, 50041, TLSPort, 1001+uint32(len(hello))+500, flagACK, plain, true)
+	f, _ := Parse(s.buf)
+	if err := checkTLSOpens(f); err == nil {
+		t.Fatal("plaintext after a sequence gap passed")
+	}
+}
+
+func TestCheckTLSOpensFailsAnOversizedRecord(t *testing.T) {
+	s := newSynth()
+	big := []byte{0x16, 0x03, 0x03, 0x41, 0x01} // length 16641: past the 16640 a TLS 1.3 record may carry
+	s.segment(synthDevice, synthServer, 50042, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50042, TLSPort, 1001, flagACK, append(big, make([]byte, 20)...), true)
+	f, _ := Parse(s.buf)
+	if err := checkTLSOpens(f); err == nil {
+		t.Fatal("a record header longer than 16640 passed")
+	}
+}
