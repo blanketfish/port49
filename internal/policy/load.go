@@ -1664,19 +1664,37 @@ func (p *Policy) buildGrants(f file) error {
 				}
 			}
 		}
-		// A grant carries permits, and a permit's safe direction is exclude: on
-		// an include scope a device the inventory could not describe would get
-		// the grant (spec §5.5, decision 56 ruling 5).
-		if sc := p.scopes[g.Scope]; sc.OnMissing == "include" {
-			carries := g.MaxPrivilege != ""
+		// A grant carries access, and access's safe direction is exclude: on an
+		// include scope a device the inventory could not describe would get a
+		// session from the grant alone. A scope that cannot miss, or is pinned
+		// by name, has nothing to include (spec §5.5, decision 56 ruling 5).
+		if sc := p.scopes[g.Scope]; sc.OnMissing == "include" && len(sc.Match) > 0 && !pinnedByName(sc.Match) {
+			admits := ""
 			for _, r := range g.Roles {
-				carries = carries || len(p.roles[r].Permit) > 0
+				switch role := p.roles[r]; {
+				case len(role.Permit) > 0:
+					admits = fmt.Sprintf("role %q carries a permit", r)
+				case role.Privilege != "":
+					admits = fmt.Sprintf("role %q carries a privilege", r)
+				case len(role.Attributes) > 0:
+					admits = fmt.Sprintf("role %q carries attributes", r)
+				}
+				if admits != "" {
+					break
+				}
 			}
-			if carries {
-				return fmt.Errorf("%s: the scope is on_missing: include and the grant carries a permit or a "+
-					"max_privilege, so a device the inventory cannot describe would receive it; use on_missing: "+
-					"exclude for a scope a grant reaches, and put a mitigation's deny in attached_roles on an "+
-					"include scope (spec §5.5)", row)
+			switch {
+			case admits != "":
+			case g.MaxPrivilege != "":
+				admits = "the grant sets max_privilege"
+			case len(g.Attributes) > 0:
+				admits = "the grant carries attributes"
+			}
+			if admits != "" {
+				return fmt.Errorf("%s: scope %q is on_missing: include and %s, so a device the inventory cannot "+
+					"describe would get a session from this grant; put the grant on a separate scope with the same "+
+					"match and on_missing: exclude, and leave the include scope for denies in attached_roles or "+
+					"deny-only grants (spec §5.5)", row, g.Scope, admits)
 			}
 		}
 		// Roles are kept sorted, so nothing a grant reports — the mint

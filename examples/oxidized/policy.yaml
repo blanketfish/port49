@@ -6,6 +6,10 @@
 #
 # The principal is the workload certificate's SPIFFE ID, verbatim; the
 # username is declared, since a workload has no directory entry (spec §2).
+# all_devices is an ordinary scope since plan 4 (spec §5.5); skip this line if
+# your policy already declares it.
+scopes:
+  - {name: all_devices, match: {}}
 roles:
   - name: config_backup
     # privilege: admin, as spec §2 gives a backup account so show running-config

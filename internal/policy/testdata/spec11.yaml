@@ -33,7 +33,7 @@ scopes:
       humans:   [cve_2026_xxxx]
       machines: [cve_2026_xxxx]
 
-  # A grant on an include scope is a load error (spec §5.5): IR's permit is earned by data.
+  # IR's grant is earned by data: a grant that admits a session on an include scope is a load error (§5.5).
   - name: srx_unpatched_known
     match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
     on_missing: exclude

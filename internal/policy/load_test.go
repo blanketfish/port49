@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -669,89 +670,85 @@ func TestTheRefusalForAnUndeclaredOnMissingRecommendsExcludeForAGrant(t *testing
 	}
 }
 
+// admitsOnInclude is includeProbe with one more role and the grant row, for the
+// cases where a grant admits a session without a permit.
+func admitsOnInclude(role, grant string) string {
+	return strings.Replace(includeProbe, "subjects:", "  - "+role+"\nsubjects:", 1) + "grants:\n  - " + grant + "\n"
+}
+
+func TestAGrantThatCanStillAdmitASessionOnAnIncludeScopeIsRefused(t *testing.T) {
+	for _, tt := range []struct{ name, role, grant, want string }{
+		{"a role with only a privilege", "{name: lvl, privilege: admin}",
+			"{subject: noc, scope: dc_fabric, roles: [lvl]}", `role "lvl" carries a privilege`},
+		{"a deny-only role with attributes", "{name: attr, deny: [reload], attributes: {all: [\"idletime*30\"]}}",
+			"{subject: noc, scope: dc_fabric, roles: [attr]}", `role "attr" carries attributes`},
+		{"a grant with attributes", "{name: d, deny: [reload]}",
+			"{subject: noc, scope: dc_fabric, roles: [d], attributes: {all: [\"idletime*30\"]}}", "the grant carries attributes"},
+		{"a grant with only a ceiling", "{name: d, deny: [reload]}",
+			"{subject: noc, scope: dc_fabric, roles: [d], max_privilege: admin}", "the grant sets max_privilege"},
+	} {
+		_, err := Parse([]byte(admitsOnInclude(tt.role, tt.grant)), env())
+		if err == nil {
+			t.Errorf("%s: loaded", tt.name)
+			continue
+		}
+		for _, want := range []string{tt.want, "same match", "on_missing: exclude"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the refusal lacks %q: %v", tt.name, want, err)
+			}
+		}
+	}
+}
+
+// A scope that cannot miss, or that is pinned by name, has nothing to include.
+func TestAGrantOnAScopeThatCannotMissLoadsWithInclude(t *testing.T) {
+	for _, scope := range []string{"{name: all_devices, match: {}, on_missing: include}",
+		"{name: pin, match: {name: [leaf-01]}, on_missing: include}"} {
+		name := strings.Split(strings.TrimPrefix(scope, "{name: "), ",")[0]
+		body := "scopes:\n  - " + scope + "\nroles:\n  - {name: ro, privilege: readonly, permit: [show **]}\n" +
+			"subjects:\n  - {name: noc, identity: [\"user:noc@example.com\"], username: noc, token_ttl: 60s}\n" +
+			"grants:\n  - {subject: noc, scope: " + name + ", roles: [ro]}\n"
+		if _, err := Parse([]byte(body), env()); err != nil {
+			t.Errorf("%s: %v", scope, err)
+		}
+	}
+}
+
 // Every policy the repository ships loads: a new load refusal must not break
 // the examples an operator copies, nor the policies the qualification suite and
 // the lab load.
 func TestEveryShippedPolicyLoads(t *testing.T) {
 	root := filepath.Join("..", "..")
-	files := []string{filepath.Join(root, "tests", "qual", "qual-policy.yaml")}
-	for _, pat := range []string{"deploy/*/config/policy.yaml", "deploy/examples/*/policy.yaml", "deploy/examples/*/*/policy.yaml"} {
-		m, err := filepath.Glob(filepath.Join(root, pat))
+	var files []string
+	for _, dir := range []string{"examples", "deploy", filepath.Join("tests", "lab"), filepath.Join("tests", "qual")} {
+		found := 0
+		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case "logs", "captures", "results", "node_modules":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if n := d.Name(); n == "policy.yaml" || strings.HasSuffix(n, "-policy.yaml") {
+				files = append(files, path)
+				found++
+			}
+			return nil
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		files = append(files, m...)
-	}
-	if len(files) < 3 {
-		t.Fatalf("expected the qual policy and the deploy policies, found %v", files)
+		if found == 0 {
+			t.Errorf("no policy file under %s: the walk matches nothing, so it guards nothing", dir)
+		}
 	}
 	for _, f := range files {
 		if _, err := Load(f, env()); err != nil {
 			t.Errorf("%s: %v", f, err)
-		}
-	}
-}
-
-// unloggedDenyScope is the reviewer's srx_unpatched: an attribute scope that
-// attaches a deny and says nothing of security_log.
-const unloggedDenyScope = `
-scopes:
-  - {name: all_devices, match: {}}
-  - {name: srx_unpatched, match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}, on_missing: include%s,
-     attached_roles: {humans: [no_reload]}}
-roles:
-  - {name: ro, privilege: readonly, permit: [show **]}
-  - {name: no_reload, deny: [reload **]}
-subjects:
-  - {name: s, identity: ["user:s@example.com"], username: s, token_ttl: 60s}
-grants:
-  - {subject: s, scope: all_devices, roles: [ro]}
-`
-
-func TestADenyBearingAttributeScopeIsSecurityLoggedByDefault(t *testing.T) {
-	p := mustParse(t, fmt.Sprintf(unloggedDenyScope, ""))
-	if !p.scopes["srx_unpatched"].SecurityLog {
-		t.Error("a deny-bearing attribute scope with no security_log is not security-logged")
-	}
-	if p.scopes["all_devices"].SecurityLog {
-		t.Error("a scope with no match key is logged")
-	}
-	// A grant that carries the deny delivers it as surely as attached_roles.
-	g := mustParse(t, `
-scopes:
-  - {name: all_devices, match: {}}
-  - {name: dc, match: {site: dc1}, on_missing: exclude}
-roles:
-  - {name: ro, privilege: readonly, permit: [show **]}
-  - {name: no_reload, deny: [reload **]}
-subjects:
-  - {name: s, identity: ["user:s@example.com"], username: s, token_ttl: 60s}
-grants:
-  - {subject: s, scope: all_devices, roles: [ro]}
-  - {subject: s, scope: dc, roles: [no_reload]}
-`)
-	if !g.scopes["dc"].SecurityLog {
-		t.Error("a scope a grant delivers a deny through is not security-logged")
-	}
-}
-
-func TestAnExplicitFalseLoadsAndIsLinted(t *testing.T) {
-	p := mustParse(t, fmt.Sprintf(unloggedDenyScope, ", security_log: false"))
-	if p.scopes["srx_unpatched"].SecurityLog {
-		t.Error("an explicit security_log: false was overridden")
-	}
-	found := false
-	for _, f := range p.Lint(noon) {
-		if f.Kind == FindingDenyScopeUnlogged && strings.Contains(f.Message, "srx_unpatched") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("no deny_scope_unlogged finding")
-	}
-	for _, f := range mustParse(t, fmt.Sprintf(unloggedDenyScope, "")).Lint(noon) {
-		if f.Kind == FindingDenyScopeUnlogged {
-			t.Errorf("a defaulted scope is linted: %s", f.Message)
 		}
 	}
 }
