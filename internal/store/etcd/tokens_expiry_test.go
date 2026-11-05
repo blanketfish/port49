@@ -131,3 +131,34 @@ func TestAPutOverAnExistingTokenKeyFailsAndWritesNothing(t *testing.T) {
 		t.Fatalf("the key was overwritten: %v %v", resp, err)
 	}
 }
+
+// An index entry that moves between the put's read and its Txn is not a taken
+// ID: the put reads again and lands, as it did before the create-only compare.
+func TestAPutWhoseIndexEntryMovedReadsAgainAndLands(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	s := onShared(t, func() time.Time { return now })
+	k := store.TokenKey{NAS: "leaf", Username: "alice"}
+	ix := s.k.tokenIndexed(famTokByPrin, "user:alice", k)
+	calls := 0
+	beforeTokenTxn = func(ctx context.Context) {
+		calls++
+		if calls == 1 {
+			if _, err := s.tok.Put(ctx, ix, `{"expires_at":"2026-11-02T09:30:00Z"}`); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { beforeTokenTxn = nil })
+	n, err := s.PutToken(ctx, k, store.Token{ID: "t1", Kind: store.KindLogin, ExpiresAt: now.Add(time.Hour),
+		IndexPrincipal: "user:alice", IndexTTL: time.Hour})
+	if err != nil || n != 1 {
+		t.Fatalf("PutToken = %d, %v; want 1, nil", n, err)
+	}
+	if calls != 2 {
+		t.Fatalf("the put tried %d times, want 2 (one lost to the moved index entry, one landed)", calls)
+	}
+	if got, err := s.Candidates(ctx, k); err != nil || len(got) != 1 || got[0].ID != "t1" {
+		t.Fatalf("candidates: %v %v", got, err)
+	}
+}

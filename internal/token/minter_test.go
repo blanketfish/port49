@@ -864,3 +864,45 @@ func TestEveryTokenCarriesItsVerifiedAt(t *testing.T) {
 		}
 	}
 }
+
+// conflictOnceStore refuses the first n puts with ErrConflict, as a create-only
+// put does for a token ID that is already taken.
+type conflictOnceStore struct {
+	*memory.Store
+	n   int
+	ids []string
+}
+
+func (c *conflictOnceStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
+	c.ids = append(c.ids, t.ID)
+	if c.n > 0 {
+		c.n--
+		return 0, store.ErrConflict
+	}
+	return c.Store.PutToken(ctx, k, t)
+}
+
+// A taken token ID is the store's coincidence, not the caller's fault: the
+// mint draws a fresh ID and puts again, and when every draw is taken it fails
+// as a store failure, never as a refusal of the request.
+func TestAMintWhoseTokenIDIsTakenMintsAgainWithAFreshID(t *testing.T) {
+	ctx := context.Background()
+	st := &conflictOnceStore{Store: memory.New(time.Now), n: 1}
+	m := NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), time.Now, 3)
+	if _, err := m.Mint(ctx, Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute}); err != nil {
+		t.Fatalf("a mint over one taken ID failed: %v", err)
+	}
+	if len(st.ids) != 2 || st.ids[0] == st.ids[1] {
+		t.Fatalf("puts %v, want two with different IDs", st.ids)
+	}
+
+	always := &conflictOnceStore{Store: memory.New(time.Now), n: 100}
+	m = NewMinter(always, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), time.Now, 3)
+	_, err := m.Mint(ctx, Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute})
+	if err == nil || errors.Is(err, store.ErrConflict) {
+		t.Fatalf("exhausted draws: %v, want a store failure that is not ErrConflict", err)
+	}
+	if len(always.ids) != mintIDDraws {
+		t.Fatalf("%d puts, want %d", len(always.ids), mintIDDraws)
+	}
+}

@@ -87,7 +87,7 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 			if got, err := s.tok.Get(ctx, s.k.token(k, t.ID), clientv3.WithCountOnly()); err != nil {
 				return 0, unavailable(err)
 			} else if got.Count > 0 {
-				return 0, fmt.Errorf("%w: token %q already exists", store.ErrConflict, t.ID)
+				return 0, fmt.Errorf("etcd store: token %q already exists: %w", t.ID, store.ErrConflict)
 			}
 			lost++
 			if err := casBackoff(ctx, lost); err != nil {
