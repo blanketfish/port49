@@ -156,6 +156,20 @@ func (w *regionWorld) revoke(i int, args ...string) (string, int, time.Duration)
 	return out, code, time.Since(start)
 }
 
+// failureLine is the first line of a command's output fit for a failure message: a line holding
+// "token", "secret" or "eyJ", or a held secret, is dropped, and what is left is cut to 300 bytes.
+func (w *regionWorld) failureLine(out string) string {
+	for _, l := range strings.Split(out, "\n") {
+		l = strings.TrimSpace(l)
+		low := strings.ToLower(l)
+		if l == "" || strings.Contains(low, "token") || strings.Contains(low, "secret") || strings.Contains(l, "eyJ") || w.leaky(l) {
+			continue
+		}
+		return l[:min(len(l), 300)]
+	}
+	return "(no output that is safe to show)"
+}
+
 // storeStatus is `port49 store status` at region i's port49d, or its broker.
 func (w *regionWorld) storeStatus(addr string) (string, int, time.Duration) {
 	return w.port49("store", "status", "--metrics", addr)
@@ -638,8 +652,8 @@ func l74CellsCToG(w *regionWorld, row func(id, claim, observed string, agrees bo
 	}
 	pre := w.mint(3)
 	// A mark region 3 holds before the cut, for (e)'s lift.
-	if _, code, _ := w.revoke(1, "--principal", "user:carol@example.com"); code != 0 {
-		w.t.Fatal("INVALID: carol's revocation before the cut")
+	if out, code, _ := w.revoke(1, "--principal", "user:carol@example.com"); code != 0 {
+		w.t.Fatalf("INVALID: carol's revocation before the cut: exit %d: %s", code, w.failureLine(out))
 	}
 	if _, err := w.brokers[3].wait("a revocation of user:carol@example.com made elsewhere reached", 30*time.Second); err != nil {
 		w.t.Fatalf("INVALID: %v", err)
