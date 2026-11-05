@@ -1694,7 +1694,7 @@ func (p *Policy) buildGrants(f file) error {
 		// from the grant alone. A scope that cannot miss, or is pinned by
 		// name, has nothing to include (spec §5.5, decision 56 ruling 5).
 		if sc := p.scopes[g.Scope]; sc.OnMissing == "include" && len(sc.Match) > 0 && !pinnedByName(sc.Match) {
-			admits := "a grant lets a login reach a device even when its roles only deny"
+			admits := ""
 			for _, r := range g.Roles {
 				if why := widens(p.roles[r]); why != "" {
 					admits = fmt.Sprintf("role %q %s", r, why)
@@ -1702,11 +1702,13 @@ func (p *Policy) buildGrants(f file) error {
 				}
 			}
 			switch {
-			case strings.HasPrefix(admits, "role"):
+			case admits != "":
 			case g.MaxPrivilege != "":
 				admits = "the grant sets max_privilege"
 			case len(g.Attributes) > 0:
 				admits = "the grant carries attributes"
+			default:
+				admits = "a grant lets a login reach a device even when its roles only deny"
 			}
 			return fmt.Errorf("%s: scope %q is on_missing: include and %s, so a device the inventory cannot "+
 				"describe would get a session from this grant; put the grant on a separate scope with the same "+

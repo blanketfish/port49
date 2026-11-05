@@ -250,7 +250,7 @@ func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(svc.StateDir, "bundle.json")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("persisted before the policy took it: %v", err)
 	}
-	persistStart("port49d", svc, coldPick{p, from}, testMetrics())
+	persistStart("port49d", svc, coldPick{p: p, from: from}, testMetrics())
 	fi, err := os.Stat(filepath.Join(svc.StateDir, "bundle.json"))
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("not persisted: %v %v", fi, err)
@@ -644,7 +644,7 @@ func TestAPersistThatFailsIsAlarmed(t *testing.T) {
 	if err != nil || from != "the service" {
 		t.Fatalf("%q %v", from, err)
 	}
-	persistStart("port49d", svc, coldPick{p, from}, m)
+	persistStart("port49d", svc, coldPick{p: p, from: from}, m)
 	if testutil.ToFloat64(m.InventoryPersistFailed) != 1 || !strings.Contains(out.String(), "a restart with the service down") {
 		t.Fatalf("not alarmed: %s", out.String())
 	}
@@ -665,9 +665,44 @@ func TestAColdStartWithNoLocalCopySaysWhatItTook(t *testing.T) {
 	if err != nil || from != "the service" {
 		t.Fatalf("%v %q %v", p, from, err)
 	}
-	sayStart("port49d", svc, coldPick{p, from})
+	// coldStart drops the pick's passed-over list, so ask coldCopies itself.
+	picks, err := coldCopies(context.Background(), "port49d", svc, keys,
+		&fakeService{bundles: [][]byte{sealedDocAt(t, key, 4, 1, at)}}, testMetrics(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.mu.Lock()
+	out.b.Reset()
+	out.mu.Unlock()
+	sayStart("port49d", svc, picks[0])
 	want := "port49d: inventory: no local copy; took bundle 4 published 2026-11-05T03:00:00Z from the service;"
 	if !strings.Contains(out.String(), want) {
 		t.Fatalf("the start line lacks %q:\n%s", want, out.String())
+	}
+}
+
+// A start from the service after local copies were refused or unreadable does
+// not call that no local copy: it says they were passed over.
+func TestAColdStartAfterAPassedOverCopySaysSo(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	svc.MirrorDir = ""
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	mustPersist(t, svc.StateDir, sealedDoc(t, other, 3, 1)) // signed by a key we do not hold
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	picks, err := coldCopies(context.Background(), "port49d", svc, keys,
+		&fakeService{bundles: [][]byte{sealedDoc(t, key, 4, 1)}}, testMetrics(), nil)
+	if err != nil || picks[0].from != "the service" {
+		t.Fatalf("%v %v", picks, err)
+	}
+	out.mu.Lock()
+	out.b.Reset()
+	out.mu.Unlock()
+	sayStart("port49d", svc, picks[0])
+	if !strings.Contains(out.String(), "no usable local copy (the persisted copy was passed over); took bundle 4") ||
+		strings.Contains(out.String(), "no local copy;") {
+		t.Fatalf("%s", out.String())
 	}
 }

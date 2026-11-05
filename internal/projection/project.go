@@ -258,7 +258,7 @@ func Project(in Input) (Result, error) {
 		if renderFault != nil {
 			res.Attributes = renderFault(slices.Clone(res.Attributes))
 		}
-		if v, attr, rerr := m.unsoundRendered(res.Attributes); rerr != nil || attr != "" {
+		if v, attr, rerr := m.unsoundRendered(res.Attributes, func(s string) string { return platform.QuoteShown(in.Hidden, s) }); rerr != nil || attr != "" {
 			if rerr != nil {
 				return Result{}, fmt.Errorf("projection defect on %s: the rendered %w", in.Platform, rerr)
 			}
@@ -282,6 +282,7 @@ func Project(in Input) (Result, error) {
 
 // renderFault, where a test sets it, edits the rendered attributes before the
 // recheck reads them: the rendering fault the recheck exists to catch.
+// The tests that set it must not run in parallel.
 var renderFault func(attributes []string) []string
 
 // FailClosed is the fail-closed reply for a composition refused before it

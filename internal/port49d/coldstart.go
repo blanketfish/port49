@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/blanketfish/port49/internal/bundle"
@@ -156,6 +158,9 @@ type coldCopy struct {
 type coldPick struct {
 	p    *inventory.Published
 	from string // "the persisted copy", "the mirror's copy", "the service"
+	// passedOver names the local copies a start from the service found and
+	// could not use, refused or unreadable; none where there was no copy.
+	passedOver []string
 }
 
 // coldCopies is port49d's first inventory with inventory.service (spec §10,
@@ -202,6 +207,7 @@ func coldCopies(ctx context.Context, proc string, svc *config.InventoryServiceCo
 	if svc.MirrorDir != "" {
 		why["the mirror's copy"] = "none in " + svc.MirrorDir
 	}
+	initialWhy := maps.Clone(why)
 	// ahead holds the copies refused only for their published_at; refusedOther
 	// is set once any document is refused for anything else, which only the
 	// service's word clears.
@@ -258,7 +264,7 @@ func coldCopies(ctx context.Context, proc string, svc *config.InventoryServiceCo
 				continue
 			}
 			if len(picks) == 0 || !p.Doc.PublishedAt.After(picks[0].p.Doc.PublishedAt) {
-				picks = append(picks, coldPick{p, cp.name})
+				picks = append(picks, coldPick{p: p, from: cp.name})
 				continue
 			}
 			// Newer is later publication: a sequence starts again at 1
@@ -269,7 +275,7 @@ func coldCopies(ctx context.Context, proc string, svc *config.InventoryServiceCo
 			say("inventory: the mirror's bundle %d, published %s, is published later "+
 				"than the persisted copy's bundle %d, published %s\n", p.Doc.Sequence,
 				p.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
-			picks = append([]coldPick{{p, cp.name}}, picks...)
+			picks = append([]coldPick{{p: p, from: cp.name}}, picks...)
 		}
 	}
 	choose(copies, false)
@@ -289,7 +295,13 @@ func coldCopies(ctx context.Context, proc string, svc *config.InventoryServiceCo
 				oerr = publishedInFuture(p, coldNow())
 			}
 			if oerr == nil {
-				picks = []coldPick{{p, "the service"}}
+				var passed []string
+				for _, cp := range copies {
+					if why[cp.name] != initialWhy[cp.name] {
+						passed = append(passed, cp.name)
+					}
+				}
+				picks = []coldPick{{p: p, from: "the service", passedOver: passed}}
 				break
 			}
 			m.InventoryBundleRefused.Set(1)
@@ -402,10 +414,19 @@ func persistStart(proc string, svc *config.InventoryServiceConfig, pk coldPick, 
 // sayStart is the start's line for the copy it serves, begun with proc.
 func sayStart(proc string, svc *config.InventoryServiceConfig, pk coldPick) {
 	// The service is the source only where no local copy could be taken, so
-	// the line says what backs the start (policy M5).
+	// the line says what backs the start (policy M5): nothing local, or local
+	// copies that were passed over (said above, with why).
 	if pk.from == "the service" {
-		fmt.Fprintf(stderr, proc+": inventory: no local copy; took bundle %d published %s from the service; the "+
-			"service at %s is asked every %s\n", pk.p.Doc.Sequence, pk.p.Doc.PublishedAt.Format(time.RFC3339),
+		none := "no local copy"
+		if len(pk.passedOver) > 0 {
+			was := " was"
+			if len(pk.passedOver) > 1 {
+				was = " were"
+			}
+			none = "no usable local copy (" + strings.Join(pk.passedOver, " and ") + was + " passed over)"
+		}
+		fmt.Fprintf(stderr, proc+": inventory: %s; took bundle %d published %s from the service; the "+
+			"service at %s is asked every %s\n", none, pk.p.Doc.Sequence, pk.p.Doc.PublishedAt.Format(time.RFC3339),
 			svc.URL, svc.PollInterval)
 		return
 	}

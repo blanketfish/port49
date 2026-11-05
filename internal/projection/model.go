@@ -224,7 +224,7 @@ func (m *model) unsound() ([]string, bool) {
 // as the device compiles it, and tried on every probe joined by spaces. It
 // names the attribute that lets the device run a command port49 denies, or an
 // error for a value that does not compile.
-func (m *model) unsoundRendered(attrs []string) ([]string, string, error) {
+func (m *model) unsoundRendered(attrs []string, quote func(string) string) ([]string, string, error) {
 	var allow, deny *regexp.Regexp
 	var allowAttr, denyAttr string
 	for _, a := range attrs {
@@ -234,7 +234,9 @@ func (m *model) unsoundRendered(attrs []string) ([]string, string, error) {
 		}
 		re, err := regexp.CompilePOSIX(value)
 		if err != nil {
-			return nil, "", fmt.Errorf("%s does not compile: %v", name, err)
+			// The compiler's message embeds the expression, which may carry a
+			// value a redaction hides; quote it as every refusal does.
+			return nil, "", fmt.Errorf("%s does not compile: %s", name, quote(err.Error()))
 		}
 		if name == "allow-commands" {
 			allow, allowAttr = re, name

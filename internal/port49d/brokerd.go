@@ -576,7 +576,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); <-signInDone }()
 	if startDoc != nil {
-		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+		persistStart(procOf(cfg), cfg.InventoryService, coldPick{p: startDoc, from: startFrom}, m)
 	}
 	// Every replica runs its pool's health checks and selects for its own
 	// queries; the pool closes its connections when Run returns, which is

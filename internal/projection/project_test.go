@@ -648,3 +648,46 @@ func TestProjectRechecksTheRenderedRegexes(t *testing.T) {
 		t.Fatalf("the unfaulted reply: %v", err)
 	}
 }
+
+// A rendered regex that does not compile is a defect too, and the message
+// quotes the expression through the redaction, never raw.
+func TestProjectRefusesARenderedRegexThatDoesNotCompile(t *testing.T) {
+	renderFault = func(attrs []string) []string {
+		for i, a := range attrs {
+			if strings.HasPrefix(a, "allow-commands=") {
+				attrs[i] = "allow-commands=^(show version|SECRETWORD$"
+			}
+		}
+		return attrs
+	}
+	t.Cleanup(func() { renderFault = nil })
+	in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show version"), permit("show interfaces **"))
+	in.Hidden = []string{"SECRETWORD"}
+	_, err := Project(in)
+	if err == nil || !strings.Contains(err.Error(), "allow-commands does not compile") {
+		t.Fatalf("an uncompilable rendering was proven sound: %v", err)
+	}
+	if strings.Contains(err.Error(), "SECRETWORD") {
+		t.Errorf("the compile error quotes a hidden value: %v", err)
+	}
+}
+
+// A deny-commands dropped by a rendering fault leaves the device running what
+// port49 denies, and Project says so.
+func TestProjectRechecksADroppedDeny(t *testing.T) {
+	renderFault = func(attrs []string) []string {
+		var out []string
+		for _, a := range attrs {
+			if !strings.HasPrefix(a, "deny-commands=") {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	t.Cleanup(func() { renderFault = nil })
+	_, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured,
+		permit("show version"), permit("show interfaces **")))
+	if err == nil || !strings.Contains(err.Error(), "which port49 denies") {
+		t.Fatalf("a dropped deny-commands was proven sound: %v", err)
+	}
+}
