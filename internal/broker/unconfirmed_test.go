@@ -240,11 +240,12 @@ func TestAnUnrecordedRevokeStillReachesThisRegionsSessionStore(t *testing.T) {
 	if !errors.Is(err, ErrUnrecorded) {
 		t.Fatalf("an unanswered write: %v", err)
 	}
-	if strings.Contains(err.Error(), "other regions have not learned of it") || strings.Contains(err.Error(), "at the heal") {
-		t.Errorf("an unanswered write promises nothing it does not: %v", err)
+	if n := strings.Count(err.Error(), "port49 revoke --list"); n != 1 || strings.Contains(err.Error(), "at the heal") {
+		t.Errorf("the --list check is said once, and no heal is promised: %d %v", n, err)
 	}
 	for _, want := range []string{"this region's session store: 1 token keys deleted and 1 contexts marked revoked",
-		"other regions learn of it only if the sent copy lands", "check `port49 revoke --list`"} {
+		"other regions have not learned of it yet", "run `port49 revoke` now against a broker in a region that reaches the directory",
+		"the copy sent may land too", "check `port49 revoke --list`"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error lacks %q: %v", want, err)
 		}
@@ -270,12 +271,12 @@ func TestANotSentRevokeReachesTooAndSaysSo(t *testing.T) {
 	// Nothing carries a write never sent to another region: the text says so and names the fix, and
 	// does not promise a heal.
 	for _, want := range []string{"other regions have not learned of it",
-		"run `port49 revoke` against a broker in a region that reaches the directory, now"} {
+		"run `port49 revoke` now against a broker in a region that reaches the directory", "this one, if the directory answers it again"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error lacks %q: %v", want, err)
 		}
 	}
-	for _, bad := range []string{"at the heal", "learn of it only if"} {
+	for _, bad := range []string{"at the heal", "the copy sent may land"} {
 		if strings.Contains(err.Error(), bad) {
 			t.Errorf("the error says %q: %v", bad, err)
 		}

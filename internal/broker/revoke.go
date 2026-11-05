@@ -481,9 +481,9 @@ func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
 // reachUnrecorded runs the session-store reach for a mark the directory did not record, so a region
 // cut from its directory still denies what the mark names in its own store (stores I1). It returns
 // the sentence for the error and whether the reach finished. sent is whether a copy of the write
-// left this process: only then can the mark reach other regions, and only if that copy lands. A write
-// never sent reaches no other region, and the operator is told to make it where the directory
-// answers. ReachMark only denies more and is safe to run again.
+// left this process: only then can the mark reach other regions on its own, and only if that copy
+// lands. Either way the operator is told to make it now where the directory answers; the check after
+// the heal is unrecordedWhat's. ReachMark only denies more and is safe to run again.
 func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sent bool) (string, bool) {
 	keys, ctxs, err := b.ReachMark(ctx, mark)
 	if err != nil {
@@ -493,11 +493,11 @@ func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sen
 		return fmt.Sprintf("this region's session store was reached only in part (%d token keys deleted and %d contexts "+
 			"marked revoked before: %s); ", keys, len(ctxs), printsafe.Line(err.Error(), 160)), false
 	}
-	tail := "other regions have not learned of it: run `port49 revoke` against a broker in a region that reaches " +
-		"the directory, now; "
+	tail := "other regions have not learned of it: run `port49 revoke` now against a broker in a region that " +
+		"reaches the directory (this one, if the directory answers it again); "
 	if sent {
-		tail = "other regions learn of it only if the sent copy lands: after the heal check `port49 revoke --list`, " +
-			"and run it again if the mark is not there; "
+		tail = "other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that " +
+			"reaches the directory (the copy sent may land too); "
 	}
 	return fmt.Sprintf("this region's session store: %d token keys deleted and %d contexts marked revoked; ", keys, len(ctxs)) + tail, true
 }

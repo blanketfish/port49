@@ -148,7 +148,7 @@ func TestARevokeWhoseWriteFailsSaysItMayStillLand(t *testing.T) {
 			"answers again, and then stands everywhere, even over a lift made meanwhile. Until then this " +
 			"port49-broker denies what it names, until a lift on this port49-broker or its restart; after the heal " +
 			"check `port49 revoke --list` (",
-		"this region's session store: 0 token keys deleted and 0 contexts marked revoked; other regions learn of it only if the sent copy lands",
+		"this region's session store: 0 token keys deleted and 0 contexts marked revoked; other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that reaches the directory",
 		"remove the principal's grants from broker.policy_file",
 	} {
 		if !strings.Contains(err.Error(), want) {
