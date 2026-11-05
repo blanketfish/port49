@@ -226,3 +226,65 @@ func TestANeverSentWriteIsNotRememberedAsFailed(t *testing.T) {
 		}
 	}
 }
+
+// A revocation the directory did not record still reaches this region's own session store: the token
+// keys the principal holds are deleted and its live contexts marked revoked, and the answer says so
+// (stores I1). Other regions learn of the mark at the heal.
+func TestAnUnrecordedRevokeStillReachesThisRegionsSessionStore(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	f.b.Store = putRevocationUnavailable{f.b.Store}
+	_, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice})
+	if !errors.Is(err, ErrUnrecorded) {
+		t.Fatalf("an unanswered write: %v", err)
+	}
+	for _, want := range []string{"this region's session store: 1 token keys deleted and 1 contexts marked revoked",
+		"other regions learn of it at the heal"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error lacks %q: %v", want, err)
+		}
+	}
+	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Errorf("%d unspent token(s) survived an unrecorded revoke", len(toks))
+	}
+	if c, gerr := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); gerr != nil || c.RevokedAt.IsZero() {
+		t.Errorf("the live context was not marked revoked: %+v %v", c, gerr)
+	}
+}
+
+func TestANotSentRevokeReachesTooAndSaysSo(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	f.b.Store = putRevocationNotSent{f.b.Store}
+	_, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice})
+	if !errors.Is(err, ErrNotRecorded) || !strings.Contains(err.Error(), "this region's session store: 1 token keys deleted and 1 contexts marked revoked") {
+		t.Fatalf("a write never sent: %v", err)
+	}
+	if c, gerr := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); gerr != nil || c.RevokedAt.IsZero() {
+		t.Errorf("the live context was not marked revoked: %+v %v", c, gerr)
+	}
+}
+
+// With the reach done, port49-broker is no longer told to stop every port49d; the policy edit is the
+// further cut. "Stop every port49d" is offered only when the reach itself failed.
+func TestTheFallbackNoLongerSaysStopEveryPort49d(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Proc = "port49-broker"
+	ctx := context.Background()
+	f.b.Store = putRevocationUnavailable{f.b.Store}
+	_, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice})
+	if err == nil || strings.Contains(err.Error(), "stop every port49d") || !strings.Contains(err.Error(), "broker.policy_file") {
+		t.Fatalf("the reach was done: %v", err)
+	}
+	// The reach itself failed: the process stop is offered again.
+	f.b.Store = putRevocationFails{tokensByPrincipalFails{f.st}}
+	_, err = f.b.Revoke(ctx, RevokeRequest{Principal: alice})
+	if err == nil || !strings.Contains(err.Error(), "stop every port49d") ||
+		!strings.Contains(err.Error(), "reached only in part") {
+		t.Fatalf("the reach failed: %v", err)
+	}
+}

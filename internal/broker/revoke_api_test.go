@@ -210,6 +210,12 @@ func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	}
 }
 
+type tokensByPrincipalFails struct{ store.Store }
+
+func (tokensByPrincipalFails) TokensByPrincipal(context.Context, string) ([]store.TokenKey, error) {
+	return nil, errors.New("index unreadable")
+}
+
 type putRevocationFails struct{ store.Store }
 
 func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error {
@@ -345,7 +351,15 @@ func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 			strings.Contains(err.Error(), c.wrong) {
 			t.Errorf("proc %q busy: %v", c.proc, err)
 		}
+		// The reach finished: the policy edit is the only cut left to offer (stores I1).
 		f.b.Store = putRevocationFails{f.st}
+		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
+		if err == nil || !strings.HasSuffix(err.Error(), "(live within two watch intervals)") ||
+			strings.Contains(err.Error(), "stop ") {
+			t.Errorf("proc %q unrecorded, reached: %v", c.proc, err)
+		}
+		// The reach itself failed: the process stop is offered too.
+		f.b.Store = putRevocationFails{tokensByPrincipalFails{f.st}}
 		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
 		if err == nil || !strings.HasSuffix(err.Error(), c.stop) || strings.Contains(err.Error(), c.wrong) ||
 			!strings.Contains(err.Error(), "this "+f.b.proc()+" denies what it names, until a lift on this "+f.b.proc()) {

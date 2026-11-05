@@ -148,7 +148,8 @@ func TestARevokeWhoseWriteFailsSaysItMayStillLand(t *testing.T) {
 			"answers again, and then stands everywhere, even over a lift made meanwhile. Until then this " +
 			"port49-broker denies what it names, until a lift on this port49-broker or its restart; after the heal " +
 			"check `port49 revoke --list` (",
-		"stop every port49d (port49-broker serves no device)",
+		"this region's session store: 0 token keys deleted and 0 contexts marked revoked; other regions learn of it at the heal",
+		"remove the principal's grants from broker.policy_file",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the error does not say %q:\n%v", want, err)
