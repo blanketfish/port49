@@ -94,23 +94,121 @@ func JudgeA(a A) string {
 
 // C is cell (c)'s and (d)'s measurements: the README's restore order, run step by step.
 type C struct {
-	Volumes           int    // pod volume restores the restore made
-	NotCompleted      int    // of them, not Completed
-	FingerprintBefore string // the issuing CA's sha256 before the namespace was deleted
-	FingerprintAfter  string // and after the scale-up
-	MarksPresent      bool   // broker.state_dir/marks.json is there and not empty after the scale-up
-	SpoolBefore       string // each port49d's spool directory listing before the backup, joined
-	SpoolAfter        string // and after the scale-up
+	RestorePhase      string            // the restore's phase, as the README's volume check prints it
+	Volumes           map[string]string // the restore's pod volume restores, "pod/volume": phase
+	Want              []string          // the chart's data volumes ("pod/volume"), each of which must be Completed
+	FingerprintBefore string            // the issuing CA's sha256 before the namespace was deleted
+	FingerprintAfter  string            // and after the scale-up
+	Before            map[string]string // the sha256 of each file the cell compares, "claim:path", when the backup was taken ("" absent)
+	AtZero            map[string]string // and after the restore, with both StatefulSets at 0, before the scale-up
+	FreshCopy         bool              // a broker's log after the scale-up says it had no marks.json at this start
 }
 
-// JudgeC is PASS iff the restore made pod volume restores for the chart's four data volumes at least,
-// every one Completed, the issuing CA is the one it was, marks.json is there and each spool holds what it
-// held. A fingerprint not read is a FAIL.
+// FreshCopyLine is what a broker logs when it starts with no broker.state_dir/marks.json
+// (internal/port49d/runner.go): after a restore, its state volume did not come back.
+const FreshCopyLine = "had no marks.json at this start"
+
+// JudgeC is PASS iff the restore Completed with a Completed pod volume restore for each of the chart's
+// data volumes by name (the lab's etcd volumes are in the same restore and do not count), the issuing CA
+// is the one it was, every file recorded at the backup is there with the same sha256 while both
+// StatefulSets are at 0, and no broker started a fresh copy of the marks. A fingerprint or a hash not
+// read is a FAIL.
 func JudgeC(c C) string {
-	if c.Volumes < 4 || c.NotCompleted != 0 || c.FingerprintBefore == "" || c.FingerprintBefore != c.FingerprintAfter || !c.MarksPresent || c.SpoolBefore != c.SpoolAfter {
+	if c.RestorePhase != "Completed" || len(c.Want) == 0 || len(c.Before) == 0 || c.FreshCopy {
 		return l82.Fail
 	}
+	for _, v := range c.Want {
+		if c.Volumes[v] != "Completed" {
+			return l82.Fail
+		}
+	}
+	if c.FingerprintBefore == "" || c.FingerprintBefore != c.FingerprintAfter {
+		return l82.Fail
+	}
+	for k, h := range c.Before {
+		if !sha256Hex.MatchString(h) || c.AtZero[k] != h {
+			return l82.Fail
+		}
+	}
 	return l82.Pass
+}
+
+// ParseVolumes reads the output of the README's volume check (the marker "volumes"): the restore's phase
+// on the first line, then kubectl's PHASE POD VOLUME columns. It returns the phase and each pod volume
+// restore as "pod/volume": phase. A line of any other shape (kubectl's "No resources found") is skipped:
+// a volume missing from the map is a volume that did not come back.
+func ParseVolumes(out string) (string, map[string]string) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	vols := map[string]string{}
+	phase := strings.TrimSpace(lines[0])
+	if strings.Contains(phase, " ") {
+		phase = ""
+	}
+	for _, ln := range lines[1:] {
+		f := strings.Fields(ln)
+		if len(f) != 3 || f[0] == "PHASE" {
+			continue
+		}
+		vols[f[1]+"/"+f[2]] = f[0]
+	}
+	return phase, vols
+}
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// HashScript is the debug pod's script that prints `sha256sum` of each path, or "absent <path>" for a
+// path that is missing or empty.
+func HashScript(paths ...string) string {
+	return "for f in " + strings.Join(paths, " ") + `; do if [ -s "$f" ]; then sha256sum "$f"; else echo "absent $f"; fi; done`
+}
+
+// ParseHashes reads HashScript's output on claim's volume: "claim:path" to the sha256, "" for an absent
+// path. A line of any other shape is skipped, so the path is missing from the map.
+func ParseHashes(claim, out string) map[string]string {
+	got := map[string]string{}
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Fields(ln)
+		switch {
+		case len(f) == 2 && f[0] == "absent":
+			got[claim+":"+f[1]] = ""
+		case len(f) == 2 && sha256Hex.MatchString(f[0]):
+			got[claim+":"+f[1]] = f[0]
+		}
+	}
+	return got
+}
+
+// The README's commands name etcd's namespace (the shipped etcd example's) and the release's, port49. The
+// kind lab runs both in one namespace, so Steps puts etcd's into it; the release's is the lab's own.
+const etcdNamespace = "port49-etcd"
+
+// Steps is the Velero README's restore steps (their markers' commands) as the kind lab runs them: etcd's
+// namespace replaced by the lab's ns everywhere a command names it, and the placeholders filled. It fails
+// on a step whose command lacks what it replaces, so a changed README cannot run half-substituted.
+func Steps(doc, ns, release, backup string, brokers, port49d int) (map[string]string, error) {
+	if ns != "port49" {
+		return nil, fmt.Errorf("l89: the README's commands name the namespace port49, not %q", ns)
+	}
+	repl := map[string]map[string]string{
+		"etcdrestore": {"<backup>": backup, etcdNamespace: ns},
+		"tokendelete": {etcdNamespace: ns},
+		"restorezero": {"<backup>": backup},
+		"volumes":     nil,
+		"revoke":      {"<release>": release},
+		"scaleup":     {"<release>": release, "<brokers>": fmt.Sprint(brokers), "<port49d>": fmt.Sprint(port49d)},
+	}
+	out := map[string]string{}
+	for name, r := range repl {
+		cmd, err := Command(doc, name)
+		if err != nil {
+			return nil, err
+		}
+		if cmd, err = Subst(cmd, r); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		out[name] = cmd
+	}
+	return out, nil
 }
 
 // Subst replaces each key of repl in a README command. A key the command does not hold is an error, so

@@ -346,23 +346,106 @@ func TestScrubWithDropsTheRunsOwnValues(t *testing.T) {
 }
 
 func TestJudgeCNeedsEveryCheck(t *testing.T) {
-	good := C{Volumes: 6, FingerprintBefore: "ab", FingerprintAfter: "ab", MarksPresent: true, SpoolBefore: "acct.jsonl", SpoolAfter: "acct.jsonl"}
-	if JudgeC(good) != l82.Pass {
+	h1, h2 := strings.Repeat("ab", 32), strings.Repeat("cd", 32)
+	want := []string{"t-broker-0/data", "t-broker-1/data", "t-port49d-0/data", "t-port49d-1/data"}
+	good := func() C {
+		return C{RestorePhase: "Completed", Want: want,
+			Volumes: map[string]string{"t-broker-0/data": "Completed", "t-broker-1/data": "Completed",
+				"t-port49d-0/data": "Completed", "t-port49d-1/data": "Completed", "etcd-0/data": "Completed"},
+			FingerprintBefore: "ab", FingerprintAfter: "ab",
+			Before: map[string]string{"data-t-broker-0:/v/state/marks.json": h1, "data-t-port49d-0:/v/data/l89-sentinel": h2},
+			AtZero: map[string]string{"data-t-broker-0:/v/state/marks.json": h1, "data-t-port49d-0:/v/data/l89-sentinel": h2}}
+	}
+	if JudgeC(good()) != l82.Pass {
 		t.Fatal("a complete restore is not a PASS")
 	}
 	for name, mod := range map[string]func(*C){
-		"too few volume restores": func(c *C) { c.Volumes = 3 },
-		"a failed volume restore": func(c *C) { c.NotCompleted = 1 },
-		"a different CA":          func(c *C) { c.FingerprintAfter = "cd" },
-		"no CA read":              func(c *C) { c.FingerprintBefore, c.FingerprintAfter = "", "" },
-		"no marks.json":           func(c *C) { c.MarksPresent = false },
-		"an empty spool":          func(c *C) { c.SpoolAfter = "" },
+		// three etcd volumes and one of port49's: the count is high enough, a port49 volume is missing
+		"a port49 volume with no restore, others' volumes in its place": func(c *C) {
+			delete(c.Volumes, "t-port49d-1/data")
+			c.Volumes["etcd-1/data"], c.Volumes["etcd-2/data"] = "Completed", "Completed"
+		},
+		"a failed volume restore":     func(c *C) { c.Volumes["t-broker-1/data"] = "Failed" },
+		"no volumes asked for":        func(c *C) { c.Want = nil },
+		"a restore not Completed":     func(c *C) { c.RestorePhase = "PartiallyFailed" },
+		"a different CA":              func(c *C) { c.FingerprintAfter = "cd" },
+		"no CA read":                  func(c *C) { c.FingerprintBefore, c.FingerprintAfter = "", "" },
+		"marks.json changed":          func(c *C) { c.AtZero["data-t-broker-0:/v/state/marks.json"] = h2 },
+		"marks.json absent after":     func(c *C) { c.AtZero["data-t-broker-0:/v/state/marks.json"] = "" },
+		"a sentinel not read at zero": func(c *C) { delete(c.AtZero, "data-t-port49d-0:/v/data/l89-sentinel") },
+		"nothing recorded before":     func(c *C) { c.Before, c.AtZero = map[string]string{}, map[string]string{} },
+		"absent before and after": func(c *C) {
+			c.Before["data-t-port49d-0:/v/data/l89-sentinel"], c.AtZero["data-t-port49d-0:/v/data/l89-sentinel"] = "", ""
+		},
+		"a broker started a fresh copy": func(c *C) { c.FreshCopy = true },
 	} {
-		c := good
+		c := good()
 		mod(&c)
 		if JudgeC(c) != l82.Fail {
 			t.Errorf("%s is not a FAIL", name)
 		}
+	}
+}
+
+func TestParseVolumesReadsTheREADMEsCheck(t *testing.T) {
+	out := "Completed\nPHASE       POD           VOLUME\nCompleted   t-broker-0    data\nFailed      t-port49d-1   data\n"
+	phase, vols := ParseVolumes(out)
+	if phase != "Completed" || len(vols) != 2 || vols["t-broker-0/data"] != "Completed" || vols["t-port49d-1/data"] != "Failed" {
+		t.Errorf("ParseVolumes = %q, %v", phase, vols)
+	}
+	// no pod volume restore at all: kubectl's own line on stderr, which the harness reads with stdout
+	phase, vols = ParseVolumes("Completed\nNo resources found in velero namespace.\n")
+	if phase != "Completed" || len(vols) != 0 {
+		t.Errorf("an empty list: %q, %v", phase, vols)
+	}
+	if phase, _ := ParseVolumes(""); phase != "" {
+		t.Errorf("no output has the phase %q", phase)
+	}
+}
+
+func TestParseHashesKeysEachFileByClaim(t *testing.T) {
+	h := strings.Repeat("0f", 32)
+	got := ParseHashes("data-t-broker-0", h+"  /v/state/marks.json\nabsent /v/state/issuing-ca.pem\n")
+	if len(got) != 2 || got["data-t-broker-0:/v/state/marks.json"] != h || got["data-t-broker-0:/v/state/issuing-ca.pem"] != "" {
+		t.Errorf("ParseHashes = %v", got)
+	}
+	if got := ParseHashes("x", "not a hash  /v/f\n"); len(got) != 0 {
+		t.Errorf("a malformed line is read: %v", got)
+	}
+	if s := HashScript("/v/a", "/v/b"); !strings.Contains(s, "sha256sum") || !strings.Contains(s, "/v/a /v/b") {
+		t.Errorf("HashScript = %q", s)
+	}
+}
+
+// The README's restore steps as the lab runs them: every command it names for etcd's namespace is the
+// lab's one namespace, and no placeholder is left (I1r3: the token delete's wait, logs and delete named
+// port49-etcd, which the lab does not have).
+func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps, err := Steps(string(b), "port49", "t", "l89-backup", 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"etcdrestore", "tokendelete", "restorezero", "volumes", "revoke", "scaleup"} {
+		cmd := steps[name]
+		if cmd == "" {
+			t.Errorf("no %s step", name)
+		}
+		if strings.Contains(cmd, "port49-etcd") || strings.ContainsAny(cmd, "<>") {
+			t.Errorf("%s still names etcd's namespace or a placeholder:\n%s", name, cmd)
+		}
+	}
+	if !strings.Contains(steps["etcdrestore"], "--include-namespaces port49 ") || !strings.Contains(steps["tokendelete"], "-n port49 wait") {
+		t.Errorf("the restore or the token delete is not in the lab's namespace:\n%s\n%s", steps["etcdrestore"], steps["tokendelete"])
+	}
+	if !strings.Contains(steps["volumes"], "podvolumerestores") || !strings.Contains(steps["volumes"], "velero.io/restore-name=") {
+		t.Errorf("the volume check does not list the restore's pod volume restores:\n%s", steps["volumes"])
+	}
+	if _, err := Steps(string(b), "other", "t", "l89-backup", 2, 2); err == nil {
+		t.Error("a namespace the README's port49 commands do not name is accepted")
 	}
 }
 
