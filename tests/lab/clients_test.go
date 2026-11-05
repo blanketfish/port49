@@ -57,7 +57,7 @@ func TestClientAuthenticationCost(t *testing.T) {
 		}
 		if _, err := os.Stat(venvPython); err != nil {
 			t.Skipf("no client venv at %s: %v. Create it with `python3 -m venv ~/lab-venv` and "+
-				"install pyeapi, napalm, ansible-core, nornir, nornir-napalm, nornir-netmiko, netmiko.", venvPython, err)
+				"install pyeapi, napalm, ansible-core, nornir, nornir-napalm, nornir-netmiko, netmiko, or point PORT49_LAB_VENV_PYTHON at a venv's python.", venvPython, err)
 		}
 		stop := l.capture(t, "clients")
 		defer stop()
@@ -93,7 +93,19 @@ func TestClientAuthenticationCost(t *testing.T) {
 	})
 }
 
-const venvPython = "/home/rwendt/lab-venv/bin/python"
+// venvPython is the lab's client venv interpreter: PORT49_LAB_VENV_PYTHON, or ~/lab-venv/bin/python.
+var venvPython = func() string {
+	if p := os.Getenv("PORT49_LAB_VENV_PYTHON"); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// No home directory and no PORT49_LAB_VENV_PYTHON: a path that cannot exist, so the lab tests
+		// skip with a message naming the variable rather than looking in the working directory.
+		return filepath.Join(os.TempDir(), "no-home-set-PORT49_LAB_VENV_PYTHON", "python")
+	}
+	return filepath.Join(home, "lab-venv", "bin", "python")
+}()
 
 const clientsClaim = "How many TACACS+ authentication exchanges a ten-task job costs for each client an " +
 	"operator actually runs — pyeapi, NAPALM, Ansible over `httpapi` and `network_cli`, Nornir with ten " +

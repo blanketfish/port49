@@ -345,7 +345,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ---
@@ -678,8 +677,7 @@ emits exactly one record', and four reason rows say what they mean on it.
 gains the refused-file and incomplete-refresh rows; §13 says the policy
 file is a privilege.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1044,8 +1042,7 @@ revocation alone -- only if the revision is still the one read. It moves
 nothing about the session's clocks or its idle TTL: a policy edit is not
 a re-authentication and not activity.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1293,8 +1290,7 @@ so one swap changes both. A mint holds a read lock across its request, so
 a swap waits for every mint on the policy it replaces. NextChange,
 Principals and UsernameOf are what the refresh reads.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2243,8 +2239,7 @@ reload will call. A policy file anyone but port49d's user or root could
 have written is refused, and the lab harness gives port49d a private
 copy of its policy.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3351,8 +3346,7 @@ A quarantined device's context is left for the refresh that lifts it.
 Unspent tokens a superseded policy minted, whose answer changed, are
 deleted. Each change is a refresh decision record naming the ctx_id.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4343,8 +4337,7 @@ that loads is swapped in and refreshed into every live context, again
 until done, with port49_policy_refresh_pending at 1 until it is. An
 inventory edit is said, not applied: that is plan 6's snapshot refresh.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4847,8 +4840,7 @@ lab: block, mints and logs in once, and drives a narrowing, a lowered
 ceiling, a refused typo and a withdrawn grant through the policy file,
 all in one context.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4928,8 +4920,7 @@ Expected: three lines, all between `## Plan 4b` and `## Plan 5`.
 git add docs/superpowers/plans/README.md
 git commit -m "docs: plan 4b as built, and what plans 6 and 7 inherit
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

@@ -24,15 +24,19 @@ type step struct {
 	If   string            `yaml:"if"`
 	With map[string]any    `yaml:"with"`
 	Env  map[string]string `yaml:"env"`
+
+	ContinueOnError any `yaml:"continue-on-error"`
 }
 
 type job struct {
-	If          string            `yaml:"if"`
-	Env         map[string]string `yaml:"env"`
-	Needs       any               `yaml:"needs"`
-	Environment any               `yaml:"environment"`
-	Permissions map[string]any    `yaml:"permissions"`
-	Steps       []step            `yaml:"steps"`
+	If string `yaml:"if"`
+
+	ContinueOnError any               `yaml:"continue-on-error"`
+	Env             map[string]string `yaml:"env"`
+	Needs           any               `yaml:"needs"`
+	Environment     any               `yaml:"environment"`
+	Permissions     map[string]any    `yaml:"permissions"`
+	Steps           []step            `yaml:"steps"`
 }
 
 type flow struct {
@@ -377,6 +381,26 @@ func TestTheImageJobTagsAndAttests(t *testing.T) {
 	}
 }
 
+// jobNeeds is the job's needs as a list; an entry that is not a string fails the test.
+func jobNeeds(t *testing.T, id string, j job) []string {
+	t.Helper()
+	switch n := j.Needs.(type) {
+	case string:
+		return []string{n}
+	case []any:
+		var out []string
+		for _, x := range n {
+			s, ok := x.(string)
+			if !ok {
+				t.Fatalf("release.yml job %s has a needs entry that is not a string: %T", id, x)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	return nil
+}
+
 // Every publishing job waits for check, and check refuses a tag that is not on main and a tag
 // that disagrees with the version files: a release from an unreviewed commit never publishes.
 func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
@@ -385,15 +409,7 @@ func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
 		if id == "check" {
 			continue
 		}
-		var needs []string
-		switch n := j.Needs.(type) {
-		case string:
-			needs = []string{n}
-		case []any:
-			for _, x := range n {
-				needs = append(needs, x.(string))
-			}
-		}
+		needs := jobNeeds(t, id, j)
 		found := false
 		for _, n := range needs {
 			found = found || n == "check"

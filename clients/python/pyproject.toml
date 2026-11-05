@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,12 +7,12 @@ name = "port49"
 version = "0.1.0"
 description = "port49 device tokens for Python: identity, mint, sweep, retry, and Netmiko over the port49 CLI"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: System Administrators",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: POSIX :: Linux",
   "Operating System :: MacOS",
   "Programming Language :: Python :: 3",

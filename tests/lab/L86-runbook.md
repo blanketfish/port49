@@ -101,7 +101,7 @@ read it, and the observation line says so.
    hosts file and keep this running for the whole cell:
 
    ```
-   ssh -N -L 18443:127.0.0.1:18443 -L 18749:127.0.0.1:18749 rwendt@beehive
+   ssh -N -L 18443:127.0.0.1:18443 -L 18749:127.0.0.1:18749 <user>@<lab-host>
    ```
 
    Each run makes a new lab CA, so your browser warns once about the certificate: accept it.

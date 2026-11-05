@@ -37,6 +37,7 @@ FROM gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e
 
 FROM scratch AS port49
 COPY --from=build /rootfs/ /
+COPY LICENSE /LICENSE
 # what the base image's config sets
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 WORKDIR /home/nonroot

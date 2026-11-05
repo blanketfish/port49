@@ -1166,7 +1166,6 @@ git commit -m "$(cat <<'EOF'
 test: capture the Junos CLI keyword tree, keyword abbreviations and NETCONF (L26, L9, L12)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -2290,7 +2289,6 @@ git commit -m "$(cat <<'EOF'
 feat: Junos matches keywords only; a rule reaches the wire only where the keyword tree proves it
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -2419,7 +2417,6 @@ git commit -m "$(cat <<'EOF'
 feat: policy test warns about an allow Junos would not match as port49 does
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -2681,7 +2678,6 @@ git commit -m "$(cat <<'EOF'
 feat: check-config's management-service allowlist, for a device whose RPCs no deny binds
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -3358,7 +3354,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Running the lab (Tasks 2, 3, 4 and 19)
@@ -3962,7 +3957,6 @@ git commit -m "$(cat <<'EOF'
 docs: spec for plan 5b, the Junos projection, capability inference and decision 26
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -4644,7 +4638,6 @@ git commit -m "$(cat <<'EOF'
 test: measure the Junos wire facts decision 22 rests on (L9, L12)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -5127,7 +5120,6 @@ git commit -m "$(cat <<'EOF'
 test: measure each Junos bit's reach and the class idle-timeout (L12, L24)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -5387,7 +5379,6 @@ git commit -m "$(cat <<'EOF'
 test: re-measure the inert candidates beside readonly, and NX-OS's vsh.bin record (L23, L25)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -5637,7 +5628,6 @@ git commit -m "$(cat <<'EOF'
 feat: rule containment and dominance a projection can prove with
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -6497,7 +6487,6 @@ git commit -m "$(cat <<'EOF'
 feat: the adapter declares a session-only platform's projection, bits and templates
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -7023,7 +7012,6 @@ git commit -m "$(cat <<'EOF'
 feat: a composed rule as the extended regex a Junos class reads
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -8409,7 +8397,6 @@ git commit -m "$(cat <<'EOF'
 feat: project a composition into a Junos reply, proven sound, or the fail-closed reply
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -8991,7 +8978,6 @@ git commit -m "$(cat <<'EOF'
 feat: a Junos session reply is its composition's projection, or that subject's fail-closed reply
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -9283,7 +9269,6 @@ git commit -m "$(cat <<'EOF'
 feat: a session answered with the fail-closed reply is recorded as projection_fail_closed
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -9877,7 +9862,6 @@ git commit -m "$(cat <<'EOF'
 feat: policy test reports each projection and fails on a fail-closed reply or a quarantine
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -10369,7 +10353,6 @@ git commit -m "$(cat <<'EOF'
 feat: policy diff judges a projected reply by what the device can do, and refuses a fail-closed one
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -11046,7 +11029,6 @@ git commit -m "$(cat <<'EOF'
 feat: platform export --classes writes the reference as a replace, and check-config holds a device to it
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -11773,7 +11755,6 @@ git commit -m "$(cat <<'EOF'
 feat: platform set 1.1.0 projects juniper_junos
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -12067,7 +12048,6 @@ git commit -m "$(cat <<'EOF'
 feat: NX-OS admin is a system user on its vsh.bin task_id only
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -12381,7 +12361,6 @@ git commit -m "$(cat <<'EOF'
 feat: a dropped accounting record is an account_gap record in the decision log
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -12858,7 +12837,6 @@ git commit -m "$(cat <<'EOF'
 feat: infer each device's capabilities and reconcile accounting from the decision log
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -13340,7 +13318,6 @@ git commit -m "$(cat <<'EOF'
 feat: port49 devices capabilities, and CI reports rules no platform enforces
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -13759,7 +13736,6 @@ git commit -m "$(cat <<'EOF'
 test: the projection's differential lab test, typed as an operator might type it (L9, L12)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```
@@ -13911,7 +13887,6 @@ docs: close lab register entries L9, L10, L12, L23, L24, L25; freeze set 1.1.0; 
 <name each row closed and each left open, with its note>
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
 EOF
 )"
 ```

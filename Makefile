@@ -369,7 +369,7 @@ lab-oxidized:
 # L64 and L65 (plan 9d): `port49 ssh` under OpenSSH's accept-new and the Python
 # client against each platform, one at a time as `make lab` runs them. Each
 # device is reloaded once, so this is its own target. It installs
-# ./clients/python[netmiko] into /home/rwendt/lab-venv first. L53 (the host-key
+# ./clients/python[netmiko] into $HOME/lab-venv first. L53 (the host-key
 # scan) is closed and runs only as `PORT49_LAB_REMEASURE=L53 go test -tags lab
 # ./tests/lab/ -run TestL53HostKeyScan` with PORT49_LAB_SSH=1.
 # PORT49_LAB_REMEASURE passes through from the caller's environment only; set

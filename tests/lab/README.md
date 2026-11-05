@@ -964,7 +964,7 @@ appears to hang while the launcher applies its startup config. Retry the entry.
 - `PORT49_LAB_ETCD_BIN` names a directory holding `etcd`, `etcdctl` and `etcdutl`, all v3.6.15
   (on beehive, `/mnt/images/etcd-v3.6.15`). L35-restore needs `etcdutl`.
 - L66 needs `tests/lab/l66/.collections`, which is git-ignored, so a fresh worktree lacks it. Create it
-  with `/home/rwendt/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
+  with `$HOME/lab-venv/bin/ansible-galaxy collection install -p tests/lab/l66/.collections <collections>`;
   the L66 preflight prints the exact command with the collection names.
 - Building `vrnetlab/cisco_iol` needs the image file copied into the build directory first (step 3's
   IOL-XE recipe); an `IMAGE=/mnt/images/...` path fails the Makefile's version regex.

@@ -44,11 +44,10 @@ notes, "Carried" and "Open for the final review". Also read `docs/design/2026-08
 - Never run `docker compose config` or `docker inspect` on project `port49labwin`: both print the
   environment, which holds the Administrator's password.
 - Verify with `make test && make vet`, and report the real output.
-- Branch `feature/l44-windows-ad`, worktree `/home/rwendt/git/port49/.worktrees/l44`. Use
+- Branch `feature/l44-windows-ad`, worktree `$HOME/git/port49/.worktrees/l44`. Use
   Conventional Commits, one per "Commit" step, each ending with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 - **Stay disjoint from plan 7h** (`feature/oidc-and-trust-domains`). This plan never touches
   `internal/oidc`, `internal/broker`, `internal/store`, `internal/policy`, `internal/decision`,
@@ -213,7 +212,7 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
 ### Where runs happen
 
 - **Runs always use a detached worktree pinned at the commit under test:**
-  `git -C /home/rwendt/git/port49 worktree add --detach /home/rwendt/git/port49/.worktrees/lab-l44 <sha>`.
+  `git -C $HOME/git/port49 worktree add --detach $HOME/git/port49/.worktrees/lab-l44 <sha>`.
   - Never run from `.worktrees/l44`, and never build in it, during a run.
   - Never touch `.worktrees/oidc` or `.worktrees/lab-7h`.
 - **Copy before removing.** When a run is done, copy `tests/lab/results/L44-windows_ad.md` and
@@ -711,8 +710,8 @@ This checks that the refactor changed no cell on OpenLDAP or Samba. Commit Steps
 (Step 7), then:
 
 ```bash
-git -C /home/rwendt/git/port49 worktree add --detach /home/rwendt/git/port49/.worktrees/lab-l44 "$(git -C /home/rwendt/git/port49/.worktrees/l44 rev-parse HEAD)"
-cd /home/rwendt/git/port49/.worktrees/lab-l44
+git -C $HOME/git/port49 worktree add --detach $HOME/git/port49/.worktrees/lab-l44 "$(git -C $HOME/git/port49/.worktrees/l44 rev-parse HEAD)"
+cd $HOME/git/port49/.worktrees/lab-l44
 mkdir -p /tmp/claude-1000/l44-regress
 PORT49_LAB_DIRECTORY_OUT=/tmp/claude-1000/l44-regress sg docker -c "make lab-directory" 2>&1 | tail -40
 for f in L42-openldap L42-samba_ad L43-openldap L43-samba_ad; do
@@ -726,22 +725,21 @@ Expected: `PASS`, and `same cells` for all four. A difference that is only a DN'
 generated SID or a serial is the run's own data, and you may note it. Any other difference is a
 regression in this task: fix it before going on.
 
-Clean up afterwards: `git -C /home/rwendt/git/port49 worktree remove --force .worktrees/lab-l44`,
+Clean up afterwards: `git -C $HOME/git/port49 worktree remove --force .worktrees/lab-l44`,
 then the "After every run, confirm" list.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/directory_test.go tests/lab/l42_test.go tests/lab/l43_test.go tests/lab/directory_unit_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): extend the directory harness for a third platform
+git -C $HOME/git/port49/.worktrees/l44 add tests/lab/directory_test.go tests/lab/l42_test.go tests/lab/l43_test.go tests/lab/directory_unit_test.go
+git -C $HOME/git/port49/.worktrees/l44 commit -m "test(lab): extend the directory harness for a third platform
 
 The note takes its platform line, run selection and credentials line from the
 platform; newDirectories writes the PKI without starting the containers; L42's
 table is labDir.l42Observe; L43's mapping checks run wherever
 altSecurityIdentities exists. The containers' notes are unchanged.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1789,8 +1787,8 @@ Expected: every `TestWindows*` PASSes, `make lab-unit` passes, and vet is silent
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/windows_test.go tests/lab/windows_unit_test.go tests/lab/directory_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): the Windows DC's pure helpers for L44
+git -C $HOME/git/port49/.worktrees/l44 add tests/lab/windows_test.go tests/lab/windows_unit_test.go tests/lab/directory_test.go
+git -C $HOME/git/port49/.worktrees/l44 commit -m "test(lab): the Windows DC's pure helpers for L44
 
 Secrets that print as key names, a PowerShell bootstrap that takes its
 params on stdin, the ISO check, the altSecurityIdentities forms the DC is
@@ -1798,8 +1796,7 @@ offered beside port49's, the CSRs and certificates, MIT kinit's answer read
 from its trace, and the judges that keep a setup failure from reading as a
 mapping's verdict.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2507,16 +2504,15 @@ Expected: PASS, with vet silent.
 - [ ] **Step 7: Commit**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/directory/windows tests/lab/windows_test.go tests/lab/windows_unit_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): the Windows DC's compose project and setup scripts for L44
+git -C $HOME/git/port49/.worktrees/l44 add tests/lab/directory/windows tests/lab/windows_test.go tests/lab/windows_unit_test.go
+git -C $HOME/git/port49/.worktrees/l44 commit -m "test(lab): the Windows DC's compose project and setup scripts for L44
 
 dockurr/windows 6.06 by digest on its own network, ports on loopback only;
 the first-logon hook that starts sshd; MIT kinit with PKINIT on pinned Debian;
 and sixteen PowerShell steps, each taking its params on stdin and writing
 none that is secret.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3490,16 +3486,15 @@ nothing.
 - [ ] **Step 4: Commit**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/windows_test.go tests/lab/windows_unit_test.go tests/lab/directory_test.go tests/lab/l44_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): bring up a Windows Server 2025 DC for L44
+git -C $HOME/git/port49/.worktrees/l44 add tests/lab/windows_test.go tests/lab/windows_unit_test.go tests/lab/directory_test.go tests/lab/l44_test.go
+git -C $HOME/git/port49/.worktrees/l44 commit -m "test(lab): bring up a Windows Server 2025 DC for L44
 
 dockur installs the pinned evaluation ISO; the harness promotes it over SSH,
 loads L42's fixture, installs AD CS, serves LDAPS on the lab CA's certificate,
 makes port49's keytab with ktpass and issues the run's client certificates.
 TestL44Bringup is the bring-up alone; its comment holds the command.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 5: Before the gate run, check the host**
@@ -3516,8 +3511,8 @@ Expected: at least 66 GiB available, both devices present, no lab containers, an
 - [ ] **Step 6: The feasibility gate (lab; follow "Lab rules")**
 
 ```bash
-git -C /home/rwendt/git/port49 worktree add --detach /home/rwendt/git/port49/.worktrees/lab-l44 "$(git -C /home/rwendt/git/port49/.worktrees/l44 rev-parse HEAD)"
-cd /home/rwendt/git/port49/.worktrees/lab-l44
+git -C $HOME/git/port49 worktree add --detach $HOME/git/port49/.worktrees/lab-l44 "$(git -C $HOME/git/port49/.worktrees/l44 rev-parse HEAD)"
+cd $HOME/git/port49/.worktrees/lab-l44
 sg docker -c "go test -tags lab ./tests/lab/ -run '^TestL44Bringup$' -count=1 -v -timeout 240m" > /tmp/claude-1000/l44-bringup.log 2>&1
 ```
 
@@ -3563,7 +3558,7 @@ The likely causes and their fixes, in order of likelihood:
 controller, with the failing step and the dockur log tail. L44 stays open.
 
 After the run, check the "After every run, confirm" list, then
-`git -C /home/rwendt/git/port49 worktree remove --force .worktrees/lab-l44`.
+`git -C $HOME/git/port49 worktree remove --force .worktrees/lab-l44`.
 
 ---
 
@@ -4238,8 +4233,8 @@ Expected: PASS, with vet and gofmt silent.
 - [ ] **Step 5: Commit**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/l44_test.go tests/lab/windows_unit_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): L44's measurement on the Windows DC
+git -C $HOME/git/port49/.worktrees/l44 add tests/lab/l44_test.go tests/lab/windows_unit_test.go
+git -C $HOME/git/port49/.worktrees/l44 commit -m "test(lab): L44's measurement on the Windows DC
 
 L42's fixture through port49's three nested modes; the root DSE's
 capabilities beside OpenLDAP's and Samba's; simple, plain, GSSAPI (as
@@ -4249,8 +4244,7 @@ the DC's own mapping by PKINIT and EXTERNAL under each
 StrongCertificateBindingEnforcement value, each block behind a control. A
 refusal whose cause is not proven is INVALID, never a verdict.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4271,8 +4265,8 @@ holds the ISO from the gate run; the harness re-checks its SHA-256.
 - [ ] **Step 2: Run, fresh (R7), from the pinned worktree**
 
 ```bash
-git -C /home/rwendt/git/port49 worktree add --detach /home/rwendt/git/port49/.worktrees/lab-l44 "$(git -C /home/rwendt/git/port49/.worktrees/l44 rev-parse HEAD)"
-cd /home/rwendt/git/port49/.worktrees/lab-l44
+git -C $HOME/git/port49 worktree add --detach $HOME/git/port49/.worktrees/lab-l44 "$(git -C $HOME/git/port49/.worktrees/l44 rev-parse HEAD)"
+cd $HOME/git/port49/.worktrees/lab-l44
 sg docker -c "go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD\$' -count=1 -v -timeout 240m" > /tmp/claude-1000/l44-run.log 2>&1
 ```
 
@@ -4340,24 +4334,23 @@ Decide the defects, one rule each. Each rule reads only a block where `control-s
 - [ ] **Step 4: Copy back, confirm cleanup, remove the pinned worktree**
 
 ```bash
-cp /home/rwendt/git/port49/.worktrees/lab-l44/tests/lab/results/L44-windows_ad.md /home/rwendt/git/port49/.worktrees/l44/tests/lab/results/
-cp /home/rwendt/git/port49/.worktrees/lab-l44/tests/lab/evidence/L44-windows_ad.json /home/rwendt/git/port49/.worktrees/l44/tests/lab/evidence/
-cd /home/rwendt/git/port49/.worktrees/l44 && make evidence && go test ./tests/lab/labpcap/ -count=1
+cp $HOME/git/port49/.worktrees/lab-l44/tests/lab/results/L44-windows_ad.md $HOME/git/port49/.worktrees/l44/tests/lab/results/
+cp $HOME/git/port49/.worktrees/lab-l44/tests/lab/evidence/L44-windows_ad.json $HOME/git/port49/.worktrees/l44/tests/lab/evidence/
+cd $HOME/git/port49/.worktrees/l44 && make evidence && go test ./tests/lab/labpcap/ -count=1
 ```
 
 Check the "After every run, confirm" list, then
-`git -C /home/rwendt/git/port49 worktree remove --force .worktrees/lab-l44`.
+`git -C $HOME/git/port49 worktree remove --force .worktrees/lab-l44`.
 
 - [ ] **Step 5: Commit the note**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/results/L44-windows_ad.md tests/lab/evidence/L44-windows_ad.json
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): L44 measured on Windows Server 2025 AD
+git -C $HOME/git/port49/.worktrees/l44 add tests/lab/results/L44-windows_ad.md tests/lab/evidence/L44-windows_ad.json
+git -C $HOME/git/port49/.worktrees/l44 commit -m "test(lab): L44 measured on Windows Server 2025 AD
 
 Run at <sha>: <one line per cell from Step 3's table, as the note reads>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 A Task 7 fix re-runs Steps 1–5 at the fix's commit, with `.worktrees/l44-fix-<part>` (the
@@ -4377,7 +4370,7 @@ PR (Tasks 1–6) has merged. Each part runs in this order, per "Sequencing":
 1. **Spec text first, on `main`** (Step 0): a docs-only commit in the main checkout.
 2. **A `fix/l44-<part>` branch from `main`** (`fix/l44-quote`, `fix/l44-escape`,
    `fix/l44-signbyte` or `fix/l44-external-one`), in the worktree
-   `/home/rwendt/git/port49/.worktrees/l44-fix-<part>`. It holds the `fix(directory)` commit,
+   `$HOME/git/port49/.worktrees/l44-fix-<part>`. It holds the `fix(directory)` commit,
    with its unit test (Steps 1–3).
 3. **Task 6 re-run at the fix** (Step 4). The new note and evidence are committed on the `fix/`
    branch, which then has its own PR.
@@ -4405,17 +4398,16 @@ Check that 7h and the L44 PR have both merged. Apply the part's spec text, given
 steps below, against `main` as it then stands. Then branch:
 
 ```bash
-git -C /home/rwendt/git/port49 switch main && git -C /home/rwendt/git/port49 pull --ff-only
-git -C /home/rwendt/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
-git -C /home/rwendt/git/port49 commit -m "docs: <the rule> as a Windows DC measured it (L44)
+git -C $HOME/git/port49 switch main && git -C $HOME/git/port49 pull --ff-only
+git -C $HOME/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
+git -C $HOME/git/port49 commit -m "docs: <the rule> as a Windows DC measured it (L44)
 
 tests/lab/results/L44-windows_ad.md: <the rows>. Rule 4: the doc follows the
 lab; the fix follows on fix/l44-<part>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
-git -C /home/rwendt/git/port49 push
-git -C /home/rwendt/git/port49 worktree add -b fix/l44-<part> /home/rwendt/git/port49/.worktrees/l44-fix-<part> main
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git -C $HOME/git/port49 push
+git -C $HOME/git/port49 worktree add -b fix/l44-<part> $HOME/git/port49/.worktrees/l44-fix-<part> main
 ```
 
 - [ ] **7a, Step 1: The failing test** (append to `internal/directory/mapping_test.go`)
@@ -4579,13 +4571,12 @@ Run: `go test ./internal/directory/ -count=1 && make test && make vet`. Expected
 no `docs:` commit on the branch: the spec text is already on `main` from Step 0)
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44-fix-<part> add internal/directory tests/lab/windows_unit_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44-fix-<part> commit -m "fix(directory): <7a: quote <I> values as Windows does | 7b: keep the serial's sign byte in <SR> | 7c: an EXTERNAL bind answered 1 is a refusal>
+git -C $HOME/git/port49/.worktrees/l44-fix-<part> add internal/directory tests/lab/windows_unit_test.go
+git -C $HOME/git/port49/.worktrees/l44-fix-<part> commit -m "fix(directory): <7a: quote <I> values as Windows does | 7b: keep the serial's sign byte in <SR> | 7c: an EXTERNAL bind answered 1 is a refusal>
 
 L44 (tests/lab/results/L44-windows_ad.md) <the rows that showed it>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Each part, Step 4: Re-run Task 6 at the fix, and open the `fix/` PR**
@@ -4608,7 +4599,7 @@ on `feature/l44-windows-ad` or a `fix/` branch.** It runs once all of these hold
 - the L44 PR has merged, so the note it cites is on `main` (rule 3);
 - every Task 7 `fix/l44-<part>` PR has merged, so the note on `main` is the last one measured.
 
-Its commands run in the main checkout, `/home/rwendt/git/port49`. Each edit is made against
+Its commands run in the main checkout, `$HOME/git/port49`. Each edit is made against
 `main` as it then stands: 7h will have added L45–L47 directly under the L44 row in §15, and will
 have edited the design file at other lines.
 
@@ -4627,9 +4618,9 @@ have edited the design file at other lines.
 - [ ] **Step 0: Confirm the order**
 
 ```bash
-git -C /home/rwendt/git/port49 switch main && git -C /home/rwendt/git/port49 pull --ff-only
-git -C /home/rwendt/git/port49 log --oneline -1 --grep 'from rhwendt/feature/oidc-and-trust-domains' main | grep -q . && echo "7h merged"
-test -f /home/rwendt/git/port49/tests/lab/results/L44-windows_ad.md && echo "L44 note on main"
+git -C $HOME/git/port49 switch main && git -C $HOME/git/port49 pull --ff-only
+git -C $HOME/git/port49 log --oneline -1 --grep 'from rhwendt/feature/oidc-and-trust-domains' main | grep -q . && echo "7h merged"
+test -f $HOME/git/port49/tests/lab/results/L44-windows_ad.md && echo "L44 note on main"
 ```
 
 Expected: both lines print, and no `fix/l44-*` PR is open (`gh pr list --search "head:fix/l44"`
@@ -4696,18 +4687,17 @@ or `simple` there (L44)."
 
 - [ ] **Step 5: Verify and commit** (main checkout)
 
-Run: `make test && make vet` in `/home/rwendt/git/port49`, and report the real output.
+Run: `make test && make vet` in `$HOME/git/port49`, and report the real output.
 Expected: PASS.
 
 ```bash
-git -C /home/rwendt/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md docs/superpowers/plans/README.md
-git -C /home/rwendt/git/port49 commit -m "docs: close lab register entry L44 on Windows Server 2025 AD
+git -C $HOME/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md docs/superpowers/plans/README.md
+git -C $HOME/git/port49 commit -m "docs: close lab register entry L44 on Windows Server 2025 AD
 
 tests/lab/results/L44-windows_ad.md. Decision 38 items 1, 6 and 8 state what
 the DC measured; design §7 and §10 follow (rule 4 where they differed).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 If the row stays open, the subject is `docs: narrow lab register entry L44 to what Windows Server

@@ -342,7 +342,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Running the lab (Tasks 2 and 20)
@@ -836,8 +835,7 @@ history, or one naming plan 6b, stays; any other is edited to say what plan 6a d
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
 git commit -m "docs: the spec says what plan 6a builds, decision 28 and L27/L28 included
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1411,8 +1409,7 @@ never "fixed" by guessing a different call without recording that too.
 git add tests/lab/sot tests/lab/cmd/sot-record tests/lab/sot_unit_test.go tests/lab/results/L27-*.md
 git commit -m "test(lab): record what NetBox and Nautobot return for a device (L27)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1827,8 +1824,7 @@ Expected: PASS; nothing outside the package calls `resolveKeyRef`.
 git add internal/admission
 git commit -m "feat(admission): assign one device at a time and keep a refused device in the index
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2451,8 +2447,7 @@ change nothing today.
 git add internal/policy
 git commit -m "feat(policy): key groups are policy, and a device no group admits is refused on its own
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2542,8 +2537,7 @@ Expected: PASS.
 git add internal/policy
 git commit -m "feat(policy): a scope pins devices by inventory name
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2935,8 +2929,7 @@ each compares with `bundle.ID(raw, inventory)` instead.
 git add internal/bundle internal/policy cmd/port49 cmd/port49d
 git commit -m "feat(bundle): a bundle is named by its content, and every tool loads it as port49d does
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3469,8 +3462,7 @@ Expected: PASS.
 git add internal/bundle internal/policy
 git commit -m "feat(bundle): diff two bundles, mark the security changes, and bound an inventory's shrink
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3647,8 +3639,7 @@ new keys: update its expected string, never drop the fields.
 git add internal/decision internal/daemon
 git commit -m "feat(decision): every validated record names its key; the inventory_change event
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3833,8 +3824,7 @@ A juniper_junos variant keyed by its own name would have its sessions refused,
 its login records read as commands, and its records logged without Junos's
 redaction patterns. The load's refusal of based_on: juniper_junos is lifted.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4200,8 +4190,7 @@ A device no key group admits, or one assigned a key port49d does not hold, is
 refused on its own with the new diagnosis admission_refused; with a broker,
 config.Load no longer refuses the daemon's start for it (spec §10).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4506,8 +4495,7 @@ Expected: PASS.
 git add internal/broker cmd/port49d
 git commit -m "feat(broker): devices come from the policy held, and an inventory-only swap leaves an unchanged context alone
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4700,8 +4688,7 @@ With a broker the inventory is reloaded live and decides scope membership,
 capture addresses and key pins, so it gets the policy file's owner, mode and
 size checks at start and at every reload (plan 6a pre-flight C2).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5367,8 +5354,7 @@ Expected: PASS, `-race` included: the snapshot age is read at scrape from anothe
 git add internal/config internal/daemon/metrics cmd/port49d
 git commit -m "feat(port49d): reload the inventory file, bounded, and refresh live sessions after it
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5477,8 +5463,7 @@ git commit -m "feat(port49d): write an inventory_change record for every swap th
 
 security_log scopes now emit, as spec §5.5 and §10 require.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5959,8 +5944,7 @@ Expected: PASS; `make fuzz` because `Resolve` is the first code an unauthenticat
 git add internal cmd/port49d
 git commit -m "feat(keys): retire_after is enforced, and each key version's devices and deadline are metrics
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6629,8 +6613,7 @@ Expected: PASS.
 git add internal/keystatus cmd/port49
 git commit -m "feat(keys): port49 keys status reads a rotation from the log, and keys show says which key and why
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7252,8 +7235,7 @@ Expected: PASS; the last command proves `peer_other.go` builds.
 git add internal cmd
 git commit -m "feat(keys): port49 keys diagnose, over a 0600 admin socket that answers only port49d's uid and root
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7490,8 +7472,7 @@ carry no key groups or admit every device.
 git add cmd/port49
 git commit -m "feat(policy): policy test fails on a key-group tie and an undefined key, and reports retire_after
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7679,8 +7660,7 @@ Expected: PASS.
 git add cmd/port49
 git commit -m "feat(inventory): port49 inventory diff, the review artifact for an inventory change
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7878,8 +7858,7 @@ Expected: PASS; `TestARedactedBlobEventLeavesItsRecordsUnverifiable` still passe
 git add internal/replay cmd/port49
 git commit -m "feat(replay): verify a redacted blob's records against the blob recompiled from the files
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8206,8 +8185,7 @@ make evidence
 git add tests/lab/l28_test.go tests/lab/l28 tests/lab/results/L28-*.md tests/lab/evidence/L28-*
 git commit -m "test(lab): what a device does on a key miss, and a rotation end to end (L28)
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8256,8 +8234,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 git add docs
 git commit -m "docs: close lab register entries L27 and L28 as measured; plan 6a as built
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   (Name only the rows actually closed in the subject line.)

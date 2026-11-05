@@ -28,7 +28,6 @@
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ---
@@ -4937,7 +4936,7 @@ Expected: binary builds; no vet output; every package PASS.
 
 - [ ] **Step 11: Smoke-run the binary against loopback**
 
-Write `/tmp/claude-1000/-home-rwendt-git-port49/dc901c27-fbba-4903-9586-93fc85a7cca6/scratchpad/port49d.yaml`:
+Write `/tmp/port49-plan1/port49d.yaml`:
 ```yaml
 listen: "127.0.0.1:4949"
 metrics_listen: "127.0.0.1:9049"
@@ -4946,7 +4945,7 @@ keys:
   lab_key:
     current: {version: 1, secret_env: PORT49_LAB_KEY}
 accounting:
-  spool_overflow_path: /tmp/claude-1000/-home-rwendt-git-port49/dc901c27-fbba-4903-9586-93fc85a7cca6/scratchpad/acct-overflow.jsonl
+  spool_overflow_path: /tmp/port49-plan1/acct-overflow.jsonl
 lab:
   session_attributes: ["priv-lvl=15"]
   deny_prefixes: ["reload"]
@@ -4960,7 +4959,7 @@ devices:
 key_groups:
   - {match: {cidr: 127.0.0.0/8}, key_ref: lab_key}
 ```
-Run: `PORT49_LAB_KEY=labsecret ./bin/port49d -config /tmp/claude-1000/-home-rwendt-git-port49/dc901c27-fbba-4903-9586-93fc85a7cca6/scratchpad/port49d.yaml &` then `curl -s 127.0.0.1:9049/metrics | grep port49_connections`
+Run: `PORT49_LAB_KEY=labsecret ./bin/port49d -config /tmp/port49-plan1/port49d.yaml &` then `curl -s 127.0.0.1:9049/metrics | grep port49_connections`
 Expected: stderr line `listening on 127.0.0.1:4949`; metrics endpoint answers. Kill the background process afterward.
 
 - [ ] **Step 12: Commit**

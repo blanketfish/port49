@@ -996,7 +996,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Review Focus
@@ -1066,7 +1065,7 @@ single-occupant. The controller rewrote `.superpowers/sdd/2026-10-02-07d-shared-
 for 7d with this amendment (pre-flight M45). Task 15 Step 0 checks it before dispatch.
 
 **Every run is made from a detached worktree pinned to a commit:** `git worktree add --detach
-/home/rwendt/git/port49/.worktrees/lab-7d <sha>`, then `make build` there, never in the shared
+$HOME/git/port49/.worktrees/lab-7d <sha>`, then `make build` there, never in the shared
 feature worktree. The commit includes `tests/lab/store_test.go`
 (Task 15 Step 1 commits it first). Run one platform at a time: `PORT49_LAB_PLATFORMS=eos`, then
 `nxos`, `iosxe`, `vjunos`, `vsrx`.
@@ -1486,8 +1485,7 @@ Nothing here asserts what a device does.
   Design §8 and §12 follow. CLAUDE.md's Go floor is 1.26 (OD-1).
   port49d on etcd, and L35, are plan 7d-2's (Task 8b).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1711,8 +1709,7 @@ from Task 5, etcd.
   store and the sealing layer each run it whole. Plan 7d's etcd backend
   runs the same suite.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2578,8 +2575,7 @@ from Task 5, etcd.
   context written revoked, and a mark read that errs is ERROR
   store_unavailable.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2796,8 +2792,7 @@ from Task 5, etcd.
   context. A login that cannot be indexed is ERROR store_unavailable
   (plan 7d; decision 35; PR #7's third follow-up; 4b pre-flight N4).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4293,8 +4288,7 @@ from Task 5, etcd.
   7d, Ruling 17; the controller's rulings on pre-flight I12 and re-check
   CA1, IA1). A record sealed the old way does not open.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -6124,8 +6118,7 @@ from Task 5, etcd.
   binary (etcdtest; no docker, no cgo); PurgeTokens pages, and its
   property runs from Task 6. go 1.26 (OD-1).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -7147,8 +7140,7 @@ from Task 5, etcd.
   (re-check MA3). Every write of an index record drops its expired
   entries. Every context property passes on a real etcd member.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -7654,8 +7646,7 @@ from Task 5, etcd.
   removes one a login just listed. IndexKeysAreExact pins keys that are
   prefixes of each other or hold / and %, on every backend.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -8031,8 +8022,7 @@ from Task 5, etcd.
   one that will not open, and counts port49_contexts_reindexed_total.
   port49d calls it from 7d-2 (plan 7d; Ruling 6; re-check IA2).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -8271,8 +8261,7 @@ from Task 5, etcd.
   and against the sealing layer over it, and a lost quorum is
   store.ErrUnavailable within the deadline, never a stale answer.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 - [ ] **Step 6: 7d-1 as built** (on `main`, docs only, after 7d-1's pull request merges; pre-flight
@@ -8290,8 +8279,7 @@ from Task 5, etcd.
   git add docs/superpowers/plans/README.md docs/superpowers/plans/2026-10-02-07d-shared-store.md
   git commit -m "docs: plan 7d-1 merged (PR #<n>)
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -8622,8 +8610,7 @@ does, it says what port49d does and cites L35 as open.
   interfaces, Errors and §19 follow. Every device cell cites L35, opened
   here on five images.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -9581,8 +9568,7 @@ circuit, and shares the backend's connections.
   Design §12's hard timeouts, circuit breaker and pool separation (plan
   7d; decision 35; pre-flight I10, I11, I14; re-check R-I5).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -10201,8 +10187,7 @@ store:
   with no admin_socket; start_timeout 0 waits forever (plan 7d; decision
   35; pre-flight I1, I13, I16, I19; re-check N1).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -10788,8 +10773,7 @@ store:
   port49d store-roles prints the etcdctl commands, refusing a name a
   shell would read (design §17; decision 35).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -12701,8 +12685,7 @@ store:
   through its own (plan 7d; decision 35; pre-flight C1, I9, I13, I15,
   I19; re-check IA1, IA2, R-I2, R-I3, R-I4, R-M0 to R-M3).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -13075,8 +13058,7 @@ an operator can act on, and the start a check.
   was last written under a current key it does not hold (plan 2's alarm;
   plan 7d).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -13500,8 +13482,7 @@ search away: Step 2 ends with that grep.
   done, never that the broker is unreachable, which a remote store made
   likely (7c final review; plan 7d, Ruling 15; pre-flight I18, M43).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -13950,8 +13931,7 @@ measurement on a hang of its own, the store returned between them. On each image
   gains a packet's capture time); step 3 marked invalid if port49d went
   dark before it ended (plan 7d Task 15).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   Then, on beehive, from a worktree pinned to that commit, one platform at a time:
@@ -14002,8 +13982,7 @@ measurement on a hang of its own, the store returned between them. On each image
   <one line per image: request-to-reply times, what it printed,
   break-glass, the delay to the listeners closing, the session's return>
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   If the harness changed (`harness_test.go`), add it to the `git add`, by path. If the test changed
@@ -14091,8 +14070,7 @@ measurement on a hang of its own, the store returned between them. On each image
     docs/design/2026-08-21-port49-design.md
   git commit -m "docs: plan 7d as built
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
