@@ -58,7 +58,7 @@ before the members serve clients or the brokers start:
 
 1. Delete `v1/t/` (the token family) and `meta/judged` and `meta/judged_bundle`, with the members on
    loopback only.
-2. Re-issue the revocations made since the backup with `port49 revoke --offline`.
+2. Re-issue the revocations made since the backup with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`).
 3. Lift again what was lifted since.
 
 Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
