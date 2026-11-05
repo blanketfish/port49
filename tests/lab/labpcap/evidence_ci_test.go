@@ -116,16 +116,15 @@ func TestCommittedEvidenceHoldsNoCredential(t *testing.T) {
 // tlsEvidence names the committed files that are RFC 9887 TLS runs. Ciphertext cannot be audited
 // without the session keys, and the lab keeps none (no keylog), so each file is exempt by name and
 // reason; a TLS file not listed here fails.
-var tlsEvidence = tlsFiles("RFC 9887 TLS 1.3 on port 300; ciphertext, the lab keeps nothing that decrypts it",
-	"ceos436-arista_ceos", "iosxe1718-cisco_iosxe", "nxos106-cisco_nxos", "vjunos26-juniper_vjunos-router", "xrd261-cisco_xrd")
-
-func tlsFiles(reason string, platforms ...string) map[string]string {
-	m := map[string]string{}
-	for _, p := range platforms {
-		m["L88-f-tls-"+p+".pcap"] = reason
-	}
-	return m
+var tlsEvidence = map[string]string{
+	"L88-f-tls-ceos436-arista_ceos.pcap":            tlsReason,
+	"L88-f-tls-iosxe1718-cisco_iosxe.pcap":          tlsReason,
+	"L88-f-tls-nxos106-cisco_nxos.pcap":             tlsReason,
+	"L88-f-tls-vjunos26-juniper_vjunos-router.pcap": tlsReason,
+	"L88-f-tls-xrd261-cisco_xrd.pcap":               tlsReason,
 }
+
+const tlsReason = "RFC 9887 TLS 1.3 on port 300; ciphertext, the lab keeps nothing that decrypts it"
 
 // auditCommitted is the rule for one committed file: any credential finding fails; plaintext
 // port-49 data that frames nothing fails; a TLS run fails unless the file is on allow; a file with
@@ -139,6 +138,9 @@ func auditCommitted(base string, raw []byte, opt Options, allow map[string]strin
 	}
 	if r.Unframed > 0 {
 		out = append(out, fmt.Sprintf("%s: %d port-49 stream(s) carry data that is not TACACS+ and cannot be audited (counts %+v)", base, r.Unframed, r))
+	}
+	if r.Other > 0 {
+		out = append(out, fmt.Sprintf("%s: %d record(s) are not IPv4 TCP on port 49 or 300 and cannot be audited (counts %+v)", base, r.Other, r))
 	}
 	if _, ok := allow[base]; r.TLS > 0 && !ok {
 		out = append(out, fmt.Sprintf("%s: %d TLS stream(s) and the file is not on the RFC 9887 allowlist (counts %+v)", base, r.TLS, r))
@@ -175,5 +177,44 @@ func TestAuditCommittedPassesAFileWithNoPort49Payload(t *testing.T) {
 	s.segment(synthDevice, synthServer, 50011, Port, 1000, flagSYN, nil, true)
 	if problems, r := auditCommitted("empty.pcap", s.buf, Options{Key: synthKey}, nil); len(problems) != 0 {
 		t.Errorf("a file with no payload failed: %v (%+v)", problems, r)
+	}
+}
+
+func TestAuditCommittedFailsAStreamWithAnUnframedTail(t *testing.T) {
+	s := newSynth()
+	req := wire.AcctRequest{
+		Flags: wire.AcctFlagStart, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+		AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+		User: []byte("alice01"), Port: []byte("ssh"), RemAddr: []byte("192.0.2.9"),
+		Args: [][]byte{[]byte("task_id=42")},
+	}
+	whole := tacacs(0x55555555, wire.TypeAcct, 1, req.Encode())
+	cut := tacacs(0x55555555, wire.TypeAcct, 3, req.Encode())
+	cut = cut[:len(cut)-5] // a packet whose body ends early: its header frames, its body does not
+	s.exchange(50012, [][]byte{whole, cut}, []bool{true, true}, true)
+	problems, r := auditCommitted("synthetic.pcap", s.buf, Options{Key: synthKey}, nil)
+	if r.Unframed != 1 || len(problems) == 0 {
+		t.Fatalf("report %+v, problems %d: want the unframed tail counted and failing", r, len(problems))
+	}
+}
+
+func TestAuditCommittedChecksPort300EvenOnTheAllowlist(t *testing.T) {
+	s := newSynth()
+	plain := tacacs(0x66666666, wire.TypeAcct, 1, []byte{1, 2, 3, 4})
+	s.segment(synthDevice, synthServer, 50013, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50013, TLSPort, 1001, flagACK, plain, true)
+	problems, _ := auditCommitted("tls.pcap", s.buf, Options{Key: synthKey}, map[string]string{"tls.pcap": "x"})
+	if len(problems) == 0 {
+		t.Fatal("plain TACACS+ on port 300 passed through the allowlist")
+	}
+}
+
+func TestAuditCommittedFailsTrafficOffPorts49And300(t *testing.T) {
+	s := newSynth()
+	s.segment(synthDevice, synthServer, 50014, 8080, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50014, 8080, 1001, flagACK, []byte("GET / HTTP/1.1\r\n\r\n"), true)
+	problems, r := auditCommitted("other.pcap", s.buf, Options{Key: synthKey}, nil)
+	if r.Other != 2 || len(problems) == 0 {
+		t.Fatalf("report %+v, problems %d: want the other-protocol records counted and failing", r, len(problems))
 	}
 }

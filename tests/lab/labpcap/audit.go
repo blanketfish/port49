@@ -1,6 +1,7 @@
 package labpcap
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"sort"
@@ -19,6 +20,7 @@ type EvidenceReport struct {
 	Unaudited        int // streams not decodable as plain TACACS+: Unframed + TLS
 	Unframed         int // port-49 streams with data that framed no TACACS+ packet
 	TLS              int // directions of connections on TLSPort (RFC 9887), whose bytes TLS 1.3 hides
+	Other            int // records that are not IPv4 TCP on port 49 or 300
 }
 
 // hashShape matches the password hashes and obfuscated secrets a device puts in a command:
@@ -44,8 +46,11 @@ func AuditEvidence(pcap []byte, opt Options) (EvidenceReport, error) {
 	if len(d.Gaps) > 0 {
 		return r, fmt.Errorf("%d stream(s) had a sequence gap: part of the file was never framed", len(d.Gaps))
 	}
-	r.Unframed, r.TLS = unaudited(f, d)
-	r.Unaudited = r.Unframed + r.TLS
+	r.Unframed, r.TLS, r.Other = unaudited(f, d)
+	r.Unaudited = r.Unframed + r.TLS + r.Other
+	// Port 300 is checked, not assumed: each direction must open with a TLS handshake record,
+	// so plain TACACS+ there cannot hide behind an allowlisted file name.
+	tlsErr := checkTLSOpens(f)
 	fields, err := d.Fields()
 	if err != nil {
 		return r, err
@@ -67,42 +72,48 @@ func AuditEvidence(pcap []byte, opt Options) (EvidenceReport, error) {
 		}
 	}
 	for _, p := range d.Packets {
-		if labcreds.TokenShaped(p.Body) != "" || strings.Contains(string(p.Body), labcreds.TokenPrefix) {
+		if labcreds.TokenShaped(p.Body) != "" || bytes.Contains(p.Body, []byte(labcreds.TokenPrefix)) {
 			r.TokenShaped++
 			kinds[p.Kind()+" token-shaped"]++
 		}
 	}
 	if len(kinds) == 0 {
-		return r, nil
+		return r, tlsErr
 	}
 	var parts []string
 	for k, n := range kinds {
 		parts = append(parts, fmt.Sprintf("%s x%d", k, n))
 	}
 	sort.Strings(parts)
-	return r, fmt.Errorf("the evidence holds a credential: %s", strings.Join(parts, ", "))
+	err = fmt.Errorf("the evidence holds a credential: %s", strings.Join(parts, ", "))
+	if tlsErr != nil {
+		err = fmt.Errorf("%w; %v", err, tlsErr)
+	}
+	return r, err
 }
 
-// unaudited counts the streams AuditEvidence could not read as plain TACACS+: a port-49 stream
-// that carries data but framed no packet, and each direction of a connection on TLSPort (RFC 9887),
-// which TLS 1.3 hides.
-func unaudited(f *File, d *Decode) (unframed, tlsRuns int) {
-	framed := map[int]bool{}
-	for _, p := range d.Packets {
-		framed[p.Stream] = true
-	}
-	for i, s := range d.Streams {
-		if len(s.Payload) > 0 && !framed[i] {
+// unaudited counts what AuditEvidence could not read as plain TACACS+:
+//   - unframed: port-49 streams with bytes left after the last whole packet (or no packet at all)
+//     that are not all Fill,
+//   - tlsRuns: each direction of a connection on TLSPort (RFC 9887), which TLS 1.3 hides,
+//   - other: records that are not IPv4 TCP on port 49 or 300, which Redact would have dropped.
+func unaudited(f *File, d *Decode) (unframed, tlsRuns, other int) {
+	// A tail that is entirely Fill is what the redactor writes over bytes it cannot frame, and
+	// holds nothing; any other tail is unaudited.
+	for _, tl := range d.Tails() {
+		if !labcreds.Redacted(d.Streams[tl.Stream].Payload[tl.Off:]) {
 			unframed++
 		}
 	}
 	tls := map[string]bool{}
 	for _, r := range f.Records {
 		fl, ok := FlowOf(f.Link, f.Bytes(r))
-		if !ok || fl.PayloadLen == 0 || (fl.SrcPort != TLSPort && fl.DstPort != TLSPort) {
-			continue
+		switch {
+		case !ok || (fl.SrcPort != Port && fl.DstPort != Port && fl.SrcPort != TLSPort && fl.DstPort != TLSPort):
+			other++
+		case fl.PayloadLen > 0 && (fl.SrcPort == TLSPort || fl.DstPort == TLSPort):
+			tls[fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)] = true
 		}
-		tls[fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)] = true
 	}
-	return unframed, len(tls)
+	return unframed, len(tls), other
 }

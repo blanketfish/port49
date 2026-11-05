@@ -56,6 +56,7 @@ type Stats struct {
 	Packets        int
 	FieldsRedacted int
 	BytesRedacted  int
+	TailBytes      int // bytes after a stream's last whole packet, overwritten with Fill
 	RecordsPatched int
 
 	// ChecksumsRecomputed counts patched records whose TCP checksum was
@@ -158,6 +159,19 @@ func Redact(raw []byte, opt Options) ([]byte, Stats, error) {
 		}
 		st.FieldsRedacted++
 		st.BytesRedacted += fd.Len
+	}
+
+	// A stream's bytes after its last whole packet are framed by nothing, so no field list could
+	// name a credential in them: they are overwritten with Fill, as a credential is. The Fill is
+	// written as it is, because nothing obfuscated them.
+	for _, tl := range d.Tails() {
+		if perStream[tl.Stream] == nil {
+			perStream[tl.Stream] = map[int]byte{}
+		}
+		for k := 0; k < tl.Len; k++ {
+			perStream[tl.Stream][tl.Off+k] = byte(Fill)
+		}
+		st.TailBytes += tl.Len
 	}
 
 	// Stream coordinates back to file coordinates. Every segment that claims a
@@ -324,6 +338,17 @@ func Verify(raw, out []byte, opt Options) error {
 		return fmt.Errorf("output holds %d TACACS+ packets, the input holds %d", len(outD.Packets), len(inD.Packets))
 	}
 
+	inTails, outTails := inD.Tails(), outD.Tails()
+	if len(outTails) != len(inTails) {
+		return fmt.Errorf("output has %d unframed stream tail(s), the input has %d", len(outTails), len(inTails))
+	}
+	for _, tl := range outTails {
+		if !labcreds.Redacted(outD.Streams[tl.Stream].Payload[tl.Off:]) {
+			return fmt.Errorf("stream %s: %d byte(s) after its last whole packet survived redaction, not all %q",
+				outD.Streams[tl.Stream].Key, tl.Len, string(rune(Fill)))
+		}
+	}
+
 	inFields, err := inD.Fields()
 	if err != nil {
 		return fmt.Errorf("input: %w", err)
@@ -419,6 +444,21 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 		for _, seg := range s.Segments {
 			for k := 0; k < fd.Len; k++ {
 				off := p.BodyOff + fd.Off + k
+				if off < seg.StreamOff || off >= seg.StreamOff+seg.Length {
+					continue
+				}
+				if allowed[seg.Record] == nil {
+					allowed[seg.Record] = map[int]bool{}
+				}
+				allowed[seg.Record][seg.PayloadOff+(off-seg.StreamOff)] = true
+			}
+		}
+	}
+
+	for _, tl := range inD.Tails() {
+		s := inD.Streams[tl.Stream]
+		for _, seg := range s.Segments {
+			for off := tl.Off; off < tl.Off+tl.Len; off++ {
 				if off < seg.StreamOff || off >= seg.StreamOff+seg.Length {
 					continue
 				}
