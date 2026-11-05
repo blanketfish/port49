@@ -98,17 +98,23 @@ type leg struct {
 	// placed is set once the leg's opening has returned: until then it has no
 	// stream to ask for progress on.
 	placed *atomic.Bool
+	// closed is set by the leg's goroutine, before it sends its stream's
+	// end: a progress request on a closed stream would have clientv3 open a
+	// new stream, keyed by the leg's context, that nothing ends.
+	closed *atomic.Bool
 }
 
 // watchLegs merges two legs of one watch into one channel of responses, which
 // it closes when the watch is over: ctx ended, a leg's compaction (the
 // response is passed on, its Err says so), or both legs failed at once (the
-// last failure is passed on). A leg that fails alone is opened again after
+// last failure is passed on). single is true when the client has one endpoint:
+// the legs can only share its member, which is no fault, so they are never
+// moved and colo is never told. A leg that fails alone is opened again after
 // legRetry and the watch goes on. asks has each leg send a progress request.
 // after is the revision the watch follows from, as WatchContexts has it; saw
 // is told every response's header revision, those it drops included.
 func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan struct{}, saw func(int64),
-	logf func(string, ...any), colo func(on bool, member string)) <-chan clientv3.WatchResponse {
+	logf func(string, ...any), colo func(on bool, member string), single bool) <-chan clientv3.WatchResponse {
 	out := make(chan clientv3.WatchResponse)
 	go func() {
 		defer close(out)
@@ -120,6 +126,9 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 				colo(on, member)
 			}
 		}
+		if single {
+			logf("etcd: the client has one endpoint, so both legs of a watch share one member; they are not moved apart")
+		}
 		through := int64(after)
 		start := func(i int) {
 			l := &legs[i]
@@ -129,8 +138,8 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			// connection, and the other leg's events must not wait with it.
 			lctx, cancel := context.WithCancel(ctx)
 			l.cancel = cancel
-			l.placed = new(atomic.Bool)
-			placed, gen, from := l.placed, l.gen, through+1
+			l.placed, l.closed = new(atomic.Bool), new(atomic.Bool)
+			placed, closed, gen, from := l.placed, l.closed, l.gen, through+1
 			go func() {
 				defer cancel()
 				ch, ocancel := src.open(lctx, i, gen, from)
@@ -143,6 +152,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 						return
 					}
 				}
+				closed.Store(true)
 				select {
 				case in <- legMsg{i, gen, clientv3.WatchResponse{}, false}:
 				case <-ctx.Done():
@@ -200,7 +210,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 			// elsewhere; one being opened has no member yet. The state holds
 			// through both, so a stream breaking now and then neither says
 			// "apart again" nor drops the gauge to bring it back a second on.
-			if legs[0].failed || legs[1].failed {
+			if single || legs[0].failed || legs[1].failed {
 				return
 			}
 			m0, m1 := src.member(0), src.member(1)
@@ -237,7 +247,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 				return
 			case <-asks:
 				for i := range legs {
-					if !legs[i].failed && legs[i].placed.Load() {
+					if !legs[i].failed && legs[i].placed.Load() && !legs[i].closed.Load() {
 						src.progress(i)
 					}
 				}
@@ -320,7 +330,7 @@ func watchLegs(ctx context.Context, src legSource, after uint64, asks <-chan str
 							traceLeg("quiet, opened again", i, l.gen, fmt.Sprintf("after %v", quiet.Round(10*time.Millisecond)))
 							start(i)
 						}
-					case quiet >= feedIdle && l.placed.Load():
+					case quiet >= feedIdle && l.placed.Load() && !l.closed.Load():
 						src.progress(i)
 					}
 				}
@@ -461,5 +471,5 @@ func (s *Store) followLegs(ctx context.Context, feed string, cl *clientv3.Client
 			s.legsColocated(feed, on)
 		}
 	}
-	return watchLegs(ctx, src, after, asks, s.saw, s.logf, colo), nil
+	return watchLegs(ctx, src, after, asks, s.saw, s.logf, colo, len(cl.Endpoints()) == 1), nil
 }

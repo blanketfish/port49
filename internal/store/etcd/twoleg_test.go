@@ -98,7 +98,7 @@ func progressAt(rev int64) clientv3.WatchResponse {
 func runLegs(t *testing.T, src *scripted, after uint64) (<-chan clientv3.WatchResponse, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	out := watchLegs(ctx, src, after, nil, func(int64) {}, func(string, ...any) {}, func(bool, string) {})
+	out := watchLegs(ctx, src, after, nil, func(int64) {}, func(string, ...any) {}, func(bool, string) {}, false)
 	// The controller is over (its output closed) before the next test runs, so
 	// a test that sets feedIdle or feedStall never races a controller left by
 	// an earlier one.
@@ -315,7 +315,7 @@ func TestALegWhoseOpeningBlocksDoesNotStopTheOther(t *testing.T) {
 	src := newScripted()
 	src.block[1] = make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, func(bool, string) {})
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, func(bool, string) {}, false)
 	t.Cleanup(func() {
 		close(src.block[1])
 		cancel()
@@ -366,7 +366,7 @@ func TestLegsOnOneMemberAreMovedApartWhenAnotherIsReady(t *testing.T) {
 	}
 	var tl togetherLog
 	ctx, cancel := context.WithCancel(context.Background())
-	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, tl.note)
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, tl.note, false)
 	t.Cleanup(func() {
 		cancel()
 		for range out {
@@ -496,7 +496,7 @@ func TestALegFailingAndReopeningLeavesTheLegsTogether(t *testing.T) {
 	src := newScripted()
 	var tl togetherLog
 	ctx, cancel := context.WithCancel(context.Background())
-	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, tl.note)
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, func(string, ...any) {}, tl.note, false)
 	t.Cleanup(func() {
 		cancel()
 		for range out {
@@ -517,5 +517,38 @@ func TestALegFailingAndReopeningLeavesTheLegsTogether(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	if got := tl.get(); got != "true@a" {
 		t.Fatalf("colocation reports %q across a leg failure, want only true@a", got)
+	}
+}
+
+// A client with one endpoint has nowhere to move a leg to: the legs are never
+// reopened for it, colocation is never reported, and the start says once that
+// the feeds share one member (final review M2).
+func TestOneEndpointNeverRelocatesOrReportsColocation(t *testing.T) {
+	fastLegs(t, 50*time.Millisecond, 50*time.Millisecond, 200*time.Millisecond)
+	src := newScripted()
+	var tl togetherLog
+	var mu sync.Mutex
+	var lines []string
+	logf := func(f string, a ...any) { mu.Lock(); lines = append(lines, fmt.Sprintf(f, a...)); mu.Unlock() }
+	ctx, cancel := context.WithCancel(context.Background())
+	out := watchLegs(ctx, src, 5, nil, func(int64) {}, logf, tl.note, true)
+	t.Cleanup(func() {
+		cancel()
+		for range out {
+		}
+	})
+	<-src.opened
+	<-src.opened
+	time.Sleep(time.Second)
+	if n := src.opens[1].Load(); n != 1 {
+		t.Fatalf("leg 1 was opened %d times, want once", n)
+	}
+	if got := tl.get(); got != "" {
+		t.Fatalf("colocation reported %q with one endpoint", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) != 1 || !strings.Contains(lines[0], "one endpoint") {
+		t.Fatalf("log lines %q, want one saying the feeds share one member", lines)
 	}
 }
