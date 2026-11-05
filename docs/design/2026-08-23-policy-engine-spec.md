@@ -5796,9 +5796,10 @@ sync:
     platform_aliases: {eos-lab: arista_eos}
 ```
 
-A device whose name is not 1–253 bytes of printable ASCII without a space (`bundle.DeviceNameOK`), or whose platform or
-attributes carry a control character, is left out of the sync, said and counted: it could not
-reach a record or a line safely, and the broker refuses to mint for such a name anyway.
+A device whose name is not 1–253 bytes of printable ASCII without a space
+(`bundle.DeviceNameOK`), or whose platform or attributes carry a control character, is left out of
+the sync, said and counted: it could not reach a record or a line safely, and the broker refuses
+to mint for such a name anyway.
 
 ### How a daemon refreshes its snapshot
 
@@ -8942,8 +8943,8 @@ built, and ruling 10's host-key options are replaced.
   - **The request.** `POST /v1/tokens` takes `scope` in place of `devices`, one or the other, and
     `after` to continue a sweep. `scope` is 1 to 253 printable ASCII characters, as a device name
     in a `devices` list always was. `after` is 1 to 253, the longest name the bundle admits for a
-    device (`bundle.DeviceNameOK`), so the `next` of a page is always an `after` the broker accepts and a
-    long inventory name never stalls a sweep. Anything else is `400 bad_request`: both keys (a
+    device (`bundle.DeviceNameOK`), so the `next` of a page is always an `after` the broker
+    accepts and a long inventory name never stalls a sweep. Anything else is `400 bad_request`: both keys (a
     `devices` key beside `scope` is refused even when empty), `after` without `scope`, neither.
   - **The page.** In the byte order of their inventory names, after `after`, at most `batch_max`:
     the devices the scope selects (§5.5) on which the caller's subjects hold a grant unexpired
