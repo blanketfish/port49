@@ -8239,6 +8239,12 @@ L84, L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/la
     `--bump-revision`); the guard, the floor and the witness record do not survive a port49d restart (the drop line warns). Also `supersedeTokens` visiting
     only the keys that hold tokens (deferred: it changes which pairs a revocation-relevant pass visits and depends on the index being atomic; the cost until then
     is minutes of 2.5 cores per policy edit at fleet size).
+  - **From the final review (2026-11-05):** the restore guard was reworked in review (`a213fab9` to `ecdfc1a5`, four rounds, each probe kept as a test):
+    after a judged drop it compares against the drop's witness and, below the old record, counts only tokens minted by the drop read. Left for the review:
+    - while a failed scan holds redemptions, `port49_redemption_restore_guarded` reads 0 and no alert names it; only the log line says why (count the scan outcome, or hold the gauge at 1);
+    - on a busy store the witness moves every second, so the guard scans the token family on every pass until the store catches up (load, not safety; the final review's M1);
+    - a restored token a broker stamped more than 5m ahead of port49d's clock is not counted (outside the NTP tolerance; documented);
+    - `RequestProgress` racing a leg's stream close can leave an empty watcher stream (bounded; the closed flag narrows it; a `w.streams` count test after a forced `ErrNoLeader` would settle it).
   - **The store and the feeds:**
     - `WatchMemberships` and `WatchLogouts` are single-leg; only the context and marks feeds are two-leg (a stall delays a pin change or a logout forward by up to keepalive, not a loss).
     - A member forgiven by a success takes load until the other suspicions expire.
@@ -8258,7 +8264,7 @@ L84, L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/la
     - L90's 32 parallel `ssh` appends to one `known_hosts` are unmeasured;
     - `lab-kind.yml` and `lab-hosted.yml` rerun on `synchronize` after a label, so a labelled fork PR runs new pushes unreviewed (the jobs hold `contents: read`, no secrets, no `id-token`): remove the label on `synchronize`;
     - **the go-public pcap check:** committed `tests/lab/evidence` pcaps carry TACACS+ bodies under the lab key; confirm none exposes a reusable secret (lab key, break-glass password, live token) before the repository is public.
-  - **Small:** `composeMarkedFor` (`scope.go:135`) is unused; the guard's scan pages are not pinned to one revision (it fails closed); each post-lift re-guard reprints the drop line; one scan timeout leaves the guard purge-only; no rule pages when every broker has been down past a day (the README pairs the rules with `up{job=<broker>} == 0`); `Retry-After` has no jitter; the `l84DiskFloorMB` comment ignores build caches; `testpki` import grouping in `listen_idle_cap_test.go`; the `addSamplerObserved` duplicate loop; cell b's margin on GCE is 0.1 ms (4.90 against 5).
+  - **Small:** `composeMarkedFor` (`scope.go:135`) is unused; the guard's scan pages are not pinned to one revision (it fails closed); each post-lift re-guard reprints the drop line; one scan timeout on a first drop leaves the guard purge-only (after a judged drop it only holds redemptions until a scan answers); no rule pages when every broker has been down past a day (the README pairs the rules with `up{job=<broker>} == 0`); `Retry-After` has no jitter; the `l84DiskFloorMB` comment ignores build caches; `testpki` import grouping in `listen_idle_cap_test.go`; the `addSamplerObserved` duplicate loop; cell b's margin on GCE is 0.1 ms (4.90 against 5).
 - **The Mac check (unmeasured on a real Mac).** The Homebrew `yubico-piv-tool` prefix is group-writable by `admin` (GitHub's `macos-15` and `macos-15-intel`, run 41633453384), so `CheckOwned` refused `--module` there. Ryan agreed 2026-11-03 to the exception, which is built (`f43f37b0`): on darwin only, group `admin` (gid 80) write is root-equivalent in `CheckOwned`; Linux is unchanged. Whether a real Homebrew Mac now loads the module is not measured.
 
 #### Operator notes (for the pull request body)
