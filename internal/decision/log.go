@@ -251,6 +251,9 @@ type Device struct {
 type Session struct {
 	CtxID    string `json:"ctx_id"`
 	Username string `json:"username,omitempty"`
+	// UsernameRedacted is set where the device sent a token-shaped username,
+	// which the log never carries.
+	UsernameRedacted bool `json:"username_redacted,omitempty"`
 	// ReplacedCtxID is set on a redeem that replaced an existing context for
 	// the same (nas, username) rather than joining it: another principal under
 	// the same username, or the same principal's context past its session

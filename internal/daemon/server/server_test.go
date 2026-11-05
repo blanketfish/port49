@@ -2642,3 +2642,39 @@ func TestTheGlobalCapUnderAFloodLeavesNoSlotHeld(t *testing.T) {
 		t.Fatalf("shed counter %v, resets the clients saw %d", shed, resets.Load())
 	}
 }
+
+// TestAuthorAndAcctRefuseASeqNoOtherThanOne: authorization and accounting are
+// single-packet exchanges, so a request at any other seq_no is a protocol error
+// (no reply, connection closed) and no handler runs.
+func TestAuthorAndAcctRefuseASeqNoOtherThanOne(t *testing.T) {
+	bodies := map[string]struct {
+		typ  wire.Type
+		body []byte
+	}{
+		"author": {wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+			AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
+			Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode()},
+		"acct": {wire.TypeAcct, wire.AcctRequest{Flags: wire.AcctFlagStart, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+			AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
+			Args: [][]byte{[]byte("task_id=1"), []byte("service=shell"), []byte("cmd=")}}.Encode()},
+	}
+	for name, b := range bodies {
+		t.Run(name, func(t *testing.T) {
+			log := &syncBuffer{}
+			addr, _, _ := startServer(t, log)
+			c := dial(t, addr, []byte("k2"))
+			c.seq = 3
+			c.send(t, b.typ, b.body, 0)
+			c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+				t.Fatal("a request at seq_no 3 must get no reply")
+			} else if errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("the connection must be closed: %v", err)
+			}
+			if log.contains("authorize_") || log.contains(`"event":"account"`) {
+				t.Fatalf("no handler may run: %s", log.String())
+			}
+			assertProtocolErrorRecorded(t, log)
+		})
+	}
+}

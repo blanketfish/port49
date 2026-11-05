@@ -2440,7 +2440,8 @@ A value outside its list is recorded as `unknown_<n>`. The object carries no use
 data or argument, and an `unvalidated` record never carries it (decision 52 ruling 3).
 
 `session.username` is the username the device sent; `session.username_redacted` (bool) is true
-when it was token-shaped, and `session.username` is then empty (decision 56 ruling 10).
+when it was token-shaped or near-token-shaped (a 20+ character base62 run with a digit, an
+uppercase and a lowercase letter), and `session.username` is then empty (decision 56 ruling 10).
 
 `session.privilege` on an `authorize_session` or `authorize_command` record is the `priv_lvl` of
 the request's header: the level the device asked at. `session.held_privilege` is the context's
@@ -11878,10 +11879,17 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
    `deadline_on_entry`, not as a store failure** (amends decision 35; stores I3).
 9. **A full logout queue owes a rescan of the logout set and never drops a logout's reach**
    (identity I3).
-10. **A token-shaped username (after trimming surrounding whitespace) is never logged:**
-    `session.username` is empty and `session.username_redacted` is true. A real 30-character
-    alphanumeric username is redacted too, in the redeem, authorization and accounting records
-    alike; that is the cost (devices I1).
+10. **A token-shaped username is never logged:** `session.username` is empty and
+    `session.username_redacted` is true, in the redeem, authorization and accounting records
+    alike (devices I1). The name is tested with its control characters removed, and both as sent
+    and in its canonical form (so `corp\<token>` and `<token>@host` are caught). It is redacted when
+    it is a token (30 base62 characters) or a *near-token*: a run of 20 or more base62 characters
+    holding at least one digit, one uppercase and one lowercase letter, or a run of 24 or more
+    holding both cases with no digit required (about 0.6% of tokens have no digit in their first 29
+    characters). That covers a truncated paste, an over-long paste and a token followed by a stray
+    byte. A real username almost never has that shape; when one does, the cost is a redacted name
+    in the log and never a change to access. **Operator note:** a redacted name cannot be searched
+    for by username; search the log by `principal` or `ctx_id` instead.
 11. **An enable token is refused `credential_mismatch` unless its principal is the escalated
     context's** (devices M2).
 12. **An authorization or accounting packet with `seq_no` other than 1 is a protocol error**

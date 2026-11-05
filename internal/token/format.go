@@ -8,8 +8,11 @@ import (
 	"crypto/subtle"
 	"io"
 	"math/big"
+	"strings"
+	"unicode"
 
 	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/username"
 )
 
 // TagLen, SecretLen, and Len are the fixed sizes of the token format: a
@@ -157,4 +160,65 @@ func randInt(r io.Reader, n int) (int, error) {
 			return int(b[0]) % n, nil
 		}
 	}
+}
+
+// LoggedUsername is the username as the decision log may carry it. A user who
+// pastes a token into the username prompt would otherwise put it in the log, so
+// a token-shaped name is dropped and reported as redacted. Control characters
+// are removed before the check, because a pasted token often arrives with a
+// trailing space, CR or NUL. The canonical form is checked too, since it is what
+// would be logged and strips a `domain\` prefix and an `@suffix` that can wrap a
+// token. A near-token shape is redacted as well (nearToken): a truncated or
+// over-long paste still holds most of a live secret. Only the log is redacted:
+// lookups keep using the canonical name.
+func LoggedUsername(raw string) (name string, redacted bool) {
+	clean := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, raw)
+	canonical := username.Canonical(raw)
+	for _, s := range []string{strings.TrimSpace(clean), username.Canonical(clean), canonical} {
+		if _, ok := Parse([]byte(s)); ok {
+			return "", true
+		}
+	}
+	if nearToken(clean) {
+		return "", true
+	}
+	return canonical, false
+}
+
+// nearTokenRun is the shortest run of base62 characters that nearToken treats
+// as part of a pasted token.
+const nearTokenRun = 20
+
+// nearTokenDigitlessRun is the shortest run that needs no digit. About 0.6% of
+// tokens have none in their first 29 characters, so a truncated paste of one
+// would pass the digit rule; at this length both letter cases are enough.
+const nearTokenDigitlessRun = 24
+
+// nearToken reports whether s holds a run of at least nearTokenRun base62
+// characters containing a digit, an uppercase and a lowercase letter, or a run
+// of at least nearTokenDigitlessRun with both letter cases. A real username
+// almost never has either shape; when one does, the cost is a redacted name in
+// the log and nothing else.
+func nearToken(s string) bool {
+	run, digit, upper, lower := 0, false, false, false
+	for i := 0; i <= len(s); i++ {
+		if i < len(s) && isAlphabet(s[i]) {
+			run++
+			c := s[i]
+			digit = digit || (c >= '0' && c <= '9')
+			upper = upper || (c >= 'A' && c <= 'Z')
+			lower = lower || (c >= 'a' && c <= 'z')
+			continue
+		}
+		if upper && lower && (run >= nearTokenDigitlessRun || run >= nearTokenRun && digit) {
+			return true
+		}
+		run, digit, upper, lower = 0, false, false, false
+	}
+	return false
 }

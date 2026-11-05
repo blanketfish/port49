@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"strings"
 	"testing"
+
+	"github.com/blanketfish/port49/internal/username"
 )
 
 func isBase62(s string) bool {
@@ -106,5 +108,76 @@ func TestTagWindowAcceptsEveryKeyInIt(t *testing.T) {
 	}
 	if NewTagWindow(nil, []byte{}).Matches(Tag(cur, "leaf-01"), "leaf-01") {
 		t.Fatal("an empty key is not a key")
+	}
+}
+
+// synthTokenShaped is token-shaped (Len base62 characters) and obviously not a
+// credential.
+const synthTokenShaped = "SyntheticTokenShapedNameXY1234"
+
+func TestLoggedUsernameRedactsOnlyTokenShapedNames(t *testing.T) {
+	if len(synthTokenShaped) != Len {
+		t.Fatalf("fixture is %d bytes, want %d", len(synthTokenShaped), Len)
+	}
+	cases := []struct {
+		name, in, want string
+		redacted       bool
+	}{
+		{"plain_name", "alice", "alice", false},
+		{"token_shaped", synthTokenShaped, "", true},
+		{"token_shaped_with_trailing_space_and_cr", synthTokenShaped + " \r", "", true},
+		{"thirty_chars_with_dot", "synthetic.name.of.thirty.chars", "synthetic.name.of.thirty.chars", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, red := LoggedUsername(c.in)
+			if got != c.want || red != c.redacted {
+				t.Fatalf("LoggedUsername(%q) = %q, %v; want %q, %v", c.in, got, red, c.want, c.redacted)
+			}
+		})
+	}
+}
+
+func TestLoggedUsernameRedactsWrappedAndNearTokenShapes(t *testing.T) {
+	tok := synthTokenShaped
+	lower := strings.ToLower(tok)
+	redacted := map[string]string{
+		"domain_prefix":        `corp\` + tok,
+		"domain_prefix_lower":  `CORP\` + lower,
+		"at_suffix":            tok + "@",
+		"at_host":              tok + "@example",
+		"at_host_lower":        lower + "@Example.com",
+		"truncated_paste":      tok[:len(tok)-1],
+		"truncated_paste_more": tok[:27],
+		"one_char_too_long":    tok + "x",
+		"trailing_nul":         tok + "\x00",
+		"leading_nul":          "\x00" + tok,
+		"interior_control":     tok[:10] + "\x01" + tok[10:],
+		// No digit in the first 24 characters: only the digitless run rule
+		// sees these.
+		"digitless_truncated_paste":        tok[:24],
+		"digitless_truncated_paste_domain": `corp\` + tok[:24],
+		// A 30-character lower-case token with no digit and no upper case:
+		// only the canonical form's exact check sees it behind a prefix.
+		"digitless_lower_token_domain": `corp\abcdefghijklmnopqrstuvwxyzabcd`,
+		"digitless_lower_token_host":   `abcdefghijklmnopqrstuvwxyzabcd@example`,
+	}
+	for name, in := range redacted {
+		t.Run("redacted_"+name, func(t *testing.T) {
+			got, red := LoggedUsername(in)
+			if got != "" || !red {
+				t.Fatalf("LoggedUsername(%q) = %q, %v; want empty, true", in, got, red)
+			}
+		})
+	}
+	clear := []string{"alice", "firstname.lastname.contractor", "svc_backup_nightly_runner", `corp\alice`, "alice@example.com",
+		"administratorsecondaccount", "FirstnameLastnameContractor"[:20]}
+	for _, in := range clear {
+		t.Run("clear_"+in, func(t *testing.T) {
+			got, red := LoggedUsername(in)
+			if red || got != username.Canonical(in) {
+				t.Fatalf("LoggedUsername(%q) = %q, %v; want the canonical name in clear", in, got, red)
+			}
+		})
 	}
 }
