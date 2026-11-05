@@ -211,11 +211,11 @@ func TestAGrantedScopeTakenInOnAnIncomparableVersionIsReported(t *testing.T) {
 scopes:
   - {name: junos_old, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: include}
 roles:
-  - {name: read_only, privilege: readonly, permit: [show **]}
+  - {name: no_reload, deny: [reload]}
 subjects:
   - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
 grants:
-  - {subject: noc, scope: junos_old, roles: [read_only]}
+  - {subject: noc, scope: junos_old, roles: [no_reload]}
 `)
 	if c := composed(t, p, "noc", "srx-fw-22", time.Time{}); len(c.grants) != 1 ||
 		strings.Join(c.incomparable, ",") != "junos_old" {

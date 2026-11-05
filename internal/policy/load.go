@@ -1643,8 +1643,24 @@ func (p *Policy) buildGrants(f file) error {
 				if len(p.roles[r].Deny) > 0 {
 					return fmt.Errorf("%s: role %q carries a deny onto scope %q: declare on_missing on the "+
 						"scope (include assumes a device with no data for the match is affected, the safe direction "+
-						"for a mitigation; exclude says the grant must be earned by data; spec §5.5)", row, r, g.Scope)
+						"for a mitigation; exclude says the grant must be earned by data: write exclude for a grant; "+
+						"put a mitigation's deny in attached_roles on an include scope; spec §5.5)", row, r, g.Scope)
 				}
+			}
+		}
+		// A grant carries permits, and a permit's safe direction is exclude: on
+		// an include scope a device the inventory could not describe would get
+		// the grant (spec §5.5, decision 56 ruling 5).
+		if sc := p.scopes[g.Scope]; sc.OnMissing == "include" {
+			carries := g.MaxPrivilege != ""
+			for _, r := range g.Roles {
+				carries = carries || len(p.roles[r].Permit) > 0
+			}
+			if carries {
+				return fmt.Errorf("%s: the scope is on_missing: include and the grant carries a permit or a "+
+					"max_privilege, so a device the inventory cannot describe would receive it; use on_missing: "+
+					"exclude for a scope a grant reaches, and put a mitigation's deny in attached_roles on an "+
+					"include scope (spec §5.5)", row)
 			}
 		}
 		// Roles are kept sorted, so nothing a grant reports — the mint

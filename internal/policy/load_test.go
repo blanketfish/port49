@@ -621,3 +621,73 @@ func TestServiceAccountIdentities(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// includeProbe is a mitigation scope that also carries a grant, the shape policy I1 found:
+// dc_admin hands a permit to whatever device the inventory cannot describe.
+const includeProbe = `
+scopes:
+  - {name: dc_fabric, match: {site: [dc1, dc2]}, on_missing: include}
+roles:
+  - {name: dc_admin, privilege: admin, permit: ["**"]}
+  - {name: dc_read, privilege: readonly}
+  - {name: no_reload, deny: [reload **]}
+subjects:
+  - {name: noc, identity: ["user:noc@example.com"], username: noc, token_ttl: 60s}
+`
+
+func TestAGrantOnAnIncludeScopeIsRefusedAtLoad(t *testing.T) {
+	_, err := Parse([]byte(includeProbe+"grants:\n  - {subject: noc, scope: dc_fabric, roles: [dc_admin]}\n"), env())
+	if err == nil {
+		t.Fatal("a grant of a permit on an on_missing: include scope loaded")
+	}
+	for _, want := range []string{"grants[0] (subject noc, scope dc_fabric)", "on_missing: include", "exclude",
+		"attached_roles", "§5.5"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal lacks %q: %v", want, err)
+		}
+	}
+}
+
+func TestAGrantWithOnlyAMaxPrivilegeOnAnIncludeScopeIsRefused(t *testing.T) {
+	_, err := Parse([]byte(includeProbe+"grants:\n  - {subject: noc, scope: dc_fabric, roles: [dc_read], max_privilege: admin}\n"), env())
+	if err == nil || !strings.Contains(err.Error(), "on_missing: include") {
+		t.Fatalf("a max_privilege on an include scope loaded or was refused for another reason: %v", err)
+	}
+}
+
+func TestADenyOnlyGrantOnAnIncludeScopeLoads(t *testing.T) {
+	if _, err := Parse([]byte(includeProbe+"grants:\n  - {subject: noc, scope: dc_fabric, roles: [no_reload]}\n"), env()); err != nil {
+		t.Fatalf("a deny-only grant on an include scope is the mitigation shape: %v", err)
+	}
+}
+
+func TestTheRefusalForAnUndeclaredOnMissingRecommendsExcludeForAGrant(t *testing.T) {
+	_, err := Parse([]byte(scopeOK+"  - {name: x, match: {site: dc1}}\n"+roleOK+"  - {name: d, deny: [reload]}\n"+subjOK+
+		"grants:\n  - {subject: s, scope: x, roles: [r, d]}\n"), env())
+	if err == nil || !strings.Contains(err.Error(), "exclude for a grant; put a mitigation's deny in attached_roles on an include scope") {
+		t.Fatalf("the refusal does not steer a grant to exclude: %v", err)
+	}
+}
+
+// Every policy the repository ships loads: a new load refusal must not break
+// the examples an operator copies, nor the policies the qualification suite and
+// the lab load.
+func TestEveryShippedPolicyLoads(t *testing.T) {
+	root := filepath.Join("..", "..")
+	files := []string{filepath.Join(root, "tests", "qual", "qual-policy.yaml")}
+	for _, pat := range []string{"deploy/*/config/policy.yaml", "deploy/examples/*/policy.yaml", "deploy/examples/*/*/policy.yaml"} {
+		m, err := filepath.Glob(filepath.Join(root, pat))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, m...)
+	}
+	if len(files) < 3 {
+		t.Fatalf("expected the qual policy and the deploy policies, found %v", files)
+	}
+	for _, f := range files {
+		if _, err := Load(f, env()); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+}

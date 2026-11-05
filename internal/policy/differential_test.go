@@ -242,11 +242,21 @@ func (s fleetSpec) render() string {
 	if s.defMFA != "" {
 		fmt.Fprintf(&b, "defaults:\n  per_login_mfa: %s\n", s.defMFA)
 	}
+	// Every generated role carries a permit, and a grant on an include scope is
+	// a load error (spec §5.5): a scope a grant reaches is written exclude.
+	granted := map[string]bool{}
+	for _, g := range s.grants {
+		granted[g.scope] = true
+	}
 	b.WriteString("scopes:\n")
 	for _, sc := range s.scopes {
 		fmt.Fprintf(&b, "  - {name: %s, match: %s", sc.name, sc.match)
 		if sc.onMissing != "" {
-			fmt.Fprintf(&b, ", on_missing: %s", sc.onMissing)
+			om := sc.onMissing
+			if granted[sc.name] {
+				om = "exclude"
+			}
+			fmt.Fprintf(&b, ", on_missing: %s", om)
 		}
 		if sc.attached != "" {
 			fmt.Fprintf(&b, ", attached_roles: %s", sc.attached)

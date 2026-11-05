@@ -328,7 +328,7 @@ roles:
 scopes:
   - name: core
     match: {tier: core}
-    on_missing: include
+    on_missing: exclude
 grants:
   - {subject: alice-group, scope: all_devices, roles: [netadmin]}
   - {subject: alice-core, scope: core, roles: [core-ops]}

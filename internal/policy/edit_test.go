@@ -67,12 +67,12 @@ func TestRemoveSubjectCutsOnlyTheRemovedLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// spec11.yaml lines 101-102 (the subject block), 108 (its grant row),
-	// 116-119 (two of its tests, wrapped, one with a trailing comment), and
-	// 124 (its session test).
+	// spec11.yaml lines 108-109 (the subject block), 115 (its grant row),
+	// 123-126 (two of its tests, wrapped, one with a trailing comment), and
+	// 131 (its session test).
 	var want []string
 	for i, line := range strings.SplitAfter(string(raw), "\n") {
-		if n := i + 1; (n >= 101 && n <= 102) || n == 108 || (n >= 116 && n <= 119) || n == 124 {
+		if n := i + 1; (n >= 108 && n <= 109) || n == 115 || (n >= 123 && n <= 126) || n == 131 {
 			continue
 		}
 		want = append(want, line)
