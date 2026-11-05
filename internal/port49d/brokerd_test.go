@@ -2510,9 +2510,7 @@ func padPast(t *testing.T, root *clientv3.Client, rev uint64) {
 // ledger's did; anything but an outage or a compaction ends the start
 // (11a final review N1).
 func TestAPagedLoadRetriesACompaction(t *testing.T) {
-	was := startRetryWait
-	startRetryWait = time.Millisecond
-	t.Cleanup(func() { startRetryWait = was })
+	fastRetries(t)
 	var out bytes.Buffer
 	n := 0
 	err := pagedLoad(context.Background(), &out, "marks", func() error {
@@ -2530,41 +2528,12 @@ func TestAPagedLoadRetriesACompaction(t *testing.T) {
 	}
 }
 
-// A compaction that never clears is read again every startRetryWait, never in
-// a hot loop: counted over a window of several waits.
-func TestACompactionRetryWaitsBetweenTries(t *testing.T) {
-	was := startRetryWait
-	startRetryWait = 50 * time.Millisecond
-	t.Cleanup(func() { startRetryWait = was })
-	ctx, cancel := context.WithTimeout(context.Background(), 330*time.Millisecond)
-	defer cancel()
-	var out syncBuffer
-	n := 0
-	err := pagedLoad(ctx, &out, "ledger", func() error {
-		n++
-		return store.ErrCompacted
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("%v", err)
-	}
-	// One try at once, then one per 50ms: 7 in 330ms. A loop without the
-	// wait makes thousands.
-	if n < 4 || n > 9 {
-		t.Fatalf("%d tries in 330ms with a 50ms wait", n)
-	}
-	if got := strings.Count(out.String(), "trying again in 50ms"); got != n-1 && got != n {
-		t.Fatalf("%d lines for %d tries\n%s", got, n, out.String())
-	}
-}
-
 // A load that meets a compaction again and again says once, in fixed text,
 // what to change, and keeps trying; one compaction says nothing of the sort.
 // The error line names the load without a doubled "store:" prefix (Task 13
 // review m1).
 func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
-	was := startRetryWait
-	startRetryWait = time.Millisecond
-	t.Cleanup(func() { startRetryWait = was })
+	fastRetries(t)
 	const remedy = "raise etcd's --auto-compaction-retention"
 	var out bytes.Buffer
 	n := 0

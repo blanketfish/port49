@@ -369,7 +369,7 @@ func procOf(cfg config.Config) string {
 // at one revision the feeds then follow from; and on a run after a store
 // gone first keeps every mark it enforced that the store lost while it was
 // dark (keepLost; pre-flight 7e-2 P-1). Each read is bounded, and an outage
-// is said and tried again every 5s. The ledger record is the runner's to
+// is said and tried again on the store wait's schedule (storeScheduleText). The ledger record is the runner's to
 // keep, and the sweep is the broker's.
 func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, authMarks *store.Marks,
@@ -666,7 +666,7 @@ type keepServing struct{ error }
 func (k *keepServing) Unwrap() error { return k.error }
 
 // openDirectoryLater opens the directory store once it answers, trying
-// every 5s, on a run that serves from the marks or the snapshot it holds
+// on the store wait's schedule, on a run that serves from the marks or the snapshot it holds
 // (R19). check (nil skips it) is the start checks the cold path runs
 // (R27, R28), run before the handle is set: the configuration may have
 // changed since the start that loaded the marks. A directory that does not
@@ -676,8 +676,8 @@ func (k *keepServing) Unwrap() error { return k.error }
 // returns nil with the handle set, or ctx.Err() when ctx ended first.
 func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, dir *dirHandle,
 	proc string, check func(*etcdstore.Store) error) error {
-	said := ""
-	for {
+	var say outageSayer
+	for failed := 1; ; failed++ {
 		s, err := attempt(ctx, cfg, directoryRef(cfg), m, out, true)
 		if err == nil {
 			if check != nil {
@@ -696,15 +696,19 @@ func openDirectoryLater(ctx context.Context, cfg config.Config, m *metrics.Metri
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if why := err.Error(); why != said {
-			fmt.Fprintf(out, "%s: directory store: not followed yet (%v); serving from the marks this "+
-				"process holds; trying again every 5s\n", proc, err)
-			said = why
-		}
-		if !sleepCtx(ctx, 5*time.Second) {
+		if !waitForDirectory(ctx, out, &say, failed, proc, err) {
 			return ctx.Err()
 		}
 	}
+}
+
+// waitForDirectory says why the directory store is not followed yet (once per
+// reason) and waits failed's step of the store wait's schedule. It reports
+// whether the wait passed.
+func waitForDirectory(ctx context.Context, out io.Writer, say *outageSayer, failed int, proc string, err error) bool {
+	say.say(out, fmt.Sprintf("%s: directory store: not followed yet (%v); serving from the marks this "+
+		"process holds; trying again: %s", proc, err, storeScheduleText))
+	return retryWait(ctx, failed, retryRnd)
 }
 
 // guardConfig is component's guard on etcd (Task 8a): the etcd block's, under

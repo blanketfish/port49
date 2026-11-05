@@ -107,14 +107,13 @@ type brokerStores struct {
 	issuer *loadedIssuer
 }
 
-// startRetryWait is how long a broker start waits before reading again.
-var startRetryWait = 5 * time.Second
-
 // startRetry runs f until it succeeds, ctx ends, or it fails with an error
-// that is neither an outage nor one of also: each wait is said, since
-// nothing is served meanwhile.
+// that is neither an outage nor one of also: an outage is said once (and again
+// if it changes), since nothing is served meanwhile, and each wait follows the
+// store wait's schedule (retryWait).
 func startRetry(ctx context.Context, out io.Writer, f func() error, also ...error) error {
-	for {
+	var say outageSayer
+	for failed := 1; ; failed++ {
 		err := f()
 		if err == nil || ctx.Err() != nil {
 			return err
@@ -126,8 +125,8 @@ func startRetry(ctx context.Context, out io.Writer, f func() error, also ...erro
 		if !wait {
 			return err
 		}
-		fmt.Fprintf(out, "port49-broker: %v; nothing is served yet; trying again in %v\n", err, startRetryWait)
-		if !sleepCtx(ctx, startRetryWait) {
+		say.say(out, fmt.Sprintf("port49-broker: %v; nothing is served yet; trying again: %s", err, storeScheduleText))
+		if !retryWait(ctx, failed, retryRnd) {
 			return ctx.Err()
 		}
 	}
@@ -179,7 +178,7 @@ func pagedLoadTry(name string, f func() error) error {
 // openBroker waits for etcd on the broker's identity alone, as port49d's
 // start waits (waitForStore): start_timeout, then a refusal, on a cold
 // start, and nothing served meanwhile. Then, each read bounded and an
-// outage said and tried again every 5s, it loads the ledger (the record's
+// outage said and tried again on the store wait's schedule, it loads the ledger (the record's
 // marks, then every live context at one revision; plan 7e, Rulings 3, 4)
 // and the marks, into marks. Its guard never ends the process
 // (StopAfter 0): a broker never goes dark, and its readiness is never the

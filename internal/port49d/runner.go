@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +25,7 @@ import (
 // runner is one port49-broker's part in the keyspace's one runner (plan
 // 7e, Ruling 6): it takes the hold (etcd.Store.Hold, as the broker),
 // runs the takeover, then the duties, until the hold is lost or ctx ends;
-// then it lets go and tries again every 5s. running is read by the
+// then it lets go and tries again on the store wait's schedule (retryWait). running is read by the
 // reloader's pass to choose the whole refresh or its token half.
 type runner struct {
 	cfg    config.Config
@@ -164,6 +165,8 @@ func (r *runner) run(ctx context.Context) {
 	e := r.cfg.Stores.Session.Etcd
 	// The series exists once a runner does, at 0 until the hold is taken.
 	r.m.StoreKeyspaceHeld.WithLabelValues().Set(0)
+	var say outageSayer
+	failed := 0 // runs and attempts in a row that did not last (retryWait's schedule)
 	for ctx.Err() == nil {
 		lost, release, err := r.raw.Hold(ctx, e.HoldTTL, r.who, func(holder string) {
 			if r.held != "" && holder == r.held {
@@ -183,11 +186,13 @@ func (r *runner) run(ctx context.Context) {
 		})
 		if err != nil {
 			if ctx.Err() == nil {
-				fmt.Fprintf(stderr, "port49-broker: runner: taking keyspace %s: %v; trying again in 5s\n", e.Prefix, err)
-				sleepCtx(ctx, 5*time.Second)
+				failed++
+				waitToHold(ctx, &say, failed, e.Prefix, err)
 			}
 			continue
 		}
+		took := time.Now()
+		say = outageSayer{}
 		r.held = r.who
 		r.m.StoreKeyspaceHeld.WithLabelValues().Set(1)
 		fmt.Fprintf(stderr, "port49-broker: runner: took keyspace %s (%s): this replica runs the start, the sweep "+
@@ -200,11 +205,11 @@ func (r *runner) run(ctx context.Context) {
 		case <-lost:
 			fmt.Fprintln(stderr, "port49-broker: runner: lost the keyspace's hold (its lock key is gone, or etcd "+
 				"stopped answering with half its lease or less left); the runner's duties stop; this replica keeps "+
-				"serving the API and tries to take the hold again every 5s")
+				"serving the API and tries to take the hold again ("+storeScheduleText+")")
 		case <-done:
 			// The takeover stopped on an error that waiting does not mend
 			// (duties says it): the hold is let go, so another replica may
-			// run, and taken again in 5s.
+			// run, and taken again on the store wait's schedule.
 		}
 		stop()
 		<-done
@@ -220,8 +225,22 @@ func (r *runner) run(ctx context.Context) {
 		r.m.LedgerPending.Set(0)
 		r.m.LedgerBehind.Set(0)
 		release()
-		sleepCtx(ctx, 5*time.Second)
+		// A run that lasted starts the schedule over; one that did not (a hold
+		// lost at once, again and again) backs off like a store that is down.
+		if time.Since(took) >= storeAttemptMax {
+			failed = 0
+		}
+		failed++
+		retryWait(ctx, failed, retryRnd)
 	}
+}
+
+// waitToHold says why the hold was not taken (an outage once, again if it
+// changes, as outageSayer does) and waits failed's step of the store wait's
+// schedule. It reports whether the wait passed.
+func waitToHold(ctx context.Context, say *outageSayer, failed int, prefix string, err error) bool {
+	say.say(stderr, fmt.Sprintf("port49-broker: runner: taking keyspace %s: %v; trying again: %s", prefix, err, storeScheduleText))
+	return retryWait(ctx, failed, retryRnd)
 }
 
 // duties is the takeover, then the sweep, the ledger record's keeper, the
@@ -827,10 +846,12 @@ func (r *runner) confirmPurged(ctx context.Context, over uint64) (bool, error) {
 
 // retryCtx runs f until it returns nil, an error that is not
 // store.ErrUnavailable (or one of also), or ctx ends (ctx.Err()), waiting
-// 5s between tries and saying each wait. A failure fails toward purging
+// between tries on the store wait's schedule (retryWait), saying an outage
+// once. A failure fails toward purging
 // at the next takeover, which denies more.
 func retryCtx(ctx context.Context, f func() error, also ...error) error {
-	for {
+	var say outageSayer
+	for failed := 1; ; failed++ {
 		err := f()
 		if err == nil {
 			return nil
@@ -845,11 +866,29 @@ func retryCtx(ctx context.Context, f func() error, also ...error) error {
 		if !wait {
 			return err
 		}
-		fmt.Fprintf(stderr, "port49-broker: runner: %v; trying again in 5s\n", err)
-		if !sleepCtx(ctx, 5*time.Second) {
+		say.say(stderr, fmt.Sprintf("port49-broker: runner: %v; trying again: %s", err, storeScheduleText))
+		if !retryWait(ctx, failed, retryRnd) {
 			return ctx.Err()
 		}
 	}
+}
+
+// retrySleep and retryRnd are the retry loops' sleep and jitter source; a test
+// replaces them. retryRnd is nil (math/rand/v2) in production.
+var (
+	retrySleep = sleepCtx
+	retryRnd   func() float64
+)
+
+// retryWait is the wait after the failed-th failure (1 is the first) of a
+// loop that tries the store again: the store wait's schedule (storeWaitAfter
+// from storeAttemptEvery, with jitter), so every loop that waits on etcd
+// backs off the same way. It reports whether the wait passed.
+func retryWait(ctx context.Context, failed int, rnd func() float64) bool {
+	if rnd == nil {
+		rnd = rand.Float64
+	}
+	return retrySleep(ctx, jittered(storeWaitAfter(storeAttemptEvery, failed), rnd()))
 }
 
 // sleepCtx waits d or for ctx, and reports whether d passed.
@@ -929,7 +968,7 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //
 // The ledger's base was set before any of it, by runBroker's LoadLedger,
 // and the marks were loaded there before the API served. Each step that
-// reads the store retries every 5s while it is unavailable, and so does
+// reads the store retries on the store wait's schedule while it is unavailable, and so does
 // step 5 while a principal's contexts cannot be looked up (Ruling T12-c).
 func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	e := r.cfg.Stores.Session.Etcd

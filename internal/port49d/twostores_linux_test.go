@@ -312,7 +312,7 @@ func TestNothingIsServedBeforeTheDirectorysMarksLoad(t *testing.T) {
 // it, so a mint or a refresh is never waved through a set that has not loaded.
 func TestNothingIsServedBeforeTheDirectorysLogoutsLoad(t *testing.T) {
 	notServedBeforeTheFirstLoad(t, "revocation(s) in force from the directory store",
-		"nothing is served yet; trying again in 5s", "revocation(s) in force from the directory store")
+		"nothing is served yet; trying again: an attempt every second", "revocation(s) in force from the directory store")
 }
 
 // metricsReadyz is the status /readyz answers on the metrics listener.

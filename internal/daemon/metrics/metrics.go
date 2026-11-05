@@ -793,7 +793,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "port49_store_member_suspect_total",
 			Help: "Times the etcd client stopped choosing a member for a while because a call on it timed out; a climb with a member paused or cut off, flat otherwise."}),
 		StoreFastFail: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_fast_fail_total",
-			Help: "Store calls the etcd client refused within 20 ms while the caller still waited, by reason (no_leader, leader_changed, no_connection, other); a call the guard refuses is port49_store_calls_total outcome circuit_open or saturated."}, []string{"reason"}),
+			Help: "Store calls the etcd client refused within 20 ms while the caller still waited, by reason (no_leader, leader_changed, no_connection, other); counted once per hedged copy; a call the guard refuses is port49_store_calls_total outcome circuit_open or saturated."}, []string{"reason"}),
 		StoreKeyspaceHeld: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
 			Help: "1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend)."}, nil),
 		StoreFeedUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_up",

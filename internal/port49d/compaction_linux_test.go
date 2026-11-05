@@ -20,9 +20,9 @@ import (
 // compaction in front of each is read again and the broker starts
 // (pre-flight I11). The logouts are loaded on two stores only.
 func TestTheBrokerStartRetriesACompactionInItsMarksAndLogouts(t *testing.T) {
-	was, wasWait := pagedLoadFault, startRetryWait
-	t.Cleanup(func() { pagedLoadFault, startRetryWait = was, wasWait })
-	startRetryWait = time.Millisecond
+	was := pagedLoadFault
+	t.Cleanup(func() { pagedLoadFault = was })
+	fastRetries(t)
 	var mu sync.Mutex
 	hit := map[string]int{}
 	pagedLoadFault = func(name string) error {
@@ -49,9 +49,9 @@ func TestTheBrokerStartRetriesACompactionInItsMarksAndLogouts(t *testing.T) {
 // directory is compacted after the write, a start's logouts load meets a
 // compaction, reads again, and the logout is in the broker's set.
 func TestALogoutIsNotLostAcrossACompaction(t *testing.T) {
-	was, wasWait := pagedLoadFault, startRetryWait
-	t.Cleanup(func() { pagedLoadFault, startRetryWait = was, wasWait })
-	startRetryWait = time.Millisecond
+	was := pagedLoadFault
+	t.Cleanup(func() { pagedLoadFault = was })
+	fastRetries(t)
 	f := splitFleet(t)
 	f.twoStores(t)
 	ctx := context.Background()
