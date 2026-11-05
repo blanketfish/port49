@@ -32,12 +32,37 @@ services:
     ports:
       - "127.0.0.1:18443:18443"
 
+  # One-shot, as root, as setup is: the provider's CA the broker's OIDC verifiers trust, into a volume of
+  # its own owned by the broker's user (uid 65532). The broker refuses a ca_file owned by any other uid
+  # but root, and a bind mount of the host user's file is owned by that user (the broker restarts on it).
+  idp-pki:
+    image: port49-setup:dev
+    # setup builds this tag
+    pull_policy: never
+    network_mode: none
+    # the image's entrypoint is /bin/sh
+    command:
+      - -c
+      - |
+        set -eu
+        install -d -o 0 -g 0 -m 0755 /vol
+        install -o 65532 -g 65532 -m 0444 /src/idp-ca.pem /vol/idp-ca.pem
+    volumes:
+      - ${PORT49_COMPOSE_LOCAL}/oidc/idp-ca.pem:/src/idp-ca.pem:ro
+      - idp-pki:/vol
+    depends_on:
+      setup: {condition: service_completed_successfully}
+
   port49-broker:
     volumes:
-      - ${PORT49_COMPOSE_LOCAL}/oidc/idp-ca.pem:/etc/port49-oidc/idp-ca.pem:ro
+      - idp-pki:/etc/port49-oidc:ro
     # service_started is all this asks: Keycloak's image carries no HTTP client
     # for a healthcheck, and the broker must not wait on the provider anyway
     # (Ruling 4). Its first key-set fetches fail while Keycloak imports the
     # realm; the test's first mint retries on identity_provider_unavailable.
     depends_on:
       keycloak: {condition: service_started}
+      idp-pki: {condition: service_completed_successfully}
+
+volumes:
+  idp-pki: {}

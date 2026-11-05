@@ -190,13 +190,20 @@ func TestOIDCE2EOverlayNamesWhatTheTestWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := string(raw)
-	for _, want := range []string{"oidc/admin.env", "oidc/pki:/pki:ro", "oidc/idp-ca.pem:/etc/port49-oidc/idp-ca.pem:ro",
+	for _, want := range []string{"oidc/admin.env", "oidc/pki:/pki:ro", "oidc/idp-ca.pem:/src/idp-ca.pem:ro", "idp-pki:/etc/port49-oidc:ro",
+		"install -o 65532 -g 65532 -m 0444 /src/idp-ca.pem /vol/idp-ca.pem",
 		"--https-certificate-file=/pki/keycloak.pem", "--https-certificate-key-file=/pki/keycloak-key.pem",
 		"--truststore-paths=/pki/broker-ca.pem", "--hostname=https://" + kcHost + ":" + kcPort,
 		"aliases: [" + kcHost + "]", `"127.0.0.1:` + kcPort + ":" + kcPort + `"`} {
 		if !strings.Contains(o, want) {
 			t.Errorf("tests/lab/compose/oidc.yaml lacks %q", want)
 		}
+	}
+	// The broker refuses an OIDC ca_file owned by any uid but its own (65532) or root, and a bind mount of the
+	// host user's file keeps the host user's uid (the 2026-11-05 run: the broker restarted until the harness
+	// gave up): the CA reaches the broker through a volume a root one-shot chowns.
+	if strings.Contains(o, "idp-ca.pem:/etc/port49-oidc") {
+		t.Error("oidc.yaml bind-mounts the host user's idp-ca.pem into the broker, which refuses a file that uid owns")
 	}
 	if strings.Contains(o, "KC_BOOTSTRAP_ADMIN_PASSWORD:") {
 		t.Error("oidc.yaml holds the admin password")
