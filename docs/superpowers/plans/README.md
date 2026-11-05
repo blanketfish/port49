@@ -360,7 +360,7 @@ and lab row L91; nineteen tasks. Ruled 2026-11-02 (Ryan): the least ceiling per 
 ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the largest `ExpiresAt` among the token records on port49d's
 clock; fail closed on a scan that fails, a bad record or an expiry far ahead); L91 stays open "needs Ryan at the SER8", and Task 18 tests
 from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish). Measured 2026-11-04: L39 (b, c) and L89 closed on kind in CI (`tests/lab/results/L39-kind.md`, `tests/lab/results/L89-kind.md`: Velero's file-system backup restored a working port49; it skips a hostPath volume with only a warning, so the chart README gives the every-claim check).
-**12c executed 2026-11-02 to 2026-11-04** on `feature/12c-reference-configs-alarms-load` (Plan 12c — As built, below; draft PR #40): done, pending merge. L39 (b, c), L84, L87, L88, L89 and L90 closed (L84 2026-11-04, hosted run 41930879677); L91 open (Ryan, SER8); L92 opened. Next are the pre-beta review, then plan 13.
+**12c executed 2026-11-02 to 2026-11-04** on `feature/12c-reference-configs-alarms-load` (Plan 12c — As built, below; draft PR #40): done, pending merge. L39 (b, c), L84, L87, L88, L89 and L90 closed (L84 2026-11-04, hosted run 41930879677); L91 open (Ryan, SER8); L92 opened. **12c merged 2026-11-05** (PR #40, `c0ad3498`). **Pre-beta review done 2026-11-05** (1 Critical, 18 Important, 26 Minor; findings in `.superpowers/pre-beta/`). **Pre-beta fixes plan written 2026-11-05** (`2026-11-05-pre-beta-fixes.md`, branch `feature/pre-beta-fixes`, twenty-five tasks in seven lanes; decision 56; opens L93); see "Pre-beta fixes" under the Pre-beta review section. Next: its pre-flight review, then execution, then plan 13.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -8345,6 +8345,59 @@ Decided 2026-11-04 (Ryan's lead): the wait for the store after a store gone, and
 compose `store_hangs` failed twice in CI on the old 5 s. The other 5 s loops are untouched (`runLoop`'s start-again, now `startAgainEvery`, says a fault once) and carried to the
 pre-beta review as candidates: `startRetryWait` (the broker's start), the runner's hold, and the broker's late
 directory open (spec 11186).
+
+### Pre-beta fixes (plan `2026-11-05-pre-beta-fixes.md`)
+
+Status: **written 2026-11-05** (branch `feature/pre-beta-fixes`; twenty-five tasks in seven lanes; spec decision 56;
+opens L93). Not yet pre-flighted or executed.
+
+**Builds.** The fixes for every Critical and Important finding of the pre-beta review, and the Minors and carried items
+it triaged as security-relevant or small. Each is a task with a failing test, or a docs task that cites its note:
+- **The restore floor replaces the restore guard** (controller's ruling; identity and stores moot sections). port49d
+  refuses only a token whose etcd `CreateRevision` is at or below the drop read's header, as `token_spent` (FAIL). A
+  fresh mint is served. On a restore without `--bump-revision`, a band also covers an unseen second restore, judged on
+  `MintedAt`. The floor and its witness record persist in `restore.json` beside the accounting spool, so they survive a
+  restart.
+  - The guard's scan, its time bound, the purge-lifts case, `meta/purged`, the 10m page and its two gauges are removed.
+  - The unjudged hold after a failed read stays, gauged and paged.
+- **The runner's restore purge** also deletes the `on/` and `mp/` once-only records.
+- **Security:**
+  - a person's ID token is never a bearer: a human `oidc` verifier requires issuance (Q1);
+  - a grant on an `on_missing: include` scope is refused at load;
+  - a revoke in a cut region reaches that region's session store;
+  - a logout burst owes a rescan instead of dropping;
+  - a token typed as the username is never logged;
+  - a deny-bearing attribute scope is security-logged by default.
+- **3am traps:**
+  - a passing health check closes the token and context circuits;
+  - `deadline_on_entry` is not a store failure;
+  - a page on a port49 target down or absent, and the chart's PodMonitor;
+  - the remaining 5 s loops move to the store wait's schedule.
+- **Release and go-public:**
+  - the setuptools classifier and a PR build job;
+  - license files in every artifact;
+  - the Go toolchain pin;
+  - a CI audit of the committed pcaps;
+  - no session links at HEAD, with a gitleaks rule and a tree test (history is not rewritten);
+  - no personal paths;
+  - `RELEASING.md`.
+
+**Implements:** spec decision 56 (Task 1). §5.5, §5.7 (`store_unavailable`, `token_spent`, `credential_mismatch`) and
+§10 change; decision 36's guard sentences and decision 55 ruling 15 are superseded.
+
+**Inherits:** the pre-beta review's five findings files and the controller's rulings (`.superpowers/pre-beta/`); the 12c
+pre-beta list and hand-offs above.
+
+**Leaves for later:** the plan's "Left for later" section, one line and one reason each. Among them are the systemd
+sandboxing directives (they need a measured run), the sealed `oo/` records, `supersedeTokens`' cost, and every item the
+review did not judge.
+
+**Lab:**
+- Task 6 re-measures L45 and L46 on issuance (`make lab-oidc`).
+- Task 8 adds L74 cell (j) (`make lab-regions`).
+- Task 24 may close the new L93 (XR over TCP on an ERROR).
+- All of these run on beehive, and none needs a hardware key.
+- The compose failure matrix reruns in CI.
 
 ## Plan 13 — User and admin documentation
 
