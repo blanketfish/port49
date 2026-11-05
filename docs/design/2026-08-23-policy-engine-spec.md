@@ -6848,7 +6848,7 @@ scheduled backup needs no shell redirect and writes nothing sealed to a log. Nei
 creates nothing that exists, and the other reads sealed bytes.
 
 **`port49 devices trust`** was removed by plan 9d (§13 decision 46 ruling 4): port49 keeps no host
-key. It answers one line naming the change and exits 2.
+key. It is an unknown command (usage, exit 2).
 
 **`port49 ssh [--port N] [--ssh PATH] [--ssh-config FILE] [-v] DEVICE [-- COMMAND…]`** mints a
 token through the agent and logs in with the operator's OpenSSH (8.5 or later).
@@ -10019,12 +10019,10 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
 - **4. `port49 devices trust` is removed.** Kept as an admin tool only if a reason survived; none
   did: verified first contact is OpenSSH's (above, or `ssh-keyscan` and `ssh-keygen -lf` against
   L53's console commands), pre-seeding keys per device is the toil ruling 1 rules out, and its
-  direct dial past a jump host (plan 9a final review I-1) goes with it. It answers one line naming
-  this and exits 2.
-- **5. Plan 9a's pins file** is never read. While it exists, `port49 ssh` names it once per run and
-  says how to keep the keys in it (its lines are already OpenSSH's format under the alias). It is
-  found by `Lstat` alone. `port49 ssh --known-hosts` is refused, naming `UserKnownHostsFile`.
-  Nothing port49 keeps reads a file under `~/.config` through decision 42 ruling 6's walk, so a
+  direct dial past a jump host (plan 9a final review I-1) goes with it. It is an unknown command:
+  usage, exit 2, and no word of where it went (no deprecation before beta).
+- **5. Plan 9a's pins file** is never read and no longer named: `port49 ssh` says nothing of it, and
+  `--known-hosts` is not a flag. Nothing port49 keeps reads a file under `~/.config` through decision 42 ruling 6's walk, so a
   group-writable `~/.config` stops nothing (plan 9b pre-flight 2, m5).
 - **6. The OpenSSH floor** stays 8.5 unless an 8.5p1 under `accept-new` accepts a key of another
   type for an alias that holds one; then it rises to the earliest version measured refusing it

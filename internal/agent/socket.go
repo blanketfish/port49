@@ -143,7 +143,31 @@ func (c *Client) checkDir() error {
 	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
 	}
-	return checkPrivateDir(dir)
+	if err := checkPrivateDir(dir); err != nil {
+		return err
+	}
+	return c.checkSocket()
+}
+
+// checkSocket refuses a path that is there and is not a socket, or is a socket another user owns,
+// before anything dials it: the agent answers whoever connects, and what a client sends it names
+// the device the operator is about to log in to. PORT49_TEST_AGENT_SOCKET names any path, so this
+// is what keeps it from naming someone else's. A path that is not there is no agent.
+func (c *Client) checkSocket() error {
+	fi, err := os.Lstat(c.socket)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case fi.Mode().Type() != os.ModeSocket:
+		return fmt.Errorf("agent: %s is not a socket; the agent's socket is refused rather than dialled", c.socket)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != getuid() {
+		return fmt.Errorf("agent: the socket %s is not owned by you (uid %d); it is refused rather than dialled, "+
+			"since whoever owns it can read what you ask the agent for", c.socket, getuid())
+	}
+	return nil
 }
 
 // Token asks the agent to mint one device.

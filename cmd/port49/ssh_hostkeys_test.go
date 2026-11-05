@@ -293,35 +293,6 @@ func TestSSHName(t *testing.T) {
 	}
 }
 
-// --known-hosts named port49's own pins file, which is gone.
-func TestTheKnownHostsFlagIsRefused(t *testing.T) {
-	var out, errb lockedBuffer
-	if code := run([]string{"ssh", "--known-hosts", "/k", "leaf1"}, &out, &errb); code != 2 ||
-		!strings.Contains(errb.String(), "UserKnownHostsFile") {
-		t.Fatalf("code %d stderr %q", code, errb.String())
-	}
-}
-
-// Plan 9a's pins file is named, never read: a pins file anyone can write
-// stops nothing, and its keys are not used.
-func TestThe9aPinsFileIsNamedNotRead(t *testing.T) {
-	xdg := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(xdg, "port49"), 0o777); err != nil {
-		t.Fatal(err)
-	}
-	pins := filepath.Join(xdg, "port49", "known_hosts")
-	if err := os.WriteFile(pins, []byte("leaf1 not-a-key\n"), 0o666); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
-	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
-	code, _, errb := r.run(t, "leaf1", "--", "show", "version")
-	if code != 0 || strings.Count(errb, pins) != 2 || !strings.Contains(errb, "no longer reads it") {
-		t.Fatalf("code %d stderr %q", code, errb)
-	}
-}
-
 // Plan 9b pre-flight 2, m5: Ubuntu's 0775 ~/.config refused port49 ssh with no
 // fix to run. Nothing port49 ssh reads is under it now.
 func TestAGroupWritableConfigStopsNothing(t *testing.T) {
@@ -343,5 +314,34 @@ func TestAGroupWritableConfigStopsNothing(t *testing.T) {
 	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
 	if code, _, errb := r.run(t, "leaf1", "--", "show", "version"); code != 0 {
 		t.Fatalf("code %d stderr %q", code, errb)
+	}
+}
+
+// A plan 9a pins file is not looked for: port49 ssh says nothing of it.
+func TestSSHSaysNothingOfAPinsFile(t *testing.T) {
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "port49"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pins := filepath.Join(xdg, "port49", "known_hosts")
+	if err := os.WriteFile(pins, []byte("leaf1 not-a-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dev := startDeviceSSH(t, []string{"keyboard-interactive"}, "LOGINTOKEN", 0)
+	r := newSSHRig(t, dev, sshPermit, 0, dev.key)
+	code, _, errb := r.run(t, "leaf1", "--", "show", "version")
+	if code != 0 || strings.Contains(errb, pins) || strings.Contains(errb, "no longer reads it") {
+		t.Fatalf("code %d stderr %q", code, errb)
+	}
+}
+
+// --known-hosts is a flag port49 ssh does not have.
+func TestKnownHostsIsAnUnknownFlag(t *testing.T) {
+	var out, errb lockedBuffer
+	code := run([]string{"ssh", "--known-hosts", "/k", "leaf1"}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "flag provided but not defined") ||
+		strings.Contains(errb.String(), "plan 9d") {
+		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }
