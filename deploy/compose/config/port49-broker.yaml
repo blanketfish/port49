@@ -53,7 +53,7 @@ broker:
   # token for a short-lived certificate), replace client_ca_file with an
   # identity block that sets issuance; a person's ID token is taken nowhere
   # else, and a human oidc verifier with neither issuance nor
-  # per_login_mfa.idp_mfa does not load. The provider's keys are kept in
+  # per_login_mfa.idp_mfa beside an x509 humans verifier does not load. The provider's keys are kept in
   # state_dir across a restart.
   # identity:
   #   humans:
@@ -71,7 +71,7 @@ broker:
   #       audience: "api://port49-svc"
   #       clients:                             # required: each client, with its sub at the provider
   #         - {client_id: oxidized, sub: 5f3c2d1e-0000-4000-8000-000000000049}
-  #   issuance: {}                          # required for a human oidc verifier (or per_login_mfa.idp_mfa)
+  #   issuance: {}                          # required for a human oidc verifier (or idp_mfa beside x509)
   #   # clock_skew: 60s
   #   # max_token_age: 2h
   #   # jwks_refresh_interval: 1h

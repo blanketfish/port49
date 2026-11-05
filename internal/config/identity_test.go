@@ -435,8 +435,9 @@ func TestIssuanceLoads(t *testing.T) {
 // and nowhere else (decision 56 ruling 4), so a human oidc verifier with
 // neither loads nowhere: the broker could sign no one in with it.
 func TestAHumanOIDCVerifierNeedsIssuanceOrIdPMFA(t *testing.T) {
-	const want = "broker.identity.humans[1] (oidc): a person's ID token is taken only to issue a certificate or as a " +
-		"per_login_mfa.idp_mfa proof; set issuance (`issuance: {}` takes its defaults) or idp_mfa, or remove this verifier"
+	const want = "broker.identity.humans[1] (oidc): a person's ID token is taken only to issue a certificate or, beside " +
+		"an x509 humans verifier, as a per_login_mfa.idp_mfa proof; set issuance (`issuance: {}` takes its defaults), " +
+		"add an x509 humans verifier with idp_mfa, or remove this verifier"
 	if _, err := loadWith(t, brokerWithIdentityRaw(twoLists)); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("no issuance, no idp_mfa: got %v, want %q", err, want)
 	}
@@ -448,6 +449,19 @@ func TestAHumanOIDCVerifierNeedsIssuanceOrIdPMFA(t *testing.T) {
 		if _, err := loadWith(t, brokerWithIdentityRaw(block)); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+	// idp_mfa with no x509 people verifier signs no one in.
+	oidcOnly := `  identity:
+    humans:
+      - {type: oidc, issuer: "https://sso.corp.example.com/realms/corp", client_id: port49-cli,
+         principal_claim: upn, principal_domains: [corp.example.com]}
+    per_login_mfa:
+      idp_mfa: {}
+`
+	noStatus := strings.Replace(brokerWithIdentityRaw(oidcOnly), "  certificate_status: {disabled: true}\n", "", 1)
+	if _, err := loadWith(t, noStatus); err == nil || !strings.Contains(err.Error(), "broker.identity.humans[0] (oidc)") ||
+		!strings.Contains(err.Error(), "beside an x509 humans verifier") {
+		t.Fatalf("an oidc human with idp_mfa and no x509: got %v", err)
 	}
 	// hardware_key_touch alone is not an idp_mfa.
 	touch := twoLists + "    per_login_mfa:\n      hardware_key_touch: {attestation_roots_file: /etc/port49/roots.pem}\n"

@@ -11829,7 +11829,9 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
 4. **A person's ID token is never a caller's credential on any broker.** It is taken only at
    `POST /v1/certificate` (with `issuance`) and at `POST /v1/mfa` as an `idp_mfa` proof
    (decision 45 ruling 20). This amends decision 43 ruling 13 and retires plan 7h's bearer path
-   for people (identity I4, Q1).
+   for people (identity I4, Q1). A human `oidc` verifier therefore loads only with `issuance`, or
+   with `per_login_mfa.idp_mfa` beside an x509 people verifier; otherwise no one could sign in to
+   the broker, and the load is refused naming the fix.
 5. **A grant on an `on_missing: include` scope whose roles carry a permit, or which sets
    `max_privilege`, is a load error** (§5.5; policy I1).
 6. **An attribute scope that delivers a deny defaults to `security_log: true`, and
