@@ -93,7 +93,14 @@ func TestClientAuthenticationCost(t *testing.T) {
 	})
 }
 
-const venvPython = "/home/rwendt/lab-venv/bin/python"
+// venvPython is the lab's client venv interpreter: PORT49_LAB_VENV_PYTHON, or ~/lab-venv/bin/python.
+var venvPython = func() string {
+	if p := os.Getenv("PORT49_LAB_VENV_PYTHON"); p != "" {
+		return p
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "lab-venv", "bin", "python")
+}()
 
 const clientsClaim = "How many TACACS+ authentication exchanges a ten-task job costs for each client an " +
 	"operator actually runs — pyeapi, NAPALM, Ansible over `httpapi` and `network_cli`, Nornir with ten " +

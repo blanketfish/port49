@@ -4142,8 +4142,8 @@ feature worktree (pre-flight I-9: the harness's `PORT49_LAB_DIRECTORY_OUT`, read
 `directoryOut()`):
 
 ```bash
-cd /home/rwendt/git/port49/.worktrees/lab-l50
-sg docker -c 'PORT49_LAB_DIRECTORY_OUT=/home/rwendt/git/port49/.worktrees/workload-directory make lab-l50'
+cd $HOME/git/port49/.worktrees/lab-l50
+sg docker -c 'PORT49_LAB_DIRECTORY_OUT=$HOME/git/port49/.worktrees/workload-directory make lab-l50'
 ```
 
 Wait in a foreground loop with a deadline, `pgrep -f "^/tmp/go-build[^ ]*/lab\.test"` every 60s,
@@ -4177,7 +4177,7 @@ never in the detached `.worktrees/lab-l50`, where a commit would be orphaned and
 files (pre-flight I-9).
 
 ```bash
-cd /home/rwendt/git/port49/.worktrees/workload-directory
+cd $HOME/git/port49/.worktrees/workload-directory
 git branch --show-current   # expect feature/workload-directory
 git add tests/lab/results/L50-*.md tests/lab/evidence/L50-*.json docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entries L50

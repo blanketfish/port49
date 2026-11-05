@@ -1376,7 +1376,7 @@ single-occupant.
   `.superpowers/sdd/2026-10-03-07e-broker-process/lab-instructions.md` from 7d's, amended as
   below, before Task 17 dispatches. Task 17 Step 0 checks it.
 - **Every run is from a detached worktree pinned to a commit:**
-  `git worktree add --detach /home/rwendt/git/port49/.worktrees/lab-7e <sha>`, then `make build`
+  `git worktree add --detach $HOME/git/port49/.worktrees/lab-7e <sha>`, then `make build`
   there, which now builds `bin/port49-broker` too. Never build in the shared feature worktree
   during a run.
 - **The pinned commit includes `tests/lab/split_test.go`.** Task 17 Step 1 commits it as

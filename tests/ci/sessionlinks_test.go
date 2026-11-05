@@ -60,6 +60,17 @@ func TestTheSessionLinkRuleCatchesALink(t *testing.T) {
 
 func TestNoSessionLinkInTheTree(t *testing.T) {
 	rx := sessionLinkRule(t)
+	for name, b := range trackedText(t) {
+		if loc := rx.FindIndex(b); loc != nil {
+			t.Errorf("%s:%d holds a session link or trailer", name, bytes.Count(b[:loc[0]], []byte("\n"))+1)
+		}
+	}
+}
+
+// trackedText is every tracked text file by name, skipping the files that are never read (realm.json,
+// *.env, *-key.pem, *.keytab), binary files, and tracked files absent from the working tree.
+func trackedText(t *testing.T) map[string][]byte {
+	t.Helper()
 	cmd := exec.Command("git", "ls-files", "-z")
 	cmd.Dir = "../.."
 	out, err := cmd.Output()
@@ -67,6 +78,7 @@ func TestNoSessionLinkInTheTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	never := []string{"realm.json", "*.env", "*-key.pem", "*.keytab"}
+	files := map[string][]byte{}
 	for _, name := range strings.Split(string(out), "\x00") {
 		if name == "" {
 			continue
@@ -81,14 +93,10 @@ func TestNoSessionLinkInTheTree(t *testing.T) {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join("..", "..", name))
-		if err != nil {
-			continue // a tracked file removed in the working tree
+		if err != nil || bytes.IndexByte(b, 0) >= 0 {
+			continue
 		}
-		if bytes.IndexByte(b, 0) >= 0 {
-			continue // binary: a capture, not text
-		}
-		if loc := rx.FindIndex(b); loc != nil {
-			t.Errorf("%s:%d holds a session link or trailer", name, bytes.Count(b[:loc[0]], []byte("\n"))+1)
-		}
+		files[name] = b
 	}
+	return files
 }

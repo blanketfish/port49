@@ -1065,7 +1065,7 @@ single-occupant. The controller rewrote `.superpowers/sdd/2026-10-02-07d-shared-
 for 7d with this amendment (pre-flight M45). Task 15 Step 0 checks it before dispatch.
 
 **Every run is made from a detached worktree pinned to a commit:** `git worktree add --detach
-/home/rwendt/git/port49/.worktrees/lab-7d <sha>`, then `make build` there, never in the shared
+$HOME/git/port49/.worktrees/lab-7d <sha>`, then `make build` there, never in the shared
 feature worktree. The commit includes `tests/lab/store_test.go`
 (Task 15 Step 1 commits it first). Run one platform at a time: `PORT49_LAB_PLATFORMS=eos`, then
 `nxos`, `iosxe`, `vjunos`, `vsrx`.

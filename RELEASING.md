@@ -1,0 +1,36 @@
+# Releasing port49
+
+A release is a `v*` tag on a commit that is on `main`. The `release` workflow
+(`.github/workflows/release.yml`) does the rest: it checks the tag against every version file, builds
+the packages, image, chart, Python package and Galaxy collection, and publishes each from a job that
+only downloads. The GitHub release stays a draft until every publisher has finished.
+
+Nothing publishes until a tag is pushed. Do the one-time setup below first; it is what makes a tag
+without approval harmless.
+
+## One-time setup, before the first tag
+
+1. **PyPI trusted publisher.** Project `port49`, repository `blanketfish/port49`, workflow
+   `release.yml`, environment `pypi`.
+2. **Environments** (Settings, Environments):
+   - `release` (the goreleaser, image and chart jobs): the maintainer as the **required reviewer**, so
+     no tag publishes without approval.
+   - `pypi` and `galaxy`: created beside it.
+   - Each of `release`, `pypi` and `galaxy`: deployment branches and tags restricted to the **`v*`
+     tag pattern**.
+3. **`GALAXY_API_KEY`** is an **environment secret on `galaxy` only**: never a repository or
+   organization secret, so no other job can read it.
+4. **Tag ruleset.** A repository ruleset protecting `v*` tags (restrict creation, updates and
+   deletion to the maintainers).
+5. **Fork pull-request workflows.** Settings, Actions, General, "Fork pull request workflows from
+   outside collaborators": **Require approval for all outside collaborators**.
+6. **Public packages.** When the repository goes public, make the GHCR package `port49` and the
+   chart package public.
+
+## Each release
+
+1. Set the same version in `clients/python/pyproject.toml`, the collection's `galaxy.yml`, and the chart
+   and app versions; `go run ./tests/ci/cmd/versioncheck -tag vX.Y.Z` must pass.
+2. Merge to `main`. The tag must be on `main`; the workflow refuses it otherwise.
+3. Push the tag. Approve the `release` environment when the run asks.
+4. Check the draft release's assets and provenance attestations, then let the last job publish it.

@@ -1191,10 +1191,10 @@ After Task 3.
 ### Task 23: Go-public hygiene (deploy M7, M8; the fork-approval item)
 
 **Files:**
-- Modify: the 14 tracked files `git grep -l '/home/rwendt'` lists, among them `Makefile:372`, `tests/lab/clients_test.go:96`, `tests/lab/README.md:967` and `tests/lab/evidence/L48-step_ca.json`.
+- Modify: the 14 tracked files `git grep -l` for the author's home path lists, among them `Makefile:372`, `tests/lab/clients_test.go:96`, `tests/lab/README.md:967` and `tests/lab/evidence/L48-step_ca.json`.
 - Create: `RELEASING.md`.
 
-- [ ] **Step 1: Write the failing test.** `TestNoPersonalPathInTheTree` (`tests/ci`): no tracked file holds `/home/rwendt`. The never-read patterns are skipped. For a committed evidence JSON, rewrite only the path string, never a credential field.
+- [ ] **Step 1: Write the failing test.** `TestNoPersonalPathInTheTree` (`tests/ci`): no tracked file holds the author's home path. The never-read patterns are skipped. For a committed evidence JSON, rewrite only the path string, never a credential field.
 
 - [ ] **Step 2: Run** `TMPDIR=/tmp go test ./tests/ci/ -run PersonalPath -count=1`. Expected: FAIL.
 
@@ -1211,7 +1211,7 @@ After Task 3.
 
 - [ ] **Step 5: Commit.**
 
-  `git add -- $(git grep -l '/home/rwendt' 2>/dev/null) RELEASING.md tests/ci && git commit -m "chore: no personal paths in the tree, and the release checklist is written down"`
+  `git add -- $(git grep -l <the author's home path> 2>/dev/null) RELEASING.md tests/ci && git commit -m "chore: no personal paths in the tree, and the release checklist is written down"`
 
   Run the `git grep` before the edits, and pass the files it named.
 
