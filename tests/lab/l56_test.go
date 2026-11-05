@@ -657,7 +657,7 @@ func l56(t *testing.T, l *lab) {
 		t.Fatalf("INVALID: port49-broker init-issuer: %v: %s", err, oneLineMax(out, 400))
 	}
 	cell("0c. port49-broker init-issuer", oneLineMax(out, 300))
-	if _, err := c.run("restart", "port49-broker"); err != nil {
+	if _, err := c.restartBroker(); err != nil {
 		t.Fatalf("INVALID: restarting the broker: %v", err)
 	}
 	ready("after the restart")

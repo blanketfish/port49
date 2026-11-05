@@ -242,7 +242,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	if out, err := c.run("run", "--rm", "--no-deps", "port49-broker", "init-issuer"); err != nil || !strings.Contains(out, "created the issuing CA") {
 		t.Fatalf("INVALID: port49-broker init-issuer: %v: %s", err, oneLineMax(out, 300))
 	}
-	if _, err := c.run("restart", "port49-broker"); err != nil {
+	if _, err := c.restartBroker(); err != nil {
 		t.Fatalf("INVALID: restarting the broker: %v", err)
 	}
 

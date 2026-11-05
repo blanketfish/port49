@@ -342,6 +342,18 @@ func (c *composeStack) follow(container, since, out, errp string) error {
 	return nil
 }
 
+// restartBroker restarts the port49-broker service and follows its log again. docker logs -f ends
+// with the container it followed, so a restarted broker's records and lines would otherwise never
+// reach brokerLog and brokerErr; the new follower starts from the instant before the restart.
+func (c *composeStack) restartBroker() (string, error) {
+	since := time.Now().UTC().Format(time.RFC3339Nano)
+	out, err := c.run("restart", "port49-broker")
+	if err != nil {
+		return out, err
+	}
+	return out, c.follow(composeProject+"-port49-broker-1", since, c.brokerLog, c.brokerErr)
+}
+
 // stopFollowers ends every log follower; what they wrote stays.
 func (c *composeStack) stopFollowers() {
 	c.mu.Lock()

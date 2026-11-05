@@ -1352,7 +1352,7 @@ func (x *l67X) composeHalf(t *testing.T) {
 		t.Fatalf("INVALID: port49-broker init-issuer: %v: %s", err, oneLineMax(out, 300))
 	}
 	restartedAt := time.Now()
-	if _, err := c.run("restart", "port49-broker"); err != nil {
+	if _, err := c.restartBroker(); err != nil {
 		t.Fatalf("INVALID: restarting the broker: %v", err)
 	}
 	deadline := time.Now().Add(3 * time.Minute)
