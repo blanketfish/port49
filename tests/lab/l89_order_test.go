@@ -17,56 +17,82 @@ import (
 	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
-// l89Sentinel is the file cell (a) writes in each port49d spool before the backup: the spool holds no
-// accounting record in the lab, and port49d writes restore.json there at every start, so a listing of
-// the directory cannot tell a restored spool from an empty one.
-const l89Sentinel = "/v/data/l89-sentinel"
+// l89Revoked is the principal cell (a) revokes before the backup, so each broker's marks.json exists and
+// holds a mark the restore must bring back. README step 4 revokes the same principal again.
+const l89Revoked = "user:bob@example.com"
 
-// l89Hashed is the files cells (c) and (d) compare with the backup, by claim: each broker's marks.json and
-// issuing CA certificate (never the key), and each spool's sentinel.
-var l89Hashed = []struct {
-	pvc   string
-	paths []string
-}{
-	{"data-t-broker-0", []string{"/v/state/marks.json", "/v/state/issuing-ca.pem"}},
-	{"data-t-broker-1", []string{"/v/state/marks.json", "/v/state/issuing-ca.pem"}},
-	{"data-t-port49d-0", []string{l89Sentinel}},
-	{"data-t-port49d-1", []string{l89Sentinel}},
+// l89Lab is the kind cluster as l89.BeforeBackup sees it: revoke-offline.sh, and debug pods on the claims.
+type l89Lab struct{ r *l89Run }
+
+func (l l89Lab) Revoke(principal string) error {
+	t, c, ns := l.r.t, l.r.stack.Cluster(), l.r.stack.Namespace()
+	cmd := exec.Command("bash", filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "scripts", "revoke-offline.sh"),
+		ns, l.r.stack.Release(), "--", "--principal", principal)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.Kubeconfig, "PATH="+filepath.Dir(kindtest.Bin(t, "KUBECTL_BIN"))+":"+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("revoke-offline.sh:\n%s", kindtest.Filter(l89.Scrub(string(out))))
+		return fmt.Errorf("revoke-offline.sh: %v", err)
+	}
+	// the script scales the brokers back to the count it found; wait for them to be back
+	c.Kubectl("-n", ns, "rollout", "status", "statefulset/"+l.r.stack.Release()+"-broker", "--timeout=5m")
+	for _, p := range []string{"t-broker-0", "t-broker-1"} {
+		c.WaitReady(ns, p, 4*time.Minute)
+	}
+	return nil
 }
 
-// l89HashKeys is every "claim:path" of l89Hashed.
-func l89HashKeys() []string {
-	var keys []string
-	for _, v := range l89Hashed {
-		for _, p := range v.paths {
-			keys = append(keys, v.pvc+":"+p)
+// Read is cat of a file on the claim. Only marks.json is read so: principals and certificate keys, no secret.
+func (l l89Lab) Read(pvc, path string) string {
+	return l.r.stack.DebugPod("l89-read-"+pvc, pvc, "cat "+path+" 2>/dev/null || true", true)
+}
+
+// WriteSentinel writes a random sentinel, owned by uid 65532 and mode 0600 as the init containers require.
+// Its content is never printed; only its hash's first characters are.
+func (l l89Lab) WriteSentinel(pvc, path string) error {
+	script := "umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n' > " + path +
+		" && chown 65532:65532 " + path + " && echo written"
+	if out := strings.TrimSpace(l.r.stack.DebugPod("l89-sentinel-"+pvc, pvc, script, false)); out != "written" {
+		return fmt.Errorf("the debug pod printed %q", kindtest.Filter(out))
+	}
+	return nil
+}
+
+func (l l89Lab) Hashes(pvc string, paths []string) map[string]string {
+	return l89.ParseHashes(pvc, l.r.stack.DebugPod("l89-hash-"+pvc, pvc, l89.HashScript(paths...), true))
+}
+
+func (l l89Lab) Eventually(what string, cond func() bool) bool {
+	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(5 * time.Second) {
+		if cond() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			l.r.t.Logf("%s: not within 3m", what)
+			return false
 		}
 	}
-	return keys
 }
 
-// writeSentinels writes a random sentinel, owned by uid 65532 and mode 0600 as the init containers
-// require, in each port49d's spool. Its content is never printed; only its hash's first characters are.
-func (r *l89Run) writeSentinels() {
-	t := r.t
-	t.Helper()
-	script := "umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n' > " + l89Sentinel +
-		" && chown 65532:65532 " + l89Sentinel + " && echo written"
-	for _, pvc := range []string{"data-t-port49d-0", "data-t-port49d-1"} {
-		if out := strings.TrimSpace(r.stack.DebugPod("l89-sentinel-"+pvc, pvc, script, false)); out != "written" {
-			t.Fatalf("the sentinel was not written on %s: %q", pvc, kindtest.Filter(out))
-		}
-	}
-}
-
-// hashes is the sha256 of each file of l89Hashed ("" for one absent or empty), keyed "claim:path".
+// hashes is the sha256 of each file of l89.Hashed ("" for one absent or empty), keyed "claim:path".
 func (r *l89Run) hashes() map[string]string {
 	got := map[string]string{}
-	for _, v := range l89Hashed {
-		out := r.stack.DebugPod("l89-hash-"+v.pvc, v.pvc, l89.HashScript(v.paths...), true)
-		for k, h := range l89.ParseHashes(v.pvc, out) {
+	for _, f := range l89.Hashed {
+		for k, h := range (l89Lab{r}).Hashes(f.PVC, f.Paths) {
 			got[k] = h
 		}
+	}
+	return got
+}
+
+// marks is each broker's decoded marks.json, by claim.
+func (r *l89Run) marks() map[string][]l89.Mark {
+	got := map[string][]l89.Mark{}
+	for _, pvc := range []string{"data-t-broker-0", "data-t-broker-1"} {
+		m, err := l89.DecodeMarks((l89Lab{r}).Read(pvc, l89.MarksPath))
+		if err != nil {
+			r.t.Logf("%s: %v", pvc, err)
+		}
+		got[pvc] = m
 	}
 	return got
 }
@@ -74,7 +100,7 @@ func (r *l89Run) hashes() map[string]string {
 // l89HashText is the hashes for a results row: the first characters of each, or "absent".
 func l89HashText(h map[string]string) string {
 	var parts []string
-	for _, k := range l89HashKeys() {
+	for _, k := range l89.HashKeys() {
 		v, ok := h[k]
 		switch {
 		case !ok:
@@ -89,22 +115,38 @@ func l89HashText(h map[string]string) string {
 	return strings.Join(parts, "; ")
 }
 
+// l89MarksText is each broker's marks for a results row: kind and key, never more.
+func l89MarksText(m map[string][]l89.Mark) string {
+	var parts []string
+	for _, pvc := range []string{"data-t-broker-0", "data-t-broker-1"} {
+		var ks []string
+		for _, mk := range m[pvc] {
+			ks = append(ks, mk.Kind+" "+mk.Key)
+		}
+		if len(ks) == 0 {
+			ks = []string{"none"}
+		}
+		parts = append(parts, pvc+": "+strings.Join(ks, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
 // cellOrder is cells (c) and (d): the Velero README's steps run from its own text (the marked blocks,
 // l89.Steps), after the namespace is deleted once more and the backup of cell (a) is restored.
 //
 // The lab's etcd shares the release's namespace, so the README's step 1 (etcd alone, in its own namespace)
 // cannot be run apart from the rest: (c) restores the namespace once, with the README's resource modifier
 // limited to the release's two StatefulSets, and waits for etcd as step 1 does. (d), the fallback, runs
-// step 1's restore, which in the one namespace restores the release too with its pods running (so the node
-// agent can restore their volumes), and scales the two StatefulSets to 0 before the token delete. Both run
-// the README's volume check, and stop as it says when a volume did not come back. Then, with both
-// StatefulSets at 0, the files cell (a) hashed are compared, and the README's token delete,
-// revoke-offline.sh and scale-up run; after them the CA is the one it was and no broker started a fresh
-// copy of the marks.
+// the fallback's restore of port49, which in the one namespace restores etcd too, with the pods running
+// (so the node agent can restore their volumes), then the fallback's scale to 0, before the token delete.
+// Both run the README's volume check on their named restore, and stop as it says when a volume did not
+// come back. Then, with both StatefulSets at 0, the files cell (a) hashed and the marks it read are
+// compared, and the README's token delete, revoke-offline.sh and scale-up run; after them the CA is the
+// one it was and no broker started a fresh copy of the marks.
 //
-// A README command that fails, or a check that does not hold, is a measured FAIL. A failure of the
-// harness's own setup (a kubectl call of its own, a debug pod) leaves the verdict empty: NOT RUN, which
-// fails the test and is never written as a measurement.
+// A README command that fails, or a check that does not hold, is a measured FAIL; the row names the
+// failed command (l89.FailedCommand). A failure of the harness's own setup (a kubectl call of its own, a
+// debug pod) leaves the verdict empty: NOT RUN, which fails the test and is never written as a measurement.
 func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	c, ns := r.stack.Cluster(), r.stack.Namespace()
 	defer func() {
@@ -115,14 +157,18 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 			r.diagnose()
 		}
 	}()
-	if len(r.hashesBefore) == 0 {
-		t.Fatalf("cell (a) never hashed the files before the backup, so they cannot be compared")
+	if len(r.before.Hashes) == 0 || len(r.before.Marks) == 0 {
+		t.Fatalf("cell (a) never recorded the files and marks before the backup, so they cannot be compared")
 	}
 	doc, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	steps, err := l89.Steps(string(doc), ns, r.stack.Release(), l89Backup, 2, 2)
+	restore := l89RestoreC
+	if fallback {
+		restore = l89RestoreD
+	}
+	steps, err := l89.Steps(string(doc), ns, r.stack.Release(), l89Backup, restore, 2, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,11 +177,11 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	// the files the README's commands read from the working directory: the examples, for the lab's
 	// namespace (and, for the modifier, the lab's one namespace)
 	work := t.TempDir()
-	token, err := os.ReadFile(filepath.Join(example, "restore-token-delete.yaml"))
+	tokenFile, err := os.ReadFile(filepath.Join(example, "restore-token-delete.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok := strings.ReplaceAll(strings.ReplaceAll(string(token), "port49-etcd.svc", ns+".svc"), "namespace: port49-etcd", "namespace: "+ns)
+	tok := strings.ReplaceAll(strings.ReplaceAll(string(tokenFile), "port49-etcd.svc", ns+".svc"), "namespace: port49-etcd", "namespace: "+ns)
 	if strings.Contains(tok, "port49-etcd") {
 		t.Fatalf("restore-token-delete.yaml names port49-etcd in a way the lab does not rewrite")
 	}
@@ -162,14 +208,15 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if err := os.WriteFile(filepath.Join(bin, "velero"), []byte(wrapper), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// readme runs one README step. Its failure is the measurement: the cell is a FAIL and ends.
+	// readme runs one README step. Its failure is the measurement: the row names the command the ERR trap
+	// caught and the exit status, the output goes to the test log, and the cell is a FAIL and ends.
 	readme := func(what, dir, script string) string {
-		cmd := exec.Command("bash", "-ec", script)
+		cmd := exec.Command("bash", "-ec", l89.StepScript(script))
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			l82Row(cell, what, "its command failed ("+err.Error()+"); the output is in the test log")
+			l82Row(cell, what+": the README command that failed, and how", l89.FailedCommand(string(out))+" ("+err.Error()+")")
 			cell.Verdict = l82.Fail
 			t.Fatalf("%s: a README command failed: %v\n%s", what, err, kindtest.Filter(l89.Scrub(string(out))))
 		}
@@ -180,13 +227,6 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		l82Row(cell, what, observation)
 		cell.Verdict = l82.Fail
 		t.FailNow()
-	}
-	// noPort49Pods waits until no port49 pod is left, so the volumes are read with nothing running on them
-	noPort49Pods := func() {
-		shapetest.WaitFor(t, "no port49 pod to be left", 3*time.Minute, func() bool {
-			out, err := c.KubectlTry("", "-n", ns, "get", "pods", "-l", "app.kubernetes.io/name=port49", "-o", "name")
-			return err == nil && strings.TrimSpace(out) == ""
-		})
 	}
 
 	_, fpBefore := r.snapshot()
@@ -205,9 +245,9 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if !fallback {
 		l82Row(cell, "the resource modifier as the lab runs it", "restore-scale-zero.yaml with a resourceNameRegex the lab adds (its etcd shares the namespace), so the shipped file is not run as shipped")
 		c.Kubectl("-n", "velero", "delete", "configmap", "restore-scale-zero", "--ignore-not-found")
-		readme("README step 3 (the restore with the resource modifier, both StatefulSets at 0 replicas)", work, steps["restorezero"])
-		l82Row(cell, "README step 3 (the restore with the resource modifier, both StatefulSets at 0 replicas) ran from its own text", "yes")
-		readme("README step 1's wait for etcd (the lab's etcd is restored by step 3's restore)", work,
+		readme("README step 3 (the restore with the resource modifier)", work, steps["restorezero"])
+		l82Row(cell, "README step 3 (the restore "+restore+" with the resource modifier, both StatefulSets at 0 replicas) ran from its own text", "yes")
+		readme("README step 1's wait for etcd", work,
 			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns))
 		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by step 3's restore)", "ready")
 		replicas := strings.TrimSpace(c.Kubectl("-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
@@ -216,15 +256,19 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		}
 		l82Row(cell, "the two StatefulSets' replicas after the restore", replicas)
 	} else {
-		readme("README step 1's restore", work, steps["etcdrestore"])
-		l82Row(cell, "README step 1's restore ran from its own text, etcd's namespace the lab's one", "yes: in the lab it restores the release too, normally, so its pods ran against the restored store before the token delete")
+		readme("README fallback step 4 (the restore of port49)", work, steps["fallbackrestore"])
+		l82Row(cell, "README fallback step 4 (the restore "+restore+" of port49, normally) ran from its own text", "yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2")
 		l82Row(cell, "what (d) cannot show", "that port49 pods restored while etcd is held at 0 (the README's fallback steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release")
+		readme("README step 1's wait for etcd", work,
+			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns))
+		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by the fallback's restore)", "ready")
 	}
 
-	// the README's volume check, once Velero has finished with the volumes
-	phaseWait(t, c)
+	// the README's volume check on the named restore, once Velero has finished with the volumes
+	phaseWait(t, c, restore)
 	phase, vols := l89.ParseVolumes(readme("the README's volume check", work, steps["volumes"]))
-	cs := l89.C{RestorePhase: phase, Volumes: vols, FingerprintBefore: l89.Short(fpBefore[0]), Before: r.hashesBefore}
+	cs := l89.C{RestorePhase: phase, Volumes: vols, FingerprintBefore: l89.Short(fpBefore[0]), Before: r.before.Hashes,
+		MarksBefore: r.before.Marks, Fallback: fallback}
 	for _, v := range l89Volumes {
 		cs.Want = append(cs.Want, strings.TrimPrefix(v.pvc, "data-")+"/data")
 	}
@@ -240,14 +284,30 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 
 	if fallback {
-		// the README's fallback step 6, run by the lab: the volumes are back, the StatefulSets go to 0
-		c.Kubectl("-n", ns, "scale", "statefulset/t-broker", "statefulset/t-port49d", "--replicas=0")
-		l82Row(cell, "both port49 StatefulSets scaled to 0 after the volume check (the fallback's step 6)", "yes")
+		readme("README fallback step 6 (both StatefulSets to 0)", work, steps["fallbackzero"])
+		l82Row(cell, "README fallback step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text", "yes")
+	} else {
+		// a restore at 0 replicas whose pods outlive it: the README's order relies on there being none
+		var left string
+		gone := (l89Lab{r}).Eventually("no port49 pod to be left", func() bool {
+			out, err := c.KubectlTry("", "-n", ns, "get", "pods", "-l", "app.kubernetes.io/name=port49", "-o", "name")
+			left = strings.Join(strings.Fields(out), " ")
+			return err == nil && left == ""
+		})
+		if !gone {
+			measured("port49 pods still there 3 minutes after the restore at 0 replicas", left)
+		}
+		l82Row(cell, "port49 pods left after the restore at 0 replicas", "none")
 	}
-	noPort49Pods()
 	cs.AtZero = r.hashes()
-	l82Row(cell, "files hashed before the backup", l89HashText(r.hashesBefore))
+	cs.MarksAtZero = r.marks()
+	l82Row(cell, "files hashed before the backup", l89HashText(r.before.Hashes))
 	l82Row(cell, "the same files with both StatefulSets at 0, before the scale-up", l89HashText(cs.AtZero))
+	if fallback {
+		l82Row(cell, "marks.json is compared by its marks here", "the brokers ran before the check, and a broker rewrites the file when the store and its copy disagree")
+	}
+	l82Row(cell, "each broker's marks before the backup", l89MarksText(r.before.Marks))
+	l82Row(cell, "each broker's marks with both StatefulSets at 0", l89MarksText(cs.MarksAtZero))
 	if !complete {
 		// the README: never run step 5 while a volume is not Completed; the operator stops here, and so does the cell
 		cell.Verdict = l89.JudgeC(cs)
@@ -255,8 +315,8 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		return
 	}
 
-	readme("README step 2 (the token delete Job)", work, steps["tokendelete"])
-	l82Row(cell, "README step 2 (the token delete Job) ran from its own text and completed", "yes")
+	readme("README step 2 (the delete Job of design 13 step 3)", work, steps["tokendelete"])
+	l82Row(cell, "README step 2 (the delete Job of design 13 step 3) ran from its own text and completed", "yes")
 	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), steps["revoke"])
 	l82Row(cell, "README step 4 (revoke-offline.sh) ran from its own text", "yes")
 	readme("README step 5 (the scale-up)", work, steps["scaleup"])
@@ -274,29 +334,11 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	cell.Verdict = l89.JudgeC(cs)
 }
 
-// restoreName is the name of the restore the README's command made: Velero names it
-// <backup>-<timestamp> when no name is given, so it is read as the newest restore of the backup.
-func restoreName(c *kindtest.Cluster, backup string) string {
-	out := c.Kubectl("-n", "velero", "get", "restores", "--sort-by=.metadata.creationTimestamp", "-o",
-		`jsonpath={range .items[*]}{.spec.backupName} {.metadata.name}{"\n"}{end}`)
-	got := ""
-	for _, ln := range strings.Split(strings.TrimSpace(out), "\n") {
-		if f := strings.Fields(ln); len(f) == 2 && f[0] == backup {
-			got = f[1]
-		}
-	}
-	return got
-}
-
-// phaseWait waits until the newest restore has ended and none of its pod volume restores is still
-// running, so the README's volume check reads where they ended. A restore that made none at all (the
-// suspected failure of cell c) ends too, and the check then lists nothing.
-func phaseWait(t *testing.T, c *kindtest.Cluster) {
+// phaseWait waits until the restore has ended and none of its pod volume restores is still running, so
+// the README's volume check reads where they ended. A restore that made none at all (the suspected
+// failure of cell c) ends too, and the check then lists nothing.
+func phaseWait(t *testing.T, c *kindtest.Cluster, name string) {
 	t.Helper()
-	name := restoreName(c, l89Backup)
-	if name == "" {
-		t.Fatalf("no restore of %s to wait for", l89Backup)
-	}
 	ended := map[string]bool{"Completed": true, "PartiallyFailed": true, "Failed": true, "FailedValidation": true}
 	shapetest.WaitFor(t, "the restore and its pod volume restores to end", 10*time.Minute, func() bool {
 		ph, err := c.KubectlTry("", "-n", "velero", "get", "restore", name, "-o", "jsonpath={.status.phase}")

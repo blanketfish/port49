@@ -1,8 +1,14 @@
 package l89
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -345,6 +351,199 @@ func TestScrubWithDropsTheRunsOwnValues(t *testing.T) {
 	}
 }
 
+var bob = Mark{Kind: "principal", Key: "user:bob@example.com", At: "2026-11-05T00:00:00Z"}
+
+// fakeLab is the lab as cell (a)'s step before the backup sees it, with markscopy.go's behaviour: a
+// broker's marks.json is written only when its set of marks changes, so it is absent until a revocation.
+type fakeLab struct {
+	files     map[string]string // "claim:path": content
+	revoked   []string
+	revokeErr error
+	noCopy    bool // the revocation lands but no broker's copy writes it
+	calls     []string
+}
+
+func newFakeLab() *fakeLab {
+	f := &fakeLab{files: map[string]string{}}
+	for _, v := range Hashed {
+		if strings.HasPrefix(v.PVC, "data-t-broker") {
+			f.files[v.PVC+":/v/state/issuing-ca.pem"] = "a certificate"
+		}
+	}
+	return f
+}
+
+func (f *fakeLab) Revoke(principal string) error {
+	f.calls = append(f.calls, "revoke")
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
+	f.revoked = append(f.revoked, principal)
+	if !f.noCopy {
+		for _, v := range Hashed {
+			if strings.HasPrefix(v.PVC, "data-t-broker") {
+				f.files[v.PVC+":"+MarksPath] = `{"marks":[{"kind":"principal","key":"` + principal + `","at":"2026-11-05T00:00:00Z"}]}`
+			}
+		}
+	}
+	return nil
+}
+
+func (f *fakeLab) Read(pvc, path string) string { return f.files[pvc+":"+path] }
+
+func (f *fakeLab) WriteSentinel(pvc, path string) error {
+	f.calls = append(f.calls, "sentinel")
+	f.files[pvc+":"+path] = "random"
+	return nil
+}
+
+func (f *fakeLab) Hashes(pvc string, paths []string) map[string]string {
+	f.calls = append(f.calls, "hash")
+	got := map[string]string{}
+	for _, p := range paths {
+		got[pvc+":"+p] = ""
+		if b := f.files[pvc+":"+p]; b != "" {
+			got[pvc+":"+p] = fmt.Sprintf("%x", sha256.Sum256([]byte(b)))
+		}
+	}
+	return got
+}
+
+func (f *fakeLab) Eventually(what string, cond func() bool) bool { return cond() }
+
+// I1r4: cell (a)'s step before the backup, run in its own order against a lab that makes marks.json only
+// on a change. Before the round 5 fix the step hashed with no revocation, and marks.json was absent.
+func TestBeforeBackupRevokesSoMarksJSONExists(t *testing.T) {
+	lab := newFakeLab()
+	got, err := BeforeBackup(lab, bob.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lab.revoked) != 1 || lab.revoked[0] != bob.Key || lab.calls[0] != "revoke" {
+		t.Errorf("the step did not revoke first: revoked %v, calls %v", lab.revoked, lab.calls)
+	}
+	for _, k := range HashKeys() {
+		if !sha256Hex.MatchString(got.Hashes[k]) {
+			t.Errorf("%s is %q before the backup", k, got.Hashes[k])
+		}
+	}
+	for _, pvc := range []string{"data-t-broker-0", "data-t-broker-1"} {
+		if m := got.Marks[pvc]; len(m) != 1 || m[0] != bob {
+			t.Errorf("%s's marks before the backup: %v", pvc, m)
+		}
+	}
+	if len(got.Marks) != 2 {
+		t.Errorf("marks read on %d claims, want the 2 brokers'", len(got.Marks))
+	}
+
+	lab = newFakeLab()
+	lab.noCopy = true
+	if _, err := BeforeBackup(lab, bob.Key); err == nil || !strings.Contains(err.Error(), "marks.json") {
+		t.Errorf("a revocation no copy wrote: %v", err)
+	}
+	lab = newFakeLab()
+	lab.revokeErr = fmt.Errorf("revoke-offline.sh: exit status 1")
+	if _, err := BeforeBackup(lab, bob.Key); err == nil {
+		t.Error("a failed revocation is accepted")
+	}
+}
+
+func TestDecodeMarksReadsTheCopysFile(t *testing.T) {
+	got, err := DecodeMarks(`{"marks":[{"kind":"principal","key":"user:bob@example.com","at":"2026-11-05T00:00:00Z"},{"future":1}]}`)
+	if err != nil || len(got) != 1 || got[0] != bob {
+		t.Errorf("DecodeMarks = %v, %v", got, err)
+	}
+	if _, err := DecodeMarks("not json"); err == nil {
+		t.Error("a file that is not JSON decodes")
+	}
+	if got, err := DecodeMarks(""); err != nil || len(got) != 0 {
+		t.Errorf("an absent file: %v, %v", got, err)
+	}
+}
+
+func TestFailedCommandIsTheTrapsLineScrubbed(t *testing.T) {
+	out := "some output\nl89-failed: kubectl -n port49 wait --for=condition=complete job/restore-token-delete --timeout=3m\nError: timed out\n"
+	// the token delete's own lines hold a word Results refuses: the row shows it masked, and stays writable
+	got := FailedCommand(out)
+	// --for=condition=complete is 24 key characters, so Scrub shortens it
+	if got != "kubectl -n port49 wait <LONG> job/restore-<word>-delete --timeout=3m" {
+		t.Errorf("FailedCommand = %q", got)
+	}
+	if _, err := Results(Env{}, []l82.Cell{{ID: "c", Verdict: l82.Fail, Rows: []l82.Row{{Case: "README step 2", Observation: got}}}}); err != nil {
+		t.Errorf("a row with the failed command cannot be written: %v", err)
+	}
+	if got := FailedCommand("no trap line\n"); got != "not named (no l89-failed line)" {
+		t.Errorf("no trap line: %q", got)
+	}
+	if got := FailedCommand("l89-failed: echo " + strings.Repeat("A", 40) + "\n"); strings.Contains(got, strings.Repeat("A", 24)) {
+		t.Errorf("a long run is kept: %q", got)
+	}
+	if got := FailedCommand("l89-failed: curl --password x\n"); got != "curl --<word> x" {
+		t.Errorf("a credential word: %q", got)
+	}
+	if got := FailedCommand("l89-failed: echo eyJhbGciOi\n"); Leak(got) != "" {
+		t.Errorf("a JWT's start is kept: %q", got)
+	}
+	if !strings.HasPrefix(StepScript("true\n"), "trap 'echo \"l89-failed: $BASH_COMMAND\" >&2' ERR\n") {
+		t.Errorf("StepScript = %q", StepScript("true\n"))
+	}
+}
+
+// Every results row the L89 harness writes with a literal case or observation must pass Leak, or Results
+// refuses the whole file and the run records nothing. Round 4's "README step 2 (the token delete Job)"
+// would have.
+func TestTheHarnesssRowTextIsWritable(t *testing.T) {
+	fset := token.NewFileSet()
+	n := 0
+	for _, name := range []string{"l89_test.go", "l89_order_test.go"} {
+		f, err := parser.ParseFile(fset, filepath.Join("..", "..", "lab", name), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || (id.Name != "l82Row" && id.Name != "measured" && id.Name != "readme") {
+				return true
+			}
+			// the arguments that become row text: l82Row's after the cell, measured's both, readme's label
+			// (its other two are a directory and the script); every string literal in them, the parts of a
+			// concatenation too
+			args := call.Args
+			switch id.Name {
+			case "l82Row":
+				args = args[1:]
+			case "readme":
+				args = args[:1]
+			}
+			for _, arg := range args {
+				ast.Inspect(arg, func(a ast.Node) bool {
+					lit, ok := a.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						return true
+					}
+					s, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					n++
+					if why := Leak(s); why != "" {
+						t.Errorf("%s: the row text %q holds %s", fset.Position(lit.Pos()), s, why)
+					}
+					return true
+				})
+			}
+			return true
+		})
+	}
+	if n < 20 {
+		t.Errorf("only %d literal row texts found: the call names changed", n)
+	}
+}
+
 func TestJudgeCNeedsEveryCheck(t *testing.T) {
 	h1, h2 := strings.Repeat("ab", 32), strings.Repeat("cd", 32)
 	want := []string{"t-broker-0/data", "t-broker-1/data", "t-port49d-0/data", "t-port49d-1/data"}
@@ -353,11 +552,32 @@ func TestJudgeCNeedsEveryCheck(t *testing.T) {
 			Volumes: map[string]string{"t-broker-0/data": "Completed", "t-broker-1/data": "Completed",
 				"t-port49d-0/data": "Completed", "t-port49d-1/data": "Completed", "etcd-0/data": "Completed"},
 			FingerprintBefore: "ab", FingerprintAfter: "ab",
-			Before: map[string]string{"data-t-broker-0:/v/state/marks.json": h1, "data-t-port49d-0:/v/data/l89-sentinel": h2},
-			AtZero: map[string]string{"data-t-broker-0:/v/state/marks.json": h1, "data-t-port49d-0:/v/data/l89-sentinel": h2}}
+			Before:      map[string]string{"data-t-broker-0:/v/state/marks.json": h1, "data-t-port49d-0:/v/data/l89-sentinel": h2},
+			AtZero:      map[string]string{"data-t-broker-0:/v/state/marks.json": h1, "data-t-port49d-0:/v/data/l89-sentinel": h2},
+			MarksBefore: map[string][]Mark{"data-t-broker-0": {bob}},
+			MarksAtZero: map[string][]Mark{"data-t-broker-0": {bob}}}
 	}
 	if JudgeC(good()) != l82.Pass {
 		t.Fatal("a complete restore is not a PASS")
+	}
+	// the fallback: the brokers ran before the check, so marks.json may be rewritten; every mark recorded
+	// before must still be there, and a mark added is not a FAIL
+	fb := good()
+	fb.Fallback = true
+	fb.AtZero["data-t-broker-0:/v/state/marks.json"] = h2
+	fb.MarksAtZero["data-t-broker-0"] = []Mark{{Kind: "cert", Key: "k", At: "2026-11-05T01:00:00Z"}, bob}
+	if JudgeC(fb) != l82.Pass {
+		t.Error("the fallback with every mark kept and one added is not a PASS")
+	}
+	fb.MarksAtZero["data-t-broker-0"] = []Mark{{Kind: "cert", Key: "k", At: "2026-11-05T01:00:00Z"}}
+	if JudgeC(fb) != l82.Fail {
+		t.Error("the fallback with a mark lost is not a FAIL")
+	}
+	fb = good()
+	fb.Fallback = true
+	fb.AtZero["data-t-port49d-0:/v/data/l89-sentinel"] = h1
+	if JudgeC(fb) != l82.Fail {
+		t.Error("the fallback compares the sentinel's hash no more")
 	}
 	for name, mod := range map[string]func(*C){
 		// three etcd volumes and one of port49's: the count is high enough, a port49 volume is missing
@@ -378,6 +598,13 @@ func TestJudgeCNeedsEveryCheck(t *testing.T) {
 			c.Before["data-t-port49d-0:/v/data/l89-sentinel"], c.AtZero["data-t-port49d-0:/v/data/l89-sentinel"] = "", ""
 		},
 		"a broker started a fresh copy": func(c *C) { c.FreshCopy = true },
+		// I1r4: a lab that revoked nothing has no mark to lose, so the restore proves nothing about marks
+		"no mark recorded before":       func(c *C) { c.MarksBefore = map[string][]Mark{"data-t-broker-0": nil} },
+		"no broker's marks read before": func(c *C) { c.MarksBefore = nil },
+		"a mark lost, the hash equal":   func(c *C) { c.MarksAtZero["data-t-broker-0"] = nil },
+		"a mark's time changed at zero": func(c *C) {
+			c.MarksAtZero["data-t-broker-0"] = []Mark{{Kind: bob.Kind, Key: bob.Key, At: "2026-11-05T02:00:00Z"}}
+		},
 	} {
 		c := good()
 		mod(&c)
@@ -425,11 +652,11 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steps, err := Steps(string(b), "port49", "t", "l89-backup", 2, 2)
+	steps, err := Steps(string(b), "port49", "t", "l89-backup", "l89-restore-c", 2, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"etcdrestore", "tokendelete", "restorezero", "volumes", "revoke", "scaleup"} {
+	for _, name := range []string{"etcdrestore", "tokendelete", "restorezero", "volumes", "revoke", "scaleup", "fallbackrestore", "fallbackzero"} {
 		cmd := steps[name]
 		if cmd == "" {
 			t.Errorf("no %s step", name)
@@ -441,10 +668,19 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	if !strings.Contains(steps["etcdrestore"], "--include-namespaces port49 ") || !strings.Contains(steps["tokendelete"], "-n port49 wait") {
 		t.Errorf("the restore or the token delete is not in the lab's namespace:\n%s\n%s", steps["etcdrestore"], steps["tokendelete"])
 	}
-	if !strings.Contains(steps["volumes"], "podvolumerestores") || !strings.Contains(steps["volumes"], "velero.io/restore-name=") {
-		t.Errorf("the volume check does not list the restore's pod volume restores:\n%s", steps["volumes"])
+	if !strings.Contains(steps["volumes"], "podvolumerestores") || !strings.Contains(steps["volumes"], "velero.io/restore-name=l89-restore-c ") {
+		t.Errorf("the volume check does not list the named restore's pod volume restores:\n%s", steps["volumes"])
 	}
-	if _, err := Steps(string(b), "other", "t", "l89-backup", 2, 2); err == nil {
+	// m1r4: both restores the check can follow are made under the name the check reads
+	for _, name := range []string{"restorezero", "fallbackrestore"} {
+		if !strings.Contains(steps[name], "velero restore create l89-restore-c --from-backup l89-backup") {
+			t.Errorf("%s does not name its restore:\n%s", name, steps[name])
+		}
+	}
+	if !strings.Contains(steps["fallbackzero"], "--replicas=0") || !strings.Contains(steps["fallbackzero"], "--for=delete") {
+		t.Errorf("the fallback's scale to 0 does not wait for the pods to go:\n%s", steps["fallbackzero"])
+	}
+	if _, err := Steps(string(b), "other", "t", "l89-backup", "r", 2, 2); err == nil {
 		t.Error("a namespace the README's port49 commands do not name is accepted")
 	}
 }

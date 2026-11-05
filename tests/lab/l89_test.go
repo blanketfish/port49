@@ -28,7 +28,10 @@ const (
 	l89Bucket  = "velero"
 	l89Backup  = "l89-backup"
 	l89Restore = "l89-restore"
-	l89Region  = "us-east-1"
+	// the README's named restores (its <restore>) in cells (c) and (d)
+	l89RestoreC = "l89-restore-c"
+	l89RestoreD = "l89-restore-d"
+	l89Region   = "us-east-1"
 )
 
 // l89Fence is what the fence's refusals say: the broker's and port49d's data directory writable by a
@@ -42,7 +45,9 @@ var l89Fence = regexp.MustCompile(`data-dir(-owner)?: |writable by its group or 
 // The Velero Schedule is the chart's own example (deploy/helm/port49/examples/velero), applied as it is
 // and run by `velero backup create --from-schedule`.
 //
-//	(a) back up, delete the namespace, restore: both StatefulSets ready with no fence refusal, the
+//	(a) first a revocation (so each broker's marks.json exists and holds a mark), a sentinel in each spool
+//	    and the hashes cells (c) and (d) compare (l89.BeforeBackup); then
+//	    back up, delete the namespace, restore: both StatefulSets ready with no fence refusal, the
 //	    issuing CA's fingerprint unchanged; the owner, group and mode of state/, issuing-ca.key and the
 //	    spool directory are recorded before and after
 //	(b) after the restore, a mint and a login
@@ -115,8 +120,9 @@ type l89Run struct {
 	bucketLog string   // the last curl attempt at the bucket
 	own       []string // the store credentials, which a diagnosis line must not hold
 	key       string   // the generated repository key, compared with the cluster's and never printed
-	// the sha256 of each file in l89Hashed when the backup was taken (cells c and d compare against them)
-	hashesBefore map[string]string
+	// the sha256 of each file of l89.Hashed and each broker's marks when the backup was taken (cells c
+	// and d compare against them)
+	before l89.Before
 }
 
 func l89Env(t *testing.T) *l89.Env {
@@ -424,8 +430,10 @@ func (r *l89Run) diagnose() {
 	}
 	add("velero backup describe --details", vel("backup", "describe", l89Backup, "--details"))
 	add("velero backup logs", vel("backup", "logs", l89Backup))
-	add("velero restore describe --details", vel("restore", "describe", l89Restore, "--details"))
-	add("velero restore logs", vel("restore", "logs", l89Restore))
+	for _, name := range []string{l89Restore, l89RestoreC, l89RestoreD} {
+		add("velero restore describe --details "+name, vel("restore", "describe", name, "--details"))
+		add("velero restore logs "+name, vel("restore", "logs", name))
+	}
 	for _, kind := range []string{"podvolumebackups", "podvolumerestores"} {
 		out, _ := c.KubectlTry("", "-n", "velero", "get", kind, "-o",
 			`jsonpath={range .items[*]}{.metadata.name} {.status.phase} {.spec.pod.name} {.spec.volume}: {.status.message}{"\n"}{end}`)
@@ -481,6 +489,17 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	}()
 	r.checkRepositoryKey()
 	l82Row(cell, "the repository key in the cluster is the one generated for this run", "yes")
+	// What cells (c) and (d) compare with the restored volumes, first, since the revocation restarts the
+	// brokers: a revocation (a broker writes marks.json only when its marks change, and the lab revokes
+	// nothing else), a sentinel in each spool, and the sha256 of each broker's marks.json and CA certificate
+	// and of each sentinel. A setup that fails here stops the cell NOT RUN: nothing was measured.
+	before0, err := l89.BeforeBackup(l89Lab{r}, l89Revoked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.before = before0
+	l82Row(cell, "a revocation before the backup (revoke-offline.sh), held in each broker's marks.json", l89MarksText(r.before.Marks))
+	l82Row(cell, "files hashed before the backup (each spool's sentinel, each broker's marks.json and CA certificate)", l89HashText(r.before.Hashes))
 	before, fpBefore := r.snapshot()
 	logBefore := l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
@@ -517,17 +536,6 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	}
 	l82Row(cell, "applying the example Schedule started no backup (skipImmediately skipped the first run)", "yes")
 	l82Row(cell, "the lab's etcd shares the release's namespace", "yes: the Schedule names both namespaces, the lab applies it with the one")
-	// what cells (c) and (d) compare with the restored volumes, taken just before the backup: a sentinel in
-	// each spool, and each broker's marks.json and CA certificate. One absent cannot be compared, so the
-	// cell stops (NOT RUN: the setup failed, nothing was measured).
-	r.writeSentinels()
-	r.hashesBefore = r.hashes()
-	for _, k := range l89HashKeys() {
-		if r.hashesBefore[k] == "" {
-			t.Fatalf("%s is absent before the backup: cells (c) and (d) cannot compare it", k)
-		}
-	}
-	l82Row(cell, "files hashed before the backup (each spool's sentinel, each broker's marks.json and CA certificate)", l89HashText(r.hashesBefore))
 	r.velero("backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
 	phase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
 	l82Row(cell, "the backup's phase", phase)

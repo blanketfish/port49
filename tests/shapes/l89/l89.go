@@ -12,6 +12,7 @@ package l89
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -101,7 +102,13 @@ type C struct {
 	FingerprintAfter  string            // and after the scale-up
 	Before            map[string]string // the sha256 of each file the cell compares, "claim:path", when the backup was taken ("" absent)
 	AtZero            map[string]string // and after the restore, with both StatefulSets at 0, before the scale-up
-	FreshCopy         bool              // a broker's log after the scale-up says it had no marks.json at this start
+	MarksBefore       map[string][]Mark // each broker's decoded marks.json, by claim, when the backup was taken
+	MarksAtZero       map[string][]Mark // and with both StatefulSets at 0, before the scale-up
+	// Fallback is cell (d): the brokers ran against the restored store before the check, and a broker
+	// rewrites marks.json when the store and its copy disagree, so marks.json is compared by its decoded
+	// marks (every one recorded before still there), not by its hash.
+	Fallback  bool
+	FreshCopy bool // a broker's log after the scale-up says it had no marks.json at this start
 }
 
 // FreshCopyLine is what a broker logs when it starts with no broker.state_dir/marks.json
@@ -111,10 +118,11 @@ const FreshCopyLine = "had no marks.json at this start"
 // JudgeC is PASS iff the restore Completed with a Completed pod volume restore for each of the chart's
 // data volumes by name (the lab's etcd volumes are in the same restore and do not count), the issuing CA
 // is the one it was, every file recorded at the backup is there with the same sha256 while both
-// StatefulSets are at 0, and no broker started a fresh copy of the marks. A fingerprint or a hash not
-// read is a FAIL.
+// StatefulSets are at 0 (marks.json, in the fallback, by its marks instead), every broker held a mark at
+// the backup and holds each of them at 0, and no broker started a fresh copy of the marks. A fingerprint
+// or a hash not read is a FAIL.
 func JudgeC(c C) string {
-	if c.RestorePhase != "Completed" || len(c.Want) == 0 || len(c.Before) == 0 || c.FreshCopy {
+	if c.RestorePhase != "Completed" || len(c.Want) == 0 || len(c.Before) == 0 || len(c.MarksBefore) == 0 || c.FreshCopy {
 		return l82.Fail
 	}
 	for _, v := range c.Want {
@@ -126,11 +134,202 @@ func JudgeC(c C) string {
 		return l82.Fail
 	}
 	for k, h := range c.Before {
+		if c.Fallback && strings.HasSuffix(k, ":"+MarksPath) {
+			continue
+		}
 		if !sha256Hex.MatchString(h) || c.AtZero[k] != h {
 			return l82.Fail
 		}
 	}
+	for claim, before := range c.MarksBefore {
+		// a broker with no mark at the backup has none to lose: the restore would prove nothing about marks
+		if len(before) == 0 {
+			return l82.Fail
+		}
+		kept := map[Mark]bool{}
+		for _, m := range c.MarksAtZero[claim] {
+			kept[m] = true
+		}
+		for _, m := range before {
+			if !kept[m] {
+				return l82.Fail
+			}
+		}
+	}
 	return l82.Pass
+}
+
+// Mark is one entry of broker.state_dir/marks.json (internal/port49d/markscopy.go): a revocation's kind
+// and key, and when it took force, as written.
+type Mark struct {
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+	At   string `json:"at"`
+}
+
+// DecodeMarks reads marks.json. An entry it does not understand (no kind or key: a newer port49's) is
+// skipped, as the copy keeps it unread; an empty body is no marks.
+func DecodeMarks(body string) ([]Mark, error) {
+	if strings.TrimSpace(body) == "" {
+		return nil, nil
+	}
+	var f struct {
+		Marks []json.RawMessage `json:"marks"`
+	}
+	if err := json.Unmarshal([]byte(body), &f); err != nil {
+		return nil, fmt.Errorf("l89: marks.json does not decode: %w", err)
+	}
+	var out []Mark
+	for _, raw := range f.Marks {
+		var m Mark
+		if json.Unmarshal(raw, &m) == nil && m.Kind != "" && m.Key != "" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// The files cells (c) and (d) compare with the backup.
+const (
+	// Sentinel is the file cell (a) writes in each port49d spool before the backup: the spool holds no
+	// accounting record in the lab, and port49d writes restore.json there at every start, so a listing
+	// of the directory cannot tell a restored spool from an empty one.
+	Sentinel = "/v/data/l89-sentinel"
+	// MarksPath is a broker's copy of the marks. The copy writes it only when its marks change
+	// (markscopy.go), so it exists only once something was revoked.
+	MarksPath = "/v/state/marks.json"
+)
+
+// Files is the paths compared on one volume claim, mounted at /v.
+type Files struct {
+	PVC   string
+	Paths []string
+}
+
+// Hashed is the files cells (c) and (d) compare with the backup, by the kind lab's claims: each broker's
+// marks.json and issuing CA certificate (never the key), and each spool's sentinel.
+var Hashed = []Files{
+	{"data-t-broker-0", []string{MarksPath, "/v/state/issuing-ca.pem"}},
+	{"data-t-broker-1", []string{MarksPath, "/v/state/issuing-ca.pem"}},
+	{"data-t-port49d-0", []string{Sentinel}},
+	{"data-t-port49d-1", []string{Sentinel}},
+}
+
+// HashKeys is every "claim:path" of Hashed.
+func HashKeys() []string {
+	var keys []string
+	for _, v := range Hashed {
+		for _, p := range v.Paths {
+			keys = append(keys, v.PVC+":"+p)
+		}
+	}
+	return keys
+}
+
+func holdsMarks(f Files) bool {
+	for _, p := range f.Paths {
+		if p == MarksPath {
+			return true
+		}
+	}
+	return false
+}
+
+// Lab is what cell (a)'s step before the backup needs of the cluster.
+type Lab interface {
+	// Revoke revokes principal with revoke-offline.sh and returns once the brokers are back and ready.
+	Revoke(principal string) error
+	// Read is a file on a claim ("" when it is absent).
+	Read(pvc, path string) string
+	// WriteSentinel writes a random sentinel at path on a claim, owned by uid 65532, mode 0600.
+	WriteSentinel(pvc, path string) error
+	// Hashes is HashScript's result on a claim, as ParseHashes reads it.
+	Hashes(pvc string, paths []string) map[string]string
+	// Eventually is true once cond holds, false if it never did within the lab's time.
+	Eventually(what string, cond func() bool) bool
+}
+
+// Before is what the step before the backup recorded.
+type Before struct {
+	Hashes map[string]string // "claim:path": sha256
+	Marks  map[string][]Mark // each broker's decoded marks.json, by claim
+}
+
+// BeforeBackup is cell (a)'s step before the backup, in its order. It revokes principal, since a broker
+// writes marks.json only on a change and the lab revokes nothing else, and waits until every broker's
+// marks.json holds that revocation. Then it writes each spool's sentinel and hashes every file of Hashed.
+// A file still absent is an error: the cells could not compare it.
+func BeforeBackup(lab Lab, principal string) (Before, error) {
+	b := Before{Hashes: map[string]string{}, Marks: map[string][]Mark{}}
+	if err := lab.Revoke(principal); err != nil {
+		return b, fmt.Errorf("l89: the revocation before the backup: %w", err)
+	}
+	for _, f := range Hashed {
+		if !holdsMarks(f) {
+			continue
+		}
+		var marks []Mark
+		held := lab.Eventually("marks.json on "+f.PVC+" to hold "+principal, func() bool {
+			marks, _ = DecodeMarks(lab.Read(f.PVC, MarksPath))
+			for _, m := range marks {
+				if m.Kind == "principal" && m.Key == principal {
+					return true
+				}
+			}
+			return false
+		})
+		if !held {
+			return b, fmt.Errorf("l89: marks.json on %s never held the revocation of %s", f.PVC, principal)
+		}
+		b.Marks[f.PVC] = marks
+	}
+	for _, f := range Hashed {
+		for _, p := range f.Paths {
+			if p == Sentinel {
+				if err := lab.WriteSentinel(f.PVC, p); err != nil {
+					return b, fmt.Errorf("l89: the sentinel on %s: %w", f.PVC, err)
+				}
+			}
+		}
+	}
+	for _, f := range Hashed {
+		for k, h := range lab.Hashes(f.PVC, f.Paths) {
+			b.Hashes[k] = h
+		}
+	}
+	for _, k := range HashKeys() {
+		if !sha256Hex.MatchString(b.Hashes[k]) {
+			return b, fmt.Errorf("l89: %s is absent before the backup, so cells (c) and (d) cannot compare it", k)
+		}
+	}
+	return b, nil
+}
+
+// StepScript is a README step as the lab runs it under bash -e: an ERR trap first names the command that
+// failed, so a FAIL's row can say which line of the README's text it was.
+func StepScript(script string) string {
+	return "trap 'echo \"l89-failed: $BASH_COMMAND\" >&2' ERR\n" + script
+}
+
+// FailedCommand is the command StepScript's trap named in a step's output, for a results row. It is the
+// README's text after Subst, but a word Results refuses (the token delete's Job is named for what it
+// deletes) is shown as <word>, a long run as <LONG> (Scrub), and a line that still looks like it holds a
+// credential (Leak) is withheld.
+func FailedCommand(out string) string {
+	got := ""
+	for _, ln := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(ln, "l89-failed: "); ok {
+			got = rest
+		}
+	}
+	if got == "" {
+		return "not named (no l89-failed line)"
+	}
+	got = strings.TrimSpace(Scrub(credWords.ReplaceAllString(got, "<word>")))
+	if got == "" || Leak(got) != "" {
+		return "withheld (the line looks like it holds a credential)"
+	}
+	return got
 }
 
 // ParseVolumes reads the output of the README's volume check (the marker "volumes"): the restore's phase
@@ -185,17 +384,19 @@ const etcdNamespace = "port49-etcd"
 // Steps is the Velero README's restore steps (their markers' commands) as the kind lab runs them: etcd's
 // namespace replaced by the lab's ns everywhere a command names it, and the placeholders filled. It fails
 // on a step whose command lacks what it replaces, so a changed README cannot run half-substituted.
-func Steps(doc, ns, release, backup string, brokers, port49d int) (map[string]string, error) {
+func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[string]string, error) {
 	if ns != "port49" {
 		return nil, fmt.Errorf("l89: the README's commands name the namespace port49, not %q", ns)
 	}
 	repl := map[string]map[string]string{
-		"etcdrestore": {"<backup>": backup, etcdNamespace: ns},
-		"tokendelete": {etcdNamespace: ns},
-		"restorezero": {"<backup>": backup},
-		"volumes":     nil,
-		"revoke":      {"<release>": release},
-		"scaleup":     {"<release>": release, "<brokers>": fmt.Sprint(brokers), "<port49d>": fmt.Sprint(port49d)},
+		"etcdrestore":     {"<backup>": backup, etcdNamespace: ns},
+		"tokendelete":     {etcdNamespace: ns},
+		"restorezero":     {"<restore>": restore, "<backup>": backup},
+		"volumes":         {"<restore>": restore},
+		"revoke":          {"<release>": release},
+		"scaleup":         {"<release>": release, "<brokers>": fmt.Sprint(brokers), "<port49d>": fmt.Sprint(port49d)},
+		"fallbackrestore": {"<restore>": restore, "<backup>": backup},
+		"fallbackzero":    {"<release>": release},
 	}
 	out := map[string]string{}
 	for name, r := range repl {
