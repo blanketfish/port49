@@ -641,6 +641,11 @@ func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply 
 	case wire.TypeAuthen:
 		return s.authenticate(ctx, h, body, peer)
 	case wire.TypeAuthor:
+		// Authorization is one request and one response (RFC 8907 §6.1): any
+		// seq_no but 1 is a packet this exchange cannot answer.
+		if h.SeqNo != 1 {
+			return nil, true, true
+		}
 		p, err := wire.DecodeAuthorRequest(body)
 		if err != nil {
 			return nil, true, true
@@ -649,6 +654,9 @@ func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply 
 		s.d.Metrics.Requests.WithLabelValues("author", authorOutcome(resp.Status)).Inc()
 		return resp.Encode(), true, false
 	case wire.TypeAcct:
+		if h.SeqNo != 1 { // one request, one reply, like authorization
+			return nil, true, true
+		}
 		p, err := wire.DecodeAcctRequest(body)
 		if err != nil {
 			return nil, true, true

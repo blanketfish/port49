@@ -462,6 +462,15 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		return s.fail(ctx, rec, decision.TokenNotFound)
 	}
 
+	// An enable token raises the context of the principal it was minted for and
+	// no one else's. Two principals can hold tokens under one (nas, username);
+	// without this, B's enable token would raise A's context. Refused before the
+	// token is spent, so it stays B's.
+	if enable && winner.Principal != incumbent.Principal {
+		rec.Principal = incumbent.Principal
+		return s.fail(ctx, rec, decision.CredentialMismatch)
+	}
+
 	// A token whose session ceiling has passed opens nothing: the context it
 	// would write is born expired. The minter clamps a token's expiry to its
 	// ceiling, so this is the floor under that, for a token minted without

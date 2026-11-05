@@ -3343,3 +3343,39 @@ func TestATokenTypedAsTheUsernameIsNeverLogged(t *testing.T) {
 		check(t, f, reply, done)
 	})
 }
+
+// An enable token is the escalated principal's own. Two principals can hold
+// tokens under one (nas, username); B's enable token must not raise A's context.
+func TestAnEnableTokenOfAnotherPrincipalIsRefused(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	key := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	f.st.PutToken(context.Background(), key,
+		store.Token{ID: "en-b", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice-b@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, done := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	if !done || reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("%+v %v", reply, done)
+	}
+	recs := f.records(t)
+	if last := recs[len(recs)-1]; last["reason"] != "credential_mismatch" {
+		t.Fatalf("%v", last)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.PrivLvl != 1 {
+		t.Fatalf("the context's privilege must not change: %+v", c)
+	}
+	cands, _ := f.st.Candidates(context.Background(), key)
+	unspent := false
+	for _, c := range cands {
+		if c.ID == "en-b" {
+			unspent = true
+		}
+	}
+	if !unspent {
+		t.Fatal("the other principal's enable token was spent")
+	}
+}
