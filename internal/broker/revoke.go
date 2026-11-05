@@ -262,11 +262,11 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		if errors.Is(err, store.ErrNotSent) {
 			// Nothing reached the store, so nothing can land; the pending mark stays all the same (fail closed).
-			reach, reached := b.reachUnrecorded(ctx, mark, false)
-			return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reached), ErrNotRecorded, b.notRecordedWhat(), err, reachNote(reach))
+			reach := b.reachUnrecorded(ctx, mark, false)
+			return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reach.reached), ErrNotRecorded, b.notRecordedWhat(), err, reach)
 		}
-		reach, reached := b.reachUnrecorded(ctx, mark, true)
-		return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reached), ErrUnrecorded, b.unrecordedWhat(), err, reachNote(reach))
+		reach := b.reachUnrecorded(ctx, mark, true)
+		return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reach.reached), ErrUnrecorded, b.unrecordedWhat(), err, reach)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
@@ -480,17 +480,19 @@ func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
 
 // reachNote is reachUnrecorded's sentence carried on the error, so the HTTP answer can say what the
 // error's text says: the answer is built from the error's class, and would otherwise drop it.
-type reachNote string
+// full is for the log and the Go error and quotes the store's error; api is for the answer and does not.
+type reachNote struct {
+	full, api string
+	reached   bool
+}
 
-func (n reachNote) Error() string { return string(n) }
+func (n reachNote) Error() string { return n.full }
 
-// reachOf is the reach sentence an unrecorded revocation's error carries, or "".
-func reachOf(err error) string {
+// reachOf is the reach sentence an unrecorded revocation's error carries, or the zero value.
+func reachOf(err error) reachNote {
 	var n reachNote
-	if errors.As(err, &n) {
-		return string(n)
-	}
-	return ""
+	errors.As(err, &n)
+	return n
 }
 
 // reachUnrecorded runs the session-store reach for a mark the directory did not record, so a region
@@ -499,22 +501,32 @@ func reachOf(err error) string {
 // left this process: only then can the mark reach other regions on its own, and only if that copy
 // lands. Either way the operator is told to make it now where the directory answers; the check after
 // the heal is unrecordedWhat's. ReachMark only denies more and is safe to run again.
-func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sent bool) (string, bool) {
+func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sent bool) reachNote {
 	keys, ctxs, err := b.ReachMark(ctx, mark)
-	if err != nil {
-		if keys == 0 && len(ctxs) == 0 {
-			return "this region's session store could not be reached (" + printsafe.Line(err.Error(), 160) + "); ", false
-		}
-		return fmt.Sprintf("this region's session store was reached only in part (%d token keys deleted and %d contexts "+
-			"marked revoked before: %s); ", keys, len(ctxs), printsafe.Line(err.Error(), 160)), false
+	n := reachNote{reached: err == nil}
+	done := fmt.Sprintf("%d token keys deleted and %d contexts marked revoked", keys, len(ctxs))
+	switch {
+	case err == nil:
+		n.api = "this region's session store: " + done + "; "
+		n.full = n.api
+	case keys == 0 && len(ctxs) == 0:
+		n.api = "this region's session store could not be reached; "
+		n.full = "this region's session store could not be reached (" + printsafe.Line(err.Error(), 160) + "); "
+	default:
+		n.api = "this region's session store was reached only in part (" + done + "); "
+		n.full = fmt.Sprintf("this region's session store was reached only in part (%s before: %s); ", done,
+			printsafe.Line(err.Error(), 160))
 	}
+	// What the other regions know does not depend on whether this region's store answered.
 	tail := "other regions have not learned of it: run `port49 revoke` now against a broker in a region that " +
-		"reaches the directory (this one, if the directory answers it again); "
+		"reaches the directory, or here once the store answers; "
 	if sent {
 		tail = "other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that " +
 			"reaches the directory (the copy sent may land too); "
 	}
-	return fmt.Sprintf("this region's session store: %d token keys deleted and %d contexts marked revoked; ", keys, len(ctxs)) + tail, true
+	n.api += tail
+	n.full += tail
+	return n
 }
 
 // fallback is how to cut access when a revocation cannot be made. With the session store reached,
@@ -523,13 +535,19 @@ func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sen
 func (b *Broker) fallback(reached bool) string {
 	const edit = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
 		"two watch intervals)"
-	if reached {
-		return edit
+	return edit + b.stopStep(reached)
+}
+
+// stopStep is the last resort when the region's session store was not reached: on port49-broker, which
+// serves no device, stopping it cuts nothing, so it is the port49d that stop.
+func (b *Broker) stopStep(reached bool) string {
+	switch {
+	case reached:
+		return ""
+	case b.proc() == "port49-broker":
+		return ", or stop every port49d (port49-broker serves no device)"
 	}
-	if b.proc() == "port49-broker" {
-		return edit + ", or stop every port49d (port49-broker serves no device)"
-	}
-	return edit + ", or stop port49d"
+	return ", or stop port49d"
 }
 
 // acquireRevoke takes revokeSem, or gives up when ctx ends first. A free
@@ -572,7 +590,7 @@ func (b *Broker) detach(ctx context.Context) (context.Context, context.CancelFun
 // notRecordedWhat is what a revocation the store was never sent means for whoever asked.
 func (b *Broker) notRecordedWhat() string {
 	return "not recorded in the store and will not land later, but this " + b.proc() + " denies what it names " +
-		"until a lift on this " + b.proc() + " or its restart; run it again once the store answers"
+		"until a lift on this " + b.proc() + " or its restart"
 }
 
 // unrecordedWhat is what an unrecorded revocation means for whoever asked, without the store's own

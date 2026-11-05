@@ -203,7 +203,7 @@ func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "revocation_unconfirmed") ||
 		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
-		!strings.Contains(w.Body.String(), "check `port49 revoke --list` once the store answers, before trying again") ||
+		!strings.Contains(w.Body.String(), "check `port49 revoke --list` here before running it again") ||
 		!strings.Contains(w.Body.String(), "remove the principal's grants from broker.policy_file") ||
 		strings.Contains(w.Body.String(), "socket") {
 		t.Fatalf("%d %s", w.Code, w.Body)

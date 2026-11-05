@@ -163,7 +163,7 @@ func TestARevocationThatWasNeverSentKeepsDenyingHere(t *testing.T) {
 	if code != 503 || decodeAdminAnswer(t, raw).Error != "store_unavailable" {
 		t.Fatalf("%d %s", code, raw)
 	}
-	for _, want := range []string{"not recorded in the store", "will not land later", "denies what it names", "port49 revoke --list"} {
+	for _, want := range []string{"not recorded in the store", "will not land later", "denies what it names", "or here once the store answers"} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("the answer lacks %q: %s", want, raw)
 		}
@@ -274,7 +274,7 @@ func TestANotSentRevokeReachesTooAndSaysSo(t *testing.T) {
 	// Nothing carries a write never sent to another region: the text says so and names the fix, and
 	// does not promise a heal.
 	for _, want := range []string{"other regions have not learned of it",
-		"run `port49 revoke` now against a broker in a region that reaches the directory", "this one, if the directory answers it again"} {
+		"run `port49 revoke` now against a broker in a region that reaches the directory", "or here once the store answers"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error lacks %q: %v", want, err)
 		}
@@ -345,56 +345,82 @@ func TestTheRevokeAnswerNamesTheReachAndWhatToDoAboutOtherRegions(t *testing.T) 
 	}
 }
 
-// The exact detail an operator reads for each unrecorded branch, with the reach done and with it
-// failed: `port49 revoke --list` is named once, and the reach says what to do now (3am text).
+// The exact detail an operator reads for each unrecorded branch, on port49d and on port49-broker, with
+// the reach done and with it failed (3am text): `port49 revoke --list` is named once at most, the
+// other regions are always told to be revoked now, the stop step comes only when the reach failed,
+// and the store's own words are not quoted.
 func TestTheUnrecordedRevokeAnswersAreExact(t *testing.T) {
-	const body = "a copy already sent can still land when the directory answers again, and then stands everywhere, " +
-		"even over a lift made meanwhile. Until then this port49d denies what it names, until a lift on this port49d " +
-		"or its restart; "
 	const reached = "this region's session store: 0 token keys deleted and 0 contexts marked revoked; "
+	const notReached = "this region's session store could not be reached; "
 	const sentTail = "other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that " +
 		"reaches the directory (the copy sent may land too); "
 	const notSentTail = "other regions have not learned of it: run `port49 revoke` now against a broker in a region that " +
-		"reaches the directory (this one, if the directory answers it again); "
-	const notReached = "this region's session store could not be reached (index unreadable); "
-	const closing = "check `port49 revoke --list` once the store answers, before trying again: if the mark is there it " +
-		"landed and needs nothing; if it is absent and nobody lifted it, run it again; meanwhile an operator can remove " +
-		"the principal's grants from broker.policy_file"
-	const notSentWhat = "the revocation was not recorded in the store and will not land later, but this port49d denies what " +
-		"it names until a lift on this port49d or its restart; run it again once the store answers; "
-	for _, c := range []struct {
-		name   string
-		wrap   func(store.Store) store.Store
-		reach  bool
-		detail string
-	}{
-		{"unanswered, reached", func(s store.Store) store.Store { return putRevocationUnavailable{s} }, true,
-			"the revocation may not have been recorded: " + body + reached + sentTail + closing},
-		{"unanswered, reach failed", func(s store.Store) store.Store { return putRevocationUnavailable{s} }, false,
-			"the revocation may not have been recorded: " + body + notReached + closing},
-		{"never sent, reached", func(s store.Store) store.Store { return putRevocationNotSent{s} }, true,
-			notSentWhat + reached + notSentTail + "check `port49 revoke --list` first"},
-		{"never sent, reach failed", func(s store.Store) store.Store { return putRevocationNotSent{s} }, false,
-			notSentWhat + notReached + "check `port49 revoke --list` first"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			f := newMFAFixture(t, withAllAdminRights())
-			f.b.Store = c.wrap(f.b.Store)
-			if !c.reach {
-				f.b.Store = putRevocationUnavailableIndex{f.b.Store}
-			}
-			code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
-			var a struct{ Detail string }
-			if err := json.Unmarshal(raw, &a); err != nil || code != http.StatusServiceUnavailable {
-				t.Fatalf("%d %s", code, raw)
-			}
-			if a.Detail != c.detail {
-				t.Errorf("detail:\n got %q\nwant %q", a.Detail, c.detail)
-			}
-			if n := strings.Count(a.Detail, "port49 revoke --list"); n != 1 {
-				t.Errorf("--list is named %d times", n)
-			}
-		})
+		"reaches the directory, or here once the store answers; "
+	const edit = "cut access another way: remove the principal's grants from broker.policy_file (live within two watch " +
+		"intervals)"
+	stop := map[string]string{"port49d": ", or stop port49d",
+		"port49-broker": ", or stop every port49d (port49-broker serves no device)"}
+	body := func(proc string) string {
+		return "a copy already sent can still land when the directory answers again, and then stands everywhere, even " +
+			"over a lift made meanwhile. Until then this " + proc + " denies what it names, until a lift on this " + proc +
+			" or its restart; "
+	}
+	closing := func(stop string) string {
+		return "after the heal, check `port49 revoke --list` here before running it again: if the mark is there it landed " +
+			"and needs nothing; if it is absent and nobody lifted it, run it again; meanwhile an operator can remove the " +
+			"principal's grants from broker.policy_file" + stop
+	}
+	notSentWhat := func(proc string) string {
+		return "the revocation was not recorded in the store and will not land later, but this " + proc + " denies what it " +
+			"names until a lift on this " + proc + " or its restart; "
+	}
+	for _, proc := range []string{"port49d", "port49-broker"} {
+		for _, c := range []struct {
+			name   string
+			sent   bool
+			reach  bool
+			code   string
+			detail string
+		}{
+			{"unanswered, reached", true, true, "revocation_unconfirmed",
+				"the revocation may not have been recorded: " + body(proc) + reached + sentTail + closing("")},
+			{"unanswered, reach failed", true, false, "revocation_unconfirmed",
+				"the revocation may not have been recorded: " + body(proc) + notReached + sentTail + closing(stop[proc])},
+			{"never sent, reached", false, true, "store_unavailable",
+				notSentWhat(proc) + reached + notSentTail + edit},
+			{"never sent, reach failed", false, false, "store_unavailable",
+				notSentWhat(proc) + notReached + notSentTail + edit + stop[proc]},
+		} {
+			t.Run(proc+", "+c.name, func(t *testing.T) {
+				f := newMFAFixture(t, withAllAdminRights())
+				f.b.Proc = proc
+				if c.sent {
+					f.b.Store = putRevocationUnavailable{f.b.Store}
+				} else {
+					f.b.Store = putRevocationNotSent{f.b.Store}
+				}
+				if !c.reach {
+					f.b.Store = putRevocationUnavailableIndex{f.b.Store}
+				}
+				code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+				var a struct{ Error, Detail string }
+				if err := json.Unmarshal(raw, &a); err != nil || code != http.StatusServiceUnavailable {
+					t.Fatalf("%d %s", code, raw)
+				}
+				if a.Error != c.code || a.Detail != c.detail {
+					t.Errorf("%s detail:\n got %q\nwant %q", a.Error, a.Detail, c.detail)
+				}
+				if n := strings.Count(a.Detail, "port49 revoke --list"); n > 1 || (c.sent && n != 1) {
+					t.Errorf("--list is named %d times", n)
+				}
+				if strings.Contains(a.Detail, "index unreadable") {
+					t.Errorf("the store's own words are quoted: %q", a.Detail)
+				}
+				if !c.sent && len(a.Detail) > 600 {
+					t.Errorf("the detail is %d bytes, over the CLI's 600-byte cut", len(a.Detail))
+				}
+			})
+		}
 	}
 }
 
