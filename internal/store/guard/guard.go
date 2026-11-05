@@ -50,7 +50,7 @@ var pools = map[string]Pool{
 	"PutContextRev": Context, "SwapContextRev": Context, "SwapLoginRev": Context, "RewriteContextRev": Context,
 	"Ping": Context,
 
-	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk,
+	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk, "PurgeOnceRecords": Bulk,
 
 	"PutToken": Token, "Candidates": Token, "TokenIDs": Token, "RedeemAndReceipt": Token, "DeleteTokens": Token, "DeleteToken": Token,
 	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token,
@@ -765,6 +765,11 @@ func (g *guarded) MembershipPrincipals(ctx context.Context) (ps []string, err er
 
 func (g *guarded) DeleteMembership(ctx context.Context, principal string) (m store.Membership, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { m, e = g.inner.DeleteMembership(ctx, principal); return })
+	return
+}
+
+func (g *guarded) PurgeOnceRecords(ctx context.Context) (n int, err error) {
+	err = g.do(ctx, Bulk, func(ctx context.Context) (e error) { n, e = g.inner.PurgeOnceRecords(ctx); return })
 	return
 }
 

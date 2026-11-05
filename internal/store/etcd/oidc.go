@@ -339,3 +339,31 @@ func (s *Store) logoutEntry(prefix string, key, value []byte) (store.LogoutEntry
 	}
 	return store.LogoutEntry{Logout: store.Logout{Key: k, At: r.At, Origin: r.Origin}, Until: r.ExpiresAt}, true
 }
+
+// PurgeOnceRecords deletes every on/ and mp/ record, a page at a time as
+// PurgeTokens deletes tokens, and counts them. It runs with the keyspace
+// held, at a takeover: a record put mid-purge is purged by a later page or
+// left, never half-deleted.
+func (s *Store) PurgeOnceRecords(ctx context.Context) (int, error) {
+	n := 0
+	for _, fam := range []string{famOnce, famMFAProof} {
+		prefix := s.k.family(fam)
+		end := clientv3.GetPrefixRangeEnd(prefix)
+		for {
+			resp, err := s.tok.Get(ctx, prefix, clientv3.WithRange(end), clientv3.WithLimit(purgePage), clientv3.WithKeysOnly())
+			if err != nil {
+				return n, unavailable(err)
+			}
+			if len(resp.Kvs) == 0 {
+				break
+			}
+			last := string(resp.Kvs[len(resp.Kvs)-1].Key)
+			del, err := s.tok.Delete(ctx, string(resp.Kvs[0].Key), clientv3.WithRange(last+"\x00"))
+			if err != nil {
+				return n, unavailable(err)
+			}
+			n += int(del.Deleted)
+		}
+	}
+	return n, nil
+}

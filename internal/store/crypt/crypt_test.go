@@ -2247,3 +2247,30 @@ func TestATokenSealedWithoutMFAFreshReadsNotFresh(t *testing.T) {
 }
 
 func kp(k Key) *Key { return &k }
+
+// revisioned stamps every candidate with a store revision, as etcd does.
+type revisioned struct{ *memory.Store }
+
+func (r revisioned) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token, error) {
+	ts, err := r.Store.Candidates(ctx, k)
+	for i := range ts {
+		ts[i].Revision = 42
+	}
+	return ts, err
+}
+
+// Revision is the store's, never sealed: the seal/open round trip must carry
+// the inner store's value through.
+func TestTheSealingLayerKeepsTheRevision(t *testing.T) {
+	s := Wrap(revisioned{memory.New(time.Now)}, keys(), nil)
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin,
+		Principal: "user:alice@example.com", Username: "alice", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || got[0].Revision != 42 {
+		t.Fatalf("Revision lost through the sealing layer: %+v %v", got, err)
+	}
+}

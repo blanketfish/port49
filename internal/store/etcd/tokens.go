@@ -29,6 +29,7 @@ func liveTokens(kvs []*mvccpb.KeyValue, now time.Time) []store.Token {
 			continue
 		}
 		t := r.token()
+		t.Revision = uint64(kv.CreateRevision)
 		t.Secret = bytes.Clone(t.Secret)
 		out = append(out, t)
 	}
@@ -55,8 +56,8 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		// The grant alone is hedged: a mint at a bucket's rollover grants,
 		// and an unhedged grant on a dark member's stalled connection fails
 		// one mint in three. The marked ctx goes to the grant only; the
-		// token's Txn is never hedged, since a second copy would write a
-		// second token.
+		// token's Txn is never hedged or re-sent, and its create-only
+		// compare makes a late copy a refused one, not a second token.
 		id, err := s.tokLeases.For(idempotent(ctx), t.ExpiresAt)
 		if err != nil {
 			return 0, unavailable(err)
@@ -65,6 +66,7 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		if err != nil {
 			return 0, err
 		}
+		cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(s.k.token(k, t.ID)), "=", 0))
 		ops = append([]clientv3.Op{clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id))}, ops...)
 		ops = append(ops, clientv3.OpGet(s.k.tokens(k), clientv3.WithPrefix()))
 		if beforeTokenTxn != nil {
@@ -79,7 +81,14 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		if err != nil {
 			return 0, unavailable(err)
 		}
-		if !resp.Succeeded { // an index entry moved since it was read: read it again
+		if !resp.Succeeded {
+			// The ID is taken, or an index entry moved since it was read. Taken
+			// is final: the same ID is never written twice.
+			if got, err := s.tok.Get(ctx, s.k.token(k, t.ID), clientv3.WithCountOnly()); err != nil {
+				return 0, unavailable(err)
+			} else if got.Count > 0 {
+				return 0, fmt.Errorf("%w: token %q already exists", store.ErrConflict, t.ID)
+			}
 			lost++
 			if err := casBackoff(ctx, lost); err != nil {
 				return 0, unavailable(err)

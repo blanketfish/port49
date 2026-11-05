@@ -69,3 +69,65 @@ func TestLatestTokenExpiryCountsOnlyTokensMintedByTheCutoff(t *testing.T) {
 		t.Fatalf("cutoff before every mint: %v %v", got, err)
 	}
 }
+
+// A candidate carries the revision its record was created at: the restore
+// guard's fence (pre-beta Task 2).
+func TestCandidatesCarryTheTokensCreateRevision(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	s := onShared(t, func() time.Time { return now })
+	k := store.TokenKey{NAS: "leaf", Username: "alice"}
+	for _, id := range []string{"t1", "t2"} {
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Kind: store.KindLogin, ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("candidates: %v %v", got, err)
+	}
+	byID := map[string]uint64{}
+	for _, c := range got {
+		resp, err := s.tok.Get(ctx, s.k.token(k, c.ID))
+		if err != nil || len(resp.Kvs) != 1 {
+			t.Fatalf("raw read of %s: %v", c.ID, err)
+		}
+		if c.Revision == 0 || c.Revision != uint64(resp.Kvs[0].CreateRevision) {
+			t.Fatalf("%s: Revision %d, want create revision %d", c.ID, c.Revision, resp.Kvs[0].CreateRevision)
+		}
+		byID[c.ID] = c.Revision
+	}
+	if byID["t2"] <= byID["t1"] {
+		t.Fatalf("the later put's revision %d is not above the earlier's %d", byID["t2"], byID["t1"])
+	}
+}
+
+// A put over a key that exists is refused and writes nothing: the Txn is
+// never hedged, and a late copy of it is a refused one, not a second token.
+func TestAPutOverAnExistingTokenKeyFailsAndWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	s := onShared(t, func() time.Time { return now })
+	k := store.TokenKey{NAS: "leaf", Username: "alice"}
+	key := s.k.token(k, "dup")
+	const first = `{"id":"dup","kind":"login","expires_at":"2026-11-02T10:00:00Z"}`
+	calls := 0
+	beforeTokenTxn = func(ctx context.Context) {
+		calls++
+		if _, err := s.tok.Put(ctx, key, first); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeTokenTxn = nil })
+	_, err := s.PutToken(ctx, k, store.Token{ID: "dup", Kind: store.KindLogin, Principal: "late", ExpiresAt: now.Add(time.Hour)})
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("PutToken over an existing key: %v, want ErrConflict", err)
+	}
+	if calls != 1 {
+		t.Fatalf("the put tried %d times, want 1", calls)
+	}
+	resp, err := s.tok.Get(ctx, key)
+	if err != nil || len(resp.Kvs) != 1 || string(resp.Kvs[0].Value) != first {
+		t.Fatalf("the key was overwritten: %v %v", resp, err)
+	}
+}

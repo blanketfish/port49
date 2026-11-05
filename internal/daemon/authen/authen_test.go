@@ -393,6 +393,9 @@ func (noStore) DeleteToken(context.Context, store.TokenKey, string) error {
 func (noStore) PurgeTokens(context.Context) (int, error) {
 	panic("store called")
 }
+func (noStore) PurgeOnceRecords(context.Context) (int, error) {
+	panic("store called")
+}
 func (noStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, error) {
 	panic("store called")
 }
