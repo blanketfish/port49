@@ -311,6 +311,11 @@ spool directory were unchanged (65532:65532, 0700 and 0600), and a mint and a lo
 measurement used file-system backup because kind has no snapshot-capable CSI driver; CSI snapshots are
 not measured here.
 
+- **Restore with the pods running, never with the StatefulSets at 0 replicas.** Velero's file-system
+  restore copies a volume through the pod that mounts it; restored at 0 replicas, the restore stayed
+  `InProgress` past 8 minutes with every pod volume restore `New` and its pod absent (L89 cell (c), run
+  42053716808). `examples/velero/README.md` has the order (etcd held down while the pods run, then both
+  StatefulSets scaled to 0) and the recovery from a restore at 0 replicas.
 - **The backup holds the issuing CA's private key** (`state/issuing-ca.key`), each broker's state and the
   accounting spool. **The bucket alone also holds the namespaces' Secrets**, unencrypted by Velero: the
   TACACS+ keys, the store's encryption key, the etcd CA and client identities and the TLS key. The

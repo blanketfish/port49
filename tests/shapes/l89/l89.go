@@ -28,8 +28,8 @@ func title(id string) string {
 	return map[string]string{
 		"a": "(a) back up both StatefulSets, delete the namespace, restore: ownership, mode, readiness, the CA",
 		"b": "(b) after the restore, a mint and a login",
-		"c": "(c) the README's restore order (StatefulSets restored at 0 replicas): volumes, the CA, marks.json, the spool",
-		"d": "(d) the README's fallback order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool",
+		"c": "(c) a restore with both StatefulSets at 0 replicas (the order the README measured hanging): volumes, the CA, marks.json, the spool",
+		"d": "(d) the README's restore order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool",
 	}[id]
 }
 
@@ -464,14 +464,13 @@ func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[
 		return nil, fmt.Errorf("l89: the README's commands name the namespace port49, not %q", ns)
 	}
 	repl := map[string]map[string]string{
-		"etcdrestore":     {"<backup>": backup, etcdNamespace: ns},
-		"deletejob":       {etcdNamespace: ns},
-		"restorezero":     {"<restore>": restore, "<backup>": backup},
-		"volumes":         {"<restore>": restore},
-		"revoke":          {"<release>": release},
-		"scaleup":         {"<release>": release, "<brokers>": fmt.Sprint(brokers), "<port49d>": fmt.Sprint(port49d)},
-		"fallbackrestore": {"<restore>": restore, "<backup>": backup},
-		"fallbackzero":    {"<release>": release},
+		"etcdrestore": {"<backup>": backup, etcdNamespace: ns},
+		"deletejob":   {etcdNamespace: ns},
+		"volumes":     {"<restore>": restore},
+		"revoke":      {"<release>": release},
+		"scaleup":     {"<release>": release, "<brokers>": fmt.Sprint(brokers), "<port49d>": fmt.Sprint(port49d)},
+		"restore":     {"<restore>": restore, "<backup>": backup},
+		"scalezero":   {"<release>": release},
 	}
 	out := map[string]string{}
 	for name, r := range repl {
@@ -484,6 +483,12 @@ func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[
 		}
 		out[name] = cmd
 	}
+	// (c)'s restore at 0 replicas, which the README no longer holds: the lab's input, ZeroReplicaRestore
+	zero, err := Subst(ZeroReplicaRestore, map[string]string{"<restore>": restore, "<backup>": backup})
+	if err != nil {
+		return nil, fmt.Errorf("restorezero: %w", err)
+	}
+	out["restorezero"] = zero
 	// step 1's wait for etcd, alone: the lab's etcd is restored with the release, so the restore line is
 	// folded and only the wait is run
 	for _, ln := range strings.Split(out["etcdrestore"], "\n") {
@@ -495,6 +500,24 @@ func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[
 		return nil, fmt.Errorf("l89: step 1 has no kubectl wait for etcd")
 	}
 	return out, nil
+}
+
+// ZeroReplicaRestore is cell (c)'s restore: the order the Velero README once gave, both StatefulSets
+// restored at 0 replicas by the resource modifier in testdata/restore-scale-zero.yaml. L89 cell (c), run
+// 42053716808, measured it hanging, and the README dropped it; (c) runs it as the measured negative.
+const ZeroReplicaRestore = `kubectl -n velero create configmap restore-scale-zero --from-file=restore-scale-zero.yaml
+velero restore create <restore> --from-backup <backup> --include-namespaces port49 \
+  --resource-modifier-configmap restore-scale-zero --wait
+`
+
+// Recover is the README's recovery from a restore at 0 replicas (the marker "recover"), for the stuck
+// restore named stuck.
+func Recover(doc, stuck string) (string, error) {
+	cmd, err := Command(doc, "recover")
+	if err != nil {
+		return "", err
+	}
+	return Subst(cmd, map[string]string{"<restore>": stuck})
 }
 
 // Subst replaces each key of repl in a README command. A key the command does not hold is an error, so
@@ -514,7 +537,7 @@ func Subst(cmd string, repl map[string]string) (string, error) {
 	return cmd, nil
 }
 
-// shippedModifier is the rule's conditions in restore-scale-zero.yaml. The kind lab runs etcd in the
+// shippedModifier is the rule's conditions in testdata/restore-scale-zero.yaml. The kind lab runs etcd in the
 // release's namespace, where the rule would also scale etcd to 0; LabModifier limits it to the release's
 // two StatefulSets (named t-broker and t-port49d there), so the README's order is otherwise run as written.
 const shippedModifier = "      groupResource: statefulsets.apps\n"

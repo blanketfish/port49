@@ -952,7 +952,7 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"etcdrestore", "deletejob", "restorezero", "volumes", "revoke", "scaleup", "fallbackrestore", "fallbackzero"} {
+	for _, name := range []string{"etcdrestore", "deletejob", "restorezero", "volumes", "revoke", "scaleup", "restore", "scalezero"} {
 		cmd := steps[name]
 		if cmd == "" {
 			t.Errorf("no %s step", name)
@@ -968,16 +968,76 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 		t.Errorf("the volume check does not list the named restore's pod volume restores:\n%s", steps["volumes"])
 	}
 	// m1r4: both restores the check can follow are made under the name the check reads
-	for _, name := range []string{"restorezero", "fallbackrestore"} {
+	for _, name := range []string{"restorezero", "restore"} {
 		if !strings.Contains(steps[name], "velero restore create l89-restore-c --from-backup l89-backup") {
 			t.Errorf("%s does not name its restore:\n%s", name, steps[name])
 		}
 	}
-	if !strings.Contains(steps["fallbackzero"], "--replicas=0") || !strings.Contains(steps["fallbackzero"], "--for=delete") {
-		t.Errorf("the fallback's scale to 0 does not wait for the pods to go:\n%s", steps["fallbackzero"])
+	if !strings.Contains(steps["scalezero"], "--replicas=0") || !strings.Contains(steps["scalezero"], "--for=delete") {
+		t.Errorf("the scale to 0 does not wait for the pods to go:\n%s", steps["scalezero"])
+	}
+	if strings.Contains(steps["restore"], "resource-modifier") || !strings.Contains(steps["restorezero"], "--resource-modifier-configmap restore-scale-zero") {
+		t.Errorf("the README's restore holds a resource modifier, or (c)'s lacks it:\n%s\n%s", steps["restore"], steps["restorezero"])
+	}
+	if strings.Contains(steps["restorezero"], "\\\\") || !strings.Contains(steps["restorezero"], "port49 \\\n  --resource-modifier") {
+		t.Errorf("(c)'s restore does not continue its line with one backslash:\n%s", steps["restorezero"])
 	}
 	if _, err := Steps(string(b), "other", "t", "l89-backup", "r", 2, 2); err == nil {
 		t.Error("a namespace the README's port49 commands do not name is accepted")
+	}
+}
+
+// Run 42053716808: L89 (c) measured the restore at 0 replicas hanging (InProgress past 8m, every pod
+// volume restore New, its pod absent), so the README restores with the pods running, then scales to 0,
+// and says how to recover from the old order; the resource modifier is only (c)'s input now.
+func TestTheREADMEsOrderRestoresWithThePodsRunning(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero")
+	b, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(b)
+	for _, gone := range []string{"--resource-modifier-configmap", "fallback order", "l89:restorezero", "l89:fallback"} {
+		if strings.Contains(doc, gone) {
+			t.Errorf("the README still holds %q", gone)
+		}
+	}
+	for _, want := range []string{"L89 cell (c), run 42053716808", "restore-scale-zero"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the README does not say %q (the measured hang, and the file an operator may have used)", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "restore-scale-zero.yaml")); !os.IsNotExist(err) {
+		t.Errorf("restore-scale-zero.yaml is still shipped: %v", err)
+	}
+	// the main order, by its markers: the token delete, the restore with the pods running, the check, the
+	// scale to 0, the revocations, the scale-up
+	last := -1
+	for _, m := range []string{"etcdrestore", "deletejob", "restore", "volumes", "scalezero", "revoke", "scaleup", "recover"} {
+		at := strings.Index(doc, "<!-- l89:"+m+":begin -->")
+		if at < 0 || at < last {
+			t.Errorf("the marker %s is missing or out of order (%d after %d)", m, at, last)
+		}
+		last = at
+	}
+	rec, err := Recover(doc, "l89-restore-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"rollout restart deployment/velero", "rollout status deployment/velero --timeout=", "velero restore delete l89-restore-c --confirm", "wait --for=delete restore/l89-restore-c --timeout="} {
+		if !strings.Contains(rec, want) {
+			t.Errorf("the recovery lacks %q:\n%s", want, rec)
+		}
+	}
+	if strings.ContainsAny(rec, "<>") {
+		t.Errorf("the recovery keeps a placeholder:\n%s", rec)
+	}
+	sum, err := READMETimeouts(rec)
+	if err != nil || StepBounds["recover"] < sum+BoundSlack {
+		t.Errorf("the recovery's bound %v does not cover its timeouts %v (%v)", StepBounds["recover"], sum, err)
+	}
+	if _, err := Recover("no markers\n", "x"); err == nil {
+		t.Error("a README without the recovery is accepted")
 	}
 }
 
@@ -1013,7 +1073,7 @@ func TestSubstAndLabModifier(t *testing.T) {
 	if _, err := Subst("a b", map[string]string{"<x>": "1"}); err == nil {
 		t.Error("Subst accepts a placeholder the command lacks")
 	}
-	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "restore-scale-zero.yaml"))
+	b, err := os.ReadFile(filepath.Join("testdata", "restore-scale-zero.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -140,14 +140,15 @@ func l89MarksText(m map[string][]l89.Mark) string {
 // l89.Steps), after the namespace is deleted once more and the backup of cell (a) is restored.
 //
 // The lab's etcd shares the release's namespace, so the README's step 1 (etcd alone, in its own namespace)
-// cannot be run apart from the rest: (c) restores the namespace once, with the README's resource modifier
-// limited to the release's two StatefulSets, and waits for etcd as step 1 does. (d), the fallback, runs
-// the fallback's restore of port49, which in the one namespace restores etcd too, with the pods running
-// (so the node agent can restore their volumes), then the fallback's scale to 0, before the token delete.
-// Both run the README's volume check on their named restore, and stop as it says when a volume did not
-// come back. Then, with both StatefulSets at 0, the files cell (a) hashed and the marks it read are
-// compared, and the README's token delete, revoke-offline.sh and scale-up run; after them the CA is the
-// one it was and no broker started a fresh copy of the marks.
+// cannot be run apart from the rest. (c) restores the namespace once at 0 replicas, with the resource
+// modifier the README once shipped (now the lab's input, limited to the release's two StatefulSets), and
+// waits for etcd as step 1 does. (d), the README's order, first runs the README's recovery from (c)'s
+// restore when it is there, then its restore of port49, which in the one namespace restores etcd too,
+// with the pods running (so the node agent can restore their volumes), then its scale to 0, before the
+// token delete. Both run the README's volume check on their named restore, and stop as it says when a
+// volume did not come back. Then, with both StatefulSets at 0, the files cell (a) hashed and the marks it
+// read are compared, and the README's token delete, revoke-offline.sh and scale-up run; after them the CA
+// is the one cell (a) read before the backup and no broker started a fresh copy of the marks.
 //
 // A README command that fails, or a check that does not hold, is a measured FAIL; the row names the
 // failed command (l89.FailedCommand). A failure of the harness's own setup (a kubectl call of its own, a
@@ -192,7 +193,8 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if err != nil {
 		r.setupFail(t, cell, "%v", err)
 	}
-	mod, err := os.ReadFile(filepath.Join(example, "restore-scale-zero.yaml"))
+	// (c)'s resource modifier, which the README no longer ships (run 42053716808 measured it hanging)
+	mod, err := os.ReadFile(filepath.Join(kindtest.Root(), "tests", "shapes", "l89", "testdata", "restore-scale-zero.yaml"))
 	if err != nil {
 		r.setupFail(t, cell, "%v", err)
 	}
@@ -235,7 +237,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 			t.Fatalf("%s: stopped at the cell's end, after %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
 		case timedOut:
 			l82Row(cell, what+": did not end within the harness's own bound of "+within.Round(time.Second).String()+", not a measurement", "it was in: "+l89.RunningCommand(out))
-			if step == "restorezero" || step == "fallbackrestore" {
+			if step == "restorezero" || step == "restore" {
 				r.hung(t, cell, dir, env, restore)
 			}
 			t.Fatalf("%s: did not end within the harness's bound of %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
@@ -253,9 +255,35 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		t.FailNow()
 	}
 
-	_, fpBefore := r.snapshot()
+	// the CA cell (a) read before the backup, not the cluster's now: (c) leaves the release's volumes
+	// empty when its restore hangs, and run 42053716808's (d) stopped reading them (a broker's state/ was
+	// not there)
+	fpBefore := r.fpBefore
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
-		r.setupFail(t, cell, "the brokers do not hold one CA before the restore")
+		r.setupFail(t, cell, "cell (a) never recorded one CA for both brokers before the backup")
+	}
+
+	// (d) after (c): (c)'s restore at 0 replicas hangs (run 42053716808) and holds Velero, which restores
+	// one at a time, so (d) first runs the README's recovery from it, whatever (c) ended with
+	if fallback {
+		if _, err := c.KubectlTry("", "-n", "velero", "get", "restore", l89RestoreC); err == nil {
+			stuck := strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "restore", l89RestoreC, "-o", "jsonpath={.status.phase}"))
+			l82Row(cell, "cell (c)'s restore "+l89RestoreC+" before the recovery", "phase "+stuck)
+			rec, err := l89.Recover(string(doc), l89RestoreC)
+			if err != nil {
+				r.setupFail(t, cell, "%v", err)
+			}
+			steps["recover"] = rec
+			readme("the README's recovery from a restore at 0 replicas (on cell (c)'s restore)", work, "recover")
+			l82Row(cell, "the README's recovery from a restore at 0 replicas ran from its own text, and the restore is gone", "yes")
+			r.waitFor(t, cell, "no restore of Velero's to be New or InProgress", 2*time.Minute, func() bool {
+				out, err := c.KubectlTry("", "-n", "velero", "get", "restores", "-o", `jsonpath={range .items[*]}{.status.phase} {end}`)
+				return err == nil && !strings.Contains(out, "InProgress") && !strings.Contains(out, "New")
+			})
+			l82Row(cell, "Velero's restores after the recovery", "none New or InProgress")
+		} else {
+			l82Row(cell, "cell (c)'s restore before (d)", "none: the README's recovery was not needed")
+		}
 	}
 
 	// the README's first command: both namespaces deleted (the lab has one), and its volumes gone
@@ -267,23 +295,23 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	l82Row(cell, "the namespace was deleted", "yes, and its volumes")
 
 	if !fallback {
-		l82Row(cell, "the resource modifier as the lab runs it", "restore-scale-zero.yaml with a resourceNameRegex the lab adds (its etcd shares the namespace), so the shipped file is not run as shipped")
+		l82Row(cell, "the resource modifier as the lab runs it", "the README's former restore-scale-zero.yaml (the lab's input now) with a resourceNameRegex the lab adds (its etcd shares the namespace)")
 		r.kubectl(t, cell, "-n", "velero", "delete", "configmap", "restore-scale-zero", "--ignore-not-found")
-		readme("README step 3 (the restore with the resource modifier)", work, "restorezero")
-		l82Row(cell, "README step 3 (the restore "+restore+" with the resource modifier, both StatefulSets at 0 replicas) ran from its own text", "yes")
+		readme("the restore at 0 replicas (the README's former step 3)", work, "restorezero")
+		l82Row(cell, "the restore "+restore+" with the resource modifier, both StatefulSets at 0 replicas, ran from the README's former text", "yes")
 		readme("README step 1's wait for etcd", work, "etcdwait")
-		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by step 3's restore)", "ready")
+		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored with the release)", "ready")
 		replicas := strings.TrimSpace(r.kubectl(t, cell, "-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
 		if replicas != "0 0" {
 			measured("the two StatefulSets' replicas after the restore (the resource modifier did not apply)", replicas)
 		}
 		l82Row(cell, "the two StatefulSets' replicas after the restore", replicas)
 	} else {
-		readme("README fallback step 4 (the restore of port49)", work, "fallbackrestore")
-		l82Row(cell, "README fallback step 4 (the restore "+restore+" of port49, normally) ran from its own text", "yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2")
-		l82Row(cell, "what (d) cannot show", "that port49 pods restored while etcd is held at 0 (the README's fallback steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release")
+		readme("README step 4 (the restore of port49)", work, "restore")
+		l82Row(cell, "README step 4 (the restore "+restore+" of port49, its pods running) ran from its own text", "yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2")
+		l82Row(cell, "what (d) cannot show", "that port49 pods restored while etcd is held at 0 (the README's steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release")
 		readme("README step 1's wait for etcd", work, "etcdwait")
-		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by the fallback's restore)", "ready")
+		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored with the release)", "ready")
 	}
 
 	// the README's volume check on the named restore, once Velero has finished with the volumes
@@ -306,8 +334,8 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 
 	if fallback {
-		readme("README fallback step 6 (both StatefulSets to 0)", work, "fallbackzero")
-		l82Row(cell, "README fallback step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text", "yes")
+		readme("README step 6 (both StatefulSets to 0)", work, "scalezero")
+		l82Row(cell, "README step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text", "yes")
 	} else {
 		// a restore at 0 replicas whose pods outlive it: the README's order relies on there being none
 		var left string
@@ -338,16 +366,16 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if !complete {
 		// the README: never run step 5 while a volume is not Completed; the operator stops here, and so does the cell
 		l82SetVerdict(cell, l89.JudgeC(cs))
-		l82Row(cell, "the README says never to scale up while a volume is not Completed", "so the cell stopped before steps 2, 4 and 5, as an operator would")
+		l82Row(cell, "the README says never to go on while a volume is not Completed", "so the cell stopped before the delete Job, the revocations and the scale-up, as an operator would")
 		return
 	}
 
 	readme("README step 2 (the delete Job of design 13 step 3)", work, "deletejob")
 	l82Row(cell, "README step 2 (the delete Job of design 13 step 3) ran from its own text and completed", "yes")
-	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), "revoke")
-	l82Row(cell, "README step 4 (revoke-offline.sh) ran from its own text", "yes")
-	readme("README step 5 (the scale-up)", work, "scaleup")
-	l82Row(cell, "README step 5 (the scale-up, brokers then port49d) ran from its own text and both rolled out", "yes")
+	readme("README step 8 (revoke-offline.sh)", kindtest.Root(), "revoke")
+	l82Row(cell, "README step 8 (revoke-offline.sh) ran from its own text", "yes")
+	readme("README step 9 (the scale-up)", work, "scaleup")
+	l82Row(cell, "README step 9 (the scale-up, brokers then port49d) ran from its own text and both rolled out", "yes")
 
 	_, fpAfter := r.snapshot()
 	cs.FingerprintAfter = l89.Short(fpAfter[0])

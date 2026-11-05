@@ -43,14 +43,15 @@ func CellCap(id string) (cap, need time.Duration) {
 // A step past it is NOT RUN, unless HangCause sees the README's cause; a README timeout fails the
 // command itself, which is a measured FAIL.
 var StepBounds = map[string]time.Duration{
-	"restorezero":     8 * time.Minute, // velero --wait has no timeout of its own
-	"fallbackrestore": 8 * time.Minute,
-	"etcdwait":        6 * time.Minute,
-	"volumes":         time.Minute,
-	"fallbackzero":    4 * time.Minute,
-	"deletejob":       4 * time.Minute,
-	"revoke":          6 * time.Minute,
-	"scaleup":         22 * time.Minute, // two rollouts of 10m each
+	"restorezero": 8 * time.Minute, // velero --wait has no timeout of its own
+	"restore":     8 * time.Minute,
+	"etcdwait":    6 * time.Minute,
+	"volumes":     time.Minute,
+	"scalezero":   4 * time.Minute,
+	"recover":     12 * time.Minute, // a rollout and a wait of 5m each
+	"deletejob":   4 * time.Minute,
+	"revoke":      6 * time.Minute,
+	"scaleup":     22 * time.Minute, // two rollouts of 10m each
 }
 
 // BoundSlack is what a step's bound keeps above its README timeouts: the commands around them.

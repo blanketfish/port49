@@ -51,13 +51,22 @@ backup, so a revoked principal or certificate is admitted again until it is re-i
 every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
 `restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore: the token
 delete (design §13 step 3) is required, and it must land before port49d or a broker reaches the restored
-store. So the restore is made in this order, with nothing running against the store until the end.
+store. So the restore is made in this order, with nothing reaching the store until the end.
 
-Run steps 2 and 3 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-token-delete.yaml` and
-`restore-scale-zero.yaml`; step 4 from the repository root. `<release>` is your Helm release name, `<backup>` the Velero backup, `<brokers>` and `<port49d>` the
-`broker.replicas` and `port49d.replicas` you run, `<prefix>` the store prefix (`/port49/` by default), and
-`<restore>` a name for the restore of `port49`, new each time you make one (`port49-restore-1`, then
-`port49-restore-2` in the fallback).
+Run step 2 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-token-delete.yaml`;
+step 8 from the repository root. `<release>` is your Helm release name, `<backup>` the Velero backup,
+`<brokers>` and `<port49d>` the `broker.replicas` and `port49d.replicas` you run, `<prefix>` the store
+prefix (`/port49/` by default), and `<restore>` a name for the restore of `port49`, new each time you make
+one (`port49-restore-1`, then `port49-restore-2`).
+
+**Do not restore `port49` with its StatefulSets at 0 replicas** (a resource modifier setting
+`/spec/replicas` to 0, as the `restore-scale-zero.yaml` of earlier versions of this page did). Velero's
+file-system restore copies a volume through the pod that mounts it, and at 0 replicas there is none:
+measured on kind in L89 cell (c), run 42053716808, the restore stayed `InProgress` past 8 minutes with
+every pod volume restore at `New` and its pod absent. It does not finish. If you started one, see
+"Recovering from a restore at 0 replicas" below.
+
+So the pods run for the restore, and etcd is held down while they do, so none of them reaches the store:
 
 ```sh
 kubectl delete namespace port49 port49-etcd
@@ -85,17 +94,18 @@ kubectl -n port49-etcd delete job/restore-token-delete
 ```
 <!-- l89:deletejob:end -->
 
-3. Everything else, with both StatefulSets at 0 replicas, so no broker or port49d starts yet.
+3. Hold etcd down: `kubectl -n port49-etcd scale statefulset/etcd --replicas=0`.
+4. Restore `port49`. Its pods start, so the node agent can restore their volumes, and with etcd down they
+   cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
+   L89 (d) runs this command with its etcd up.
 
-<!-- l89:restorezero:begin -->
+<!-- l89:restore:begin -->
 ```sh
-kubectl -n velero create configmap restore-scale-zero --from-file=restore-scale-zero.yaml
-velero restore create <restore> --from-backup <backup> --include-namespaces port49 \
-  --resource-modifier-configmap restore-scale-zero --wait
+velero restore create <restore> --from-backup <backup> --include-namespaces port49 --wait
 ```
-<!-- l89:restorezero:end -->
+<!-- l89:restore:end -->
 
-   Then check that the volumes came back, by the restore's name. This prints the restore's phase, then one
+5. Check that the volumes came back, by the restore's name. This prints the restore's phase, then one
    line per pod volume restore:
 
 <!-- l89:volumes:begin -->
@@ -108,13 +118,25 @@ kubectl -n velero get podvolumerestores -l velero.io/restore-name=<restore> -o c
    The phase must be `Completed`, and there must be a `Completed` line with volume `data` for every
    broker pod (`<release>-broker-0`, `-1`, ...) and every port49d pod (`<release>-port49d-0`, ...). A
    pod with no line did not have its volume restored. A line still `New` or `InProgress` is still copying: run the
-   check again. **Never run step 5 while the restore or any of these lines is not `Completed`.** A broker
-   that starts on an empty `state_dir` puts back none of the revocations the store restore lost. If one
-   is missing or `Failed`, stop and use the fallback order below.
+   check again. **Never go on to step 7 while the restore or any of these lines is not `Completed`.** A
+   broker that starts on an empty `state_dir` puts back none of the revocations the store restore lost.
+   If one is missing or `Failed`, stop: no broker or port49d has reached the store, so start over from
+   the first command with a new `<restore>`.
+6. Scale both StatefulSets to 0, and wait until no port49 pod is left.
+
+<!-- l89:scalezero:begin -->
+```sh
+kubectl -n port49 scale statefulset/<release>-broker statefulset/<release>-port49d --replicas=0
+kubectl -n port49 wait --for=delete pod -l app.kubernetes.io/name=port49 --timeout=3m
+```
+<!-- l89:scalezero:end -->
+
+7. Bring etcd back: `kubectl -n port49-etcd scale statefulset/etcd --replicas=3`, and wait for it as
+   step 1 does.
 
 Then, with no broker and no port49d running:
 
-4. Re-issue the revocations made since the backup (design §13 step 4). The script leaves the brokers at the 0
+8. Re-issue the revocations made since the backup (design §13 step 4). The script leaves the brokers at the 0
    it finds. Run it from the repository root.
 
 <!-- l89:revoke:begin -->
@@ -123,7 +145,7 @@ deploy/helm/port49/scripts/revoke-offline.sh port49 <release> -- --principal use
 ```
 <!-- l89:revoke:end -->
 
-5. The brokers first, a broker whose `broker.state_dir` survived the restore first (the check after step 3
+9. The brokers first, a broker whose `broker.state_dir` survived the restore first (the check in step 5
    showed every broker's volume restored, so any of them does); then port49d.
 
 <!-- l89:scaleup:begin -->
@@ -135,42 +157,27 @@ kubectl -n port49 rollout status statefulset/<release>-port49d --timeout=10m
 ```
 <!-- l89:scaleup:end -->
 
-6. Lift again what was lifted since (design §13 step 6).
+10. Lift again what was lifted since (design §13 step 6).
 
-**The fallback order**, for when the check after step 3 shows a volume that did not come back. The
-suspected cause, which L89 cell (c) measures (`tests/lab/results/L89-kind.md`), is that Velero's
-file-system restore needs the pods to run, and restoring the StatefulSets at 0 replicas deletes them.
-No broker or port49d has run yet, so start over:
-
-1. Delete both namespaces again, with the first command above.
-2. Do steps 1 and 2.
-3. Hold etcd down: `kubectl -n port49-etcd scale statefulset/etcd --replicas=0`.
-4. Restore `port49` normally, under a new `<restore>` name. Its pods start, and with etcd down they
-   cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
-   L89 (d) runs this command with its etcd up.
-
-<!-- l89:fallbackrestore:begin -->
-```sh
-velero restore create <restore> --from-backup <backup> --include-namespaces port49 --wait
-```
-<!-- l89:fallbackrestore:end -->
-
-5. Run the volume check again, with this `<restore>`. Every line must be `Completed`.
-6. Scale both StatefulSets to 0, and wait until no port49 pod is left.
-
-<!-- l89:fallbackzero:begin -->
-```sh
-kubectl -n port49 scale statefulset/<release>-broker statefulset/<release>-port49d --replicas=0
-kubectl -n port49 wait --for=delete pod -l app.kubernetes.io/name=port49 --timeout=3m
-```
-<!-- l89:fallbackzero:end -->
-
-7. Bring etcd back: `kubectl -n port49-etcd scale statefulset/etcd --replicas=3`, and wait for it as
-   step 1 does.
-8. Do steps 4, 5 and 6.
-
-With the chart's `autoscaling.enabled`, the HPA does nothing while port49d is at 0 replicas and resumes once step 5
+With the chart's `autoscaling.enabled`, the HPA does nothing while port49d is at 0 replicas and resumes once step 9
 scales it up.
+
+### Recovering from a restore at 0 replicas
+
+A restore made with the StatefulSets at 0 replicas waits for pods that never start, and Velero restores
+one at a time, so it holds up every restore after it. No broker or port49d ran, so nothing reached the
+store. Restart Velero, which ends a restore it finds `InProgress` when it starts, delete that restore
+(`<restore>` here is its name), then start over from the first command above with a new `<restore>`. L89
+(d) runs this after (c)'s hung restore.
+
+<!-- l89:recover:begin -->
+```sh
+kubectl -n velero rollout restart deployment/velero
+kubectl -n velero rollout status deployment/velero --timeout=5m
+velero restore delete <restore> --confirm
+kubectl -n velero wait --for=delete restore/<restore> --timeout=5m
+```
+<!-- l89:recover:end -->
 
 Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
 as design §13 gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is

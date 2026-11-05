@@ -54,15 +54,16 @@ var l89Fence = regexp.MustCompile(`data-dir(-owner)?: |writable by its group or 
 //	    issuing CA's fingerprint unchanged; the owner, group and mode of state/, issuing-ca.key and the
 //	    spool directory are recorded before and after
 //	(b) after the restore, a mint and a login
-//	(c) the Velero README's restore order, steps run from its own text: the namespace restored with both
-//	    StatefulSets at 0 replicas (the resource modifier) and the README's volume check, a Completed pod
-//	    volume restore for each of the chart's four data volumes by name; with both StatefulSets at 0, each
-//	    broker's marks.json and CA certificate and each spool's sentinel (written by (a) before the backup)
-//	    have the sha256 they had; then the token delete, revoke-offline.sh and the scale-up, the CA
-//	    unchanged and no broker logging that it had no marks.json
-//	(d) the same checks after the README's fallback order, for when (c) fails: the pods run for the volume
-//	    restore and are scaled to 0 before the token delete (the lab's etcd shares the namespace, so it
-//	    cannot be held down apart; see the rows)
+//	(c) a restore with both StatefulSets at 0 replicas (a resource modifier), the order the Velero README
+//	    once gave and dropped when this cell measured it hanging (run 42053716808): the README's volume
+//	    check, a Completed pod volume restore for each of the chart's four data volumes by name; with both
+//	    StatefulSets at 0, each broker's marks.json and CA certificate and each spool's sentinel (written
+//	    by (a) before the backup) have the sha256 they had; then the token delete, revoke-offline.sh and
+//	    the scale-up, the CA unchanged and no broker logging that it had no marks.json
+//	(d) the same checks after the README's restore order, steps run from its own text: first the README's
+//	    recovery from (c)'s restore if it is there, then the pods run for the volume restore and are scaled
+//	    to 0 before the token delete (the lab's etcd shares the namespace, so it cannot be held down
+//	    apart; see the rows)
 //
 // The backup holds issuing-ca.key. The store's credentials and the repository key are generated per
 // run, written 0600 in the test's temp directory and handed over by file; they are never printed, never
@@ -134,8 +135,8 @@ func TestL89(t *testing.T) {
 	r.first = &cells[0]
 	r.cell(t, "a_backup_delete_restore", &cells[0], func(t *testing.T) { r.cellA(t, &cells[0]) })
 	r.cell(t, "b_mint_and_login", &cells[1], func(t *testing.T) { r.cellB(t, &cells[1]) })
-	r.cell(t, "c_readme_restore_order", &cells[2], func(t *testing.T) { r.cellOrder(t, &cells[2], false) })
-	r.cell(t, "d_readme_fallback_order", &cells[3], func(t *testing.T) { r.cellOrder(t, &cells[3], true) })
+	r.cell(t, "c_zero_replica_restore", &cells[2], func(t *testing.T) { r.cellOrder(t, &cells[2], false) })
+	r.cell(t, "d_readme_restore_order", &cells[3], func(t *testing.T) { r.cellOrder(t, &cells[3], true) })
 }
 
 // cell runs one cell as a subtest inside its budget (l89.CellCap, l89.Budget): it is NOT RUN, saying so,
@@ -239,10 +240,11 @@ type l89Run struct {
 	key       string   // the generated repository key, compared with the cluster's and never printed
 	// the sha256 of each file of l89.Hashed and each broker's marks when the backup was taken (cells c
 	// and d compare against them)
-	before  l89.Before
-	budget  l89.Budget
-	end     time.Time    // the running cell's end; zero outside a cell
-	running atomic.Value // the running cell's ID, "" between cells: what the guard's kill marks NOT RUN
+	before   l89.Before
+	budget   l89.Budget
+	end      time.Time    // the running cell's end; zero outside a cell
+	fpBefore []string     // both brokers' CA fingerprints before the backup, which cells (c) and (d) compare
+	running  atomic.Value // the running cell's ID, "" between cells: what the guard's kill marks NOT RUN
 }
 
 func l89Env(t *testing.T) *l89.Env {
@@ -739,6 +741,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	l82Row(cell, "the restore's phase", rphase)
 
 	// ready: both StatefulSets, with the time the restore of the volumes takes inside it
+	r.fpBefore = fpBefore
 	a := l89.A{FingerprintBefore: l89.Short(fpBefore[0])}
 	ready := true
 	for _, sts := range []string{"statefulset/t-broker", "statefulset/t-port49d"} {
