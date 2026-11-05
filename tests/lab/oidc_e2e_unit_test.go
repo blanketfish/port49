@@ -40,7 +40,7 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := oidcE2EFiles(files); err != nil {
+	if err := oidcE2EIssuingFiles(files); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
@@ -88,6 +88,9 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 	if h.Domain != oidc.Humans || h.Issuer != issuer || h.ClientID != kcClient || h.PrincipalClaim != oidc.ClaimEmail ||
 		len(h.PrincipalDomains) != 1 || h.PrincipalDomains[0] != "corp.example.com" || h.CAFile != filepath.Join(dir, "oidc", "idp-ca.pem") {
 		t.Errorf("the human verifier resolved to %+v", h)
+	}
+	if id.Issuance == nil {
+		t.Error("the end to end's broker does not issue: a person's ID token mints nowhere else")
 	}
 	if m.Domain != oidc.Machines || m.Issuer != issuer || m.Audience != "api://port49-svc" || len(m.Clients) != 1 ||
 		m.Clients[0].ClientID != "port49-svc" || m.Clients[0].Sub != kcServiceAccountID {

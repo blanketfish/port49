@@ -3,10 +3,14 @@
 package lab
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -24,15 +28,17 @@ import (
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
-const oidcE2EClaim = "A person who logs in at Keycloak mints a token from the broker with the ID token as a bearer " +
-	"and logs in to the device with it; a logout at Keycloak reaches the broker by back-channel and the open " +
-	"session's next command is denied credential_revoked; a new login once clock_skew has passed works (an immediate one is refused, for the sub record every Keycloak logout writes); a prompt=login refresh " +
-	"answering the broker's challenge extends the open session from the fresh auth_time, while a plain SSO login " +
-	"answering one is refused refresh_not_fresh; and a client-credentials token of the listed client mints for " +
-	"the machine subject (plan 7h Task 16; policy engine spec §14); Keycloak's admin sign-out of a user holding two " +
-	"sessions sends one logout token naming one session and the subject, and the broker ends both sessions (ruling 13, " +
-	"spec §5.1.4); and a burst of eight back-channel logouts, one per session ended back to back, all reach the broker and " +
-	"all apply, none lost to a reused connection (plan 7h final review F1)."
+const oidcE2EClaim = "A person who logs in at Keycloak exchanges the ID token for a certificate at POST /v1/certificate " +
+	"(a person's ID token is no caller's credential, decision 56 ruling 4), mints a token from the broker with that " +
+	"certificate and logs in to the device with it; a logout at Keycloak reaches the broker by back-channel and the " +
+	"open session's next command is denied credential_revoked; a new login once clock_skew has passed works (an " +
+	"immediate one is refused, for the sub record every Keycloak logout writes); and a client-credentials token of the " +
+	"listed client mints for the machine subject (plan 7h Task 16; policy engine spec §14); Keycloak's admin sign-out " +
+	"of a user holding two sessions sends one logout token naming one session and the subject, and the broker ends both " +
+	"sessions (ruling 13, spec §5.1.4); and a burst of eight back-channel logouts, one per session ended back to back, " +
+	"all reach the broker and all apply, none lost to a reused connection (plan 7h final review F1). The refresh of an " +
+	"open session by a prompt=login ID token at POST /v1/refresh is retired with the bearer refresh; the certificate's " +
+	"refresh is L56's."
 
 const (
 	// oidcAlice is the realm's person, and the device username her subject names.
@@ -94,6 +100,20 @@ func oidcE2EFiles(files map[string]string) error {
 		}
 		files["policy.yaml"] = strings.Replace(files["policy.yaml"], add.key, add.key+add.entries, 1)
 	}
+	return nil
+}
+
+// oidcE2EIssuingFiles is oidcE2EFiles with the broker issuing: a person's ID
+// token is exchanged for a certificate, the one credential a person mints with.
+func oidcE2EIssuingFiles(files map[string]string) error {
+	if err := oidcE2EFiles(files); err != nil {
+		return err
+	}
+	b := files["port49-broker.yaml"]
+	if !strings.Contains(b, "  identity:\n") {
+		return fmt.Errorf("port49-broker.yaml has no identity to add issuance to")
+	}
+	files["port49-broker.yaml"] = strings.Replace(b, "  identity:\n", "  identity:\n    issuance: {}\n", 1)
 	return nil
 }
 
@@ -178,7 +198,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := l.startComposeWith(t, composeOptions{Overlay: "oidc.yaml", Files: oidcE2EFiles, Prepare: func(c *composeStack) error {
+	c := l.startComposeWith(t, composeOptions{Overlay: "oidc.yaml", Files: oidcE2EIssuingFiles, Prepare: func(c *composeStack) error {
 		brokerCA, err := os.ReadFile(filepath.Join(root, slicePKIDir, testpki.LabCA))
 		if err != nil {
 			return err
@@ -217,13 +237,27 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	kc.SetLogoutURL(t, oidcBrokerLogout)
 	br := oidcBroker{c: brokerClient(t), kc: kc, base: sliceBrokerURL}
 
-	// ---- 1. Log in at Keycloak, mint with the ID token, log in to the device.
-	// The first mint retries while the broker's key set has not yet fetched
-	// Keycloak's keys (pre-flight I-9), and while the broker's start gate
-	// holds mints until its first takeover (decision 36).
-	first := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
-	tok, said := br.mintRetry(t, first.IDToken, l.p.node, 3*time.Minute)
-	cell("1a. Keycloak login, POST /v1/tokens with the ID token as bearer", said)
+	// The broker issues, and has no issuing CA until one is made (as in L56):
+	// make it and restart, before any person signs in.
+	if out, err := c.run("run", "--rm", "--no-deps", "port49-broker", "init-issuer"); err != nil || !strings.Contains(out, "created the issuing CA") {
+		t.Fatalf("INVALID: port49-broker init-issuer: %v: %s", err, oneLineMax(out, 300))
+	}
+	if _, err := c.run("restart", "port49-broker"); err != nil {
+		t.Fatalf("INVALID: restarting the broker: %v", err)
+	}
+
+	// ---- 1. Log in at Keycloak with a nonce bound to a fresh key, exchange the
+	// ID token for a certificate, mint with the certificate, log in to the
+	// device. The exchange and the first mint retry while the broker's key set
+	// has not yet fetched Keycloak's keys (pre-flight I-9), and while the
+	// broker's start gate holds requests until its first takeover (decision 36).
+	first, h1, exchanged := br.signIn(t, oidcAlice, oidcAlicePassword, 3*time.Minute)
+	cell("1a. Keycloak login with a nonce bound to a fresh key, POST /v1/certificate with the ID token as bearer", exchanged)
+	if h1 == nil {
+		t.Fatalf("INVALID: the first exchange gave no certificate: %s", exchanged)
+	}
+	tok, said := retryMint(func() (string, string) { return br.mintAs(t, h1, l.p.node) }, 3*time.Minute, 10*time.Second)
+	cell("1b. POST /v1/tokens by the issued certificate", said)
 	if tok == "" {
 		t.Fatalf("INVALID: the first mint gave no token: %s", said)
 	}
@@ -233,7 +267,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	}
 	defer sh.Close()
 	r := l.runPermitted(sh, "show version", 20*time.Second)
-	cell("1b. SSH as alice with the token, `show version`", r.cell)
+	cell("1c. SSH as alice with the token, `show version`", r.cell)
 	if !r.permitted {
 		// Every later step rests on this session; record it and stop.
 		fail("the first command: %s", r.cell)
@@ -284,17 +318,10 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	if denied.permitted || verdict != "deny" || reason != "credential_revoked" {
 		fail("the session's command after the logout: %s; port49d %s %s", denied.cell, verdict, reason)
 	}
-	// The ID token lives 300s and the steps above may have used most of it: an
-	// expired token is refused for its expiry, which says nothing of the logout
-	// (Task 16 review M1).
-	if idTokenExpired(first.IDToken, time.Now(), 10*time.Second) {
-		cell("2c. the ended session's ID token mints again", "not measured: the ID token had expired")
-	} else {
-		_, again := br.mint(t, first.IDToken, l.p.node)
-		cell("2c. the ended session's ID token mints again", again)
-		if !saidRevoked(again) {
-			fail("the ended session's ID token minted again: %s", again)
-		}
+	_, again := br.mintAs(t, h1, l.p.node)
+	cell("2c. the ended session's certificate mints again", again)
+	if !saidRevoked(again) {
+		fail("the ended session's certificate minted again: %s", again)
 	}
 
 	// ---- 3. A new login once clock_skew has passed works, and opens a live
@@ -303,17 +330,22 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	// (ruling 13 B) that refuses an ID token issued within clock_skew of the
 	// logout: 3- records what an immediate re-login is told, then 3a waits it out.
 	kc.HTTP = keycloakClient(idpCA) // a fresh browser
-	soon := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
-	_, saidSoon := br.mint(t, soon.IDToken, l.p.node)
-	cell("3-. a new Keycloak login at once after the logout, a new mint", saidSoon)
+	_, hSoon, saidSoon := br.signIn(t, oidcAlice, oidcAlicePassword, 0)
+	if hSoon != nil { // the exchange was let through: the mint is where the sub record refuses
+		_, saidSoon = br.mintAs(t, hSoon, l.p.node)
+	}
+	cell("3-. a new Keycloak login at once after the logout, its exchange and a new mint", saidSoon)
 	if !saidRevoked(saidSoon) {
 		fail("a login at once after the logout was not refused credential_revoked: %s", saidSoon)
 	}
 	time.Sleep(time.Until(loginAgainAt(endedAt)))
 	kc.HTTP = keycloakClient(idpCA)
-	second := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
-	tok2, said2 := br.mint(t, second.IDToken, l.p.node)
-	cell("3a. a new Keycloak login after clock_skew, a new mint", said2)
+	_, h2, exchanged2 := br.signIn(t, oidcAlice, oidcAlicePassword, 0)
+	if h2 == nil {
+		t.Fatalf("INVALID: a login after the logout and clock_skew was given no certificate: %s", exchanged2)
+	}
+	tok2, said2 := br.mintAs(t, h2, l.p.node)
+	cell("3a. a new Keycloak login after clock_skew, its exchange and a new mint", said2)
 	if tok2 == "" {
 		t.Fatalf("INVALID: a login after the logout and clock_skew minted nothing: %s", said2)
 	}
@@ -330,52 +362,13 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 		return
 	}
 
-	// ---- 4b. A plain SSO login answering a challenge is not fresh: Keycloak
-	// does not authenticate again without prompt=login, so its auth_time
-	// predates the challenge by more than clock_skew (75s after step 3a) and
-	// the broker refuses it (Ruling 15; pre-flight I-10).
-	time.Sleep(75 * time.Second)
-	stale := br.challenge(t, second.IDToken)
-	sso := kc.Login(t, oidcAlice, oidcAlicePassword, url.Values{"nonce": {stale}})
-	code, body := br.post("/v1/refresh", sso.IDToken, "{}")
-	_, rsaid := refreshSaid(code, body, kc.known())
-	cell("4b. a challenge, a plain SSO login with its nonce, `POST /v1/refresh`",
-		fmt.Sprintf("password asked: %v; %s", sso.SawLoginForm, rsaid))
-	if code != 401 || !strings.Contains(rsaid, "refresh_not_fresh") {
-		fail("a refresh the provider did not re-authenticate: %s", rsaid)
-	}
-
-	// ---- 4. A prompt=login refresh answering the broker's challenge extends
-	// the open session from the fresh auth_time.
-	time.Sleep(11 * time.Second) // one challenge per principal per 10s
-	nonce := br.challenge(t, second.IDToken)
-	fresh := kc.Login(t, oidcAlice, oidcAlicePassword, url.Values{"prompt": {"login"}, "nonce": {nonce}})
-	code, body = br.post("/v1/refresh", fresh.IDToken, "{}")
-	refreshed, rsaid := refreshSaid(code, body, kc.known())
-	cell("4. `POST /v1/refresh/challenge`, a prompt=login login with its nonce, `POST /v1/refresh`",
-		fmt.Sprintf("password asked: %v; %s", fresh.SawLoginForm, rsaid))
-	_, fc := claimsOf(fresh.IDToken)
-	at, _ := fc["auth_time"].(float64)
-	extended := 0
-	for _, s := range refreshed.Sessions {
-		if s.Outcome == "extended" && s.Device == l.p.node && s.Username == oidcAlice {
-			extended++
-		}
-	}
-	switch {
-	case code != 200:
-		fail("the OIDC refresh: %s", rsaid)
-	case extended < 1:
-		fail("the OIDC refresh extended no session: %s", rsaid)
-	case refreshed.AuthTime != time.Unix(int64(at), 0).UTC().Format(time.RFC3339):
-		fail("the refresh's auth_time %s is not the fresh token's %s", refreshed.AuthTime,
-			time.Unix(int64(at), 0).UTC().Format(time.RFC3339))
-	}
-	after := l.runPermitted(sh2, "show version", 20*time.Second)
-	cell("4a. the extended session's next `show version`", after.cell)
-	if !after.permitted {
-		fail("the extended session's next command: %s", after.cell)
-	}
+	// ---- 4. Retired. The refresh of an open session by a prompt=login ID token
+	// at POST /v1/refresh (and its refusal of a plain SSO login, refresh_not_fresh)
+	// went with the bearer refresh: a person's ID token is no caller's credential
+	// (decision 56 ruling 4). The certificate's refresh, signed on the held
+	// connection, is measured by L56.
+	cell("4, 4b, 4a. a prompt=login ID token at POST /v1/refresh", "not measured: retired with the bearer refresh "+
+		"(decision 56 ruling 4); the certificate's refresh is L56's")
 
 	// ---- 5. A machine mints with a client-credentials token of its listed
 	// client, whose sub is the pinned service account (Ruling 21).
@@ -392,24 +385,28 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	// exactly the two sessions made here.
 	bobID := kc.UserID(t, oidcBob)
 	var pairIDs, pairSids []string
+	var pairHolders []*oidcHolder
 	for i := 1; i <= 2; i++ {
 		kc.HTTP = keycloakClient(idpCA) // a fresh browser: a session of its own
-		lg := kc.Login(t, oidcBob, oidcBobPassword, nil)
+		lg, h, ex := br.signIn(t, oidcBob, oidcBobPassword, 0)
+		if h == nil {
+			t.Fatalf("INVALID: session %d of 2 was given no certificate: %s", i, ex)
+		}
 		sid := sidOf(lg.IDToken)
 		kc.know(sid)
 		if sid == "" {
 			t.Fatalf("INVALID: session %d of 2 has an ID token with no sid", i)
 		}
-		if tk, said := br.mint(t, lg.IDToken, l.p.node); tk == "" {
+		if tk, said := br.mintAs(t, h, l.p.node); tk == "" {
 			t.Fatalf("%s", mintFault(fmt.Sprintf("session %d of 2", i), said))
 		}
-		pairIDs, pairSids = append(pairIDs, lg.IDToken), append(pairSids, sid)
+		pairIDs, pairSids, pairHolders = append(pairIDs, lg.IDToken), append(pairSids, sid), append(pairHolders, h)
 	}
 	if pairSids[0] == pairSids[1] {
 		t.Fatalf("INVALID: the two logins share one sid")
 	}
 	bobSub := subOf(pairIDs[0])
-	cell("6a. two fresh Keycloak logins as bob, a mint with each ID token", "both minted; two different sids")
+	cell("6a. two fresh Keycloak logins as bob, a certificate for each and a mint with it", "both minted; two different sids")
 	since := time.Now().UTC().Format(time.RFC3339)
 	boff, errOff, mBefore := fileSize(c.brokerLog), fileSize(c.brokerErr), oidcBrokerMetrics()
 	kc.LogoutUser(t, bobID)
@@ -452,15 +449,11 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 				"within 30s (%d revoke records)", oidcLogoutOrigin, len(reasonsOf(recs, "revoke"))))
 		fail("the sign-out of a user holding two sessions left no revoke by sid then by sub within 30s")
 	}
-	for i, id := range pairIDs {
-		if idTokenExpired(id, time.Now(), 10*time.Second) {
-			cell(fmt.Sprintf("6c. session %d of 2's ID token mints again", i+1), "not measured: the ID token had expired")
-			continue
-		}
-		tk, again := br.mint(t, id, l.p.node)
-		cell(fmt.Sprintf("6c. session %d of 2's ID token mints again", i+1), again)
+	for i, h := range pairHolders {
+		tk, again := br.mintAs(t, h, l.p.node)
+		cell(fmt.Sprintf("6c. session %d of 2's certificate mints again", i+1), again)
 		if tk != "" || !saidRevoked(again) {
-			fail("session %d of 2's ID token minted after the sign-out of its user: %s", i+1, again)
+			fail("session %d of 2's certificate minted after the sign-out of its user: %s", i+1, again)
 		}
 	}
 	// 6e recounts after 6c, so a late record is not missed; a count of 1 does
@@ -485,21 +478,25 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	// user is carol: an empty token key (device, username), so the eight mints
 	// fit token.candidate_cap, and a sub of her own that no earlier logout marked.
 	const burst = 8
-	var burstIDs, burstSids []string
+	var burstHolders []*oidcHolder
+	var burstSids []string
 	for i := 1; i <= burst; i++ {
 		kc.HTTP = keycloakClient(idpCA)
-		lg := kc.Login(t, oidcCarol, oidcCarolPassword, nil)
+		lg, h, ex := br.signIn(t, oidcCarol, oidcCarolPassword, 0)
+		if h == nil {
+			t.Fatalf("INVALID: burst session %d of %d was given no certificate: %s", i, burst, ex)
+		}
 		sid := sidOf(lg.IDToken)
 		kc.know(sid)
 		if sid == "" {
 			t.Fatalf("INVALID: burst session %d of %d has an ID token with no sid", i, burst)
 		}
-		if tk, said := br.mint(t, lg.IDToken, l.p.node); tk == "" {
+		if tk, said := br.mintAs(t, h, l.p.node); tk == "" {
 			t.Fatalf("%s", mintFault(fmt.Sprintf("burst session %d of %d", i, burst), said))
 		}
-		burstIDs, burstSids = append(burstIDs, lg.IDToken), append(burstSids, sid)
+		burstHolders, burstSids = append(burstHolders, h), append(burstSids, sid)
 	}
-	cell("7a. eight fresh Keycloak logins as carol, a mint with each ID token", "all eight minted")
+	cell("7a. eight fresh Keycloak logins as carol, a certificate for each and a mint with it", "all eight minted")
 	kc.HTTP = keycloakClient(idpCA)
 	adminTok := kc.Admin(t)
 	before := oidcBrokerMetrics()
@@ -542,16 +539,12 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 			fail("of %d back-to-back back-channel logouts, %.0f were answered and %.0f applied or found nothing to end", burst, total, applied+nothing)
 		}
 	}
-	for i, id := range burstIDs {
-		name := fmt.Sprintf("7d. burst session %d of %d's ID token mints again (refused by any one logout's sub record)", i+1, burst)
-		if idTokenExpired(id, time.Now(), 10*time.Second) {
-			cell(name, "not measured: the ID token had expired")
-			continue
-		}
-		tk, again := br.mint(t, id, l.p.node)
+	for i, h := range burstHolders {
+		name := fmt.Sprintf("7d. burst session %d of %d's certificate mints again (refused by its session's logout)", i+1, burst)
+		tk, again := br.mintAs(t, h, l.p.node)
 		cell(name, again)
 		if tk != "" || !saidRevoked(again) {
-			fail("burst session %d of %d's ID token minted after its session ended: %s", i+1, burst, again)
+			fail("burst session %d of %d's certificate minted after its session ended: %s", i+1, burst, again)
 		}
 	}
 	oidcDeliveryCell(c, kc, since, cell, fail, "7e")
@@ -813,7 +806,10 @@ func jsonCell(v map[string]any) string {
 }
 
 // brokerClient trusts the compose stack's broker certificate.
-func brokerClient(t *testing.T) *http.Client {
+func brokerClient(t *testing.T) *http.Client { return brokerClientWith(t, nil) }
+
+// brokerClientWith is brokerClient presenting cert when it is given.
+func brokerClientWith(t *testing.T, cert *tls.Certificate) *http.Client {
 	t.Helper()
 	pem, err := os.ReadFile(filepath.Join(root, slicePKIDir, testpki.LabCA))
 	if err != nil {
@@ -821,8 +817,11 @@ func brokerClient(t *testing.T) *http.Client {
 	}
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(pem)
-	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}}}
+	tc := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS13}
+	if cert != nil {
+		tc.Certificates = []tls.Certificate{*cert}
+	}
+	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: tc}}
 }
 
 // oidcBroker is the broker's HTTP API as the test calls it, with the bearer in
@@ -838,13 +837,21 @@ type oidcBroker struct {
 // post is one POST with bearer in the Authorization header, never in a URL. A
 // transport failure is code 0 and the error without its URL.
 func (b oidcBroker) post(path, bearer, body string) (int, string) {
+	return b.postWith(b.c, path, bearer, body)
+}
+
+// postWith is post by client c; with no bearer it sends no Authorization
+// header, and c's certificate is the credential.
+func (b oidcBroker) postWith(c *http.Client, path, bearer, body string) (int, string) {
 	req, err := http.NewRequest("POST", b.base+path, strings.NewReader(body))
 	if err != nil {
 		return 0, errCause(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+bearer)
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := b.c.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return 0, errCause(err)
 	}
@@ -858,6 +865,64 @@ func (b oidcBroker) post(path, bearer, body string) (int, string) {
 func (b oidcBroker) mint(t *testing.T, bearer, device string) (string, string) {
 	t.Helper()
 	code, body := b.post("/v1/tokens", bearer, `{"devices":["`+device+`"],"ttl_seconds":300}`)
+	login, said := mintSaid(code, body, b.kc.known())
+	b.kc.know(login)
+	return login, said
+}
+
+// oidcHolder is a person's session at the broker: the client presenting the
+// certificate the broker issued for the sign-in.
+type oidcHolder struct{ client *http.Client }
+
+// signIn logs user in at Keycloak with a nonce bound to a fresh key and
+// exchanges the ID token for a certificate at POST /v1/certificate, retrying
+// the exchange every 10s up to within while the broker is not ready. The
+// holder is nil when the broker gave no certificate, and said is its answer.
+func (b oidcBroker) signIn(t *testing.T, user, pass string, within time.Duration) (flowResult, *oidcHolder, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	nonce, err := api.IssuanceNonce(key.Public())
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	b.kc.know(nonce)
+	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	reqBody, _ := json.Marshal(api.IssueRequest{CSR: base64.RawURLEncoding.EncodeToString(der)})
+	lg := b.kc.Login(t, user, pass, url.Values{"nonce": {nonce}})
+	var cert *tls.Certificate
+	_, said := retryMint(func() (string, string) {
+		code, body := b.post("/v1/certificate", lg.IDToken, string(reqBody))
+		if code != http.StatusOK {
+			return "", brokerSaid(code, body, b.kc.known())
+		}
+		var out api.IssueResponse
+		if json.Unmarshal([]byte(body), &out) != nil {
+			return "", fmt.Sprintf("200 (a %d-byte body that is no certificate)", len(body))
+		}
+		block, _ := pem.Decode([]byte(out.Certificate))
+		if block == nil {
+			return "", "200 (a certificate that is not PEM)"
+		}
+		cert = &tls.Certificate{Certificate: [][]byte{block.Bytes}, PrivateKey: key}
+		return "issued", fmt.Sprintf("200 %s: certificate issued", out.Principal)
+	}, within, 10*time.Second)
+	if cert == nil {
+		return lg, nil, said
+	}
+	return lg, &oidcHolder{client: brokerClientWith(t, cert)}, said
+}
+
+// mintAs mints one token for device by h's certificate, and says what it got
+// without the token, which is registered as a value no message may hold.
+func (b oidcBroker) mintAs(t *testing.T, h *oidcHolder, device string) (string, string) {
+	t.Helper()
+	code, body := b.postWith(h.client, "/v1/tokens", "", `{"devices":["`+device+`"],"ttl_seconds":300}`)
 	login, said := mintSaid(code, body, b.kc.known())
 	b.kc.know(login)
 	return login, said
