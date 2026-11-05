@@ -8233,7 +8233,7 @@ L84, L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/la
   - **L92 is new:** SR Linux over RFC 9887. 26.7.2 loads a `tls-profile` and was seen sending plain TACACS+ to port 300; no SR Linux enrolment dialect exists for L73.
 - **Standing FAILs a later version bump could reopen** (from 12b; re-run at each pin bump through `lab-kind`): L83 (b), the Secrets Store CSI driver, and
   L83 (c), the Vault injector as a reload.
-- **The restore guard, as Ryan ruled it (2026-11-02). Overturned in the pre-beta fixes (Task 5, below); Ryan to confirm.** The ERROR and its 10m page stay; "stop port49d" stays the escape; the guard lifts on its own
+- **The restore guard, as Ryan ruled it (2026-11-02). Overturned by spec decision 56 in the pre-beta fixes (built in Tasks 3 and 5, below); Ryan to confirm.** The ERROR and its 10m page stay; "stop port49d" stays the escape; the guard lifts on its own
   at the token records' latest expiry. Closing the listener while guarded is not built.
 - **Pre-beta list** (each is a ledger line marked PRE-BETA or "Carried to final review"). **The outcome of each item is recorded under "Pre-beta fixes — outcome of the pre-beta list" below:**
   - **Security-relevant:** a newer snapshot carrying a restored `meta/purged` above the drop lifts the guard (takeover purges write one, so it is reachable without
@@ -8357,8 +8357,7 @@ directory open (spec 11186).
 
 Status: **written 2026-11-05** (branch `feature/pre-beta-fixes`; twenty-six tasks in seven lanes; spec decision 56;
 opens L93). Revised the same day after its pre-flight (`.superpowers/pre-beta/preflight.md`, 0C/9I/14M, all applied as
-the controller ruled). **Executed 2026-11-05** on `feature/pre-beta-fixes` (Tasks 1 to 25 built and reviewed; every lane
-merged; Task 26, the full lab regression, runs on the branch, below). The base was `be92d427` on `main`.
+the controller ruled). **Executed 2026-11-05** on `feature/pre-beta-fixes` (Tasks 1 to 24 built and reviewed and their lanes merged, with Task 12's `leader_dark` cell pending the pull request's CI; Task 25 is this entry, lane H pending merge; Task 26, the full lab regression, runs on the branch, below). The base was `be92d427` on `main`.
 
 **Builds.** The fixes for every Critical and Important finding of the pre-beta review, and the Minors and carried items
 it triaged as security-relevant or small. Each is a task with a failing test, or a docs task that cites its note:
@@ -8435,7 +8434,7 @@ Each item of the 12c pre-beta list (above) with the task that fixed it, or why i
 - **Lab and CI:**
   - L90's 32 parallel `ssh` appends: **left for later** (needs a lab run);
   - the `synchronize` rerun of `lab-kind` and `lab-hosted`: **moot** (deploy Moot 1). Every other workflow already runs on each push to a pull request, on the same hosted runner with a `contents: read` token and no secrets, so the label jobs add nothing an attacker lacks. Fork-PR approval for outside collaborators is the control, and it is on the go-public list;
-  - the go-public pcap check: Task 21 (a CI audit of every committed pcap; the lab key and break-glass password are committed constants and a lab token dies within 15m, so the check looks for non-lab material).
+  - the go-public pcap check: Task 21 (a CI audit of every committed pcap by shape: every credential field redacted, no token- or hash-shaped string, nothing undecodable outside the five-file TLS allowlist; the lab key and break-glass password are committed constants and a lab token dies within 15m, so lab credentials would fail it too).
 - **Small:**
   - `composeMarkedFor` unused: removed (Task 19);
   - the guard's scan pages, its re-guard reprint and its first-drop timeout: moot (no scan);
@@ -8447,13 +8446,16 @@ Each item of the 12c pre-beta list (above) with the task that fixed it, or why i
 #### Pre-beta fixes — the restore ruling overturned
 
 Ryan ruled on 2026-11-02 (the roadmap's "The restore guard, as Ryan ruled it", above) that the ERROR and its 10m page stay,
-"stop port49d" stays the escape, and the guard lifts on its own at the token records' latest expiry. **Task 5 overturned the page
-and the guard's time bound, and Task 3 replaced the guard with the restore floor** (spec decision 56): only a restored token is refused,
-as `token_spent`, and a fresh mint is served, so no restore locks IOS XE or Junos out and no page fires for it. The same task
-replaced the Velero runbook: its restore-scale-zero modifier is gone, and a Job (`restore-unspent`) deletes the restored tokens after
-an etcd restore. The ruling's premise (a guard whose protection a simpler fact supplies) is the reason; the Velero change has a
-measured one. **L89 (c) measured a restore with the StatefulSets at 0 replicas hanging** (Velero's file-system restore copies a volume
-through the pod that mounts it, and there was none; run 42053716808), so the runbook restores with the pods running. **Ryan should
+"stop port49d" stays the escape, and the guard lifts on its own at the token records' latest expiry. **Spec decision 56 (rulings 1 and 4; Task 1)
+overturned the ERROR, the 10m page and the time bound.** Task 3 built the restore floor, which refuses only a restored token, as
+`token_spent` (FAIL), so its user mints again. The guard's ERROR refused every token login until it lifted, and on IOS XE and Junos an
+ERROR is final, so break-glass waited too: a lockout with no device-side escape but stopping port49d. Task 3 removed the page and the
+gauges; Task 5 added the two new alerts (`port49_redemption_restore_unjudged`, `port49_store_restore_detected`) and replaced the Velero
+runbook: its restore-scale-zero modifier is gone, and a Job (`restore-unspent`) deletes the restored tokens after an etcd restore. The
+floor still refuses every token login `store_unavailable` (an ERROR, final on those platforms) while port49d cannot read `meta/witness`
+(`port49_redemption_restore_unjudged`, page after 2m). The Velero change has its own measured reason.
+**L89 (c) measured a restore with the StatefulSets at 0 replicas hanging** (Velero's file-system restore copies a volume
+through the pod that mounts it, and there was none; `tests/lab/results/L89-kind.md`, cell (c); run 42053716808), so the runbook restores with the pods running. **Ryan should
 confirm the overturn.** The 12c "restore guard" bullets above are kept as history and marked superseded.
 
 #### Pre-beta fixes — As built
@@ -8473,13 +8475,13 @@ Operator-facing notes for the pull request body. Each name was checked against t
 
 #### Pre-beta fixes — Task 26, the full lab regression
 
-`make lab-regress` ran in full on this branch (`5ed06f5f`, `.worktrees/pb-L`); its outcome is recorded with its results.
+`make lab-regress` runs in full on this branch (`5ed06f5f`, `.worktrees/pb-L`); its outcome is recorded here when it ends.
 
 #### Pre-beta fixes — left for later and carried
 
 - **Carried lab and CI items:**
   - **The compose cell for Task 12's `leader_dark`:** the worst round and the counter dump run on the final pull request's compose job, because the local `make failure-matrix` refuses on a host with a key (`/dev/tpm0`). Record both from that log, then re-judge the 12c Task 9 Important I1;
-  - **the logout-burst compose cell** (Task 9's carried lab item): a split topology and a 1024-logout generator exist in no stack, so the unit test proves the burst's mechanism and the at-scale path is unmeasured;
+  - **the logout-burst compose cell** (pre-beta Task 9's carried lab item): a split topology and a 1024-logout generator exist in no stack, so the unit test proves the burst's mechanism and the at-scale path is unmeasured;
   - **the baseline SHA:** `be92d427` (the plan's own base, on `main`) is the `leaks.yml` baseline and `tests/ci`'s `baselineSHA`; `git merge-base --is-ancestor be92d427 HEAD` holds (checked). The weekly check scans `main` since it;
   - **the etcd-init Job** (`deploy/helm/port49/examples/etcd/etcd-init-job.yaml`) still installs its tools with `apk` at install time: publish a setup image instead (ruling (c); the restore Job already uses etcd's own image by digest);
   - **the l86 unit test** writes holder text into `/tmp/port49-lab.lock` (kept from the 12c list).
