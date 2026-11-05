@@ -48,51 +48,20 @@ func TestAnOIDCPersonMints(t *testing.T) {
 		t.Fatalf("tokens %d %v", len(toks), err)
 	}
 	cred := toks[0].Credential
-	if cred.Method != "oidc" || cred.Sub != "sub-alice" || cred.Sid != store.SidKey(iss.URL, "s-sub-alice") ||
-		strings.Join(cred.AMR, ",") != "pwd,otp" || cred.ACR != "1" || cred.Fingerprint != "" {
+	if cred.Method != "cert" || cred.Sub != "sub-alice" || cred.Sid != store.SidKey(iss.URL, "s-sub-alice") ||
+		strings.Join(cred.AMR, ",") != "pwd,otp" || cred.ACR != "1" {
 		t.Fatalf("credential %+v", cred)
 	}
 	mints := eventsOf(f.records(t), decision.EventMint)
 	auth := mints[len(mints)-1]["auth"].(map[string]any)
 	o, _ := auth["oidc"].(map[string]any)
-	if auth["method"] != "oidc" || o["issuer"] != iss.URL || o["sub"] != "sub-alice" || o["sid"] != "s-sub-alice" {
+	if auth["method"] != "cert" || o["issuer"] != iss.URL || o["sub"] != "sub-alice" || o["sid"] != "s-sub-alice" {
 		t.Fatalf("the mint record's auth: %v", auth)
 	}
 	for _, key := range []string{store.SidKey(iss.URL, "s-sub-alice"), store.OIDCKey(store.OIDCSub, iss.URL, "sub-alice")} {
 		if own, err := f.st.OIDCOwner(context.Background(), key); err != nil || strings.Join(own.Names(), ",") != alicePrincipal {
 			t.Fatalf("owner of %q: %+v %v", key, own, err)
 		}
-	}
-}
-
-// The session clock is the token's auth_time, not the request's (Ruling 9).
-func TestTheOIDCSessionClockIsAuthTime(t *testing.T) {
-	f := newFixture(t, 8)
-	iss := f.withOIDC(t)
-	authAt := f.b.Now().Add(-2 * time.Hour)
-	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, map[string]any{"auth_time": authAt.Unix()}))
-	if w.Code != 200 {
-		t.Fatalf("%s", shown(w))
-	}
-	toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
-	if len(toks) != 1 || !toks[0].AuthTime.Equal(authAt.Truncate(time.Second)) {
-		t.Fatalf("token auth_time %v, want %v", toks[0].AuthTime, authAt)
-	}
-	old := f.idToken(t, iss, map[string]any{"auth_time": f.b.Now().Add(-13 * time.Hour).Unix()})
-	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, old); w.Code != 401 ||
-		!strings.Contains(w.Body.String(), string(decision.SessionExpired)) || !strings.Contains(w.Body.String(), "port49 login") {
-		t.Fatalf("an authentication 13h ago: %s", shown(w))
-	}
-	// An auth_time ahead of the broker's clock, within clock_skew, is now: a
-	// session clock never starts in the future (pre-flight M-18).
-	ahead := f.idToken(t, iss, map[string]any{"auth_time": f.b.Now().Add(30 * time.Second).Unix(),
-		"iat": f.b.Now().Add(30 * time.Second).Unix()})
-	if w := f.bearer(context.Background(), "POST", "/v1/tokens", `{"devices":["nx1"],"ttl_seconds":60}`, ahead); w.Code != 200 {
-		t.Fatalf("an auth_time 30s ahead: %s", shown(w))
-	}
-	toks, _ = f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"})
-	if len(toks) != 1 || toks[0].AuthTime.After(f.b.Now()) {
-		t.Fatalf("a token's auth_time %v is after the broker's now %v", toks[0].AuthTime, f.b.Now())
 	}
 }
 
@@ -373,7 +342,7 @@ func TestIdentityAnswersAnOIDCCaller(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &id); err != nil || w.Code != 200 {
 		t.Fatalf("%s", shown(w))
 	}
-	if id.Principal != alicePrincipal || id.Method != "oidc" || id.OIDC == nil || id.OIDC.Issuer != iss.URL ||
+	if id.Principal != alicePrincipal || id.Method != "cert" || id.OIDC == nil || id.OIDC.Issuer != iss.URL ||
 		id.OIDC.Sid != "s-sub-alice" || id.AuthTime != f.b.Now().UTC().Format(time.RFC3339) {
 		t.Fatalf("identity %+v", id)
 	}

@@ -264,31 +264,46 @@ func TestAnOIDCOnlyBrokerThatIssuesTakesItsCertificates(t *testing.T) {
 	}
 }
 
-// One path for people (decision 43 ruling 13): a broker that issues refuses
-// a person's ID token on every endpoint but /v1/certificate; a machine's is
-// unaffected; with no issuance a person's mints as plan 7h built.
-func TestAPersonsBearerIsRefusedWhereTheBrokerIssues(t *testing.T) {
+// A person's ID token is never a caller's credential (decision 56 ruling 4):
+// on a broker that issues and on one that does not, it is refused at every
+// endpoint but /v1/certificate (and /v1/mfa as an idp_mfa proof).
+func TestAPersonsIDTokenIsRefusedAsABearerOnEveryBroker(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, machinePolicy)
+	iss := f.withOIDC(t)
+	check := func(label string) {
+		t.Helper()
+		w := f.rawBearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
+		var e api.Error
+		if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error != "trust_domain_unresolved" ||
+			e.Detail != personBearerText {
+			t.Fatalf("%s: a person's bearer: %s", label, shown(w))
+		}
+		recs := eventsOf(f.records(t), decision.EventMint)
+		if r := recs[len(recs)-1]; r["verdict"] != "deny" || r["principal"] != alicePrincipal {
+			t.Fatalf("%s: the refusal's record: %v", label, r)
+		}
+	}
+	if f.b.Issuer != nil {
+		t.Fatal("the fixture should start with no issuance")
+	}
+	check("no issuance")
+	f.withIssuance(t)
+	check("issuance")
+}
+
+// A machine's ID token is still a bearer, on either kind of broker.
+func TestAMachinesIDTokenIsStillABearer(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, machinePolicy)
 	iss := f.withIssuance(t)
-	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
-	var e api.Error
-	if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error != "trust_domain_unresolved" ||
-		!strings.Contains(e.Detail, "POST /v1/certificate") {
-		t.Fatalf("a person's bearer: %s", shown(w))
-	}
-	recs := eventsOf(f.records(t), decision.EventMint)
-	if r := recs[len(recs)-1]; r["verdict"] != "deny" || r["principal"] != alicePrincipal {
-		t.Fatalf("the refusal's record: %v", r)
-	}
 	now := f.b.Now()
 	machine := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc",
 		"azp": "Oxidized-01", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, machine); w.Code != 200 {
-		t.Fatalf("a machine's bearer: %s", shown(w))
+		t.Fatalf("a machine's bearer with issuance: %s", shown(w))
 	}
 	f.b.Issuer = nil
-	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
-		t.Fatalf("a person's bearer with no issuance: %s", shown(w))
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, machine); w.Code != 200 {
+		t.Fatalf("a machine's bearer with no issuance: %s", shown(w))
 	}
 }
 

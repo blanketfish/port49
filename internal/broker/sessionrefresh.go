@@ -32,10 +32,6 @@ const (
 // 33). It is held on this connection alone; a new one replaces it. A
 // connection that refreshed within refreshEvery is told to wait.
 func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
-	if _, ok, _ := bearerOf(r); ok {
-		b.oidcChallenge(w, r)
-		return
-	}
 	now := b.Now()
 	principal, _, cred, _, _, err := b.callerOf(r, now)
 	if err != nil {
@@ -94,10 +90,6 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 // refresh verifies the signed challenge and extends the caller's live
 // sessions (spec §5.6). The nonce is taken whatever the outcome: single use.
 func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
-	if _, ok, _ := bearerOf(r); ok {
-		b.oidcRefresh(w, r)
-		return
-	}
 	now := b.Now()
 	principal, legacy, cred, issued, signIn, err := b.callerOf(r, now)
 	if err != nil {

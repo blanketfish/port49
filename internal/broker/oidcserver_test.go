@@ -19,6 +19,7 @@ import (
 
 	"github.com/blanketfish/port49/internal/broker/api"
 	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/oidc/oidctest"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -89,12 +90,12 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"methods":["oidc"]`) {
 		t.Fatalf("config %s", w.Body)
 	}
-	// A valid bearer mints on the same OIDC-only broker.
-	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
-		t.Fatalf("a valid bearer on an OIDC-only broker: %s", shown(w))
+	// A person's ID token is not a bearer here either (decision 56 ruling 4).
+	if w := f.rawBearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 401 {
+		t.Fatalf("a person's bearer on an OIDC-only broker: %s", shown(w))
 	}
 	// No bearer: the answer says what this broker takes, and the record is oidc's.
-	w = f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "")
+	w = f.rawBearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "")
 	var e api.Error
 	if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil ||
 		e.Error != "trust_domain_unresolved" || !strings.Contains(e.Detail, "OIDC ID token only") ||
@@ -111,7 +112,15 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 	}
 }
 
-// A bearer over a real connection mints; the connection, which bound no
+// machineToken is the machine verifier's token for Oxidized-01 from iss.
+func (f *fixture) machineToken(t testing.TB, iss *oidctest.Issuer) string {
+	t.Helper()
+	now := f.b.Now()
+	return iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc",
+		"azp": "Oxidized-01", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
+}
+
+// A machine's bearer over a real connection mints; the connection, which bound no
 // principal, is closed once it goes idle and gives its source slot back.
 func TestABearerMintsThroughTheListener(t *testing.T) {
 	t.Run("x509 and oidc", func(t *testing.T) { bearerMintsThroughTheListener(t, false) })
@@ -132,7 +141,7 @@ func bearerMintsThroughTheListener(t *testing.T, noX509 bool) {
 		}
 		body := mintLeaf1
 		req := "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n" +
-			"Authorization: Bearer " + f.idToken(t, iss, nil) + "\r\nContent-Length: " +
+			"Authorization: Bearer " + f.machineToken(t, iss) + "\r\nContent-Length: " +
 			strconv.Itoa(len(body)) + "\r\n\r\n" + body
 		if _, err := io.WriteString(c, req); err != nil {
 			t.Fatal(err)

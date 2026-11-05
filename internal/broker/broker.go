@@ -770,10 +770,10 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		return caller{}, false
 	case hasBearer:
 		c, ok := b.bearerCaller(w, r, event, nothing, raw)
-		if ok && b.Issuer != nil && c.oidc.Domain == oidc.Humans {
-			// One path for people (decision 43 ruling 13): this broker
-			// exchanges a person's ID token for a certificate, and takes it
-			// nowhere else.
+		if ok && c.oidc.Domain == oidc.Humans {
+			// A person's ID token is never a caller's credential (decision
+			// 56 ruling 4): it is exchanged for a certificate, or given as
+			// an idp_mfa proof, and taken nowhere else.
 			b.emit(decision.Record{TS: b.Now(), Event: event, Verdict: decision.VerdictDeny,
 				Reason: decision.TrustDomainUnresolved, Principal: c.principal, Auth: c.auth()})
 			writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), personBearerText)

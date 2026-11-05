@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -28,6 +30,7 @@ import (
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/issuer"
 	"github.com/blanketfish/port49/internal/oidc"
 	"github.com/blanketfish/port49/internal/oidc/oidctest"
 	"github.com/blanketfish/port49/internal/policy"
@@ -412,9 +415,9 @@ func (f *fixture) idToken(t testing.TB, iss *oidctest.Issuer, extra map[string]a
 	return iss.IDToken(t, "k1", testClientID, "sub-alice", f.b.Now(), c)
 }
 
-// bearer sends one request with no client certificate and token as its
+// rawBearer sends one request with no client certificate and token as its
 // bearer through the broker's handler.
-func (f *fixture) bearer(ctx context.Context, method, path, body, token string) *httptest.ResponseRecorder {
+func (f *fixture) rawBearer(ctx context.Context, method, path, body, token string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
 	r.TLS = &tls.ConnectionState{}
 	if token != "" {
@@ -423,6 +426,41 @@ func (f *fixture) bearer(ctx context.Context, method, path, body, token string) 
 	w := httptest.NewRecorder()
 	f.b.Handler().ServeHTTP(w, r)
 	return w
+}
+
+// bearer sends one request as token's holder. A valid person's ID token is
+// never a caller's credential (decision 56 ruling 4), so it is presented as
+// the certificate this broker issues on that sign-in, the one path a person
+// has; a machine's or an invalid token goes as a bearer, unchanged. Tests of
+// the refusal itself use rawBearer.
+func (f *fixture) bearer(ctx context.Context, method, path, body, token string) *httptest.ResponseRecorder {
+	if token != "" && f.b.Identity != nil && path != "/v1/mfa" && path != "/v1/certificate" {
+		vctx, cancel := context.WithTimeout(ctx, holdTimeout)
+		a, err := f.b.Identity.Verify(vctx, token)
+		cancel()
+		if err == nil && a.Domain == oidc.Humans {
+			if f.b.Issuer == nil {
+				ca, err := issuer.Ephemeral(f.b.Now())
+				if err != nil {
+					panic(err)
+				}
+				f.b.Issuer = ca
+			}
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				panic(err)
+			}
+			c, err := f.b.Issuer.Issue(key.Public(), issuer.SignIn{Principal: a.Principal, Issuer: a.Issuer,
+				Subject: a.Subject, Sid: a.Sid, AMR: a.AMR, ACR: a.ACR, AuthTime: a.AuthTime, IssuedAt: a.IssuedAt},
+				f.b.Now(), 12*time.Hour)
+			if err != nil {
+				panic(err)
+			}
+			cs := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{c, f.b.Issuer.Cert}}}
+			return f.call(withHeldConn(ctx, f.b.Now(), nil), cs, method, path, body)
+		}
+	}
+	return f.rawBearer(ctx, method, path, body, token)
 }
 
 // httptestRequest is a request with no client certificate.

@@ -651,7 +651,7 @@ func (f *mfaFixture) proveIdP(t *testing.T, tok, ch string) int {
 func (f *mfaFixture) proveIdPDetail(t *testing.T, tok, ch string) (int, string) {
 	t.Helper()
 	body, _ := json.Marshal(api.MFAProofRequest{Challenge: ch, Method: "idp_mfa"})
-	w := f.bearer(context.Background(), "POST", "/v1/mfa", string(body), tok)
+	w := f.rawBearer(context.Background(), "POST", "/v1/mfa", string(body), tok)
 	return w.Code, w.Body.String()
 }
 
@@ -1195,6 +1195,25 @@ func TestAStoreUnavailableMintRecordCarriesTheRequirement(t *testing.T) {
 			m["reuse_for_seconds"] == nil {
 			t.Errorf("%s failing: record per_login_mfa = %v, want the requirement", c.fail, r["per_login_mfa"])
 		}
+	}
+}
+
+// idp_mfa verifies a person's ID token directly, so an x509 people broker
+// with an oidc verifier and no issuance takes it as a proof at /v1/mfa while
+// /v1/tokens refuses the same token (decision 56 ruling 4).
+func TestAnIDPMFAProofStillTakesTheIDTokenOnANonIssuingBroker(t *testing.T) {
+	f := newMFAFixture(t)
+	if f.b.Issuer != nil {
+		t.Fatal("the fixture should have no issuance")
+	}
+	ch := f.ask(t, f.alice, "core-sw01")
+	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"pwd", "mfa"}, authTime: f.clock.Now()})
+	if code, detail := f.proveIdPDetail(t, tok, ch); code != 200 {
+		t.Fatalf("POST /v1/mfa (idp) = %d %s", code, detail)
+	}
+	w := f.rawBearer(context.Background(), "POST", "/v1/tokens", `{"devices":["core-sw01"],"purpose":"test"}`, tok)
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "trust_domain_unresolved") {
+		t.Fatalf("POST /v1/tokens with the same token = %d %s, want 401", w.Code, w.Body.String())
 	}
 }
 

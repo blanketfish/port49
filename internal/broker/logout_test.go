@@ -81,6 +81,9 @@ func oidcLoggedIn(t *testing.T) (*fixture, *oidctest.Issuer, string) {
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", `{"devices":["leaf1","nx1"],"ttl_seconds":60}`, tok); w.Code != 200 {
 		t.Fatalf("mint: %s", shown(w))
 	}
+	// The sign-in came through a certificate this test's broker issued; the
+	// broker under test is one whose people hold no issuing CA of its own.
+	f.b.Issuer = nil
 	now := f.b.Now()
 	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", now, now.Add(12*time.Hour))
 	if err := f.st.IndexContext(context.Background(), alicePrincipal, store.SidKey(iss.URL, "s-sub-alice"), "",
