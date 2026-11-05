@@ -36,7 +36,8 @@ func TestAPullRequestBuildsWhatTheReleaseBuilds(t *testing.T) {
 		"python -m build --no-isolation clients/python",
 		"ansible-galaxy collection build",
 	}
-	for id, j := range f.Jobs {
+	rel := releasePython(t)
+	for _, j := range f.Jobs {
 		var runs []string
 		for _, s := range j.Steps {
 			runs = append(runs, s.Run)
@@ -46,10 +47,17 @@ func TestAPullRequestBuildsWhatTheReleaseBuilds(t *testing.T) {
 		for _, w := range want {
 			ok = ok && strings.Contains(all, w)
 		}
-		if ok {
-			return
+		if !ok {
+			continue
 		}
-		_ = id
+		for _, s := range j.Steps {
+			if strings.HasPrefix(s.Uses, "actions/setup-python@") {
+				if pv, _ := s.With["python-version"].(string); pv != rel {
+					t.Errorf("the PR build uses Python %q, the release %q", pv, rel)
+				}
+			}
+		}
+		return
 	}
 	t.Errorf("no python.yml job runs all of %q", want)
 }
@@ -101,14 +109,41 @@ func TestEveryArtifactCarriesTheLicense(t *testing.T) {
 	if !strings.Contains(readRepo(t, "packaging", "copyright"), "Apache-2.0") {
 		t.Error("packaging/copyright does not name Apache-2.0")
 	}
+	if !strings.Contains(readRepo(t, "clients", "python", "pyproject.toml"), `"setuptools>=77"`) {
+		t.Error("pyproject.toml's build-system needs setuptools>=77 (PEP 639)")
+	}
 	if !regexp.MustCompile(`(?m)^license-files\s*=\s*\[[^\]]*"LICENSE"`).MatchString(readRepo(t, "clients", "python", "pyproject.toml")) {
 		t.Error("pyproject.toml license-files does not list LICENSE")
 	}
 	g := readRepo(t, ".goreleaser.yaml")
-	if !regexp.MustCompile(`src: packaging/copyright\n\s+dst: /usr/share/doc/port49-server/copyright\n`).MatchString(g) {
-		t.Error(".goreleaser.yaml: port49-server does not ship /usr/share/doc/port49-server/copyright")
+	for _, pkg := range []string{"port49-server", "port49"} {
+		if !regexp.MustCompile(`src: packaging/copyright\n\s+dst: /usr/share/doc/` + pkg + `/copyright\n`).MatchString(g) {
+			t.Errorf(".goreleaser.yaml: %s does not ship /usr/share/doc/%s/copyright", pkg, pkg)
+		}
 	}
 	if !strings.Contains(readRepo(t, "Dockerfile"), "COPY LICENSE /LICENSE") {
 		t.Error("Dockerfile does not COPY LICENSE /LICENSE")
+	}
+}
+
+// Nothing goes public until every artifact has built: the image and the chart wait for the wheel
+// and the collection, so a failed Python build never leaves them behind.
+func TestNoPublicPushPrecedesTheArtifactBuilds(t *testing.T) {
+	f, _ := release(t)
+	for _, id := range []string{"image", "chart"} {
+		have := map[string]bool{}
+		switch n := f.Jobs[id].Needs.(type) {
+		case []any:
+			for _, x := range n {
+				have[x.(string)] = true
+			}
+		case string:
+			have[n] = true
+		}
+		for _, w := range []string{"build-python", "build-galaxy"} {
+			if !have[w] {
+				t.Errorf("release.yml job %s does not need %s", id, w)
+			}
+		}
 	}
 }

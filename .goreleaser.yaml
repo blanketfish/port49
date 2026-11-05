@@ -163,6 +163,9 @@ nfpms:
     conflicts: [port49-server]
     recommends: [python3]
     contents:
+      - src: packaging/copyright
+        dst: /usr/share/doc/port49/copyright
+        file_info: {mode: 0644, owner: root, group: root}
       - src: packaging/client/config.yaml
         dst: /etc/port49/config.yaml
         type: config|noreplace

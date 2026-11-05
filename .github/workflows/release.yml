@@ -58,8 +58,9 @@ jobs:
             dist/SHA256SUMS
 
   image:
-    # After goreleaser: a failed draft or attestation stops the pushes.
-    needs: [check, goreleaser]
+    # After goreleaser and both Python builds: a failed draft, attestation, wheel or collection
+    # build stops the pushes, so a public image or chart never outlives a failed release.
+    needs: [check, build-python, build-galaxy, goreleaser]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: release
@@ -98,7 +99,7 @@ jobs:
           push-to-registry: true
 
   chart:
-    needs: [check, goreleaser]
+    needs: [check, build-python, build-galaxy, goreleaser]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: release
