@@ -346,15 +346,49 @@ func trapLine(out, prefix string) string {
 	return Reason(got)
 }
 
-// Reason is a harness message as a row and a log line can both hold it: the words the job log's filter
-// drops whole lines for masked as <word> (a step, file or Secret name that holds one, which is how run
-// 42047911635 lost its reason), then Scrub, the lines joined, then Leak, and withheld if it still trips.
-func Reason(msg string) string {
+// Reason is ReasonWith with no values of the run's own.
+func Reason(msg string) string { return ReasonWith(msg) }
+
+// allowNames are the harness's own names that hold a word the job log's filter drops a line for (run
+// 42047911635 lost its reason to one): each is masked to <word> and its line kept. Nothing else is
+// masked. The step and bound names hold none (TestReasonKeepsASetupFailureReadable).
+var allowNames = []struct {
+	re   *regexp.Regexp
+	with string
+}{
+	{regexp.MustCompile(`restore-token-delete`), "restore-<word>-delete"},            // the delete Job, its file
+	{regexp.MustCompile(`\bsecret(s?)( "| |/)(port49-[a-z0-9.-]+)`), "<word>$1$2$3"}, // a port49 Secret, by kind
+}
+
+// keyValue is a credential word, or an allowed Secret's name, followed by : or = and a value.
+var keyValue = regexp.MustCompile(`(?i)(password|token|secret)[\w-]*(\s+"?port49-[a-z0-9.-]+)?["']?\s*[:=]\s*\S`)
+
+var printable = regexp.MustCompile(`^[\x20-\x7e\t]*$`)
+
+// ReasonWith is a harness message as a row and a log line can both hold it. A line is dropped whole when
+// it holds one of own (the run's generated values, some under Scrub's run length), a key and its value
+// (keyValue), a byte the job log's filter refuses, or, once allowNames are masked, any credential word;
+// the rest are Scrubbed and joined, and the whole is withheld if Leak still trips.
+func ReasonWith(msg string, own ...string) string {
 	var lines []string
-	for _, ln := range strings.Split(Scrub(credWords.ReplaceAllString(msg, "<word>")), "\n") {
-		if ln = strings.TrimSpace(ln); ln != "" {
-			lines = append(lines, ln)
+next:
+	for _, ln := range strings.Split(msg, "\n") {
+		ln = strings.TrimSpace(ln)
+		for _, o := range own {
+			if o != "" && strings.Contains(ln, o) {
+				continue next
+			}
 		}
+		if ln == "" || keyValue.MatchString(ln) || !printable.MatchString(ln) {
+			continue
+		}
+		for _, a := range allowNames {
+			ln = a.re.ReplaceAllString(ln, a.with)
+		}
+		if credWords.MatchString(ln) {
+			continue
+		}
+		lines = append(lines, longRun.ReplaceAllString(ln, "<LONG>"))
 	}
 	got := strings.Join(lines, " / ")
 	if got == "" || Leak(got) != "" {
@@ -364,6 +398,13 @@ func Reason(msg string) string {
 		got = got[:400] + " ..."
 	}
 	return got
+}
+
+// KubectlFailure is a failed kubectl call as a reason: the command (redacted by the caller), kubectl's
+// exit, and its own stderr, unfiltered, which ReasonWith masks or drops line by line (the job filter
+// would drop a NotFound naming a Secret whole, and with it the cause).
+func KubectlFailure(cmd string, err error, stderr string, own ...string) string {
+	return ReasonWith(cmd+"\n"+err.Error()+"\n"+stderr, own...)
 }
 
 // ParseVolumes reads the output of the README's volume check (the marker "volumes"): the restore's phase
@@ -735,7 +776,7 @@ func verdict(cells []l82.Cell, id string) string {
 // Leak is why text must not be written: what l82.Leak refuses (24 or more key characters, a JWT, the
 // words for a credential), and a PEM block. Empty when the text is clean.
 func Leak(s string) string {
-	if strings.Contains(s, "-----BEGIN") {
+	if strings.Contains(s, "-----BEGIN") || strings.Contains(s, "-----END") || strings.Contains(s, "PRIVATE KEY") {
 		return "a PEM block"
 	}
 	return l82.Leak(s)

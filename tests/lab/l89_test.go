@@ -159,34 +159,32 @@ func (r *l89Run) cell(t *testing.T, name string, cell *l82.Cell, f func(*testing
 const l89SetupRow = "the harness's own setup failed: not a measurement"
 
 // setupFail stops the cell NOT RUN for a failure of the harness's own setup. The reason goes through
-// l89.Reason, so the row and the log line both keep it past the job log's filter, which drops a line
-// that names a step, file or Secret holding a credential word.
+// l89.ReasonWith with the run's own generated values, so the row and the log line both keep it past the
+// job log's filter (only the harness's own names are masked) and no value of the run's is written.
 func (r *l89Run) setupFail(t *testing.T, cell *l82.Cell, format string, args ...any) {
 	t.Helper()
-	why := l89.Reason(fmt.Sprintf(format, args...))
+	why := l89.ReasonWith(fmt.Sprintf(format, args...), r.own...)
 	l82Row(cell, l89SetupRow, why)
 	t.Fatal(l89SetupRow + ": " + why)
 }
 
-// l89SetupRowed says setupFail already gave the cell its row.
+// l89SetupRowed says the cell already holds a row saying why it was not measured: setupFail's, a step
+// stopped by its bound or the cell's end, a wait of the harness's own, so the deferred row does not
+// relabel a timeout as a setup failure.
 func l89SetupRowed(cell *l82.Cell) bool {
 	cellsMu.Lock()
 	defer cellsMu.Unlock()
-	for _, row := range cell.Rows {
-		if row.Case == l89SetupRow {
-			return true
-		}
-	}
-	return false
+	return l89.NotMeasuredRowed(cell.Rows)
 }
 
-// kubectl is the cluster's Kubectl for a cell: its failure, kubectl's own text, is a setupFail on the
-// cell's own test (the cluster's Kubectl fails the test it was made for).
+// kubectl is the cluster's Kubectl for a cell: its failure is a setupFail on the cell's own test (the
+// cluster's Kubectl fails the test it was made for), with kubectl's own stderr masked line by line
+// (l89.KubectlFailure), since the job filter would drop the line that says why.
 func (r *l89Run) kubectl(t *testing.T, cell *l82.Cell, args ...string) string {
 	t.Helper()
-	out, err := r.stack.Cluster().KubectlTry("", args...)
+	out, stderr, err := r.stack.Cluster().KubectlUnfiltered(args...)
 	if err != nil {
-		r.setupFail(t, cell, "%v", err)
+		r.setupFail(t, cell, "%s", l89.KubectlFailure("kubectl "+kindtest.Redact(args), err, stderr, r.own...))
 	}
 	return out
 }

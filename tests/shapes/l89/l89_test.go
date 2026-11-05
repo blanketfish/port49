@@ -2,6 +2,7 @@ package l89
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -463,15 +464,19 @@ func TestDecodeMarksReadsTheCopysFile(t *testing.T) {
 	}
 }
 
-// m1r5c: a setup failure's reason survives the job log's filter (which drops a line with a credential
-// word in it) and Results' Leak, so the row and the log line both say why the cell stopped.
+// m1r5c, I1r5d: a setup failure's reason survives the job log's filter (which drops a line with a
+// credential word in it) and Results' Leak, so the row and the log line both say why the cell stopped. Only
+// the harness's own names are let past, through an allowlist; a credential word anywhere else drops its
+// line, and a word followed by : or = and a value always does.
 func TestReasonKeepsASetupFailureReadable(t *testing.T) {
 	filter := regexp.MustCompile(`(?i)password|token|secret|eyJ`)
-	got := Reason("deletejob: kubectl -n port49 get secret port49-etcd-root: exit status 1\nError from server (NotFound): secrets \"port49-etcd-root\" not found\n")
+	// the real path (m2r5d): r.kubectl hands KubectlFailure kubectl's own stderr, unfiltered
+	got := KubectlFailure("kubectl -n port49 get secret port49-etcd-root", errors.New("exit status 1"),
+		"Error from server (NotFound): secrets \"port49-etcd-root\" not found\n")
 	if filter.MatchString(got) || Leak(got) != "" {
 		t.Errorf("the reason would be dropped or refused: %q", got)
 	}
-	for _, want := range []string{"exit status 1", "(NotFound)", "<word>s \"port49-etcd-root\" not found", " / "} {
+	for _, want := range []string{"exit status 1", "(NotFound)", "<word>s \"port49-etcd-root\" not found", "get <word> port49-etcd-root", " / "} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the reason %q lacks %q", got, want)
 		}
@@ -479,11 +484,45 @@ func TestReasonKeepsASetupFailureReadable(t *testing.T) {
 	if got := Reason("reading restore-token-delete.yaml: no such file"); got != "reading restore-<word>-delete.yaml: no such file" {
 		t.Errorf("Reason = %q", got)
 	}
+	// the review's probe (I1r5d): a key and its value, a word outside the allowlist, the run's own key.
+	// Every value is generated here, new each run, so no credential-shaped literal is in the source.
+	gen := func(n int) string {
+		v, err := Random(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	access, value, short := gen(10), gen(10), gen(3) // access: 20 hex, as the store's key, under Scrub's run length
+	for _, in := range []string{
+		"password: " + short,
+		"aws_secret_access_key = " + value,
+		"aws_secret_access_key=" + value,
+		"\"token\": \"" + short + "\"",
+		"the client secret was refused",
+		"access key " + access + " refused",
+		"bearer eyJ" + short,
+	} {
+		got := ReasonWith("the store refused the harness\n"+in, access)
+		if strings.Contains(got, short) || strings.Contains(got, value) || strings.Contains(got, access) ||
+			strings.Contains(got, "<word>") || filter.MatchString(got) {
+			t.Errorf("ReasonWith(%q) = %q", in, got)
+		}
+		if got != "the store refused the harness" {
+			t.Errorf("ReasonWith(%q) = %q, want the other line alone", in, got)
+		}
+	}
+	// a name on the allowlist followed by a value is still a key and its value
+	if got := Reason("secret port49-etcd-root: " + short); strings.Contains(got, short) {
+		t.Errorf("an allowlisted name's value is kept: %q", got)
+	}
 	if got := Reason("a value " + strings.Repeat("Ab3", 12)); !strings.Contains(got, "<LONG>") || strings.Contains(got, "Ab3Ab3") {
 		t.Errorf("a long run is kept: %q", got)
 	}
-	if got := Reason("-----BEGIN PRIVATE KEY-----"); !strings.HasPrefix(got, "withheld") {
-		t.Errorf("a PEM block is kept: %q", got)
+	for _, pem := range []string{"-----BEGIN PRIVATE KEY-----", "AB12cd==\n-----END PRIVATE KEY-----", "an RSA PRIVATE KEY"} {
+		if got := Reason(pem); !strings.HasPrefix(got, "withheld") {
+			t.Errorf("a PEM fragment is kept: %q", got)
+		}
 	}
 	if got := Reason(strings.Repeat("x ", 400)); len(got) > 410 {
 		t.Errorf("a long reason is %d bytes", len(got))
@@ -526,7 +565,7 @@ func TestFailedCommandIsTheTrapsLineScrubbed(t *testing.T) {
 	if got := FailedCommand("l89-failed: echo " + strings.Repeat("A", 40) + "\n"); strings.Contains(got, strings.Repeat("A", 24)) {
 		t.Errorf("a long run is kept: %q", got)
 	}
-	if got := FailedCommand("l89-failed: curl --password x\n"); got != "curl --<word> x" {
+	if got := FailedCommand("l89-failed: curl --password x\n"); !strings.HasPrefix(got, "withheld") {
 		t.Errorf("a credential word: %q", got)
 	}
 	if got := FailedCommand("l89-failed: echo eyJhbGciOi\n"); Leak(got) != "" {
@@ -988,5 +1027,21 @@ func TestSubstAndLabModifier(t *testing.T) {
 	}
 	if _, err := LabModifier("version: v1\n", "t"); err == nil {
 		t.Error("LabModifier accepts a file without the line it rewrites")
+	}
+}
+
+// m3r5d: a step stopped by its bound already says so; the deferred row must not relabel it a setup failure.
+func TestNotMeasuredRowedSeesEveryHarnessRow(t *testing.T) {
+	for _, rows := range [][]l82.Row{
+		{{Case: "README step 5 (the scale-up): did not end within the harness's own bound of 22m0s, not a measurement", Observation: "it was in: kubectl"}},
+		{{Case: "the harness's wait for the restore", Observation: "did not end within 5m0s: not a measurement"}},
+		{{Case: "the harness's own setup failed: not a measurement", Observation: "exit status 1"}},
+	} {
+		if !NotMeasuredRowed(rows) {
+			t.Errorf("%v is not seen", rows)
+		}
+	}
+	if NotMeasuredRowed([]l82.Row{{Case: "the restore's phase", Observation: "Completed"}}) {
+		t.Error("a measured row is taken for a harness row")
 	}
 }

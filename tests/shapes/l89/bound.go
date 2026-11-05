@@ -190,3 +190,15 @@ func Stopped(cells []l82.Cell, running, why string) []l82.Cell {
 	}
 	return out
 }
+
+// NotMeasuredRowed says rows already hold one saying why the cell was not measured (a row ending "not a
+// measurement": a setup failure, a step stopped by its bound or the cell's end, a wait of the harness's
+// own), so the harness adds no generic "setup failed" row over it.
+func NotMeasuredRowed(rows []l82.Row) bool {
+	for _, row := range rows {
+		if strings.HasSuffix(row.Case, "not a measurement") || strings.HasSuffix(row.Observation, "not a measurement") {
+			return true
+		}
+	}
+	return false
+}
