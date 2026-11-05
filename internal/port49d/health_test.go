@@ -291,8 +291,9 @@ func TestAHungMinorityMemberDoesNotFailFiveChecksInARow(t *testing.T) {
 	}
 }
 
-// A passing check calls passed, and a failing one does not (stores I2).
-func TestAPassingHealthCheckClosesAnOpenCircuit(t *testing.T) {
+// watch calls passed after each passing check and not after a failing one
+// (stores I2).
+func TestWatchCallsPassedAfterEachPassingCheckOnly(t *testing.T) {
 	s := &scripted{steps: []error{nil, errCheck, nil, errCheck, errCheck, errCheck}}
 	h := testHealth(s.check)
 	var passed atomic.Int32

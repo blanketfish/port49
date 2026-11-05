@@ -414,7 +414,7 @@ func TestACallArrivingPastItsDeadlineDoesNotOpenTheCircuit(t *testing.T) {
 	g := Wrap(inner, c)
 	past, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 200; i++ {
 		if _, err := g.GetContext(past, k); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
 			t.Fatalf("a call past its deadline: %v", err)
 		}
@@ -422,7 +422,7 @@ func TestACallArrivingPastItsDeadlineDoesNotOpenTheCircuit(t *testing.T) {
 	for _, o := range outcomes {
 		want := 0.0
 		if o == "deadline_on_entry" {
-			want = 10
+			want = 200
 		}
 		if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", o)); n != want {
 			t.Errorf("outcome %s: %v, want %v", o, n, want)
@@ -432,7 +432,7 @@ func TestACallArrivingPastItsDeadlineDoesNotOpenTheCircuit(t *testing.T) {
 		t.Fatalf("%d calls past their deadline reached the store", inner.count())
 	}
 	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
-		t.Fatalf("ten calls past their deadline opened the circuit (%v)", v)
+		t.Fatalf("200 calls past their deadline opened the circuit (%v)", v)
 	}
 	if l := said.all(); len(l) != 0 {
 		t.Fatalf("said %q", l)
@@ -931,5 +931,76 @@ func TestCloseCircuitsClosesTokenAndContextNotBulk(t *testing.T) {
 	}
 	if closed != 2 {
 		t.Fatalf("said %q", said.all())
+	}
+}
+
+// A store whose health check passes while its real calls fail must still go
+// dark at StopAfter (decision 35, the hold_ttl backstop): CloseCircuits ends
+// the circuit, not the failing run the backstop measures, and only an
+// answered call ends that (stores I2 review I1).
+func TestAPassingHealthCheckDoesNotRestartTheHoldBackstop(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 100*time.Millisecond
+	g := Wrap(inner, c)
+	end := time.Now().Add(1200 * time.Millisecond)
+	for next := time.Now(); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(next) {
+			g.(Closer).CloseCircuits("a store health check passed")
+			next = time.Now().Add(50 * time.Millisecond)
+		}
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	if l := gone.all(); len(l) != 1 || !strings.Contains(l[0], "token pool's circuit has been open") {
+		t.Fatalf("Unhealthy told %d times: %q", len(l), l)
+	}
+}
+
+// An answered call ends the failing run: a later failing run is timed from
+// its own start.
+func TestAnAnsweredCallRestartsTheHoldBackstop(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 20*time.Millisecond
+	g := Wrap(inner, c)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	time.Sleep(350 * time.Millisecond)
+	inner.set(nil, 0)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{}) // answered: the run ends
+	inner.set(store.ErrUnavailable, 0)
+	for i := 0; i < 3; i++ {
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	if l := gone.all(); len(l) != 0 {
+		t.Fatalf("a new run was timed from the old one: %q", l)
+	}
+}
+
+// A probe already in flight when CloseCircuits runs belongs to the circuit
+// that was closed: its one failure does not open the new one.
+func TestAProbeInFlightAtTheCloseDoesNotReopenOnOneFailure(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.CallTimeout = time.Hour
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ {
+		g.GetContext(context.Background(), k)
+	}
+	time.Sleep(110 * time.Millisecond) // OpenFor: the next call probes
+	hold := make(chan struct{})
+	inner.mu.Lock()
+	inner.hold = hold
+	inner.mu.Unlock()
+	done := make(chan struct{})
+	go func() { defer close(done); g.GetContext(context.Background(), k) }()
+	eventually(t, "the probe to reach the store", func() bool { return inner.count() == 4 })
+	g.(Closer).CloseCircuits("a store health check passed")
+	close(hold) // the probe fails, after the close
+	<-done
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
+		t.Fatalf("a probe from before the close reopened the circuit on one failure (%v)", v)
 	}
 }
