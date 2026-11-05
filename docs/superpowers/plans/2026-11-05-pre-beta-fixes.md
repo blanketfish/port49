@@ -14,7 +14,7 @@
   - a passing health check closes the token and context circuits (Task 12);
   - a call that arrives with its deadline already spent is not a store failure (Task 13);
   - the remaining 5 s loops take the store wait's schedule (Task 15).
-- **Release and go-public work** is in Tasks 20 to 23. The docs follow in Tasks 5, 24 and 25.
+- **Release and go-public work** is in Tasks 20 to 23. The docs follow in Tasks 5, 24 and 25, and Task 26 runs the full lab regression before the PR merges.
 
 **Tech Stack:** Go 1.26, `go.etcd.io/etcd/client/v3`, `github.com/prometheus/client_golang`, `gopkg.in/yaml.v3`, all already in go.mod; no new module. Prometheus `promtool` and gitleaks at their Makefile pins. Python setuptools at `packaging/requirements-release.txt`'s pin.
 
@@ -58,11 +58,17 @@ The controller's rulings in `progress.md` bind. These are the planner's own call
 
 1. **The floor's two parts** (Task 3; the moot sections of identity and stores).
    - `floor` is the drop read's header, held until the next drop replaces it. It never refuses a fresh mint, because revisions only rise on one timeline.
-   - Without `--bump-revision`, a second restore to a newer snapshot of the old timeline can be unseen. Its witness and header can both sit above the first drop's values and below the old record. So a drop whose header is below the highest header read before it (`high_header`) also sets a `band`: tokens at or below `high_header` whose `MintedAt` is not after the drop read are refused too, for `policy.MaxTokenTTL` + `restoreSkew` (20m) after the read.
+   - Without `--bump-revision`, a second restore to a newer snapshot of the old timeline can be unseen. Its witness and header can both sit above the first drop's values and below the old record. So a drop whose header is below the highest header read before it (`high_header`) also sets a `band`: tokens at or below `high_header` whose `MintedAt` is not after the drop read plus `restoreSkew` are refused too, for `policy.MaxTokenTTL` + `restoreSkew` (20m) after the read.
    - **Disagreement with identity's text:** it holds the band by revision alone. That refuses every fresh mint on the non-bumped timeline until its revisions pass the old header, which can take hours (a token lockout, the 3am cost this review set out to remove). The `MintedAt` term keeps a fresh mint served.
-   - **The residual, stated on the drop line and in the runbook:** on the non-bumped path only, a restored token whose minting broker's clock ran ahead of port49d's, by more than the time from its mint to the drop read, is served. That time is at least the first restore's own length. `--bump-revision` (the runbook) closes it, because then `floor` ≥ `high_header`, and no band is armed.
-   - The controller's "a fresh mint is never refused" therefore holds outright with `--bump-revision`. Without it, it holds unless the minting broker's clock is behind port49d's by more than the time since the drop read.
-2. **Drop detection also compares the header** (new; neither reviewer proposed it). A linearizable read's header never falls on a live cluster. A header below the highest one read on the current timeline is a restore without `--bump-revision`, even when the witness did not move. It costs nothing and narrows the band's case.
+   - **The cutoff is the drop read plus `restoreSkew`** (pre-flight I4; controller). A broker within port49's 5m clock tolerance never opens it.
+     - **The residual** needs all of: a non-bumped restore; a second old-timeline restore that no read tells, within 20m; a broker clock more than 5m ahead of port49d's, outside every tolerance port49 states; and a token redeemed between the second snapshot and the first restore. It is stated once in spec decision 56 ruling 1 and once in the failure matrix.
+     - **The cost**, on the non-bumped path only: a token minted within 5m after the drop read whose revision is at or below `high_header` is refused once. A token minted after the timeline's revision passes `high_header` is served whatever its clock.
+   - `--bump-revision` (the runbook) arms no band, because then `floor` ≥ `high_header`. So the controller's "a fresh mint is never refused" holds outright with the bump, and without it holds except for that 5-minute cost.
+   - **Not built: a fully clock-free band.** The runner's restore purge could re-create `meta/witness` so that its CreateRevision falling is a clock-free drop. It needs a runner that saw the drop. It is in "Left for later" as the path if Ryan rules the clock term out (controller).
+2. **Drop detection also compares the header, and the witness against a header** (new; neither reviewer proposed it; the second part is pre-flight m3).
+   - A linearizable read's header never falls on a live cluster. A header below the highest one read on the current timeline is a restore without `--bump-revision`, even when the witness did not move.
+   - On one timeline a key's new ModRevision is above every header read before it. So a witness that changes to a revision at or below a header already read (`witness_header`) is a drop. This is clock-free, with no false positive, and it tells a second restore whenever the first restore's timeline was read past the second snapshot's witness.
+   - A false drop costs one `token_spent` refusal per outstanding token and a ticket, never a lockout (pre-flight doubt (b)).
 3. **The unjudged hold stays** (identity: "not moot, kept"). After a failed `RestoreRead`, every redemption is refused `store_unavailable` until a read answers.
    - Each run's first pass is made synchronously, before the listeners open, so a run's start has no unjudged window.
    - The hold gets a gauge, `port49_redemption_restore_unjudged`, and a 2m page. It is the one refusal state the new design keeps, and it refuses every token login, so it pages. It is never silent (stores I4, deploy I3).
@@ -76,6 +82,7 @@ The controller's rulings in `progress.md` bind. These are the planner's own call
      - a record of another prefix is no record, and is said;
      - an unreadable record is moved aside and makes the first read a drop, which fails closed;
      - an absent record is said once at start.
+   - **Durable is not independent** (pre-flight I8). A backup that copies the spool directory with the store (Velero's file-system backup, `examples/velero/schedule.yaml`) restores `restore.json` with it. port49d then cannot tell that restore, and neither can a broker whose `witness.json` came back too. Design §13's step 3 token delete is then required, not a belt. The Velero README and the failure matrix say so (Task 5).
 6. **`meta/purged` is removed entirely** (no-deprecation). port49d no longer reads it, so nothing does.
    - The runner's purge still re-reads the witness before it resets its record.
    - The daemon role loses `purged`. `PutPurged` and `RestoreRead.Purged` go.
@@ -86,9 +93,8 @@ The controller's rulings in `progress.md` bind. These are the planner's own call
    - A deny-only role on an include scope still loads.
 9. **`security_log` for deny-bearing attribute scopes** (policy I2). It defaults to `true`. An explicit `security_log: false` loads, and `Lint` reports it as `deny_scope_unlogged`. A refusal would turn the spec's SHOULD into a MUST, and this way the author can still opt out on purpose. `platform_changed` becomes a security change.
 10. **The other 5 s loops** (stores: hold "fine at 5 s"; identity: "move to `storeAttemptEvery`"). Taken: all four move to the store wait's schedule and to `outageSayer`. That is one schedule, and it removes up to 5 s from the time mints stay closed after the store returns.
-11. **port49d's `inventory.max_removed_percent` under a service** (policy moot). Follow the verdict: with `inventory.service` set, it defaults to 100. A removal denies more, never less, so this weakens no security. The availability guard stays with the service, which counts first.
-12. **XR over TCP on an ERROR** (devices I2). QUAL is not a §15 row. So the README's XR ERROR row says "final over TLS (L73)". Over TCP it says the qualification vet saw it final and that no §15 row measured it, and it opens L93. Task 24 may close L93 on beehive.
-13. **Moot verdicts followed:**
+11. **XR over TCP on an ERROR** (devices I2). QUAL is not a §15 row. So the README's XR ERROR row says "final over TLS (L73)". Over TCP it says the qualification vet saw it final and that no §15 row measured it, and it opens L93. Task 24 may close L93 on beehive.
+12. **Moot verdicts followed:**
     - `mfaTokenKey` PutOnce: removed (controller).
     - `issueKey` PutOnce: kept (controller).
     - The lab `synchronize` label: moot (controller). It is recorded in Task 25.
@@ -97,6 +103,10 @@ The controller's rulings in `progress.md` bind. These are the planner's own call
     - The `ProtectSystem=strict` absence: not moot, no change (deploy).
     - The label jobs' log filter: kept (deploy).
     - None of these weakens security.
+13. **A moot verdict rejected** (controller, after pre-flight I5): policy's "port49d's `inventory.max_removed_percent` defaults to 100 under a service". It stays at 10.
+    - The service's first sync after its state is lost is bounded by nothing (`internal/inventory/safety.go:31`). A partial NetBox page at a service restart would then take most of the fleet out of admission.
+    - The same bound is the only check on port49d's own policy file's admission effect (`reload.go:702`).
+    - The two-bound decommission is a daytime change. The spec sentence "a deliberate large removal raises both" stays.
 
 ## Lanes
 
@@ -105,22 +115,23 @@ Tasks are numbered in priority order. Lanes group them by the code they touch, s
 | Lane | Tasks, in order | Files it owns |
 |---|---|---|
 | 0 (first, alone) | 1 | the spec |
-| A, restore and runner | 2, 3, 4, 5, 9, 15 (15 after 12) | `internal/store/etcd`, `internal/store/{store,memory,crypt}`, `internal/port49d` (restore, runner, brokerd, store wiring), `internal/daemon/metrics`, `deploy/alerts`, `deploy/failure-matrix.md`, `tests/compose` |
+| A, restore and runner | 2, 3, 4, 5, 9, 15 (15 after 9 and 12) | `internal/store/etcd`, `internal/store/{store,memory,crypt}`, `internal/port49d` (restore, runner, brokerd, store wiring), `internal/daemon/metrics`, `deploy/alerts`, `deploy/failure-matrix.md`, `tests/compose` |
 | B, broker and client | 6, 8, 16, 18 | `internal/broker`, `internal/config` (identity), `internal/bundle/document.go`, `cmd/port49`, `internal/agent`, `tests/lab` (OIDC, regions) |
-| C, store guard | 12, 13 | `internal/store/guard`, `internal/port49d/health.go` |
-| D, daemon protocol | 10, 17 (after 3) | `internal/daemon/{authen,author,acct,server}`, `internal/username`, `internal/decision` |
-| E, policy | 7, 11, 19 | `internal/policy`, `internal/bundle/diff.go`, `internal/projection`, `internal/port49d/{coldstart,reload}.go`, `internal/config` (inventory) |
+| C, store guard | 12 (after 2), 13 | `internal/store/guard`, `internal/port49d/health.go` |
+| D, daemon protocol | 10 (after 3), 17 (after 3) | `internal/daemon/{authen,author,acct,server}`, `internal/token/format.go`, `internal/decision` |
+| E, policy | 7, 11, 19 | `internal/policy`, `internal/bundle/diff.go`, `internal/projection`, `internal/port49d/coldstart.go`, the policies in `tests/qual` and `tests/lab` (Task 7) |
 | F, release and go-public | 20, 21, 22, 23 | `clients/python`, `packaging`, `.github/workflows`, `go.mod`, `tests/ci`, `tests/lab/labpcap`, `.gitleaks*`, `docs/superpowers/plans/*` (old plans), personal paths |
 | G, alerts and device docs | 14 (after 5), 24 (after 5 and 8) | `deploy/alerts` (after A), `deploy/helm`, `deploy/device-aaa` |
-| last | 25 | the roadmap |
+| last | 25, then 26 | the roadmap; the full `make lab-regress` |
 
-Task 15 touches `internal/port49d/store.go` beside Task 12's wiring, so it waits for 12. Task 14 and Task 24 edit files Task 5 rewrites, so they wait for 5. Task 24 also waits for Task 8, which edits the spec's L74 row. Task 1 is the only other spec edit, and it runs first.
+Task 10 edits `authen.go` beside Task 3, and Task 12 edits `guard.go` beside Task 2, so each waits for that merge. Task 15 touches `internal/port49d/store.go` beside Task 12's wiring and `runner.go` beside Task 9, so it waits for both. Task 14 and Task 24 edit files Task 5 rewrites, so they wait for 5. Task 24 also waits for Task 8, which edits the spec's L74 row. Task 1 is the only other spec edit, and it runs first.
 
 **Lab runs:**
 - **Task 6:** `make lab-oidc` (L45, L46), re-measured on issuance, on beehive.
 - **Task 8:** `make lab-regions`, a new L74 cell (j), on beehive.
 - **Task 24 (optional):** a new row, L93, on XRd 26.1.1, on beehive.
 - **CI, not lab:** Tasks 5 and 12 rerun the compose failure matrix.
+- **Task 26, after Task 25 and before the PR merges:** `make lab-regress` in full on beehive (about 737 minutes), under the lab lock and the stall watchdog. Its summary goes in the PR body. A failing cell is reported and never worked around (pre-flight I9; roadmap: "The pre-beta review runs `make lab-regress` in full").
 - No task needs a hardware key.
 
 ## Review Focus
@@ -129,9 +140,9 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 
 1. **The spool directory is full or read-only, so `restore.json` cannot be saved.** port49d keeps serving, keeps the record in memory, says it once, and saves again each second (Task 3, `TestARecordThatCannotBeSavedKeepsServingAndSaysSoOnce`).
 2. **A restored enable token** is refused like a login token. The floor runs on every candidate kind (Task 3, `TestARestoredEnableTokenIsRefusedTokenSpent`).
-3. **A port49d on the memory store** never applies a floor, and a token with `Revision` 0 there is served (Task 3, `TestTheMemoryStoreHasNoFloor`).
+3. **A port49d on the memory store** never applies a floor: a `runOnce` on memory logs in with a minted token. Under a floor, a token whose `Revision` a wrapper dropped (0) is still refused (Task 3, `TestTheMemoryStoreHasNoFloor`, `TestATokenWithNoRevisionIsRefusedUnderAFloor`).
 4. **A shipped example policy uses `on_missing: include` on a grant.** Task 7's refusal would then break `deploy/examples` at load. Every committed policy must still load (Task 7, `TestEveryShippedPolicyLoads`).
-5. **A restore found at a run's first pass while the read fails.** The listeners open with redemptions held, the gauge reads 1 before the first device connects, and break-glass (not a token) is unaffected (Task 3, `TestARunWhoseFirstReadFailsOpensHeldAndGauged`).
+5. **A restore found at a run's first pass while the read fails.** The listeners open with redemptions held, the gauge reads 1 before the first device connects, and break-glass is as under any ERROR (Task 3, `TestARunWhoseFirstReadFailsOpensHeldAndGauged`).
 
 ---
 
@@ -148,25 +159,24 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - a new §15 row L93.
 
 - [ ] **Step 1: Write decision 56, "The pre-beta review's fixes (2026-11-05)".** Give one ruling per item. Each ruling states the behaviour and the finding it closes:
-  1. **The restore floor**, Task 3's design, word for word from Task 3's Step 3 block. It closes stores C1 and identity I1, I2 and I5 (with ruling 2), stores I4 and deploy I3. It supersedes decision 36's guard sentences ("and so does port49d's own guard … arms no …") and decision 55 ruling 15. Mark both of those "*Superseded by decision 56 ruling 1*" in place, and leave their text otherwise as the record.
+  1. **The restore floor**, Task 3's design, word for word from Task 3's Step 3 block, with the band's residual and cost as the planner's ruling 1 states them (this is the one place in the spec that states the residual). It closes stores C1 and identity I1, I2 and I5 (with ruling 2), stores I4 and deploy I3. It supersedes decision 36's guard sentences ("and so does port49d's own guard … arms no …") and decision 55 ruling 15. Mark both of those "*Superseded by decision 56 ruling 1*" in place, and leave their text otherwise as the record.
   2. The runner's restore purge also deletes the `on/` and `mp/` families.
   3. A revocation made in a region cut from the directory still reaches that region's session store (Task 8).
-  4. A person's ID token is never a bearer. A human `oidc` verifier requires `broker.identity.issuance`. This amends decision 43 ruling 13 and retires plan 7h's bearer path for people (Q1).
+  4. A person's ID token is never a caller's credential on any broker. It is taken only at `POST /v1/certificate` (with `issuance`) and at `POST /v1/mfa` as an `idp_mfa` proof (decision 45 ruling 20). This amends decision 43 ruling 13 and retires plan 7h's bearer path for people (Q1).
   5. A grant on an `on_missing: include` scope whose roles carry a permit, or which sets `max_privilege`, is a load error (§5.5).
   6. An attribute scope that delivers a deny defaults to `security_log: true`, and `platform_changed` is a security change (§10).
   7. A passing store health check closes the token and context pools' circuits (amends decision 35).
   8. A call whose caller's deadline had passed before it entered is counted `deadline_on_entry`, not as a store failure (amends decision 35).
   9. A full logout queue owes a rescan of the logout set and never drops a logout's reach.
-  10. With `inventory.service` set, port49d's `inventory.max_removed_percent` defaults to 100. The sentence "a deliberate large removal raises both" goes.
-  11. A token-shaped username is never logged: `session.username` is empty and `session.username_redacted` is true.
-  12. An enable token is refused `credential_mismatch` unless its principal is the escalated context's.
-  13. An authorization or accounting packet with `seq_no` other than 1 is a protocol error.
-  14. The `mfaTokenKey` once-record is removed (the nonce-bound challenge is taken once already).
+  10. A token-shaped username (after trimming spaces and CR) is never logged: `session.username` is empty and `session.username_redacted` is true. A real 30-character alphanumeric username is redacted too, in the redeem, authorization and accounting records alike; that is the cost.
+  11. An enable token is refused `credential_mismatch` unless its principal is the escalated context's.
+  12. An authorization or accounting packet with `seq_no` other than 1 is a protocol error.
+  13. The `mfaTokenKey` once-record is removed (the nonce-bound challenge is taken once already).
 
 - [ ] **Step 2: Edit the §5.7 rows.**
   - `store_unavailable`: delete the restore clause. Add: "or, on `redeem` on etcd, port49d's last read of `meta/witness` failed, so it cannot tell whether the store was restored (`port49_redemption_restore_unjudged`; decision 56 ruling 1)".
   - `token_spent`: add: "or the token's store revision is at or below port49d's restore floor: an etcd restore brought it back (decision 56 ruling 1)".
-  - `credential_mismatch`: add the enable case of ruling 12.
+  - `credential_mismatch`: add the enable case of ruling 11.
   - Add `session.username_redacted` (bool) to the decision-log schema.
 
 - [ ] **Step 3: Edit §5.5 and §10.**
@@ -185,29 +195,25 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 
 ---
 
-### Task 2: The store: a token's revision, a create-only put, the once purge, and no `meta/purged`
+### Task 2: The store: a token's revision, a create-only put and the once purge
 
 **Files:**
 - Modify:
   - `internal/store/store.go`: `Token` gets `Revision`, and the `Store` interface gets `PurgeOnceRecords`;
   - `internal/store/etcd/tokens.go`: `liveTokens` fills `Revision`, and `PutToken` gets the create-only compare;
   - `internal/store/etcd/oidc.go`: `PurgeOnceRecords`;
-  - `internal/store/etcd/meta.go`: remove `PutPurged`, and remove `RestoreRead.Purged` and its read;
-  - `internal/store/etcd/roles.go`: `daemonMetaReads` loses `"purged"`, and so does any broker grant on it;
-  - `internal/store/memory/memory.go`, `internal/store/crypt/crypt.go` and `internal/store/guard/guard.go` (`PurgeOnceRecords` routed `Bulk`).
+  - `internal/store/memory/memory.go`, `internal/store/crypt/crypt.go` and `internal/store/guard/guard.go` (`PurgeOnceRecords` routed `Bulk`);
+  - `internal/daemon/authen/authen_test.go` (`noStore` at ~:373, asserted `store.Store` at ~:590, gets a `PurgeOnceRecords` that panics like its siblings).
 - Delete: `LatestTokenExpiry` and `ErrTokenRecord` (`tokens.go:299-345`), and `internal/store/etcd/tokens_expiry_test.go`.
 - Test:
   - `internal/store/etcd/tokens_test.go`, or the package's token test file;
   - `internal/store/etcd/oidc_test.go`;
-  - `internal/store/crypt/crypt_test.go`;
-  - `internal/store/etcd/roles_test.go`;
-  - `internal/store/etcd/meta_test.go`.
+  - `internal/store/crypt/crypt_test.go`.
 
 **Interfaces:**
 - Produces:
   - `store.Token.Revision uint64`: "the store revision this token's record was created at (etcd: the key's CreateRevision); 0 on the memory store. Never stored in the record, never sealed".
   - `(store.Store) PurgeOnceRecords(ctx context.Context) (int, error)`: deletes every `on/` and `mp/` record and returns how many. On memory it clears both maps.
-  - `etcdstore.RestoreRead{Witness, Header uint64}`: `Purged` is gone.
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestCandidatesCarryTheTokensCreateRevision` (etcd): put two tokens, then `Candidates`. Each `Revision` is nonzero, equals the key's `CreateRevision` read raw, and the later put's is larger.
@@ -220,11 +226,10 @@ The five failure modes these fixes imply that a reasonable operator meets first,
     - `PutOnce` ×2 and `PutMFAProof` ×1, then `PurgeOnceRecords` returns 3;
     - `TakeOnce` then answers not-found;
     - `lo/` and `oo/` records are untouched.
-  - `TestTheDaemonRoleReadsNoPurgeRecord` (roles): the daemon role grants no read of `meta/purged`.
 
 - [ ] **Step 2: Run them and see them fail.**
 
-  `TMPDIR=/tmp go test ./internal/store/... -run 'Revision|ExistingTokenKey|PurgeOnce|NoPurgeRecord' -count=1`
+  `TMPDIR=/tmp go test ./internal/store/... -run 'Revision|ExistingTokenKey|PurgeOnce' -count=1`
 
   Expected: FAIL. `Revision` and `PurgeOnceRecords` are undefined.
 
@@ -233,17 +238,17 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `PutToken`'s `If` gets `clientv3.Compare(clientv3.CreateRevision(s.k.token(k, t.ID)), "=", 0)`.
   - On `!resp.Succeeded`, `PutToken` reads the token key once. If the key exists, it returns the conflict without retrying, because the ID is taken. Otherwise it keeps today's index-moved retry.
   - Comment at `tokens.go:55`: the Txn is never hedged or re-sent, and the compare makes a late copy a refused one, not a second token (stores Moot 3).
-  - Delete `LatestTokenExpiry`, `ErrTokenRecord`, `PutPurged` and the `Purged` read.
+  - Delete `LatestTokenExpiry` and `ErrTokenRecord`. `PutPurged` and `RestoreRead.Purged` stay until Task 4, so the tree builds at every commit.
 
 - [ ] **Step 4: Run the package tests.**
 
   `TMPDIR=/tmp go test ./internal/store/... -count=1`
 
-  Expected: PASS. Fix the compile errors this leaves in `internal/port49d`: delete `restoreguard.go`'s scan and `RestoreRead.Purged` uses only so the package builds. Task 3 replaces the file, so leave `go vet ./internal/port49d/` to Task 3.
+  Expected: PASS. Fix the compile errors this leaves in `internal/port49d`: delete only `restoreguard.go`'s use of `LatestTokenExpiry` (its scan reads nothing; Task 3 replaces the file), so the package builds. Then `go vet ./...`. It compiles every package's tests and must pass at this commit.
 
 - [ ] **Step 5: Commit.**
 
-  `git add internal/store && git commit -m "feat: a token carries its store revision, its put is create-only, and the once records can be purged"`
+  `git add internal/store internal/port49d internal/daemon/authen/authen_test.go && git commit -m "feat: a token carries its store revision, its put is create-only, and the once records can be purged"`
 
 ---
 
@@ -284,7 +289,8 @@ The five failure modes these fixes imply that a reasonable operator meets first,
     - `(*restoreFloor) attach(path, prefix string)`, which opens the record on its first call;
     - `(*restoreFloor) begin(m *metrics.Metrics)`;
     - `(*restoreFloor) pass(ctx context.Context, callTimeout time.Duration, read func(context.Context) (etcdstore.RestoreRead, error)) bool`;
-    - `(*restoreFloor) keep(ctx context.Context, s *etcdstore.Store, callTimeout time.Duration)`, which follows, passes every `witnessEvery` and saves the record each second;
+    - `(*restoreFloor) keep(ctx context.Context, s *etcdstore.Store, callTimeout time.Duration)`, which follows, passes every `witnessEvery` and saves the record each second. `pass` saves at once when it judged a drop (pre-flight m2);
+    - `restoreFloor.save func(path string, body []byte) error`, `writeOwnerOnly` by default, so a test can fail it;
     - `Held`, `Restored` and `followed(rev uint64)`;
     - the test hooks `floorFollowed` and `floorPassed`, which replace `guardFollowed` and `restorePassed` with the same shape.
   - metrics (per-run registry; values the process holds are set again at `begin`):
@@ -303,7 +309,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
     - After it: floor is 500, band is 1010, and the band runs 20m from now.
     - Then `{985, 990}`, which is not a drop.
     - A token `{Revision: 970, MintedAt: now-2m}` is `Restored`.
-    - A token `{Revision: 995, MintedAt: now+1s}` is not.
+    - A token `{Revision: 995, MintedAt: now+restoreSkew+1s}` is not.
     - The output never contains "purge".
   - `TestASecondOldTimelineRestoreKeepsTheFirstDropsTokensRefused` (both identity probes, two subtests: `live` and `expired`).
     - Setup: a record of witness 50 and header 55; restore 1 `{10, 29}`; restore 2 `{45, 45}`.
@@ -322,7 +328,8 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `TestARestoreAfterATimeLiftIsDetected` → `TestARestoreAfterTheBandEndsIsStillTold`.
   - `TestAFreshMintAfterAnAllExpiredDropNeverArmsTheGuard` and `TestAMintMinutesAfterAnAllExpiredDropNeverGuards` → `TestAFreshMintIsNeverRestored`. Two subtests:
     - bump: drop `{480, 5_000_000_000}` after a header of 1010, so no band is armed, and a token `{Revision: 5_000_000_001}` is served;
-    - no bump: a token `{Revision: 600, MintedAt: now+1ms}` is served inside the band.
+    - no bump: a token `{Revision: 600, MintedAt: now+restoreSkew+1ms}` is served inside the band;
+    - no bump, the cost: `{Revision: 600, MintedAt: now+4m}` inside the band is `Restored`, and `{Revision: high_header+1, MintedAt: now}` is not.
   - `TestAClockStepBackAfterALiftStillRefusesARestoredToken` → `TestAClockStepBackNeverRevivesARestoredToken`. At now-1h, and at now+1h past the band, a token `{Revision: 400}` is still `Restored`.
   - `TestAQuietStoreRestoreStaysGuardedUntilTheLastTokenExpires` → `TestAQuietStoreRestoreRefusesATokenMintedAfterTheLastWitness`. The witness was last written at 02:00, a token minted at 03:00 has `Revision` 499, and the snapshot is at 03:00:00.4. After the drop at header 500 the token is `Restored`, with no time bound involved.
   - `TestARestoredTokenFromAClockAheadBrokerHoldsTheBound` → `TestTheFloorIgnoresMintedAt`. A token at or below the floor, with any `MintedAt`, including the zero time and now+1h, is `Restored`.
@@ -330,7 +337,8 @@ The five failure modes these fixes imply that a reasonable operator meets first,
     - "token_spent";
     - "a token minted after this read is served";
     - "design §13";
-    - "--bump-revision" (on the no-bump path only, with the residual of ruling 1);
+    - "--bump-revision" (on the no-bump path only, with the band's end time);
+    - "tokens minted since the restore and before this read are refused once too" (pre-flight m12);
     - and no "stop port49d".
   - `witness_test.go`:
     - `TestRestorePassedCountsPasses` → `TestFloorPassedCountsPasses`;
@@ -342,9 +350,14 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `TestARecordOfAnotherPrefixIsNoRecord` and `TestAnUnreadableRecordMakesTheFirstReadADrop`. The file is moved aside, and the line says that every token in the store is refused once.
   - `TestAnAbsentRecordIsSaidOnce`.
   - `TestTheHeaderFallingIsADrop`. The witness is unchanged at 1000, the header goes 1010 then 900, and that is a drop.
+  - `TestAWitnessThatMovesBelowAReadHeaderIsADrop` (pre-flight m3). A read of `{1000, 1010}`, then `{1005, 1012}`, is a drop. A read of `{1000, 1010}`, then `{1011, 1012}`, is not.
+  - `TestAFollowedWitnessBelowAReadHeaderIsADropAtTheNextPass`. After a read of `{1000, 1010}`, `Saw(1005)`, then a pass reading `{1005, 1012}`, is a drop. `Saw(1011)` then `{1011, 1012}` is not, and neither is a late `Saw(998)` after a read of `{1000, 1010}`.
   - `TestARestoredEnableTokenIsRefusedTokenSpent` (Review Focus 2; in `authen_test.go`).
-  - `TestTheMemoryStoreHasNoFloor` (Review Focus 3; in `authen_test.go`): a handler built as `main.go` builds it on memory, with no `WithRestoreFloor`, redeems a token whose `Revision` is 0.
-  - `TestARecordThatCannotBeSavedKeepsServingAndSaysSoOnce` (Review Focus 1). A read-only directory: `Held` stays false, one line, and the save is retried on the next tick.
+  - `TestTheMemoryStoreHasNoFloor` (Review Focus 3; in `internal/port49d`): a `runOnce` on the memory store logs in with a minted token.
+  - `TestATokenWithNoRevisionIsRefusedUnderAFloor`: with a floor set, a token whose `Revision` is 0 (a wrapper dropped it) is `Restored`.
+  - `TestARecordThatCannotBeSavedKeepsServingAndSaysSoOnce` (Review Focus 1). The injected `save` fails, so this also holds under `make test-root`: `Held` stays false, one line is said, and the save is retried on the next tick.
+  - `TestADropIsSavedAtOnce`: after a `pass` that judged a drop, the file holds the new floor before `keep`'s next tick.
+  - `TestARecordAnotherUserOwnsIsUnreadable`: a record refused by `ownedHere` is an unreadable record.
   - `TestARunWhoseFirstReadFailsOpensHeldAndGauged` (Review Focus 5).
   - `TestTheRestoreDetectedGaugeIsSetAgainInANewRun`. The process-held time is set into the next run's registry at `begin`.
 
@@ -382,33 +395,40 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   The algorithm, which no signature fixes. Decision 56 ruling 1 quotes it.
 
   ```text
-  record (restore.json, owner-only, beside accounting.spool_path; saved each second when changed):
+  record (restore.json beside accounting.spool_path; written with writeOwnerOnly and read after ownedHere,
+          as witness.json is, a refusal of either being an unreadable record; saved each second when changed,
+          and at once by a pass that judged a drop):
     prefix, witness, header       highest meta/witness ModRevision and read header since the last drop
+    witness_header                the header of the read that last showed witness
     high_header                   highest header ever read, across drops
     floor                         the latest drop read's header; 0: none
     band, band_from, band_until   see below; band 0: none
   a pass: take the record, then RestoreRead (Txn, linearizable)
     read error  -> held = true (said once per run of failures; unjudged gauge 1); nothing else changes
     read ok     -> held = false
-      drop := unread_record || have && (r.Witness < witness || r.Header < header)
+      drop := unread_record || pending_drop || have && (r.Witness < witness || r.Header < header
+                                          || r.Witness != witness && r.Witness <= witness_header)
       drop:  floor = r.Header
              band  = max(r.Header, high_header); if band > floor { band_from = now; band_until = now + MaxTokenTTL + restoreSkew } else band = 0
-             witness, header = r.Witness, r.Header; high_header = max(high_header, r.Header)
-             detected gauge = now; say the drop line
-      else:  witness, header, high_header = max with the read
-  Restored(t, now) = t.Revision <= floor
-                  || band != 0 && now.Before(band_until) && t.Revision <= band && !t.MintedAt.After(band_from)
+             witness, header, witness_header = r.Witness, r.Header, r.Header; high_header = max(high_header, r.Header)
+             pending_drop = false; detected gauge = now; say the drop line; save at once
+      else:  witness, header, high_header = max with the read; witness_header = r.Header when the read moved witness
+  Restored(t, now) = floor != 0 && t.Revision <= floor
+                  || band != 0 && now.Before(band_until) && t.Revision <= band
+                     && !t.MintedAt.After(band_from.Add(restoreSkew))
   ```
 
   More rules:
-  - `Saw` (the follower) raises `witness` only.
+  - `Saw` (the follower) never judges and never lowers. A followed `rev > witness_header` raises `witness`, and `witness_header` becomes `max(witness_header, rev)`, a lower bound that keeps the m3 rule free of false positives. A followed `rev` above `witness` and at or below `witness_header` sets `pending_drop`, which the next pass judges as a drop: no live put lands in that range. A followed `rev` below `witness` is a late watch event and changes nothing; a real fall is the pass's to judge. Without this, the follower could raise `witness` to a restored value before the pass reads it, and the pass would see no change.
   - An absent record says once: "no restore record at <path>: a restore made before this port49d's first read of the store cannot be told; start a broker first after a restore (design §13)".
   - An unreadable record is moved aside, as `openWitness` does, and sets `unread_record`.
+  - `ownedHere` and `writeOwnerOnly` (`statedir_linux.go:47,87`) take the line prefix as a parameter, in place of their fixed `"broker.state_dir "`.
   - The drop line, on stderr, says:
     - the witness or header it fell to and from;
     - that tokens at or below revision N are refused `token_spent`, and users mint again;
     - that a token minted after this read is served;
-    - on the no-bump path, the band's end time and ruling 1's residual, with "restore with --bump-revision (design §13)";
+    - tokens minted since the restore and before this read are refused once too;
+    - on the no-bump path, the band's end time, with "restore with --bump-revision (design §13)";
     - "revocations and marks made after the snapshot are lost: follow the restore runbook (design §13)".
   - `restoreSkew` stays at 5m, its comment rewritten for the band alone. `scanEvery`, `scanResult`, `needsScan`, `scanDue`, `arm`, `expired`, `drop`'s guard, `liftAt`, `bounded`, `why`, `cutoff`, `said` and `checked` all go.
 
@@ -436,18 +456,25 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 
 ---
 
-### Task 4: The runner's restore purge, and the floor end to end
+### Task 4: The runner's restore purge, no `meta/purged`, and the floor end to end
 
 **Files:**
-- Modify: `internal/port49d/runner.go`: `purgeRestored` (~:733) and `markPurged` (~:764), which becomes `confirmPurged`.
+- Modify:
+  - `internal/port49d/runner.go`: `purgeRestored` (~:733), `markPurged` (~:764), which becomes `confirmPurged`, and the takeover's `markPurged` call (~:1005);
+  - `internal/store/etcd/meta.go`: remove `PutPurged`, and remove `RestoreRead.Purged` and its read;
+  - `internal/store/etcd/roles.go`: `daemonMetaReads` loses `"purged"`, and so does any broker grant on it.
 - Test:
   - `internal/port49d/brokerd_test.go` (~:2166 and ~:2250);
-  - `internal/port49d/runner_test.go` (~:846 and ~:1086);
-  - `internal/port49d/witness_test.go` (~:326).
+  - `internal/port49d/runner_test.go` (~:846, ~:1086, ~:1102, ~:1111);
+  - `internal/port49d/witness_test.go` (~:326, ~:358, ~:370);
+  - `internal/port49d/store_test.go` (~:620: drop the `"purged"` subtest of `TestARefusedWitnessReadNamesStoreRoles`);
+  - `internal/store/etcd/meta_test.go` and `roles_test.go`.
 
 **Interfaces:**
 - Consumes: `PurgeOnceRecords` (Task 2), and `restoreFloor` with its record path (Task 3).
-- Produces: `(*runner) confirmPurged(ctx context.Context, over uint64) (bool, error)`. It reads `meta/witness` (`r.raw.Witness`), and reports whether its `ModRevision` is still `over`. Only then is the record `Reset`.
+- Produces:
+  - `(*runner) confirmPurged(ctx context.Context, over uint64) (bool, error)`. It reads `meta/witness` (`r.raw.Witness`), and reports whether its `ModRevision` is still `over`. Only then is the record `Reset`.
+  - `etcdstore.RestoreRead{Witness, Header uint64}`: `Purged` is gone.
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestPort49dRefusesARestoredTokenUntilTheRunnerPurges` becomes `TestPort49dRefusesARestoredTokenAndServesAFreshOne`. Keep the fleet, the snapshot, the redemption and the restore as they are, then check:
@@ -463,22 +490,25 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `TestTheRestorePurgeDeletesTheOnceRecords`: a `PutOnce` before the snapshot, then the restore. After the purge line, `TakeOnce` is not-found.
   - `runner_test.go`: `TestAPurgeDoneOnAnotherStoreWritesNoPurgeRecord` becomes `TestAPurgeUnderAMovedWitnessKeepsTheRecord`. Delete the `meta/purged` assertion at ~:846 from `TestATakeoverPurgesOnceTheBundleJudgedIsInDoubt`.
   - `witness_test.go`: `TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass` becomes `TestAPurgeUnderAMovedWitnessLeavesTheRecordForTheNextPass`.
+  - `TestTheDaemonRoleReadsNoPurgeRecord` (`internal/store/etcd/roles_test.go`): the daemon role grants no read of `meta/purged`.
 
 - [ ] **Step 2: Run them and see them fail.**
 
-  `TMPDIR=/tmp go test ./internal/port49d/ -run 'RestoredToken|OnceRecords|MovedWitness' -count=1 -timeout 600s`
+  `TMPDIR=/tmp go test ./internal/port49d/ ./internal/store/etcd/ -run 'RestoredToken|OnceRecords|MovedWitness|NoPurgeRecord' -count=1 -timeout 600s`
 
   Expected: FAIL, because `PurgeOnceRecords` is not called and `confirmPurged` is undefined.
 
 - [ ] **Step 3: Implement.**
   - `purgeRestored`: after `PurgeTokens`, `retryCtx(… PurgeOnceRecords …)`. The line adds "; N once-only records (sign-in challenges, proofs, nonces) deleted".
   - `markPurged` is replaced by `confirmPurged`. Its "meta/purged is not written" line becomes "meta/witness changed during the purge, so the store may not be the one purged; the next pass judges it again".
+  - Delete the takeover's `markPurged` call at `runner.go:1005`: a takeover purge resets no witness record.
+  - Remove `PutPurged`, `RestoreRead.Purged` and its read, and `"purged"` from the daemon role and the start's role probe.
 
-- [ ] **Step 4: Run the tests.** The same command. Expected: PASS.
+- [ ] **Step 4: Run the tests.** The same command, then `go vet ./...`. Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
-  `git add internal/port49d && git commit -m "feat: the restore purge deletes the once-only records, and the floor is tested end to end"`
+  `git add internal/port49d internal/store/etcd && git commit -m "feat: the restore purge deletes the once-only records, meta/purged goes, and the floor is tested end to end"`
 
 ---
 
@@ -491,7 +521,8 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `deploy/failure-matrix.md` (~:15, ~:40);
   - `tests/compose/failmatrix_test.go` (~:703, ~:949–990);
   - `deploy/device-aaa/README.md` (~:69);
-  - `docs/design/2026-08-21-port49-design.md`: §13 runbook ~:1774–1840 and §15 ~:2014, ~:2056.
+  - `docs/design/2026-08-21-port49-design.md`: §13 runbook ~:1774–1840 and §15 ~:2014, ~:2056;
+  - `deploy/helm/port49/examples/velero/README.md` (its Restore section).
 
 - [ ] **Step 1: Write the failing tests.**
   - In `port49.rules.test.yaml`:
@@ -509,7 +540,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 
 - [ ] **Step 3: Write the rules and the docs.**
   - **Rules.** Remove `port49_redemption_restore_guarded`. Add the two rules above.
-    - The page's summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness".
+    - The page's summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass".
     - The ticket's summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook".
     - Copy the file byte for byte to the chart.
   - **The failure matrix's 3am row**, which replaces the `restore_guarded` row:
@@ -517,12 +548,15 @@ The five failure modes these fixes imply that a reasonable operator meets first,
     - What the devices do: that one login is refused; a new token logs in; break-glass is as without the restore.
     - What to do: start a broker, which purges, and follow the runbook. No need to stop port49d.
     - Add a row for `port49_redemption_restore_unjudged`.
+    - State the band's residual once, in the row's "what the devices do" or a footnote, as decision 56 ruling 1 words it.
+    - After a restore that also restored the spool or `broker.state_dir` (Velero), the token delete of design §13 step 3 is required: port49d and the brokers cannot see that restore.
   - **Design §13 runbook:**
     - step 1 becomes "start a broker before any port49d whose spool directory was lost; port49d's own `restore.json` beside the spool tells the drop otherwise";
     - `--bump-revision` is required. Without it, the band and its residual apply (ruling 1);
-    - step 3's token delete stays as the belt to the purge's braces;
+    - step 3's token delete is required after a restore that also restored the spool or `broker.state_dir` (Velero); otherwise it is the belt to the purge's braces;
     - remove "never restart this port49d", the guard text at ~:1805–1813 and "stop port49d" as the escape.
   - **Design §15:** replace the guard metrics and the alarm with Task 3's three metrics and these two alerts. Add `deadline_on_entry` to the `port49_store_calls_total` outcome values, for Task 13.
+  - **The Velero README's Restore section:** "after a restore that includes `port49-etcd`, run the token delete (design §13 step 3) before scaling port49d up: the backup restores port49d's `restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore".
   - **`deploy/device-aaa/README.md`:** at ~:69, "Under the restore guard, it waits until port49d is stopped" goes. A restore no longer refuses break-glass.
 
 - [ ] **Step 4: Run the tests.**
@@ -537,35 +571,32 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 
 ---
 
-### Task 6: A person's ID token is never a bearer (identity I4; Q1) — lab run
+### Task 6: A person's ID token is never a caller's credential (identity I4; Q1) — lab run
 
 **Files:**
 - Modify:
-  - `internal/broker/broker.go` (~:771–782);
-  - `internal/config/identity.go` (`checkIssuance` ~:386, and the human verifier load);
+  - `internal/broker/broker.go` (`authenticate`, ~:771–782);
   - `internal/broker/issued.go` (`personBearerText` ~:18);
   - the 7h session refresh through the bearer (`internal/broker/sessionrefresh.go`), which is removed for people;
   - `tests/lab/oidc_test.go` and `tests/lab/oidc/` (the L45 and L46 harness, rebuilt on issuance).
-- Test:
-  - `internal/broker/broker_test.go`;
-  - `internal/config/identity_test.go`.
+- Test: `internal/broker/broker_test.go` and `internal/broker/mfa_test.go`.
+
+The fix is the `authenticate` change only (controller, after pre-flight I6). `idp_mfa` verifies a person's ID token through `bearerCaller` directly (`mfa.go:556–573`), so x509 people with an IdP second factor keep a human `oidc` verifier and need no issuance. No config refusal is added.
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestAPersonsIDTokenIsRefusedAsABearerOnEveryBroker`, on a broker with `Issuer == nil` and an `oidc` humans verifier: `/v1/tokens` with `Authorization: Bearer <a valid person's ID token from the test IdP>` is 401 `trust_domain_unresolved`, carrying `personBearerText`.
   - `TestAMachinesIDTokenIsStillABearer`: the k8s or machine verifier still mints.
-  - `TestAHumanOIDCVerifierRequiresIssuance` (config): `broker.identity.humans: [{kind: oidc, …}]` without `issuance` fails at load. The error names `broker.identity.issuance` and `issuance: {}`.
+  - `TestAnIDPMFAProofStillTakesTheIDTokenOnANonIssuingBroker`: an x509 humans broker, plus an `oidc` humans verifier, plus `per_login_mfa.idp_mfa`, with no issuance. `/v1/mfa` accepts the bearer proof, and `/v1/tokens` refuses the same token 401.
   - Delete or convert the tests that mint with a person's bearer. Name each one in the commit message.
 
 - [ ] **Step 2: Run them and see them fail.**
 
-  `TMPDIR=/tmp go test ./internal/broker/ ./internal/config/ -run 'Bearer|RequiresIssuance' -count=1`
+  `TMPDIR=/tmp go test ./internal/broker/ -run 'Bearer|IDPMFAProofStillTakes' -count=1`
 
 - [ ] **Step 3: Implement.**
   - Drop `b.Issuer != nil &&` from the case at ~:772.
-  - `personBearerText` becomes "a person's ID token is exchanged for a certificate at POST /v1/certificate (`port49 login`), never taken as a bearer (decision 56 ruling 4)".
+  - `personBearerText` becomes "a person's ID token is never a caller's credential: it is exchanged for a certificate at POST /v1/certificate (`port49 login`), or given as an idp_mfa proof at POST /v1/mfa (decision 56 ruling 4)".
   - Remove the bearer branch of the person's 7h refresh.
-  - `checkIssuance`, or the humans loader, refuses an `oidc` human verifier with no `issuance`.
-  - Update every committed config that has such a verifier and no issuance (`git grep -n 'kind: oidc'` under `deploy/`, `tests/`, `examples/`).
 
 - [ ] **Step 4: Run the tests.**
 
@@ -574,14 +605,14 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   Expected: PASS.
 
 - [ ] **Step 5: Lab, on beehive.**
-  - Rebuild L45 and L46's port49 side on `issuance: {}`, so `port49 login` exchanges the token.
+  - Where L45 or L46 mint with a person's bearer at `/v1/tokens`, rebuild that side on `issuance: {}`, so `port49 login` exchanges the token.
   - `make lab-oidc`. Both rows' assertions hold.
   - Append a "Re-measured on issuance (pre-beta fixes, <date>, <commit>)" section to their results notes, with the capture pointer.
   - The rows stay closed. A failing cell reopens the row and is reported; it is never worked around.
 
 - [ ] **Step 6: Commit.**
 
-  `git add internal/broker internal/config tests/lab deploy && git commit -m "feat: a person's ID token is never a bearer; a human OIDC verifier requires issuance"`
+  `git add internal/broker tests/lab && git commit -m "feat: a person's ID token is never a caller's credential"`
 
 ---
 
@@ -590,7 +621,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 **Files:**
 - Modify:
   - `internal/policy/load.go` (`buildGrants` ~:1638–1648);
-  - every committed policy whose grant sits on an include scope (`git grep -n 'on_missing: include'` under `deploy/`, `tests/`, `docs/` YAML).
+  - every committed policy, YAML or Go string, with an include scope: `git grep -n 'on_missing: include' -- deploy tests docs ':!tests/lab/logs' ':!tests/lab/captures'`. At `c0ad3498` that is `tests/qual/qual-policy.yaml` (:39–40), `tests/lab/l78.go` (:88), `tests/lab/load_harness_test.go` (:164) and `tests/lab/l60/broker_test.go` (:77). These are the policies the lab and the qualification suite load, so `make lab-unit` and `tests/qual` must stay green.
 - Test: `internal/policy/load_test.go`, and a new `TestEveryShippedPolicyLoads` in `internal/policy`, if none exists.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -598,15 +629,17 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `TestAGrantWithOnlyAMaxPrivilegeOnAnIncludeScopeIsRefused`: the role has no permit, the grant sets `max_privilege`, and the load is refused.
   - `TestADenyOnlyGrantOnAnIncludeScopeLoads`.
   - `TestTheRefusalForAnUndeclaredOnMissingRecommendsExcludeForAGrant`: the existing refusal's text now says "exclude for a grant; put a mitigation's deny in attached_roles on an include scope".
-  - `TestEveryShippedPolicyLoads` (Review Focus 4): every `*.yaml` under `deploy/examples` and `tests/policy` that `policy.Load` accepted at `c0ad3498` still loads.
+  - `TestEveryShippedPolicyLoads` (Review Focus 4): every `*.yaml` under `deploy/examples` and `tests/qual/` that `policy.Load` accepted at `c0ad3498` still loads.
 
 - [ ] **Step 2: Run them and see them fail.**
 
   `TMPDIR=/tmp go test ./internal/policy/ -run 'IncludeScope|DenyOnlyGrant|UndeclaredOnMissing|ShippedPolicy' -count=1`
 
-- [ ] **Step 3: Implement** the refusal in `buildGrants`, after the existing `onMissingDeclared` check: `sc.OnMissing == "include"` and (any role has `len(Permit) > 0` or `g.MaxPrivilege != ""`). Fix the fixtures the new test names.
+- [ ] **Step 3: Implement** the refusal in `buildGrants`, after the existing `onMissingDeclared` check: `sc.OnMissing == "include"` and (any role has `len(Permit) > 0` or `g.MaxPrivilege != ""`).
+  - Fix the four files above, and any fixture the new test names. A `platform:`-keyed scope moves to `exclude`: every device has a platform, so nothing changes.
+  - Build the lab files: `go vet -tags lab ./tests/lab/...`.
 
-- [ ] **Step 4: Run** `TMPDIR=/tmp go test ./internal/policy/ ./internal/bundle/ ./cmd/port49/ -count=1`. Expected: PASS.
+- [ ] **Step 4: Run** `TMPDIR=/tmp go test ./internal/policy/ ./internal/bundle/ ./cmd/port49/ ./tests/qual/... -count=1`, `make lab-unit` and `go vet -tags lab ./tests/lab/...`. Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
@@ -691,7 +724,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 
 **Files:**
 - Modify:
-  - `internal/username/username.go` (new func);
+  - `internal/token/format.go` (new func; `internal/token` already imports `internal/username`, so the func lives here, not there);
   - `internal/daemon/authen/authen.go` (`newRecord` ~:242);
   - `internal/daemon/author/author.go` (~:265);
   - `internal/daemon/acct/acct.go` (where `Session.Username` is set);
@@ -700,10 +733,10 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `internal/daemon/authen/authen_test.go`;
   - `internal/daemon/author/author_test.go`;
   - `internal/daemon/acct/acct_test.go`;
-  - `internal/username/username_test.go`.
+  - `internal/token/format_test.go`.
 
 **Interfaces:**
-- Produces: `username.Logged(raw string) (name string, redacted bool)`. It returns `"", true` when `token.Parse([]byte(raw))` says the name is token-shaped, and `Canonical(raw), false` otherwise.
+- Produces: `token.LoggedUsername(raw string) (name string, redacted bool)` in `internal/token/format.go`. It returns `"", true` when `Parse([]byte(strings.TrimSpace(raw)))` is true, and `username.Canonical(raw), false` otherwise. `TrimSpace` catches a pasted token with a trailing space or CR.
 
 - [ ] **Step 1: Write the failing tests.** These are the devices probe, ported.
   - `TestATokenTypedAsTheUsernameIsNeverLogged`, ASCII and PAP subtests:
@@ -711,22 +744,22 @@ The five failure modes these fixes imply that a reasonable operator meets first,
     - the record's `session.username` is `""` and `session.username_redacted` is `true`;
     - the reply is FAIL, as before.
   - The same assertion in author (`TestAnAuthorizationNamingATokenLogsNoUsername`) and acct (`TestAnAccountingRecordNamingATokenLogsNoUsername`).
-  - `TestLoggedRedactsOnlyTokenShapedNames`:
+  - `TestLoggedUsernameRedactsOnlyTokenShapedNames`:
     - `alice` gives `alice`, false;
-    - a 30-character base62 string gives `""`, true;
+    - a 30-character base62 string gives `""`, true, and so does the same string with a trailing `" \r"`;
     - a 30-character name with `.` gives the canonical name, false.
 
 - [ ] **Step 2: Run them and see them fail.**
 
-  `TMPDIR=/tmp go test ./internal/username/ ./internal/daemon/... -run 'TokenTypedAsTheUsername|NamingAToken|LoggedRedacts' -count=1`
+  `TMPDIR=/tmp go test ./internal/token/ ./internal/daemon/... -run 'TokenTypedAsTheUsername|NamingAToken|LoggedUsernameRedacts' -count=1`
 
 - [ ] **Step 3: Implement** the three call sites. The context key (`store.ContextKey.Username`) still uses the canonical name, because only the log is redacted.
 
-- [ ] **Step 4: Run** `TMPDIR=/tmp go test ./internal/username/ ./internal/daemon/... ./internal/decision/ -count=1`. Expected: PASS.
+- [ ] **Step 4: Run** `TMPDIR=/tmp go test ./internal/token/ ./internal/daemon/... ./internal/decision/ -count=1`. Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
-  `git add internal/username internal/daemon internal/decision && git commit -m "fix: a token-shaped username is never written to the decision log"`
+  `git add internal/token internal/daemon internal/decision && git commit -m "fix: a token-shaped username is never written to the decision log"`
 
 ---
 
@@ -821,6 +854,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
 - [ ] **Step 3: Implement.**
   - Add `"deadline_on_entry"` to `outcomes`, and to `leave`'s not-counted case beside `"saturated"`.
   - `do`'s early branch uses it.
+  - Rewrite the comment at `guard.go:340–345`: a deadline spent before entry is the caller's (decision 56 ruling 8, reversing review I1), and a store slow enough to spend it still fails the calls that spent it.
   - The docs name it already: Task 1 (decision 56 ruling 8) and Task 5 (design §15). This task touches no doc.
 
 - [ ] **Step 4: Run the guard tests and `./tests/alerts/`.** Expected: PASS.
@@ -928,14 +962,14 @@ This task covers identity M3 and M4, the `mfaTokenKey` removal, and policy M2 an
   - `TestAnIDPMFAProofWritesNoTokenOnceRecord`: after a proof, the store holds no `mfaTokenKey` record. A second use of the same ID token is refused by the spent challenge, as before.
   - `TestBindRefusalsSayWhenToTryAgain`: each 503 detail holds "try again in 30s", and none holds "the agent retries".
   - `TestAByNameNoGrantsDenyCarriesTheBundle`: `rec.Policy.Bundle` is set on `ErrNoGrants`.
-  - `TestADeviceNameOver253BytesIsRefusedByTheBundle`: `NameOK` refuses 254, and the broker's and the bundle's limits are one constant.
+  - `TestADeviceNameOver253BytesIsRefusedByTheBundle`: `DeviceNameOK` refuses 254, `NameOK` still takes a 255-byte platform or attribute key, and the broker's and the bundle's device-name limits are one constant.
 
 - [ ] **Step 2: Run** `TMPDIR=/tmp go test ./internal/broker/ ./internal/bundle/ -run 'TrailingData|TokenOnceRecord|TryAgain|NoGrantsDeny|Over253' -count=1`. Expected: FAIL.
 
 - [ ] **Step 3: Implement.**
   - The decoders use the same `dec.Token() == io.EOF` check as `admin_api.go:69`, in one shared helper `decodeOne(dec *json.Decoder, v any) error`.
   - `deny` always sets `Policy{Bundle: pol.Bundle}`.
-  - `bundle.MaxDeviceName = 253` is used by both, and the broker's refusal text no longer says "as the inventory names it".
+  - Add `bundle.DeviceNameOK` (≤ `bundle.MaxDeviceName`, 253) for device names; `NameOK` stays at 255 for platforms and attribute keys (`document.go:272–274`). The broker uses `MaxDeviceName`, and its refusal text no longer says "as the inventory names it".
 
 - [ ] **Step 4: Run** `TMPDIR=/tmp go test ./internal/broker/ ./internal/bundle/ ./internal/inventory/ -count=1`. Expected: PASS.
 
@@ -979,14 +1013,14 @@ After Task 3.
   - `internal/userconfig` (`LegacyPinsPath`, if nothing else uses it);
 - Test:
   - `internal/agent/socket_test.go`;
-  - `cmd/port49/devices_test.go:550`;
-  - `cmd/port49/ssh_fix_test.go:257`.
+  - `cmd/port49/devices_test.go:551` (`TestDevicesTrustIsGone`);
+  - `cmd/port49/ssh_hostkeys_test.go:297` (`TestTheKnownHostsFlagIsRefused`) and `:307` (`TestThe9aPinsFileIsNamedNotRead`).
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestTheTestSocketVariableIsRefusedForASocketAnotherUserOwns`. A socket file whose `Lstat` uid differs from `os.Getuid()`, or a path that is not a socket, makes the dial refused before connecting. Simulate the owner check through an injected `lstat`. A socket the caller owns is dialled.
   - `TestDevicesTrustIsAnUnknownCommand`: exit 2 with the usage text. Nothing mentions "removed in plan 9d".
   - `TestSSHSaysNothingOfAPinsFile` and `TestKnownHostsIsAnUnknownFlag`.
-  - Delete `devices_test.go:550`'s and `ssh_fix_test.go:257`'s tests of the removal lines, and name them in the commit.
+  - Delete the three tests that pin the removal lines, `TestDevicesTrustIsGone`, `TestTheKnownHostsFlagIsRefused` and `TestThe9aPinsFileIsNamedNotRead`, and name them in the commit. Keep `ssh_fix_test.go`'s `TestTheHostKeyHintIsConditionalOnSSHsMessage`: its `!Contains("devices trust")` stays true and useful.
 
 - [ ] **Step 2: Run** `TMPDIR=/tmp go test ./internal/agent/ ./cmd/port49/ -run 'TestSocket|DevicesTrust|PinsFile|KnownHosts' -count=1`. Expected: FAIL.
 
@@ -1000,35 +1034,32 @@ After Task 3.
 
 ---
 
-### Task 19: Policy small fixes (policy M1, M4, M5, moot 1)
+### Task 19: Policy small fixes (policy M1, M4, M5)
 
 **Files:**
 - Modify:
   - `internal/projection/project.go` (~:240–268);
   - `internal/port49d/coldstart.go` (~:285–300);
-  - `internal/config/config.go` (the inventory defaults), and `internal/port49d/reload.go:944`;
   - `internal/policy/scope.go:135` (`composeMarkedFor`, unused: delete it, no-deprecation).
 - Test:
   - `internal/projection/project_test.go`;
-  - `internal/port49d/coldstart_test.go`;
-  - `internal/config/config_test.go`.
+  - `internal/port49d/coldstart_test.go`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestProjectRechecksTheRenderedRegexes`: inject a rendering fault through a test hook on the ERE join, for example an alternation missing its anchor. `Project` returns an error naming the unsound vector, instead of a "proven" reply.
   - `TestAColdStartWithNoLocalCopySaysWhatItTook`: an empty `state_dir` and mirror. The start line is "no local copy; took bundle <N> published <T> from the service".
-  - `TestMaxRemovedPercentDefaultsTo100UnderAService`: with `inventory.service` it is 100; with only `inventory_file` it keeps its old default; an explicit value wins.
 
-- [ ] **Step 2: Run** `TMPDIR=/tmp go test ./internal/projection/ ./internal/port49d/ ./internal/config/ -run 'RenderedRegexes|NoLocalCopy|MaxRemovedPercent' -count=1`. Expected: FAIL.
+- [ ] **Step 2: Run** `TMPDIR=/tmp go test ./internal/projection/ ./internal/port49d/ -run 'RenderedRegexes|NoLocalCopy' -count=1`. Expected: FAIL.
 
 - [ ] **Step 3: Implement.**
   - `Project` compiles each rendered `allow-commands` and `deny-commands` value with `regexp.CompilePOSIX`, and checks them against `m.probes()` joined by spaces, beside `m.device`.
   - Fix the 12c operator note's `single_device` sentence in the roadmap (policy M1): "a device pinning it is refused admission; a `keys:` or `key_groups` entry naming it is refused at load". Task 25 owns the roadmap, so hand this line to Task 25.
 
-- [ ] **Step 4: Run the three packages** (port49d with timeout 600000). Expected: PASS.
+- [ ] **Step 4: Run the packages** (port49d with timeout 600000), and `./internal/policy/`. Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
-  `git add internal/projection internal/port49d internal/config internal/policy && git commit -m "fix: the projection rechecks its rendered regexes; a cold start says what it took; max_removed_percent defaults to 100 under a service"`
+  `git add internal/projection internal/port49d internal/policy && git commit -m "fix: the projection rechecks its rendered regexes, and a cold start says what it took"`
 
 ---
 
@@ -1085,7 +1116,7 @@ After Task 3.
 **Interfaces:**
 - Produces:
   - `func AuditEvidence(pcap []byte, opt Options) (EvidenceReport, error)`;
-  - `EvidenceReport{CredentialFields, NotFill, TokenShaped, HashShaped int}`. Counts only, with no bytes and no strings.
+  - `EvidenceReport{CredentialFields, NotFill, TokenShaped, HashShaped, Unaudited int}`. Counts only, with no bytes and no strings. `Unaudited` counts the streams not decodable as plain TACACS+ (RFC 9887 TLS runs, other protocols).
 
   `HashShaped` counts the accounting and authorization `cmd` and `arg` values matching:
   - `$1$`, `$5$`, `$6$`, `$9$` or `$aes1$`;
@@ -1095,7 +1126,7 @@ After Task 3.
 - [ ] **Step 1: Write the failing tests.**
   - `TestAuditEvidenceCountsANonFillCredential`: build a synthetic pcap with `synth_test.go`'s helpers whose PAP data is not all `Fill`. `NotFill` is 1, and the error names the field kind only.
   - `TestAuditEvidenceCountsAHashInAnAccountingArg`.
-  - `TestCommittedEvidenceHoldsNoCredential`: it runs over `tests/lab/evidence/*.pcap` with no capture needed. For each file it fails with only the file name and the counts. It never skips, because the evidence is committed.
+  - `TestCommittedEvidenceHoldsNoCredential`: it runs over `tests/lab/evidence/*.pcap` with no capture needed. For each file it fails with only the file name and the counts. It never skips, because the evidence is committed. It prints `Unaudited` per file, and fails on a file whose every stream is unaudited.
 
 - [ ] **Step 2: Run** `TMPDIR=/tmp go test ./tests/lab/labpcap/ -run 'AuditEvidence|HoldsNoCredential' -count=1`.
 
@@ -1115,7 +1146,7 @@ After Task 3.
 
 **Files:**
 - Modify:
-  - every file `git grep -lE 'claude\.ai/code/session|Claude-Session:[ \t]*https?://'` lists. At `c0ad3498` that is 38 files: 37 under `docs/superpowers/` and `docs/superpowers/handoff-2026-09-18-ser8.md`. CLAUDE.md's rule text names the trailer without a link and is left alone;
+  - every file `git grep -lE 'claude\.ai/code/session|Claude-Session:[ \t]*https?://'` lists. At `c0ad3498` that is 25 files, all under `docs/superpowers/plans/`. Files that name the trailer without a link (CLAUDE.md, the handoff and 12 plans) are left alone;
   - `.gitleaks.toml` (a new rule);
   - `.gitleaksignore` (the history's fingerprints for that rule);
   - `.github/workflows/leaks.yml`.
@@ -1131,7 +1162,7 @@ After Task 3.
     Assemble the fixture strings in code, so that no committed file matches.
   - `TestNoSessionLinkInTheTree`: `git ls-files`, skipping the never-read file patterns, then every tracked text file is read and none matches the rule's regex.
 
-- [ ] **Step 2: Run** `TMPDIR=/tmp go test ./tests/ci/ -run SessionLink -count=1`. Expected: FAIL (no rule; 38 files).
+- [ ] **Step 2: Run** `TMPDIR=/tmp go test ./tests/ci/ -run SessionLink -count=1`. Expected: FAIL (no rule; 25 files).
 
 - [ ] **Step 3: Implement.**
   - **The rule:**
@@ -1143,7 +1174,7 @@ After Task 3.
     keywords = ["claude.ai/code/session", "claude-session"]
     ```
   - **Delete every matching line at HEAD.** A line that only carries the link goes whole. In a quoted commit template, the trailer line goes and the template keeps its other lines. Do not rewrite history (Ryan, 2026-10-15).
-  - **The history's hits.** Run `make leaks` with the new rule and `--report-format json --report-path "$CLAUDE_JOB_DIR/tmp/leaks.json"` (redacted). Append every finding's `Fingerprint` for this rule to `.gitleaksignore`, under a comment: "claude-session-link: history before 2026-11-05, not rewritten (Ryan, 2026-10-15)". Print only the count.
+  - **The history's hits.** Run `make leaks` with the new rule, passing `--report-format json --report-path "$CLAUDE_JOB_DIR/tmp/leaks.json"` through `GITLEAKS_FLAGS` so that `--redact` still applies. Append every finding's commit-scoped `Fingerprint` for this rule to `.gitleaksignore`, as the existing 28 are, under a comment: "claude-session-link: history before 2026-11-05, not rewritten (Ryan, 2026-10-15)". Print only the count, and hand it to Task 25.
   - **CI.** `leaks.yml` also runs `go test ./tests/ci/ -run SessionLink`.
 
 - [ ] **Step 4: Run** `make leaks` and `TMPDIR=/tmp go test ./tests/ci/ -count=1`. Expected: PASS, and gitleaks reports no leak.
@@ -1235,15 +1266,18 @@ After Tasks 5 and 8 (both edit files this task edits: the failure matrix, and th
 - [ ] **Step 1: Record each pre-beta list item's outcome.** Give the task number that fixed it, or "Left for later" below with its reason. Also:
   - fix the false `up{job=<broker>}` sentence (Task 14) and the `single_device` sentence (Task 19);
   - record the lab `synchronize` item as moot (deploy Moot 1);
-  - add the fork-PR approval to the go-public list.
+  - record policy's `max_removed_percent` moot verdict as rejected, with its reason (planner's ruling 13);
+  - add the fork-PR approval to the go-public list;
+  - add to the go-public list: "history holds N `claude-session-link` fingerprints (`.gitleaksignore`), published with the history (Ryan, 2026-10-15: not rewritten). Reconfirm at go-public." N is Task 22's count;
+  - add the full `make lab-regress` (Task 26) and its outcome.
 
 - [ ] **Step 2: Write "Pre-beta fixes — As built".** List the operator-facing notes for the PR body:
   - the restore floor's lines, file, metrics and alerts;
   - the removed metrics and alert;
   - `session.username_redacted`;
-  - the config refusals (a human `oidc` verifier without issuance, an include-scope grant);
+  - a person's ID token refused as a bearer on every broker, and the include-scope grant refused at load;
   - `security_log`'s default;
-  - `max_removed_percent`'s default;
+  - after a Velero restore that includes `port49-etcd`, the token delete is required;
   - the new alerts and the PodMonitor;
   - `deadline_on_entry`;
   - the logout counter.
@@ -1251,6 +1285,16 @@ After Tasks 5 and 8 (both edit files this task edits: the failure matrix, and th
 - [ ] **Step 3: Commit.**
 
   `git add docs/superpowers/plans/README.md && git commit -m "docs: the roadmap records the pre-beta fixes"`
+
+---
+
+### Task 26: The full lab regression (pre-flight I9) — lab run
+
+After Task 25, before the PR merges. No hardware key is needed.
+
+- [ ] **Step 1: Run** `make lab-regress` in full on beehive (about 737 minutes), under the lab lock and the stall watchdog (re-arm it on wake). Follow the security rules: no body is decoded and no credential is printed.
+- [ ] **Step 2: Report.** Put its summary in the PR body (cells, passes, failures, the run's commit). A failing cell is reported to the lead with its note and never worked around. In particular, look at cells that met a restored token (now FAIL `token_spent`, before ERROR) or a harness policy with an include scope (Task 7).
+- [ ] **Step 3: Commit** any results notes the run writes: `git add tests/lab/results && git commit -m "docs: the pre-beta fixes' full lab regression"`. Copy raw pcaps to main's `tests/lab/captures/` before the lab worktree is removed.
 
 ---
 
@@ -1262,6 +1306,8 @@ Each item has a one-line reason. Items marked "plan 13" are documentation the do
 - **deploy M5** (more systemd sandboxing): it needs a measured run on the hosted runner's own systemd (L84's host cells). Unmeasured directives could stop a start. Do it before go-public.
 - **policy M5** (an `inventory.service.min_published_at` floor): a new key. Task 19 states the cold-start line, which is what the operator needs at 3am. The rest is bounded by the signature.
 - **identity P8 and P12** (`--broker-ca-fd` fstat, askpass pidfd test): neither is reachable by an attacker. P8 is the user's own fd.
+- **policy moot (`inventory.max_removed_percent` under a service):** kept at 10, the verdict rejected (controller, after pre-flight I5). The service's first sync after its state is lost is unbounded (`safety.go:31`), and the same bound holds port49d's own policy file's admission effect (`reload.go:702`). The two-bound decommission is a daytime change. The spec sentence stays.
+- **A fully clock-free restore band:** the runner's restore purge re-creates `meta/witness` (a delete and a put in one Txn, compared on ModRevision), and `RestoreRead` returns its CreateRevision. "The witness's CreateRevision fell" is then a clock-free drop, and the band lifts at the first read that shows a witness created above `floor`. It needs a runner that saw the drop. This is the path if Ryan rules the band's clock term out (controller; pre-flight doubt (a)).
 
 **Can wait:**
 - **Sealing `oo/` and `lo/`** records with principal AAD: a store writer can already delete marks and tokens.
@@ -1287,6 +1333,9 @@ Each item has a one-line reason. Items marked "plan 13" are documentation the do
 - **The gitleaks pre-commit hook and commit-scoped fingerprints:** the CI history scan is the gate.
 - **`Retry-After` with no jitter**, the `testpki` import grouping and the `addSamplerObserved` duplicate loop: cosmetic, and no reviewer judged them.
 - **The `l84DiskFloorMB` comment:** a comment.
+- **The `port49d` package's test time** (about 9 minutes, near `go test`'s 10m default; roadmap ~:5069): can wait, because the make targets set `-timeout`.
+- **`GOOS=darwin go vet -tags lab` failing at `tests/lab/l56_test.go:131`** (roadmap ~:7350): can wait until the next L56 touch.
+- **The CertNameToStr characters, the multi-valued RDN, and `identity_unmapped` printing the searched value** (roadmap ~:4566): can wait. They are unmeasured and in the directory area; plan 13 notes them.
 
 **Lab and platform:**
 - **L90's 32 parallel `ssh` appends to `known_hosts`:** unmeasured, and needs a lab run.
@@ -1321,8 +1370,30 @@ Checked against the five findings files, `progress.md` and the brief:
   - devices M1 (24), M2 and M3 (17);
   - policy M1 (19, 25), M2 and M3 (16), M4 and M5 (19, part), and the carried `composeMarkedFor` (19);
   - deploy M1, M2 and M6 (20), M3, M4 and M9 (14), M5 (left), M7 and M8 (23).
+
+  The pre-flight (0C/9I/14M, `.superpowers/pre-beta/preflight.md`) is taken as the controller ruled:
+  - I1: Task 10;
+  - I2: Tasks 2 and 4;
+  - I3: the lanes table;
+  - I4: ruling 1 and Task 3;
+  - I5: ruling 13 and "Left for later";
+  - I6: Task 6 and decision 56 ruling 4;
+  - I7: Task 7;
+  - I8: ruling 5 and Task 5;
+  - I9: Task 26;
+  - m1–m5 and m12: Task 3;
+  - m6: Task 22;
+  - m7: Task 18;
+  - m8: Task 16;
+  - m9: Task 13;
+  - m10: Task 10;
+  - m11: Task 21;
+  - m13: Task 5 and Review Focus 5;
+  - m14: "Left for later";
+  - doubt (a): "Left for later";
+  - doubt (f): Tasks 22 and 25.
 - **Types.**
-  - `store.Token.Revision`, `PurgeOnceRecords`, `RestoreRead{Witness, Header}`, `authen.RestoreFloor` and `restoreFloor`'s methods are named once and used with the same names in Tasks 2 to 5.
+  - `store.Token.Revision`, `PurgeOnceRecords`, `authen.RestoreFloor` and `restoreFloor`'s methods are named once and used with the same names in Tasks 2 to 5. `RestoreRead` loses `Purged` in Task 4, after Task 3 stops reading it, so every commit builds.
   - `guard.Closer` is used only by Task 12.
-  - `username.Logged` is used only by Task 10.
+  - `token.LoggedUsername` is used only by Task 10.
 - **Proportion.** Code blocks are the floor's algorithm, two interfaces and one TOML rule. Everything else is signatures, test names and assertions.
