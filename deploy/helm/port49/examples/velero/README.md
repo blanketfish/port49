@@ -56,6 +56,8 @@ backup, so a revoked principal or certificate is admitted again until it is re-i
 every token redeemed since, redeemable again while it has not expired. Run the runbook's steps that apply
 before the members serve clients or the brokers start:
 
+After a restore that includes `port49-etcd`, run the token delete (design §13 step 3) before scaling port49d up: the backup restores port49d's `restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore.
+
 1. Delete `v1/t/` (the token family) and `meta/judged` and `meta/judged_bundle`, with the members on
    loopback only.
 2. Re-issue the revocations made since the backup with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`).

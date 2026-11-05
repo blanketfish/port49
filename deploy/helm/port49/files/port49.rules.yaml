@@ -271,6 +271,17 @@ groups:
         labels: {severity: ticket}
         annotations:
           summary: "Workload certificates are being presented with under a quarter of their validity left: their renewal is late."
+      - alert: port49_redemption_restore_unjudged
+        expr: "port49_redemption_restore_unjudged == 1"
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass"
+      - alert: port49_store_restore_detected
+        expr: "(port49_store_restore_detected_timestamp_seconds > 0) and (time() - port49_store_restore_detected_timestamp_seconds < 86400)"
+        labels: {severity: ticket}
+        annotations:
+          summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook"
   - name: port49_directory
     rules:
       - alert: port49_directory_refresh_stale

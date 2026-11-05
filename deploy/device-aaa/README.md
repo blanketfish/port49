@@ -66,7 +66,7 @@ through to the local password (L4, both Junos images).
 
 **The cost, at 3am:** while port49 answers ERROR (its store is failing), an ERROR is final.
 Break-glass waits until go-dark closes the listener, about 5.5 s at the defaults, bounded at 10.5 s (L41), then
-logs in. Under the restore guard, it waits until port49d is stopped.
+logs in. A store restore does not add to the wait: port49d refuses a restored token with a `FAIL`, which falls through, and only a port49d that cannot read `meta/witness` answers `ERROR` (`port49_redemption_restore_unjudged`), which go-dark ends only when the store itself is failing; if the store answers and the daemon's role cannot read `meta/witness`, break-glass waits until that is fixed or port49d is stopped.
 
 Login classes are not in the file. Run
 `port49 platform export --classes --config port49d.yaml juniper_junos` and load its output;

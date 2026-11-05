@@ -249,6 +249,60 @@ tests:
       - eval_time: 6m
         alertname: port49_broker_mint_gate_closed
         exp_alerts: []
+  # port49_redemption_restore_unjudged
+  - interval: 1m
+    input_series:
+      - {series: "port49_redemption_restore_unjudged{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: port49_redemption_restore_unjudged
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: port49_redemption_restore_unjudged
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "page"}
+            exp_annotations:
+              summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass"
+  - interval: 1m
+    input_series:
+      - {series: "port49_redemption_restore_unjudged{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: port49_redemption_restore_unjudged
+        exp_alerts: []
+  # port49_store_restore_detected
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_restore_detected_timestamp_seconds{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_store_restore_detected
+        exp_alerts:
+          - exp_labels: {instance: "a", severity: "ticket"}
+            exp_annotations:
+              summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook"
+  - interval: 1m
+    input_series:
+      - {series: "port49_store_restore_detected_timestamp_seconds{instance=\"a\"}", values: "0+0x30"}
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: port49_store_restore_detected
+        exp_alerts: []
+  - interval: 1h
+    input_series:
+      - {series: "port49_store_restore_detected_timestamp_seconds{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: port49_store_restore_detected
+        exp_alerts: []
+  # the guard's alerts are gone
+  - interval: 1m
+    input_series:
+      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x30"}
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: port49_redemption_restore_guarded
+        exp_alerts: []
   # port49_store_directory_unreachable
   - interval: 1m
     input_series:
