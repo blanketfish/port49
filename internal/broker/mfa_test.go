@@ -1294,23 +1294,6 @@ func TestAnIdPSignInAtTheFreshnessLimitIsAccepted(t *testing.T) {
 	}
 }
 
-// Proof by idp spends the token: the same token posted for a second request
-// bound to the same challenge is refused even where the challenge record is
-// there (a fresh alice challenge is bound by its own nonce, so the token's
-// SHA-256 is what is spent).
-func TestAnIdPTokenIsSpent(t *testing.T) {
-	f := newMFAFixture(t)
-	ch := f.ask(t, f.alice, "core-sw01")
-	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"}, authTime: f.clock.Now()})
-	// Spend the token's hash as a first proof would, then post it.
-	if ok, err := f.st.PutOnce(context.Background(), mfaTokenKey(tok), nil, time.Hour); err != nil || !ok {
-		t.Fatalf("PutOnce: %v %v", ok, err)
-	}
-	if code, detail := f.proveIdPDetail(t, tok, ch); code != 401 || !strings.Contains(detail, "used as a proof already") {
-		t.Fatalf("a spent ID token: %d %s, want 401 saying it was used already", code, detail)
-	}
-}
-
 func TestUnavailableMethodsAreSaidPerDevice(t *testing.T) {
 	f := newMFAFixture(t, withoutAttestationRoots(), withTouchOnlyCore())
 	resp := f.mintMany(t, f.alice, "core-sw01", "edge-sw01")

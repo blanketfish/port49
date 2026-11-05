@@ -67,7 +67,7 @@ func (f FileSource) Fetch(context.Context) (admission.Inventory, error) {
 		if d.KeyRef == "" {
 			continue
 		}
-		if !bundle.NameOK(d.Name) {
+		if !bundle.DeviceNameOK(d.Name) {
 			// A key group cannot match a position: the name is fixed first.
 			return admission.Inventory{}, fmt.Errorf("%s: device %s pins key_ref; the inventory service never "+
 				"assigns keys, and its name is not one a policy key group can match: fix its name at the source, "+
@@ -106,9 +106,9 @@ func NewSources(cfgs []SourceConfig, log io.Writer) ([]Source, error) {
 }
 
 // deviceLabel is a device as a line names it: its name where the name can
-// reach a line as it is (bundle.NameOK), and otherwise its position.
+// reach a line as it is (bundle.DeviceNameOK), and otherwise its position.
 func deviceLabel(i int, name string) string {
-	if bundle.NameOK(name) {
+	if bundle.DeviceNameOK(name) {
 		return name
 	}
 	return fmt.Sprintf("#%d", i)

@@ -64,8 +64,8 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 	var named api.RefreshChallengeRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&named); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh challenge request")
+	if err := decodeOne(dec, &named); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh challenge request"+trailingNote(err))
 		return
 	}
 	nonce := make([]byte, api.RefreshNonceLen)
@@ -135,8 +135,8 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	var req api.RefreshRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh request")
+	if err := decodeOne(dec, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh request"+trailingNote(err))
 		return
 	}
 	// A live nonce consumed is paced, whether its answer verifies or not: a

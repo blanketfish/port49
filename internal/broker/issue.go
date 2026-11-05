@@ -158,8 +158,8 @@ func (b *Broker) issue(w http.ResponseWriter, r *http.Request) {
 	var req api.IssueRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&req) != nil {
-		refuse(http.StatusBadRequest, "bad_request", `the body is not a certificate request: {"csr": base64url DER}`)
+	if derr := decodeOne(dec, &req); derr != nil {
+		refuse(http.StatusBadRequest, "bad_request", `the body is not a certificate request: {"csr": base64url DER}`+trailingNote(derr))
 		return
 	}
 	der, err := base64.RawURLEncoding.DecodeString(req.CSR)

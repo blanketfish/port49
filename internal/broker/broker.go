@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/blanketfish/port49/internal/broker/api"
+	"github.com/blanketfish/port49/internal/bundle"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/directory"
@@ -48,19 +49,14 @@ import (
 // so a megabyte is generous and an unbounded read is a memory hazard (§17).
 const maxBody = 1 << 20
 
-// maxDeviceName is a DNS name's length, and maxIdempotencyKey is generous for
-// the agent's 32 hex characters. Both bound what a caller can make the broker
-// log or store (plan 3, pre-flight F11).
+// maxDeviceName is the bundle's device-name limit, one constant for what the
+// inventory admits and what a caller may name, and maxIdempotencyKey is
+// generous for the agent's 32 hex characters. Both bound what a caller can
+// make the broker log or store (plan 3, pre-flight F11).
 const (
-	maxDeviceName     = 253
+	maxDeviceName     = bundle.MaxDeviceName
 	maxIdempotencyKey = 128
 )
-
-// maxInventoryName is the longest name the bundle admits for a device
-// (bundle.NameOK). A sweep's after is a device name its last page returned
-// as next, so it takes every name the inventory holds; a devices list and a
-// scope keep maxDeviceName, which they have always had.
-const maxInventoryName = 255
 
 // blobsSeenMax bounds blobsSeen: a policy rewritten on a schedule mints a
 // new hash per device per rewrite, and the set must not grow with them.
@@ -415,7 +411,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	var req api.MintRequest
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := decodeOne(dec, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a mint request: "+err.Error())
 		return
 	}
@@ -437,7 +433,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	for _, name := range req.Devices {
 		if !deviceName(name) {
 			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf(
-				"a device name is 1 to %d printable ASCII characters, as the inventory names it", maxDeviceName))
+				"a device name is 1 to %d printable ASCII characters", maxDeviceName))
 			return
 		}
 		if seen[name] {
@@ -730,8 +726,8 @@ func sweepRequestError(req api.MintRequest, hasDevices bool) string {
 		return "name devices or a scope, not both (design §17)"
 	case !deviceName(req.Scope):
 		return fmt.Sprintf("a scope is 1 to %d printable ASCII characters", maxDeviceName)
-	case req.After != "" && !printable(req.After, maxInventoryName):
-		return fmt.Sprintf("a sweep's after is 1 to %d printable ASCII characters", maxInventoryName)
+	case req.After != "" && !printable(req.After, maxDeviceName):
+		return fmt.Sprintf("a sweep's after is 1 to %d printable ASCII characters", maxDeviceName)
 	}
 	return ""
 }
@@ -1383,9 +1379,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer),
 				OIDC: ca.OIDC, K8s: ca.K8s, DirectoryPassword: ca.DirectoryPassword},
 			Device: &decision.Device{Name: name, Platform: platform}, Sweep: sweepOf(req), PerLoginMFA: mfaRec}
-		if len(res.Subjects) > 0 {
-			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
-		}
+		rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
 		b.emitTo(buf, rec)
 		return api.MintItem{Device: name, Verdict: decision.VerdictDeny, Reason: string(reason)}
 	}

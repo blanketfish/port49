@@ -76,14 +76,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.DisallowUnknownFields()
-		err = dec.Decode(&req)
-		if err == nil {
-			// One object and nothing after it: a second one would otherwise
-			// be dropped unread, narrowing the request silently.
-			if _, terr := dec.Token(); terr != io.EOF {
-				err = errors.New("trailing data")
-			}
-		}
+		err = decodeOne(dec, &req)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a revocation request: "+
