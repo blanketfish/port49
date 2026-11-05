@@ -6,9 +6,9 @@ The backup holds `state/issuing-ca.key` (the issuing CA's private key), each bro
 
 The lab's etcd shares the release's namespace; the example Schedule names the release's namespace and the shipped etcd example's.
 
-- Date: 2026-11-04
+- Date: 2026-11-05
 - Platform: ubuntu24 20261101.360.1
-- Run: run 41870212174, attempt 1
+- Run: run 42070060908, attempt 1
 - Docker: 28.0.4
 - Kernel: 7.0.0-1017-azure
 - kind: kind v0.29.0 go1.24.2 linux/amd64
@@ -27,12 +27,16 @@ The lab's etcd shares the release's namespace; the example Schedule names the re
 |---|---|
 | (a) back up both StatefulSets, delete the namespace, restore: ownership, mode, readiness, the CA | PASS |
 | (b) after the restore, a mint and a login | PASS |
+| (c) the README's warning: a restore with both StatefulSets at 0 replicas hangs (the restore InProgress, its pod volume restores New, their pods absent) | PASS |
+| (d) the README's restore order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool | PASS |
 
 ## (a) back up both StatefulSets, delete the namespace, restore: ownership, mode, readiness, the CA: PASS
 
 | Case | Observation |
 |---|---|
 | the repository key in the cluster is the one generated for this run | yes |
+| a revocation before the backup (revoke-offline.sh), held in each broker's marks.json | data-t-broker-0: principal user:bob@example.com; data-t-broker-1: principal user:bob@example.com |
+| files hashed before the backup (each spool's sentinel, each broker's marks.json and CA certificate) | data-t-broker-0:/v/state/marks.json 356fd13d82da; data-t-broker-0:/v/state/issuing-ca.pem eda87e248bd9; data-t-broker-1:/v/state/marks.json 356fd13d82da; data-t-broker-1:/v/state/issuing-ca.pem eda87e248bd9; data-t-port49d-0:/v/data/l89-sentinel 68894a409393; data-t-port49d-1:/v/data/l89-sentinel f3e414e2c322 |
 | applying the example Schedule started no backup (skipImmediately skipped the first run) | yes |
 | the lab's etcd shares the release's namespace | yes: the Schedule names both namespaces, the lab applies it with the one |
 | the backup's phase | Completed |
@@ -44,8 +48,8 @@ The lab's etcd shares the release's namespace; the example Schedule names the re
 | the restore's phase | Completed |
 | both StatefulSets became ready | yes |
 | a fence refusal in a pod's log (the data directory writable by a group, or not owned by uid 65532) | no |
-| the fingerprint the broker's "issuing as" line prints (first 12), before and after | 3827e78a397f, 3827e78a397f |
-| the issuing CA's fingerprint (first 12 hex) before the backup, and after the restore | f2e63f159d4d, f2e63f159d4d |
+| the fingerprint the broker's "issuing as" line prints (first 12), before and after | ac885ded7f26, ac885ded7f26 |
+| the issuing CA's fingerprint (first 12 hex) before the backup, and after the restore | eda87e248bd9, eda87e248bd9 |
 | data-t-broker-0: before the backup | /v/state 700 65532:65532; /v/state/issuing-ca.key 600 65532:65532 |
 | data-t-broker-0: after the restore | unchanged |
 | data-t-broker-1: before the backup | /v/state 700 65532:65532; /v/state/issuing-ca.key 600 65532:65532 |
@@ -62,4 +66,47 @@ The lab's etcd shares the release's namespace; the example Schedule names the re
 | a mint after the restore | succeeded |
 | a login after the restore | succeeded |
 
-The register row closes only when both cells have a PASS or a FAIL; a FAIL is a measured answer.
+## (c) the README's warning: a restore with both StatefulSets at 0 replicas hangs (the restore InProgress, its pod volume restores New, their pods absent): PASS
+
+| Case | Observation |
+|---|---|
+| the namespace was deleted | yes, and its volumes |
+| the resource modifier as the lab runs it | the README's former restore-scale-zero.yaml (the lab's input now) with a resourceNameRegex the lab adds (its etcd shares the namespace) |
+| the restore l89-restore-c at 0 replicas did not end within 8m0s | it was in: velero restore create l89-restore-c --from-backup l89-backup --include-namespaces port49 <LONG> restore-scale-zero --wait |
+| the restore's phase when its wait was stopped | InProgress |
+| the pod volume restore of t-port49d-0/data when the restore's wait was stopped | New; pod t-port49d-0 absent |
+| the pod volume restore of t-broker-1/data when the restore's wait was stopped | New; pod t-broker-1 absent |
+| the pod volume restore of t-port49d-1/data when the restore's wait was stopped | New; pod t-port49d-1 absent |
+| the pod volume restore of t-broker-0/data when the restore's wait was stopped | New; pod t-broker-0 absent |
+| the restore's wait cannot end | a pod volume restore waits on a pod that does not exist: the README's warning, measured |
+
+## (d) the README's restore order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool: PASS
+
+| Case | Observation |
+|---|---|
+| cell (c)'s restore l89-restore-c before the recovery | phase InProgress |
+| the README's recovery from a restore at 0 replicas ran from its own text, and the restore is gone | yes |
+| Velero's restores after the recovery | none New or InProgress |
+| the namespace was deleted | yes, and its volumes |
+| README step 4 (the restore l89-restore-d of port49, its pods running) ran from its own text | yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2 |
+| what (d) cannot show | that port49 pods restored while etcd is held at 0 (the README's steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release |
+| README step 1's wait for etcd (the lab's etcd is restored with the release) | ready |
+| the restore's phase, as the README's volume check prints it | Completed |
+| the pod volume restore of t-broker-0/data | Completed |
+| the pod volume restore of t-broker-1/data | Completed |
+| the pod volume restore of t-port49d-0/data | Completed |
+| the pod volume restore of t-port49d-1/data | Completed |
+| README step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text | yes |
+| files hashed before the backup | data-t-broker-0:/v/state/marks.json 356fd13d82da; data-t-broker-0:/v/state/issuing-ca.pem eda87e248bd9; data-t-broker-1:/v/state/marks.json 356fd13d82da; data-t-broker-1:/v/state/issuing-ca.pem eda87e248bd9; data-t-port49d-0:/v/data/l89-sentinel 68894a409393; data-t-port49d-1:/v/data/l89-sentinel f3e414e2c322 |
+| the same files with both StatefulSets at 0, before the scale-up | data-t-broker-0:/v/state/marks.json 356fd13d82da; data-t-broker-0:/v/state/issuing-ca.pem eda87e248bd9; data-t-broker-1:/v/state/marks.json 356fd13d82da; data-t-broker-1:/v/state/issuing-ca.pem eda87e248bd9; data-t-port49d-0:/v/data/l89-sentinel 68894a409393; data-t-port49d-1:/v/data/l89-sentinel f3e414e2c322 |
+| marks.json is compared by its marks here | the brokers ran before the check, and a broker rewrites the file when the store and its copy disagree |
+| each broker's marks before the backup | data-t-broker-0: principal user:bob@example.com; data-t-broker-1: principal user:bob@example.com |
+| each broker's marks with both StatefulSets at 0 | data-t-broker-0: principal user:bob@example.com; data-t-broker-1: principal user:bob@example.com |
+| README step 2 (the delete Job of design 13 step 3) ran from its own text and completed | yes |
+| README step 8 (revoke-offline.sh) ran from its own text | yes |
+| README step 9 (the scale-up, brokers then port49d) ran from its own text and both rolled out | yes |
+| the issuing CA's fingerprint (first 12 hex) before the namespace was deleted, and after the scale-up | eda87e248bd9, eda87e248bd9 |
+| t-broker-0's log after the scale-up says it had no marks.json at this start | no |
+| t-broker-1's log after the scale-up says it had no marks.json at this start | no |
+
+The register row closes only when every cell has a PASS or a FAIL; a FAIL is a measured answer.

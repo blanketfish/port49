@@ -8,6 +8,14 @@
         "Observation": "yes"
       },
       {
+        "Case": "a revocation before the backup (revoke-offline.sh), held in each broker's marks.json",
+        "Observation": "data-t-broker-0: principal user:bob@example.com; data-t-broker-1: principal user:bob@example.com"
+      },
+      {
+        "Case": "files hashed before the backup (each spool's sentinel, each broker's marks.json and CA certificate)",
+        "Observation": "data-t-broker-0:/v/state/marks.json 356fd13d82da; data-t-broker-0:/v/state/issuing-ca.pem eda87e248bd9; data-t-broker-1:/v/state/marks.json 356fd13d82da; data-t-broker-1:/v/state/issuing-ca.pem eda87e248bd9; data-t-port49d-0:/v/data/l89-sentinel 68894a409393; data-t-port49d-1:/v/data/l89-sentinel f3e414e2c322"
+      },
+      {
         "Case": "applying the example Schedule started no backup (skipImmediately skipped the first run)",
         "Observation": "yes"
       },
@@ -53,11 +61,11 @@
       },
       {
         "Case": "the fingerprint the broker's \"issuing as\" line prints (first 12), before and after",
-        "Observation": "3827e78a397f, 3827e78a397f"
+        "Observation": "ac885ded7f26, ac885ded7f26"
       },
       {
         "Case": "the issuing CA's fingerprint (first 12 hex) before the backup, and after the restore",
-        "Observation": "f2e63f159d4d, f2e63f159d4d"
+        "Observation": "eda87e248bd9, eda87e248bd9"
       },
       {
         "Case": "data-t-broker-0: before the backup",
@@ -104,6 +112,150 @@
       {
         "Case": "a login after the restore",
         "Observation": "succeeded"
+      }
+    ]
+  },
+  {
+    "ID": "c",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "the namespace was deleted",
+        "Observation": "yes, and its volumes"
+      },
+      {
+        "Case": "the resource modifier as the lab runs it",
+        "Observation": "the README's former restore-scale-zero.yaml (the lab's input now) with a resourceNameRegex the lab adds (its etcd shares the namespace)"
+      },
+      {
+        "Case": "the restore l89-restore-c at 0 replicas did not end within 8m0s",
+        "Observation": "it was in: velero restore create l89-restore-c --from-backup l89-backup --include-namespaces port49 \u003cLONG\u003e restore-scale-zero --wait"
+      },
+      {
+        "Case": "the restore's phase when its wait was stopped",
+        "Observation": "InProgress"
+      },
+      {
+        "Case": "the pod volume restore of t-port49d-0/data when the restore's wait was stopped",
+        "Observation": "New; pod t-port49d-0 absent"
+      },
+      {
+        "Case": "the pod volume restore of t-broker-1/data when the restore's wait was stopped",
+        "Observation": "New; pod t-broker-1 absent"
+      },
+      {
+        "Case": "the pod volume restore of t-port49d-1/data when the restore's wait was stopped",
+        "Observation": "New; pod t-port49d-1 absent"
+      },
+      {
+        "Case": "the pod volume restore of t-broker-0/data when the restore's wait was stopped",
+        "Observation": "New; pod t-broker-0 absent"
+      },
+      {
+        "Case": "the restore's wait cannot end",
+        "Observation": "a pod volume restore waits on a pod that does not exist: the README's warning, measured"
+      }
+    ]
+  },
+  {
+    "ID": "d",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "cell (c)'s restore l89-restore-c before the recovery",
+        "Observation": "phase InProgress"
+      },
+      {
+        "Case": "the README's recovery from a restore at 0 replicas ran from its own text, and the restore is gone",
+        "Observation": "yes"
+      },
+      {
+        "Case": "Velero's restores after the recovery",
+        "Observation": "none New or InProgress"
+      },
+      {
+        "Case": "the namespace was deleted",
+        "Observation": "yes, and its volumes"
+      },
+      {
+        "Case": "README step 4 (the restore l89-restore-d of port49, its pods running) ran from its own text",
+        "Observation": "yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2"
+      },
+      {
+        "Case": "what (d) cannot show",
+        "Observation": "that port49 pods restored while etcd is held at 0 (the README's steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release"
+      },
+      {
+        "Case": "README step 1's wait for etcd (the lab's etcd is restored with the release)",
+        "Observation": "ready"
+      },
+      {
+        "Case": "the restore's phase, as the README's volume check prints it",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "the pod volume restore of t-broker-0/data",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "the pod volume restore of t-broker-1/data",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "the pod volume restore of t-port49d-0/data",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "the pod volume restore of t-port49d-1/data",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "README step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text",
+        "Observation": "yes"
+      },
+      {
+        "Case": "files hashed before the backup",
+        "Observation": "data-t-broker-0:/v/state/marks.json 356fd13d82da; data-t-broker-0:/v/state/issuing-ca.pem eda87e248bd9; data-t-broker-1:/v/state/marks.json 356fd13d82da; data-t-broker-1:/v/state/issuing-ca.pem eda87e248bd9; data-t-port49d-0:/v/data/l89-sentinel 68894a409393; data-t-port49d-1:/v/data/l89-sentinel f3e414e2c322"
+      },
+      {
+        "Case": "the same files with both StatefulSets at 0, before the scale-up",
+        "Observation": "data-t-broker-0:/v/state/marks.json 356fd13d82da; data-t-broker-0:/v/state/issuing-ca.pem eda87e248bd9; data-t-broker-1:/v/state/marks.json 356fd13d82da; data-t-broker-1:/v/state/issuing-ca.pem eda87e248bd9; data-t-port49d-0:/v/data/l89-sentinel 68894a409393; data-t-port49d-1:/v/data/l89-sentinel f3e414e2c322"
+      },
+      {
+        "Case": "marks.json is compared by its marks here",
+        "Observation": "the brokers ran before the check, and a broker rewrites the file when the store and its copy disagree"
+      },
+      {
+        "Case": "each broker's marks before the backup",
+        "Observation": "data-t-broker-0: principal user:bob@example.com; data-t-broker-1: principal user:bob@example.com"
+      },
+      {
+        "Case": "each broker's marks with both StatefulSets at 0",
+        "Observation": "data-t-broker-0: principal user:bob@example.com; data-t-broker-1: principal user:bob@example.com"
+      },
+      {
+        "Case": "README step 2 (the delete Job of design 13 step 3) ran from its own text and completed",
+        "Observation": "yes"
+      },
+      {
+        "Case": "README step 8 (revoke-offline.sh) ran from its own text",
+        "Observation": "yes"
+      },
+      {
+        "Case": "README step 9 (the scale-up, brokers then port49d) ran from its own text and both rolled out",
+        "Observation": "yes"
+      },
+      {
+        "Case": "the issuing CA's fingerprint (first 12 hex) before the namespace was deleted, and after the scale-up",
+        "Observation": "eda87e248bd9, eda87e248bd9"
+      },
+      {
+        "Case": "t-broker-0's log after the scale-up says it had no marks.json at this start",
+        "Observation": "no"
+      },
+      {
+        "Case": "t-broker-1's log after the scale-up says it had no marks.json at this start",
+        "Observation": "no"
       }
     ]
   }

@@ -11,10 +11,15 @@
 # naming the broker's own certificate (its etcd cert_file and key_file in another directory, where
 # you have put port49-etcd-broker's tls.crt and tls.key).
 #
-# Secret `port49-etcd-root` holds etcd's root client certificate (ca.crt tls.crt tls.key). UNVERIFIED
-# until Task 11's kind smoke runs it: the etcd image has no shell, so this Job runs alpine and
-# installs etcdctl from the distribution (needs egress to the package mirror: replace it with an
-# image of your own that carries etcdctl and a shell).
+# Secret `port49-etcd-root` holds etcd's root client certificate (ca.crt tls.crt tls.key).
+#
+# This Job fetches etcdctl from the Alpine package mirror at install time: etcd's image has no shell, and
+# applying roles.sh line by line needs one, so it runs alpine and installs etcdctl first. It needs egress
+# to the mirror when it runs; it runs once, at install, never during a restore (the restore's delete Job,
+# examples/velero/restore-unspent.yaml, runs etcdctl from etcd's own image and fetches nothing). To avoid
+# the fetch, replace the image with one of your own that carries etcdctl and a shell.
+#
+# A lab exercises it: the kind stack applies this Job in every kind run (tests/kind/stack.go:244).
 apiVersion: batch/v1
 kind: Job
 metadata:
