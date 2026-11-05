@@ -392,10 +392,10 @@ groups:
         annotations:
           summary: "The inventory service built the bundle in force against a policy other than port49d's own; port49d applies the inventory against its own policy."
       - alert: port49_inventory_privilege_changes
-        expr: "increase(port49_inventory_changes_total{kind=~\"key_ref_changed|transport_changed|platform_changed|admission_changed|address_added|scope_joined|scope_left|device_added\"}[1h]) > 0"
+        expr: "increase(port49_inventory_changes_total{kind=~\"key_ref_changed|platform_changed|admission_changed|address_added|scope_joined|scope_left|device_added\"}[1h]) > 0"
         labels: {severity: ticket}
         annotations:
-          summary: "A source-of-truth edit moved privilege: a device changed key, transport or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
+          summary: "A source-of-truth edit moved privilege: a device changed key or platform, was admitted or added, gained an address, or entered or left a security_log scope; the inventory_change record names the device."
   - name: etcd
     rules:
       - alert: etcd_no_leader
