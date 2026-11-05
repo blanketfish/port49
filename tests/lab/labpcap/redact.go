@@ -79,9 +79,9 @@ func (s Stats) String() string {
 		d = strings.Join(drops, " ")
 	}
 	return fmt.Sprintf("%d/%d records kept (dropped: %s), %d streams, %d TACACS+ packets, "+
-		"%d credential fields (%d bytes) overwritten across %d records, %d checksums recomputed, %d left stale",
+		"%d credential fields (%d bytes) overwritten across %d records, %d unframed stream-tail bytes filled, %d checksums recomputed, %d left stale",
 		s.RecordsKept, s.RecordsIn, d, s.Streams, s.Packets,
-		s.FieldsRedacted, s.BytesRedacted, s.RecordsPatched, s.ChecksumsRecomputed, s.ChecksumsLeftStale)
+		s.FieldsRedacted, s.BytesRedacted, s.RecordsPatched, s.TailBytes, s.ChecksumsRecomputed, s.ChecksumsLeftStale)
 }
 
 // patch is one byte of one record, rewritten.
@@ -529,8 +529,9 @@ func verifyBytes(inF, outF *File, inD *Decode, opt Options) error {
 // checkTLSOpens refuses a capture in which a connection to or from TLSPort carries data that does
 // not open with a TLS handshake record in some direction. It names the connection, never bytes.
 func checkTLSOpens(f *File) error {
-	seen := map[string]bool{}
-	for _, r := range f.Records {
+	streams := map[string]*Stream{}
+	var order []string
+	for i, r := range f.Records {
 		pkt := f.Bytes(r)
 		fl, ok := FlowOf(f.Link, pkt)
 		if !ok || (fl.SrcPort != TLSPort && fl.DstPort != TLSPort) {
@@ -538,20 +539,43 @@ func checkTLSOpens(f *File) error {
 		}
 		k := fmt.Sprintf("%s:%d>%s:%d", fl.Src, fl.SrcPort, fl.Dst, fl.DstPort)
 		if fl.SYN() { // a new connection on a reused 4-tuple is checked from its start
-			delete(seen, k)
-			delete(seen, fmt.Sprintf("%s:%d>%s:%d", fl.Dst, fl.DstPort, fl.Src, fl.SrcPort))
+			delete(streams, k)
+			delete(streams, fmt.Sprintf("%s:%d>%s:%d", fl.Dst, fl.DstPort, fl.Src, fl.SrcPort))
 			continue
 		}
 		if fl.PayloadLen == 0 {
 			continue
 		}
-		if seen[k] {
+		s := streams[k]
+		if s == nil {
+			s = &Stream{Key: k}
+			streams[k] = s
+			order = append(order, k)
+		}
+		s.add(fl.Seq, i, fl.PayloadOff, f.Payload(r, fl))
+	}
+	// Each direction, reassembled, is a run of TLS records: a known content type, version 3.x, and a
+	// length that leads to the next record. The first must be a handshake. A stream that only stops
+	// short (a capture cut mid-record) is fine; one that leaves the framing is not.
+	for _, k := range order {
+		s := streams[k]
+		if s == nil {
 			continue
 		}
-		seen[k] = true
-		if fl.PayloadLen < 2 || pkt[fl.PayloadOff] != 0x16 || pkt[fl.PayloadOff+1] != 0x03 {
+		p := s.Payload
+		if len(p) < 2 || p[0] != 0x16 || p[1] != 0x03 {
 			return fmt.Errorf("the connection %s carries data on port %d that does not open with a TLS handshake record; "+
 				"it may be plain TACACS+, which this tool would not redact there", k, TLSPort)
+		}
+		for i := 0; i < len(p); {
+			if len(p)-i < 5 {
+				break
+			}
+			if p[i] < 0x14 || p[i] > 0x17 || p[i+1] != 0x03 {
+				return fmt.Errorf("the connection %s carries data on port %d that leaves the TLS record framing at stream offset %d; "+
+					"it may be plain TACACS+, which this tool would not redact there", k, TLSPort, i)
+			}
+			i += 5 + int(p[i+3])<<8 + int(p[i+4])
 		}
 	}
 	return nil

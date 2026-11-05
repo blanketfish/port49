@@ -20,6 +20,7 @@ type EvidenceReport struct {
 	Unaudited        int // streams not decodable as plain TACACS+: Unframed + TLS
 	Unframed         int // port-49 streams with data that framed no TACACS+ packet
 	TLS              int // directions of connections on TLSPort (RFC 9887), whose bytes TLS 1.3 hides
+	TailBytes        int // bytes after a stream's last whole packet, filled or not
 	Other            int // records that are not IPv4 TCP on port 49 or 300
 }
 
@@ -47,6 +48,9 @@ func AuditEvidence(pcap []byte, opt Options) (EvidenceReport, error) {
 		return r, fmt.Errorf("%d stream(s) had a sequence gap: part of the file was never framed", len(d.Gaps))
 	}
 	r.Unframed, r.TLS, r.Other = unaudited(f, d)
+	for _, tl := range d.Tails() {
+		r.TailBytes += tl.Len
+	}
 	r.Unaudited = r.Unframed + r.TLS + r.Other
 	// Port 300 is checked, not assumed: each direction must open with a TLS handshake record,
 	// so plain TACACS+ there cannot hide behind an allowlisted file name.

@@ -218,3 +218,37 @@ func TestAuditCommittedFailsTrafficOffPorts49And300(t *testing.T) {
 		t.Fatalf("report %+v, problems %d: want the other-protocol records counted and failing", r, len(problems))
 	}
 }
+
+func TestCheckTLSOpensWalksEveryRecord(t *testing.T) {
+	s := newSynth()
+	hello := []byte{0x16, 0x03, 0x03, 0x00, 0x02, 0x01, 0x00} // one whole handshake record
+	plain := tacacs(0x88888888, wire.TypeAcct, 1, []byte{1, 2, 3, 4})
+	s.segment(synthDevice, synthServer, 50030, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50030, TLSPort, 1001, flagACK, hello, true)
+	s.segment(synthDevice, synthServer, 50030, TLSPort, 1001+uint32(len(hello)), flagACK, plain, true)
+	f, err := Parse(s.buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkTLSOpens(f); err == nil {
+		t.Fatal("plain TACACS+ after a valid TLS record passed")
+	}
+	s = newSynth()
+	s.segment(synthDevice, synthServer, 50031, TLSPort, 1000, flagSYN, nil, true)
+	s.segment(synthDevice, synthServer, 50031, TLSPort, 1001, flagACK, append(append([]byte{}, hello...), 0x17, 0x03, 0x03, 0x00, 0x01, 0xff), true)
+	f, _ = Parse(s.buf)
+	if err := checkTLSOpens(f); err != nil {
+		t.Errorf("two whole TLS records failed: %v", err)
+	}
+}
+
+func TestAuditEvidenceReportsTailBytes(t *testing.T) {
+	out, _, err := Redact(tailRun(t), synthOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := AuditEvidence(out, Options{Key: synthKey})
+	if err != nil || r.Unframed != 0 || r.TailBytes != 6 {
+		t.Fatalf("report %+v, %v: want the filled 6-byte tail visible as TailBytes", r, err)
+	}
+}

@@ -377,8 +377,6 @@ func TestTheImageJobTagsAndAttests(t *testing.T) {
 	}
 }
 
-// Every publishing job waits for check, and check refuses a tag that is not on main and a tag
-// that disagrees with the version files: a release from an unreviewed commit never publishes.
 // jobNeeds is the job's needs as a list; an entry that is not a string fails the test.
 func jobNeeds(t *testing.T, id string, j job) []string {
 	t.Helper()
@@ -399,6 +397,8 @@ func jobNeeds(t *testing.T, id string, j job) []string {
 	return nil
 }
 
+// Every publishing job waits for check, and check refuses a tag that is not on main and a tag
+// that disagrees with the version files: a release from an unreviewed commit never publishes.
 func TestEveryPublishingJobWaitsForTheCheck(t *testing.T) {
 	f, _ := release(t)
 	for id, j := range f.Jobs {
