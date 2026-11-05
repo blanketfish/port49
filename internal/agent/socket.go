@@ -130,10 +130,24 @@ const socketTimeout = revokeWait + 10*time.Second
 // NewClient talks to the agent at socket.
 func NewClient(socket string) *Client {
 	return &Client{socket: socket, http: &http.Client{Timeout: socketTimeout, Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socket)
-		}}}}
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dialOwned(ctx, socket) }}}}
+}
+
+// dialOwned dials the agent's socket and, where the platform reports a peer's credentials, refuses
+// a peer that is not this user's process. The Lstat checks before the dial name a path; this names
+// the process actually reached, so a path swapped between the check and the dial is caught.
+func dialOwned(ctx context.Context, socket string) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, err
+	}
+	if cred, ok := peerOf(conn); ok && cred.uid != getuid() {
+		conn.Close()
+		return nil, fmt.Errorf("agent: the process listening at %s runs as uid %d, not you (uid %d); it is "+
+			"refused rather than asked for a token", socket, cred.uid, getuid())
+	}
+	return conn, nil
 }
 
 // checkDir refuses a socket whose directory is not private before anything
@@ -160,6 +174,9 @@ func (c *Client) checkSocket() error {
 		return nil
 	case err != nil:
 		return err
+	case fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("agent: %s is a symlink; the agent's socket must be the socket itself, and a link is refused "+
+			"rather than followed", c.socket)
 	case fi.Mode().Type() != os.ModeSocket:
 		return fmt.Errorf("agent: %s is not a socket; the agent's socket is refused rather than dialled", c.socket)
 	}

@@ -10019,8 +10019,8 @@ inventory host keys).* Rulings rest on reasoning unless they say data. Amends de
 - **4. `port49 devices trust` is removed.** Kept as an admin tool only if a reason survived; none
   did: verified first contact is OpenSSH's (above, or `ssh-keyscan` and `ssh-keygen -lf` against
   L53's console commands), pre-seeding keys per device is the toil ruling 1 rules out, and its
-  direct dial past a jump host (plan 9a final review I-1) goes with it. It is an unknown command:
-  usage, exit 2, and no word of where it went (no deprecation before beta).
+  direct dial past a jump host (plan 9a final review I-1) goes with it. It is an unknown
+  command: usage, exit 2, and no word of where it went (no deprecation before beta).
 - **5. Plan 9a's pins file** is never read and no longer named: `port49 ssh` says nothing of it, and
   `--known-hosts` is not a flag. Nothing port49 keeps reads a file under `~/.config` through decision 42 ruling 6's walk, so a
   group-writable `~/.config` stops nothing (plan 9b pre-flight 2, m5).

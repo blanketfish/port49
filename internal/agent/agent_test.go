@@ -2796,6 +2796,33 @@ func TestTheTestSocketVariableIsRefusedForASocketAnotherUserOwns(t *testing.T) {
 	if err := NewClient(plain).checkSocket(); err == nil || !strings.Contains(err.Error(), "not a socket") {
 		t.Fatalf("a path that is not a socket: %v", err)
 	}
+	link := filepath.Join(dir, "link.sock")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewClient(link).checkSocket(); err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("a symlink to a socket: %v", err)
+	}
+	// The process actually reached is checked after the dial, whatever the path said: seen as
+	// another uid, the listener (this process) is refused.
+	getuid = func() int { return os.Getuid() + 1 }
+	probe, perr := net.Dial("unix", sock)
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	_, reports := peerOf(probe)
+	probe.Close()
+	if reports { // a platform that cannot report a peer's credentials has nothing to refuse on
+		conn, err := dialOwned(context.Background(), sock)
+		if err == nil || !strings.Contains(err.Error(), "not you") {
+			if conn != nil {
+				conn.Close()
+			}
+			t.Fatalf("a listener of another uid was dialled: %v", err)
+		}
+	}
+	getuid = func() int { return os.Getuid() }
+	time.Sleep(200 * time.Millisecond) // let the listener count the probe dials above
 	for len(served) > 0 {
 		<-served
 	}
