@@ -1054,7 +1054,9 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 		}
 		calls = append(calls, strings.Join(c.Command, " "))
 	}
-	want := []string{"etcdctl endpoint health", "etcdctl del --prefix $(PREFIX)v1/t/", "etcdctl del $(PREFIX)v1/meta/judged", "etcdctl del $(PREFIX)v1/meta/judged_bundle"}
+	// m1r8: no all-three `endpoint health` gate: one member down after the restore failed it every try,
+	// while the deletes need only quorum and each fails on its own without it
+	want := []string{"etcdctl del --prefix $(PREFIX)v1/t/", "etcdctl del $(PREFIX)v1/meta/judged", "etcdctl del $(PREFIX)v1/meta/judged_bundle"}
 	if len(calls) != len(want) {
 		t.Fatalf("the Job's calls are %q, want %q", calls, want)
 	}
@@ -1081,11 +1083,17 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := strings.Index(step, "logs job/"+DeleteJob+" --all-containers")
+	logs := strings.Index(step, "logs job/"+DeleteJob+" --all-containers || true")
 	failed := strings.Index(step, "*Failed*")
 	stop := strings.Index(step, "do not go on to step 3")
 	if logs < 0 || failed < 0 || stop < 0 || logs > stop || strings.Contains(step, "wait --for=condition=complete") {
 		t.Errorf("step 2 does not end on Complete or Failed, show the log, and stop on a failure:\n%s", step)
+	}
+	// m3r8 and m1r8: the text names one container's log, and says one unhealthy member is fine
+	for _, want := range []string{"logs job/" + DeleteJob + " -c unspent", "one member"} {
+		if !strings.Contains(string(doc), want) {
+			t.Errorf("step 2's text does not say %q", want)
+		}
 	}
 	if StepBounds["deletejob"] < 5*time.Minute {
 		t.Errorf("step 2's bound %v is under its own 4m loop plus a minute", StepBounds["deletejob"])
@@ -1196,13 +1204,17 @@ func TestTheREADMESuspendsGitOpsAndBringsTheHPABack(t *testing.T) {
 	}
 	doc := string(b)
 	first := strings.Index(doc, "kubectl delete namespace port49 port49-etcd")
-	for _, want := range []string{"argocd app set <app> --sync-policy none", "flux suspend helmrelease <name> -n <namespace>", "admit a revoked principal"} {
+	for _, want := range []string{"argocd app set <app> --sync-policy none", "flux suspend helmrelease <name> -n <namespace>",
+		"flux suspend kustomization <name> -n <namespace>", "admit a revoked principal",
+		// I1r8: a parent app turns a child's sync back on; resume restores the policy that was noted
+		"parent", "ApplicationSet", "argocd app get <app> -o json", ".spec.syncPolicy.automated"} {
 		if at := strings.Index(doc, want); at < 0 || at > first {
 			t.Errorf("the README does not say %q before the first command", want)
 		}
 	}
 	scaleup := strings.Index(doc, "<!-- l89:scaleup:end -->")
-	for _, want := range []string{"flux resume helmrelease <name> -n <namespace>", "argocd app set <app> --sync-policy automated", "helm upgrade <release> <chart> --version <version> -n port49 --reuse-values"} {
+	for _, want := range []string{"flux resume helmrelease <name> -n <namespace>", "flux resume kustomization <name> -n <namespace>",
+		"argocd app set <app> --sync-policy automated --self-heal --auto-prune", "helm upgrade <release> <chart> --version <version> -n port49 --reuse-values"} {
 		if at := strings.Index(doc, want); at < scaleup {
 			t.Errorf("the README does not say %q after step 9", want)
 		}

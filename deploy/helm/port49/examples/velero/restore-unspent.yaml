@@ -4,10 +4,11 @@
 # It mounts the Secret `port49-etcd-root` (ca.crt tls.crt tls.key) at /etcd-root, as
 # examples/etcd/etcd-init-job.yaml does. It runs etcdctl from etcd's own image, the digest
 # examples/etcd/statefulset.yaml runs, so nothing is fetched at restore time; that image has no shell,
-# so each etcdctl call is its own container, the health check first. A member still electing after the
-# restore fails the health check, and the Job's backoff tries again (a new pod each time).
-# Edit PREFIX to your store prefix (stores.session.etcd.prefix) in each of the four containers;
-# Kubernetes puts it into $(PREFIX). Each container is written out in full: change one, change all four.
+# so each etcdctl call is its own container. There is no `endpoint health` gate: it fails when any one
+# of the three members does not answer, while each delete needs only a quorum and fails on its own
+# without one; the Job's backoff then tries again (a new pod each time). The deletes are idempotent.
+# Edit PREFIX to your store prefix (stores.session.etcd.prefix) in each of the three containers;
+# Kubernetes puts it into $(PREFIX). Each container is written out in full: change one, change all three.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -21,22 +22,6 @@ spec:
       automountServiceAccountToken: false   # etcdctl does not call the Kubernetes API
       restartPolicy: Never
       initContainers:
-        - name: health
-          image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
-          command: [etcdctl, endpoint, health, --dial-timeout=10s, --command-timeout=30s]
-          env:
-            - {name: PREFIX, value: /port49/}
-            - {name: ETCDCTL_ENDPOINTS, value: "https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379"}
-            - {name: ETCDCTL_CACERT, value: /etcd-root/ca.crt}
-            - {name: ETCDCTL_CERT, value: /etcd-root/tls.crt}
-            - {name: ETCDCTL_KEY, value: /etcd-root/tls.key}
-          securityContext:
-            runAsUser: 0
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities: {drop: [ALL]}
-          volumeMounts:
-            - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
         - name: unspent
           image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
           command: [etcdctl, del, --prefix, "$(PREFIX)v1/t/"]
