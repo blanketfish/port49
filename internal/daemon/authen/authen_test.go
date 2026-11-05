@@ -3221,34 +3221,82 @@ func TestATLSPeersDeviceBlock(t *testing.T) {
 	}
 }
 
-// A token expiring at or before the redeem floor is refused store_unavailable,
-// as the restore guard refuses: a clock stepped back after the guard lifted on
-// its own cannot make a restored token redeemable (plan 12c, Task 9a). The
-// token is not consumed.
-func TestATokenAtOrBelowTheRedeemFloorIsRefused(t *testing.T) {
-	login := func(f *fixture) wire.AuthenReply {
-		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-			PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
-			Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
-		return reply
-	}
+// fakeFloor is a RestoreFloor that holds, or calls the named token IDs restored.
+type fakeFloor struct {
+	held     bool
+	restored map[string]bool
+}
+
+func (f fakeFloor) Held() bool                               { return f.held }
+func (f fakeFloor) Restored(t store.Token, _ time.Time) bool { return f.restored[t.ID] }
+
+func (f *fixture) login(secret string) wire.AuthenReply {
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte(secret)})
+	return reply
+}
+
+// A token the restore floor calls restored is refused token_spent and left
+// where it is; a fresh token beside it is redeemed.
+func TestARestoredTokenIsRefusedTokenSpentAndNotSpent(t *testing.T) {
 	f := setup(t)
-	expires := f.now.Add(15 * time.Minute) // the fixture's token
-	f.h.WithRedeemFloor(func() time.Time { return expires })
-	if reply := login(f); reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
-		t.Fatalf("a token at the floor: %+v %v", reply, f.records(t))
+	key := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	fresh := f.tag() + "newnewnewnewnewnewnew1"
+	if _, err := f.st.PutToken(context.Background(), key, store.Token{ID: "t2", Secret: []byte(fresh), Kind: store.KindLogin,
+		Username: "alice", Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		t.Fatal(err)
 	}
-	if cands, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(cands) != 1 {
-		t.Fatal("a refused token was consumed")
+	f.h.WithRestoreFloor(fakeFloor{restored: map[string]bool{"t1": true}})
+	reply := f.login(f.tag() + "tok1tok1tok1tok1tok1tok1")
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "token_spent" {
+		t.Fatalf("a restored token: %+v %v", reply, f.records(t))
 	}
-	f = setup(t)
-	f.h.WithRedeemFloor(func() time.Time { return expires.Add(-time.Second) })
-	if reply := login(f); reply.Status != wire.AuthenStatusPass {
-		t.Fatalf("a token above the floor: %+v", reply)
+	if got := testutil.ToFloat64(f.m.RedemptionRestoredRefused); got != 1 {
+		t.Fatalf("port49_redemption_restored_refused_total = %v, want 1", got)
 	}
-	f = setup(t)
-	f.h.WithRedeemFloor(func() time.Time { return time.Time{} })
-	if reply := login(f); reply.Status != wire.AuthenStatusPass {
-		t.Fatalf("no floor: %+v", reply)
+	if cands, _ := f.st.Candidates(context.Background(), key); len(cands) != 2 {
+		t.Fatalf("a refused token was consumed: %d candidates", len(cands))
+	}
+	if reply := f.login(fresh); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("a fresh token beside it: %+v", reply)
+	}
+}
+
+// While the floor is held nothing is looked up: the reply is ERROR
+// store_unavailable and no candidate read is made.
+func TestAHeldFloorRefusesStoreUnavailableBeforeAnyLookup(t *testing.T) {
+	f := setup(t)
+	f.h.WithRestoreFloor(fakeFloor{held: true})
+	before := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("candidates", "ok"))
+	reply := f.login(f.tag() + "tok1tok1tok1tok1tok1tok1")
+	if reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
+		t.Fatalf("a held floor: %+v %v", reply, f.records(t))
+	}
+	if got := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("candidates", "ok")); got != before {
+		t.Fatalf("candidates read %v times under a held floor", got-before)
+	}
+}
+
+// An enable token is a token too (Review Focus 2): a restored one is refused
+// token_spent.
+func TestARestoredEnableTokenIsRefusedTokenSpent(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	f.h.WithRestoreFloor(fakeFloor{restored: map[string]bool{"en": true}})
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	recs := f.records(t)
+	if reply.Status != wire.AuthenStatusFail || recs[len(recs)-1]["reason"] != "token_spent" {
+		t.Fatalf("a restored enable token: %+v %v", reply, recs[len(recs)-1])
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.PrivLvl == 15 {
+		t.Fatalf("a restored enable token escalated: %+v", c)
 	}
 }

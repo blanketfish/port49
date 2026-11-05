@@ -431,16 +431,16 @@ func followWitness(t *testing.T) func(t *testing.T, rec *witnessRecord, atLeast 
 	}
 }
 
-// followGuard is followWitness for port49d's restore guard, which a test
+// followGuard is followWitness for port49d's restore floor, which a test
 // cannot name (run makes it): the wait is until guards distinct guards have
 // each followed atLeast, guards being the number of daemons the test runs, so
 // a test with two daemons cannot pass on the first one alone.
 func followGuard(t *testing.T) func(t *testing.T, guards int, atLeast uint64) {
 	t.Helper()
-	var h hookSeen[*restoreGuard]
-	old := guardFollowed
-	guardFollowed = func(g *restoreGuard, rev uint64) { h.add(g, rev, false) }
-	t.Cleanup(func() { guardFollowed = old })
+	var h hookSeen[*restoreFloor]
+	old := floorFollowed
+	floorFollowed = func(g *restoreFloor, rev uint64) { h.add(g, rev, false) }
+	t.Cleanup(func() { floorFollowed = old })
 	return func(t *testing.T, guards int, atLeast uint64) {
 		t.Helper()
 		reached := func() (n int) {
@@ -485,14 +485,14 @@ func passesAfter[P comparable](h *hookSeen[P], what string) func(t *testing.T, d
 	}
 }
 
-// countPasses installs a recording restorePassed, restored in t.Cleanup, and
+// countPasses installs a recording floorPassed, restored in t.Cleanup, and
 // returns a wait for n more completed passes of each of daemons guards.
 func countPasses(t *testing.T) func(t *testing.T, daemons, n int) {
 	t.Helper()
-	var h hookSeen[*restoreGuard]
-	old := restorePassed
-	restorePassed = func(g *restoreGuard) { h.add(g, 0, true) }
-	t.Cleanup(func() { restorePassed = old })
+	var h hookSeen[*restoreFloor]
+	old := floorPassed
+	floorPassed = func(g *restoreFloor) { h.add(g, 0, true) }
+	t.Cleanup(func() { floorPassed = old })
 	return passesAfter(&h, "restore guards")
 }
 
@@ -537,26 +537,26 @@ func TestTheWitnessHookSeesWhatTheFollowerSaw(t *testing.T) {
 	}
 }
 
-// Passes are counted per guard: a second guard's are not the first's.
-func TestRestorePassedCountsPasses(t *testing.T) {
-	var h hookSeen[*restoreGuard]
-	old := restorePassed
-	restorePassed = func(g *restoreGuard) { h.add(g, 0, true) }
-	t.Cleanup(func() { restorePassed = old })
+// Passes are counted per floor: a second floor's are not the first's.
+func TestFloorPassedCountsPasses(t *testing.T) {
+	var h hookSeen[*restoreFloor]
+	old := floorPassed
+	floorPassed = func(f *restoreFloor) { h.add(f, 0, true) }
+	t.Cleanup(func() { floorPassed = old })
 	_, s := openFollowStore(t)
-	a, b := newRestoreGuard(io.Discard), newRestoreGuard(io.Discard)
+	a, b := newRestoreFloor(io.Discard, time.Now), newRestoreFloor(io.Discard, time.Now)
 	ctx := context.Background()
-	pass := func(g *restoreGuard) {
+	pass := func(f *restoreFloor) {
 		t.Helper()
-		if !g.pass(ctx, time.Second, s.RestoreRead, nil) {
+		if !f.pass(ctx, time.Second, s.RestoreRead) {
 			t.Fatal("a pass was cut short")
 		}
 	}
-	waitA := passesFrom(&h, "restore guards")
+	waitA := passesFrom(&h, "restore floors")
 	pass(a)
 	pass(a)
 	waitA(t, 1, 2) // returns: a completed two since the counts were taken
-	waitAB := passesFrom(&h, "restore guards")
+	waitAB := passesFrom(&h, "restore floors")
 	pass(a)
 	pass(a)
 	if base := h.snapshot(); base[a] != 4 || base[b] != 0 {
@@ -577,36 +577,31 @@ func TestRestorePassedCountsPasses(t *testing.T) {
 // follow hook fires after Saw has raised the witness followed, and the pass
 // hook after judge has judged the read. A hook moved before either would take
 // the waits back to timing, and these go red.
-func TestTheGuardHooksFireAfterTheirWork(t *testing.T) {
+func TestTheFloorHooksFireAfterTheirWork(t *testing.T) {
 	var atFollow, atPass []string
-	oldF, oldP := guardFollowed, restorePassed
-	guardFollowed = func(g *restoreGuard, rev uint64) {
-		if high, _, _ := g.recorded(); high < rev {
-			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, high))
+	oldF, oldP := floorFollowed, floorPassed
+	floorFollowed = func(f *restoreFloor, rev uint64) {
+		if s := f.record(); s.witness < rev {
+			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, s.witness))
 		}
 	}
-	restorePassed = func(g *restoreGuard) {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		if !g.checked {
+	floorPassed = func(f *restoreFloor) {
+		if f.Held() {
 			atPass = append(atPass, "the read was not judged")
 		}
 	}
-	t.Cleanup(func() { guardFollowed, restorePassed = oldF, oldP })
+	t.Cleanup(func() { floorFollowed, floorPassed = oldF, oldP })
 	_, s := openFollowStore(t)
-	g := newRestoreGuard(io.Discard)
-	g.followed(7)
-	// A guard waiting for a read that answers: judge lifts it.
-	g.mu.Lock()
-	g.checked = false
-	g.mu.Unlock()
-	if !g.pass(context.Background(), time.Second, s.RestoreRead, nil) {
+	f := newRestoreFloor(io.Discard, time.Now)
+	f.begin(metrics.New(prometheus.NewRegistry())) // held until a read answers
+	f.followed(7)
+	if !f.pass(context.Background(), time.Second, s.RestoreRead) {
 		t.Fatal("a pass was cut short")
 	}
 	if len(atFollow) > 0 {
-		t.Errorf("guardFollowed fired before Saw: %v", atFollow)
+		t.Errorf("floorFollowed fired before Saw: %v", atFollow)
 	}
 	if len(atPass) > 0 {
-		t.Errorf("restorePassed fired before judge: %v", atPass)
+		t.Errorf("floorPassed fired before judge: %v", atPass)
 	}
 }

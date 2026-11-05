@@ -141,36 +141,6 @@ tests:
       - eval_time: 5m
         alertname: port49_key_retirement_within_1d
         exp_alerts: []
-  # port49_redemption_restore_guarded
-  - interval: 1m
-    input_series:
-      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x40"}
-      - {series: "port49_redemption_restore_guard_until_timestamp_seconds{instance=\"a\"}", values: "0+0x40"}
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: port49_redemption_restore_guarded
-        exp_alerts:
-          - exp_labels: {instance: "a", severity: "page"}
-            exp_annotations:
-              summary: "port49d refuses every token redemption: it found its store restored from a snapshot. Its bound is unknown: only the runner's purge lifts it. To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
-  - interval: 1m
-    input_series:
-      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "1+0x40"}
-      - {series: "port49_redemption_restore_guard_until_timestamp_seconds{instance=\"a\"}", values: "5000+0x40"}
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: port49_redemption_restore_guarded
-        exp_alerts:
-          - exp_labels: {instance: "a", severity: "page"}
-            exp_annotations:
-              summary: "port49d refuses every token redemption: it found its store restored from a snapshot. The guard lifts on its own at 1970-01-01 01:23:20 +0000 UTC unless new tokens are minted, or at the runner's purge. To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
-  - interval: 1m
-    input_series:
-      - {series: "port49_redemption_restore_guarded{instance=\"a\"}", values: "0+0x40"}
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: port49_redemption_restore_guarded
-        exp_alerts: []
   # port49_admin_touch_refused
   - interval: 1m
     input_series:

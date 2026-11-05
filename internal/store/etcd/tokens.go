@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -302,51 +301,6 @@ func (s *Store) PurgeTokens(ctx context.Context) (int, error) {
 		if _, err := s.tok.Delete(ctx, string(resp.Kvs[0].Key), clientv3.WithRange(last+"\x00")); err != nil {
 			return n, unavailable(err)
 		}
-	}
-}
-
-// ErrTokenRecord is a token record LatestTokenExpiry could not decode. It
-// names no record and holds no body.
-var ErrTokenRecord = errors.New("etcd store: a token record does not decode")
-
-// LatestTokenExpiry is the largest ExpiresAt among every record under the
-// token family, expired or not, zero when there is none. It reads a page at a
-// time, writes nothing and keeps nothing of a record but its expiry. A record
-// that does not decode is an error (ErrTokenRecord), never skipped: port49d's
-// restore guard (plan 12c, Task 9a) lifts only once this time has passed, and a
-// record it could not read might be the latest. The time is the minting
-// broker's, to be compared with the caller's clock as redemption compares it.
-//
-// mintedBy bounds the records counted to those minted at or before it (zero:
-// every record): only a token minted before a restore can have been restored,
-// and one a running broker minted after it must not move the bound. A record
-// with no MintedAt cannot be shown to be later, so it counts. A record that
-// does not decode is an error whatever its age.
-func (s *Store) LatestTokenExpiry(ctx context.Context, mintedBy time.Time) (time.Time, error) {
-	end := clientv3.GetPrefixRangeEnd(s.k.family(famToken))
-	from := s.k.family(famToken)
-	var latest time.Time
-	for {
-		resp, err := s.tok.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(purgePage))
-		if err != nil {
-			return time.Time{}, unavailable(err)
-		}
-		for _, kv := range resp.Kvs {
-			var r tokenRec
-			if json.Unmarshal(kv.Value, &r) != nil {
-				return time.Time{}, ErrTokenRecord
-			}
-			if !mintedBy.IsZero() && r.MintedAt.After(mintedBy) {
-				continue
-			}
-			if r.ExpiresAt.After(latest) {
-				latest = r.ExpiresAt
-			}
-		}
-		if len(resp.Kvs) < purgePage {
-			return latest, nil
-		}
-		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
 }
 

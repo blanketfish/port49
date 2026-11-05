@@ -487,19 +487,19 @@ type Metrics struct {
 	// replica's bundle. Readiness never shows it (design §12): it is an
 	// alarm.
 	BrokerMintGateClosed prometheus.Gauge
-	// port49_redemption_restore_guarded: 1 while this port49d refuses every
-	// token redemption store_unavailable, having found meta/witness below
-	// the highest it followed (an etcd restore; plan 7e, Task 15d), until
-	// a broker runner's purge is done or every token the restored store holds
-	// has expired (plan 12c, Task 9a); 1 too from a run's start after a
-	// store gone until its first read of the witness.
-	RedemptionRestoreGuarded prometheus.Gauge
-	// port49_redemption_restore_guard_until_timestamp_seconds: while the
-	// guard holds, the Unix time it lifts on its own: the largest expiry among
-	// the token records, read again on every guarded read, so it only rises
-	// (plan 12c, Task 9a); 0 while it does not hold, or when only a broker
-	// runner's purge lifts it.
-	RedemptionRestoreGuardUntil prometheus.Gauge
+	// port49_redemption_restore_unjudged: 1 while this port49d refuses every
+	// token redemption store_unavailable because its last read of
+	// meta/witness failed (or none has answered in this run), so it cannot
+	// tell whether its store was restored; 0 otherwise.
+	RedemptionRestoreUnjudged prometheus.Gauge
+	// port49_redemption_restored_refused_total: token redemptions refused
+	// token_spent because the token's store revision is at or below this
+	// port49d's restore floor.
+	RedemptionRestoredRefused prometheus.Counter
+	// port49_store_restore_detected_timestamp_seconds: the Unix time this
+	// port49d last found its session store restored, 0 if never. The process
+	// holds the time; each run's registry is set again at begin.
+	StoreRestoreDetected prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -948,14 +948,16 @@ func New(reg prometheus.Registerer) *Metrics {
 				"under the swapped bundle, and from its start until it has seen a takeover done for the bundle it " +
 				"serves; 1 for longer than a minute is a store that does not answer, or refuses, the mark, or no " +
 				"runner that judges this broker's bundle."}),
-		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
-			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
-				"snapshot, until a broker runner's purge is done or every token the store holds has expired."}),
-		RedemptionRestoreGuardUntil: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "port49_redemption_restore_guard_until_timestamp_seconds",
-			Help: "While port49_redemption_restore_guarded is 1: the Unix time the guard lifts on its own, the " +
-				"largest expiry among the token records, which a token minted meanwhile moves later and which may " +
-				"be in the past while the store's reads fail; 0 when only a broker runner's purge lifts it."}),
+		RedemptionRestoreUnjudged: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_unjudged",
+			Help: "1 while this port49d refuses every token redemption store_unavailable because its last read of " +
+				"meta/witness failed, so it cannot tell whether its store was restored; 0 otherwise."}),
+		RedemptionRestoredRefused: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_redemption_restored_refused_total",
+			Help: "Token redemptions refused token_spent because the token's store revision is at or below this " +
+				"port49d's restore floor: an etcd restore brought it back."}),
+		StoreRestoreDetected: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "port49_store_restore_detected_timestamp_seconds",
+			Help: "The Unix time this port49d last found its session store restored from a snapshot, 0 if never: " +
+				"meta/witness or the store's revision fell below what it had read."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -1068,7 +1070,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded, m.RedemptionRestoreGuardUntil,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreUnjudged, m.RedemptionRestoredRefused, m.StoreRestoreDetected,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,

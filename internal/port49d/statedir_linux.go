@@ -85,8 +85,15 @@ func ownedHere(what, path string, dir bool) error {
 // same directory at mode 0600 and renames it over path, so a reader sees
 // the old file or the new one.
 func writeOwnerOnly(path string, body []byte) error {
+	return writeOwnerOnlyAs("broker.state_dir ", path, body)
+}
+
+// writeOwnerOnlyAs is writeOwnerOnly with the name its refusal gives the
+// directory: what is the words before the directory's path, as
+// "broker.state_dir " is for the state files.
+func writeOwnerOnlyAs(what, path string, body []byte) error {
 	dir := filepath.Dir(path)
-	if err := ownedHere("broker.state_dir "+dir, dir, true); err != nil {
+	if err := ownedHere(what+dir, dir, true); err != nil {
 		return err
 	}
 	if err := ownedHere(path, path, false); err != nil {

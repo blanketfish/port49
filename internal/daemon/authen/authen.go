@@ -90,15 +90,10 @@ type Handler struct {
 	// (store.Marks): the enable gate and a receipt's replay read it beside
 	// the context's own revocation. Nil names none.
 	marks *store.Marks
-	// redeemable, when set, is asked before a token is looked up: false
-	// refuses the redemption store_unavailable, the token untouched (the
-	// restore guard; plan 7e, Task 15d). A receipt's replay is not a
-	// redemption, and is not asked.
-	redeemable func() bool
-	// redeemFloor, when set, is the expiry at or before which a token is
-	// refused, store_unavailable, as the guard is (plan 12c, Task 9a); the
-	// zero time refuses none.
-	redeemFloor func() time.Time
+	// floor, when set, is port49d's restore floor (RestoreFloor): asked
+	// before a token is looked up, and of each token that matches. A receipt's
+	// replay is not a redemption, and is not asked.
+	floor RestoreFloor
 }
 
 // New builds the authentication handler. tags are the keys the token tag may be
@@ -120,18 +115,19 @@ func (h *Handler) WithMarks(m *store.Marks) *Handler {
 	return h
 }
 
-// WithRedeemGuard sets the check every token redemption asks first (plan
-// 7e, Task 15d).
-func (h *Handler) WithRedeemGuard(redeemable func() bool) *Handler {
-	h.redeemable = redeemable
-	return h
+// RestoreFloor is port49d's restore floor as a redemption asks it.
+type RestoreFloor interface {
+	// Held reports that the last read of the store's witness failed, so no
+	// redemption can be judged: every one is refused store_unavailable.
+	Held() bool
+	// Restored reports that t came back with an etcd restore: it is refused
+	// token_spent, and nothing is written.
+	Restored(t store.Token, now time.Time) bool
 }
 
-// WithRedeemFloor sets the expiry at or before which a token stays refused
-// after the restore guard lifted on its own, so a clock stepped back cannot
-// make a restored token redeemable (plan 12c, Task 9a).
-func (h *Handler) WithRedeemFloor(floor func() time.Time) *Handler {
-	h.redeemFloor = floor
+// WithRestoreFloor sets the floor every token redemption asks.
+func (h *Handler) WithRestoreFloor(f RestoreFloor) *Handler {
+	h.floor = f
 	return h
 }
 
@@ -428,9 +424,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		return s.storeError(rec)
 	}
 
-	// A store restored from a snapshot holds every token redeemed since it,
-	// unspent: none is redeemed until the runner's purge (plan 7e, Task 15d).
-	if s.h.redeemable != nil && !s.h.redeemable() {
+	// While the store's witness cannot be read, whether it was restored from a
+	// snapshot cannot be told: no token is looked up.
+	if s.h.floor != nil && s.h.floor.Held() {
 		return s.storeError(rec)
 	}
 
@@ -442,15 +438,15 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if err != nil {
 		return s.storeError(rec)
 	}
-	var floor time.Time
-	if s.h.redeemFloor != nil {
-		floor = s.h.redeemFloor()
-	}
 	var winner *store.Token
 	for i := range cands {
 		if cands[i].Kind == kind && match(cands[i]) {
-			if !floor.IsZero() && !cands[i].ExpiresAt.After(floor) {
-				return s.storeError(rec)
+			// A restore brings back every token redeemed since its snapshot,
+			// unspent. One at or below the floor is refused and not touched.
+			if s.h.floor != nil && s.h.floor.Restored(cands[i], s.h.now()) {
+				rec.Principal = cands[i].Principal
+				s.h.metrics.RedemptionRestoredRefused.Inc()
+				return s.fail(ctx, rec, decision.TokenSpent)
 			}
 			winner = &cands[i]
 			break
