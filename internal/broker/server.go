@@ -92,8 +92,10 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		// issuing CA's, added below.
 		pool = x509.NewCertPool()
 	case anchor == nil && b.NoX509 && b.Identity != nil:
-		// An OIDC-only broker (Ruling 1): no certificate is requested, and
-		// every caller authenticates by bearer.
+		// An OIDC-only broker that issues nothing (Ruling 1): no certificate
+		// is requested, and every caller it takes authenticates by bearer, a
+		// machine's; a person's ID token is only an idp_mfa proof here
+		// (decision 56 ruling 4).
 		clientAuth = tls.NoClientCert
 	case anchor == nil || anchor.Equal(x509.NewCertPool()):
 		return nil, errors.New("broker: the broker trusts exactly one anchor; a nil pool would mean the system " +

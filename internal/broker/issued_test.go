@@ -264,31 +264,46 @@ func TestAnOIDCOnlyBrokerThatIssuesTakesItsCertificates(t *testing.T) {
 	}
 }
 
-// One path for people (decision 43 ruling 13): a broker that issues refuses
-// a person's ID token on every endpoint but /v1/certificate; a machine's is
-// unaffected; with no issuance a person's mints as plan 7h built.
-func TestAPersonsBearerIsRefusedWhereTheBrokerIssues(t *testing.T) {
+// A person's ID token is never a caller's credential (decision 56 ruling 4):
+// on a broker that issues and on one that does not, it is refused at every
+// endpoint but /v1/certificate (and /v1/mfa as an idp_mfa proof).
+func TestAPersonsIDTokenIsRefusedAsABearerOnEveryBroker(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, machinePolicy)
+	iss := f.withOIDC(t)
+	check := func(label string) {
+		t.Helper()
+		w := f.rawBearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
+		var e api.Error
+		if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error != "trust_domain_unresolved" ||
+			e.Detail != personBearerText {
+			t.Fatalf("%s: a person's bearer: %s", label, shown(w))
+		}
+		recs := eventsOf(f.records(t), decision.EventMint)
+		if r := recs[len(recs)-1]; r["verdict"] != "deny" || r["principal"] != alicePrincipal {
+			t.Fatalf("%s: the refusal's record: %v", label, r)
+		}
+	}
+	if f.b.Issuer != nil {
+		t.Fatal("the fixture should start with no issuance")
+	}
+	check("no issuance")
+	f.withIssuance(t)
+	check("issuance")
+}
+
+// A machine's ID token is still a bearer, on either kind of broker.
+func TestAMachinesIDTokenIsStillABearer(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, machinePolicy)
 	iss := f.withIssuance(t)
-	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
-	var e api.Error
-	if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error != "trust_domain_unresolved" ||
-		!strings.Contains(e.Detail, "POST /v1/certificate") {
-		t.Fatalf("a person's bearer: %s", shown(w))
-	}
-	recs := eventsOf(f.records(t), decision.EventMint)
-	if r := recs[len(recs)-1]; r["verdict"] != "deny" || r["principal"] != alicePrincipal {
-		t.Fatalf("the refusal's record: %v", r)
-	}
 	now := f.b.Now()
 	machine := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc",
 		"azp": "Oxidized-01", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, machine); w.Code != 200 {
-		t.Fatalf("a machine's bearer: %s", shown(w))
+		t.Fatalf("a machine's bearer with issuance: %s", shown(w))
 	}
 	f.b.Issuer = nil
-	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
-		t.Fatalf("a person's bearer with no issuance: %s", shown(w))
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, machine); w.Code != 200 {
+		t.Fatalf("a machine's bearer with no issuance: %s", shown(w))
 	}
 }
 
@@ -474,6 +489,155 @@ func TestAFailedIssuedRefreshStillHonoursALogout(t *testing.T) {
 	}
 	if extended == 0 {
 		t.Fatal("the refresh extended nothing, so the test proves nothing")
+	}
+}
+
+// issuedRefresh sets up alice's live contexts on devices under an issued
+// certificate's key and a held connection with that certificate, the store
+// hooked by before.
+func issuedRefresh(t *testing.T, devices []string, before func(f *fixture, iss *oidctest.Issuer) map[string]func() error) (
+	*fixture, *tls.Conn, *bufio.Reader, tls.Certificate) {
+	t.Helper()
+	f := newFixture(t, 8)
+	iss := f.withIssuance(t)
+	c := f.issued(t, f.aliceSignIn(iss))
+	auth := f.now.Add(-time.Hour)
+	for _, d := range devices {
+		f.liveContextAt(t, d, "alice", alicePrincipal, certKey(c), auth, auth.Add(12*time.Hour))
+	}
+	f.b.Store = hookStore{Store: f.st, before: before(f, iss)}
+	addr, _ := serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) { f.b.Wire(l) })
+	conn, br := held(t, f, addr, c)
+	f.advance(time.Minute)
+	return f, conn, br, c
+}
+
+// Pre-flight I-2, on a certificate: a logout that lands while a refresh
+// extends the session never leaves an extended context alive to its new
+// ceiling. A logout whose passes ran after the sid was indexed reaches the
+// context itself; one that left only its record is caught by the refresh's
+// after-check, which marks what it extended before it answers 401.
+func TestALogoutDuringAnIssuedRefreshMarksTheExtendedContext(t *testing.T) {
+	for name, during := range map[string]func(f *fixture, iss *oidctest.Issuer) error{
+		"the logout's passes run after the index": func(f *fixture, iss *oidctest.Issuer) error {
+			ctx := context.Background()
+			if err := f.st.PutLogout(ctx, store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"), At: f.b.Now()},
+				time.Hour); err != nil {
+				return err
+			}
+			_, err := f.b.Sessions.RevokeBySid(ctx, store.SidKey(iss.URL, "s-sub-alice"))
+			return err
+		},
+		"only the logout record stands": func(f *fixture, iss *oidctest.Issuer) error {
+			return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"),
+				At: f.b.Now()}, time.Hour)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fired := false
+			f, conn, br, c := issuedRefresh(t, []string{"leaf1"}, func(f *fixture, iss *oidctest.Issuer) map[string]func() error {
+				return map[string]func() error{"RefreshContext": func() error {
+					if fired {
+						return nil
+					}
+					fired = true
+					return during(f, iss)
+				}}
+			})
+			nonce, text := challengeOn(t, conn, br)
+			status, body := answerOn(t, conn, br, conn, c, nonce, text)
+			if status != 401 || !strings.Contains(body, "credential_revoked") {
+				t.Fatalf("a refresh a logout landed during: %d %s", status, body)
+			}
+			if got := f.context(t, "leaf1", "alice"); got.RevokedAt.IsZero() {
+				t.Fatal("a context the refresh extended outlived a logout that landed during it")
+			}
+		})
+	}
+}
+
+// Review N2: a refresh marks what it extended after a logout, not every
+// context it visited.
+func TestALogoutMarksOnlyWhatAnIssuedRefreshExtended(t *testing.T) {
+	calls := 0
+	f, conn, br, c := issuedRefresh(t, []string{"leaf1", "nx1"}, func(f *fixture, iss *oidctest.Issuer) map[string]func() error {
+		return map[string]func() error{"RefreshContext": func() error {
+			if calls++; calls == 1 {
+				return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"),
+					At: f.b.Now()}, time.Hour)
+			}
+			return store.ErrConflict // not_judged: visited, not extended
+		}}
+	})
+	nonce, text := challengeOn(t, conn, br)
+	if status, body := answerOn(t, conn, br, conn, c, nonce, text); status != 401 {
+		t.Fatalf("%d %s", status, body)
+	}
+	revoked := 0
+	for _, nas := range []string{"leaf1", "nx1"} {
+		if !f.context(t, nas, "alice").RevokedAt.IsZero() {
+			revoked++
+		}
+	}
+	if revoked != 1 {
+		t.Fatalf("%d contexts marked; only the one the refresh extended may be", revoked)
+	}
+}
+
+// Review N1: when the marking fails, the operator's line names the check and
+// the two commands: a logout is not a ban, and the person may log in again.
+func TestTheOperatorLinesNameTheLogoutRecoveryWhenAnIssuedRefreshCannotMark(t *testing.T) {
+	landed := false
+	f, conn, br, c := issuedRefresh(t, []string{"leaf1"}, func(f *fixture, iss *oidctest.Issuer) map[string]func() error {
+		return map[string]func() error{
+			"RefreshContext": func() error {
+				landed = true
+				return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"),
+					At: f.b.Now()}, time.Hour)
+			},
+			"SetContextPolicy": func() error {
+				if landed {
+					return store.ErrUnavailable
+				}
+				return nil
+			}}
+	})
+	f.b.Proc = "port49-broker"
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	nonce, text := challengeOn(t, conn, br)
+	if status, body := answerOn(t, conn, br, conn, c, nonce, text); status != 401 {
+		t.Fatalf("%d %s", status, body)
+	}
+	out := said.String()
+	for _, w := range []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "`",
+		"port49 revoke --lift --principal " + alicePrincipal,
+		"`port49 revoke --list` shows no mark for " + alicePrincipal} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("the operator's line lacks %q: %s", w, out)
+		}
+	}
+	if strings.Contains(out, "socket") {
+		t.Fatalf("the operator's line names a socket: %s", out)
+	}
+}
+
+// A bearer at the refresh endpoints is answered in words: a person's ID
+// token is refused as anywhere, a machine is told it has no session.
+func TestABearerAtTheRefreshEndpointsIsAnsweredInWords(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, machinePolicy)
+	iss := f.withOIDC(t)
+	for _, path := range []string{"/v1/refresh/challenge", "/v1/refresh"} {
+		w := f.rawBearer(context.Background(), "POST", path, "{}", f.idToken(t, iss, nil))
+		var e api.Error
+		if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error != "trust_domain_unresolved" ||
+			e.Detail != personBearerText {
+			t.Fatalf("%s, a person's bearer: %s", path, shown(w))
+		}
+		w = f.rawBearer(context.Background(), "POST", path, "{}", f.machineToken(t, iss))
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "a machine has no session to refresh") {
+			t.Fatalf("%s, a machine's bearer: %s", path, shown(w))
+		}
 	}
 }
 

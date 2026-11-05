@@ -211,7 +211,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	release, err := b.acquireRevoke(ctx)
 	if err != nil {
-		return RevokeReport{}, fmt.Errorf("%w, so nothing was revoked by this one (%w); "+b.fallback(),
+		return RevokeReport{}, fmt.Errorf("%w, so nothing was revoked by this one (%w); "+b.fallback(false),
 			ErrRevocationBusy, err)
 	}
 	defer release()
@@ -237,11 +237,11 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		if errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused) {
 			if held { // a refused write never lands: the mark held here stands (task 2 review M2)
 				return RevokeReport{}, fmt.Errorf("broker: the revocation was refused; the revocation of %s this %s "+
-					"already holds stands (%w); "+b.fallback(), printsafe.Line(key, 160), b.proc(), err)
+					"already holds stands (%w); "+b.fallback(false), printsafe.Line(key, 160), b.proc(), err)
 			}
 			b.Marks.Set(mark, false)
 			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
-				b.fallback(), err)
+				b.fallback(false), err)
 		}
 		// A copy already sent may land when the store answers again, held
 		// or not, and over a lift made meanwhile (L79 k): its mark is said
@@ -262,9 +262,11 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		if errors.Is(err, store.ErrNotSent) {
 			// Nothing reached the store, so nothing can land; the pending mark stays all the same (fail closed).
-			return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrNotRecorded, b.notRecordedWhat(), err)
+			reach := b.reachUnrecorded(ctx, mark, false)
+			return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reach.reached), ErrNotRecorded, b.notRecordedWhat(), err, reach)
 		}
-		return RevokeReport{}, fmt.Errorf("%w: %s (%w); "+b.fallback(), ErrUnrecorded, b.unrecordedWhat(), err)
+		reach := b.reachUnrecorded(ctx, mark, true)
+		return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reach.reached), ErrUnrecorded, b.unrecordedWhat(), err, reach)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
@@ -476,16 +478,76 @@ func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
 	return out
 }
 
-// fallback is how to cut access when a revocation cannot be made. On
-// port49-broker, which serves no device, stopping it cuts nothing: the
-// port49d that serve the devices are what stop.
-func (b *Broker) fallback() string {
-	const edit = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
-		"two watch intervals), or "
-	if b.proc() == "port49-broker" {
-		return edit + "stop every port49d (port49-broker serves no device)"
+// reachNote is reachUnrecorded's sentence carried on the error, so the HTTP answer can say what the
+// error's text says: the answer is built from the error's class, and would otherwise drop it.
+// full is for the log and the Go error and quotes the store's error; api is for the answer and does not.
+type reachNote struct {
+	full, api string
+	reached   bool
+}
+
+func (n reachNote) Error() string { return n.full }
+
+// reachOf is the reach sentence an unrecorded revocation's error carries, or the zero value.
+func reachOf(err error) reachNote {
+	var n reachNote
+	errors.As(err, &n)
+	return n
+}
+
+// reachUnrecorded runs the session-store reach for a mark the directory did not record, so a region
+// cut from its directory still denies what the mark names in its own store (stores I1). It returns
+// the sentence for the error and whether the reach finished. sent is whether a copy of the write
+// left this process: only then can the mark reach other regions on its own, and only if that copy
+// lands. Either way the operator is told to make it now where the directory answers; the check after
+// the heal is unrecordedWhat's. ReachMark only denies more and is safe to run again.
+func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sent bool) reachNote {
+	keys, ctxs, err := b.ReachMark(ctx, mark)
+	n := reachNote{reached: err == nil}
+	done := fmt.Sprintf("%d token keys deleted and %d contexts marked revoked", keys, len(ctxs))
+	switch {
+	case err == nil:
+		n.api = "this region's session store: " + done + "; "
+		n.full = n.api
+	case keys == 0 && len(ctxs) == 0:
+		n.api = "this region's session store could not be reached; "
+		n.full = "this region's session store could not be reached (" + printsafe.Line(err.Error(), 160) + "); "
+	default:
+		n.api = "this region's session store was reached only in part (" + done + "); "
+		n.full = fmt.Sprintf("this region's session store was reached only in part (%s before: %s); ", done,
+			printsafe.Line(err.Error(), 160))
 	}
-	return edit + "stop port49d"
+	// What the other regions know does not depend on whether this region's store answered.
+	tail := "other regions have not learned of it: run `port49 revoke` now against a broker in a region that " +
+		"reaches the directory, or here once the store answers; "
+	if sent {
+		tail = "other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that " +
+			"reaches the directory (the copy sent may land too); "
+	}
+	n.api += tail
+	n.full += tail
+	return n
+}
+
+// fallback is how to cut access when a revocation cannot be made. With the session store reached,
+// the policy edit is the only cut left to offer; without it, on port49-broker, which serves no
+// device, stopping it cuts nothing: the port49d that serve the devices are what stop.
+func (b *Broker) fallback(reached bool) string {
+	const edit = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
+		"two watch intervals)"
+	return edit + b.stopStep(reached)
+}
+
+// stopStep is the last resort when the region's session store was not reached: on port49-broker, which
+// serves no device, stopping it cuts nothing, so it is the port49d that stop.
+func (b *Broker) stopStep(reached bool) string {
+	switch {
+	case reached:
+		return ""
+	case b.proc() == "port49-broker":
+		return ", or stop every port49d in this region (port49-broker serves no device)"
+	}
+	return ", or stop port49d"
 }
 
 // acquireRevoke takes revokeSem, or gives up when ctx ends first. A free
@@ -528,15 +590,21 @@ func (b *Broker) detach(ctx context.Context) (context.Context, context.CancelFun
 // notRecordedWhat is what a revocation the store was never sent means for whoever asked.
 func (b *Broker) notRecordedWhat() string {
 	return "not recorded in the store and will not land later, but this " + b.proc() + " denies what it names " +
-		"until a lift on this " + b.proc() + " or its restart; run it again once the store answers"
+		"until a lift on this " + b.proc() + " or its restart"
 }
 
 // unrecordedWhat is what an unrecorded revocation means for whoever asked, without the store's own
 // words: it can still land, and until then this process denies what it names.
 func (b *Broker) unrecordedWhat() string {
+	return b.unrecordedBody() + "; after the heal check `port49 revoke --list`"
+}
+
+// unrecordedBody is unrecordedWhat without its check after the heal, for the HTTP answer, whose own
+// closing note says to check once (unconfirmedNote).
+func (b *Broker) unrecordedBody() string {
 	return "a copy already sent can still land when the directory answers again, and then stands everywhere, even " +
 		"over a lift made meanwhile. Until then this " + b.proc() + " denies what it names, until a lift on this " +
-		b.proc() + " or its restart; after the heal check `port49 revoke --list`"
+		b.proc() + " or its restart"
 }
 
 // persist writes the marks in force to broker.revocations_file.

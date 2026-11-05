@@ -56,10 +56,12 @@ func TestPort49BrokerReReadsItsAttestationRootsAtSIGHUP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Replace(string(raw), "  identity:\n",
-		"  identity:\n    per_login_mfa: {hardware_key_touch: {attestation_roots_file: "+roots+"}}\n", 1)
+	// brokerWithIdentity wrote a per_login_mfa block with idp_mfa: one block holds both.
+	const idpOnly = "    per_login_mfa:\n      idp_mfa: {}\n"
+	body := strings.Replace(string(raw), idpOnly,
+		idpOnly+"      hardware_key_touch: {attestation_roots_file: "+roots+"}\n", 1)
 	if body == string(raw) {
-		t.Fatal("the broker config has no identity block to add per_login_mfa to")
+		t.Fatal("the broker config has no per_login_mfa block to add hardware_key_touch to")
 	}
 	if err := os.WriteFile(f.broker, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

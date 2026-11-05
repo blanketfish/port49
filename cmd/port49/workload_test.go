@@ -531,7 +531,7 @@ func TestADirectoryOutageExitsTemporary(t *testing.T) {
 		w.Header().Set("Retry-After", "1")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(api.Error{Error: "directory_unavailable", Detail: "no directory server answered " +
-			"and no membership verified within the grace window is held; the agent retries"})
+			"and no membership verified within the grace window is held; try again in 30s"})
 	})
 	var out, errb bytes.Buffer
 	if code := run(append(append([]string{"workload", "token"}, down...), "leaf1"), &out, &errb); code != exitTemporary ||

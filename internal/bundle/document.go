@@ -145,9 +145,9 @@ func Open(raw []byte, keys []ed25519.PublicKey) (Document, admission.Inventory, 
 		// The service's next sync bounds against these, and its lines name
 		// them: DeviceProblem's name rule, as for the inventory.
 		for _, dev := range devices {
-			if !NameOK(dev) {
+			if !DeviceNameOK(dev) {
 				return Document{}, admission.Inventory{}, errors.New("bundle: the document lists, under a source, a " +
-					"device name that is not 1 to 255 bytes of printable ASCII without a space")
+					"device name that is not 1 to 253 bytes of printable ASCII without a space")
 			}
 		}
 	}
@@ -204,7 +204,7 @@ func inventoryOf(raw []byte) (admission.Inventory, error) {
 	var inv admission.Inventory
 	for i, d := range c.Devices {
 		label := fmt.Sprintf("#%d", i)
-		if NameOK(d.Name) {
+		if NameOK(d.Name) { // a name too long to admit still quotes, so the line names the device
 			label = d.Name
 		}
 		if d.KeyRef != "" {
@@ -250,8 +250,8 @@ func inventoryOf(raw []byte) (admission.Inventory, error) {
 // whatever the service publishes, port49d opens. It never quotes the value.
 func DeviceProblem(d admission.Device) string {
 	switch {
-	case !NameOK(d.Name):
-		return "has a name that is not 1 to 255 bytes of printable ASCII without a space"
+	case !DeviceNameOK(d.Name):
+		return "has a name that is not 1 to 253 bytes of printable ASCII without a space"
 	case !NameOK(d.Platform):
 		return "has a platform that is not 1 to 255 bytes of printable ASCII without a space"
 	case d.Transport != "" && !NameOK(d.Transport):
@@ -271,9 +271,16 @@ func DeviceProblem(d admission.Device) string {
 	return ""
 }
 
-// NameOK is a device name, platform or attribute key that can reach a record
-// and a line as it is: 1 to 255 bytes of printable ASCII, no space — the
-// broker's rule for a device name (pre-flight F11).
+// MaxDeviceName is a DNS name's length: the longest device name the bundle admits and the broker
+// takes from a caller.
+const MaxDeviceName = 253
+
+// DeviceNameOK is a device name: NameOK within MaxDeviceName bytes.
+func DeviceNameOK(s string) bool { return len(s) <= MaxDeviceName && NameOK(s) }
+
+// NameOK is a name that can reach a record and a line as it is: 1 to 255 bytes of printable ASCII,
+// no space. It is the rule for a platform, an attribute key, a source or platform set, and for a
+// device's name in a log label; a device name is admitted by DeviceNameOK (pre-flight F11).
 func NameOK(s string) bool {
 	return s != "" && len(s) <= 255 && strings.IndexFunc(s, func(r rune) bool { return r < 0x21 || r > 0x7e }) < 0
 }

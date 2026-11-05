@@ -76,14 +76,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.DisallowUnknownFields()
-		err = dec.Decode(&req)
-		if err == nil {
-			// One object and nothing after it: a second one would otherwise
-			// be dropped unread, narrowing the request silently.
-			if _, terr := dec.Token(); terr != io.EOF {
-				err = errors.New("trailing data")
-			}
-		}
+		err = decodeOne(dec, &req)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a revocation request: "+
@@ -235,12 +228,12 @@ func (b *Broker) runRevoke(w http.ResponseWriter, r *http.Request, pol *policy.P
 		b.logf("broker: a revocation asked by %s may not have been recorded: %v", asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the revocation may not have been "+
-			"recorded: "+b.unrecordedWhat()+"; "+b.unconfirmedNote())
+			"recorded: "+b.unrecordedBody()+"; "+reachOf(err).api+b.unconfirmedNote(reachOf(err).reached))
 	case errors.Is(err, ErrNotRecorded):
 		b.logf("broker: a revocation asked by %s was not sent to the store: %v", asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation was "+
-			b.notRecordedWhat()+"; check `port49 revoke --list` first")
+			b.notRecordedWhat()+"; "+reachOf(err).api+b.fallback(reachOf(err).reached))
 	case err != nil:
 		// The store refused the mark, so nothing was revoked beyond this
 		// port49d's own copy (Revoke): Revoke's own error names the store's
@@ -389,10 +382,10 @@ func (b *Broker) unrecordedNote() string {
 // unconfirmedNote is what to do when a mark may or may not have been written: look before trying
 // again, because a retry can stack a second mark. Whoever asked may be revoking their own principal,
 // so it names no one else to ask.
-func (b *Broker) unconfirmedNote() string {
-	return "check `port49 revoke --list` once the store answers, before trying again: if the mark is there it landed " +
+func (b *Broker) unconfirmedNote(reached bool) string {
+	return "after the heal, check `port49 revoke --list` here before running it again: if the mark is there it landed " +
 		"and needs nothing; if it is absent and nobody lifted it, run it again; meanwhile an operator can remove the " +
-		"principal's grants from broker.policy_file"
+		"principal's grants from broker.policy_file" + b.stopStep(reached)
 }
 
 // ownNote is the first line of a self revocation asked by the caller's own

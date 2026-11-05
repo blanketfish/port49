@@ -869,14 +869,8 @@ func directoryEndToEnd(t *testing.T, l *lab) {
 	if _, err := c.run("stop", "-t", "5", "openldap"); err != nil {
 		t.Fatalf("stopping openldap before the restart: %v", err)
 	}
-	restartSince := time.Now().UTC().Format(time.RFC3339Nano)
-	if out, err := c.run("restart", "port49-broker"); err != nil {
-		t.Fatalf("restarting the broker: %v\n%s", err, tailOf(out, 400))
-	}
-	// docker logs -f ends with the container it followed; the restarted broker's
-	// records and lines are followed again from the instant before the restart
-	if err := c.follow(composeProject+"-port49-broker-1", restartSince, c.brokerLog, c.brokerErr); err != nil {
-		t.Fatalf("following the restarted broker: %v", err)
+	if out, err := c.restartBroker(); err != nil {
+		t.Fatalf("restarting the broker, or following it again: %v\n%s", err, tailOf(out, 400))
 	}
 	restartedAt := time.Now()
 	for deadline := time.Now().Add(3 * time.Minute); !httpOK("http://127.0.0.1:9050/readyz"); time.Sleep(time.Second) {

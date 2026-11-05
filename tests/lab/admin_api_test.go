@@ -185,7 +185,7 @@ func (a *labAdmin) runCmd(full ...string) (string, int) {
 		// The command never ran: say why, as initEnrollments does.
 		return strings.TrimSpace(string(out) + " " + err.Error()), -1
 	}
-	return strings.TrimSpace(string(out)), code
+	return withoutTouchPrompt(string(out)), code
 }
 
 // labRepo is the repository root: the global the tests that need it fill in, or the checkout this test
@@ -214,4 +214,17 @@ func hasArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// withoutTouchPrompt is out without the agent's "touch your key to ..." lines, which the CLI prints
+// on stderr before it waits for the key: they come first in the combined output, and a cell that
+// quotes the first line, or looks for the broker's refusal there, would record the prompt instead.
+func withoutTouchPrompt(out string) string {
+	var kept []string
+	for _, l := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), "touch your key to ") {
+			kept = append(kept, l)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }

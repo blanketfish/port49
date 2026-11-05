@@ -2748,3 +2748,75 @@ func TestAStoreUnavailableMintCarriesItsRetryAfterThroughTheSocket(t *testing.T)
 		}
 	}
 }
+
+// PORT49_TEST_AGENT_SOCKET points a command at an agent of a test's own, and nothing else: a path
+// that is not a socket, or a socket another user owns, is refused before the client connects.
+func TestTheTestSocketVariableIsRefusedForASocketAnotherUserOwns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "a.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	served := make(chan struct{}, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			served <- struct{}{}
+			c.Close()
+		}
+	}()
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	c := NewClient(SocketPath())
+	// the caller's own socket is dialled
+	_, _ = c.Status(context.Background())
+	select {
+	case <-served:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a socket the caller owns was not dialled")
+	}
+	// another user's socket is refused before any connection
+	defer func(f func() int) { getuid = f }(getuid)
+	getuid = func() int { return os.Getuid() + 1 }
+	if err := c.checkSocket(); err == nil || !strings.Contains(err.Error(), "not owned by you") {
+		t.Fatalf("a socket another user owns: %v", err)
+	}
+	getuid = func() int { return os.Getuid() }
+	plain := filepath.Join(dir, "plain")
+	if err := os.WriteFile(plain, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewClient(plain).checkSocket(); err == nil || !strings.Contains(err.Error(), "not a socket") {
+		t.Fatalf("a path that is not a socket: %v", err)
+	}
+	link := filepath.Join(dir, "link.sock")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewClient(link).checkSocket(); err == nil || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("a symlink to a socket: %v", err)
+	}
+	// The process actually reached is checked after the dial, whatever the path said: seen as
+	// another uid, the listener (this process) is refused.
+	getuid = func() int { return os.Getuid() + 1 }
+	if peerCredsReported { // elsewhere the dial rests on the path checks alone
+		conn, err := dialOwned(context.Background(), sock)
+		if err == nil || !strings.Contains(err.Error(), "not you") {
+			if conn != nil {
+				conn.Close()
+			}
+			t.Fatalf("a listener of another uid was dialled: %v", err)
+		}
+	}
+	getuid = func() int { return os.Getuid() }
+	if _, err := NewClient(plain).Status(context.Background()); err == nil || !strings.Contains(err.Error(), "not a socket") {
+		t.Fatalf("a non-socket was dialled: %v", err)
+	}
+}

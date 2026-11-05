@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/netip"
@@ -544,10 +543,10 @@ func handleKey(handle string) string {
 // readSignInBody reads r's body into v, refusing a body with another member
 // and naming none of it.
 func readSignInBody(w http.ResponseWriter, r *http.Request, v any, shape string) bool {
-	dec := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
-	if dec.Decode(v) != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a sign-in: "+shape)
+	if err := decodeOne(dec, v); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a sign-in: "+shape+trailingNote(err))
 		return false
 	}
 	return true

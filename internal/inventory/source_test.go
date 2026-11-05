@@ -105,3 +105,15 @@ func TestNewSourcesBuildsEachConfiguredSource(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A device name too long to admit is still quoted by the line that leaves it out, so an operator
+// can find the device; the position stands in only for a name that cannot be printed.
+func TestALeftOutDeviceIsNamedByItsNameNotItsPosition(t *testing.T) {
+	long := strings.Repeat("a", 254)
+	if got := deviceLabel(3, long); got != long {
+		t.Errorf("a 254-byte name: %q", got)
+	}
+	if got := deviceLabel(3, "bad name"); got != "#3" {
+		t.Errorf("an unprintable name: %q", got)
+	}
+}
