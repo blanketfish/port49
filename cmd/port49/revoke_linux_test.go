@@ -276,7 +276,7 @@ func TestRevokeNotRecordedIsNotAPassingOutage(t *testing.T) {
 	})
 	var out, errb bytes.Buffer
 	code := run([]string{"revoke", "--principal", "user:carol@example.com", "--yes"}, &out, &errb)
-	if want := "port49 revoke: the broker did not record it: " + detail + "\n"; code == 0 || errb.String() != want {
+	if want := "port49 revoke: the broker says: " + detail + "\n"; code == 0 || errb.String() != want {
 		t.Errorf("exit %d:\n got %q\nwant %q", code, errb.String(), want)
 	}
 	errb.Reset()

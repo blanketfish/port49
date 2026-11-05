@@ -1116,14 +1116,30 @@ revocation takes no slot, and one caller has one in flight at a time: a caller's
 key revocation, while its first is still running, is answered `503 revocation_busy` at once,
 with `Retry-After`, nothing revoked. Neither busy answer writes a record. The response
 says what was reached, names the contexts on a platform that never asks about a command, and
-repeats the text `port49 revoke` prints. A revocation whose store write is not answered may still land when the store does, over a lift made meanwhile (L79 k): it is answered `503 revocation_unconfirmed` (a lift whose delete is not answered too: the mark may or may not be gone), never "nothing was revoked"; the detail says this broker keeps denying what it names, and to check `port49 revoke --list` once the store answers, before trying again (a mark that landed needs nothing; a retry after someone lifted it revokes again). Both unrecorded answers (the unanswered write and the one never sent) first reach this region's own session store, as a recorded revocation does: the principal's token keys are deleted and its live contexts marked revoked, and the detail says how many ("this region's session store: N token keys deleted and M contexts marked revoked"), then what the other regions can expect, whether or not that reach
-succeeded: that they have not learned of it and the operator is to run `port49 revoke` now against a broker in a
-region that reaches the directory (for a write never sent, or here once the store answers; for an unanswered one,
-the copy sent may land too, and `port49 revoke --list` here after the heal shows the mark, to be read before running
-it again). The detail carries the fallback: the policy edit, and stopping port49d (every port49d, on port49-broker)
-only when that reach itself failed (decision 56 ruling 3). A reach that failed says so without quoting the store's
-own error (the log has it). The CLI prints the never-sent answer as "the broker did not record it: <detail>", not as
-an outage to run again shortly. A write the store refused wrote nothing and is still `503 store_unavailable`, nothing revoked. A write the store guard failed before sending (an open circuit, no free slot, a deadline already past) cannot land later, and is `503 store_unavailable` too, but the answer does not say nothing was revoked: it says the revocation is not recorded in the store and this broker keeps denying what it names until a lift here or its restart (revoke fails closed). A lift in that case, or one whose read of the mark failed, is `503 store_unavailable` too, "could not be lifted, and stands", without the store's own words. The agent waits on a revocation past these bounds (the
+repeats the text `port49 revoke` prints. A revocation whose store write is not answered may still
+land when the store does, over a lift made meanwhile (L79 k): it is answered `503
+revocation_unconfirmed` (a lift whose delete is not answered too: the mark may or may not be gone),
+never "nothing was revoked"; the detail says this broker keeps denying what it names, and to check
+`port49 revoke --list` once the store answers, before trying again (a mark that landed needs
+nothing; a retry after someone lifted it revokes again). Both unrecorded answers (the unanswered
+write and the one never sent) first reach this region's own session store, as a recorded revocation
+does: the principal's token keys are deleted and its live contexts marked revoked, and the detail
+says how many ("this region's session store: N token keys deleted and M contexts marked revoked"),
+then what the other regions can expect, whether or not that reach succeeded: that they have not
+learned of it and the operator is to run `port49 revoke` now against a broker in a region that
+reaches the directory (for a write never sent, that may be this broker once the store answers; for
+an unanswered one, the copy sent may land too, and `port49 revoke --list` here after the heal shows
+the mark, to be read before running it again). The detail carries the fallback: the policy edit, and
+stopping port49d (every port49d in the region, on port49-broker) only when that reach itself failed
+(decision 56 ruling 3). A reach that failed says so without quoting the store's own error (the log
+has it). The CLI prints the never-sent answer as "the broker says: <detail>", not as an outage to
+run again shortly. A write the store refused wrote nothing and is still `503 store_unavailable`,
+nothing revoked. A write the store guard failed before sending (an open circuit, no free slot, a
+deadline already past) cannot land later, and is `503 store_unavailable` too, but the answer does
+not say nothing was revoked: it says the revocation is not recorded in the store and this broker
+keeps denying what it names until a lift here or its restart (revoke fails closed). A lift in that
+case, or one whose read of the mark failed, is `503 store_unavailable` too, "could not be lifted,
+and stands", without the store's own words. The agent waits on a revocation past these bounds (the
 slot's 10 s, the run's `RevokeTimeout`, the file's save) and never sends one twice once it began
 writing it: one it sent and got no answer to may be in force, and `port49 revoke` says to check
 `--list` or the decision log before running it again.

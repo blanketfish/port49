@@ -335,7 +335,7 @@ func TestTheRevokeNotesNameTheCommand(t *testing.T) {
 func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 	for _, c := range []struct{ proc, stop, wrong string }{
 		{"", "or stop port49d", "stop every port49d"},
-		{"port49-broker", "or stop every port49d (port49-broker serves no device)", "this port49d"},
+		{"port49-broker", "or stop every port49d in this region (port49-broker serves no device)", "this port49d"},
 	} {
 		f := newFixtureWithPolicy(t, 8, sharedPolicy)
 		f.b.Proc = c.proc

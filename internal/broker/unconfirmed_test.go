@@ -359,7 +359,7 @@ func TestTheUnrecordedRevokeAnswersAreExact(t *testing.T) {
 	const edit = "cut access another way: remove the principal's grants from broker.policy_file (live within two watch " +
 		"intervals)"
 	stop := map[string]string{"port49d": ", or stop port49d",
-		"port49-broker": ", or stop every port49d (port49-broker serves no device)"}
+		"port49-broker": ", or stop every port49d in this region (port49-broker serves no device)"}
 	body := func(proc string) string {
 		return "a copy already sent can still land when the directory answers again, and then stands everywhere, even " +
 			"over a lift made meanwhile. Until then this " + proc + " denies what it names, until a lift on this " + proc +

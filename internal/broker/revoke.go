@@ -545,7 +545,7 @@ func (b *Broker) stopStep(reached bool) string {
 	case reached:
 		return ""
 	case b.proc() == "port49-broker":
-		return ", or stop every port49d (port49-broker serves no device)"
+		return ", or stop every port49d in this region (port49-broker serves no device)"
 	}
 	return ", or stop port49d"
 }

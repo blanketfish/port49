@@ -109,7 +109,7 @@ func adminRefused(name, path string, resp agent.AdminResponse, touched bool, std
 	case resp.Status == 503 && e.Error == "store_unavailable" && path == "/v1/tokens/revoke":
 		// The mark went nowhere but the broker's own process: its words say where else to make it, not "run it
 		// again shortly".
-		fmt.Fprintf(stderr, "%s: the broker did not record it: %s\n", name, printsafe.Line(e.Detail, 1200))
+		fmt.Fprintf(stderr, "%s: the broker says: %s\n", name, printsafe.Line(e.Detail, 1200))
 	case resp.Status == 413:
 		fmt.Fprintf(stderr, "%s: the broker takes at most %d MiB; an export port49 wrote is smaller than that: check "+
 			"the file is the export\n", name, api.MaxImportBytes>>20)
