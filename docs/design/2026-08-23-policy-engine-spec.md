@@ -2412,8 +2412,8 @@ never consulted for policy (§5.2).
 A value outside its list is recorded as `unknown_<n>`. The object carries no user, port, address,
 data or argument, and an `unvalidated` record never carries it (decision 52 ruling 3).
 
-`session.username` is the username the device sent; `session.username_redacted` (bool) is true when it
-was token-shaped, and `session.username` is then empty (decision 56 ruling 10).
+`session.username` is the username the device sent; `session.username_redacted` (bool) is true
+when it was token-shaped, and `session.username` is then empty (decision 56 ruling 10).
 
 `session.privilege` on an `authorize_session` or `authorize_command` record is the `priv_lvl` of
 the request's header: the level the device asked at. `session.held_privilege` is the context's
@@ -6014,8 +6014,8 @@ Mitigations, designed in rather than documented afterward:
   its platform (§5.5).
 - An attribute scope that delivers a deny defaults to `security_log: true`, so membership
   changes are logged and alerted as security events rather than routine inventory churn, and
-  `platform_changed` is a security change (decision 56 ruling 6). An explicit `security_log: false`
-  loads, and `Lint` reports it as `deny_scope_unlogged`.
+  `platform_changed` is a security change (decision 56 ruling 6). An explicit `security_log:
+  false` loads, and `Lint` reports it as `deny_scope_unlogged`.
 - Attributes used for security scoping SHOULD come from an attested path rather than a
   hand-editable field.
 - A connector's token MUST be able to read devices and nothing more. The service never writes
@@ -8069,7 +8069,8 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   a runner judges it. The runbook deletes `meta/judged`, which is what keeps the gate closed
   after a restore; a snapshot restored without that step brings back a `meta/judged` that names
   the bundle, the gate opens on it at once, and the restore guard and the runner's purge are
-  the backstop *(the restore guard: superseded by decision 56 ruling 1)* (each such login fails `token_not_found`). The lab's seed tokens, minted before
+  the backstop *(the restore guard: superseded by decision 56 ruling 1)* (each such login fails
+  `token_not_found`). The lab's seed tokens, minted before
   the gate and before "listening on", are not covered: the first takeover purges them. The
   tokens such a takeover would purge were minted under the very bundle
   it then records, so purging by mint time was not taken: it would keep, too, a token another
@@ -8092,7 +8093,8 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   store was restored: it takes `meta/judged` as absent and purges every unspent token, so
   the first takeover purges even when the runbook's delete of `meta/judged` was forgotten.
   It does not cover a port49d serving before that takeover: the runbook's token delete does,
-  *(Superseded by decision 56 ruling 1, through "The guard is about single-use tokens alone":)* and so does port49d's own guard: a port49d that finds the witness below what it followed
+  *(Superseded by decision 56 ruling 1, through "The guard is about single-use tokens alone":)*
+  and so does port49d's own guard: a port49d that finds the witness below what it followed
   refuses every token redemption `store_unavailable` until the first of two: a runner, once a
   purge of every unspent token is done, writes `meta/purged` (plan 7e Task 15d); or every token
   the store holds has expired, which port49d takes as its own clock passing the largest
@@ -11503,7 +11505,8 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
   on FAIL". Under `tacplus` alone an ERROR is final until go-dark closes the listener (at most 5.5 s
   at the defaults, L41); after that the server is unreachable and break-glass logs in (L4, L17). The
   cost, stated in the reference's README: break-glass waits up to 5.5 s while port49 is up with its
-  store failing, and under the restore guard until port49d is stopped (ruling 15; *superseded by decision 56 ruling 1*: a restore no longer refuses break-glass). The alternative,
+  store failing, and under the restore guard until port49d is stopped (ruling 15; *superseded
+  by decision 56 ruling 1*: a restore no longer refuses break-glass). The alternative,
   `[ tacplus password ]`, is not built: it would need a rule that no Junos device holds a local
   account sharing a port49 username, which is device toil and nothing port49 can check.
 - **3. SR Linux ships `exit-on-reject true`.** Without it a port49 deny falls through to `local`
@@ -11600,7 +11603,8 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
   idle timer. The alternative (the default on every class) is not built. Decision 21's timer is the
   only thing that ends a session on a session-only platform, so this takes decision 33's "the option
   that denies more".
-- **15. The restore guard's ERROR stands, bounded in time (Ryan, 2026-11-02).** *Superseded by decision 56 ruling 1.* After an etcd restore
+- **15. The restore guard's ERROR stands, bounded in time (Ryan, 2026-11-02).** *Superseded by
+  decision 56 ruling 1.* After an etcd restore
   port49d refuses token logins until a runner's purge, and its refusal is an ERROR, which IOS XE
   treats as final, and Junos under `tacplus` alone (ruling 2) does the same, so break-glass is
   refused there until the brokers start and purge. SR Linux under `exit-on-reject true` does not:
@@ -11761,14 +11765,15 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
 - **Open.** L91 is provisional until it closes. L89 closed 2026-11-04 (`tests/lab/results/L89-kind.md`). L39 (b) and (c) closed 2026-11-04 (`tests/lab/results/L39-kind.md`).
 
 
-**56. The pre-beta review's fixes (2026-11-05; the pre-beta review, plan `2026-11-05-pre-beta-fixes`).**
-Each ruling states the behaviour and the finding it closes.
+**56. The pre-beta review's fixes (2026-11-05; the pre-beta review, plan
+`2026-11-05-pre-beta-fixes`).** Each ruling states the behaviour and the finding it closes.
 
-1. **The restore floor replaces the restore guard.** port49d judges an etcd restore from two reads
-   of the store, the highest `meta/witness` `ModRevision` and the read's header revision, and
-   refuses by token revision, not by time. It closes stores C1, identity I1, I2 and I5 (with ruling
-   2), stores I4 and deploy I3. It supersedes decision 36's guard sentences and decision 55 ruling
-   15, each marked in place. A fresh mint is never refused, because revisions rise on one timeline.
+1. **The restore floor replaces the restore guard.** port49d judges an etcd restore from two
+   reads of the store, the highest `meta/witness` `ModRevision` and the read's header revision,
+   and refuses by token revision, not by time. It closes stores C1, identity I1, I2 and I5
+   (with ruling 2), stores I4 and deploy I3. It supersedes decision 36's guard sentences and
+   decision 55 ruling 15, each marked in place. A fresh mint is never refused, because
+   revisions rise on one timeline.
 
    ```text
    record (restore.json beside accounting.spool_path; written with writeOwnerOnly and read after ownedHere,
@@ -11800,25 +11805,25 @@ Each ruling states the behaviour and the finding it closes.
      (`port49_redemption_restore_unjudged` is 1) until a read answers. A port49d on the memory
      store applies no floor; on etcd, a token whose `Revision` is 0 is refused under a floor.
    - Without `--bump-revision`, a second restore to a newer snapshot of the old timeline can be
-     unseen: its witness and header can both sit above the first drop's values and below the old
-     record. A drop whose header is below `high_header` therefore also sets a `band`: tokens at or
-     below `high_header` whose `MintedAt` is not after the drop read plus `restoreSkew` (5m) are
-     refused too, for `MaxTokenTTL` + `restoreSkew` (20m) after the read. `MintedAt` keeps a fresh
-     mint served on the non-bumped timeline.
-   - **The residual**, which this is the one place in the spec to state, needs all of: a non-bumped
-     restore; a second old-timeline restore that no read tells, within 20m; a broker clock more
-     than 5m ahead of port49d's, outside every tolerance port49 states; and a token redeemed
-     between the second snapshot and the first restore.
+     unseen: its witness and header can both sit above the first drop's values and below the
+     old record. A drop whose header is below `high_header` therefore also sets a `band`:
+     tokens at or below `high_header` whose `MintedAt` is not after the drop read plus
+     `restoreSkew` (5m) are refused too, for `MaxTokenTTL` + `restoreSkew` (20m) after the
+     read. `MintedAt` keeps a fresh mint served on the non-bumped timeline.
+   - **The residual**, which this is the one place in the spec to state, needs all of: a
+     non-bumped restore; a second old-timeline restore that no read tells, within 20m; a broker
+     clock more than 5m ahead of port49d's, outside every tolerance port49 states; and a token
+     redeemed between the second snapshot and the first restore.
    - **The cost**, on the non-bumped path only: a token minted within 5m after the drop read
      whose revision is at or below `high_header` is refused once. A token minted after the
-     timeline's revision passes `high_header` is served whatever its clock. `--bump-revision` (the
-     runbook) arms no band, because then `floor` is at least `high_header`.
+     timeline's revision passes `high_header` is served whatever its clock. `--bump-revision`
+     (the runbook) arms no band, because then `floor` is at least `high_header`.
    - The record survives a restart. An absent record is said once; an unreadable one is moved
      aside and makes the first read a drop (every token in the store is refused once). A record
      that cannot be saved is kept in memory, said once, and saved again each second; port49d
      keeps serving.
-2. **The runner's restore purge also deletes the `on/` and `mp/` families.** It closes identity I5
-   with ruling 1.
+2. **The runner's restore purge also deletes the `on/` and `mp/` families.** It closes identity
+   I5 with ruling 1.
 3. **A revocation made in a region cut from the directory still reaches that region's session
    store** (stores I1; plan Task 8).
 4. **A person's ID token is never a caller's credential on any broker.** It is taken only at
@@ -11829,20 +11834,22 @@ Each ruling states the behaviour and the finding it closes.
    `max_privilege`, is a load error** (§5.5; policy I1).
 6. **An attribute scope that delivers a deny defaults to `security_log: true`, and
    `platform_changed` is a security change** (§10; policy I2).
-7. **A passing store health check closes the token and context pools' circuits** (amends decision
-   35; stores I2).
-8. **A call whose caller's deadline had passed before it entered is counted `deadline_on_entry`,
-   not as a store failure** (amends decision 35; stores I3).
-9. **A full logout queue owes a rescan of the logout set and never drops a logout's reach** (identity I3).
-10. **A token-shaped username (after trimming surrounding whitespace) is never logged:** `session.username`
-    is empty and `session.username_redacted` is true. A real 30-character alphanumeric username is
-    redacted too, in the redeem, authorization and accounting records alike; that is the cost
-    (devices I1).
+7. **A passing store health check closes the token and context pools' circuits** (amends
+   decision 35; stores I2).
+8. **A call whose caller's deadline had passed before it entered is counted
+   `deadline_on_entry`, not as a store failure** (amends decision 35; stores I3).
+9. **A full logout queue owes a rescan of the logout set and never drops a logout's reach**
+   (identity I3).
+10. **A token-shaped username (after trimming surrounding whitespace) is never logged:**
+    `session.username` is empty and `session.username_redacted` is true. A real 30-character
+    alphanumeric username is redacted too, in the redeem, authorization and accounting records
+    alike; that is the cost (devices I1).
 11. **An enable token is refused `credential_mismatch` unless its principal is the escalated
     context's** (devices M2).
-12. **An authorization or accounting packet with `seq_no` other than 1 is a protocol error** (devices M3).
-13. **The `mfaTokenKey` once-record is removed.** The nonce-bound challenge is taken once already
-   (the controller's moot verdict, plan ruling 12).
+12. **An authorization or accounting packet with `seq_no` other than 1 is a protocol error**
+    (devices M3).
+13. **The `mfaTokenKey` once-record is removed.** The nonce-bound challenge is taken once
+    already (the controller's moot verdict, plan ruling 12).
 
 ---
 
