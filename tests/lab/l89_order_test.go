@@ -5,7 +5,6 @@ package lab
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +13,6 @@ import (
 	"github.com/blanketfish/port49/tests/kind/kindtest"
 	"github.com/blanketfish/port49/tests/shapes/l82"
 	"github.com/blanketfish/port49/tests/shapes/l89"
-	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
 // l89Revoked is the principal cell (a) revokes before the backup, so each broker's marks.json exists and
@@ -26,15 +24,20 @@ type l89Lab struct{ r *l89Run }
 
 func (l l89Lab) Revoke(principal string) error {
 	t, c, ns := l.r.t, l.r.stack.Cluster(), l.r.stack.Namespace()
-	cmd := exec.Command("bash", filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "scripts", "revoke-offline.sh"),
-		ns, l.r.stack.Release(), "--", "--principal", principal)
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.Kubeconfig, "PATH="+filepath.Dir(kindtest.Bin(t, "KUBECTL_BIN"))+":"+os.Getenv("PATH"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Logf("revoke-offline.sh:\n%s", kindtest.Filter(l89.Scrub(string(out))))
+	script := fmt.Sprintf("exec bash %q %q %q -- --principal %q\n",
+		filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "scripts", "revoke-offline.sh"), ns, l.r.stack.Release(), principal)
+	env := append(os.Environ(), "KUBECONFIG="+c.Kubeconfig, "PATH="+filepath.Dir(kindtest.Bin(t, "KUBECTL_BIN"))+":"+os.Getenv("PATH"))
+	within, _ := l.r.bound(6 * time.Minute)
+	out, timedOut, err := l89.RunBounded(kindtest.Root(), env, script, within)
+	if err != nil {
+		t.Logf("revoke-offline.sh:\n%s", kindtest.Filter(l89.Scrub(out)))
+		if timedOut {
+			return fmt.Errorf("revoke-offline.sh did not end within %v", within.Round(time.Second))
+		}
 		return fmt.Errorf("revoke-offline.sh: %v", err)
 	}
 	// the script scales the brokers back to the count it found; wait for them to be back
-	c.Kubectl("-n", ns, "rollout", "status", "statefulset/"+l.r.stack.Release()+"-broker", "--timeout=5m")
+	c.Kubectl("-n", ns, "rollout", "status", "statefulset/"+l.r.stack.Release()+"-broker", l.r.kubectlTimeout(4*time.Minute))
 	for _, p := range []string{"t-broker-0", "t-broker-1"} {
 		c.WaitReady(ns, p, 4*time.Minute)
 	}
@@ -62,12 +65,13 @@ func (l l89Lab) Hashes(pvc string, paths []string) map[string]string {
 }
 
 func (l l89Lab) Eventually(what string, cond func() bool) bool {
-	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(5 * time.Second) {
+	within, _ := l.r.bound(3 * time.Minute)
+	for deadline := time.Now().Add(within); ; time.Sleep(5 * time.Second) {
 		if cond() {
 			return true
 		}
 		if time.Now().After(deadline) {
-			l.r.t.Logf("%s: not within 3m", what)
+			l.r.t.Logf("%s: not within %v", what, within.Round(time.Second))
 			return false
 		}
 	}
@@ -208,19 +212,28 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	if err := os.WriteFile(filepath.Join(bin, "velero"), []byte(wrapper), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// readme runs one README step. Its failure is the measurement: the row names the command the ERR trap
-	// caught and the exit status, the output goes to the test log, and the cell is a FAIL and ends.
-	readme := func(what, dir, script string) string {
-		cmd := exec.Command("bash", "-ec", l89.StepScript(script))
-		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			l82Row(cell, what+": the README command that failed, and how", l89.FailedCommand(string(out))+" ("+err.Error()+")")
+	// readme runs one README step, bounded by own (l89.RunBounded, inside the cell's end). Its failure is
+	// the measurement: the row names the command the ERR trap caught and the exit status, the output goes
+	// to the test log, and the cell is a FAIL and ends. A step past its own bound is a measured FAIL too,
+	// its row naming the command it was in; a step stopped by the cell's end is the budget, NOT RUN.
+	readme := func(what, dir, script string, own time.Duration) string {
+		within, capped := r.bound(own)
+		env := append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
+		out, timedOut, err := l89.RunBounded(dir, env, l89.StepScript(script), within)
+		switch {
+		case timedOut && capped:
+			l82Row(cell, what+": stopped when the cell's time ran out, not a measurement", "it was in: "+l89.RunningCommand(out))
+			t.Fatalf("%s: stopped at the cell's end, after %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
+		case timedOut:
+			l82Row(cell, what+": did not end within "+within.Round(time.Second).String(), "it was in: "+l89.RunningCommand(out))
 			cell.Verdict = l82.Fail
-			t.Fatalf("%s: a README command failed: %v\n%s", what, err, kindtest.Filter(l89.Scrub(string(out))))
+			t.Fatalf("%s: a README command did not end within %v\n%s", what, within.Round(time.Second), kindtest.Filter(l89.Scrub(out)))
+		case err != nil:
+			l82Row(cell, what+": the README command that failed, and how", l89.FailedCommand(out)+" ("+err.Error()+")")
+			cell.Verdict = l82.Fail
+			t.Fatalf("%s: a README command failed: %v\n%s", what, err, kindtest.Filter(l89.Scrub(out)))
 		}
-		return string(out)
+		return l89.StepOutput(out)
 	}
 	// measured ends the cell with a measured FAIL on a check that does not hold
 	measured := func(what, observation string) {
@@ -235,20 +248,24 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 
 	// the README's first command: both namespaces deleted (the lab has one), and its volumes gone
-	c.Kubectl("delete", "namespace", ns, "--wait=true", "--timeout=5m")
-	shapetest.WaitFor(t, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
+	c.Kubectl("delete", "namespace", ns, "--wait=true", r.kubectlTimeout(5*time.Minute))
+	r.waitFor(t, cell, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
 		out, err := c.KubectlTry("", "get", "pv", "-o", `jsonpath={range .items[*]}{.spec.claimRef.namespace}{"\n"}{end}`)
 		return err == nil && !strings.Contains(out, ns)
 	})
 	l82Row(cell, "the namespace was deleted", "yes, and its volumes")
 
+	// each README step's own bound: a velero --wait has none, and a restore whose pod volume restores wait
+	// on pods that are gone (the suspected failure of c) would otherwise wait out the test
+	const restoreBound, etcdBound, checkBound, zeroBound, deleteBound, revokeBound, scaleBound = 8 * time.Minute,
+		6 * time.Minute, time.Minute, 4 * time.Minute, 4 * time.Minute, 6 * time.Minute, 10 * time.Minute
 	if !fallback {
 		l82Row(cell, "the resource modifier as the lab runs it", "restore-scale-zero.yaml with a resourceNameRegex the lab adds (its etcd shares the namespace), so the shipped file is not run as shipped")
 		c.Kubectl("-n", "velero", "delete", "configmap", "restore-scale-zero", "--ignore-not-found")
-		readme("README step 3 (the restore with the resource modifier)", work, steps["restorezero"])
+		readme("README step 3 (the restore with the resource modifier)", work, steps["restorezero"], restoreBound)
 		l82Row(cell, "README step 3 (the restore "+restore+" with the resource modifier, both StatefulSets at 0 replicas) ran from its own text", "yes")
 		readme("README step 1's wait for etcd", work,
-			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns))
+			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns), etcdBound)
 		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by step 3's restore)", "ready")
 		replicas := strings.TrimSpace(c.Kubectl("-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
 		if replicas != "0 0" {
@@ -256,17 +273,17 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		}
 		l82Row(cell, "the two StatefulSets' replicas after the restore", replicas)
 	} else {
-		readme("README fallback step 4 (the restore of port49)", work, steps["fallbackrestore"])
+		readme("README fallback step 4 (the restore of port49)", work, steps["fallbackrestore"], restoreBound)
 		l82Row(cell, "README fallback step 4 (the restore "+restore+" of port49, normally) ran from its own text", "yes: in the lab it restores etcd too, which is never held at 0, so the pods ran against the restored store before the delete Job of step 2")
 		l82Row(cell, "what (d) cannot show", "that port49 pods restored while etcd is held at 0 (the README's fallback steps 3 to 7) are harmless: the lab's etcd cannot be held down apart from the release")
 		readme("README step 1's wait for etcd", work,
-			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns))
+			fmt.Sprintf("kubectl -n %s wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m", ns), etcdBound)
 		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by the fallback's restore)", "ready")
 	}
 
 	// the README's volume check on the named restore, once Velero has finished with the volumes
-	phaseWait(t, c, restore)
-	phase, vols := l89.ParseVolumes(readme("the README's volume check", work, steps["volumes"]))
+	r.phaseWait(t, cell, restore)
+	phase, vols := l89.ParseVolumes(readme("the README's volume check", work, steps["volumes"], checkBound))
 	cs := l89.C{RestorePhase: phase, Volumes: vols, FingerprintBefore: l89.Short(fpBefore[0]), Before: r.before.Hashes,
 		MarksBefore: r.before.Marks, Fallback: fallback}
 	for _, v := range l89Volumes {
@@ -284,17 +301,22 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 
 	if fallback {
-		readme("README fallback step 6 (both StatefulSets to 0)", work, steps["fallbackzero"])
+		readme("README fallback step 6 (both StatefulSets to 0)", work, steps["fallbackzero"], zeroBound)
 		l82Row(cell, "README fallback step 6 (both StatefulSets scaled to 0, the pods gone) ran from its own text", "yes")
 	} else {
 		// a restore at 0 replicas whose pods outlive it: the README's order relies on there being none
 		var left string
+		within, capped := r.bound(3 * time.Minute)
 		gone := (l89Lab{r}).Eventually("no port49 pod to be left", func() bool {
 			out, err := c.KubectlTry("", "-n", ns, "get", "pods", "-l", "app.kubernetes.io/name=port49", "-o", "name")
 			left = strings.Join(strings.Fields(out), " ")
 			return err == nil && left == ""
 		})
-		if !gone {
+		switch {
+		case !gone && capped:
+			l82Row(cell, "the harness's wait for no port49 pod to be left", "stopped when the cell's time ran out, after "+within.Round(time.Second).String()+": not a measurement")
+			t.Fatalf("port49 pods still there when the cell's time ran out: %s", left)
+		case !gone:
 			measured("port49 pods still there 3 minutes after the restore at 0 replicas", left)
 		}
 		l82Row(cell, "port49 pods left after the restore at 0 replicas", "none")
@@ -315,11 +337,11 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		return
 	}
 
-	readme("README step 2 (the delete Job of design 13 step 3)", work, steps["tokendelete"])
+	readme("README step 2 (the delete Job of design 13 step 3)", work, steps["tokendelete"], deleteBound)
 	l82Row(cell, "README step 2 (the delete Job of design 13 step 3) ran from its own text and completed", "yes")
-	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), steps["revoke"])
+	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), steps["revoke"], revokeBound)
 	l82Row(cell, "README step 4 (revoke-offline.sh) ran from its own text", "yes")
-	readme("README step 5 (the scale-up)", work, steps["scaleup"])
+	readme("README step 5 (the scale-up)", work, steps["scaleup"], scaleBound)
 	l82Row(cell, "README step 5 (the scale-up, brokers then port49d) ran from its own text and both rolled out", "yes")
 
 	_, fpAfter := r.snapshot()
@@ -337,10 +359,11 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 // phaseWait waits until the restore has ended and none of its pod volume restores is still running, so
 // the README's volume check reads where they ended. A restore that made none at all (the suspected
 // failure of cell c) ends too, and the check then lists nothing.
-func phaseWait(t *testing.T, c *kindtest.Cluster, name string) {
+func (r *l89Run) phaseWait(t *testing.T, cell *l82.Cell, name string) {
 	t.Helper()
+	c := r.stack.Cluster()
 	ended := map[string]bool{"Completed": true, "PartiallyFailed": true, "Failed": true, "FailedValidation": true}
-	shapetest.WaitFor(t, "the restore and its pod volume restores to end", 10*time.Minute, func() bool {
+	r.waitFor(t, cell, "the restore and its pod volume restores to end", 5*time.Minute, func() bool {
 		ph, err := c.KubectlTry("", "-n", "velero", "get", "restore", name, "-o", "jsonpath={.status.phase}")
 		if err != nil || !ended[strings.TrimSpace(ph)] {
 			return false

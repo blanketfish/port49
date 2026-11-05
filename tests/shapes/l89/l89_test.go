@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanketfish/port49/tests/shapes/l82"
 	"gopkg.in/yaml.v3"
@@ -541,6 +542,103 @@ func TestTheHarnesssRowTextIsWritable(t *testing.T) {
 	}
 	if n < 20 {
 		t.Errorf("only %d literal row texts found: the call names changed", n)
+	}
+}
+
+// A README step that does not end is stopped at its bound, the processes it started too (round 3's run
+// hung in a step until the 55m deadline), and the output says which command was running.
+func TestRunBoundedStopsAStepAndWhatItStarted(t *testing.T) {
+	start := time.Now()
+	// a child holding the output pipe open: killing bash alone would leave CombinedOutput waiting on it
+	out, timedOut, err := RunBounded(t.TempDir(), nil, StepScript("echo first\nsleep 30 | cat\necho never\n"), time.Second)
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("the bounded step took %v", took)
+	}
+	if !timedOut || err == nil {
+		t.Errorf("a step past its bound: timedOut %v, err %v", timedOut, err)
+	}
+	if got := RunningCommand(out); got != "sleep 30" && got != "cat" {
+		t.Errorf("RunningCommand = %q; output %q", got, out)
+	}
+	out, timedOut, err = RunBounded(t.TempDir(), nil, StepScript("echo ok\n"), 10*time.Second)
+	if timedOut || err != nil || !strings.Contains(out, "ok") {
+		t.Errorf("a step that ends: %q, %v, %v", out, timedOut, err)
+	}
+	// the volume check's output, read with its trap lines, parses as the command printed it
+	out, _, err = RunBounded(t.TempDir(), nil, StepScript("echo Completed\necho 'PHASE POD VOLUME'\necho 'Completed t-broker-0 data'\n"), 10*time.Second)
+	if err != nil || !strings.Contains(out, "l89-running: ") {
+		t.Fatalf("the trap lines: %q, %v", out, err)
+	}
+	if phase, vols := ParseVolumes(StepOutput(out)); phase != "Completed" || vols["t-broker-0/data"] != "Completed" {
+		t.Errorf("ParseVolumes after StepOutput = %q, %v", phase, vols)
+	}
+	_, timedOut, err = RunBounded(t.TempDir(), nil, StepScript("false\n"), 10*time.Second)
+	if timedOut || err == nil {
+		t.Errorf("a failing step: timedOut %v, err %v", timedOut, err)
+	}
+}
+
+func TestBudgetKeepsTheCellsInsideTheTestsDeadline(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	b := Budget{TestEnd: now.Add(30 * time.Minute), Reserve: 4 * time.Minute}
+	// the cell's own cap
+	if end, ok := b.Cell(now, 15*time.Minute, 6*time.Minute); !ok || !end.Equal(now.Add(15*time.Minute)) {
+		t.Errorf("Cell = %v, %v", end, ok)
+	}
+	// the test's deadline less the reserve comes first
+	if end, ok := b.Cell(now.Add(14*time.Minute), 15*time.Minute, 6*time.Minute); !ok || !end.Equal(now.Add(26*time.Minute)) {
+		t.Errorf("Cell near the deadline = %v, %v", end, ok)
+	}
+	// too little left to start
+	if _, ok := b.Cell(now.Add(21*time.Minute), 15*time.Minute, 6*time.Minute); ok {
+		t.Error("a cell with 5m left and 6m needed starts")
+	}
+	// no -timeout: only the cap
+	if end, ok := (Budget{}).Cell(now, 15*time.Minute, 6*time.Minute); !ok || !end.Equal(now.Add(15*time.Minute)) {
+		t.Errorf("no deadline: %v, %v", end, ok)
+	}
+	end := now.Add(5 * time.Minute)
+	if d, capped := Bound(now, end, 8*time.Minute); d != 5*time.Minute || !capped {
+		t.Errorf("Bound past the cell's end = %v, %v", d, capped)
+	}
+	if d, capped := Bound(now, end, 3*time.Minute); d != 3*time.Minute || capped {
+		t.Errorf("Bound inside the cell = %v, %v", d, capped)
+	}
+	if d, _ := Bound(now.Add(10*time.Minute), end, 3*time.Minute); d != 0 {
+		t.Errorf("Bound after the cell's end = %v", d)
+	}
+}
+
+// The cells' caps, the bring-up and the reserve fit the 55m test timeout (make lab-l89), so the guard's
+// kill, which writes NOT RUN for the cell it stops, is the exception and not the end of every slow run.
+func TestTheCellCapsFitTheTestTimeout(t *testing.T) {
+	var sum time.Duration
+	for _, id := range Order {
+		cap, need := CellCap(id)
+		if cap <= 0 || need <= 0 || need > cap {
+			t.Errorf("cell %s: cap %v, need %v", id, cap, need)
+		}
+		sum += cap
+	}
+	if total := BringUp + sum + ReserveAtEnd; total > 55*time.Minute {
+		t.Errorf("the bring-up, the cells' caps and the reserve are %v, over the 55m timeout", total)
+	}
+}
+
+// The guard's kill (the deadline 45s away) writes the results too: the cell it stopped is NOT RUN with a
+// row saying why, and the cells already judged keep their verdicts.
+func TestStoppedMarksTheRunningCellNotRun(t *testing.T) {
+	cells := []l82.Cell{{ID: "a", Verdict: l82.Pass}, {ID: "b", Verdict: l82.Pass}, {ID: "c", Verdict: l82.Fail, Rows: []l82.Row{{Case: "x", Observation: "y"}}}, {ID: "d"}}
+	got := Stopped(cells, "c", "the test's deadline was 45s away")
+	if got[0].Verdict != l82.Pass || got[2].Verdict != "" || len(got[2].Rows) != 2 || !strings.Contains(got[2].Rows[1].Observation, "deadline") {
+		t.Errorf("Stopped = %+v", got)
+	}
+	if cells[2].Verdict != l82.Fail || len(cells[2].Rows) != 1 {
+		t.Error("Stopped changed the cells it was given")
+	}
+	out, err := Results(Env{}, got)
+	if err != nil || !strings.Contains(out, "stopped") {
+		t.Errorf("the stopped run's results: %v\n%s", err, out)
 	}
 }
 

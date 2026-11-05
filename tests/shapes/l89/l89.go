@@ -305,25 +305,43 @@ func BeforeBackup(lab Lab, principal string) (Before, error) {
 	return b, nil
 }
 
-// StepScript is a README step as the lab runs it under bash -e: an ERR trap first names the command that
-// failed, so a FAIL's row can say which line of the README's text it was.
+// StepScript is a README step as the lab runs it under bash -e: an ERR trap names the command that
+// failed, so a FAIL's row can say which line of the README's text it was, and a DEBUG trap the command
+// about to run, so a step stopped at its bound can say which command it was in.
 func StepScript(script string) string {
-	return "trap 'echo \"l89-failed: $BASH_COMMAND\" >&2' ERR\n" + script
+	return "trap 'echo \"l89-failed: $BASH_COMMAND\" >&2' ERR\ntrap 'echo \"l89-running: $BASH_COMMAND\" >&2' DEBUG\n" + script
 }
 
-// FailedCommand is the command StepScript's trap named in a step's output, for a results row. It is the
-// README's text after Subst, but a word Results refuses (the token delete's Job is named for what it
+// FailedCommand is the command StepScript's ERR trap named in a step's output, for a results row. It is
+// the README's text after Subst, but a word Results refuses (the token delete's Job is named for what it
 // deletes) is shown as <word>, a long run as <LONG> (Scrub), and a line that still looks like it holds a
 // credential (Leak) is withheld.
-func FailedCommand(out string) string {
+func FailedCommand(out string) string { return trapLine(out, "l89-failed: ") }
+
+// RunningCommand is the last command StepScript's DEBUG trap named: the one a step stopped at its bound
+// was in. Shown as FailedCommand shows its own.
+func RunningCommand(out string) string { return trapLine(out, "l89-running: ") }
+
+// StepOutput is a step's output without StepScript's trap lines: what the README's command printed.
+func StepOutput(out string) string {
+	var keep []string
+	for _, ln := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(ln, "l89-running: ") && !strings.HasPrefix(ln, "l89-failed: ") {
+			keep = append(keep, ln)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+func trapLine(out, prefix string) string {
 	got := ""
 	for _, ln := range strings.Split(out, "\n") {
-		if rest, ok := strings.CutPrefix(ln, "l89-failed: "); ok {
+		if rest, ok := strings.CutPrefix(ln, prefix); ok {
 			got = rest
 		}
 	}
 	if got == "" {
-		return "not named (no l89-failed line)"
+		return "not named (no " + strings.TrimSuffix(prefix, ": ") + " line)"
 	}
 	got = strings.TrimSpace(Scrub(credWords.ReplaceAllString(got, "<word>")))
 	if got == "" || Leak(got) != "" {
