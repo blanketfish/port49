@@ -1,0 +1,4 @@
+#!/bin/sh
+# No Claude session link or trailer in a commit message (CLAUDE.md): gitleaks reads patches, never
+# messages, so this applies the same .gitleaks.toml rule to the message file. `make hooks` enables it.
+exec go run ./tests/ci/cmd/sessionmsg "$1"

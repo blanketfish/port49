@@ -13,7 +13,7 @@ useDefault = true
 [[rules]]
 id = "claude-session-link"
 description = "A Claude Code session link or session trailer; this repository is going public (CLAUDE.md)"
-regex = '''claude\.ai/code/session_[A-Za-z0-9]{8,}|Claude-Session:[ \t]*https?://'''
+regex = '''(?i)claude\.ai/code/session_[A-Za-z0-9]{8,}|Claude-Session:[ \t]*https?://'''
 keywords = ["claude.ai/code/session", "claude-session"]
 
 [[rules]]

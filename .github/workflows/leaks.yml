@@ -19,3 +19,10 @@ jobs:
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with: {go-version-file: go.mod}
       - run: go test ./tests/ci/ -run SessionLink -count=1
+      # gitleaks reads patches, not commit messages: the pull request's own commits go through the
+      # same rule. Old history keeps its trailers (not rewritten), so only base..head is checked.
+      - if: github.event_name == 'pull_request'
+        run: go run ./tests/ci/cmd/sessionmsg -range "$BASE_SHA..$HEAD_SHA"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
