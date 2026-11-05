@@ -165,14 +165,14 @@ func TestAPassTakesTheRecordBeforeItReads(t *testing.T) {
 	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		g.Saw(160) // the runner's next witness, followed while the read is in flight
 		return etcdstore.RestoreRead{Witness: 100, Header: 150}, nil
-	}, nil, nil)
+	}, nil)
 	if !g.Allows() {
 		t.Fatalf("a routine witness write followed during a read guarded port49d: %q", out.String())
 	}
 	// A real drop is still caught by the same pass.
 	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 40, Header: 200}, nil
-	}, nil, nil)
+	}, nil)
 	if g.Allows() {
 		t.Fatal("a pass that read the witness below the record did not guard")
 	}
@@ -386,10 +386,14 @@ func TestASecondRestoreAfterAnAllExpiredDropIsDetected(t *testing.T) {
 // token never arms the guard (final review I2).
 func TestAFreshMintAfterAnAllExpiredDropNeverArmsTheGuard(t *testing.T) {
 	b := newBound(t)
-	b.read(12, 0, b.now.Add(-2*time.Hour))
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
+	b.passAt(12, 100, f)
+	b.now = t0.Add(restoreSkew + time.Second)
 	for i := 0; i < 3; i++ {
-		b.now = b.now.Add(time.Second)
-		b.read(12+uint64(i), 0, b.now.Add(10*time.Minute)) // a broker minted; the witness still below the old 20
+		b.now = b.now.Add(scanEvery) // a broker mints; the witness is still below the old 20
+		f.recs = append(f.recs, fakeTok{minted: b.now, expires: b.now.Add(10 * time.Minute)})
+		b.passAt(12+uint64(i), 101+uint64(i), f)
 		if !b.g.Allows() {
 			t.Fatalf("pass %d: a fresh mint guarded: %q", i, b.out.String())
 		}
@@ -424,7 +428,7 @@ func TestAMintAfterTheDropDoesNotExtendTheBound(t *testing.T) {
 		b.header++
 		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 			return etcdstore.RestoreRead{Witness: w, Header: b.header}, nil
-		}, f.latest, nil)
+		}, f.latest)
 	}
 	pass(12)
 	if _, u := b.gauges(); u != float64(restored.Unix()) {
@@ -541,7 +545,7 @@ func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
 	read := func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 12, Header: 99}, nil
 	}
-	b.g.pass(context.Background(), time.Second, read, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil }, nil)
+	b.g.pass(context.Background(), time.Second, read, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil })
 	if scans != 1 || b.g.Allows() {
 		t.Fatalf("scans %d, allows %v", scans, b.g.Allows())
 	}
@@ -552,53 +556,128 @@ func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
 	noDrop.Saw(5)
 	noDrop.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 5, Header: 9}, nil
-	}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil }, nil)
+	}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil })
 	if scans != 1 {
 		t.Fatal("scanned with nothing restored")
 	}
 }
 
-// A guarded re-read skips the scan of the token family while no token record
-// changed since the scan that armed the bound, and scans when one did; a
-// second restore always scans (final review M1).
-func TestAGuardedPassScansOnlyWhenTheTokenFamilyChanged(t *testing.T) {
+// A second restore whose witness is above the first drop's but below the old
+// record brings back live tokens redeemed before the first restore: the record
+// still catches it (re-review R1).
+func TestASecondRestoreAboveTheFirstDropsBaselineStillGuards(t *testing.T) {
+	b := newBound(t) // the record is 20
+	b.read(12, 0, b.now.Add(-2*time.Hour))
+	if !b.g.Allows() {
+		t.Fatal("setup: the first, old snapshot guarded")
+	}
+	b.read(15, 0, b.now.Add(10*time.Minute)) // the right snapshot: live restored tokens
+	if b.g.Allows() {
+		t.Fatalf("a second restore (witness 15, below the record 20) with live tokens was served: %q", b.out.String())
+	}
+}
+
+// passAt is one pass at the witness w, header h, the scan answering what f holds.
+func (b *bound) passAt(w, h uint64, f *fakeTokens) {
+	b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+		return etcdstore.RestoreRead{Witness: w, Header: h}, nil
+	}, f.latest)
+}
+
+// A guarded re-read still takes in tokens a second restore brought, even when
+// the store's own revisions say nothing changed (re-review R2: a ModRevision
+// compares only within one timeline).
+func TestAGuardedRereadAfterACrossTimelineRestoreKeepsTheLaterBound(t *testing.T) {
 	b := newBound(t)
-	latest := b.now.Add(5 * time.Minute)
-	scans, changedCalls, moved := 0, 0, false
-	var gotSince int64
-	witness, header := uint64(12), uint64(100)
-	run := func() {
+	f := &fakeTokens{recs: []fakeTok{{minted: b.now.Add(-time.Minute), expires: b.now.Add(5 * time.Minute)}}}
+	b.passAt(12, 100, f)
+	f.recs = append(f.recs, fakeTok{minted: b.now.Add(-time.Minute), expires: b.now.Add(12 * time.Minute)})
+	b.now = b.now.Add(scanEvery + time.Second)
+	b.passAt(15, 120, f) // restore #2: an old-timeline snapshot
+	if _, u := b.gauges(); u != float64(b.now.Add(12*time.Minute-scanEvery-time.Second).Unix()) {
+		t.Fatalf("the bound stayed %v, want the second snapshot's", u)
+	}
+}
+
+// The pass that would lift scans first, however recent the last scan: a token
+// the cheaper passes missed cannot be lifted over.
+func TestThePassThatWouldLiftScansFirst(t *testing.T) {
+	b := newBound(t)
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-time.Minute), expires: t0.Add(5 * time.Minute)}}}
+	b.passAt(12, 100, f)
+	b.now = t0.Add(5*time.Minute - 2*time.Second)
+	b.passAt(12, 101, f) // a scan: its last
+	f.recs = append(f.recs, fakeTok{minted: t0.Add(-time.Minute), expires: t0.Add(12 * time.Minute)})
+	b.now = t0.Add(5 * time.Minute) // 2 s on: inside the rate limit, but the bound is reached
+	b.passAt(12, 102, f)
+	if b.g.Allows() {
+		t.Fatalf("lifted over a token the last scans had not seen: %q", b.out.String())
+	}
+}
+
+// A restored token minted a few minutes after port49d's read, by a broker whose
+// clock runs ahead (within restoreSkew), is still counted: the cutoff is the
+// read plus the skew (re-review R4).
+func TestARestoredTokenFromAClockAheadBrokerHoldsTheBound(t *testing.T) {
+	b := newBound(t)
+	restored := b.now.Add(14 * time.Minute)
+	f := &fakeTokens{recs: []fakeTok{{minted: b.now.Add(3 * time.Minute), expires: restored}}}
+	b.passAt(12, 100, f)
+	if g, u := b.gauges(); b.g.Allows() || g != 1 || u != float64(restored.Unix()) {
+		t.Fatalf("a restored token from a clock 3m ahead was left out: %v %v", g, u)
+	}
+}
+
+// While the witness stays below the old record, after an all-expired drop, a
+// pass keeps scanning with the first drop's cutoff: a broker's mint after it
+// never guards, a token minted before it that is live does (re-review R1 with
+// I2).
+func TestAPassAfterAnAllExpiredDropScansWithTheDropsCutoff(t *testing.T) {
+	b := newBound(t) // the record is 20
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
+	b.passAt(12, 100, f)
+	if !b.g.Allows() {
+		t.Fatalf("guarded for an all-expired snapshot: %q", b.out.String())
+	}
+	b.now = t0.Add(restoreSkew + time.Minute)
+	f.recs = append(f.recs, fakeTok{minted: b.now, expires: b.now.Add(15 * time.Minute)}) // a running broker
+	b.passAt(13, 101, f)
+	if !b.g.Allows() {
+		t.Fatalf("a mint after the drop's cutoff guarded: %q", b.out.String())
+	}
+	b.now = b.now.Add(scanEvery)
+	f.recs = append(f.recs, fakeTok{minted: t0.Add(-time.Hour), expires: b.now.Add(10 * time.Minute)}) // old timeline, live
+	b.passAt(15, 102, f)
+	if b.g.Allows() {
+		t.Fatalf("a second restore above the first drop's witness, with a live token, was served: %q", b.out.String())
+	}
+}
+
+// A re-read of the same drop scans at most every scanEvery.
+func TestARereadOfTheSameDropScansAtMostEveryFiveSeconds(t *testing.T) {
+	b := newBound(t)
+	t0 := b.now
+	scans := 0
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-time.Minute), expires: t0.Add(10 * time.Minute)}}}
+	count := func(ctx context.Context, m time.Time) (time.Time, error) { scans++; return f.latest(ctx, m) }
+	pass := func() {
 		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
-			return etcdstore.RestoreRead{Witness: witness, Header: header}, nil
-		}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil },
-			func(_ context.Context, since int64) (bool, error) {
-				changedCalls++
-				gotSince = since
-				return moved, nil
-			})
+			return etcdstore.RestoreRead{Witness: 12, Header: 100}, nil
+		}, count)
 	}
-	run() // the drop: a full scan, no pre-check
-	if scans != 1 || changedCalls != 0 || b.g.Allows() {
-		t.Fatalf("drop: scans %d, checks %d", scans, changedCalls)
+	pass()
+	for i := 0; i < 4; i++ {
+		b.now = b.now.Add(time.Second)
+		pass()
 	}
-	header++
-	run()
-	if scans != 1 || changedCalls != 1 || gotSince != 100 || b.g.Allows() {
-		t.Fatalf("unchanged: scans %d, checks %d, since %d", scans, changedCalls, gotSince)
+	if scans != 1 {
+		t.Fatalf("%d scans in 4 s of re-reads, want the drop's one", scans)
 	}
-	moved = true
-	header++
-	run()
+	b.now = t0.Add(scanEvery)
+	pass()
 	if scans != 2 {
-		t.Fatalf("changed family not scanned: %d", scans)
-	}
-	moved, witness = false, 9 // a second restore: scan whatever the pre-check says
-	header++
-	run()
-	if scans != 3 {
-		t.Fatalf("a second restore was not scanned: %d", scans)
-	}
-	if _, u := b.gauges(); u != float64(latest.Unix()) {
-		t.Fatalf("the bound %v", u)
+		t.Fatalf("%d scans after scanEvery, want 2", scans)
 	}
 }

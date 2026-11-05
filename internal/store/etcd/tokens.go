@@ -341,22 +341,6 @@ func (s *Store) LatestTokenExpiry(ctx context.Context, mintedBy time.Time) (time
 	}
 }
 
-// TokensChangedSince is whether any token record was written after revision
-// sinceRev (a ModRevision above it). It ships keys, no value, and only of the
-// records that changed (no limit: etcd applies a limit before the revision
-// filter, and a count ignores it): port49d's
-// restore guard asks it before scanning the whole family again (LatestTokenExpiry).
-// A delete is not a change: it cannot raise the latest expiry.
-func (s *Store) TokensChangedSince(ctx context.Context, sinceRev int64) (bool, error) {
-	from := s.k.family(famToken)
-	resp, err := s.tok.Get(ctx, from, clientv3.WithRange(clientv3.GetPrefixRangeEnd(from)),
-		clientv3.WithMinModRev(sinceRev+1), clientv3.WithKeysOnly())
-	if err != nil {
-		return false, unavailable(err)
-	}
-	return len(resp.Kvs) > 0, nil
-}
-
 func (s *Store) liveReceipt(r receiptRec) bool { return r.RetainUntil.After(s.now()) }
 
 // GetReceipt is the receipt until its RetainUntil (store.Receipt).
