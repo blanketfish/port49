@@ -164,4 +164,76 @@ func TestTheMessageCheckIsWiredIn(t *testing.T) {
 	if !found {
 		t.Error("leaks.yml has no pull_request step running sessionmsg")
 	}
+	_, raw := load(t, "../../.github/workflows/leaks.yml")
+	for _, want := range []string{"github.event.before", "github.event.pull_request.body", "edited"} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("leaks.yml does not mention %s: the push, the PR body and an edited PR are checked too", want)
+		}
+	}
+}
+
+func TestARangeWithAnEmptySideIsRefused(t *testing.T) {
+	rx := sessionLinkRule(t)
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "base")
+	for _, rev := range []string{"..HEAD", "HEAD..", "..", "HEAD", ""} {
+		if _, err := sessionlink.CheckLog(repo, rev, rx); err == nil {
+			t.Errorf("the range %q was accepted", rev)
+		}
+	}
+}
+
+// git drops # lines and everything from the scissors line (commit -v appends the diff) before it
+// stores a message; the hook's file is judged the same way.
+func TestTheHookJudgesAMessageAsGitStoresIt(t *testing.T) {
+	rx := sessionLinkRule(t)
+	trailer := "Claude-" + "Session: https://claude" + ".ai/code/session_" + strings.Repeat("A", 24)
+	f := filepath.Join(t.TempDir(), "MSG")
+	for name, c := range map[string]struct {
+		msg  string
+		want bool
+	}{
+		"comment":  {"fix: x\n\n# " + trailer + "\n", false},
+		"scissors": {"fix: x\n\n# ------------------------ >8 ------------------------\n# Do not modify or remove the line above.\n+" + trailer + "\n", false},
+		"real":     {"fix: x\n\n" + trailer + "\n# a comment\n", true},
+		"below":    {"fix: x\n\n# ------------------------ >8 ------------------------\n", false},
+	} {
+		if err := os.WriteFile(f, []byte(c.msg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := sessionlink.CheckFile(f, rx); got != c.want {
+			t.Errorf("%s: CheckFile = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestAPullRequestBodyIsChecked(t *testing.T) {
+	rx := sessionLinkRule(t)
+	trailer := "https://claude" + ".ai/code/session_" + strings.Repeat("B", 24)
+	if !sessionlink.CheckText("## Summary\n\nGenerated\n\n"+trailer, rx) {
+		t.Error("a PR body carrying a session link passed")
+	}
+	if sessionlink.CheckText("## Summary\n\nNo link here, and a # heading is not a comment.", rx) {
+		t.Error("a clean PR body failed")
+	}
+}
+
+func TestAPushRangeOfAllZerosChecksTheNewCommitAlone(t *testing.T) {
+	rx := sessionLinkRule(t)
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "base "+"Claude-"+"Session: https://example.invalid/old")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "feat: new")
+	after := gitIn(t, repo, "rev-parse", "HEAD")
+	rev := sessionlink.PushRev(strings.Repeat("0", 40), after)
+	if bad, err := sessionlink.CheckLog(repo, rev, rx); err != nil || len(bad) != 0 {
+		t.Errorf("the new commit alone: %v %v (rev %q)", bad, err, rev)
+	}
+	trailer := "Claude-" + "Session: https://example.invalid/x"
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "feat: leaky "+trailer)
+	after2 := gitIn(t, repo, "rev-parse", "HEAD")
+	if bad, _ := sessionlink.CheckLog(repo, sessionlink.PushRev(after, after2), rx); len(bad) != 1 {
+		t.Errorf("a pushed range with a trailer: %v", bad)
+	}
 }

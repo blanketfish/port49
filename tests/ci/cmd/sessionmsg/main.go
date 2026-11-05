@@ -3,6 +3,8 @@
 //
 //	sessionmsg FILE            a commit-msg hook's message file
 //	sessionmsg -range A..B     the commits of a pull request, in CI
+//	sessionmsg -before B -after A   a push: B..A, or A alone when B is all zeros (a new branch)
+//	sessionmsg -env NAME       free text in an environment variable (a pull request's body)
 //
 // It prints commit names or a file name, never the matched text. Old history keeps its trailers
 // (no rewrite, Ryan 2026-10-15), so CI checks only the pull request's own range.
@@ -19,6 +21,13 @@ import (
 func main() {
 	toml := flag.String("toml", ".gitleaks.toml", "the gitleaks config holding the claude-session-link rule")
 	rng := flag.String("range", "", "a git revision range whose commit messages are checked")
+	before := flag.String("before", "", "a push's previous tip (with -after)")
+	after := flag.String("after", "", "a push's new tip (with -before)")
+	var envs []string
+	flag.Func("env", "an environment variable whose text is checked (repeatable)", func(v string) error {
+		envs = append(envs, v)
+		return nil
+	})
 	flag.Parse()
 	rx, err := sessionlink.Rule(*toml)
 	if err != nil {
@@ -26,6 +35,15 @@ func main() {
 		os.Exit(2)
 	}
 	fail := false
+	if *after != "" {
+		*rng = sessionlink.PushRev(*before, *after)
+	}
+	for _, name := range envs {
+		if sessionlink.CheckText(os.Getenv(name), rx) {
+			fmt.Fprintf(os.Stderr, "sessionmsg: %s carries a Claude session link or trailer; remove it\n", name)
+			fail = true
+		}
+	}
 	if *rng != "" {
 		bad, err := sessionlink.CheckLog(".", *rng, rx)
 		if err != nil {
