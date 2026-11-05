@@ -429,8 +429,8 @@ func (r *runner) restoreMarks(ctx context.Context) error {
 		// after a store restore, a revocation made since the snapshot is back
 		// only if a broker whose marks.json survived runs first (design §13
 		// step 5).
-		fmt.Fprintln(stderr, "port49-broker: runner: broker.state_dir had no marks.json at this start, so its copy holds "+
-			"only what the store holds: this runner cannot put back a revocation a store restore lost (design §13 step 5)")
+		fmt.Fprintln(stderr, "port49-broker: runner: broker.state_dir had no marks.json at this start; "+
+			"a revocation a store restore lost is put back only if this copy saw it (design §13 step 5)")
 		if len(put) == 0 {
 			return nil
 		}

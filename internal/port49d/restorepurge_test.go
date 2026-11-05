@@ -429,7 +429,7 @@ func TestARunnerWhoseCopyStartedFromTheStoreSaysItCannotPutBackWhatARestoreLost(
 	if err := r.restoreMarks(g.ctx); err != nil {
 		t.Fatal(err)
 	}
-	const line = "broker.state_dir had no marks.json at this start, so its copy holds only what the store holds"
+	const line = "broker.state_dir had no marks.json at this start; a revocation a store restore lost is put back only if this copy saw it"
 	if got := out.String(); strings.Contains(got, "is in the store") || strings.Count(got, line) != 1 {
 		t.Fatalf("a runner whose copy started from the store said:\n%s", got)
 	}
