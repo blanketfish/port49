@@ -28,7 +28,7 @@ func title(id string) string {
 	return map[string]string{
 		"a": "(a) back up both StatefulSets, delete the namespace, restore: ownership, mode, readiness, the CA",
 		"b": "(b) after the restore, a mint and a login",
-		"c": "(c) a restore with both StatefulSets at 0 replicas (the order the README measured hanging): volumes, the CA, marks.json, the spool",
+		"c": "(c) the README's warning: a restore with both StatefulSets at 0 replicas hangs (the restore InProgress, its pod volume restores New, their pods absent)",
 		"d": "(d) the README's restore order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool",
 	}[id]
 }

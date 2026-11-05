@@ -128,6 +128,20 @@ func HangCause(pvrs []PVR, pods map[string]bool) (measured bool, rows []l82.Row)
 	return measured, rows
 }
 
+// HangVerdict is a cell's verdict on a restore whose wait did not end: where the README says the restore
+// hangs (cell c, its warning against restoring at 0 replicas), the hang HangCause measured is the PASS;
+// where the README's order should finish (cell d), it is a FAIL. A hang whose cause was not seen is "":
+// NOT RUN.
+func HangVerdict(expectHang, measured bool) string {
+	switch {
+	case !measured:
+		return ""
+	case expectHang:
+		return l82.Pass
+	}
+	return l82.Fail
+}
+
 // Budget is the test's deadline (zero when go test has no -timeout) and the reserve kept before it.
 type Budget struct {
 	TestEnd time.Time

@@ -1348,3 +1348,25 @@ func TestNotMeasuredRowedSeesEveryHarnessRow(t *testing.T) {
 		t.Error("a measured row is taken for a harness row")
 	}
 }
+
+// Run 42064402328: L89 (c) is the check of the README's warning that a restore at 0 replicas hangs, so
+// the measured hang (a pod volume restore not ended, its pod absent) is its PASS, and the same hang in
+// (d), the README's order, is a FAIL. A hang whose cause is not seen is neither: NOT RUN.
+func TestAHangIsAPassOnlyWhereTheREADMESaysItHangs(t *testing.T) {
+	for _, c := range []struct {
+		expect, measured bool
+		want             string
+	}{
+		{true, true, l82.Pass},
+		{false, true, l82.Fail},
+		{true, false, ""},
+		{false, false, ""},
+	} {
+		if got := HangVerdict(c.expect, c.measured); got != c.want {
+			t.Errorf("HangVerdict(expect %v, measured %v) = %q, want %q", c.expect, c.measured, got, c.want)
+		}
+	}
+	if got := title("c"); !strings.Contains(got, "the README's warning") || !strings.Contains(got, "hangs") {
+		t.Errorf("(c)'s title is %q, want the README's warning that the restore hangs", got)
+	}
+}

@@ -54,14 +54,11 @@ var l89Fence = regexp.MustCompile(`data-dir(-owner)?: |writable by its group or 
 //	    issuing CA's fingerprint unchanged; the owner, group and mode of state/, issuing-ca.key and the
 //	    spool directory are recorded before and after
 //	(b) after the restore, a mint and a login
-//	(c) a restore with both StatefulSets at 0 replicas (a resource modifier), the order the Velero README
-//	    once gave and dropped when this cell measured it hanging (run 42053716808): the README's volume
-//	    check, a Completed pod volume restore for each of the chart's four data volumes by name; with both
-//	    StatefulSets at 0, each broker's marks.json and CA certificate and each spool's sentinel (written
-//	    by (a) before the backup) have the sha256 they had; then the token delete, revoke-offline.sh and
-//	    the scale-up, the CA unchanged and no broker logging that it had no marks.json
-//	(d) the same checks after the README's restore order, steps run from its own text: first the README's
-//	    recovery from (c)'s restore if it is there, then the pods run for the volume restore and are scaled
+//	(c) the README's warning that a restore with both StatefulSets at 0 replicas (a resource modifier,
+//	    the order the README once gave) hangs: PASS when the hang is measured (the restore InProgress past
+//	    its bound, its pod volume restores New, their pods absent), FAIL when the restore ends
+//	(d) the volume, CA, marks and spool checks after the README's restore order, run from its own text: the
+//	    README's recovery from (c)'s restore first if it is there, then the pods run for the volume restore and are scaled
 //	    to 0 before the token delete (the lab's etcd shares the namespace, so it cannot be held down
 //	    apart; see the rows)
 //
