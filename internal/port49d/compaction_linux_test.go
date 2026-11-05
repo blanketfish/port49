@@ -97,9 +97,16 @@ func TestALogoutIsNotLostAcrossACompaction(t *testing.T) {
 // them fails here (Task 9 review I1).
 func TestABurstOfDirectoryLogoutsPastTheQueueIsAllReachedByTheBroker(t *testing.T) {
 	var out syncBuffer
-	was, e := logoutQueueSize, stderr
+	was, e, hook := logoutQueueSize, stderr, reachingLogout
 	logoutQueueSize, stderr = 1, &out
-	t.Cleanup(func() { logoutQueueSize, stderr = was, e })
+	// The first reach waits until the burst has found the queue full, so the
+	// overflow does not depend on how fast the consumer is.
+	release := make(chan struct{})
+	var once, closeOnce sync.Once
+	releaseOnce := func() { closeOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseOnce)
+	reachingLogout = func(store.LogoutEntry) { once.Do(func() { <-release }) }
+	t.Cleanup(func() { logoutQueueSize, stderr, reachingLogout = was, e, hook })
 	f := splitFleet(t)
 	f.twoStores(t)
 	f.judged(t)
@@ -123,6 +130,8 @@ func TestABurstOfDirectoryLogoutsPastTheQueueIsAllReachedByTheBroker(t *testing.
 		}()
 	}
 	wg.Wait()
+	waitWithin(t, &out, "the logout queue is full", 30*time.Second)
+	releaseOnce()
 	for i := 0; i < n; i++ {
 		waitWithin(t, &out, fmt.Sprintf("a logout made elsewhere (origin-burst-%d) reached", i), 30*time.Second)
 	}

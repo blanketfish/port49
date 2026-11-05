@@ -1220,3 +1220,110 @@ func TestARescanSkipsALogoutAlreadyWaitingToBeTriedAgain(t *testing.T) {
 		t.Fatalf("the waiting logout was reached %d times, want 1", tries["slow"])
 	}
 }
+
+// A key whose retry ended ErrLogoutUnreachable holds no timer, so a later
+// logout of it that overflows the queue is reached by the rescan, not skipped
+// as one already waiting (Task 9 review I1r1).
+func TestARescanReachesALaterLogoutOfAKeyWhoseRetryEndedUnreachable(t *testing.T) {
+	was, wasWait := logoutQueueSize, logoutRetryFirst
+	logoutQueueSize, logoutRetryFirst = 1, 20*time.Millisecond
+	t.Cleanup(func() { logoutQueueSize, logoutRetryFirst = was, wasWait })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	var mu sync.Mutex
+	tries := map[string]int{}
+	hold, held := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	r := &runner{brk: &broker.Broker{}, m: metrics.New(prometheus.NewRegistry()), followed: make(chan store.Revocation, 1),
+		logouts: store.NewLogoutSet(time.Now)}
+	r.openLogoutQueue()
+	r.taking.Store(true)
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		if l.Key == "a" {
+			once.Do(func() { close(held); <-hold })
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		tries[l.Key]++
+		if l.Key == "x" {
+			switch tries["x"] {
+			case 1:
+				return broker.RevokeReport{}, fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+			case 2:
+				return broker.RevokeReport{}, broker.ErrLogoutUnreachable
+			}
+		}
+		return broker.RevokeReport{}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	entry := func(k string) store.LogoutEntry {
+		return store.LogoutEntry{Logout: store.Logout{Key: k, At: time.Now(), Origin: "origin-" + k},
+			Until: time.Now().Add(time.Hour)}
+	}
+	x := entry("x")
+	r.logouts.Put(x)
+	r.followLogout(x)
+	waitUntil(t, "x tried twice (fail, then unreachable)", func() bool { mu.Lock(); defer mu.Unlock(); return tries["x"] == 2 })
+	time.Sleep(100 * time.Millisecond)
+	// A new logout of x, arriving while the consumer is blocked and the queue overflows.
+	r.logouts.Put(entry("a"))
+	r.followLogout(entry("a"))
+	<-held
+	r.logouts.Put(entry("b"))
+	r.followLogout(entry("b")) // fills the queue of 1
+	x2 := entry("x")
+	r.logouts.Put(x2)
+	r.followLogout(x2) // overflows: only the rescan can reach it
+	close(hold)
+	waitWithin(t, &out, "the pass over the whole logout set", 5*time.Second)
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if tries["x"] < 3 {
+		t.Fatalf("the later logout of x was never reached (tries %d); the rescan skipped it:\n%s", tries["x"], out.String())
+	}
+}
+
+// A logout extended while its retry waits is retried to its new Until, not
+// dropped at the old one (Task 9 review I1r1, narrower form).
+func TestAFailedLogoutExtendedWhileItWaitsIsStillRetried(t *testing.T) {
+	was := logoutRetryFirst
+	logoutRetryFirst = 300 * time.Millisecond
+	t.Cleanup(func() { logoutRetryFirst = was })
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	var mu sync.Mutex
+	tries := 0
+	r := &runner{brk: &broker.Broker{}, m: metrics.New(prometheus.NewRegistry()), followed: make(chan store.Revocation, 1),
+		logouts: store.NewLogoutSet(time.Now)}
+	r.openLogoutQueue()
+	r.taking.Store(true)
+	r.reach = func(_ context.Context, l store.Logout) (broker.RevokeReport, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if tries++; tries == 1 {
+			return broker.RevokeReport{}, fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+		}
+		return broker.RevokeReport{TokenKeys: 1}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.reachFollowed(ctx) }()
+	defer func() { cancel(); <-done }()
+	short := store.LogoutEntry{Logout: store.Logout{Key: "e", At: time.Now(), Origin: "origin-e"},
+		Until: time.Now().Add(150 * time.Millisecond)}
+	r.logouts.Put(short)
+	r.followLogout(short)
+	waitUntil(t, "the first reach", func() bool { mu.Lock(); defer mu.Unlock(); return tries == 1 })
+	long := short
+	long.Until = time.Now().Add(time.Hour)
+	r.logouts.Put(long) // a later logout of the same session: the set keeps the later Until
+	waitUntil(t, "the retry, past the first Until", func() bool { mu.Lock(); defer mu.Unlock(); return tries == 2 })
+}

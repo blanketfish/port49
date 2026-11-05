@@ -91,6 +91,10 @@ type runner struct {
 	// dropped. wakeLogouts (capacity 1) wakes reachFollowed to do it.
 	logoutRescanOwed atomic.Bool
 	wakeLogouts      chan struct{}
+	// retrying holds the keys of the logouts a retry timer is armed for
+	// (retryLogout): a rescan leaves those alone, and only those.
+	retryMu  sync.Mutex
+	retrying map[string]struct{}
 	// reach reaches a logout here: Broker.ReachLogout, or a test's (nil is
 	// the broker's).
 	reach func(ctx context.Context, l store.Logout) (broker.RevokeReport, error)
@@ -1185,6 +1189,9 @@ func (r *runner) reachFollowed(ctx context.Context) {
 				delete(failed, k) // the logout lapsed: nothing is left to reach
 			}
 		}
+		if reachingLogout != nil {
+			reachingLogout(l)
+		}
 		rep, err := r.reachLogout(ctx, l.Logout)
 		if err != nil && ctx.Err() != nil {
 			return false, err // the duties ended mid-reach: the next takeover reaches it
@@ -1195,6 +1202,7 @@ func (r *runner) reachFollowed(ctx context.Context) {
 		case err == nil:
 			delete(failed, l.Key)
 		case errors.Is(err, broker.ErrLogoutUnreachable):
+			delete(failed, l.Key) // nothing will retry it: a later rescan must reach it
 			line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
 		default:
 			f := failed[l.Key]
@@ -1246,7 +1254,7 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			var reached, unfinished, waiting int
 			for _, e := range r.logouts.All() {
-				if _, retrying := failed[e.Key]; retrying {
+				if r.isRetrying(e.Key) {
 					waiting++ // a retry timer already holds it
 					continue
 				}
@@ -1292,18 +1300,65 @@ func (r *runner) openLogoutQueue() {
 // each failure in a row doubles it, up to 64 times it.
 var logoutRetryFirst = time.Second
 
+// reachingLogout, set by a test, is told each logout just before it is
+// reached; nil in production.
+var reachingLogout func(l store.LogoutEntry)
+
+// isRetrying says whether a retry timer is armed for key.
+func (r *runner) isRetrying(key string) bool {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	_, ok := r.retrying[key]
+	return ok
+}
+
+// arm marks key as holding a retry timer, false if one is armed already.
+func (r *runner) arm(key string) bool {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	if _, ok := r.retrying[key]; ok {
+		return false
+	}
+	if r.retrying == nil {
+		r.retrying = map[string]struct{}{}
+	}
+	r.retrying[key] = struct{}{}
+	return true
+}
+
+func (r *runner) disarm(key string) {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	delete(r.retrying, key)
+}
+
 // retryLogout queues l for reachFollowed again after wait, unless the duties
-// end first or its record has expired by then.
+// end first or its record has expired by then. One timer holds a key at a
+// time, and it queues what the logout set holds when it fires, so a logout
+// extended meanwhile is retried to its new Until.
 func (r *runner) retryLogout(ctx context.Context, l store.LogoutEntry, wait time.Duration) {
+	if !r.arm(l.Key) {
+		return
+	}
 	go func() {
 		t := time.NewTimer(wait)
 		defer t.Stop()
 		select {
 		case <-ctx.Done():
+			r.disarm(l.Key)
 			return
 		case <-t.C:
 		}
-		if !l.Until.IsZero() && time.Now().After(l.Until) {
+		// The timer is spent before the entry is queued: the consumer may fail
+		// it again and arm the next.
+		r.disarm(l.Key)
+		if r.logouts != nil {
+			cur, ok := r.logouts.Entry(l.Key)
+			if !ok {
+				return // lapsed or removed
+			}
+			l = cur
+		} else if !l.Until.IsZero() && time.Now().After(l.Until) {
 			return
 		}
 		select {
