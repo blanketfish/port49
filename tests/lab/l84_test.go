@@ -19,6 +19,12 @@ import (
 	"github.com/blanketfish/port49/tests/shapes/shapetest"
 )
 
+// l84DiskFloorMB is L84's own free-disk floor on /, not L66's 66 GiB (a hosted runner has about 14 GiB free).
+// Measured from what the cells hold: port49:dev 120 MB, port49-setup:dev 74 MB and etcd 92 MB (docker images),
+// the Debian systemd image of tests/systemd (about 120 MB base plus the packages), three small etcd volumes, and
+// the build's dist/. About 1 GB at peak; 4 GiB leaves headroom. There is no env override.
+const l84DiskFloorMB = 4096
+
 // TestL84 measures spec §15 L84 on the lab host: host credential mechanisms against
 // fence.ReadSecret. Cells (b) and (c) for Compose run here, on deploy/compose with the local
 // port49:dev and port49-setup:dev images (nothing is pulled or built); cell (a) and (c) for
@@ -33,7 +39,7 @@ func TestL84(t *testing.T) {
 	if os.Getenv("PORT49_LAB_L84") != "1" {
 		t.Skip("PORT49_LAB_L84=1 runs L84 (make lab-l84); `make lab` does not")
 	}
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+	if err := labGuardAt(l66StopSentinel, "/", l84DiskFloorMB); err != nil {
 		t.Fatal(err)
 	}
 	if err := labOccupyForRun(labLockPath, fmt.Sprintf("TestL84 pid %d", os.Getpid())); err != nil {
@@ -93,7 +99,7 @@ func l84Env(t *testing.T) l84.Env {
 		Docker:  l84Out("docker", "version", "--format", "{{.Server.Version}}"),
 		Compose: l84Out("docker", "compose", "version", "--short"),
 		Kernel:  l84Out("uname", "-r"),
-		Systemd: "see cell (a)'s first row (the Debian container of tests/systemd); not run unless PORT49_L84_A_CELLS is given",
+		Systemd: "each systemd cell records its own: the Debian container's in the container cell (a)'s first row, the runner's in the first row of the host cells; none is run unless PORT49_L84_A_CELLS is given",
 		Images: strings.Join([]string{img("port49:dev"), img("port49-setup:dev"), img("gcr.io/etcd-development/etcd:v3.6.15")}, "; ") +
 			" (Docker, Compose and the kernel are the lab host's)",
 	}
@@ -267,7 +273,7 @@ func (s *l84Stack) hostSecret(dir, name string, body []byte, owner, mode string)
 
 func (s *l84Stack) guard() {
 	s.t.Helper()
-	if err := labGuardAt(l66StopSentinel, "/", l66DiskFloorMB); err != nil {
+	if err := labGuardAt(l66StopSentinel, "/", l84DiskFloorMB); err != nil {
 		s.t.Fatal(err)
 	}
 }

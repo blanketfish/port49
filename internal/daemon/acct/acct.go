@@ -170,9 +170,15 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	h.metrics.Attributions.WithLabelValues(attribution).Inc()
 
 	// Annotate exec records only, never command records, and never delete
-	// (spec §5.6 row 7, §5.8). The record is already durable at this point:
-	// the annotation is advisory, so it must not stand between a device and
-	// its reply.
+	// (spec §5.6 row 7, §5.8). The record is already durable at this point.
+	// The annotation is advisory for authorization, but it is written before
+	// the reply, deliberately: a START's discriminator must be in the store
+	// when the device sends its next record, on this daemon or on any other
+	// replica, or that STOP or WATCHDOG finds a non-empty set without its
+	// session and is attributed `foreign`, the series spec §5.8 says to alert
+	// on. A queued or dropped annotation would page for a legitimate session
+	// exactly when the store is slow. A store error is still not a reason to
+	// refuse the record (annotate counts it and goes on).
 	//
 	// Every write goes through AnnotateContext, which writes at most two
 	// fields under the store's own lock. The accounting path never calls

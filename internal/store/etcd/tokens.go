@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -40,13 +41,17 @@ func liveTokens(kvs []*mvccpb.KeyValue, now time.Time) []store.Token {
 var beforeTokenTxn func(ctx context.Context)
 
 // PutToken writes t and counts the live tokens under k, in one
-// transaction, as the memory store counts them after its append.
+// transaction, as the memory store counts them after its append. A token
+// that asks for index entries (store.Token.IndexTTL) has them in the same
+// transaction, each kept at the later expiry by a compare on the entry's
+// revision: a mint is one revision, and no token exists that a revocation
+// cannot find.
 func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
 	body, err := json.Marshal(tokenRecOf(t))
 	if err != nil {
 		return 0, err
 	}
-	for attempt := 0; ; attempt++ {
+	for attempt, lost := 0, 0; ; {
 		// The grant alone is hedged: a mint at a bucket's rollover grants,
 		// and an unhedged grant on a dark member's stalled connection fails
 		// one mint in three. The marked ctx goes to the grant only; the
@@ -56,22 +61,71 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		if err != nil {
 			return 0, unavailable(err)
 		}
+		cmps, ops, err := s.tokenIndexOps(ctx, k, t)
+		if err != nil {
+			return 0, err
+		}
+		ops = append([]clientv3.Op{clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id))}, ops...)
+		ops = append(ops, clientv3.OpGet(s.k.tokens(k), clientv3.WithPrefix()))
 		if beforeTokenTxn != nil {
 			beforeTokenTxn(ctx)
 		}
-		resp, err := s.tok.Txn(ctx).Then(
-			clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id)),
-			clientv3.OpGet(s.k.tokens(k), clientv3.WithPrefix()),
-		).Commit()
+		resp, err := s.tok.Txn(ctx).If(cmps...).Then(ops...).Commit()
 		if isLeaseLost(err) && attempt == 0 {
+			attempt++
 			s.tokLeases.Reset()
 			continue
 		}
 		if err != nil {
 			return 0, unavailable(err)
 		}
-		return len(liveTokens(resp.Responses[1].GetResponseRange().Kvs, s.now())), nil
+		if !resp.Succeeded { // an index entry moved since it was read: read it again
+			lost++
+			if err := casBackoff(ctx, lost); err != nil {
+				return 0, unavailable(err)
+			}
+			continue
+		}
+		return len(liveTokens(resp.Responses[len(ops)-1].GetResponseRange().Kvs, s.now())), nil
 	}
+}
+
+// tokenIndexOps are the index entries t asks for, as the puts to add to its
+// transaction and the compares that hold them: an entry already covering the
+// expiry is not written, but is still compared, so a delete since the read
+// is not missed. An empty or blank key is skipped (store.BlankCertKey).
+func (s *Store) tokenIndexOps(ctx context.Context, k store.TokenKey, t store.Token) ([]clientv3.Cmp, []clientv3.Op, error) {
+	if t.IndexTTL <= 0 {
+		return nil, nil, nil
+	}
+	exp := s.now().Add(t.IndexTTL)
+	var cmps []clientv3.Cmp
+	var ops []clientv3.Op
+	for _, ix := range []struct{ fam, key string }{{famTokByPrin, t.IndexPrincipal}, {famTokByCert, t.IndexCertKey}} {
+		if ix.key == "" || ix.fam == famTokByCert && store.BlankCertKey(ix.key) {
+			continue
+		}
+		key := s.k.tokenIndexed(ix.fam, ix.key, k)
+		var r expiryRec
+		mod, found, err := getJSON(ctx, s.tok, key, &r)
+		if err != nil {
+			return nil, nil, err
+		}
+		cmps = append(cmps, unchanged(key, mod))
+		if found && !exp.After(r.ExpiresAt) {
+			continue
+		}
+		body, err := json.Marshal(expiryRec{ExpiresAt: exp})
+		if err != nil {
+			return nil, nil, err
+		}
+		lease, err := s.tokLeases.For(idempotent(ctx), exp)
+		if err != nil {
+			return nil, nil, unavailable(err)
+		}
+		ops = append(ops, clientv3.OpPut(key, string(body), clientv3.WithLease(lease)))
+	}
+	return cmps, ops, nil
 }
 
 // Candidates is every live token under k.
@@ -112,6 +166,10 @@ func (s *Store) liveToken(ctx context.Context, k store.TokenKey, id string) (mod
 	return mod, r.ExpiresAt.After(s.now()), nil
 }
 
+// tokenKV is the KV RedeemAndReceipt's transaction goes through: the token
+// client, but for a test that stands between (redeem_hedge_test.go).
+var tokenKV = func(kv clientv3.KV) clientv3.KV { return kv }
+
 // RedeemAndReceipt deletes the token and writes the receipt and its index
 // entry in one transaction that holds only while the token is the one
 // read: of two racing redeemers, exactly one's compare holds (design §12).
@@ -123,7 +181,10 @@ func (s *Store) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID 
 	if !live {
 		return store.ErrNotFound
 	}
-	body, err := json.Marshal(receiptRecOf(w.Receipt))
+	nonce := newNonce()
+	rec := receiptRecOf(w.Receipt)
+	rec.Nonce = nonce
+	body, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
@@ -135,15 +196,41 @@ func (s *Store) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID 
 		}
 		puts = append(puts, put{key: s.k.receiptBy(w.Principal, w.Key), val: idx, exp: s.now().Add(w.IndexTTL)})
 	}
-	tk := s.k.token(k, tokenID)
-	ok, err := commit(ctx, s.tok, s.tokLeases, []clientv3.Cmp{unchanged(tk, mod)}, puts, del{key: tk})
+	tk, rk := s.k.token(k, tokenID), s.k.receipt(w.Key)
+	// Hedged (hedge.go): with one member dark, a Txn sent to its stalled
+	// connection is sent again on the next. A second copy is safe: the
+	// compare is the token's mod_revision, so once one copy has spent the
+	// token the other's compare fails. That failure is read back in the else
+	// branch: the receipt this request's own nonce wrote is a success, and
+	// anything else is another redeemer, token_spent as ever.
+	resp, err := commitTxn(idempotent(ctx), tokenKV(s.tok), s.tokLeases, []clientv3.Cmp{unchanged(tk, mod)}, puts,
+		[]del{{key: tk}}, []clientv3.Op{clientv3.OpGet(rk)})
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if !resp.Succeeded {
+		if _, own := ownWrite(resp, func(value []byte) bool {
+			var r receiptRec
+			return json.Unmarshal(value, &r) == nil && r.Nonce == nonce
+		}); own {
+			return nil
+		}
 		return store.ErrNotFound // another redeemer, or a delete, took it
 	}
 	return nil
+}
+
+// ownWrite reads the else branch's one Get: the record's mod_revision, and
+// whether own accepts its value.
+func ownWrite(resp *clientv3.TxnResponse, own func(value []byte) bool) (mod int64, ok bool) {
+	if len(resp.Responses) != 1 {
+		return 0, false
+	}
+	kvs := resp.Responses[0].GetResponseRange().Kvs
+	if len(kvs) != 1 || !own(kvs[0].Value) {
+		return 0, false
+	}
+	return kvs[0].ModRevision, true
 }
 
 // DeleteTokens drops every token under k, spent or not.
@@ -206,6 +293,51 @@ func (s *Store) PurgeTokens(ctx context.Context) (int, error) {
 		if _, err := s.tok.Delete(ctx, string(resp.Kvs[0].Key), clientv3.WithRange(last+"\x00")); err != nil {
 			return n, unavailable(err)
 		}
+	}
+}
+
+// ErrTokenRecord is a token record LatestTokenExpiry could not decode. It
+// names no record and holds no body.
+var ErrTokenRecord = errors.New("etcd store: a token record does not decode")
+
+// LatestTokenExpiry is the largest ExpiresAt among every record under the
+// token family, expired or not, zero when there is none. It reads a page at a
+// time, writes nothing and keeps nothing of a record but its expiry. A record
+// that does not decode is an error (ErrTokenRecord), never skipped: port49d's
+// restore guard (plan 12c, Task 9a) lifts only once this time has passed, and a
+// record it could not read might be the latest. The time is the minting
+// broker's, to be compared with the caller's clock as redemption compares it.
+//
+// mintedBy bounds the records counted to those minted at or before it (zero:
+// every record): only a token minted before a restore can have been restored,
+// and one a running broker minted after it must not move the bound. A record
+// with no MintedAt cannot be shown to be later, so it counts. A record that
+// does not decode is an error whatever its age.
+func (s *Store) LatestTokenExpiry(ctx context.Context, mintedBy time.Time) (time.Time, error) {
+	end := clientv3.GetPrefixRangeEnd(s.k.family(famToken))
+	from := s.k.family(famToken)
+	var latest time.Time
+	for {
+		resp, err := s.tok.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(purgePage))
+		if err != nil {
+			return time.Time{}, unavailable(err)
+		}
+		for _, kv := range resp.Kvs {
+			var r tokenRec
+			if json.Unmarshal(kv.Value, &r) != nil {
+				return time.Time{}, ErrTokenRecord
+			}
+			if !mintedBy.IsZero() && r.MintedAt.After(mintedBy) {
+				continue
+			}
+			if r.ExpiresAt.After(latest) {
+				latest = r.ExpiresAt
+			}
+		}
+		if len(resp.Kvs) < purgePage {
+			return latest, nil
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
 }
 
@@ -291,31 +423,6 @@ func (s *Store) DeleteReceiptsByPrincipal(ctx context.Context, principal string)
 		}
 		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
-}
-
-// IndexToken records k under principal and certKey, keeping the later
-// expiry where one is recorded; an empty or blank key is skipped
-// (store.BlankCertKey).
-func (s *Store) IndexToken(ctx context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
-	exp := s.now().Add(ttl)
-	for _, ix := range []struct{ fam, key string }{{famTokByPrin, principal}, {famTokByCert, certKey}} {
-		if ix.key == "" || ix.fam == famTokByCert && store.BlankCertKey(ix.key) {
-			continue
-		}
-		err := cas(ctx, s.tok, s.tokLeases, s.k.tokenIndexed(ix.fam, ix.key, k),
-			func(r expiryRec) bool { return true },
-			func(r *expiryRec, found bool) (bool, time.Time, bool, error) {
-				if found && !exp.After(r.ExpiresAt) {
-					return false, time.Time{}, false, nil
-				}
-				r.ExpiresAt = exp
-				return true, exp, false, nil
-			})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Store) tokenKeys(ctx context.Context, fam, key string) ([]store.TokenKey, error) {

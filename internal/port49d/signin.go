@@ -76,6 +76,9 @@ func setPasswordSignIn(cfg config.Config, b *broker.Broker) {
 		p.TOTPLabel = defaultTOTPLabel(cfg.Broker.Listen)
 	}
 	b.PasswordSignIn = &p
+	if b.Metrics != nil {
+		b.Metrics.DirectoryPasswordConfigured.Set(1)
+	}
 }
 
 // wireSignIn is wirePasswordSignIn over the shared store's enrollment handle,

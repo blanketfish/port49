@@ -66,7 +66,7 @@ const (
 // as the daemon does (package authen): the context takes the token's blob,
 // ceiling and enable mechanism, at priv-lvl 15, and is indexed under the
 // principal. It returns the context as written.
-func (f *fixture) login(t *testing.T, principal, device, username string) store.Context {
+func (f *fixture) login(t testing.TB, principal, device, username string) store.Context {
 	t.Helper()
 	cert := f.alice
 	if principal != alice {
@@ -102,7 +102,7 @@ func (f *fixture) login(t *testing.T, principal, device, username string) store.
 	return got
 }
 
-func (f *fixture) context(t *testing.T, device, username string) store.Context {
+func (f *fixture) context(t testing.TB, device, username string) store.Context {
 	t.Helper()
 	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: device, Username: username})
 	if err != nil {

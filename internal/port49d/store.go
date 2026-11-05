@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/url"
 	"regexp"
 	"strings"
@@ -154,16 +155,126 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, dc, d, say)
 }
 
+// The wait for the store (waitForStore, and the start's reads after it) lets
+// storeAttemptEvery pass between attempts for the first storeFastAttempts,
+// then doubles to storeAttemptMax, each wait with storeJitter either way. After
+// a store gone the listeners reopen through these attempts, so they open up to
+// a second (1.2 with the jitter) after etcd answers during the first ten, then
+// after open_after passes; a re-election is over within them. An attempt is a
+// TLS probe, two clients dialling every member, and a read (about seven
+// handshakes against members that are up without a leader), so a fleet in an
+// hours-long outage backs off to one in ten seconds, spread by the jitter, and
+// an outage is said once, again when it changes and every ten minutes (outageSayer).
+const (
+	storeAttemptEvery = time.Second
+	storeFastAttempts = 10
+	storeAttemptMax   = 10 * time.Second
+	storeJitter       = 0.2
+	storeScheduleText = "an attempt every second at first, backing off to every 10s"
+)
+
+// storeWaitAfter is the wait, before jitter, after the failed-th failed
+// attempt (1 is the first) at base: base for the first storeFastAttempts,
+// then doubling, to ten times base.
+func storeWaitAfter(base time.Duration, failed int) time.Duration {
+	limit := storeAttemptMax / storeAttemptEvery * base
+	d := base
+	for i := storeFastAttempts; i < failed && d < limit; i++ {
+		d *= 2
+	}
+	return min(d, limit)
+}
+
+// jittered spreads d by storeJitter either way, by r in [0, 1): from
+// (1-storeJitter)d, never 0, to just under (1+storeJitter)d.
+func jittered(d time.Duration, r float64) time.Duration {
+	return time.Duration(float64(d) * (1 - storeJitter + 2*storeJitter*r))
+}
+
+// outageRemindEvery is how often a sayer repeats an outage that has not
+// changed, so that the newest line after hours shows port49d alive and trying.
+const outageRemindEvery = 10 * time.Minute
+
+// outageSayer prints an outage's line once, again only when it changes, and
+// again every outageRemindEvery as "; still waiting since <time>, N attempts",
+// so a wait of hours at storeAttemptEvery is a line, not thousands. Its lines
+// carry nothing that varies between attempts. now is the clock (time.Now when
+// nil).
+type outageSayer struct {
+	now      func() time.Time
+	last     string
+	since    time.Time
+	said     time.Time
+	attempts int
+}
+
+func (o *outageSayer) say(out io.Writer, line string) {
+	now := time.Now
+	if o.now != nil {
+		now = o.now
+	}
+	t := now()
+	switch {
+	case line != o.last:
+		o.last, o.since, o.said, o.attempts = line, t, t, 1
+		fmt.Fprintln(out, line)
+	default:
+		o.attempts++
+		if t.Sub(o.said) >= outageRemindEvery {
+			o.said = t
+			fmt.Fprintf(out, "%s; still waiting since %s, %d attempts\n", line, o.since.UTC().Format(time.RFC3339), o.attempts)
+		}
+	}
+}
+
+// storeWait is what awaitStore needs to say about the store it waits for.
+type storeWait struct {
+	every        time.Duration                        // between attempts
+	again        bool                                 // a run after a store gone: no deadline, a fault is tried again
+	startTimeout time.Duration                        // a cold start's bound; 0 is for as long as it takes
+	proc, what   string                               // "port49d", "stores.session"
+	eps, at      string                               // the endpoints, joined; the config block ("stores.session.etcd")
+	closed       string                               // what stays shut meanwhile
+	rnd          func() float64                       // jitter's source in [0, 1); math/rand/v2 when nil
+	after        func(time.Duration) <-chan time.Time // the wait; time.After when nil
+	now          func() time.Time                     // the clock; time.Now when nil
+}
+
+func (w storeWait) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
+}
+
+// wait is the channel that fires after the failed-th failed attempt's wait,
+// cut to limit when that is more than 0: a cold start's wait ends at its
+// deadline, not after it.
+func (w storeWait) wait(failed int, limit time.Duration) <-chan time.Time {
+	r := rand.Float64
+	if w.rnd != nil {
+		r = w.rnd
+	}
+	d := jittered(storeWaitAfter(w.every, failed), r())
+	if limit > 0 && d > limit {
+		d = limit
+	}
+	if w.after != nil {
+		return w.after(d)
+	}
+	return time.After(d)
+}
+
 // waitForStore is a start's wait for etcd (pre-flight I9, I13, M33), on
 // the identity cfg's role names (attempt): the feeds' series made first,
-// then an attempt every 5s, each outage said with what stays shut
-// meanwhile (closed), up to start_timeout on a cold start and with no
-// deadline when again. A configuration fault ends a cold start, named;
-// after a store gone it is said and tried again, re-reading the files.
+// then an attempt every storeAttemptEvery, each outage said once with what
+// stays shut meanwhile (closed) and again if it changes, up to
+// start_timeout on a cold start and with no deadline when again. A
+// configuration fault ends a cold start, named; after a store gone it is
+// said and tried again, re-reading the files.
 func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metrics.Metrics, out io.Writer, again bool,
 	closed string) (*etcdstore.Store, error) {
 	e := ref.cfg.Etcd
-	proc := procOf(cfg)
 	// Both feeds read down from here until each first runs, so an alert on
 	// port49_store_feed_up == 0 fires through a wait for the store or a
 	// marks load still retrying, not on an absent series; and each rescan
@@ -181,15 +292,25 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 			m.StoreFeedUp.WithLabelValues("logouts").Set(0)
 		}
 	}
-	eps := strings.Join(e.Endpoints, ", ")
-	var deadline time.Time
-	if !again && e.StartTimeout > 0 {
-		deadline = time.Now().Add(e.StartTimeout)
+	w := storeWait{every: storeAttemptEvery, again: again, startTimeout: e.StartTimeout, proc: procOf(cfg),
+		what: ref.what(), eps: strings.Join(e.Endpoints, ", "), at: ref.at + ".etcd", closed: closed}
+	s, err := awaitStore(ctx, func() (*etcdstore.Store, error) { return attempt(ctx, cfg, ref, m, out, true) }, w, out)
+	if err == nil {
+		sayUnenforced(out, cfg, ref)
 	}
-	for {
-		s, err := attempt(ctx, cfg, ref, m, out, true)
+	return s, err
+}
+
+// awaitStore runs try until it opens the store, saying each outage once.
+func awaitStore(ctx context.Context, try func() (*etcdstore.Store, error), w storeWait, out io.Writer) (*etcdstore.Store, error) {
+	var deadline time.Time
+	if !w.again && w.startTimeout > 0 {
+		deadline = w.clock().Add(w.startTimeout)
+	}
+	var said outageSayer
+	for failed := 1; ; failed++ {
+		s, err := try()
 		if err == nil {
-			sayUnenforced(out, cfg, ref)
 			return s, nil
 		}
 		if ctx.Err() != nil {
@@ -197,25 +318,29 @@ func waitForStore(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 		}
 		var fault *storeFault
 		switch {
-		case errors.As(err, &fault) && !again:
+		case errors.As(err, &fault) && !w.again:
 			return nil, err // the operator's to fix; named, exit 1
 		case errors.As(err, &fault):
-			fmt.Fprintf(out, "%s: %v; %s; trying again in 5s\n", proc, err, closed)
-		case !deadline.IsZero() && time.Now().After(deadline):
+			said.say(out, fmt.Sprintf("%s: %v; %s; trying again (%s)", w.proc, err, w.closed, storeScheduleText))
+		case !deadline.IsZero() && !w.clock().Before(deadline):
 			return nil, fmt.Errorf("%s: etcd at %s did not answer within %s.start_timeout (%v); not "+
-				"starting", ref.what(), eps, ref.at+".etcd", e.StartTimeout)
+				"starting", w.what, w.eps, w.at, w.startTimeout)
 		default:
 			wait := "until it answers"
 			if !deadline.IsZero() {
-				wait = fmt.Sprintf("up to %v", e.StartTimeout)
+				wait = fmt.Sprintf("up to %v", w.startTimeout)
 			}
-			fmt.Fprintf(out, "%s: %s: etcd at %s not answering (%v); %s; waiting %s\n", proc, ref.what(), eps, err, closed,
-				wait)
+			said.say(out, fmt.Sprintf("%s: %s: etcd at %s not answering (%v); %s; waiting %s, %s",
+				w.proc, w.what, w.eps, err, w.closed, wait, storeScheduleText))
+		}
+		var limit time.Duration
+		if !deadline.IsZero() {
+			limit = max(deadline.Sub(w.clock()), time.Nanosecond)
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(5 * time.Second):
+		case <-w.wait(failed, limit):
 		}
 	}
 }
@@ -251,10 +376,13 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	dc *directoryCache, d *etcdstore.Store, say crypt.Option) (stores, error) {
 	e := cfg.Stores.Session.Etcd
 	// retry runs f until it returns anything but an outage (or one of
-	// also), saying each outage and trying again in 5s with the
-	// listeners closed. ctx's end ends it.
+	// also), saying each outage once (and again if it changes) and trying
+	// again every storeAttemptEvery with the listeners closed. ctx's end
+	// ends it.
 	retry := func(f func() error, also ...error) error {
-		for {
+		var said outageSayer
+		w := storeWait{every: storeAttemptEvery}
+		for failed := 1; ; failed++ {
 			err := f()
 			if err == nil || ctx.Err() != nil {
 				return err
@@ -266,11 +394,11 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			if !wait {
 				return err
 			}
-			fmt.Fprintf(out, "port49d: %v; the listeners stay closed; trying again in 5s\n", err)
+			said.say(out, fmt.Sprintf("port49d: %v; the listeners stay closed; trying again (%s)", err, storeScheduleText))
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(5 * time.Second):
+			case <-w.wait(failed, 0):
 			}
 		}
 	}
@@ -871,8 +999,10 @@ func openIdentity(ctx context.Context, cfg config.Config, ref storeRef, m *metri
 	}
 	proc := procOf(cfg)
 	logf := func(format string, args ...any) { fmt.Fprintf(out, proc+": "+ref.what()+": "+format+"\n", args...) }
-	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace,
-		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace, CallTimeout: e.CallTimeout,
+		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable, MemberSuspect: m.StoreMemberSuspect,
+		FastFail:      func(reason string) { m.StoreFastFail.WithLabelValues(reason).Inc() },
+		LegsColocated: func(feed string, on bool) { m.StoreFeedLegsColocated.WithLabelValues(feed).Set(b2f(on)) }})
 	if err != nil {
 		return nil, nil, &storeFault{fmt.Errorf("%s.%s: %w", at, name, err)}
 	}
@@ -1000,13 +1130,27 @@ func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig
 		return nil
 	}
 	if err := b.CheckIdentityAt(cctx, true, ref.scope); err != nil {
-		if errors.Is(err, etcdstore.ErrMissingGrant) { // the refusal names the grant itself
-			return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, leaves["broker"].Subject.CommonName, err)
-		}
-		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
-			"apply 'port49d store-roles' output", at, leaves["broker"].Subject.CommonName, err)
+		return brokerRolesError(at, leaves["broker"].Subject.CommonName, err)
 	}
 	return nil
+}
+
+// brokerRolesError is the broker's identity check failing with err. The roles
+// hint goes only on a refusal; a full etcd names its alarm, and any other
+// error is said as it is.
+func brokerRolesError(at, cn string, err error) error {
+	if errors.Is(err, etcdstore.ErrMissingGrant) { // the refusal names the grant itself
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, cn, err)
+	}
+	switch {
+	case errors.Is(err, etcdstore.ErrNoSpace):
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; etcd's space quota is exceeded (alarm NOSPACE): "+
+			"compact and defragment etcd, then run 'etcdctl alarm disarm'", at, cn, err)
+	case errors.Is(err, etcdstore.ErrRefused), errors.Is(err, etcdstore.ErrNotSeparated):
+		return fmt.Errorf("%s.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+
+			"apply 'port49d store-roles' output", at, cn, err)
+	}
+	return fmt.Errorf("%s.broker: its identity (CN=%s): %w", at, cn, err)
 }
 
 // caCerts is the CA file's certificates, and a pool of them.

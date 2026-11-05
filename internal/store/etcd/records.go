@@ -81,6 +81,8 @@ type receiptRec struct {
 	Sid       string `json:"sid,omitempty"`
 	CertKey   string `json:"cert_key,omitempty"`
 	Sealed    []byte `json:"sealed,omitempty"`
+	// Nonce is the redemption request that wrote this receipt (hedge.go).
+	Nonce string `json:"nonce,omitempty"`
 }
 
 func receiptRecOf(r store.Receipt) receiptRec {
@@ -173,6 +175,10 @@ type ctxRec struct {
 	// production configuration (Task 6 review M-2).
 	Logins []string `json:"logins,omitempty"`
 	Sealed []byte   `json:"sealed,omitempty"`
+	// SwapNonce is the login swap that wrote this record (hedge.go); a write
+	// that rebuilds the record from a context (RewriteContext, or applyTo through
+	// ctxRecOf) drops it; mutate, and so TouchContext, keeps it.
+	SwapNonce string `json:"swap_nonce,omitempty"`
 
 	ExpiresAt   time.Time `json:"expires_at"`
 	PolicyRev   int64     `json:"policy_rev"`

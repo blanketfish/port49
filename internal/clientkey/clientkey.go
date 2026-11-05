@@ -180,3 +180,19 @@ func chainFor(certPath string, key hwkey.Key) ([]*x509.Certificate, error) {
 	}
 	return chain, nil
 }
+
+// StoreOf is the store a session key reference names, one word of the
+// issued_key_store set: pkcs11, tpm, secure_enclave, or file for a path. It
+// returns the word and never any part of the reference, which can carry a token
+// serial.
+func StoreOf(ref string) string {
+	switch {
+	case strings.HasPrefix(ref, "pkcs11:"):
+		return "pkcs11"
+	case strings.HasPrefix(ref, "tpm:"):
+		return "tpm"
+	case strings.HasPrefix(ref, "secure-enclave:"):
+		return "secure_enclave"
+	}
+	return "file"
+}

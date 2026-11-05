@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/blanketfish/port49/internal/tacacs/wire"
 )
@@ -21,9 +22,10 @@ type fake struct {
 	authenRepeat        bool    // keep answering with the last status once the list is down to it (a fleet's many plays)
 	authorArgs          [][]byte
 	echo, singleConnect bool
-	offer               bool // set single-connect on every reply, asked or not, and keep the connection (decision 50 ruling 20)
-	clearReply          bool // reply with the unencrypted flag and a clear body
-	wrongSession        bool // reply with a session id the request did not carry
+	offer               bool          // set single-connect on every reply, asked or not, and keep the connection (decision 50 ruling 20)
+	clearReply          bool          // reply with the unencrypted flag and a clear body
+	wrongSession        bool          // reply with a session id the request did not carry
+	delay               time.Duration // hold every reply this long (a slow server, for the fleet's rate and latency tests)
 	conns               atomic.Int32
 	reqs                []seen // what the server received; test-only, never printed
 }
@@ -180,6 +182,7 @@ func (f *fake) serve(c net.Conn) {
 		if f.wrongSession {
 			rh.SessionID++
 		}
+		time.Sleep(f.delay)
 		if _, err := c.Write(append(rh.Encode(), out...)); err != nil {
 			return
 		}

@@ -70,25 +70,25 @@ const alicePrincipal = "user:alice@example.com"
 // newFixture's clock starts at the real time: Task 10's handshakes verify
 // certificates against it, and the fixture's certificates are cut around it.
 // "bare" is in inventory with no platform, which admission.LoadFile allows.
-func newFixture(t *testing.T, candidateCap int) *fixture {
+func newFixture(t testing.TB, candidateCap int) *fixture {
 	t.Helper()
 	return newFixtureWithPolicy(t, candidateCap, testPolicy)
 }
 
 // newFixtureWithDevices is newFixture with extra added to the inventory the
 // policy loads against.
-func newFixtureWithDevices(t *testing.T, candidateCap int, extra ...admission.Device) *fixture {
+func newFixtureWithDevices(t testing.TB, candidateCap int, extra ...admission.Device) *fixture {
 	t.Helper()
 	return newFixtureWith(t, candidateCap, testPolicy, extra...)
 }
 
 // newFixtureWithPolicy is newFixture with policyText in place of testPolicy.
-func newFixtureWithPolicy(t *testing.T, candidateCap int, policyText string) *fixture {
+func newFixtureWithPolicy(t testing.TB, candidateCap int, policyText string) *fixture {
 	t.Helper()
 	return newFixtureWith(t, candidateCap, policyText)
 }
 
-func newFixtureWith(t *testing.T, candidateCap int, policyText string, extra ...admission.Device) *fixture {
+func newFixtureWith(t testing.TB, candidateCap int, policyText string, extra ...admission.Device) *fixture {
 	t.Helper()
 	f := &fixture{log: &bytes.Buffer{}, now: time.Now().Truncate(time.Second)}
 	clock := func() time.Time {
@@ -145,7 +145,7 @@ func (f *fixture) inventory() []admission.Device {
 }
 
 // loadPolicy swaps f.b.Policy to a policy loaded from text over f.devices.
-func (f *fixture) loadPolicy(t *testing.T, text string) {
+func (f *fixture) loadPolicy(t testing.TB, text string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -160,7 +160,7 @@ func (f *fixture) loadPolicy(t *testing.T, text string) {
 
 // liveContext writes a live context for principal under (device, username),
 // indexed by principal and certificate, as a redemption would.
-func (f *fixture) liveContext(t *testing.T, device, username, principal, certKey string) {
+func (f *fixture) liveContext(t testing.TB, device, username, principal, certKey string) {
 	t.Helper()
 	ctx := context.Background()
 	k := store.ContextKey{NAS: device, Username: username}
@@ -189,7 +189,7 @@ func (b *Broker) putBlobLogged(ctx context.Context, hash string, body []byte, tt
 // policy's compiled blob for principal on device, written through putBlob;
 // its store TTL is a day, so a test may advance the clock by hours; it is
 // indexed by principal and by certificate.
-func (f *fixture) liveContextAt(t *testing.T, device, username, principal, certKey string, auth, expires time.Time) {
+func (f *fixture) liveContextAt(t testing.TB, device, username, principal, certKey string, auth, expires time.Time) {
 	t.Helper()
 	ctx := context.Background()
 	pol := f.b.Policy.Load()
@@ -235,7 +235,7 @@ func (f *fixture) advance(d time.Duration) {
 	f.mu.Unlock()
 }
 
-func (f *fixture) client(t *testing.T, email string, notAfter time.Time) tls.Certificate {
+func (f *fixture) client(t testing.TB, email string, notAfter time.Time) tls.Certificate {
 	t.Helper()
 	c, err := f.ca.Issue(testpki.Leaf{CommonName: email, Emails: []string{email}, Client: true,
 		NotBefore: f.now.Add(-time.Hour), NotAfter: notAfter})
@@ -287,7 +287,7 @@ type heldAnswer struct {
 
 // postOn writes one POST to path with body on the held connection c and
 // reads its whole response.
-func postOn(t *testing.T, c *tls.Conn, br *bufio.Reader, path, body string) heldAnswer {
+func postOn(t testing.TB, c *tls.Conn, br *bufio.Reader, path, body string) heldAnswer {
 	t.Helper()
 	if _, err := fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n"+
 		"Content-Length: %d\r\n\r\n%s", path, len(body), body); err != nil {
@@ -306,7 +306,7 @@ func postOn(t *testing.T, c *tls.Conn, br *bufio.Reader, path, body string) held
 	return heldAnswer{status: resp.StatusCode, body: string(raw), retryAfter: resp.Header.Get("Retry-After")}
 }
 
-func (f *fixture) records(t *testing.T) []map[string]any {
+func (f *fixture) records(t testing.TB) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(f.log.String()), "\n") {
@@ -324,7 +324,7 @@ func (f *fixture) records(t *testing.T) []map[string]any {
 
 // blobRecords are the log's blob events with their bodies as the exact bytes
 // written, which a map would re-encode.
-func (f *fixture) blobRecords(t *testing.T) []decision.Blob {
+func (f *fixture) blobRecords(t testing.TB) []decision.Blob {
 	t.Helper()
 	var out []decision.Blob
 	for _, line := range strings.Split(strings.TrimSpace(f.log.String()), "\n") {
@@ -345,7 +345,7 @@ func (f *fixture) blobRecords(t *testing.T) []decision.Blob {
 	return out
 }
 
-func decodeMint(t *testing.T, w *httptest.ResponseRecorder) api.MintResponse {
+func decodeMint(t testing.TB, w *httptest.ResponseRecorder) api.MintResponse {
 	t.Helper()
 	if w.Code != 200 {
 		t.Fatalf("status %s", answer(w))
@@ -374,7 +374,7 @@ const testClientID = "port49-cli"
 // a human verifier (client_id port49-cli, principal from
 // preferred_username, for example.com) and a machine verifier (audience
 // api://port49-svc, client Oxidized-01 whose sub is svc).
-func (f *fixture) withOIDC(t *testing.T) *oidctest.Issuer {
+func (f *fixture) withOIDC(t testing.TB) *oidctest.Issuer {
 	t.Helper()
 	iss := oidctest.NewIssuer(t)
 	f.addIssuer(t, iss, "example.com", true)
@@ -383,7 +383,7 @@ func (f *fixture) withOIDC(t *testing.T) *oidctest.Issuer {
 
 // addIssuer adds iss to f's OIDC set (making the set if there is none): a
 // human verifier for domain, and, with machine, the machine verifier.
-func (f *fixture) addIssuer(t *testing.T, iss *oidctest.Issuer, domain string, machine bool) {
+func (f *fixture) addIssuer(t testing.TB, iss *oidctest.Issuer, domain string, machine bool) {
 	t.Helper()
 	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
 		MaxAge: 24 * time.Hour, Now: f.b.Now, M: f.b.Metrics})
@@ -403,7 +403,7 @@ func (f *fixture) addIssuer(t *testing.T, iss *oidctest.Issuer, domain string, m
 
 // idToken is alice's ID token from iss at f's now, sid s-alice, sub
 // sub-alice; extra overrides, nil deleting.
-func (f *fixture) idToken(t *testing.T, iss *oidctest.Issuer, extra map[string]any) string {
+func (f *fixture) idToken(t testing.TB, iss *oidctest.Issuer, extra map[string]any) string {
 	t.Helper()
 	c := map[string]any{"preferred_username": "alice@example.com", "amr": []string{"pwd", "otp"}, "acr": "1"}
 	for k, v := range extra {
@@ -444,13 +444,13 @@ const k8sTestIssuer = "https://l69-a.port49.lab"
 
 // withCluster adds a k8s verifier for iss's keys, cluster l69_a, issuer
 // k8sTestIssuer, audience port49, namespaces netops, to f's set.
-func (f *fixture) withCluster(t *testing.T) *oidctest.Issuer {
+func (f *fixture) withCluster(t testing.TB) *oidctest.Issuer {
 	t.Helper()
 	return f.withClusterNamed(t, "l69_a", k8sTestIssuer)
 }
 
 // withClusterNamed adds another cluster's verifier, listing netops too.
-func (f *fixture) withClusterNamed(t *testing.T, cluster, issuer string) *oidctest.Issuer {
+func (f *fixture) withClusterNamed(t testing.TB, cluster, issuer string) *oidctest.Issuer {
 	t.Helper()
 	iss := oidctest.NewIssuer(t)
 	v := oidc.VerifierConfig{Domain: oidc.Machines, Kind: oidc.KindK8s, Cluster: cluster, Issuer: issuer,

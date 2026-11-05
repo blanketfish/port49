@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -63,9 +64,25 @@ func serveThroughWith(t *testing.T, f *fixture, lim ListenerLimits, logf func(st
 	if set != nil {
 		set(bl)
 	}
+	t.Cleanup(func() { seen.Delete(bl) })
+	inner := srv.Handler
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestsSeen(bl).Add(1)
+		inner.ServeHTTP(w, r)
+	})
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return raw.Addr().String(), bl
+}
+
+var seen sync.Map // *Listener -> *atomic.Int64
+
+// requestsSeen counts the requests whose headers a handler behind bl has
+// received. A bound connection is busy before any request arrives (bind sets
+// active), so only this proves the broker has read one.
+func requestsSeen(bl *Listener) *atomic.Int64 {
+	n, _ := seen.LoadOrStore(bl, new(atomic.Int64))
+	return n.(*atomic.Int64)
 }
 
 func logTo(b *lockedBuffer) func(string, ...any) {
@@ -342,11 +359,11 @@ func TestAPrincipalPastItsCapLosesItsOldest(t *testing.T) {
 	f := newFixture(t, 8)
 	lim := DefaultListenerLimits
 	lim.MaxPerPrincipal = 2
-	addr, _ := serveThrough(t, f, lim, nil)
+	addr, bl := serveThrough(t, f, lim, nil)
 	carol := f.client(t, "carol@example.com", f.now.Add(time.Hour))
-	cc, cbr := held(t, f, addr, carol)
-	first, _ := held(t, f, addr, f.alice)
-	second, sbr := held(t, f, addr, f.alice)
+	cc, cbr := heldIdle(t, f, bl, addr, carol, 0)
+	first, _ := heldIdle(t, f, bl, addr, f.alice, 0)
+	second, sbr := heldIdle(t, f, bl, addr, f.alice, 0)
 	third, tbr := held(t, f, addr, f.alice)
 	if !closedByPeer(first) {
 		t.Fatal("alice's oldest connection was not closed")
@@ -370,10 +387,10 @@ func TestARevokedCertificateNeverEvictsItsOwner(t *testing.T) {
 	lim.MaxPerPrincipal = 2
 	addr, bl := serveThrough(t, f, lim, nil)
 	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
-	rc, rbr := held(t, f, addr, renewed)
+	rc, rbr := heldIdle(t, f, bl, addr, renewed, 0)
 	// Before any mark: the stolen certificate's flood churns its own slots.
 	for i := 0; i < 5; i++ {
-		held(t, f, addr, f.alice)
+		heldIdle(t, f, bl, addr, f.alice, 0)
 	}
 	ask(t, rc, rbr)
 	stolenKey := certKey(f.alice)

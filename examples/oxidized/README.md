@@ -147,6 +147,49 @@ than one sweep's TTL mints in waves (design §17).
 
 The wrapper never prints a token. If you edit it, do not add `set -x` or an `echo` of one.
 
+## 7a. Host keys
+
+Oxidized runs with `secure: true` and never `secure: false`. It has no accept-new of its own, and
+the one setting it reads, `secure`, is a boolean (lab L90, vEOS 4.31.2F, Oxidized 0.37.0): with
+`secure: true` and no `known_hosts` entry it raises `Net::SSH::HostKeyUnknown` and sends no token; with
+a changed key, `HostKeyMismatch` and no token; any other value of `secure`, `accept_new` included,
+turns verification off, so a changed key is accepted. An entry OpenSSH's accept-new wrote, hashed or
+not, is read and the backup runs.
+
+So the wrapper saves a key for each node absent from `known_hosts` (`~/.ssh/known_hosts` of the user
+Oxidized runs as; `OXIDIZED_KNOWN_HOSTS` moves it), once, with the line L90 measured:
+`ssh -F /dev/null -o UserKnownHostsFile=<known_hosts> -o StrictHostKeyChecking=accept-new -o
+BatchMode=yes -o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o
+IdentitiesOnly=yes -o ConnectTimeout=15 -- <address> exit`. The key is saved at key exchange, before
+authentication, and the flags stop every method that would sign or send, so no credential leaves the
+host. `-F /dev/null` means the sweep **does not read your ssh configuration**: a device reached only
+through a jump host or a `ProxyCommand`, or one saved under a `HostKeyAlias`, is not reached by it. Add
+that device's key with your own tooling (`ssh-keyscan`, or ssh with your config); the wrapper then finds
+it listed and leaves it alone. Only IP literals are visited.
+
+- **A listed node is never visited.** A changed key stays refused until you remove its line
+  (`ssh-keygen -R <address>`) after checking the change. The wrapper stays green for it: the symptom is
+  one node whose backups stop, and Oxidized's log says `Net::SSH::HostKeyMismatch` for it. Look there.
+- **The sweep is bounded.** The visits run `OXIDIZED_HOSTKEY_JOBS` at a time (default 32) and none
+  starts after `OXIDIZED_HOSTKEY_BUDGET` seconds (default 600), nor runs past it. A node not reached is
+  named on stderr, the run exits 1, and the node is tried again at the next window; this window its
+  backup fails at the host key, with no token sent, and every node with a known key is backed up. A node
+  whose key could not be saved (unreachable, blackholed) is named the same way and costs up to the
+  budget each window until it is fixed.
+- **Tokens do not age through it.** The addresses come from the mint, so the sweep follows a first mint
+  and a run that visited any node mints again after it: the tokens Oxidized gets are minted after the
+  sweep. A window with nothing to visit mints once. The first mint's tokens are never used and lapse at
+  their TTL. A node that stays unreachable
+  makes every window mint the whole fleet twice, which doubles the broker's mint load and audit records
+  for that window: fix or remove the node. A node that first appears in the second mint is visited too.
+- **Concurrency is unmeasured.** L90 swept one device; up to 32 visits append to `known_hosts` at once,
+  which OpenSSH does with one small append each. A lost line fails closed: the node is named and tried
+  again at the next window.
+- **Needs** `ssh`, `ssh-keygen` and `timeout` on the wrapper's host. A missing one is named and the run
+  exits 2 with `router.db` untouched.
+- **Measured on vEOS only** (Oxidized 0.37.0). That Oxidized reads what OpenSSH saved for the host-key
+  type it negotiated is unmeasured on NX-OS, IOS-XE and Junos.
+
 ## 8. On a bad day
 
 - **Exit 75**: the broker or its store did not answer within the deadline, or the broker could not

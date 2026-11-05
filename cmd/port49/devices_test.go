@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -554,5 +555,139 @@ func TestDevicesTrustIsGone(t *testing.T) {
 	if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "removed in plan 9d") ||
 		!strings.Contains(errb.String(), "known_hosts") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// ageFixture is junosFixture with a one-hour ceiling on the role noc holds
+// and an extra, already expired, grant of a 30m role: under set 1.1.0 every
+// Junos session lands in p49-remote, so its class is the least of them.
+func ageFixture(t *testing.T) (pol, inv, cfg string) {
+	t.Helper()
+	pol, inv, cfg = junosFixture(t)
+	body, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.Replace(string(body), `{name: read_only, privilege: readonly, permit: ["show **"]}`,
+		`{name: read_only, privilege: readonly, permit: ["show **"], max_session_age: 1h}`, 1)
+	s = strings.Replace(s, "subjects:", `  - {name: brief, privilege: readonly, permit: ["show **"], max_session_age: 30m}
+subjects:`, 1)
+	s = strings.Replace(s, "tests:", `  - {subject: ops, scope: all_devices, roles: [brief], expires: 2026-01-01T00:00:00Z}
+tests:`, 1)
+	if err := os.WriteFile(pol, []byte(s), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return pol, inv, cfg
+}
+
+// ageCapture exports the reference under the fixture and returns it as a
+// device capture, with edit applied to each set line.
+func ageCapture(t *testing.T, pol, inv, cfg string, edit func(string) string) string {
+	t.Helper()
+	var ref, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &ref, &errb); code != 0 {
+		t.Fatalf("export: code %d\n%s", code, errb.String())
+	}
+	lines := []string{"set version 23.4R2-S2.1", "set system host-name srx-01", "set system services ssh"}
+	for _, l := range strings.Split(ref.String(), "\n") {
+		if strings.HasPrefix(l, "set ") {
+			lines = append(lines, edit(l))
+		}
+	}
+	file := filepath.Join(t.TempDir(), "srx-01.set")
+	if err := os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func checkAge(t *testing.T, pol, inv, cfg, file string) (int, string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "srx-01",
+		"--config", cfg, file}, &out, &errb)
+	return code, out.String() + errb.String()
+}
+
+// The export and the check read the same class ages: the export's own lines
+// pass, and a device still at the default reports the rendered line missing.
+func TestCheckConfigHoldsTheSameClassAges(t *testing.T) {
+	pol, inv, cfg := ageFixture(t)
+	same := func(l string) string { return l }
+	if code, out := checkAge(t, pol, inv, cfg, ageCapture(t, pol, inv, cfg, same)); code != 0 {
+		t.Fatalf("the export: code %d\n%s", code, out)
+	}
+	longer := func(l string) string {
+		return strings.Replace(l, "p49-remote idle-timeout 60", "p49-remote idle-timeout 480", 1)
+	}
+	code, out := checkAge(t, pol, inv, cfg, ageCapture(t, pol, inv, cfg, longer))
+	if code != 1 || !strings.Contains(out, "set system login class p49-remote idle-timeout 60: the configuration does not carry") {
+		t.Fatalf("the default: code %d\n%s", code, out)
+	}
+}
+
+// A device timer shorter than the rendered one ends sessions sooner than
+// port49 proved, which is no drift. The fixture's 30m grant has expired, so
+// a capture exported while it was live (30) passes against the class's 60.
+func TestCheckConfigPassesAShorterIdleTimeout(t *testing.T) {
+	pol, inv, cfg := ageFixture(t)
+	shorter := func(l string) string {
+		return strings.Replace(l, "p49-remote idle-timeout 60", "p49-remote idle-timeout 30", 1)
+	}
+	if code, out := checkAge(t, pol, inv, cfg, ageCapture(t, pol, inv, cfg, shorter)); code != 0 {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+}
+
+// An expired grant is not in the class's age: it does not flag the fleet.
+func TestAnExpiredGrantDoesNotFlagTheFleet(t *testing.T) {
+	pol, inv, cfg := ageFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "p49-remote idle-timeout 60\n") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// Live, the same grant would have pulled the class to 30m.
+	body, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(body), "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z", 1)),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "p49-remote idle-timeout 30\n") {
+		t.Fatalf("live: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// check-config computes a platform's class ages once for a --batch run.
+func TestCheckConfigComputesClassAgesOnce(t *testing.T) {
+	pol, inv, cfg := ageFixture(t)
+	file := ageCapture(t, pol, inv, cfg, func(l string) string { return l })
+	var files policyFiles
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	files.register(fs)
+	if err := fs.Parse([]string{"--policy", pol, "--inventory", inv}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := files.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]int{}
+	var out, errb bytes.Buffer
+	c := checkRun{p: p, files: files, cfgPath: cfg, batch: true, stdout: &out, stderr: &errb,
+		ages: map[string]platform.ClassAges{}, onClassAges: func(name string) { calls[name]++ }}
+	for range 50 {
+		if code := c.one("srx-01", file); code != 0 {
+			t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+		}
+	}
+	if calls["juniper_junos"] != 1 {
+		t.Errorf("ClassAges computed %v times, want once per platform", calls)
 	}
 }

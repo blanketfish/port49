@@ -2,6 +2,7 @@ package platform
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,7 +20,7 @@ import (
 func TestReferenceClasses(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
 	d.DeviceConfig = []string{"set system tacplus-options strict-authorization"}
-	got, err := ReferenceClasses(d, 12*time.Hour+59*time.Second)
+	got, err := ReferenceClasses(d, ClassAges{Default: 12*time.Hour + 59*time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,14 +61,14 @@ func TestReferenceClasses(t *testing.T) {
 			t.Errorf("a template user that can log in locally: %s", l)
 		}
 	}
-	up, _ := ReferenceClasses(junosProjected(BitDeliveryUserPermissions), 30*time.Second)
+	up, _ := ReferenceClasses(junosProjected(BitDeliveryUserPermissions), ClassAges{Default: 30 * time.Second})
 	if up[1] != "set system login class p49-remote idle-timeout 1" {
 		t.Fatalf("user_permissions: %q", up)
 	}
 	// What export prints for the shipped Junos adapter carries every line
 	// check-config holds a Junos device to.
 	junos, _ := DialectFor("juniper_junos")
-	ref, err := ReferenceClasses(junos, 12*time.Hour)
+	ref, err := ReferenceClasses(junos, ClassAges{Default: 12 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestReferenceClasses(t *testing.T) {
 		t.Fatalf("%q %v", missing, err)
 	}
 	eos, _ := DialectFor("arista_eos")
-	if _, err := ReferenceClasses(eos, time.Hour); err == nil {
+	if _, err := ReferenceClasses(eos, ClassAges{Default: time.Hour}); err == nil {
 		t.Error("a platform that projects nothing has no classes")
 	}
 }
@@ -87,10 +88,10 @@ func TestReferenceClassesRefusesATemplateOutsideP49(t *testing.T) {
 	for _, name := range []string{"root", "remote", "noc", "P49-ADMIN"} {
 		d := junosProjected(BitDeliveryLocalUserName)
 		d.LocalUserNames["admin"] = name
-		if _, err := ReferenceClasses(d, time.Hour); err == nil {
+		if _, err := ReferenceClasses(d, ClassAges{Default: time.Hour}); err == nil {
 			t.Errorf("%s: written", name)
 		}
-		if _, _, err := TemplateDrift([]byte("set system host-name srx1\n"), d, time.Hour); err == nil {
+		if _, _, err := TemplateDrift([]byte("set system host-name srx1\n"), d, ClassAges{Default: time.Hour}); err == nil {
 			t.Errorf("%s: checked", name)
 		}
 	}
@@ -102,7 +103,7 @@ func TestReferenceClassesRefusesATemplateOutsideP49(t *testing.T) {
 // drift; the uid Junos assigns is not (I8, I9).
 func TestTemplateDrift(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
-	ref, _ := ReferenceClasses(d, time.Hour)
+	ref, _ := ReferenceClasses(d, ClassAges{Default: time.Hour})
 	var config []string
 	for _, l := range ref {
 		if !strings.HasPrefix(l, "delete ") {
@@ -111,19 +112,19 @@ func TestTemplateDrift(t *testing.T) {
 	}
 	config = append(config, "set system login user p49-admin uid 2001", "set system host-name srx1",
 		"set version 21.4R3")
-	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour)
+	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, ClassAges{Default: time.Hour})
 	if err != nil || len(missing) != 0 || len(extra) != 0 {
 		t.Fatalf("clean: %q %+v %v", missing, extra, err)
 	}
 	drifted := append(config[1:], `set system login class p49-remote allow-commands "^configure"`,
 		`set system login user p49-readonly authentication encrypted-password "$6$x"`,
 		"set system login class p49-readonly permissions   clear")
-	missing, extra, err = TemplateDrift([]byte(strings.Join(drifted, "\n")), d, time.Hour)
+	missing, extra, err = TemplateDrift([]byte(strings.Join(drifted, "\n")), d, ClassAges{Default: time.Hour})
 	if err != nil || !reflect.DeepEqual(missing, []string{config[0]}) || len(extra) != 3 ||
 		extra[2].Text != "set system login class p49-readonly permissions clear" {
 		t.Fatalf("drift: %q %+v %v", missing, extra, err)
 	}
-	if _, _, err := TemplateDrift([]byte("system {\n  login {\n  }\n}\n"), d, time.Hour); err == nil ||
+	if _, _, err := TemplateDrift([]byte("system {\n  login {\n  }\n}\n"), d, ClassAges{Default: time.Hour}); err == nil ||
 		!strings.Contains(err.Error(), "display set") {
 		t.Fatalf("curly form: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestTemplateDrift(t *testing.T) {
 	for _, partial := range [][]string{config[:len(config)-1],
 		append(config[:len(config)-1:len(config)-1], "set logical-systems ls1 version 21.4R3"),
 		append(config[:len(config)-1:len(config)-1], "deactivate version")} {
-		if _, _, err := TemplateDrift([]byte(strings.Join(partial, "\n")), d, time.Hour); err == nil ||
+		if _, _, err := TemplateDrift([]byte(strings.Join(partial, "\n")), d, ClassAges{Default: time.Hour}); err == nil ||
 			!strings.Contains(err.Error(), "set version") {
 			t.Errorf("partial %q: %v", partial[len(partial)-1], err)
 		}
@@ -144,7 +145,7 @@ func TestTemplateDrift(t *testing.T) {
 // cleanCapture is the reference as `display set` prints it once loaded.
 func cleanCapture(t *testing.T, d Dialect) []string {
 	t.Helper()
-	ref, err := ReferenceClasses(d, time.Hour)
+	ref, err := ReferenceClasses(d, ClassAges{Default: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 		{"a deactivated login", "deactivate system login", false},
 	} {
 		config := append(cleanCapture(t, d), c.line)
-		missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour)
+		missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, ClassAges{Default: time.Hour})
 		if err != nil || len(extra) != 1 || extra[0].Line != len(config) || len(missing) != 0 {
 			t.Errorf("%s: %q %+v %v", c.name, missing, extra, err)
 		}
@@ -192,7 +193,7 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 		"set groups wide system login <*> p49-readonly permissions all",
 		"set groups wide system login user noc full-name x"} {
 		config := append(cleanCapture(t, d), line)
-		if _, _, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour); err == nil ||
+		if _, _, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, ClassAges{Default: time.Hour}); err == nil ||
 			!strings.HasPrefix(err.Error(), fmt.Sprintf("line %d ", len(config))) ||
 			!strings.Contains(err.Error(), ConfigCapture) {
 			t.Errorf("%s: %v", line, err)
@@ -206,7 +207,7 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 			config[i] = "set system login class p49-admin idle-timeout 100000"
 		}
 	}
-	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour)
+	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, ClassAges{Default: time.Hour})
 	if err != nil || !reflect.DeepEqual(missing, []string{"set system login class p49-admin idle-timeout 60"}) ||
 		len(extra) != 0 {
 		t.Errorf("idle-timeout: %q %+v %v", missing, extra, err)
@@ -215,7 +216,7 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 	other := append(cleanCapture(t, d), "set system login class noc permissions all",
 		"set system login user noc class super-user",
 		"deactivate system login user noc", "set system login class p49-readonly-extra permissions all")
-	if missing, extra, err := TemplateDrift([]byte(strings.Join(other, "\n")), d, time.Hour); err != nil ||
+	if missing, extra, err := TemplateDrift([]byte(strings.Join(other, "\n")), d, ClassAges{Default: time.Hour}); err != nil ||
 		len(missing) != 0 || len(extra) != 0 {
 		t.Errorf("other: %q %+v %v", missing, extra, err)
 	}
@@ -223,7 +224,7 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 	// part carries, so it is not read.
 	mixed := append(cleanCapture(t, d), "system {", "    login {", `        class p49-readonly { allow-commands ".*"; }`,
 		"    }", "}")
-	if _, _, err := TemplateDrift([]byte(strings.Join(mixed, "\n")), d, time.Hour); err == nil ||
+	if _, _, err := TemplateDrift([]byte(strings.Join(mixed, "\n")), d, ClassAges{Default: time.Hour}); err == nil ||
 		!strings.Contains(err.Error(), "display set") {
 		t.Errorf("mixed: %v", err)
 	}
@@ -232,7 +233,7 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 	session := append([]string{"{master:0}", "admin@srx1> show configuration | display set", "## Last commit: x", "",
 		"{master:0}[edit]", "[edit]", "{primary:node0}[edit system login]", "admin@srx1# run show configuration | display set"},
 		cleanCapture(t, d)...)
-	if missing, extra, err := TemplateDrift([]byte(strings.Join(session, "\n")), d, time.Hour); err != nil ||
+	if missing, extra, err := TemplateDrift([]byte(strings.Join(session, "\n")), d, ClassAges{Default: time.Hour}); err != nil ||
 		len(missing) != 0 || len(extra) != 0 {
 		t.Errorf("session: %q %+v %v", missing, extra, err)
 	}
@@ -260,10 +261,10 @@ func TestNoTemplateTakesTheRemoteClassOrAnothersClass(t *testing.T) {
 		if err := Validate("juniper_junos", d); err == nil {
 			t.Errorf("%s: validated", c.name)
 		}
-		if _, err := ReferenceClasses(d, time.Hour); err == nil {
+		if _, err := ReferenceClasses(d, ClassAges{Default: time.Hour}); err == nil {
 			t.Errorf("%s: written", c.name)
 		}
-		if _, _, err := TemplateDrift([]byte("set system host-name srx1\n"), d, time.Hour); err == nil {
+		if _, _, err := TemplateDrift([]byte("set system host-name srx1\n"), d, ClassAges{Default: time.Hour}); err == nil {
 			t.Errorf("%s: checked", c.name)
 		}
 	}
@@ -271,7 +272,7 @@ func TestNoTemplateTakesTheRemoteClassOrAnothersClass(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
 	d.CeilingBits["operator"] = []string{"all"}
 	d.LocalUserNames["operator"] = "p49-admin"
-	got, err := ReferenceClasses(d, time.Hour)
+	got, err := ReferenceClasses(d, ClassAges{Default: time.Hour})
 	if err != nil || strings.Count(strings.Join(got, "\n"), "delete system login class p49-admin") != 1 {
 		t.Errorf("shared: %q %v", got, err)
 	}
@@ -290,19 +291,19 @@ func TestTemplateDriftReadsQuotedAndNestedPaths(t *testing.T) {
 		"set tenants t1 system login class p49-remote permissions all",
 	} {
 		config := append(cleanCapture(t, d), line)
-		if _, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour); err != nil ||
+		if _, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, ClassAges{Default: time.Hour}); err != nil ||
 			len(extra) != 1 {
 			t.Errorf("%s: %+v %v", line, extra, err)
 		}
 	}
 	mixed := append(cleanCapture(t, d), `system { login { class p49-readonly { allow-commands ".*"; } } } ## x`)
-	if _, _, err := TemplateDrift([]byte(strings.Join(mixed, "\n")), d, time.Hour); err == nil {
+	if _, _, err := TemplateDrift([]byte(strings.Join(mixed, "\n")), d, ClassAges{Default: time.Hour}); err == nil {
 		t.Error("an annotated one-line curly statement read as nothing")
 	}
 	// A group's line is refused, a logical system's included (decision 44
 	// ruling 7).
 	grouped := append(cleanCapture(t, d), "set groups g logical-systems <*> system login class p49-readonly permissions all")
-	if _, _, err := TemplateDrift([]byte(strings.Join(grouped, "\n")), d, time.Hour); err == nil ||
+	if _, _, err := TemplateDrift([]byte(strings.Join(grouped, "\n")), d, ClassAges{Default: time.Hour}); err == nil ||
 		!strings.HasPrefix(err.Error(), fmt.Sprintf("line %d ", len(grouped))) {
 		t.Errorf("a group's line: %v", err)
 	}
@@ -357,7 +358,7 @@ func TestTemplateDriftReadsGroups(t *testing.T) {
 		{"a group word in a value", "set interfaces ge-0/0/0 description \"set groups and apply-groups\"\n", nil},
 		{"another class", "set system login class noc permissions all\n", nil},
 	} {
-		missing, extra, err := TemplateDrift([]byte(base+c.lines), d, 12*time.Hour)
+		missing, extra, err := TemplateDrift([]byte(base+c.lines), d, ClassAges{Default: 12 * time.Hour})
 		if err != nil || len(missing) != 0 || len(extra) != len(c.extra) {
 			t.Errorf("%s: %v %q %+v", c.name, err, missing, extra)
 			continue
@@ -384,7 +385,7 @@ func TestTemplateDriftReadsGroups(t *testing.T) {
 		{"a group line with a stray quote", "set groups BASE system login class <*> login-tip \"x\n"},
 		{"a plain capture, its first sign named", "set groups BASE system login class <*> login-tip\nset apply-groups BASE\n"},
 	} {
-		_, _, err := TemplateDrift([]byte(base+c.lines+"set system host-name srx1\n"), d, 12*time.Hour)
+		_, _, err := TemplateDrift([]byte(base+c.lines+"set system host-name srx1\n"), d, ClassAges{Default: 12 * time.Hour})
 		if err == nil || !strings.HasPrefix(err.Error(), "line 5 ") || !strings.Contains(err.Error(), ConfigCapture) ||
 			!strings.Contains(err.Error(), "without it") || strings.Contains(err.Error(), "BASE") {
 			t.Errorf("%s: want a refusal naming line 5 and %q, quoting nothing of the line: %v", c.name,
@@ -413,7 +414,7 @@ func TestTemplateDriftReadsTheL57Captures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		missing, extra, err := TemplateDrift(raw, d, 12*time.Hour)
+		missing, extra, err := TemplateDrift(raw, d, ClassAges{Default: 12 * time.Hour})
 		if err != nil || len(missing) != 0 {
 			t.Fatalf("%s: %q %v", f, missing, err)
 		}
@@ -436,19 +437,89 @@ func TestTemplateDriftReadsTheL57Captures(t *testing.T) {
 func TestTemplateDriftReadsCRLF(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
 	clean := strings.Join(cleanCapture(t, d), "\r\n") + "\r\n"
-	if missing, extra, err := TemplateDrift([]byte(clean), d, time.Hour); err != nil || len(missing) != 0 || len(extra) != 0 {
+	if missing, extra, err := TemplateDrift([]byte(clean), d, ClassAges{Default: time.Hour}); err != nil || len(missing) != 0 || len(extra) != 0 {
 		t.Errorf("crlf: %q %+v %v", missing, extra, err)
 	}
 	joined := strings.Join(cleanCapture(t, d), "\n") +
 		"\nset system login class p49-readonly login-tip\rset system login class p49-readonly permissions all\n"
 	line := fmt.Sprintf("line %d ", len(cleanCapture(t, d))+1)
-	if _, _, err := TemplateDrift([]byte(joined), d, time.Hour); err == nil || strings.Contains(err.Error(), "permissions") ||
+	if _, _, err := TemplateDrift([]byte(joined), d, ClassAges{Default: time.Hour}); err == nil || strings.Contains(err.Error(), "permissions") ||
 		!strings.HasPrefix(err.Error(), line) {
 		t.Errorf("a mid-line carriage return: %v", err)
 	}
 	// Exactly one trailing carriage return is a line ending: two are refused.
 	doubled := strings.Join(cleanCapture(t, d), "\n") + "\r\r\n"
-	if _, _, err := TemplateDrift([]byte(doubled), d, time.Hour); err == nil || !strings.HasPrefix(err.Error(), "line ") {
+	if _, _, err := TemplateDrift([]byte(doubled), d, ClassAges{Default: time.Hour}); err == nil || !strings.HasPrefix(err.Error(), "line ") {
 		t.Errorf("a doubled carriage return: %v", err)
+	}
+}
+
+// A class's idle-timeout is held to the rendered minutes as a ceiling: a
+// shorter device value carries the line, a longer or missing one does not,
+// and a never class (age zero) writes no line and passes any value
+// (decision 55 ruling 14).
+func TestTemplateDriftHoldsIdleTimeoutAsACeiling(t *testing.T) {
+	d := junosProjected(BitDeliveryLocalUserName)
+	ages := ClassAges{Default: 12 * time.Hour, ByClass: map[string]time.Duration{"p49-readonly": time.Hour,
+		"p49-admin": 0}}
+	ref, err := ReferenceClasses(d, ages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range ref {
+		if strings.HasPrefix(l, "set system login class p49-admin idle-timeout") {
+			t.Fatalf("a never class carries %q", l)
+		}
+	}
+	capture := func(class, value string) []byte {
+		var config []string
+		for _, l := range ref {
+			if strings.HasPrefix(l, "delete ") {
+				continue
+			}
+			if strings.HasPrefix(l, "set system login class "+class+" idle-timeout") {
+				l = "set system login class " + class + " idle-timeout " + value
+			}
+			config = append(config, l)
+		}
+		if class == "p49-admin" {
+			config = append(config, "set system login class p49-admin idle-timeout "+value)
+		}
+		return []byte(strings.Join(append(config, "set version 21.4R3"), "\n"))
+	}
+	for _, c := range []struct {
+		class, value string
+		missing      int
+	}{
+		{"p49-readonly", "60", 0}, {"p49-readonly", "30", 0}, {"p49-readonly", "720", 1},
+		{"p49-admin", "1", 0}, {"p49-admin", "99999", 0},
+	} {
+		missing, extra, err := TemplateDrift(capture(c.class, c.value), d, ages)
+		if err != nil || len(missing) != c.missing || len(extra) != 0 {
+			t.Errorf("%s %s: missing %q extra %+v err %v", c.class, c.value, missing, extra, err)
+		}
+	}
+	if c := capture("p49-readonly", "30"); !strings.Contains(string(c), "idle-timeout 30") {
+		t.Fatal("fixture lost the shorter line")
+	}
+}
+
+// Junos accepts an idle-timeout up to 4294967295 minutes (lab entry L88 cell i, measured by
+// bisection on vSRX 21.4R3.15 and vJunos-router); a larger value fails the commit. A
+// time.Duration reaches only about 1.5e8 minutes, so no age can pass the ceiling today, and
+// the cap holds the reference to it should a longer unit or type ever feed idleMinutes.
+func TestAClassAgePastTheDeviceMaximumIsCapped(t *testing.T) {
+	const deviceMax = 4294967295
+	if got := clampIdleMinutes(deviceMax + 1); got != deviceMax {
+		t.Errorf("clampIdleMinutes(%d) = %d, want the device maximum %d", int64(deviceMax)+1, got, int64(deviceMax))
+	}
+	if got := clampIdleMinutes(deviceMax); got != deviceMax {
+		t.Errorf("clampIdleMinutes(%d) = %d, want it unchanged", int64(deviceMax), got)
+	}
+	if got := clampIdleMinutes(90); got != 90 {
+		t.Errorf("clampIdleMinutes(90) = %d, want it unchanged", got)
+	}
+	if got := idleMinutes(time.Duration(math.MaxInt64)); got > deviceMax {
+		t.Errorf("idleMinutes of the largest Duration = %d, past the device maximum %d", got, int64(deviceMax))
 	}
 }

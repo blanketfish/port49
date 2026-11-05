@@ -267,7 +267,10 @@ func l86Issued(text string) bool {
 
 // l86Lock takes the lab's single-occupant lock for the cell, as the
 // topology runs do, and lets it go with the process.
-func (h *lab) l86Lock(t *testing.T, cell string) {
+func (h *lab) l86Lock(t *testing.T, cell string) { h.labLock(t, "TestL86"+cell) }
+
+// labLock is the lock for the test named name.
+func (h *lab) labLock(t *testing.T, name string) {
 	t.Helper()
 	f, err := os.OpenFile(labLockFile, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -279,7 +282,7 @@ func (h *lab) l86Lock(t *testing.T, cell string) {
 		t.Fatalf("INVALID: the lab is occupied: %s holds %s; wait for it, never kill it", strings.TrimSpace(string(holder)), labLockFile)
 	}
 	_ = f.Truncate(0)
-	_, _ = f.WriteAt([]byte(fmt.Sprintf("TestL86%s pid %d\n", cell, os.Getpid())), 0)
+	_, _ = f.WriteAt([]byte(fmt.Sprintf("%s pid %d\n", name, os.Getpid())), 0)
 	t.Cleanup(func() { f.Close() })
 	h.onKill = append(h.onKill, func() { f.Close() }) // a killed process lets the lock go too; say so explicitly
 }
@@ -371,7 +374,7 @@ func (h *lab) l86Guard(exit func(int), deadline time.Time) {
 		case <-done:
 			return
 		}
-		h.say("\n  L86 cell %s: %s; cleaning up (agents by pid, the terminal, Keycloak, the lab lock) and stopping", h.cell, why)
+		h.say("\n  %s cell %s: %s; cleaning up (agents by pid, the terminal, the lab lock, and Keycloak where the cell started it) and stopping", h.study, h.cell, why)
 		h.stopAllAgents()
 		h.restoreTTY()
 		h.mu.Lock()

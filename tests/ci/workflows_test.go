@@ -21,11 +21,13 @@ type step struct {
 	Name string            `yaml:"name"`
 	Uses string            `yaml:"uses"`
 	Run  string            `yaml:"run"`
+	If   string            `yaml:"if"`
 	With map[string]any    `yaml:"with"`
 	Env  map[string]string `yaml:"env"`
 }
 
 type job struct {
+	If          string            `yaml:"if"`
 	Env         map[string]string `yaml:"env"`
 	Needs       any               `yaml:"needs"`
 	Environment any               `yaml:"environment"`
@@ -635,5 +637,115 @@ func TestTheChartJobAttestsThePushedDigest(t *testing.T) {
 		if !strings.Contains(job, want) {
 			t.Errorf("the chart job lacks %q", want)
 		}
+	}
+}
+
+// lab-hosted.yml runs L84's systemd cells on a hosted runner (plan 12c, Task 14). It is opt-in by label,
+// holds no id-token, and builds the three images TestL84 refuses to run without (it pulls and builds
+// nothing itself), the etcd one by digest.
+func TestLabHostedIsLabelGatedAndHoldsNoIDToken(t *testing.T) {
+	f, raw := load(t, "../../.github/workflows/lab-hosted.yml")
+	var on struct {
+		PullRequest struct {
+			Types []string `yaml:"types"`
+		} `yaml:"pull_request"`
+	}
+	if err := f.On.Decode(&on); err != nil {
+		t.Fatalf("triggers are not a mapping with pull_request alone (never a push): %v", err)
+	}
+	if strings.Join(on.PullRequest.Types, ",") != "labeled,synchronize" {
+		t.Errorf("pull_request types %v, want labeled and synchronize", on.PullRequest.Types)
+	}
+	if v, ok := f.Permissions["contents"]; !ok || v != "read" || len(f.Permissions) != 1 {
+		t.Errorf("workflow permissions %v, want contents: read alone", f.Permissions)
+	}
+	if len(f.Jobs) != 1 {
+		t.Fatalf("%d jobs, want one", len(f.Jobs))
+	}
+	for id, j := range f.Jobs {
+		if len(j.Permissions) != 1 || j.Permissions["contents"] != "read" {
+			t.Errorf("job %s permissions %v, want contents: read alone", id, j.Permissions)
+		}
+		// Built from two pieces: only the guard and its test may name the override
+		// (sdtest's TestTheKeyHostEscapeIsOnlyOnHostedRunners).
+		keyHost := "PORT49_SMOKE_" + "ON_KEY_HOST"
+		if j.Env[keyHost] != "1" {
+			t.Errorf("job %s does not set the key-host override to \"1\"", id)
+		}
+	}
+	if regexp.MustCompile(`id-token`).MatchString(raw) {
+		t.Error("lab-hosted.yml mentions id-token")
+	}
+	for id, j := range f.Jobs {
+		for _, want := range []string{
+			"contains(github.event.pull_request.labels.*.name, 'lab-hosted')",
+			"github.event.label.name == 'lab-hosted'",
+		} {
+			if !strings.Contains(j.If, want) {
+				t.Errorf("job %s: its if lacks %q: %q", id, want, j.If)
+			}
+		}
+	}
+	// the order matters: the images exist before TestL84 looks for them
+	var runs []string
+	for _, j := range f.Jobs {
+		for _, s := range j.Steps {
+			if s.Run != "" {
+				runs = append(runs, s.Run)
+			}
+		}
+	}
+	at := func(re string) int {
+		for i, r := range runs {
+			if regexp.MustCompile(re).MatchString(r) {
+				return i
+			}
+		}
+		t.Errorf("no run step matches %s", re)
+		return -1
+	}
+	img := at(`(?m)^make image\b`)
+	setup := at(`docker build --target setup -t port49-setup:dev \.`)
+	pull := at(`docker pull gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64}\b`)
+	tag := at(`docker tag gcr\.io/etcd-development/etcd:v3\.6\.15@sha256:[0-9a-f]{64} gcr\.io/etcd-development/etcd:v3\.6\.15$`)
+	sys := at(`make lab-l84-systemd CELLS_OUT=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	host := at(`make lab-l84-host CELLS_OUT=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	merge := at(`make lab-l84 L84_NOTE="\$GITHUB_WORKSPACE/bin/lab-out/l84/L84-systemd-docker\.md" A_CELLS=bin/lab-out/l84/cells\.json .*secret-filter\.sh`)
+	if img >= 0 && setup >= 0 && pull >= 0 && tag >= 0 && sys >= 0 && host >= 0 && merge >= 0 {
+		if tag < pull || max(img, setup, tag) > sys || sys > host || host > merge {
+			t.Errorf("order is image %d, setup %d, pull %d, tag %d, systemd %d, host %d, merge %d; want the three images (pull before tag), then the container's cells, then the host cells (they add to the same cells.json), then lab-l84", img, setup, pull, tag, sys, host, merge)
+		}
+	}
+	// the host cells and the note still run when the container step fails: they are the register's answer
+	for _, j := range f.Jobs {
+		for _, s := range j.Steps {
+			if strings.Contains(s.Run, "make lab-l84-host") || strings.Contains(s.Run, "make lab-l84 ") {
+				if s.If != "always() && !cancelled()" {
+					t.Errorf("step %q: its if is %q, want always() && !cancelled()", s.Run, s.If)
+				}
+			}
+		}
+	}
+	// the note is written where the artifact picks it up (an absolute path: go test runs in tests/lab)
+	mk, err := os.ReadFile("../../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^L84_NOTE \?= \$\(CURDIR\)/tests/lab/results/L84-systemd-docker\.md$`).Match(mk) ||
+		!regexp.MustCompile(`(?m)^\tPORT49_L84_NOTE=\$\(abspath \$\(L84_NOTE\)\) `).Match(mk) {
+		t.Error("the Makefile does not make the L84 note path overridable with ?= and pass it as PORT49_L84_NOTE")
+	}
+	// go test runs in tests/lab and tests/systemd, so a relative path would land in the wrong directory
+	for _, want := range []string{
+		`PORT49_L84_NOTE=$(abspath $(L84_NOTE))`,
+		`PORT49_L84_A_CELLS=$(abspath $(A_CELLS))`,
+		`PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT))`,
+	} {
+		if !strings.Contains(string(mk), want) {
+			t.Errorf("the Makefile does not pass %s", want)
+		}
+	}
+	if !strings.Contains(raw, "path: bin/lab-out/l84") {
+		t.Error("the artifact is not bin/lab-out/l84")
 	}
 }

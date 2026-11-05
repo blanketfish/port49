@@ -41,6 +41,12 @@ regex = '''(?i)(?:key|key-string|password|secret) 7 "?[0-9]{2}[0-9A-Fa-f]{4,}'''
 keywords = [" 7 "]
 
 [[rules]]
+id = "srlinux-aes1"
+description = "SR Linux $aes1$ secret: reversible encryption, so it is the key itself"
+regex = '''\$aes1\$[A-Za-z0-9+/=]{8,}'''
+keywords = ["$aes1$"]
+
+[[rules]]
 id = "tacacs-key-config-line"
 description = "TACACS+ shared key in a device config line"
 regex = '''(?i)(?:tacacs-server (?:host \S+ )?key|tacacs\S*[^\n]{0,80}\skey|\bkey [06]|\bkey-string)\s+(?:[0-7]\s+)?"?[^\s"'<>$%{}()\[\]]{4,}'''
@@ -78,6 +84,7 @@ paths = [
   '''^tests/lab/l71_unit_test\.go$''',
   '''^tests/lab/l73_junos_root_unit_test\.go$''',
   '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/l88_unit_test\.go$''',
   '''^tests/lab/labcreds/labcreds_test\.go$''',
 ]
 
@@ -190,6 +197,7 @@ paths = [
   '''^tests/lab/l72_unit_test\.go$''',
   '''^tests/lab/l74_test\.go$''',
   '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/l88_unit_test\.go$''',
   '''^tests/lab/qual_evidence_unit_test\.go$''',
   '''^tests/lab/testdata/etcd-get-keys-only\.json$''',
   '''^docs/superpowers/plans/2026-09-24-05a-platform-adapters\.md$''',
@@ -242,5 +250,6 @@ regexTarget = "match"
 regexes = ['''^\$y\$[^$]+\$[^$]+\$[./0-9A-Za-z]{1,30}$''']
 paths = [
   '''^tests/lab/l76_unit_test\.go$''',
+  '''^tests/lab/l88_unit_test\.go$''',
   '''^docs/superpowers/plans/2026-10-17-l76-srlinux\.md$''',
 ]

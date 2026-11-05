@@ -432,3 +432,71 @@ func TestParseAnchors(t *testing.T) {
 		t.Error("an intermediate alone parsed as anchors")
 	}
 }
+
+// TestVerifyPairWords: each refusal VerifyPair makes returns the broker's fixed
+// word, in the broker's order, and a good pair returns none.
+func TestVerifyPairWords(t *testing.T) {
+	root, device, devKey := yubicoLike(t)
+	anchors, err := ParseAnchors(root.PEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	good := func(touch byte) (*x509.Certificate, *x509.Certificate) {
+		return slotCert(t, device, devKey, slotOpts{serial: 77, pin: PINOnce, touch: TouchNever}),
+			slotCert(t, device, devKey, slotOpts{serial: 77, pin: PINOnce, touch: touch})
+	}
+	otherRoot, otherDev, otherKey := yubicoLike(t)
+	otherAnchors, err := ParseAnchors(otherRoot.PEM())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name           string
+		anchors        Anchors
+		device         *x509.Certificate
+		session, touch *x509.Certificate
+		why            string
+	}{
+		{"a good pair", anchors, device, nil, nil, ""},
+		{"a touch chain to another root", otherAnchors, device, nil, nil, "touch_slot_chain"},
+		{"a session chain to another root", anchors, device, slotCert(t, otherDev, otherKey, slotOpts{serial: 77, pin: PINOnce, touch: TouchNever}), nil, "session_slot_chain"},
+		{"two devices", anchors, device, slotCert(t, device, devKey, slotOpts{serial: 78, pin: PINOnce, touch: TouchNever}), nil, "device_mismatch"},
+		{"touch cached", anchors, device, nil, slotCert(t, device, devKey, slotOpts{serial: 77, pin: PINOnce, touch: TouchCached}), "touch_policy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, touch := good(TouchAlways)
+			if tc.session != nil {
+				sess = tc.session
+			}
+			if tc.touch != nil {
+				touch = tc.touch
+			}
+			s, tt, why, err := VerifyPair(tc.anchors, tc.device, sess, touch, now)
+			if why != tc.why || (why == "") != (err == nil) {
+				t.Fatalf("why %q, err %v; want why %q", why, err, tc.why)
+			}
+			if why == "" && (s.Serial != 77 || tt.Serial != 77 || tt.TouchPolicy != TouchAlways) {
+				t.Fatalf("a good pair returned %+v %+v", s, tt)
+			}
+		})
+	}
+}
+
+// TestAnchorsPEMHoldsCertificatesOnly: Anchors.PEM is the CERTIFICATE blocks
+// re-encoded, and a comment in the file is not in it.
+func TestAnchorsPEMHoldsCertificatesOnly(t *testing.T) {
+	root, _, _ := yubicoLike(t)
+	in := append([]byte("# operator note: do not serve this line\n"), root.PEM()...)
+	in = append(in, []byte("trailing note\n")...)
+	a, err := ParseAnchors(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(a.PEM) != string(root.PEM()) {
+		t.Fatalf("PEM is %q, want the certificate block alone", a.PEM)
+	}
+	if strings.Contains(string(a.PEM), "operator note") || strings.Contains(string(a.PEM), "trailing") {
+		t.Fatal("a comment was served")
+	}
+}

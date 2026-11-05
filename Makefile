@@ -1,4 +1,4 @@
-.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks packages packages-check release-packages helm-test kind-smoke kind-smoke-red systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85
+.PHONY: requirements-release qual qual-vet qual-update qual-fleet qualified-platforms test test-rest race-rest test-shard race-shard test-root test-python test-race test-hw lab-unit lab-l62-up vet fuzz lab lab-regress lab-qualify lab-directory lab-regions lab-load lab-l50 lab-l67 lab-l80 lab-l84 lab-l84-systemd lab-l84-host lab-l67-windows lab-oidc lab-oidc-l55 lab-mfa-idp lab-oidc-agent lab-workload lab-oxidized lab-ssh lab-ansible lab-k8s build build-client l86-build check-static check-darwin evidence image image-check compose-smoke leaks leaks-staged hooks packages packages-check release-packages helm-test alerts-check kind-smoke kind-smoke-red kind-enrollments systemd-smoke smoke-keyhost lab-l82 lab-l83 lab-l85 lab-l39 lab-l89 lab-l87 lab-l88 lab-l90 failure-matrix
 
 # The static build (plan 9c, ruling 22): CGO_ENABLED=0 and no tag, whatever the
 # environment says, so these are the four static binaries the image carries.
@@ -12,8 +12,9 @@ build:
 build-client:
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/port49-client ./cmd/port49
 
-# L86's binaries, at the fixed paths tests/lab/L86-runbook.md runs: the client and the L86 cells
-# as one compiled test binary, so what Ryan runs is this tree's. Nothing here touches a token.
+# L86's and L91's binaries, at the fixed paths tests/lab/L86-runbook.md and L91-runbook.md run: the
+# client and the L86 and L91 cells as one compiled test binary, so what Ryan runs is this tree's.
+# Nothing here touches a token.
 l86-build:
 	mkdir -p bin/l86
 	CGO_ENABLED=0 go build -tags hwkey_dlopen -o bin/l86/port49 ./cmd/port49
@@ -81,7 +82,8 @@ test: lab-unit test-python
 #   test-root   the tests that skip unless run as root, which must pass, not skip.
 # A skip in a must-pass test fails: tests/ci/cmd/mustpass reads go test -json.
 PORT49D_PKG = github.com/blanketfish/port49/internal/port49d
-ACL_TEST = TestAnACLGrantingWriteIsRefused
+# The ACL tests, as a comma list like ROOT_TESTS: three need setfacl, the Xattr ones only an ACL-capable filesystem.
+ACL_TEST = TestAnACLGrantingWriteIsRefused,TestAnACLGrantingAnotherUserReadIsRefused,TestTheSystemdCredentialShapeIsAccepted,TestAnACLXattrGrantingAnotherUserReadIsRefused,TestTheSystemdCredentialShapeXattrIsAccepted,TestAnACLXattrGrantingAnotherUserWriteOnTheDirIsRefused,TestTheSystemdDirectoryShapeXattrIsAccepted
 # The tests that must pass, not skip, as a comma list: it is mustpass's -tests as it stands,
 # and test-root turns it into the -run alternation below.
 ROOT_TESTS = TestAKeyFileTheBrokerDidNotWriteIsRefused
@@ -94,7 +96,7 @@ RACE ?=
 
 test-rest: lab-unit test-python
 	go test $(REST_PKGS) -count=1 -timeout 30m
-	go test -json ./internal/fence/ -run '^$(ACL_TEST)$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(ACL_TEST)
+	go test -json ./internal/fence/ -run '^($(subst $(comma),|,$(ACL_TEST)))$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(ACL_TEST)
 	go test -json ./tests/qual/ -run '^TestSecretFilterEngines$$' -count=1 | go run ./tests/ci/cmd/mustpass -tests $(FILTER_TEST)
 
 race-rest:
@@ -182,7 +184,7 @@ vet:
 # `make test && make vet > log 2>&1` is writing.
 	gofmt -l . | (! grep .)
 	go vet ./...
-	go vet -tags compose ./tests/compose/...
+	go vet -tags compose,failmatrix ./tests/compose/...
 	go vet -tags hwkey_dlopen ./...
 	go vet -tags hwkey,hwkey_dlopen $(HW_PACKAGES) ./tests/lab/l60/
 	go vet -tags systemd,helm,kind,image,packages ./tests/...
@@ -226,6 +228,21 @@ lab-directory:
 lab-regions:
 	go test -tags lab ./tests/lab/ -run '^TestRegions$$' -count=1 -timeout 120m -v
 
+# The load harness (plan 12c): the design 5 rate against port49d and port49-broker on
+# a three-member etcd, up to 150 minutes. PORT49_LAB_LOAD_CELLS=a,c runs only those cells.
+# PORT49_LAB_LOAD_IN_RAM=1 (lab-only) puts both fsync paths, the session etcd's data and port49d's
+# accounting spool, under /dev/shm (the directory etcds stay on disk): port49's own ceiling, not a
+# deployable shape. The note says so and is written to load-<host>-ram.md, so the RAM run and
+# the real-disk run (load-<host>.md, whose note names the drive) never overwrite each other. A cloud
+# disk's model line names its bus, not its volume type (pd-ssd and pd-balanced read alike): say the
+# volume type in PORT49_LAB_LOAD_DISK_DECLARED (free text, 64 printable characters; the note carries it as
+# declared by the operator, not read from the host; make passes it through the environment untouched, never
+# through the recipe's shell). A RAM run needs 9 GiB free in /dev/shm and no p49load-s* left there.
+lab-load:
+	PORT49_LAB_LOAD=1 PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) PORT49_LAB_LOAD_CELLS=$(PORT49_LAB_LOAD_CELLS) \
+		PORT49_LAB_LOAD_IN_RAM=$(PORT49_LAB_LOAD_IN_RAM) \
+		go test -tags lab ./tests/lab/ -run '^TestLoad$$' -count=1 -v -timeout 150m
+
 # The closed lab entries, rerun under the lab lock and diffed against their notes
 # (plan 11b). Beehive only. LAB_REGRESS_ARGS passes -only=<ids> or -dry-run.
 lab-regress: build
@@ -255,13 +272,34 @@ lab-l80:
 # cells on the local images (nothing is pulled or built) and writes the note from the cells; with
 # A_CELLS=<json from lab-l84-systemd> it merges the systemd cells. lab-l84-systemd runs cell (a) and its (c) in
 # Task 9's container (needs `make packages` and the debian image) and writes the cells to CELLS_OUT.
+# lab-l84-host runs the same two questions on the machine's own systemd (a GitHub-hosted runner, root through
+# sudo, a real systemd as PID 1) and adds cells a-host and c-host to CELLS_OUT; the container renders no credentials.
+L84_NOTE ?= $(CURDIR)/tests/lab/results/L84-systemd-docker.md
+# go test runs in the package's directory, so the three paths are made absolute.
+# L88 (plan 12c, Task 12): the reference AAA configurations on the lab images. One image per run:
+#   make lab-l88 PLATFORM=eos
+lab-l88: build
+	@test -n "$(PLATFORM)" || { echo "usage: make lab-l88 PLATFORM=<PORT49_LAB_PLATFORMS selector>"; exit 2; }
+	PORT49_LAB_PLATFORMS=$(PLATFORM) go test -tags lab ./tests/lab/ -run '^TestL88$$' -count=1 -v -timeout 300m
+
+# L87: SR Linux with exit-on-reject true on an ERROR and once port49d is dark. Cell (b) needs
+# PORT49_LAB_ETCD_BIN (the directory holding etcd, etcdctl and etcdutl v3.6.15); the test refuses
+# as INVALID without it.
+lab-l87: build
+	PORT49_LAB_PLATFORMS=srlinux PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) go test -tags lab ./tests/lab/ -run '^TestL87$$' -count=1 -v -timeout 60m
+
 lab-l84:
-	PORT49_L84_NOTE=$(CURDIR)/tests/lab/results/L84-systemd-docker.md $(if $(A_CELLS),PORT49_L84_A_CELLS=$(A_CELLS)) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
+	PORT49_L84_NOTE=$(abspath $(L84_NOTE)) $(if $(A_CELLS),PORT49_L84_A_CELLS=$(abspath $(A_CELLS))) PORT49_LAB_L84=1 go test -tags lab ./tests/lab/ -run '^TestL84$$' -count=1 -v -timeout 30m
 
 lab-l84-systemd: smoke-keyhost packages
 	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-systemd CELLS_OUT=/path/cells.json"; exit 2; }
-	rc=0; PORT49_L84_CELLS_OUT=$(CELLS_OUT) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
+	rc=0; PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT)) go test -tags systemd ./tests/systemd/ -run '^TestL84Credentials$$' -count=1 -v -timeout 30m || rc=$$?; \
 	  docker rm -f port49systemd >/dev/null 2>&1; docker network rm port49systemd >/dev/null 2>&1; exit $$rc
+
+lab-l84-host:
+	@test "$$GITHUB_ACTIONS" = true -a "$$RUNNER_ENVIRONMENT" = github-hosted || { echo "INVALID: TestL84Host changes the machine's users and units; it runs only on a GitHub-hosted runner"; exit 2; }
+	@test -n "$(CELLS_OUT)" || { echo "usage: make lab-l84-host CELLS_OUT=/path/cells.json"; exit 2; }
+	PORT49_L84_CELLS_OUT=$(abspath $(CELLS_OUT)) go test -tags systemdhost ./tests/systemd/ -run '^TestL84Host$$' -count=1 -v -timeout 20m
 
 # L67 (plan 9e): a person's bind and the directory-password sign-in, on
 # OpenLDAP and Samba AD as containers. Needs Docker with Compose v2.24.4+
@@ -314,6 +352,10 @@ lab-workload:
 # Oxidized end to end (plan 8, L49): the compose stack with one platform, as
 # `make lab` runs one at a time. Needs containerlab, the platform's image and
 # `make build`.
+# L90: Oxidized's host-key handling against accept-new, on vEOS.
+lab-l90: build
+	PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run '^TestL90$$' -count=1 -v -timeout 60m
+
 lab-oxidized:
 	@set -e; \
 	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
@@ -413,6 +455,11 @@ image-check: image
 compose-smoke:
 	go test -tags compose ./tests/compose/ -count=1 -v -timeout 20m
 
+# The design 12 failure matrix on the compose stack (plan 12c, Task 9), CI only: it
+# refuses on a host with a security key attached (shapetest.RefuseOnKeyHost).
+failure-matrix:
+	go test -tags compose,failmatrix ./tests/compose/ -run '^TestFailureMatrix$$' -count=1 -v -timeout 40m
+
 # Secret scanning (.gitleaks.toml). The pinned release is downloaded into bin/ and verified by
 # sha256. CI runs `make leaks`, so this is the single pin: bump the version and the checksum
 # together. --redact on every run: a finding's value is never printed. Never re-run a finding
@@ -496,6 +543,25 @@ bin/helm: bin/helm-$(HELM_VERSION)
 helm-test: bin/helm-$(HELM_VERSION)
 	HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) go test -tags helm -count=1 ./tests/helm/
 
+# The alert rules' checks (plan 12c, Task 5). promtool is pinned by sha256 (the digest is the one in the
+# release's sha256sums.txt). `make alerts-check` syntax-checks the rules, then runs their unit tests;
+# tests/alerts checks them against the metrics port49 registers, in `make test`.
+PROMTOOL_VERSION ?= 3.5.0
+PROMTOOL_SHA256_LINUX_AMD64 = e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a
+
+bin/promtool-$(PROMTOOL_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install promtool $(PROMTOOL_VERSION) yourself and put it at bin/promtool-$(PROMTOOL_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/prometheus.tar.gz https://github.com/prometheus/prometheus/releases/download/v$(PROMTOOL_VERSION)/prometheus-$(PROMTOOL_VERSION).linux-amd64.tar.gz
+	echo "$(PROMTOOL_SHA256_LINUX_AMD64)  bin/prometheus.tar.gz" | sha256sum -c -
+	tar -xzf bin/prometheus.tar.gz -C bin --strip-components=1 prometheus-$(PROMTOOL_VERSION).linux-amd64/promtool
+	mv bin/promtool bin/promtool-$(PROMTOOL_VERSION)
+	rm bin/prometheus.tar.gz
+
+alerts-check: bin/promtool-$(PROMTOOL_VERSION)
+	bin/promtool-$(PROMTOOL_VERSION) check rules deploy/alerts/port49.rules.yaml
+	bin/promtool-$(PROMTOOL_VERSION) test rules deploy/alerts/port49.rules.test.yaml
+
 # The container and cluster smokes run with enough privilege to escape to the host if their contents are
 # hostile, so they refuse to start on a host with a TPM (/dev/tpm0, /dev/tpmrm0) or a Yubico hidraw device,
 # which they only stat and read from sysfs. PORT49_SMOKE_ON_KEY_HOST=1 overrides it: its owner's decision.
@@ -536,8 +602,20 @@ kind-smoke: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KU
 	go build -o bin/oldroot ./tests/kind/cmd/oldroot
 	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
 	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) OLDROOT_BIN=$(CURDIR)/bin/oldroot \
-	  go test -tags kind ./tests/kind/ -count=1 -v -timeout 40m || rc=$$?; \
+	  go test -tags kind ./tests/kind/ -skip '^TestEnrollmentsExportRuns$$' -count=1 -v -timeout 40m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49smoke; exit $$rc
+
+# The chart's enrollments export CronJob, run (plan 12c, Task 17, ruling 13): the chart on a kind cluster
+# with an OpenLDAP pod (tests/lab/directory/openldap, built and loaded by the test), a directory_password
+# verifier, the shipped init-enrollments Job, then the CronJob's Job twice and once more over a stale file. It runs in CI only (.github/workflows/kind.yml):
+# kind's nodes are privileged containers, so smoke-keyhost refuses on a host with a TPM or a security key.
+# kind-smoke skips it (its own cluster, its own job). The cluster is deleted afterwards whatever the result.
+kind-enrollments: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) \
+	  go test -tags kind ./tests/kind/ -run '^TestEnrollmentsExportRuns$$' -count=1 -v -timeout 40m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49enroll; exit $$rc
 
 packages-check:
 	go test -tags packages ./tests/packages/ -count=1 -v
@@ -550,6 +628,14 @@ leaks: bin/gitleaks-$(GITLEAKS_VERSION)
 	bin/gitleaks-$(GITLEAKS_VERSION) git $(GITLEAKS_FLAGS) --log-opts=HEAD .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --pre-commit $(GITLEAKS_FLAGS) .
 	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
+
+# The index only: what .githooks/pre-commit runs on every commit.
+leaks-staged: bin/gitleaks-$(GITLEAKS_VERSION)
+	bin/gitleaks-$(GITLEAKS_VERSION) git --staged $(GITLEAKS_FLAGS) .
+
+# Once per clone: every worktree of it then runs .githooks/pre-commit.
+hooks:
+	git config core.hooksPath .githooks
 
 # The fsGroup cell's red run: the same install with the first design's 2755 volume root, by the
 # test-only post-renderer. The test PASSES only when the kubelet's walk
@@ -643,6 +729,55 @@ lab-l85: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBEC
 	  PORT49_LAB_L85=1 go test -tags lab ./tests/lab/ -run '^TestL85$$' -count=1 -v -timeout 50m || rc=$$?; \
 	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l85; \
 	  docker rm -f port49l85-frr port49l85-client >/dev/null 2>&1; docker network rm port49l85dev >/dev/null 2>&1; exit $$rc
+
+# Lab entry L39 (b) and (c) (plan 12c, Task 13): the source address port49d sees behind a NodePort Service
+# under each externalTrafficPolicy, and on the host network, on kind. Runs locally or in CI like L85. The
+# test makes one container by a fixed name, removed afterwards whatever the result, as is the cluster.
+lab-l39: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l39
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) PORT49_LAB_OUT=$(LAB_OUT)/l39 \
+	  PORT49_LAB_L39=1 go test -tags lab ./tests/lab/ -run '^TestL39$$' -count=1 -v -timeout 50m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l39; \
+	  docker rm -f port49l39-client >/dev/null 2>&1; exit $$rc
+
+# Lab entry L89 (plan 12c, Task 15): a Velero file-system backup (node agent) of the chart's volumes,
+# a deleted namespace, a restore, and a mint and a login after it. Runs in CI like L39 (the lab-kind
+# label, cell l89). Velero's CLI is pinned by the sha256 its release publishes (CHECKSUM); its server and
+# the AWS plugin are pinned by image index digest. The object store is SeaweedFS's S3 gateway, not
+# MinIO: MinIO stopped publishing community images in 2025. It is lab-only and the chart never names
+# it. The store's credentials and the repository key are generated per run and never printed.
+VELERO_VERSION ?= 1.18.4
+VELERO_SHA256_LINUX_AMD64 = e520c17d8997e1c9d0a28ae013592e4473ca3bd82cb3acd132e51286263f74bf
+VELERO_IMAGE = velero/velero:v$(VELERO_VERSION)@sha256:c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b
+VELERO_AWS_PLUGIN_VERSION = 1.14.4
+# The plugin is given to `velero install --plugins` by tag: Velero names the plugin's init container after the
+# reference, and a digest in it is an invalid name. The digest is the integrity check, read back from the
+# running pod's imageID by the harness.
+VELERO_AWS_PLUGIN_IMAGE = velero/velero-plugin-for-aws:v$(VELERO_AWS_PLUGIN_VERSION)
+VELERO_AWS_PLUGIN_DIGEST = sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
+OBJECT_STORE_VERSION = 4.52
+OBJECT_STORE_IMAGE = chrislusf/seaweedfs:$(OBJECT_STORE_VERSION)@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
+
+bin/velero-v$(VELERO_VERSION):
+	@test "$$(uname -sm)" = "Linux x86_64" || { echo "install velero v$(VELERO_VERSION) yourself and put it at bin/velero-v$(VELERO_VERSION)"; exit 2; }
+	mkdir -p bin
+	curl -fsSL -o bin/velero.tar.gz https://github.com/vmware-tanzu/velero/releases/download/v$(VELERO_VERSION)/velero-v$(VELERO_VERSION)-linux-amd64.tar.gz
+	echo "$(VELERO_SHA256_LINUX_AMD64)  bin/velero.tar.gz" | sha256sum -c -
+	tar -xzf bin/velero.tar.gz -C bin --strip-components=1 velero-v$(VELERO_VERSION)-linux-amd64/velero
+	mv bin/velero bin/velero-v$(VELERO_VERSION)
+	rm bin/velero.tar.gz
+
+lab-l89: smoke-keyhost image build bin/kind-v$(KIND_VERSION) bin/kubectl-$(KUBECTL_VERSION) bin/helm-$(HELM_VERSION) bin/velero-v$(VELERO_VERSION)
+	docker build --target setup -t port49-setup:dev .
+	mkdir -p $(LAB_OUT)/l89
+	rc=0; KIND_BIN=$(CURDIR)/bin/kind-v$(KIND_VERSION) KUBECTL_BIN=$(CURDIR)/bin/kubectl-$(KUBECTL_VERSION) \
+	  HELM_BIN=$(CURDIR)/bin/helm-$(HELM_VERSION) VELERO_BIN=$(CURDIR)/bin/velero-v$(VELERO_VERSION) \
+	  VELERO_VERSION=$(VELERO_VERSION) VELERO_IMAGE=$(VELERO_IMAGE) VELERO_AWS_PLUGIN_IMAGE=$(VELERO_AWS_PLUGIN_IMAGE) VELERO_AWS_PLUGIN_DIGEST=$(VELERO_AWS_PLUGIN_DIGEST) \
+	  OBJECT_STORE_IMAGE=$(OBJECT_STORE_IMAGE) PORT49_LAB_OUT=$(LAB_OUT)/l89 \
+	  PORT49_LAB_L89=1 go test -tags lab ./tests/lab/ -run '^TestL89$$' -count=1 -v -timeout 55m || rc=$$?; \
+	  $(CURDIR)/bin/kind-v$(KIND_VERSION) delete cluster --name port49l89; exit $$rc
 
 # The systemd shape end to end (plan 12b, Task 9): the port49-server package from `make packages`
 # installed in a Debian container whose PID 1 is systemd. UNVERIFIED: not run. Needs Docker and a cgroup v2

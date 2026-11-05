@@ -372,11 +372,16 @@ func (p *Policy) mfaFor(c composition) (MFARequirement, error) {
 // mfaAt is the requirement subject holds on d at at, false where it holds no
 // grant there or the composition has none (a quarantine says so).
 func (p *Policy) mfaAt(subject string, d admission.Device, at time.Time) (MFARequirement, bool) {
+	return p.mfaAtMarked(subject, d, at, "")
+}
+
+// mfaAtMarked is mfaAt with d's class marks when known (composeMarked).
+func (p *Policy) mfaAtMarked(subject string, d admission.Device, at time.Time, marks string) (MFARequirement, bool) {
 	sub, ok := p.subs[subject]
 	if !ok {
 		return MFARequirement{}, false
 	}
-	c := p.compose(sub, d, at)
+	c := p.composeMarked([]*Subject{sub}, d, at, marks)
 	if len(c.grants) == 0 {
 		return MFARequirement{}, false
 	}
@@ -397,18 +402,42 @@ type DeviceMFA struct {
 // swap (decision 45 ruling 18).
 func (p *Policy) MFARequirements(at time.Time) []DeviceMFA {
 	subjects := sortedKeys(p.subs)
-	var out []DeviceMFA
-	for _, d := range p.Devices() {
+	devs := p.Devices()
+	// mfaAt reads the device only through its class (scope.go, deviceClass):
+	// the requirements are worked out once per class, on its first device.
+	held := make([][]MFARequirement, len(devs))
+	classes, marks := p.deviceClassMarks(devs)
+	for ci, members := range classes {
 		var reqs []MFARequirement
 		for _, s := range subjects {
-			r, ok := p.mfaAt(s, d, at)
+			r, ok := p.mfaAtMarked(s, devs[members[0]], at, marks[ci])
 			if !ok || !r.Required() || slices.ContainsFunc(reqs, func(o MFARequirement) bool { return reflect.DeepEqual(o, r) }) {
 				continue
 			}
 			reqs = append(reqs, r)
 		}
-		if len(reqs) > 0 {
-			out = append(out, DeviceMFA{Device: d.Name, Requirements: reqs})
+		for _, i := range members {
+			held[i] = reqs
+		}
+	}
+	var out []DeviceMFA
+	for i, d := range devs {
+		if len(held[i]) > 0 {
+			out = append(out, DeviceMFA{Device: d.Name, Requirements: cloneRequirements(held[i])})
+		}
+	}
+	return out
+}
+
+// cloneRequirements is reqs with nothing shared: a caller that sorts one
+// device's list or edits a method list must not change another's.
+func cloneRequirements(reqs []MFARequirement) []MFARequirement {
+	out := slices.Clone(reqs)
+	for i := range out {
+		out[i].Accept = slices.Clone(out[i].Accept)
+		out[i].Levels = slices.Clone(out[i].Levels)
+		for j := range out[i].Levels {
+			out[i].Levels[j].Accept = slices.Clone(out[i].Levels[j].Accept)
 		}
 	}
 	return out
@@ -614,15 +643,17 @@ func (c *comparison) mfa(subject string, at time.Time) {
 	}
 	var order []string
 	groups := map[string]*group{}
-	for _, dev := range c.after.Devices() {
-		was, wasOK := c.before.mfaAt(subject, dev, at)
-		is, isOK := c.after.mfaAt(subject, dev, at)
+	for i, dev := range c.after.Devices() {
+		was, wasOK := c.sides.mfaAt(c.before, subject, i, dev, at)
+		is, isOK := c.sides.mfaAt(c.after, subject, i, dev, at)
 		if !wasOK || !isOK || reflect.DeepEqual(was, is) {
 			continue
 		}
 		key := fmt.Sprintf("%+v|%+v", was, is)
 		if _, ok := groups[key]; !ok {
-			groups[key] = &group{was: was, is: is}
+			// The requirements come from a memo that hands one class's to all its
+			// devices: a change keeps its own copies.
+			groups[key] = &group{was: cloneRequirements([]MFARequirement{was})[0], is: cloneRequirements([]MFARequirement{is})[0]}
 			order = append(order, key)
 		}
 		groups[key].devices = append(groups[key].devices, dev.Name)

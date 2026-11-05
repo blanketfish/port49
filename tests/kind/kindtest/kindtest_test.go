@@ -128,6 +128,13 @@ func TestDumpNeverReadsTheVaultNamespace(t *testing.T) {
 	}
 }
 
+func TestDumpNeverReadsTheVeleroNamespaces(t *testing.T) {
+	got := DumpNamespaces([]string{"velero", "port49", "l89-store"})
+	if strings.Join(got, ",") != "port49" {
+		t.Fatalf("%v", got)
+	}
+}
+
 func TestRedactHidesALiteral(t *testing.T) {
 	r := Redact([]string{"create", "secret", "generic", "x", "--from-literal=k=SECRETVALUE", "--from-file=a=b"})
 	if strings.Contains(r, "SECRETVALUE") || !strings.Contains(r, "--from-file=a=b") {

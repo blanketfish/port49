@@ -28,6 +28,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -47,6 +48,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/blanketfish/port49/internal/agent"
+	"github.com/blanketfish/port49/internal/hwkey/serialmask"
+	"github.com/blanketfish/port49/internal/hwkeysetup"
 	"github.com/blanketfish/port49/internal/testpki"
 )
 
@@ -72,11 +75,14 @@ const (
 
 const defaultModule = "/usr/lib/x86_64-linux-gnu/libykcs11.so"
 
-// The PIV slots' CKA_IDs under libykcs11 (L60-ser8.md, cell (c)).
-const (
-	slot9a = "01" // PIN once, touch never: the session key
-	slot9c = "02" // PIN once, touch always: the touch key
+// The PIV slots' CKA_IDs under libykcs11 (L60-ser8.md, cell (c)), from the
+// one table port49 hwkey uses.
+var (
+	slot9a = slotID("9a") // PIN once, touch never: the session key
+	slot9c = slotID("9c") // PIN once, touch always: the touch key
 )
+
+func slotID(slot string) string { return hex.EncodeToString([]byte{hwkeysetup.SlotIDs[slot]}) }
 
 // labEmail is the identity the lab certificates carry and the policy grants.
 const labEmail = "alice@example.com"
@@ -123,6 +129,7 @@ type lab struct {
 	mu      sync.Mutex
 	agents  map[string]int // socket -> agent pid
 	obsFile *os.File
+	noAgent string     // L91: an agent socket path where no agent runs (l91Args)
 	broker  *labBroker // the cell's broker, whose refresh pacing a refresh steps past
 	// onKill is what a killed cell also undoes (the lab lock, Keycloak): the
 	// signal guard (l86Guard) runs it after the agents and the terminal.
@@ -239,7 +246,7 @@ func repoRoot(t *testing.T) string {
 // the lab directory, fresh each run so it is this tree's port49.
 func buildPort49(t *testing.T, h *lab) string {
 	t.Helper()
-	if p := os.Getenv("PORT49_L86_BIN"); p != "" && h.study == "L86" {
+	if p := os.Getenv("PORT49_L86_BIN"); p != "" && (h.study == "L86" || h.study == "L91") {
 		// make l86-build's client, so the run is that build's (tests/lab/L86-runbook.md).
 		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
 			t.Fatalf("PORT49_L86_BIN=%s is not an executable file: run make l86-build", p)
@@ -271,7 +278,7 @@ func (h *lab) step(n, format string, a ...any) {
 
 // obs records one observation: in the test log and in observations.log.
 func (h *lab) obs(field, value string) {
-	if h.study == "L86" {
+	if h.study == "L86" || h.study == "L91" {
 		// An admin call's words never carry a token, a challenge or a signature; a long opaque
 		// run is masked all the same.
 		value = longOpaque.ReplaceAllString(value, "<opaque>")
@@ -303,17 +310,10 @@ func oneLine(s string) string {
 // longOpaque is a run that can only be a token, a hash or a signature.
 var longOpaque = regexp.MustCompile(`[A-Za-z0-9+_=-]{40,}`)
 
-var (
-	serialHash  = regexp.MustCompile(`(#|%23)\d+`)
-	serialWords = regexp.MustCompile(`(?i)(serial[^0-9\n]{0,4})\d+`)
-)
-
 // redact masks a device serial: libykcs11's token label carries it
-// ("YubiKey PIV #<serial>"), and the results note keeps it out.
-func redact(s string) string {
-	s = serialHash.ReplaceAllString(s, "${1}<serial>")
-	return serialWords.ReplaceAllString(s, "${1}<serial>")
-}
+// ("YubiKey PIV #<serial>"), and the results note keeps it out. The rule is
+// serialmask's, shared with port49 hwkey.
+func redact(s string) string { return serialmask.MaskSerial(s) }
 
 // readLine reads one line Ryan types, within d. A terminal that takes no
 // deadline is read with none.

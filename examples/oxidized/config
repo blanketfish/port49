@@ -46,7 +46,9 @@ input:
   ssh:
     # Host keys are verified against ~/.ssh/known_hosts (design §17: a device
     # address is a fact from the source of truth, trusted no further than its
-    # host key). Populate it once per device; never set secure: false.
+    # host key). port49-oxidized-run saves a node's key the first time it sees
+    # the node (README 7a; L90). Never set secure to anything but true: any
+    # other value, accept_new included, turns verification off.
     secure: true
 output:
   default: git

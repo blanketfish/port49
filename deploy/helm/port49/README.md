@@ -29,6 +29,12 @@ an empty Secret name. List every member: a client given one URL has no failover.
 create or run etcd for you; `examples/etcd/` is a three-member example, and the kind smoke runs it with
 its init Job.
 
+**etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms (`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`); beehive's QLC drive failed it (`tests/lab/results/load-beehive.md`).
+port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
+
 Two server groups (for example a lab and production) are two releases in two namespaces with their
 own Secrets and their own etcd; they share nothing.
 
@@ -172,7 +178,9 @@ workstation that can reach the `<release>-broker` Service.
 Break-glass, when no broker is reachable: `scripts/revoke-offline.sh <ns> <release> -- --principal
 <name> [--lift|--list]` scales the brokers to 0, runs `port49-broker revoke --offline` against
 broker-0's volume, and scales back on every exit. `init-revocations` and `init-enrollments` are
-one-off Jobs, run once per new deployment. A broker already running when `init-enrollments` finishes
+one-off Jobs, run once per new deployment: `examples/init-enrollments-job.yaml` is the second (adapt its names to
+your values, then `kubectl -n <ns> apply -f` it and `kubectl -n <ns> wait --for=condition=complete job/port49-init-enrollments
+--timeout=300s`; the kind job `make kind-enrollments` applies that file with only the image and the release's ConfigMap name changed, in the namespace `-n` names). A broker already running when `init-enrollments` finishes
 finds the new store within 30 seconds; until then its sign-ins answer `enrollment_store_lost`.
 
 ## At 3am
@@ -201,9 +209,31 @@ A scale-down leaves the spool of the removed pod on its PVC, so drain or collect
 
 ## Network
 
-`service.type` defaults to LoadBalancer with `externalTrafficPolicy: Local`. Whether the device's
-source address is preserved on Kubernetes is unmeasured (L39 b, c): do not write source-based policy
-on the strength of it. `tlsListener.enabled` adds port 300 and requires `tlsListener.existingSecret`.
+`service.type` defaults to LoadBalancer with `externalTrafficPolicy: Local`, and the device's source
+address must reach port49d unrewritten, because port49d admits a device by that address. Measured on kind
+(spec §15 L39, 2026-11-04, kube-proxy in iptables mode, a device outside every node, a NodePort Service):
+
+| Setting, and where the device dials | Result |
+|---|---|
+| `Cluster`, a node running the pod | fails: the source port49d sees is a pod-network address, not the device's |
+| `Cluster`, a node not running the pod | fails: the source is that node's own address |
+| `Local`, a node running the pod | works: port49d sees the device's own address |
+| `Local`, a node not running the pod | the connection times out, and port49d logs nothing, since the connection never reaches it |
+| host networking, the pod's node | works, but the chart does not offer it |
+
+Keep `Local`; `Cluster` breaks device binding. Under `Local`, give devices the LoadBalancer address, not a
+node's address: a pod that moves leaves its old node answering nothing, and the symptom is a device whose
+logins time out while port49d's log shows no attempt from it. MetalLB in BGP mode advertises the address
+only from nodes with a ready pod (L85 measured that); a cloud load balancer is unmeasured.
+
+Host networking passed in the lab, on a namespace relabelled `privileged`. The chart offers none: its namespace
+runs at Pod Security `baseline`. Kubernetes also refuses a pod's `net.ipv4.ip_unprivileged_port_start`
+sysctl on the host network, so a host-network pod needs that sysctl removed. Binding port 49 as the non-root
+user then depends on the node's own value, which is 1024 on an ordinary host: set it to 0 there or give
+the container a capability to bind. A kind node's value is inferred to be 0, not read.
+
+The TLS listener's Service has the same policy; its port was not dialled. `tlsListener.enabled` adds port 300
+and requires `tlsListener.existingSecret`.
 The pod sets `net.ipv4.ip_unprivileged_port_start` to 0 so the non-root process can bind 49; clusters
 that forbid that sysctl need a different arrangement (not offered here).
 
@@ -248,14 +278,14 @@ for the cluster, which is a cluster-wide change: enable it in one release per cl
 
 ## Backups
 
-Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke; the enrollments job's run is unmeasured): `examples/backup-cronjob.yaml` (the etcd
+Two CronJobs, one pattern (the etcd snapshot job runs in the kind smoke, the enrollments job in its own kind job against a directory, `make kind-enrollments`): `examples/backup-cronjob.yaml` (the etcd
 snapshot, which needs etcd's root certificate and is yours to adapt) and the chart's own, off by default:
 `--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<your PVC>` (the sealed
 enrollment store, `port49-broker export-enrollments --out FILE`; it mounts what the broker does, from
 the same template). It exports the enrollment store of a `directory_password` verifier, so the chart refuses
 to render it unless `config.broker.broker.identity.humans` has one (otherwise the job would fail every night).
 The kind smoke runs the etcd snapshot job only: it has no directory, and a directory refuses the smoke's
-policy; the enrollments job's run is unmeasured. Neither the etcd nor the port49 image has a shell, so:
+policy. The enrollments job reads the sealed enrollment store in etcd (not the directory; the directory is only what the verifier's config needs to load). `make kind-enrollments` runs it against an OpenLDAP pod: `init-enrollments` as the example Job, then the export twice (a dated, non-empty, 0600 file owned by 65532 each, and a log holding only the broker's certificate-validity warning), then once over a stale `enrollments.new` (the job fails and `stale-check`'s log names it). That run exported a freshly initialised store, the mark with no enrolled person: an export holding enrollments is unmeasured. Neither the etcd nor the port49 image has a shell, so:
 
 1. a `stale-check` init container fails the job when `<name>.new` is left from a run that did not
    finish (the failed pod stays, and `kubectl logs` names the file); remove it and the next run goes;
@@ -265,6 +295,66 @@ policy; the enrollments job's run is unmeasured. Neither the etcd nor the port49
 
 Nothing sealed is written to a log. The snapshot holds sealed data but is still sensitive; give its
 PVC a restrictive access mode. Restore enrollments with `port49 directory import`.
+
+### Velero (file-system backup of the volumes)
+
+`examples/velero/` is a Velero `Schedule` with the steps around it. **A Velero restore that includes
+`port49-etcd` is a store restore under design §13**: it loses the revocations and lifts made since the backup
+and brings back redeemed tokens, so follow that runbook (delete `v1/t/` and `meta/judged`/`meta/judged_bundle`
+before the members serve clients, re-issue revocations with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`), lift again). Prefer
+restoring etcd from the `etcdctl snapshot` CronJob with `--bump-revision`; a file-system copy of a live member
+is crash-consistent at best and unmeasured under load (L89 measured one restore on an idle cluster). Measured on kind (Velero 1.18.4 with
+its node agent, an S3-compatible store in the cluster; `tests/lab/results/L89-kind.md`, 2026-11-04): after a
+backup, deleting the namespace and a restore, both StatefulSets became ready with no fence refusal, the
+issuing CA's fingerprint was unchanged, the owner, group and mode of `state/`, `issuing-ca.key` and the
+spool directory were unchanged (65532:65532, 0700 and 0600), and a mint and a login succeeded. The
+measurement used file-system backup because kind has no snapshot-capable CSI driver; CSI snapshots are
+not measured here.
+
+- **The backup holds the issuing CA's private key** (`state/issuing-ca.key`), each broker's state and the
+  accounting spool. **The bucket alone also holds the namespaces' Secrets**, unencrypted by Velero: the
+  TACACS+ keys, the store's encryption key, the etcd CA and client identities and the TLS key. The
+  repository key protects only the volumes. Protect the bucket like the CA key: server-side encryption, and
+  access limited to the backup's own credentials.
+- **Set the repository key from your own Secret before installing Velero.** Velero's default repository
+  password is a well-known static value, and Velero writes it into `velero-repo-credentials` itself when
+  it finds no Secret (`examples/velero/README.md` has the order).
+- **Velero skips a hostPath volume with only a warning, and the backup still reads Completed.** The first
+  measured run backed up 4 of the namespace's 7 claims: etcd's volumes were hostPath (kind's default
+  class), and the backup said "Volume data in pod port49/etcd-0 is a hostPath volume which is not
+  supported for pod volume backup, skipping" (lab-kind run 41855911600). The restore then brought etcd back
+  empty and port49d never became ready. Put etcd on volumes the node agent can read: list the volumes
+  backed by hostPath (a claim and its path per line; no output means none), and move any that appear:
+
+  <!-- l89:hostpath:begin -->
+  ```sh
+  kubectl get pv -o jsonpath='{range .items[*]}{.spec.claimRef.namespace}/{.spec.claimRef.name} {.spec.hostPath.path}{"\n"}{end}' \
+    | grep -E '^(port49|port49-etcd)/' | awk 'NF == 2'
+  ```
+  <!-- l89:hostpath:end -->
+
+  A claim that no pod mounts (a spool kept after a scale-down, say) is never copied: file-system backup
+  reads a volume through the pod that mounts it. So after every backup check each claim in both namespaces
+  by name, not by count. This prints every claim without a completed pod volume backup (it assumes
+  StatefulSet claim names, `<volume>-<pod>`, as the chart and the etcd example use), and nothing is the pass:
+
+  <!-- l89:claims:begin -->
+  ```sh
+  backup=<the backup's name>
+  comm -23 \
+    <(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' | grep -E '^(port49|port49-etcd)/' | sort) \
+    <(kubectl -n velero get podvolumebackups -l velero.io/backup-name=$backup \
+        -o jsonpath='{range .items[?(@.status.phase=="Completed")]}{.spec.pod.namespace}/{.spec.volume}-{.spec.pod.name}{"\n"}{end}' | sort)
+  ```
+  <!-- l89:claims:end -->
+
+  L89 runs these two commands verbatim, from this file, in CI after its backup (lab-kind run 41870212174): each printed nothing on a good backup, and with a claim no pod mounts the second printed exactly that claim.
+
+  The backup's own warnings, which name a volume Velero skipped:
+
+  ```sh
+  velero backup describe <the backup's name> --details | grep -i -A6 warnings
+  ```
 
 ## Multi-region
 

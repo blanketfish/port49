@@ -46,7 +46,13 @@ func newLabInventory(t *testing.T, name string) *labInventory {
 			"stop it: pkill -f bin/port49-inventory", inventoryAddr)
 	}
 	logs := filepath.Join(root, "tests", "lab", "logs")
-	li := &labInventory{dir: filepath.Join(logs, "inventory-"+name), pki: filepath.Join(logs, "inventory-pki"),
+	// The service's key and trust files live in the private directory: the fence refuses a
+	// file under a group-writable ~/git (decision 53 ruling 11, private_files_test.go).
+	priv, err := labPrivateRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	li := &labInventory{dir: filepath.Join(priv, "inventory-"+name), pki: filepath.Join(priv, "inventory-pki"),
 		errPath: filepath.Join(logs, "port49-inventory-"+name+".log"), done: make(chan struct{})}
 	if err := os.RemoveAll(li.dir); err != nil {
 		t.Fatal(err)

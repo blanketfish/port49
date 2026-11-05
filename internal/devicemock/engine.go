@@ -41,6 +41,7 @@ type StepResult struct {
 	ServerMsgLen  int      // a length, never the text
 	SingleConnect bool
 	Conn          int
+	Elapsed       time.Duration // request sent to final reply read; a dial is not in it
 }
 
 type Transcript struct {
@@ -349,6 +350,7 @@ func (pl *player) step(ctx context.Context, s Step) (StepResult, error) {
 		return StepResult{}, fmt.Errorf("devicemock: step %s has type %q", s.Name, s.Type)
 	}
 	h.Length = uint32(len(body))
+	sent := time.Now()
 	if err := pl.send(h, body); err != nil {
 		return fail(err)
 	}
@@ -413,6 +415,7 @@ func (pl *player) step(ctx context.Context, s Step) (StepResult, error) {
 		}
 		break
 	}
+	res.Elapsed = time.Since(sent)
 	if !(res.SingleConnect && (h.Flags&wire.FlagSingleConnect != 0 || pl.honorsOffer())) {
 		pl.closeConn()
 		pl.reuse = false

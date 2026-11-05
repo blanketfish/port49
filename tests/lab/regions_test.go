@@ -174,7 +174,11 @@ type regionPKI struct {
 	lab                                       string
 }
 
-func newRegionPKI(t *testing.T) *regionPKI {
+func newRegionPKI(t *testing.T) *regionPKI { return newRegionPKIFor(t, []string{regionOncall}) }
+
+// newRegionPKIFor is newRegionPKI with the lab client certificates of others
+// (testpki.LabClientFiles) beside alice's: the load run's machine principals.
+func newRegionPKIFor(t *testing.T, others []string) *regionPKI {
 	t.Helper()
 	p := &regionPKI{dir: t.TempDir(), lab: t.TempDir()}
 	now := time.Now()
@@ -216,7 +220,7 @@ func newRegionPKI(t *testing.T) *regionPKI {
 	for i := 1; i <= 3; i++ {
 		brokerIPs = append(brokerIPs, net.ParseIP(regionIP(i)))
 	}
-	if err := testpki.WriteLabAt(p.lab, "alice@example.com", []string{regionOncall}, brokerIPs, now); err != nil {
+	if err := testpki.WriteLabAt(p.lab, "alice@example.com", others, brokerIPs, now); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -226,6 +230,7 @@ func newRegionPKI(t *testing.T) *regionPKI {
 type regionEtcd struct {
 	ns, name, bin string
 	client, peer  string // host:port
+	metrics       string // host:port of a plain-HTTP /metrics listener; empty is none
 	cluster       string // --initial-cluster
 	data, log     string
 	pki           *regionPKI
@@ -233,12 +238,26 @@ type regionEtcd struct {
 	done          chan struct{}
 }
 
+// The lab's etcd runs with the compaction and quota port49 ships
+// (deploy/systemd/examples/etcd-1.yaml; a unit test holds the three equal to it).
+// Without them etcd's defaults fill a 2 GiB quota inside two load cells.
+const (
+	etcdCompactionMode      = "periodic"
+	etcdCompactionRetention = "10m"
+	etcdQuotaBackendBytes   = "8589934592"
+)
+
 func (e *regionEtcd) argv() []string {
 	a := []string{filepath.Join(e.bin, "etcd"), "--name", e.name, "--data-dir", e.data,
 		"--listen-client-urls", "https://" + e.client, "--advertise-client-urls", "https://" + e.client,
 		"--listen-peer-urls", "http://" + e.peer, "--initial-advertise-peer-urls", "http://" + e.peer,
 		"--initial-cluster", e.cluster, "--initial-cluster-state", "new",
-		"--cert-file", e.pki.server, "--key-file", e.pki.serverKey, "--trusted-ca-file", e.pki.ca, "--client-cert-auth"}
+		"--cert-file", e.pki.server, "--key-file", e.pki.serverKey, "--trusted-ca-file", e.pki.ca, "--client-cert-auth",
+		"--auto-compaction-mode", etcdCompactionMode, "--auto-compaction-retention", etcdCompactionRetention,
+		"--quota-backend-bytes", etcdQuotaBackendBytes}
+	if e.metrics != "" {
+		a = append(a, "--listen-metrics-urls", "http://"+e.metrics)
+	}
 	a = pidWrap(e.pidfile(), "", a)
 	if e.ns != "" {
 		return inNS(e.ns, nil, a...)

@@ -57,12 +57,9 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 	d, b := openAs(t, srv, "port49-daemon", prefix), openAs(t, srv, "port49-broker", prefix)
 
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	if err := b.IndexToken(ctx, "user:alice", "", k, time.Minute); err != nil {
-		t.Fatalf("the broker indexes a token: %v", err)
-	}
 	if _, err := b.PutToken(ctx, k, store.Token{ID: "t", Secret: []byte("s"), Kind: store.KindLogin,
-		ExpiresAt: t0.Add(time.Minute)}); err != nil {
-		t.Fatalf("the broker mints: %v", err)
+		ExpiresAt: t0.Add(time.Minute), IndexPrincipal: "user:alice", IndexTTL: time.Minute}); err != nil {
+		t.Fatalf("the broker mints and indexes a token: %v", err)
 	}
 	if err := b.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob", At: t0}); err != nil {
 		t.Fatalf("the broker marks: %v", err)
@@ -117,10 +114,14 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 			_, err := d.tok.Put(ctx, d.k.mark(store.RevocationPrincipal, "user:bob"), "{}")
 			return unavailable(err)
 		}(),
-		"lift a mark":           d.DeleteRevocation(ctx, store.RevocationPrincipal, "user:bob", store.Lift{}),
-		"write the token index": d.IndexToken(ctx, "user:alice", "", k, time.Minute),
-		"read the token index":  func() error { _, err := d.TokensByPrincipal(ctx, "user:alice"); return err }(),
-		"write meta/":           func() error { _, err := d.ctx.Put(ctx, d.k.meta("hold"), "x"); return unavailable(err) }(),
+		"lift a mark": d.DeleteRevocation(ctx, store.RevocationPrincipal, "user:bob", store.Lift{}),
+		"write the token index": func() error {
+			_, err := d.PutToken(ctx, k, store.Token{ID: "ix", Secret: []byte("s"), Kind: store.KindLogin,
+				ExpiresAt: t0.Add(time.Minute), IndexPrincipal: "user:alice", IndexTTL: time.Minute})
+			return err
+		}(),
+		"read the token index": func() error { _, err := d.TokensByPrincipal(ctx, "user:alice"); return err }(),
+		"write meta/":          func() error { _, err := d.ctx.Put(ctx, d.k.meta("hold"), "x"); return unavailable(err) }(),
 		"lower the ledger record": func() error {
 			_, err := d.ctx.Put(ctx, d.k.ledgerOf(lk), `{"seq":1}`)
 			return unavailable(err)

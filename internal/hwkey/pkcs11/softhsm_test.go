@@ -655,3 +655,68 @@ func TestThePINBufferIsZeroedAfterOpenAndUnlock(t *testing.T) {
 	}
 	zero("Unlock", right)
 }
+
+// TestTokensListsWithoutLogin: Tokens returns both tokens with their model set
+// and no serial, and it logs in to nothing and makes nothing: the process
+// counters are unchanged across the call.
+func TestTokensListsWithoutLogin(t *testing.T) {
+	module, label1 := hwtest.SoftHSM(t)
+	_, label2 := hwtest.SoftHSM(t)
+	logins, gens, creates := pkcs11.LoginCalls(), pkcs11.GenerateKeyPairCalls(), pkcs11.CreateObjectCalls()
+	toks, err := pkcs11.Tokens(module)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]pkcs11.Token{}
+	for _, tk := range toks {
+		got[tk.Label] = tk
+	}
+	for _, l := range []string{label1, label2} {
+		tk, ok := got[l]
+		if !ok || tk.Model == "" || tk.MaskedSerial != "<serial>" {
+			t.Fatalf("token %q: %+v (all %d)", l, tk, len(toks))
+		}
+	}
+	if pkcs11.LoginCalls() != logins || pkcs11.GenerateKeyPairCalls() != gens || pkcs11.CreateObjectCalls() != creates {
+		t.Fatal("Tokens logged in, generated a key or made an object")
+	}
+}
+
+// TestOpenAfterTokens: Tokens does not tear down the cached module, so an Open
+// of a key on it, in the same process, still succeeds and signs.
+func TestOpenAfterTokens(t *testing.T) {
+	module, label := hwtest.SoftHSM(t)
+	if _, err := pkcs11.Tokens(module); err != nil {
+		t.Fatal(err)
+	}
+	s, err := pkcs11.Open(uriFor(t, module, label), pin())
+	if err != nil {
+		t.Fatalf("Open after Tokens: %v", err)
+	}
+	defer s.Close()
+	digest := sha256.Sum256([]byte("after tokens"))
+	if _, err := s.Sign(rand.Reader, digest[:], crypto.SHA256); err != nil {
+		t.Fatalf("Sign after Tokens: %v", err)
+	}
+}
+
+// TestHwkeyPathWritesNothing: the read path `port49 hwkey` uses, Tokens, Open
+// with a nil PIN and Certificates, makes no key and no object on the token.
+func TestHwkeyPathWritesNothing(t *testing.T) {
+	module, label := hwtest.SoftHSM(t)
+	gens, creates := pkcs11.GenerateKeyPairCalls(), pkcs11.CreateObjectCalls()
+	if _, err := pkcs11.Tokens(module); err != nil {
+		t.Fatal(err)
+	}
+	s, err := pkcs11.Open(uriFor(t, module, label), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Certificates(); err != nil {
+		t.Fatal(err)
+	}
+	if pkcs11.GenerateKeyPairCalls() != gens || pkcs11.CreateObjectCalls() != creates {
+		t.Fatal("the read path generated a key or made an object")
+	}
+}

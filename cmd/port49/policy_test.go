@@ -2035,3 +2035,40 @@ func TestPolicyTestNeverPrintsAPastedEnvName(t *testing.T) {
 		t.Fatalf("the refusal is missing, or names the pasted variable")
 	}
 }
+
+// A changed max_session_age prints one line per subject and move; a
+// lengthening says live sessions keep the shorter ceiling (decision 33).
+func TestDiffPrintsTheCeilingLine(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	capped := func(age string) string {
+		body := strings.Replace(raw, "privilege: readonly, permit: [show **]", "privilege: readonly, permit: [show **], max_session_age: "+age, 1)
+		return strings.Replace(body, "deny: [reload **]", "deny: [reload **], max_session_age: "+age, 1)
+	}
+	write := func(body string) string {
+		p := filepath.Join(t.TempDir(), "policy.yaml")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	diff := func(from, to string) (int, string) {
+		var out, errb bytes.Buffer
+		code := run([]string{"policy", "diff", "--old", write(from), "--new", write(to), "--inventory", inv}, &out, &errb)
+		return code, out.String() + errb.String()
+	}
+	code, out := diff(capped("8h"), capped("1h"))
+	if code != 0 || !strings.Contains(out, "session ceiling: noc on 1 devices: 8h0m0s -> 1h0m0s") ||
+		strings.Contains(out, "lengthened") {
+		t.Fatalf("shortened: code %d\n%s", code, out)
+	}
+	code, out = diff(capped("1h"), capped("never"))
+	if code != 0 || !strings.Contains(out, "session ceiling: noc on 1 devices: 1h0m0s -> never (lengthened: live sessions keep "+
+		"the shorter ceiling until they refresh, decision 33)") {
+		t.Fatalf("lengthened: code %d\n%s", code, out)
+	}
+	code, out = diff(capped("1h"), raw)
+	if code != 0 || !strings.Contains(out, "1h0m0s -> default (may lengthen: to session.max_session_age_default)") {
+		t.Fatalf("removed: code %d\n%s", code, out)
+	}
+}

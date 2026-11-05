@@ -1,0 +1,105 @@
+[
+  {
+    "step": "a_no_entry",
+    "value": {
+      "status": "no_connection",
+      "ended": true,
+      "redeems": 0,
+      "port49d_records": 0,
+      "known_hosts_lines_before": 0,
+      "known_hosts_lines_after": 0,
+      "oxidized_log_excerpt": "oxidized-1 | 2026-11-04 15:18:25.331149 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyUnknown with msg \"fingerprint SHA256:FT2fWz/ty61LH3FE1SiOhgI8vH95gF4gwy0whbJu/EQ is unknown for \"172.100...."
+    }
+  },
+  {
+    "step": "b_changed_key",
+    "value": {
+      "status": "no_connection",
+      "ended": true,
+      "redeems": 0,
+      "port49d_records": 0,
+      "known_hosts_lines_before": 3,
+      "known_hosts_lines_after": 3,
+      "oxidized_log_excerpt": "oxidized-1 | 2026-11-04 15:18:33.333827 W [7:Job 'leaf1'] Oxidized::Node -- 172.100.100.11 raised Net::SSH::HostKeyMismatch (rescued RuntimeError) with msg \"fingerprint SHA256:6oavtCXsBu0LfSnpotRaqoHAKcY1jMfQCSSH0NvqxE0 ..."
+    }
+  },
+  {
+    "step": "c_entry_from_openssh",
+    "value": {
+      "status": "success",
+      "ended": true,
+      "redeems": 1,
+      "port49d_records": 9,
+      "known_hosts_lines_before": 1,
+      "known_hosts_lines_after": 1,
+      "oxidized_log_excerpt": ""
+    }
+  },
+  {
+    "step": "c_prepopulate",
+    "value": {
+      "hashed": false,
+      "key_lines_written": 1,
+      "methods_listed": "publickey,keyboard-interactive",
+      "port49d_records_during": 0,
+      "ssh_exit": 255
+    }
+  },
+  {
+    "step": "c2_hashed_entry",
+    "value": {
+      "status": "success",
+      "ended": true,
+      "redeems": 1,
+      "port49d_records": 9,
+      "known_hosts_lines_before": 1,
+      "known_hosts_lines_after": 1,
+      "oxidized_log_excerpt": ""
+    }
+  },
+  {
+    "step": "c3_wrapper_sweep",
+    "value": {
+      "status": "success",
+      "ended": true,
+      "redeems": 1,
+      "port49d_records": 9,
+      "known_hosts_lines_before": 0,
+      "known_hosts_lines_after": 1,
+      "oxidized_log_excerpt": ""
+    }
+  },
+  {
+    "step": "d_unknown_key",
+    "value": {
+      "status": "success",
+      "ended": true,
+      "redeems": 1,
+      "port49d_records": 9,
+      "known_hosts_lines_before": 0,
+      "known_hosts_lines_after": 0,
+      "oxidized_log_excerpt": ""
+    }
+  },
+  {
+    "step": "d_changed_key",
+    "value": {
+      "status": "success",
+      "ended": true,
+      "redeems": 1,
+      "port49d_records": 9,
+      "known_hosts_lines_before": 3,
+      "known_hosts_lines_after": 3,
+      "oxidized_log_excerpt": ""
+    }
+  },
+  {
+    "step": "verdicts",
+    "value": {
+      "b": "PASS",
+      "c": "PASS",
+      "c3": "PASS",
+      "d": "FAIL"
+    }
+  }
+]

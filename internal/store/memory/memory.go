@@ -406,8 +406,10 @@ func (s *Store) PutToken(_ context.Context, k store.TokenKey, t store.Token) (in
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.live(k)
+	s.indexTokenLocked(t.IndexPrincipal, t.IndexCertKey, k, t.IndexTTL)
 	// Copy Secret to prevent aliasing
 	t.Secret = bytes.Clone(t.Secret)
+	t.IndexPrincipal, t.IndexCertKey, t.IndexTTL = "", "", 0 // the index's, not the stored token's
 	s.tokens[k] = append(s.tokens[k], t)
 	s.writes++
 	if s.writes%sweepEvery == 0 {
@@ -752,7 +754,11 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	//
 	// The rule under this lock: the ceiling read is the one on the record
 	// now, which a join may have moved since the caller read it (spec §5.3).
+	held := e.c.PrivLvl
 	moved := store.ApplyPrivilege(&e.c, level)
+	if e.c.PrivLvl == held {
+		return nil // the level a device repeats is not a write
+	}
 	e.rev = s.nextRevLocked()
 	// A level that moved is a write to what the refresh decides; a grant of
 	// the level already held, which a device repeats, is not, or a session
@@ -779,11 +785,17 @@ func (s *Store) AnnotateContext(_ context.Context, k store.ContextKey, discHash,
 		delete(s.contexts, k)
 		return store.ErrNotFound
 	}
+	changed := false
 	if discHash != "" {
-		e.c.SessionDiscriminators = addDiscriminator(e.c.SessionDiscriminators, discHash)
+		next := addDiscriminator(e.c.SessionDiscriminators, discHash)
+		changed = !slices.Equal(next, e.c.SessionDiscriminators)
+		e.c.SessionDiscriminators = next
 	}
-	if state != "" {
-		e.c.AccountingState = state
+	if state != "" && state != e.c.AccountingState {
+		e.c.AccountingState, changed = state, true
+	}
+	if !changed {
+		return nil // an annotation already recorded is not a write
 	}
 	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
@@ -981,15 +993,20 @@ func (s *Store) DeleteContextIf(_ context.Context, k store.ContextKey, rev uint6
 	return nil
 }
 
-// PutBlob writes body under hash, keeping the later of the existing and the
-// new expiry: a re-put must not shorten a blob another context still
-// references.
+// PutBlob writes body under hash only when the stored blob dies before
+// now+ttl, and rounds the expiry up to the minute, as the etcd store's lease
+// bucket does: a re-put must not shorten a blob another context still
+// references, and a put it already covers writes nothing.
 func (s *Store) PutBlob(_ context.Context, hash string, body []byte, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp := s.now().Add(ttl)
-	if existing, ok := s.blobs[hash]; ok && existing.exp.After(exp) {
-		exp = existing.exp
+	want := s.now().Add(ttl)
+	if existing, ok := s.blobs[hash]; ok && existing.exp.After(s.now()) && !existing.exp.Before(want) {
+		return nil
+	}
+	exp := want.Truncate(store.BlobBucket)
+	if exp.Before(want) {
+		exp = exp.Add(store.BlobBucket)
 	}
 	s.blobs[hash] = blobEntry{body: bytes.Clone(body), exp: exp}
 	s.writes++
@@ -1297,12 +1314,14 @@ func (s *Store) ActivePrincipals(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
-// IndexToken adds k under principal and certKey, each skipped when empty,
+// indexTokenLocked adds k under principal and certKey, each skipped when empty
 // and a certificate key with no issuer or no serial the same way
-// (blankCertKey).
-func (s *Store) IndexToken(_ context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// (blankCertKey); a zero ttl indexes nothing (a PutToken that asked for no
+// index).
+func (s *Store) indexTokenLocked(principal, certKey string, k store.TokenKey, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
 	if blankCertKey(certKey) {
 		certKey = ""
 	}
@@ -1323,8 +1342,6 @@ func (s *Store) IndexToken(_ context.Context, principal, certKey string, k store
 			set[k] = exp
 		}
 	}
-	s.wroteLocked()
-	return nil
 }
 
 func (s *Store) TokensByPrincipal(_ context.Context, principal string) ([]store.TokenKey, error) {

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Secret scan of the index before every commit (`make hooks` enables it once per clone).
+# Findings print redacted. Never bypass a finding with --no-verify: fix it, or, for a
+# deliberate fixture, add a commit-scoped fingerprint to .gitleaksignore (see .gitleaks.toml).
+exec make -s --no-print-directory leaks-staged

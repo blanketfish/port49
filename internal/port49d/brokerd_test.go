@@ -796,8 +796,8 @@ func TestTheBrokersStoreIsFencedUnderItsGuard(t *testing.T) {
 	if got, err := bs.st.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("the broker read %q with its feed not running: %v", got.CtxID, err)
 	}
-	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("broker", "context", "timeout")); n != 1 {
-		t.Fatalf("the broker's guard counted %v context timeouts", n)
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("broker", "context", "feed_behind")); n != 1 {
+		t.Fatalf("the broker's guard counted %v feed_behind outcomes", n)
 	}
 	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
 		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)
@@ -2531,5 +2531,83 @@ func TestAPersistentCompactionSaysItsRemedyOnce(t *testing.T) {
 		return nil
 	}); err != nil || strings.Contains(out.String(), "auto-compaction-retention") {
 		t.Fatalf("%v\n%s", err, out.String())
+	}
+}
+
+// A scraper that keeps its connection alive reads the run now serving, not the
+// run that ended: port49d binds the same metrics address again after a store
+// gone, and the first run's server must not outlive its run on a kept-alive
+// connection (load run 4: a scrape read a dead registry, and /readyz).
+func TestAKeptAliveScraperReadsTheNewRunAfterAStoreGone(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	api, _ := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+
+	// The daemon's metrics address is fixed, so a second run binds it again.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	body, err := os.ReadFile(f.daemon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = regexp.MustCompile(`(?m)^metrics_listen: .*$`).ReplaceAll(body, []byte(`metrics_listen: "`+addr+`"`))
+	if err := os.WriteFile(f.daemon, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tacacs, _ := runSplitDaemon(t, f.daemon, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	tok := mintOn(t, api, f.pki, "leaf1")
+	scraper := &http.Client{Timeout: 5 * time.Second} // keep-alive is the default transport's
+	t.Cleanup(scraper.CloseIdleConnections)
+	readyz := func() int {
+		req, _ := http.NewRequest("GET", "http://"+addr+"/readyz", nil)
+		resp, err := scraper.Do(req)
+		if err != nil {
+			return -1
+		}
+		io.Copy(io.Discard, resp.Body) // read to the end, or the connection is not kept
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if st := readyz(); st != http.StatusOK {
+		t.Fatalf("/readyz of the first run: %d, want 200", st)
+	}
+
+	f.proxy.Hang(true)
+	dev.login("alice", tok)
+	waitCountWithin(t, &out, "waiting for the store again, as at a start", 1, 30*time.Second)
+	// The second run waits for the store, and says so: 503. The first run's
+	// answer, read over the kept-alive connection, was 200.
+	var waiting int
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+		waiting = readyz()
+		if waiting == http.StatusServiceUnavailable {
+			break
+		}
+	}
+	if waiting != http.StatusServiceUnavailable {
+		t.Fatalf("a kept-alive scraper reads /readyz %d while the second run waits for the store, want 503 (the dead run's answer is 200)", waiting)
+	}
+	f.proxy.Hang(false)
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 60*time.Second)
+
+	// The second run serves: its /readyz is 200, read over the same client.
+	deadline := time.Now().Add(15 * time.Second)
+	st := readyz()
+	for st != http.StatusOK && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		st = readyz()
+	}
+	if st != http.StatusOK {
+		t.Fatalf("a kept-alive scraper reads /readyz %d after the second run serves, want 200 (the dead run's answer)", st)
 	}
 }

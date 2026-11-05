@@ -2,9 +2,12 @@ package etcd
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
@@ -41,6 +44,19 @@ func commit(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3.Cm
 // is every written key's mod_revision.
 func commitRev(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3.Cmp, puts []put,
 	dels ...del) (bool, int64, error) {
+	resp, err := commitTxn(ctx, cli, ls, cmps, puts, dels, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	return resp.Succeeded, resp.Header.Revision, nil
+}
+
+// commitTxn is commitRev with the else branch's ops, and the whole response
+// back: a caller whose ctx is marked idempotent (hedge.go) reads in the else
+// branch what a copy of its own transaction wrote, to tell it from another
+// request's (ownRedemption, ownSwap).
+func commitTxn(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3.Cmp, puts []put,
+	dels []del, elses []clientv3.Op) (*clientv3.TxnResponse, error) {
 	for attempt := 0; ; attempt++ {
 		ops := make([]clientv3.Op, 0, len(puts)+len(dels))
 		for _, p := range puts {
@@ -52,7 +68,7 @@ func commitRev(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3
 			default:
 				id, err := ls.For(ctx, p.exp)
 				if err != nil {
-					return false, 0, unavailable(err)
+					return nil, unavailable(err)
 				}
 				ops = append(ops, clientv3.OpPut(p.key, string(p.val), clientv3.WithLease(id)))
 			}
@@ -64,16 +80,27 @@ func commitRev(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3
 				ops = append(ops, clientv3.OpDelete(d.key))
 			}
 		}
-		resp, err := cli.Txn(ctx).If(cmps...).Then(ops...).Commit()
+		resp, err := cli.Txn(ctx).If(cmps...).Then(ops...).Else(elses...).Commit()
 		if isLeaseLost(err) && attempt == 0 {
 			ls.Reset()
 			continue
 		}
 		if err != nil {
-			return false, 0, unavailable(err)
+			return nil, unavailable(err)
 		}
-		return resp.Succeeded, resp.Header.Revision, nil
+		return resp, nil
 	}
+}
+
+// newNonce is a random per-request value: written into the record a hedged
+// transaction creates, it lets a copy that finds the compare failed tell this
+// request's own earlier copy from another request's write.
+func newNonce() string {
+	var b [12]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand does not fail
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // isLeaseLost is etcd saying a lease the put named is gone: one that
@@ -103,7 +130,12 @@ func cas[R any](ctx context.Context, cli clientv3.KV, ls *leases, key string, li
 // carries (plan 7h).
 func casAs[R any](ctx context.Context, cli clientv3.KV, ls *leases, key, what string, live func(R) bool,
 	f func(r *R, found bool) (write bool, exp time.Time, keep bool, err error)) error {
-	for {
+	for round := 0; ; round++ {
+		if round > 0 {
+			if err := casBackoff(ctx, round); err != nil {
+				return unavailable(err)
+			}
+		}
 		resp, err := cli.Get(ctx, key)
 		if err != nil {
 			return unavailable(err)
@@ -133,6 +165,31 @@ func casAs[R any](ctx context.Context, cli clientv3.KV, ls *leases, key, what st
 		if err != nil || ok {
 			return err
 		}
+	}
+}
+
+// casBackoffMax bounds the wait between a lost compare and the next read.
+const casBackoffMax = 50 * time.Millisecond
+
+// casBackoffDelay is the jittered wait before the read after lost round
+// round: half to all of a base that doubles from 2 ms at round 1, never
+// above casBackoffMax.
+func casBackoffDelay(round int) time.Duration {
+	d := min(time.Millisecond<<min(round, 6), casBackoffMax)
+	return d/2 + rand.N(d/2+1)
+}
+
+// casBackoff sleeps a jittered time whose base doubles from 2 ms (the first
+// lost round is round 1) up to casBackoffMax, so writers of one hot key
+// spread out instead of spinning on each other. It ends early with ctx's error.
+func casBackoff(ctx context.Context, round int) error {
+	t := time.NewTimer(casBackoffDelay(round))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 

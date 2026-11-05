@@ -407,3 +407,20 @@ func TestIssuingCAGaugeIsZeroWhileTheCAIsUnusable(t *testing.T) {
 		t.Fatalf("a CA with no key: %v, gauge %v", ca.Unavailable, testutil.ToFloat64(m.IssuingCANotAfter))
 	}
 }
+
+// port49_issuing_ca_configured is 1 on a broker whose issuance is set, even
+// with no usable CA (so an alert on the CA gauge's 0 can tell "none loaded"
+// from "none wanted"), and 0 on one that has no issuance (plan 12c, Task 5).
+func TestIssuingCAConfiguredFollowsTheConfig(t *testing.T) {
+	say := func(string, ...any) {}
+	cfg := config.Config{Broker: &config.BrokerConfig{StateDir: stateDir(t),
+		Identity: &oidc.Config{Issuance: &oidc.Issuance{CertificateLifetime: time.Hour}}}}
+	m := metrics.New(prometheus.NewRegistry())
+	if ca := openIssuer(cfg, m, say); ca.Unavailable == nil || testutil.ToFloat64(m.IssuingCAConfigured) != 1 {
+		t.Fatalf("issuance with no CA: %v, gauge %v", ca.Unavailable, testutil.ToFloat64(m.IssuingCAConfigured))
+	}
+	m = metrics.New(prometheus.NewRegistry())
+	if v := testutil.ToFloat64(m.IssuingCAConfigured); v != 0 {
+		t.Fatalf("a broker with no issuance: %v", v)
+	}
+}

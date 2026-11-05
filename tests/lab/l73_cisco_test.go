@@ -90,6 +90,10 @@ func l73CiscoRun(c *cliConn, items []l73Dialog, vals map[string]string, lenient 
 		if err := c.send(it.Cmd); err != nil {
 			return c.transcript()[from:], err
 		}
+		if it.Detach {
+			time.Sleep(20 * time.Second) // the commit applies; the session may or may not survive it
+			continue
+		}
 		used, pos := make([]bool, len(it.Steps)), at
 		for {
 			step, ok := -1, false

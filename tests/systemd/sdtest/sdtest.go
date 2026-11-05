@@ -327,3 +327,43 @@ func ReRead(journal string) [][2]int {
 // directory so a reader never sees a half-written file.
 const PutScript = `set -eu; d=$(dirname "$1"); install -d -m 0755 "$d"; umask 077; t=$(mktemp "$d/.put.XXXXXX")
 trap 'rm -f "$t"' EXIT; cat > "$t"; chown "$2" "$t"; chmod "$3" "$t"; mv "$t" "$1"`
+
+// shippedKeyDir is the line deploy/systemd/config/port49d.yaml ships for where a policy's device
+// keys may be read from.
+const shippedKeyDir = "key_secret_refs: {file_dir: /etc/port49/keys}\n"
+
+// KeyDir is the shipped port49d config with that one line's file_dir replaced by dir. It refuses a
+// config whose line is not exactly the shipped one, so a drift in the shipped file is caught here
+// rather than answered with a second key_secret_refs.
+func KeyDir(body, dir string) (string, error) {
+	if strings.Count(body, "key_secret_refs") != 1 || strings.Count(body, shippedKeyDir) != 1 {
+		return "", errors.New("sdtest: the port49d config does not carry exactly the shipped key_secret_refs line")
+	}
+	return strings.Replace(body, shippedKeyDir, "key_secret_refs: {file_dir: "+dir+"}\n", 1), nil
+}
+
+// Refused is one way port49d's own code refuses a secret file or its directory: the fragment of the
+// product's error that names it, and the category a note records in its place. The note carries the
+// category, never the journal line.
+type Refused struct {
+	Phrase   string
+	Category string
+	Source   string // the file under the repository root that holds Phrase
+	Also     string // when set, the matching line must also hold this (a path the harness wrote)
+}
+
+// Refusals are matched in order against port49d's journal, most specific first.
+var Refusals = []Refused{
+	{"no such file or directory", "unreadable: absent - a line says no such file naming the credentials directory", "", "/run/credentials/port49d.service"},
+	{"is group-readable by gid", "refused: the file's group is not one port49d is in", "internal/fence/fence_linux.go", ""},
+	{"is owned by uid", "refused: the owner is neither port49d nor root", "internal/fence/fence_linux.go", ""},
+	{"writable by others than its owner", "refused: a mode lets others write", "internal/fence/fence_linux.go", ""},
+	{"a secret file may be group-readable, never world-readable", "refused: a mode lets others read", "internal/fence/fence_linux.go", ""},
+	{"more than one hard link", "refused: more than one hard link", "internal/fence/fence_linux.go", ""},
+	{"resolves to", "refused: resolves outside key_secret_refs.file_dir", "internal/fence/fence_linux.go", ""},
+	{"is outside key_secret_refs", "refused: the policy's reference is outside key_secret_refs", "internal/port49d/livekeys.go", ""},
+	{"overlaps key_secret_refs.file_dir", "refused: port49d.yaml names key material inside file_dir", "internal/config/allowance.go", ""},
+	{"the secret is empty", "refused: the secret is empty", "internal/secretref/secretref.go", ""},
+	{"permission denied", "unreadable: permission denied", "", ""},
+	{"no such file or directory", "unreadable: no such file or directory (not naming the credentials directory)", "", ""},
+}

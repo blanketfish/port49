@@ -62,7 +62,8 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	for _, m := range marks {
 		ops = append(ops, clientv3.OpGet(s.k.mark(m[0], m[1])))
 	}
-	resp, err := s.ctxKV.Txn(ctx).Then(ops...).Commit()
+	// A read-only transaction, harmless sent twice: hedged like a Range.
+	resp, err := s.ctxKV.Txn(idempotent(ctx)).Then(ops...).Commit()
 	if err != nil {
 		return ctxSnap{}, unavailable(err)
 	}
@@ -104,6 +105,21 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 // entry's.
 func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap, rec *ctxRec, idx *idxRec,
 	added []string) (bool, int64, error) {
+	return s.commitCtxAs(ctx, k, snap, rec, idx, added, false)
+}
+
+// commitCtxAs is commitCtx, hedged when hedge is set (hedge.go): the
+// transaction is sent again on another connection when the first is slow, and
+// a copy that finds the compare failed reads the context back. A record
+// carrying this swap's own nonce is its earlier copy's write: success, at the
+// revision that copy committed at. Any other record is a lost race, ErrConflict
+// for the caller to read again. A write that rebuilds the record (RewriteContext,
+// or applyTo through ctxRecOf) after the first copy and before the read-back
+// drops the nonce, and reads as a lost race: the caller reads again and joins
+// what it finds, as for any race. A touch keeps the nonce, and the read-back
+// then reports the touch's revision, not the swap's.
+func (s *Store) commitCtxAs(ctx context.Context, k store.ContextKey, snap ctxSnap, rec *ctxRec, idx *idxRec,
+	added []string, hedge bool) (bool, int64, error) {
 	ck, xk := s.k.context(k), s.k.indexed(refOf(k))
 	cmps := []clientv3.Cmp{unchanged(ck, snap.mod), unchanged(xk, snap.idxMod)}
 	for m, ms := range snap.marks {
@@ -112,6 +128,9 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 	var puts []put
 	var dels []del
 	if rec != nil {
+		if hedge {
+			rec.SwapNonce = newNonce()
+		}
 		body, err := json.Marshal(rec)
 		if err != nil {
 			return false, 0, err
@@ -132,7 +151,23 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 	for _, key := range added {
 		puts = append(puts, put{key: key, val: []byte("{}")}) // no lease: the index record decides (Ruling 6)
 	}
-	return commitRev(ctx, s.ctxKV, s.ctxLeases, cmps, puts, dels...)
+	if !hedge || rec == nil {
+		return commitRev(ctx, s.ctxKV, s.ctxLeases, cmps, puts, dels...)
+	}
+	resp, err := commitTxn(idempotent(ctx), s.ctxKV, s.ctxLeases, cmps, puts, dels, []clientv3.Op{clientv3.OpGet(ck)})
+	if err != nil {
+		return false, 0, err
+	}
+	if resp.Succeeded {
+		return true, resp.Header.Revision, nil
+	}
+	if mod, own := ownWrite(resp, func(value []byte) bool {
+		var r ctxRec
+		return json.Unmarshal(value, &r) == nil && r.SwapNonce == rec.SwapNonce
+	}); own {
+		return true, mod, nil
+	}
+	return false, resp.Header.Revision, nil
 }
 
 // seenCache is the plaintext bookkeeping of the last version GetContext
@@ -309,7 +344,7 @@ func (s *Store) SwapLoginRev(ctx context.Context, k store.ContextKey, rev uint64
 		if touched || len(added) > 0 {
 			idx = &x
 		}
-		if ok, mod, err := s.commitCtx(ctx, k, snap, &r, idx, added); err != nil || ok {
+		if ok, mod, err := s.commitCtxAs(ctx, k, snap, &r, idx, added, true); err != nil || ok {
 			return uint64(mod), err
 		}
 	}
@@ -451,6 +486,15 @@ func (s *Store) mutate(ctx context.Context, k store.ContextKey,
 			x.prune(s.now())
 			x.restamp(r.ExpiresAt)
 			idx = &x
+		}
+		// A setter that changed nothing (a device repeating the level it holds, an
+		// annotation already recorded) writes nothing: no revision, no history.
+		if idx == nil {
+			was, errA := json.Marshal(snap.rec)
+			now, errB := json.Marshal(r)
+			if errA == nil && errB == nil && bytes.Equal(was, now) {
+				return nil
+			}
 		}
 		if ok, _, err := s.commitCtx(ctx, k, snap, &r, idx, nil); err != nil || ok {
 			return err
@@ -612,22 +656,37 @@ func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uin
 	}
 }
 
-// PutBlob writes body, keeping the later of the existing and the new
-// expiry. It is on the token pool, and GetBlob and BumpBlob on the context
+// PutBlob writes body only when the stored blob dies before now+ttl, and
+// rounds the expiry it writes up to the next lease bucket, so one blob is
+// written about once a bucket, not once a mint (load run 2: every mint
+// compare-and-swapped one shared key and half timed out). The expiry is
+// never shortened, and a blob outlives every context that refers to it.
+// It is on the token pool, and GetBlob and BumpBlob on the context
 // pool, on purpose: the broker's mint is what writes a blob, and the
 // commands it authorizes and the refresh are what read and extend one, so
 // each rides the pool of the path that calls it (design §12). The pools
 // are one cluster, so a blob put on one is read on the other.
 func (s *Store) PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
-	exp := s.now().Add(ttl)
+	want := s.now().Add(ttl)
 	return cas(ctx, s.tok, s.tokLeases, s.k.blob(hash), func(b blobRec) bool { return b.ExpiresAt.After(s.now()) },
 		func(b *blobRec, found bool) (bool, time.Time, bool, error) {
-			if found && b.ExpiresAt.After(exp) {
-				exp = b.ExpiresAt
+			if found && !b.ExpiresAt.Before(want) {
+				return false, time.Time{}, false, nil
 			}
+			exp := roundUpToBucket(want)
 			b.Body, b.ExpiresAt = bytes.Clone(body), exp
 			return true, exp, false, nil
 		})
+}
+
+// roundUpToBucket is t, or the end of its lease bucket when t is inside
+// one: the expiry a record may be given without costing a lease.
+func roundUpToBucket(t time.Time) time.Time {
+	r := t.Truncate(leaseBucket)
+	if r.Before(t) {
+		r = r.Add(leaseBucket)
+	}
+	return r
 }
 
 // GetBlob is the blob's body until its expiry.

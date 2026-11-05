@@ -631,10 +631,7 @@ func TestABothLogoutsReportIsTheUnionOfItsHalves(t *testing.T) {
 	f.liveContextAt(t, "bare", "alice2", alice2, "", now, now.Add(12*time.Hour))
 	if _, err := f.st.PutToken(ctx, store.TokenKey{NAS: "leaf1", Username: "alice2"}, store.Token{ID: "t-alice2",
 		Secret: []byte("x"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute), Principal: alice2,
-		Username: "alice2"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.st.IndexToken(ctx, alice2, "", store.TokenKey{NAS: "leaf1", Username: "alice2"}, time.Hour); err != nil {
+		Username: "alice2", IndexPrincipal: alice2, IndexTTL: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := f.b.Logout(ctx, oidc.LogoutToken{Issuer: iss.URL, Sid: "s-sub-alice",

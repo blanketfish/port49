@@ -39,6 +39,9 @@ var lifted = []struct {
 	{"AnnotateSetRules", AnnotateSetRules},
 	{"AnnotateDoesNotEditAReadersSlice", AnnotateDoesNotEditAReadersSlice},
 	{"BlobBump", BlobBump},
+	{"PutTokenIndexesInItsOwnWrite", PutTokenIndexesInItsOwnWrite},
+	{"AnUnchangedSetterLeavesTheRevision", AnUnchangedSetterLeavesTheRevision},
+	{"BlobPutWritesOnlyWhenTooShortLived", BlobPutWritesOnlyWhenTooShortLived},
 	{"Indexes", Indexes},
 	{"Idempotency", Idempotency},
 	{"SwapIsACompareAndSet", SwapIsACompareAndSet},
@@ -781,6 +784,115 @@ func AnnotateDoesNotEditAReadersSlice(t *testing.T, b Backend) {
 	}
 }
 
+// BlobPutWritesOnlyWhenTooShortLived: a PutBlob whose expiry the stored blob
+// already covers writes nothing (the broker's mint calls it once a mint, and
+// a write a mint is a hot key), a longer ttl still writes, and the expiry
+// is rounded up, never down, so the blob outlives what it was asked for.
+func BlobPutWritesOnlyWhenTooShortLived(t *testing.T, b Backend) {
+	now := time.Unix(1000, 0)
+	s := b.New(t, func() time.Time { return now })
+	ctx := context.Background()
+	if err := s.PutBlob(ctx, "sha256:a", []byte("first"), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := s.PutBlob(ctx, "sha256:a", []byte("second"), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetBlob(ctx, "sha256:a"); err != nil || string(got) != "first" {
+		t.Fatalf("a put the stored blob already covered rewrote it: %q %v", got, err)
+	}
+	// The expiry was rounded up to the minute's end (unix 1020), not left at 1010.
+	now = time.Unix(1015, 0)
+	if _, err := s.GetBlob(ctx, "sha256:a"); err != nil {
+		t.Fatalf("the expiry was not rounded up: %v", err)
+	}
+	now = time.Unix(1000, 0)
+	if err := s.PutBlob(ctx, "sha256:a", []byte("third"), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetBlob(ctx, "sha256:a"); err != nil || string(got) != "third" {
+		t.Fatalf("a longer ttl did not write: %q %v", got, err)
+	}
+	now = now.Add(59 * time.Minute)
+	if _, err := s.GetBlob(ctx, "sha256:a"); err != nil {
+		t.Fatalf("the longer put was shortened: %v", err)
+	}
+}
+
+// PutTokenIndexesInItsOwnWrite: a token put with IndexPrincipal, IndexCertKey and
+// IndexTTL is found by both indexes as the index rules leave them, and the
+// later-expiry rule holds: a shorter ttl never shortens an entry, a longer one
+// extends it.
+func PutTokenIndexesInItsOwnWrite(t *testing.T, b Backend) {
+	now := time.Unix(1000, 0)
+	s := b.New(t, func() time.Time { return now })
+	ctx := context.Background()
+	const alice = "user:alice@example.com"
+	cert := store.CertKey("CN=Corp CA", "3f9a01")
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	put := func(id string, ttl time.Duration) {
+		t.Helper()
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("s"), Kind: store.KindLogin,
+			ExpiresAt: now.Add(time.Hour), IndexPrincipal: alice, IndexCertKey: cert, IndexTTL: ttl}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	live := func() (bool, bool) {
+		p, _ := s.TokensByPrincipal(ctx, alice)
+		c, _ := s.TokensByCert(ctx, cert)
+		return len(p) == 1 && p[0] == k, len(c) == 1 && c[0] == k
+	}
+	put("a", 10*time.Minute)
+	if p, c := live(); !p || !c {
+		t.Fatalf("the put did not index: principal %v cert %v", p, c)
+	}
+	put("b", time.Minute) // never shortens
+	now = now.Add(5 * time.Minute)
+	if p, c := live(); !p || !c {
+		t.Fatalf("a shorter ttl shortened the entry: principal %v cert %v", p, c)
+	}
+	put("c", 30*time.Minute) // extends
+	now = now.Add(20 * time.Minute)
+	if p, c := live(); !p || !c {
+		t.Fatalf("a longer ttl did not extend the entry: principal %v cert %v", p, c)
+	}
+}
+
+// AnUnchangedSetterLeavesTheRevision: a device repeats the level it holds, and an
+// annotation repeats a discriminator and state already recorded; neither is a
+// write, so the context's revision (and an etcd mod_revision) stays put.
+func AnUnchangedSetterLeavesTheRevision(t *testing.T, b Backend) {
+	now := time.Unix(1000, 0)
+	s := b.New(t, func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 1,
+		AuthTime: now, SessionExpires: now.Add(time.Hour)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPrivilege(ctx, k, 15); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AnnotateContext(ctx, k, "h", store.AccountingStateOpen); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.GetContext(ctx, k)
+	if err := s.SetPrivilege(ctx, k, 15); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AnnotateContext(ctx, k, "h", store.AccountingStateOpen); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.GetContext(ctx, k)
+	if after.Rev != before.Rev {
+		t.Fatalf("a repeated setter moved the revision: %v then %v", before.Rev, after.Rev)
+	}
+	if err := s.SetPrivilege(ctx, k, 15); err != nil || after.PrivLvl != 15 {
+		t.Fatalf("level %d (%v)", after.PrivLvl, err)
+	}
+}
+
 func BlobBump(t *testing.T, b Backend) {
 	now := time.Unix(1000, 0)
 	s := b.New(t, func() time.Time { return now })
@@ -1218,8 +1330,8 @@ func TokenIndexExpiresWithItsLongestToken(t *testing.T, b Backend) {
 	s := b.New(t, func() time.Time { return now })
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	_ = s.IndexToken(ctx, "user:alice", "", k, 10*time.Minute)
-	_ = s.IndexToken(ctx, "user:alice", "", k, time.Minute) // never shortens it
+	_ = indexByPut(ctx, s, now, "user:alice", "", k, 10*time.Minute)
+	_ = indexByPut(ctx, s, now, "user:alice", "", k, time.Minute) // never shortens it
 	now = now.Add(5 * time.Minute)
 	if got, _ := s.TokensByPrincipal(ctx, "user:alice"); len(got) != 1 {
 		t.Fatalf("at 5m: %v", got)

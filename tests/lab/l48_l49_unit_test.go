@@ -332,7 +332,7 @@ func TestClaimsAreTheSpecRowsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ row, claim string }{{"L48", l48Claim}, {"L49", l49Claim}} {
+	for _, tc := range []struct{ row, claim string }{{"L48", l48Claim}, {"L49", l49Claim}, {"L90", l90Claim}} {
 		var cell string
 		for _, ln := range strings.Split(string(spec), "\n") {
 			if rest, ok := strings.CutPrefix(ln, "| **"+tc.row+"** | "); ok {
@@ -832,5 +832,88 @@ func TestIDPNames(t *testing.T) {
 		if got := idpNames(rl); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("idpNames = %v, want %v", got, tc.want)
 		}
+	}
+}
+
+// Ruling 9's line is what L90 cell (c) runs and the wrapper may one day run:
+// it saves the host key and sends no credential and no signature.
+func TestL90PrepopulateLineSendsNoCredential(t *testing.T) {
+	args := l90PrepopulateArgs("192.0.2.7", "/h/known_hosts")
+	if n := len(args); args[n-3] != "--" || args[n-2] != "192.0.2.7" || args[n-1] != "exit" {
+		t.Fatalf("the line must end `-- <address> exit`: %v", args)
+	}
+	// the same list examples/oxidized/run_test.go pins for the wrapper: the line measured is the line shipped
+	want := "-F /dev/null -o UserKnownHostsFile=/h/known_hosts -o StrictHostKeyChecking=accept-new -o BatchMode=yes " +
+		"-o PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes " +
+		"-o ConnectTimeout=15 -- 192.0.2.7 exit"
+	if got := strings.Join(args, " "); got != want {
+		t.Fatalf("the measured line changed:\n got %s\nwant %s", got, want)
+	}
+	var opts []string
+	for i := 0; i < len(args)-3; i++ {
+		if args[i] == "-o" {
+			i++
+			opts = append(opts, args[i])
+		}
+	}
+	for _, want := range []string{"StrictHostKeyChecking=accept-new", "BatchMode=yes", "PreferredAuthentications=none",
+		"PubkeyAuthentication=no", "IdentityAgent=none", "IdentitiesOnly=yes"} {
+		if !slicesContains(opts, want) {
+			t.Errorf("missing -o %s: %v", want, args)
+		}
+	}
+	for _, o := range opts {
+		l := strings.ToLower(o)
+		if strings.HasPrefix(l, "stricthostkeychecking=") && o != "StrictHostKeyChecking=accept-new" {
+			t.Errorf("host key checking must be accept-new, got %s", o)
+		}
+		if strings.Contains(l, "password") || strings.Contains(l, "keyboard") || strings.Contains(l, "hostbased") ||
+			strings.HasPrefix(l, "identityfile") || strings.HasPrefix(l, "gssapi") {
+			t.Errorf("an option that could send a credential: %s", o)
+		}
+	}
+	for _, a := range args {
+		if a == "-i" || a == "-A" {
+			t.Errorf("a flag that offers a key or agent: %s", a)
+		}
+	}
+}
+
+func slicesContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestL90SwapHostKeys(t *testing.T) {
+	scan := "# 192.0.2.7:22 SSH-2.0-x\n192.0.2.7 ssh-ed25519 AAAAold1\n# c\n192.0.2.7 ssh-rsa AAAAold2\n"
+	got, err := swapHostKeys(scan, func(typ string) (string, error) { return "NEW-" + typ, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "192.0.2.7 ssh-ed25519 NEW-ssh-ed25519\n192.0.2.7 ssh-rsa NEW-ssh-rsa\n"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	if _, err := swapHostKeys("# only a comment\n", nil); err == nil {
+		t.Error("an empty scan must be an error")
+	}
+}
+
+func TestL90RefusedMeansNoTokenSent(t *testing.T) {
+	if !l90Refused("no_connection", 0) || l90Refused("success", 1) || l90Refused("no_connection", 1) {
+		t.Error("refused is a failed run with no authentication at port49d")
+	}
+}
+
+// A note's Run line says "-dirty" when the tree measured was not the commit named.
+func TestRunLineSaysWhenTheTreeWasDirty(t *testing.T) {
+	if got, want := runLineOf("abc123", false, "eos", "^TestL90$"), "commit `abc123`, `PORT49_LAB_PLATFORMS=eos`, `-run ^TestL90$`"; got != want {
+		t.Errorf("clean: got %q want %q", got, want)
+	}
+	if got := runLineOf("abc123", true, "eos", "^TestL90$"); !strings.HasPrefix(got, "commit `abc123-dirty`") {
+		t.Errorf("dirty: got %q", got)
 	}
 }

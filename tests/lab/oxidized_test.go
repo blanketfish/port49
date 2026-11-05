@@ -47,7 +47,12 @@ type oxidized struct {
 	workload string // c.local/workload: the workload's CA, certificate and key
 	nodes    string // the wrapper's OXIDIZED_NODES file
 	repo     string
-	http     *http.Client
+	// wrapperKnownHosts is the known_hosts the wrapper checks and writes
+	// (OXIDIZED_KNOWN_HOSTS); "" is Oxidized's own, c.local/oxidized/known_hosts. The
+	// wrapper must never reach the operator's ~/.ssh. L90 points it at a decoy so the
+	// wrapper does not fill the file whose absence a cell measures.
+	wrapperKnownHosts string
+	http              *http.Client
 	// secrets are the tokens the wrapper has put in router.db, for the leak
 	// checks of every note and log; they are never printed.
 	secrets []string
@@ -268,12 +273,27 @@ func writeWorkloadPKI(dir, id string, now time.Time) error {
 }
 
 // prepare writes what the overlay mounts, under c.local, before `up`: the
-// workload PKI, and Oxidized's directory with examples/oxidized/config
+// workload PKI (keys outside the tree), and Oxidized's directory with examples/oxidized/config
 // (rest on 127.0.0.1:18888), an empty router.db, and known_hosts filled by
 // ssh-keyscan of the platform's device.
 func (o *oxidized) prepare(c *composeStack) error {
-	o.workload = filepath.Join(c.local, "workload")
+	// port49 workload refuses a key in a directory others can write, and a checkout
+	// under ~/git is one: the workload's keys live in a private directory outside
+	// the tree (labPrivateSub). Only the public CA is copied under c.local, for the
+	// overlay's workload-pki step to install.
+	o.workload = privateDir(o.t, "oxidized-workload-"+filepath.Base(c.dir))
+	o.t.Cleanup(func() { _ = os.RemoveAll(o.workload) })
 	if err := writeWorkloadPKI(o.workload, l48ID, time.Now()); err != nil {
+		return err
+	}
+	ca, err := os.ReadFile(filepath.Join(o.workload, testpki.WorkloadCA))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(c.local, "workload"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(c.local, "workload", testpki.WorkloadCA), ca, 0o644); err != nil {
 		return err
 	}
 	o.dir = filepath.Join(c.local, "oxidized")
@@ -488,6 +508,7 @@ func (o *oxidized) runWrapperRaw(ttl string) (int, string) {
 		"OXIDIZED_NODES="+o.nodes,
 		"OXIDIZED_ROUTER_DB="+filepath.Join(o.dir, "router.db"),
 		"OXIDIZED_REST="+oxidizedREST,
+		"OXIDIZED_KNOWN_HOSTS="+o.wrapperKH(),
 		"PORT49_TTL="+ttl)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
@@ -501,4 +522,12 @@ func (o *oxidized) runWrapperRaw(ttl string) (int, string) {
 		return ee.ExitCode(), errb.String()
 	}
 	return -1, errb.String() + strings.TrimSpace(err.Error())
+}
+
+// wrapperKH is the known_hosts file the wrapper is given.
+func (o *oxidized) wrapperKH() string {
+	if o.wrapperKnownHosts != "" {
+		return o.wrapperKnownHosts
+	}
+	return filepath.Join(o.dir, "known_hosts")
 }

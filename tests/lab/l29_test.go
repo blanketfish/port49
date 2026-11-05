@@ -20,6 +20,10 @@ import (
 	"github.com/blanketfish/port49/tests/lab/labpcap"
 )
 
+// l29CapturePrefix names each reload phase's capture. L88's cell g runs the same phase on the
+// platforms L29 did not measure and sets its own, so it never overwrites L29's evidence.
+var l29CapturePrefix = "L29-reload-"
+
 const l29ReloadClaim = "What a device does when port49d resets an open connection at its first packet after a " +
 	"reload removed, renamed, re-platformed, refused or re-keyed its device, each reload but the re-key a sync " +
 	"through the inventory service: the command in flight, the next token login and break-glass (spec §15 L29)."
@@ -167,7 +171,7 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 		fail("%s: the sync restoring the lab source neither published it nor found it current: %s", ph.name, oneLine(out))
 		return b.String() + "Not measured: the lab source could not be restored.\n\n"
 	}
-	stop := l.capture(t, "L29-reload-"+ph.name)
+	stop := l.capture(t, l29CapturePrefix+ph.name)
 	defer stop()
 	pr.at(t, "phase %s: port49d restarted on the service config, probing until the device asks it", ph.name)
 	live := l.l28Live(t, l.serviceConfig(t, li, policy))
@@ -861,7 +865,10 @@ type l29Packet struct {
 
 // l29Packets reads the capture at path for every TCP packet between addr and
 // port 49, in capture order.
-func l29Packets(path, addr string) ([]l29Packet, error) {
+func l29Packets(path, addr string) ([]l29Packet, error) { return l29PacketsOn(path, addr, 49) }
+
+// l29PacketsOn is l29Packets for a server port other than 49: L88's RFC 9887 pass dials 300.
+func l29PacketsOn(path, addr string, port uint16) ([]l29Packet, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -877,11 +884,11 @@ func l29Packets(path, addr string) ([]l29Packet, error) {
 		if !ok {
 			continue
 		}
-		p := l29Packet{fl: fl, fromDevice: fl.Src.String() == addr && fl.DstPort == 49}
+		p := l29Packet{fl: fl, fromDevice: fl.Src.String() == addr && fl.DstPort == port}
 		switch {
 		case p.fromDevice:
 			p.port = fl.SrcPort
-		case fl.Dst.String() == addr && fl.SrcPort == 49:
+		case fl.Dst.String() == addr && fl.SrcPort == port:
 			p.port = fl.DstPort
 		default:
 			continue

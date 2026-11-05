@@ -60,6 +60,14 @@ func (k *Key) Signs() int {
 	return k.signs
 }
 
+// Unlocks is how many times Unlock was called: a setup or status that reads
+// the token must leave it at 0 (no PIN is ever given).
+func (k *Key) Unlocks() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.pinSeen
+}
+
 // Sign counts the call, runs the OnSign hook and signs. A pulled token
 // signs nothing: ErrKeyAbsent, and State says Absent from then on.
 func (k *Key) Sign(rd io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {

@@ -4,6 +4,7 @@ package systemd
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/blanketfish/port49/internal/testpki"
 	"github.com/blanketfish/port49/tests/shapes/l84"
 	"github.com/blanketfish/port49/tests/shapes/shapetest"
+	"github.com/blanketfish/port49/tests/systemd/sdtest"
 )
 
 // TestL84Credentials is spec §15 L84 cell (a) and its (c): systemd LoadCredential= against
@@ -21,8 +23,8 @@ import (
 // It writes its cells to the JSON file named by PORT49_L84_CELLS_OUT, which the lab test
 // (tests/lab/l84_test.go, PORT49_L84_A_CELLS) merges into the note; `make lab-l84-systemd` runs it.
 //
-// (a) A drop-in gives port49d LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1, port49d.yaml names
-// key_secret_refs.file_dir /run/credentials/port49d.service and the policy names the file there. It
+// (a) A drop-in gives port49d LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1, port49d.yaml's key_secret_refs.file_dir is
+// /run/credentials/port49d.service (the shipped line, its directory replaced) and the policy names the file there. It
 // records stat of the directory and the file, the start's result and a second start's; PASS iff both
 // starts are ready and a login keyed with the credential passes.
 // (c) tacacs_v2 as a second LoadCredential= line, a policy naming it, systemctl daemon-reload and no
@@ -54,12 +56,54 @@ func TestL84Credentials(t *testing.T) {
 	a := l84.Cell{ID: "a", Verdict: l84.Fail}
 	a.Rows = append(a.Rows, l84.Row{Case: "systemd", Observation: strings.SplitN(b.sh("systemctl --version"), "\n", 2)[0]})
 
-	// The config and the policy name the credentials directory, once, before the first start.
-	daemon := b.sh("cat /etc/port49/port49d.yaml")
-	if strings.Contains(daemon, "key_secret_refs") {
-		t.Fatal("INVALID: the shipped port49d.yaml already names key_secret_refs")
+	// What systemd renders for User=port49d, measured apart from port49d by two one-shot units that
+	// print the credentials directory they are given: l84-bare (User= and LoadCredential= only) and
+	// l84-hard (the shipped port49d.service, its ExecStart replaced, with the same LoadCredential=).
+	// If bare shows the directory and hard does not, the shipped hardening hides it; if neither does,
+	// this systemd cannot render credentials here. The output holds paths, owners and modes only.
+	b.put("/usr/local/bin/l84-probe.sh", "root:root", "0755", `#!/bin/sh
+echo "CREDENTIALS_DIRECTORY=[$CREDENTIALS_DIRECTORY]"
+[ -d "$CREDENTIALS_DIRECTORY" ] && echo cred_dir=yes || echo cred_dir=no
+[ -e "$CREDENTIALS_DIRECTORY/tacacs_v1" ] && echo cred_file=yes || echo cred_file=no
+ls -ldn /run/credentials /run/credentials/* 2>&1
+ls -ln "$CREDENTIALS_DIRECTORY" 2>&1
+id
+`)
+	b.put("/etc/systemd/system/l84-bare.service", "root:root", "0644", "[Service]\nType=oneshot\nUser=port49d\nGroup=port49d\n"+
+		"LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\nExecStart=/bin/sh /usr/local/bin/l84-probe.sh\n")
+	b.sh(`frag=$(systemctl show port49d -p FragmentPath --value) && sed -e 's|^ExecStart=.*|ExecStart=/bin/sh /usr/local/bin/l84-probe.sh|' ` +
+		`-e 's|^Type=simple|Type=oneshot|' -e '/^ExecReload=/d;/^Restart=/d;/^RestartSec=/d;/^\[Install\]/,$d' "$frag" ` +
+		`> /etc/systemd/system/l84-hard.service && echo 'LoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1' >> /etc/systemd/system/l84-hard.service`)
+	probe := func(name string) string {
+		out := b.sh("systemctl daemon-reload; systemctl start " + name + ".service 2>&1; " +
+			"echo \"start result: $(systemctl show " + name + " -p Result --value) status $(systemctl show " + name + " -p ExecMainStatus --value)\"; " +
+			"journalctl -u " + name + ".service --no-pager -o cat 2>&1 || true")
+		return strings.Join(strings.Fields(strings.ReplaceAll(strings.TrimSpace(out), "\n", " ; ")), " ")
 	}
-	b.put("/etc/port49/port49d.yaml", "root:root", "0644", daemon+"\nkey_secret_refs: {file_dir: "+credDir+"}\n")
+	bareOut := probe("l84-bare")
+	a.Rows = append(a.Rows,
+		l84.Row{Case: "what systemd renders: User=port49d with LoadCredential= only (l84-bare)", Observation: bareOut},
+		l84.Row{Case: "what systemd renders: the shipped port49d.service's hardening, same LoadCredential= (l84-hard)", Observation: probe("l84-hard")})
+	// A systemd that renders no credentials here (a container's) cannot answer L84: the cells are
+	// INVALID for the platform, not FAIL for the product, and the runner's own systemd is measured
+	// instead (TestL84Host). A container that does render them goes on to measure.
+	if !sdtest.Rendered(bareOut) {
+		a.Verdict = l84.Invalid
+		a.Rows = append(a.Rows, l84.Row{Case: "verdict", Observation: "INVALID: the platform renders no credentials (l84-bare): systemd sets CREDENTIALS_DIRECTORY and the directory or file is not there; port49d was not started with it"})
+		c := l84.Cell{ID: "c-systemd", Verdict: l84.Invalid, Rows: []l84.Row{{Case: "state", Observation: "INVALID: the platform renders no credentials (l84-bare)"}}}
+		if err := l84.Save(out, []l84.Cell{a, c}); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	// The config and the policy name the credentials directory, once, before the first start. The
+	// shipped config already names key_secret_refs (file_dir /etc/port49/keys): that one line's
+	// directory is replaced, and a drift in the shipped line is INVALID.
+	daemon, err := sdtest.KeyDir(b.sh("cat /etc/port49/port49d.yaml"), credDir)
+	if err != nil {
+		t.Fatalf("INVALID: %v", err)
+	}
+	b.put("/etc/port49/port49d.yaml", "root:root", "0644", daemon)
 	const oldRef = "file:/etc/port49/keys/tacacs_v1"
 	if !strings.Contains(u.policy, oldRef) {
 		t.Fatalf("INVALID: the policy no longer names %s", oldRef)
@@ -68,17 +112,50 @@ func TestL84Credentials(t *testing.T) {
 	b.put("/etc/port49/policy.yaml", "root:root", "0644", policy)
 	b.put(dropIn+"/l84.conf", "root:root", "0644", "[Service]\nLoadCredential=tacacs_v1:/etc/port49/keys/tacacs_v1\n")
 	b.sh("systemctl daemon-reload && systemctl restart port49d")
-	shapetest.Ready(t, "127.0.0.1:9049")
-	first := loggedIn(u.dev)
-	a.Rows = append(a.Rows,
-		l84.Row{Case: "stat of the credentials directory and file (owner:group mode type)", Observation: stat()},
-		l84.Row{Case: "first start", Observation: "ready; a login keyed with the credential: " + yes(first)})
-	b.sh("systemctl restart port49d")
-	shapetest.Ready(t, "127.0.0.1:9049")
-	second := loggedIn(u.dev)
-	a.Rows = append(a.Rows,
-		l84.Row{Case: "second start", Observation: "ready; a login keyed with the credential: " + yes(second)},
-		l84.Row{Case: "stat after the second start", Observation: stat()})
+	a.Rows = append(a.Rows, l84.Row{Case: "stat of the credentials directory and file (owner:group mode type), when port49d was restarted", Observation: stat()})
+	// A bounded wait: a start that never becomes ready is the measurement, not an invalid run.
+	ready := func() bool {
+		deadline := time.Now().Add(90 * time.Second)
+		for ; time.Now().Before(deadline); time.Sleep(2 * time.Second) {
+			if resp, err := http.Get("http://127.0.0.1:9049/readyz"); err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// refusal is a category from port49d's own error words, never the journal line.
+	refusal := func() string {
+		for _, r := range sdtest.Refusals {
+			n := strings.TrimSpace(b.sh("journalctl -u port49d --no-pager -o cat | grep -i -F -- '" + r.Phrase + "' | grep -c -F -- '" + r.Also + "' || true"))
+			if n != "" && n != "0" {
+				return r.Category
+			}
+		}
+		return "no refusal of a secret file or directory in port49d's words"
+	}
+	unit := func() string {
+		m := b.show("port49d", "ExecMainStatus", "Result", "NRestarts", "ActiveState")
+		return fmt.Sprintf("ActiveState=%s Result=%s ExecMainStatus=%s NRestarts=%s",
+			m["ActiveState"], m["Result"], m["ExecMainStatus"], m["NRestarts"])
+	}
+	first, second := false, false
+	if ready() {
+		first = loggedIn(u.dev)
+		a.Rows = append(a.Rows, l84.Row{Case: "first start", Observation: "ready; a login keyed with the credential: " + yes(first)})
+		b.sh("systemctl restart port49d")
+		if ready() {
+			second = loggedIn(u.dev)
+			a.Rows = append(a.Rows, l84.Row{Case: "second start", Observation: "ready; a login keyed with the credential: " + yes(second)},
+				l84.Row{Case: "stat after the second start", Observation: stat()})
+		} else {
+			a.Rows = append(a.Rows, l84.Row{Case: "second start", Observation: "not ready in 90 s: " + unit() + "; " + refusal()})
+		}
+	} else {
+		a.Rows = append(a.Rows, l84.Row{Case: "first start", Observation: "not ready in 90 s: " + unit() + "; " + refusal()})
+	}
 	if first && second {
 		a.Verdict = l84.Pass
 	}

@@ -146,6 +146,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 			return withHeldConn(ctx, acceptedAt(c, b.Now), mappedOf(c))
 		},
 		ConnState: func(c net.Conn, s http.ConnState) {
+			connState(c, s)
 			closeIdleWithoutCertificate(c, s)
 			b.connClosed(c, s)
 		},
@@ -287,3 +288,52 @@ func ReadAnchor(path string) (*x509.Certificate, error) {
 // readTimeout is Server's ReadTimeout, swapped in tests. A mint request is a
 // few hundred bytes; thirty seconds is generous for one.
 var readTimeout = 30 * time.Second
+
+// writeTimeout bounds one response write, swapped in tests. A response is a
+// few kilobytes, so this is generous; it exists for a peer that vanished
+// mid-answer, whose connection would otherwise count as busy to the principal
+// cap until TCP gave up (about 15 minutes), and four of them would refuse
+// their owner (decision 32). It is set on every write, and not as the
+// server's WriteTimeout: that one starts when the request is read and would
+// have to outlast the longest handler (a mint's 10 s hold, an import's long
+// body read, admin_api.go). When a write fails, crypto/tls spends up to 5 s
+// on its close_notify before the connection is gone.
+var writeTimeout = 15 * time.Second
+
+// boundWrites gives each write of a response a deadline of writeTimeout from
+// that write (Write, WriteHeader or Flush). The deadline is per
+// Write, so it is the total bound only because every broker response is a
+// single Write; a handler that streams in many writes would need a total
+// bound of its own. Flush is passed through (answerRefusal flushes its answer
+// before the revocation closes the connection) and Unwrap reaches the real
+// writer for http.ResponseController; no other optional interface is asserted
+// on a broker response writer.
+func boundWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&boundedWriter{ResponseWriter: w, rc: http.NewResponseController(w)}, r)
+	})
+}
+
+type boundedWriter struct {
+	http.ResponseWriter
+	rc *http.ResponseController
+}
+
+func (b *boundedWriter) bound() { _ = b.rc.SetWriteDeadline(time.Now().Add(writeTimeout)) }
+
+func (b *boundedWriter) WriteHeader(code int) {
+	b.bound()
+	b.ResponseWriter.WriteHeader(code)
+}
+
+func (b *boundedWriter) Write(p []byte) (int, error) {
+	b.bound()
+	return b.ResponseWriter.Write(p)
+}
+
+func (b *boundedWriter) Flush() {
+	b.bound()
+	_ = b.rc.Flush()
+}
+
+func (b *boundedWriter) Unwrap() http.ResponseWriter { return b.ResponseWriter }

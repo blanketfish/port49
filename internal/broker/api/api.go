@@ -59,6 +59,16 @@ type Config struct {
 	// PerLoginMFA is set when this broker verifies at least one per-login
 	// method (plan 9c; decision 45): the methods it verifies now.
 	PerLoginMFA *MFAConfig `json:"per_login_mfa,omitempty"`
+	// HardwareKeyTouch is set when this broker verifies hardware_key_touch:
+	// the attestation roots it checks against, so `port49 hwkey` checks a
+	// user's key against the broker's own (decision 55 ruling 16).
+	HardwareKeyTouch *HardwareKeyTouchConfig `json:"hardware_key_touch,omitempty"`
+}
+
+// HardwareKeyTouchConfig is GET /v1/config's hardware_key_touch. The roots are
+// public certificates, never secrets.
+type HardwareKeyTouchConfig struct {
+	AttestationRootsPEM string `json:"attestation_roots_pem"`
 }
 
 // OIDCProvider is one human OIDC verifier as GET /v1/config names it.

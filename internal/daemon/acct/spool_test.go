@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1267,5 +1269,219 @@ func TestShutdownLogsHeldGapsWithoutTheLock(t *testing.T) {
 	sp.logHeldGaps()
 	if !probe.wrote || probe.held {
 		t.Fatalf("wrote %v, under gapMu %v", probe.wrote, probe.held)
+	}
+}
+
+// groupSpool is a spool whose fsync is hook, started on a fresh file.
+func groupSpool(t *testing.T, hook func(*os.File) error) (*Spool, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	sp, err := NewSpool(1024, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.syncFile = hook
+	return sp, path
+}
+
+// offerAll runs n offers at once and returns each one's error.
+func offerAll(sp *Spool, n int) []error {
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: fmt.Sprintf("t%d", i)})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	return errs
+}
+
+func fileLines(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.Count(b, []byte("\n"))
+}
+
+// One fsync a record capped accounting at the disk's fsync rate and took
+// port49d dark on an NVMe (load run 2): offers that arrive while a sync runs
+// share the next one.
+func TestConcurrentOffersShareAnFsync(t *testing.T) {
+	var syncs atomic.Int32
+	sp, path := groupSpool(t, func(f *os.File) error {
+		syncs.Add(1)
+		time.Sleep(5 * time.Millisecond)
+		return f.Sync()
+	})
+	for i, err := range offerAll(sp, 64) {
+		if err != nil {
+			t.Fatalf("offer %d: %v", i, err)
+		}
+	}
+	if n := fileLines(t, path); n != 64 {
+		t.Fatalf("want 64 lines, got %d", n)
+	}
+	if n := syncs.Load(); n >= 64 {
+		t.Fatalf("want fewer than 64 syncs, got %d", n)
+	}
+}
+
+func TestAFailedGroupSyncFailsEveryOfferInIt(t *testing.T) {
+	var syncs atomic.Int32
+	sp, _ := groupSpool(t, func(f *os.File) error {
+		if syncs.Add(1) == 1 {
+			return errors.New("injected sync failure")
+		}
+		return f.Sync()
+	})
+	// Stand in for a leader that is mid-sync: the 16 offers queue behind it, and
+	// lead() then writes them as the one batch, whose sync fails.
+	sp.qmu.Lock()
+	sp.flushing = true
+	sp.qmu.Unlock()
+	errs := make(chan error, 16)
+	for i := range 16 {
+		go func() {
+			errs <- sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: fmt.Sprintf("q%d", i)})
+		}()
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		sp.qmu.Lock()
+		n := len(sp.queue)
+		sp.qmu.Unlock()
+		if n == 16 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of 16 offers queued", n)
+		}
+	}
+	before := testutil.ToFloat64(sp.metrics.SpoolDrops.WithLabelValues(dropOfferRefused))
+	sp.lead(&offerWaiter{})
+	for range 16 {
+		if err := <-errs; !errors.Is(err, ErrSpoolFull) {
+			t.Fatalf("an offer in the failed batch got %v, want ErrSpoolFull", err)
+		}
+	}
+	if got := testutil.ToFloat64(sp.metrics.SpoolDrops.WithLabelValues(dropOfferRefused)) - before; got != 16 {
+		t.Fatalf("drops rose by %v, want 16", got)
+	}
+	sp.mu.Lock()
+	need := sp.needNewline
+	sp.mu.Unlock()
+	if !need {
+		t.Fatal("needNewline not set after the failed sync")
+	}
+}
+
+// No Offer returns before a sync that covers its line has finished.
+func TestNoOfferReturnsBeforeItsBytesAreSynced(t *testing.T) {
+	var mu sync.Mutex
+	var synced int64
+	sp, path := groupSpool(t, func(f *os.File) error {
+		time.Sleep(2 * time.Millisecond)
+		fi, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if err := f.Sync(); err != nil {
+			return err
+		}
+		mu.Lock()
+		synced = max(synced, fi.Size())
+		mu.Unlock()
+		return nil
+	})
+	var wg sync.WaitGroup
+	for i := range 48 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: fmt.Sprintf("t%d", i)}); err != nil {
+				t.Error(err)
+				return
+			}
+			mu.Lock()
+			covered := synced
+			mu.Unlock()
+			b, _ := os.ReadFile(path)
+			idx := bytes.Index(b, []byte(fmt.Sprintf(`"task_id":"t%d"`, i)))
+			if idx < 0 {
+				t.Errorf("offer %d returned with no line in the file", i)
+				return
+			}
+			end := idx + bytes.IndexByte(b[idx:], '\n') + 1
+			if int64(end) > covered {
+				t.Errorf("offer %d returned with its line ending at %d, synced only to %d", i, end, covered)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// syncObservations is the count and sum of port49_accounting_spool_sync_seconds.
+func syncObservations(t *testing.T, reg *prometheus.Registry) (uint64, float64) {
+	t.Helper()
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() == "port49_accounting_spool_sync_seconds" {
+			h := f.GetMetric()[0].GetHistogram()
+			return h.GetSampleCount(), h.GetSampleSum()
+		}
+	}
+	t.Fatal("port49_accounting_spool_sync_seconds is not registered")
+	return 0, 0
+}
+
+// Each group-commit sync is observed once, however many offers it carried, and
+// the observation covers the fsync (the spool's disk is what an ack waits on).
+func TestEachGroupSyncIsObservedInTheSyncHistogram(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	sp, err := NewSpool(1024, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.syncFile = func(f *os.File) error { time.Sleep(20 * time.Millisecond); return f.Sync() }
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	n, sum := syncObservations(t, reg)
+	if n != 1 || sum < 0.02 {
+		t.Fatalf("after one offer on a new file: %d observations, sum %.4f s", n, sum)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := syncObservations(t, reg); n != 2 {
+		t.Fatalf("after two offers one at a time: %d observations", n)
+	}
+}
+
+// A sync that fails after the disk stalled is still disk latency, so it is
+// observed, and only once.
+func TestAFailedGroupSyncIsObservedOnce(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	sp, err := NewSpool(1024, filepath.Join(t.TempDir(), "overflow.jsonl"), decision.NewJSONLines(&bytes.Buffer{}), metrics.New(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.syncFile = func(*os.File) error { time.Sleep(20 * time.Millisecond); return errors.New("EIO") }
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err == nil {
+		t.Fatal("offer succeeded over a failing sync")
+	}
+	if n, sum := syncObservations(t, reg); n != 1 || sum < 0.02 {
+		t.Fatalf("%d observations, sum %.4f s", n, sum)
 	}
 }

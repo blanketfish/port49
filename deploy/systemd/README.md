@@ -265,10 +265,18 @@ trial.
 ## etcd
 
 The two examples in `examples/` are for your etcd hosts. The three `etcd-N.yaml` files each set
-`auto-compaction-mode: periodic`, `auto-compaction-retention: "1h"` and an 8 GiB quota, with TLS
+`auto-compaction-mode: periodic`, `auto-compaction-retention: "10m"` and an 8 GiB quota, with TLS
 and client-certificate auth. Install etcd 3.6.15 or later at `/usr/local/bin/etcd`, create the user
 (`sysusers-etcd.conf`) and its data directory (`tmpfiles-etcd.conf`, `/var/lib/etcd` 0700; it also makes `/etc/etcd/pki` for the certificates), copy `etcd@.service`, and `systemctl enable --now etcd@etcd-1` on the first host, and so
-on. Then apply the roles once per cluster:
+on.
+
+**etcd's disk.** etcd needs a disk with sustained WAL fsync p99 under 10 ms (etcd's own guidance;
+datacenter NVMe or a cloud SSD volume). A drive that stalls pushes port49's store calls past the
+500 ms call timeout in bursts. The `etcd_disk_slow` alert (`deploy/alerts`) fires when the WAL fsync
+or backend commit p99 stays over its bound for 10 minutes. On a GCE pd-ssd (400 GB, declared by the operator) the load run passed every cell with a WAL fsync mean of 0.72 to 0.86 ms (`tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md`); beehive's QLC drive failed it (`tests/lab/results/load-beehive.md`).
+port49d's accounting spool directory needs the same, under 10 ms (port49's alert threshold, not etcd's figure): each accounting record is acked only after an fsync, so a slow-fsync disk caps accounting latency. The `port49_accounting_spool_disk_slow` alert watches it.
+
+Then apply the roles once per cluster:
 
 ```sh
 port49d store-roles --config /etc/port49/port49d.yaml --broker-config /etc/port49/port49-broker.yaml
@@ -319,7 +327,28 @@ check on a read-only mount, since nothing there can change. `ProtectSystem=stric
 read-only. The units set `NoNewPrivileges=yes`, `PrivateTmp=yes`, `ProtectHome=yes` and a capability
 bound, which leave `/etc` writable. The unit test (`tests/shapes`) holds each of these.
 
-`LoadCredential=` is unmeasured (L84, whose systemd cells are written and not yet run): it is not offered for a device key.
+### `LoadCredential=` for the encryption key
+
+Measured (lab L84, `tests/lab/results/L84-systemd-docker.md`: systemd 255, Ubuntu 24.04, the shipped
+unit's hardening): port49d reads a file that systemd renders from `LoadCredential=`. systemd gives the
+credential `root:root 0440` with an ACL granting only `port49d`, in a directory with an ACL too, and
+the fence reads the ACL's entries, so it passes. Use it for the encryption key, so the file on disk
+need not be readable by `port49d`:
+
+1. In a drop-in (`systemctl edit port49d`), add
+   `LoadCredential=encryption.key:/etc/port49/secrets/encryption.key`; systemd reads the source as root.
+2. In `/etc/port49/port49d.yaml`, set `encryption.current.secret_ref` to
+   `file:/run/credentials/port49d.service/encryption.key`. Leave `key_secret_refs.file_dir` as
+   shipped: the credentials directory is not a place a policy may name a device key from.
+
+Device keys stay in `/etc/port49/keys`: adding a credential needs `systemctl restart port49d`. systemd
+refuses `systemctl set-property LoadCredential=`, and a drop-in with `systemctl daemon-reload` does
+not reach the running unit (its credentials directory keeps the files it started with). A restart
+closes every session in flight, so adding a device credential that way would cost those sessions
+each time. A host whose systemd renders no credentials directory (a container's did not) cannot use this.
+
+This recipe is `port49d`'s alone. The broker's copy of the encryption key stays the file readable by
+`port49-broker`: L84 did not measure the broker unit's shape, so `LoadCredential=` is not claimed for it.
 
 ## Rotating the `encryption:` key
 
@@ -353,6 +382,7 @@ try starts.
 | A secret file missing or unreadable | `config: encryption.current.secret_ref (id "e1") file:/etc/port49/secrets/encryption.key: open ...` naming the file; a key file: `config: keys.k version 1 secret_ref file:...: ...` | `journalctl -u port49d -b` | create it, owned and moded as the table above |
 | The fence refuses a directory | `...is mode drwxrwxr-x, writable by others than its owner; whoever can write it decides who gets access - chmod go-w it ...` | same | `chmod go-w` the directory the line names, or an ancestor of it |
 | A key readable by a group the service is not in | `...is group-readable by gid N, which this process is not in (gid M); members of that group could read the secret too - chgrp it to the service's group ...` | same | `chgrp port49d` (or `port49-broker`) the file the line names. `chmod 0600` only if the service's user owns it: on the shipped `root:port49d 0440` file it leaves the key readable by root alone. A group such as Debian's `ssl-cert` is refused |
+| A secret file's POSIX ACL names someone else | `...carries the ACL entry user:N:r--, a user that is neither this process's (uid M) nor root; it could read the secret too - remove it with setfacl -x u:N on the file (setfacl -b clears every extended entry)` | same | run the `setfacl` the line prints (`-x u:N` or `g:N` for a named entry; `-m g::-` or `-m o::-` for a base one) on the file it names, or `setfacl -b` it. port49d reads the ACL, not the mode's group bits (which are the ACL mask): a file with `group::---` and only port49d named is accepted |
 | The issuing CA differs from the store's | `issuance: this broker's issuing CA (...) is not the one the store records (...)` | `journalctl -u port49-broker -b` | copy `issuing-ca.pem` and `.key` from a broker that holds it |
 | etcd below the floor | `etcd at <url> is version <v>, below the floor port49 needs (3.4.24, 3.5.8 or 3.6): ...` | `journalctl -u port49d -b` | upgrade the member |
 | etcd unreachable at boot | a store refusal after `start_timeout` (30 s unless you set it), then the unit restarts | `journalctl -u port49d -b` | nothing: it retries every ten seconds; start etcd |

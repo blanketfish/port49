@@ -431,7 +431,7 @@ func l68Guard(t *testing.T) {
 func l68Reference(t *testing.T) []string {
 	t.Helper()
 	set, _ := adapter.Set("1.2.0")
-	ref, err := adapter.ReferenceClasses(set["juniper_junos"], 12*time.Hour)
+	ref, err := adapter.ReferenceClasses(set["juniper_junos"], adapter.ClassAges{Default: 12 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -557,3 +557,81 @@ func TestNothingSecretIsPrinted(t *testing.T) {
 	// The agent's own log, the broker's decision log: the same.
 	m.sink.check(t, m.logs.String())
 }
+
+// statusStub answers the agent's /status with st, and any other request with
+// the requirement req (a 428), as the prove path reads them.
+func statusStub(t *testing.T, st agent.Status, req api.PerLoginMFA) string {
+	t.Helper()
+	return agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/status" {
+			_ = json.NewEncoder(w).Encode(st)
+			return
+		}
+		w.WriteHeader(http.StatusPreconditionRequired)
+		_ = json.NewEncoder(w).Encode(req)
+	}))
+}
+
+// runToken runs `port49 token core-sw01` against the stub at sock, no terminal
+// unless term, and returns the exit code and stderr.
+func runToken(t *testing.T, sock string, term bool) (int, string) {
+	t.Helper()
+	withTerminal(t, term)
+	var out, errb bytes.Buffer
+	t.Setenv("PORT49_TEST_AGENT_SOCKET", sock)
+	code := run([]string{"token", "core-sw01"}, &out, &errb)
+	return code, errb.String()
+}
+
+// Where a user meets the missing key, the remedy is chosen by where the session
+// key lives (Status.SessionKeyStore), and names `port49 hwkey setup`
+// (decision 55 ruling 16).
+func TestTouchOnlyRefusalNamesHwkeySetup(t *testing.T) {
+	req := coreRequirement()
+	req.Methods = []string{"hardware_key_touch"}
+	sock := statusStub(t, agent.Status{SessionKeyStore: "pkcs11"}, req)
+	code, errb := runToken(t, sock, false)
+	const want = "this device accepts only hardware_key_touch, and the agent has no touch key it can use: " +
+		"run `port49 hwkey setup`, then `port49 login` again"
+	if code != 1 || !strings.Contains(errb, want) {
+		t.Fatalf("exit %d, stderr %q lacks %q", code, errb, want)
+	}
+}
+
+func TestTouchOnlyRefusalForATPMKey(t *testing.T) {
+	req := coreRequirement()
+	req.Methods = []string{"hardware_key_touch"}
+	for _, store := range []string{"tpm", "file"} {
+		sock := statusStub(t, agent.Status{SessionKeyStore: store}, req)
+		code, errb := runToken(t, sock, false)
+		const want = "this device accepts only hardware_key_touch, and hardware_key_touch needs both keys on one YubiKey; " +
+			"your session key is not on one: run `port49 hwkey setup`, then `port49 login` again"
+		if code != 1 || !strings.Contains(errb, want) {
+			t.Fatalf("%s: exit %d, stderr %q lacks %q", store, code, errb, want)
+		}
+	}
+}
+
+func TestUnusableTouchKeyLineNamesHwkeySetup(t *testing.T) {
+	req := coreRequirement()
+	req.Methods = []string{"hardware_key_touch"}
+	sock := statusStub(t, agent.Status{SessionKeyStore: "pkcs11", TouchKeyUnusable: "touch_key did not open: no token matches"}, req)
+	_, errb := runToken(t, sock, false)
+	const want = "port49: touch_key did not open: no token matches; run `port49 hwkey setup`\n"
+	if !strings.Contains(errb, want) {
+		t.Fatalf("stderr %q lacks %q", errb, want)
+	}
+}
+
+func TestUnusableTouchKeyLineForATPMKey(t *testing.T) {
+	req := coreRequirement()
+	req.Methods = []string{"hardware_key_touch"}
+	sock := statusStub(t, agent.Status{SessionKeyStore: "tpm", TouchKeyUnusable: "not on a PKCS#11 token"}, req)
+	_, errb := runToken(t, sock, false)
+	const want = "port49: not on a PKCS#11 token; hardware_key_touch needs both keys on one YubiKey; " +
+		"run `port49 hwkey setup` to check yours\n"
+	if !strings.Contains(errb, want) {
+		t.Fatalf("stderr %q lacks %q", errb, want)
+	}
+}

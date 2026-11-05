@@ -97,6 +97,24 @@ var KeyRefShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 // KeyRefShapeRule is KeyRefShape in words, for the refusal.
 const KeyRefShapeRule = "lowercase letters, digits and _, starting with a letter; at most 64"
 
+// ReservedKeyRef is the key_ref label value the key series report for every
+// key held by exactly one device, so no metric label names one device
+// (metrics.SingleDeviceKeyRef). No key_ref may be named it.
+const ReservedKeyRef = "single_device"
+
+// KeyRefRefusal is why ref cannot name a key, or "" when it can: it is not a
+// name (KeyRefShape) or it is ReservedKeyRef. The one check every site that
+// reads a key_ref calls; the text never holds ref, which may be a secret.
+func KeyRefRefusal(ref string) string {
+	switch {
+	case !KeyRefShape.MatchString(ref):
+		return "not a valid key_ref name (" + KeyRefShapeRule + ")"
+	case ref == ReservedKeyRef:
+		return "the reserved key_ref name " + ReservedKeyRef + ": the key metrics report every single-device key under it"
+	}
+	return ""
+}
+
 // Tier is which rule assigned a device its key_ref, most specific first
 // (spec §10, "Key group matching is deterministic").
 type Tier string
@@ -266,10 +284,11 @@ func transportRefusal(d Device) string {
 // or it is a key_ref name (KeyRefShape). The pin is not in the text: one that
 // is not a name is most likely a secret pasted where the name goes.
 func pinRefusal(d Device) string {
-	if d.KeyRef == "" || KeyRefShape.MatchString(d.KeyRef) {
+	if d.KeyRef == "" || KeyRefRefusal(d.KeyRef) == "" {
 		return ""
 	}
-	return "pins a key_ref that is not a valid key_ref name (" + KeyRefShapeRule + "), so it fails closed; " +
+	return "pins a key_ref that is not a valid key_ref name (" + KeyRefShapeRule + ") or is the reserved name " +
+		ReservedKeyRef + ", so it fails closed; " +
 		"the pin is not shown, since it may be a secret pasted there (spec §10)"
 }
 
@@ -492,9 +511,9 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 		inv.Devices = append(inv.Devices, dev)
 	}
 	for i, g := range f.KeyGroups {
-		if g.KeyRef != "" && !KeyRefShape.MatchString(g.KeyRef) {
-			return Inventory{}, fmt.Errorf("admission: %skey_groups[%d]: key_ref is not a valid key_ref name (%s): "+
-				"it names the key, never holds it", at, i, KeyRefShapeRule)
+		if g.KeyRef != "" && KeyRefRefusal(g.KeyRef) != "" {
+			return Inventory{}, fmt.Errorf("admission: %skey_groups[%d]: key_ref is not a valid key_ref name (%s) "+
+				"or is the reserved name %s: it names the key, never holds it", at, i, KeyRefShapeRule, ReservedKeyRef)
 		}
 		kg := KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
 		if g.Match.CIDR != "" {

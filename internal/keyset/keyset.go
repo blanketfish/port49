@@ -137,7 +137,7 @@ func Check(sets map[string]Set, raw []byte) (map[string]Set, error) {
 func checkNames(sets map[string]Set, raw []byte) error {
 	bad := false
 	for ref := range sets {
-		if !admission.KeyRefShape.MatchString(ref) {
+		if admission.KeyRefRefusal(ref) != "" {
 			bad = true
 			break
 		}
@@ -154,7 +154,7 @@ func checkNames(sets map[string]Set, raw []byte) error {
 				continue
 			}
 			for j, keys := 0, top.Content[i+1]; j+1 < len(keys.Content); j += 2 {
-				if !admission.KeyRefShape.MatchString(keys.Content[j].Value) && (line == 0 || keys.Content[j].Line < line) {
+				if admission.KeyRefRefusal(keys.Content[j].Value) != "" && (line == 0 || keys.Content[j].Line < line) {
 					line = keys.Content[j].Line
 				}
 			}
@@ -164,8 +164,8 @@ func checkNames(sets map[string]Set, raw []byte) error {
 	if line > 0 {
 		where = fmt.Sprintf("a key under keys: on line %d", line)
 	}
-	return fmt.Errorf("%s is not a valid key_ref name (%s): it names the key, never holds it",
-		where, admission.KeyRefShapeRule)
+	return fmt.Errorf("%s is not a valid key_ref name (%s) or is the reserved name %s: it names the key, never holds it",
+		where, admission.KeyRefShapeRule, admission.ReservedKeyRef)
 }
 
 // Notices say, for each accept version, that it has no retire_after or that

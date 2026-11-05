@@ -1,0 +1,110 @@
+[
+  {
+    "ID": "a",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "the repository key in the cluster is the one generated for this run",
+        "Observation": "yes"
+      },
+      {
+        "Case": "applying the example Schedule started no backup (skipImmediately skipped the first run)",
+        "Observation": "yes"
+      },
+      {
+        "Case": "the lab's etcd shares the release's namespace",
+        "Observation": "yes: the Schedule names both namespaces, the lab applies it with the one"
+      },
+      {
+        "Case": "the backup's phase",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "pod volume backups completed",
+        "Observation": "4 of the chart's 4 data volumes, 7 in all"
+      },
+      {
+        "Case": "the README's hostPath check (run verbatim) printed",
+        "Observation": "nothing"
+      },
+      {
+        "Case": "the README's per-claim check (run verbatim) printed",
+        "Observation": "nothing"
+      },
+      {
+        "Case": "the README's per-claim check with a claim no pod mounts printed",
+        "Observation": "that claim and nothing else"
+      },
+      {
+        "Case": "the namespace was deleted",
+        "Observation": "yes, and its volumes"
+      },
+      {
+        "Case": "the restore's phase",
+        "Observation": "Completed"
+      },
+      {
+        "Case": "both StatefulSets became ready",
+        "Observation": "yes"
+      },
+      {
+        "Case": "a fence refusal in a pod's log (the data directory writable by a group, or not owned by uid 65532)",
+        "Observation": "no"
+      },
+      {
+        "Case": "the fingerprint the broker's \"issuing as\" line prints (first 12), before and after",
+        "Observation": "3827e78a397f, 3827e78a397f"
+      },
+      {
+        "Case": "the issuing CA's fingerprint (first 12 hex) before the backup, and after the restore",
+        "Observation": "f2e63f159d4d, f2e63f159d4d"
+      },
+      {
+        "Case": "data-t-broker-0: before the backup",
+        "Observation": "/v/state 700 65532:65532; /v/state/issuing-ca.key 600 65532:65532"
+      },
+      {
+        "Case": "data-t-broker-0: after the restore",
+        "Observation": "unchanged"
+      },
+      {
+        "Case": "data-t-broker-1: before the backup",
+        "Observation": "/v/state 700 65532:65532; /v/state/issuing-ca.key 600 65532:65532"
+      },
+      {
+        "Case": "data-t-broker-1: after the restore",
+        "Observation": "unchanged"
+      },
+      {
+        "Case": "data-t-port49d-0: before the backup",
+        "Observation": "/v/data 700 65532:65532"
+      },
+      {
+        "Case": "data-t-port49d-0: after the restore",
+        "Observation": "unchanged"
+      },
+      {
+        "Case": "data-t-port49d-1: before the backup",
+        "Observation": "/v/data 700 65532:65532"
+      },
+      {
+        "Case": "data-t-port49d-1: after the restore",
+        "Observation": "unchanged"
+      }
+    ]
+  },
+  {
+    "ID": "b",
+    "Verdict": "PASS",
+    "Rows": [
+      {
+        "Case": "a mint after the restore",
+        "Observation": "succeeded"
+      },
+      {
+        "Case": "a login after the restore",
+        "Observation": "succeeded"
+      }
+    ]
+  }
+]

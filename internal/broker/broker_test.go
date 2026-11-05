@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -25,8 +26,10 @@ import (
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/decision"
 	"github.com/blanketfish/port49/internal/engine"
+	"github.com/blanketfish/port49/internal/pivattest"
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/testpki"
 	"github.com/blanketfish/port49/internal/token"
 )
 
@@ -979,5 +982,95 @@ func TestSupersedePrunesOncePerInterval(t *testing.T) {
 	f.b.mu.Unlock()
 	if kept {
 		t.Fatal("supersede did not prune again after supersedePruneEvery")
+	}
+}
+
+// servedRoots is /v1/config's hardware_key_touch.attestation_roots_pem, "" with
+// the field absent.
+func servedRoots(t *testing.T, b *Broker) (pem string, present bool) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	b.config(rec, httptest.NewRequest(http.MethodGet, "/v1/config", nil))
+	var c api.Config
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.HardwareKeyTouch == nil {
+		if strings.Contains(rec.Body.String(), "attestation_roots_pem") {
+			t.Fatalf("the field is present but decodes to nil: %s", rec.Body.String())
+		}
+		return "", false
+	}
+	return c.HardwareKeyTouch.AttestationRootsPEM, true
+}
+
+func rootsFile(t *testing.T, note string) (file []byte, certPEM []byte, a pivattest.Anchors) {
+	t.Helper()
+	p, err := testpki.NewPIV(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	file = append([]byte(note), p.Anchors()...)
+	a, err = pivattest.ParseAnchors(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file, p.Anchors(), a
+}
+
+func TestConfigServesAttestationRootsOnlyWhenLoaded(t *testing.T) {
+	b := &Broker{MaxSessionAge: time.Hour}
+	if _, present := servedRoots(t, b); present {
+		t.Fatal("a broker with no attestation roots serves the field")
+	}
+	_, cert, a := rootsFile(t, "# operator note: this line is not served\n")
+	b.SetAttestationRoots(&a)
+	got, present := servedRoots(t, b)
+	if !present || got != string(cert) {
+		t.Fatalf("served %q, want the certificate block alone %q", got, cert)
+	}
+	if strings.Contains(got, "operator note") {
+		t.Fatal("a comment line in the roots file was served")
+	}
+	b.SetAttestationRoots(nil)
+	if _, present := servedRoots(t, b); present {
+		t.Fatal("roots swapped away are still served")
+	}
+}
+
+func TestTheRootsFieldHoldsCertificatesOnly(t *testing.T) {
+	b := &Broker{MaxSessionAge: time.Hour}
+	_, _, a := rootsFile(t, "")
+	b.SetAttestationRoots(&a)
+	got, _ := servedRoots(t, b)
+	rest, n := []byte(got), 0
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			break
+		}
+		n++
+		if blk.Type != "CERTIFICATE" {
+			t.Fatalf("the roots field holds a %q block", blk.Type)
+		}
+	}
+	if n == 0 || len(strings.TrimSpace(string(rest))) != 0 {
+		t.Fatalf("%d blocks, leftover %q", n, rest)
+	}
+}
+
+func TestTheRootsFieldFollowsAReload(t *testing.T) {
+	b := &Broker{MaxSessionAge: time.Hour}
+	_, first, a1 := rootsFile(t, "")
+	_, second, a2 := rootsFile(t, "")
+	b.SetAttestationRoots(&a1)
+	if got, _ := servedRoots(t, b); got != string(first) {
+		t.Fatal("the first root is not served")
+	}
+	b.SetAttestationRoots(&a2)
+	got, _ := servedRoots(t, b)
+	if got != string(second) || strings.Contains(got, string(first)) {
+		t.Fatal("after SetAttestationRoots the field does not follow the checked roots")
 	}
 }

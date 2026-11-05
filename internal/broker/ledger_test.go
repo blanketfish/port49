@@ -69,7 +69,8 @@ func TestAPolicyPassRacingASetPrivilegeDoesNotRevoke(t *testing.T) {
 		done <- err
 	}()
 	<-h.read
-	if err := daemon.SetPrivilege(ctx, k, 1); err != nil {
+	// Raises the level: a level held is no write.
+	if err := daemon.SetPrivilege(ctx, k, 2); err != nil {
 		t.Fatal(err)
 	}
 	close(h.release)
@@ -96,7 +97,8 @@ func TestRevokeUnopenedReadsAgainBeforeItRevokes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := daemon.SetPrivilege(ctx, k, 1); err != nil {
+	// Raises the level: a level held is no write.
+	if err := daemon.SetPrivilege(ctx, k, 2); err != nil {
 		t.Fatal(err)
 	}
 	stale := &store.UnreadableContextError{Rev: first.Rev,

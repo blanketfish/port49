@@ -33,13 +33,13 @@ func race(fs ...func()) {
 	wg.Wait()
 }
 
-// IndexTokenKeepsTheLongestUnderARace is IndexToken's "keeping the later
+// PutTokenKeepsTheLongestIndexUnderARace is PutToken's index "keeping the later
 // expiry", raced: two mints under one key, an hour and two hours out,
 // leave the entry naming the key until the later. A shorter write landing
 // last would drop the entry while the longer token lives, and a revocation
 // by that principal or certificate would miss the token: revocation
 // failing open.
-func IndexTokenKeepsTheLongestUnderARace(t *testing.T, b Backend) {
+func PutTokenKeepsTheLongestIndexUnderARace(t *testing.T, b Backend) {
 	k := store.TokenKey{NAS: "leaf-01", Username: "svc"}
 	const alice = "spiffe://example.com/alice"
 	cert := store.CertKey("CN=Corp CA", "0a")
@@ -49,8 +49,8 @@ func IndexTokenKeepsTheLongestUnderARace(t *testing.T, b Backend) {
 		s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
 		ctx := context.Background()
 		var errs [2]error
-		race(func() { errs[0] = s.IndexToken(ctx, alice, cert, k, time.Hour) },
-			func() { errs[1] = s.IndexToken(ctx, alice, cert, k, 2*time.Hour) })
+		race(func() { errs[0] = indexByPut(ctx, s, t0, alice, cert, k, time.Hour) },
+			func() { errs[1] = indexByPut(ctx, s, t0, alice, cert, k, 2*time.Hour) })
 		if err := errors.Join(errs[:]...); err != nil {
 			t.Fatalf("round %d: %v", round, err)
 		}

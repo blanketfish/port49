@@ -12,8 +12,8 @@ import (
 // had not delivered by the read's deadline (plan 7e, pre-flight C1). It is
 // store.ErrUnavailable: the guard counts it, a handler denies
 // store_unavailable, and the refresh leaves the context for its next pass.
-var ErrFeedBehind = fmt.Errorf("%w: this process's context feed has not delivered the record's revision",
-	store.ErrUnavailable)
+// The guard does not count it toward its circuit (store.ErrFeedBehind).
+var ErrFeedBehind = store.ErrFeedBehind
 
 // Fence is how far this process's context feed has delivered the store's
 // changes (plan 7e, Ruling 3). A read judges no record its feed has not

@@ -91,9 +91,10 @@ func (d Device) Login(user, password string) uint8 {
 	return st
 }
 
-// Permits asks for user's session (no words) or a command at 15.
-func (d Device) Permits(user string, words ...string) bool {
-	d.T.Helper()
+// AuthorStatus asks for user's session (no words) or a command at 15, and
+// returns the reply's status, or the error of a connection that was not
+// answered.
+func (d Device) AuthorStatus(user string, words ...string) (uint8, error) {
 	priv := uint8(15)
 	args := [][]byte{[]byte("service=shell")}
 	if len(words) == 0 {
@@ -109,13 +110,24 @@ func (d Device) Permits(user string, words ...string) bool {
 		PrivLvl: priv, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte(user),
 		Port: []byte("vty1"), Args: args}.Encode())
 	if err != nil {
-		d.T.Fatalf("authorize: %v", err)
+		return 0, err
 	}
 	r, err := wire.DecodeAuthorResponse(b)
 	if err != nil {
-		d.T.Fatal(err)
+		return 0, err
 	}
-	return r.Status == wire.AuthorStatusPassAdd || r.Status == wire.AuthorStatusPassRepl
+	return r.Status, nil
+}
+
+// Permits is AuthorStatus that fails the test on a connection that was not
+// answered, and reports whether the answer is a PASS.
+func (d Device) Permits(user string, words ...string) bool {
+	d.T.Helper()
+	st, err := d.AuthorStatus(user, words...)
+	if err != nil {
+		d.T.Fatalf("authorize: %v", err)
+	}
+	return st == wire.AuthorStatusPassAdd || st == wire.AuthorStatusPassRepl
 }
 
 // brokerClient is an HTTPS client for the broker at brokerDir's lab CA, with
@@ -159,6 +171,54 @@ func mintRaw(t *testing.T, brokerDir, cert, key, addr, device string) (int, []by
 			return resp.StatusCode, body
 		}
 		t.Logf("mint: 503, the broker's start gate; trying again")
+	}
+}
+
+// MintRetrying is Mint as `port49 token` makes it (cmd/port49/tokenretry.go):
+// a mint refused store_unavailable, as a 503 or as a denied item, is tried
+// again after the reply's Retry-After (5s when it carries none) for up to 30s
+// from the first try. It returns the token, how many tries were refused, and
+// how long the whole mint took; it fails the test when the budget is spent.
+func MintRetrying(t *testing.T, brokerDir, brokerAddr, device string) (token string, retries int, took time.Duration) {
+	t.Helper()
+	const budget, fallback = 30 * time.Second, 5 * time.Second
+	c := brokerClient(t, brokerDir, testpki.LabClientCert, testpki.LabClientKey)
+	start := time.Now()
+	for {
+		resp, err := c.Post("https://"+brokerAddr+"/v1/tokens", "application/json",
+			bytes.NewReader([]byte(`{"devices":["`+device+`"]}`)))
+		wait := fallback
+		refused := false
+		if err == nil {
+			body, rerr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			var out api.MintResponse
+			var e api.Error
+			json.Unmarshal(body, &e)
+			if n, aerr := strconv.Atoi(resp.Header.Get("Retry-After")); aerr == nil && n > 0 && n <= 86400 {
+				wait = time.Duration(n) * time.Second
+			}
+			switch {
+			case resp.StatusCode == http.StatusServiceUnavailable && e.Error == "store_unavailable":
+				refused = true
+			case json.Unmarshal(body, &out) == nil && len(out.Results) == 1 && out.Results[0].Login != "":
+				return out.Results[0].Login, retries, time.Since(start)
+			case json.Unmarshal(body, &out) == nil && len(out.Results) == 1 && out.Results[0].Reason == "store_unavailable":
+				refused = true
+			default:
+				t.Fatalf("mint: status %d, error %q", resp.StatusCode, e.Error) // never the body: it may hold a token
+			}
+		} else {
+			t.Fatalf("mint: %v", err) // the agent retries only store_unavailable
+		}
+		if !refused || wait > budget-time.Since(start) {
+			t.Fatalf("mint refused store_unavailable for %v (%d tries), past the 30s the agent keeps trying", time.Since(start), retries+1)
+		}
+		retries++
+		time.Sleep(wait)
 	}
 }
 

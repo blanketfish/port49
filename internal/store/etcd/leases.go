@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"time"
@@ -14,6 +15,20 @@ import (
 // one a minute of expiries, not one a record (design D1's cost).
 const leaseBucket = time.Minute
 
+// maxAttachesPerLease is how many records ride one lease before the next
+// For grants a fresh lease for the same bucket. etcd checks put permission
+// for every key already on a lease, on each put that names it, whenever the
+// caller is not root (apply_auth.go, checkLeasePutsKeys), so a put's cost
+// grows with the keys already attached. At 170 logins/s one lease a minute
+// saturated etcd's apply loop; 100 a lease took the mint's p50 from 540 ms
+// to 2 ms (plan 12c load run 1). A replaced lease still expires on its own
+// TTL, and nothing revokes it early.
+const maxAttachesPerLease = 100
+
+// defaultGrantTimeout is the grant bound when no call timeout is given: etcd's
+// call_timeout ceiling (config.MaxCallTimeout).
+const defaultGrantTimeout = 5 * time.Second
+
 // leases hands out the lease a record is put on. A lease only reclaims:
 // the record's own expiry, read against now, decides whether it is live
 // (plan 7d, Ruling 3). So a lease is always the bucket ending at least
@@ -23,22 +38,42 @@ type leases struct {
 	cli   *clientv3.Client
 	now   func() time.Time
 	grace time.Duration
-	mu    sync.Mutex
+	// grantTimeout bounds each grant from the moment it starts: the store's
+	// call_timeout, whatever budget the caller that started it has left.
+	grantTimeout time.Duration
+	mu           sync.Mutex
 	// held is, by bucket end (unix seconds of now's clock), the lease
 	// granted for it and until when it lives on the wall clock.
 	held map[int64]heldLease
 	// saw, when set, sees each grant's revision (Store.Seen).
 	saw func(rev int64)
+	// grant makes a lease; the client's Grant, but for a test's.
+	grant func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error)
+	// flight is, by bucket end, the grant in flight for it: callers that
+	// find the bucket's lease full or gone wait on it and never grant their
+	// own (a slow etcd would otherwise turn each rollover into a herd).
+	flight map[int64]*grantFlight
+}
+
+// grantFlight is one grant in flight: done closes when it ends, err says how.
+type grantFlight struct {
+	done chan struct{}
+	err  error
 }
 
 type heldLease struct {
 	id      clientv3.LeaseID
+	attach  int       // records handed this lease, capped at maxAttachesPerLease
 	granted time.Time // wall clock, no monotonic reading
 	until   time.Time // wall clock, no monotonic reading
 }
 
-func newLeases(cli *clientv3.Client, now func() time.Time, grace time.Duration) *leases {
-	return &leases{cli: cli, now: now, grace: grace, held: map[int64]heldLease{}}
+func newLeases(cli *clientv3.Client, now func() time.Time, grace, grantTimeout time.Duration) *leases {
+	if grantTimeout <= 0 {
+		grantTimeout = defaultGrantTimeout
+	}
+	return &leases{cli: cli, now: now, grace: grace, grantTimeout: grantTimeout, held: map[int64]heldLease{}, flight: map[int64]*grantFlight{},
+		grant: func(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) { return cli.Grant(ctx, ttl) }}
 }
 
 // wall is the wall clock with its monotonic reading stripped. The
@@ -62,33 +97,78 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 	if need < l.grace {
 		need = l.grace
 	}
-	w := wall()
-	l.mu.Lock()
-	if h, ok := l.held[end.Unix()]; ok && !h.until.Before(w.Add(need)) && w.Sub(h.granted) < leaseBucket {
+	key := end.Unix()
+	for {
+		w := wall()
+		l.mu.Lock()
+		if h, ok := l.held[key]; ok && !h.until.Before(w.Add(need)) && w.Sub(h.granted) < leaseBucket && h.attach < maxAttachesPerLease {
+			h.attach++
+			l.held[key] = h
+			l.mu.Unlock()
+			return h.id, nil
+		}
+		f, ok := l.flight[key]
+		if !ok {
+			f = &grantFlight{done: make(chan struct{})}
+			l.flight[key] = f
+			// The grant is the bucket's, not this caller's: it runs on a context
+			// its caller's cancel and deadline cannot reach, for a full call
+			// timeout from now, so a caller that gives up or has little budget
+			// left does not fail the waiters.
+			gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), l.grantTimeout)
+			go func() {
+				defer cancel()
+				err := l.grantFor(gctx, key, need)
+				l.mu.Lock()
+				delete(l.flight, key)
+				l.mu.Unlock()
+				f.err = err
+				close(f.done)
+			}()
+		}
 		l.mu.Unlock()
-		return h.id, nil
+		// Whoever started it, a caller waits on the grant under its own ctx,
+		// then looks for the lease again. A failed grant is every waiter's error.
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		// A context error is the grant's own (its timeout), not this caller's:
+		// while this caller's ctx is live it looks again and may start the
+		// next grant. Any other error is every waiter's.
+		if f.err != nil {
+			if (errors.Is(f.err, context.DeadlineExceeded) || errors.Is(f.err, context.Canceled)) && ctx.Err() == nil {
+				continue
+			}
+			return 0, f.err
+		}
 	}
-	l.mu.Unlock()
+}
+
+// grantFor grants the lease for the bucket at key and caches it with no
+// attach taken: every caller, the one that started it too, takes its own.
+func (l *leases) grantFor(ctx context.Context, key int64, need time.Duration) error {
 	// A bucket's worth more, so records of the same bucket put later still
 	// fit on it.
 	ttl := int64(math.Ceil((need + leaseBucket).Seconds()))
-	resp, err := l.cli.Grant(ctx, ttl)
+	resp, err := l.grant(ctx, ttl)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	if l.saw != nil {
 		l.saw(resp.ResponseHeader.GetRevision())
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	w = wall()
-	l.held[end.Unix()] = heldLease{id: resp.ID, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
+	w := wall()
+	l.held[key] = heldLease{id: resp.ID, granted: w, until: w.Add(time.Duration(resp.TTL) * time.Second)}
 	for b, h := range l.held {
 		if h.until.Before(w) || w.Sub(h.granted) >= leaseBucket {
 			delete(l.held, b)
 		}
 	}
-	return resp.ID, nil
+	return nil
 }
 
 // Reset forgets every lease, after etcd said it no longer knows one.

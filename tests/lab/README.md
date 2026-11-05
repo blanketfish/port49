@@ -313,7 +313,8 @@ its derived config (never to `port49d-lab.yaml`, so a file left behind cannot fa
 run). port49d re-reads the file on every request; its trimmed contents name the fault:
 `store_unavailable` fails the store reads each handler starts with (authentication answers ERROR,
 authorization FAIL, accounting is spooled unattributed), `command_error` / `command_fail` answer
-every per-command authorization ERROR / FAIL, and anything else is no fault. It is what
+every per-command authorization ERROR / FAIL, `session_error` answers every session
+authorization ERROR (L87 c), and anything else is no fault. It is what
 `tests/lab/results/L4-error-*.md` measured with; `author.LabFault` holds the code.
 
 ## Tokens
@@ -927,7 +928,7 @@ of content, never the content.
 
 `make lab-regress` reruns every closed entry in `tests/lab/regress.yaml` and rewrites its results
 notes. Each entry's `measured_minutes` is its wall time in a full run (the first, commit `2c680dbf`,
-2026-10-19/20, then the L35, L37, L66, L79 and L80 entries): the manifest sums to 733.6 minutes. A clean
+2026-10-19/20, then the L35, L37, L66, L79, L80 and L90 entries): the manifest sums to 736.8 minutes. A clean
 full run is about 12 h plus NX-OS boot hangs (below), so routine use needs a subset:
 `make lab-regress LAB_REGRESS_ARGS=-only=L35,L37`. The slowest are L34 (103 min), L36 (67) and
 L22 (44).

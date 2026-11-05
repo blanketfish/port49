@@ -1246,6 +1246,12 @@ func (r *reloader) swap(pol *policy.Policy, kb keyBuild) time.Time {
 	// old policy alone named stays in force with it until the swap is done
 	// (re-review 6, M1), so a device the old policy still assigns it finds its
 	// key too; then the new build alone is in force.
+	// The single-device set goes in before the policy does: a login the new
+	// policy admits under a key it makes single-device must not create a
+	// series named for it. One labelled early is merely aggregated early.
+	if r.metrics != nil {
+		r.metrics.SetSingleDeviceKeyRefs(swapSingleDeviceKeyRefs(old, pol))
+	}
 	r.keys.put(r.keys.union(kb))
 	if r.keysPut != nil {
 		r.keysPut()

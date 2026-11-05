@@ -276,7 +276,7 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/explain", b.explain)
 	mux.HandleFunc("GET /healthz", b.healthz)
 	mux.HandleFunc("GET /readyz", b.readyz)
-	return announceCloseWithoutCertificate(mux)
+	return boundWrites(announceCloseWithoutCertificate(mux))
 }
 
 // announceCloseWithoutCertificate says Connection: close on every answer to a
@@ -376,6 +376,11 @@ func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 	}
 	c.BrokerCABundle, c.BrokerCABundleRefused = string(b.CABundle), b.CABundleRefused
 	c.PerLoginMFA = b.mfaConfig()
+	// The roots served are the roots checked: one pointer, swapped together
+	// by SetAttestationRoots (decision 55 ruling 16).
+	if v := b.perLoginMFA(); v != nil && v.Anchors != nil && v.Anchors.Roots != nil {
+		c.HardwareKeyTouch = &api.HardwareKeyTouchConfig{AttestationRootsPEM: string(v.Anchors.PEM)}
+	}
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -595,23 +600,21 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, resp.Subjects = subjectNames(pol, m)
-	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, buf, pol, m, answer, c, name, req, res, bodyHash, mf)
-		if errors.Is(err, token.ErrIdempotencyInProgress) {
-			// This device's hold was taken by another request under the
-			// key, or lapsed before its turn: two retries that both
-			// abandoned a replay, or a batch that outlasted its
-			// reservation. Nothing is minted for it, and the devices
-			// already minted are completed records a retry replays — unless
-			// a revocation landed while they were written.
-			release()
-			if b.revokedSince(w, r, c, resp.Results) {
-				return
-			}
-			b.writeInProgress(w)
+	items, err := b.mintDevices(ctx, buf, pol, m, answer, c, req, res, bodyHash, mf)
+	resp.Results = items
+	if errors.Is(err, token.ErrIdempotencyInProgress) {
+		// A device's hold was taken by another request under the key, or
+		// lapsed before its turn: two retries that both abandoned a
+		// replay, or a batch that outlasted its reservation. Nothing is
+		// minted for it, and the devices already minted are completed
+		// records a retry replays — unless a revocation landed while they
+		// were written.
+		release()
+		if b.revokedSince(w, r, c, resp.Results) {
 			return
 		}
-		resp.Results = append(resp.Results, item)
+		b.writeInProgress(w)
+		return
 	}
 	release()
 	if b.revokedSince(w, r, c, resp.Results) {
@@ -619,6 +622,84 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Next = next
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// mintConcurrency bounds how many of a batch's devices mint at once. The
+// agent holds one connection and one timeout over the whole batch, so a
+// batch minted device by device took its devices' store round trips in a
+// row (load run 5: 20 batches of 100 devices ran about 90 s against a 30 s
+// timeout). Eight keeps a batch to a few rounds without one request
+// crowding the store.
+const mintConcurrency = 8
+
+// mintDevices mints req.Devices through mintOne, mintConcurrency at a time,
+// and returns the items in the request's order. Each item is exactly what
+// mintOne answers for its device, a store-unavailable deny included. Each
+// device writes its records to a buffer of its own, and the buffers are
+// joined into buf in the request's order, so the log reads as a serial
+// batch's did; a blob record an earlier device's buffer already carries is
+// not repeated. A device whose idempotency hold is in progress stops the
+// batch: no device not yet started is begun, and the error is returned with
+// the items of the devices that finished, which are completed records a
+// retry replays.
+func (b *Broker) mintDevices(ctx context.Context, buf *heldLog, pol *policy.Policy, m policy.Member,
+	answer *directory.Answer, c caller, req api.MintRequest, hold *token.Reservation, bodyHash string,
+	mf *mfaRequest) ([]api.MintItem, error) {
+	n := len(req.Devices)
+	items := make([]api.MintItem, n)
+	errs := make([]error, n)
+	done := make([]bool, n)
+	logs := make([]*heldLog, n)
+	var stop atomic.Bool
+	sem := make(chan struct{}, mintConcurrency)
+	var wg sync.WaitGroup
+	for i, name := range req.Devices {
+		sem <- struct{}{}
+		if stop.Load() {
+			<-sem
+			break
+		}
+		logs[i] = newHeldLog()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			items[i], errs[i] = b.mintOne(ctx, logs[i], pol, m, answer, c, name, req, hold, bodyHash, mf)
+			done[i] = true
+			if errs[i] != nil {
+				stop.Store(true)
+			}
+		}()
+	}
+	wg.Wait()
+	var out []api.MintItem
+	var first error
+	for i := range items {
+		if !done[i] {
+			continue
+		}
+		logs[i].Flush(joinInto{buf}, nil)
+		if errs[i] != nil {
+			first = cmp.Or(first, errs[i])
+			continue
+		}
+		out = append(out, items[i])
+	}
+	return out, first
+}
+
+// joinInto is the Emitter that appends one device's records to the request's
+// buffer, dropping a blob record the buffer already carries.
+type joinInto struct{ to *heldLog }
+
+func (j joinInto) Emit(r decision.Record) {
+	if r.Event == decision.EventBlob && r.Blob != nil {
+		if j.to.blobs[r.Blob.Hash] {
+			return
+		}
+		j.to.blobs[r.Blob.Hash] = true
+	}
+	j.to.Emit(r)
 }
 
 // mintGateRefuses asks MintGate of pol and, when it refuses, writes the
@@ -1408,7 +1489,9 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	var perLogin *decision.PerLoginMFA
 	// judge reads the requirement; denied is true when it refuses the item.
 	judge := func() (item api.MintItem, denied bool) {
+		mf.mu.Lock() // the challenge is issued once for the whole batch
 		v := b.judgeMFA(ctx, c, mf, name, res.PerLoginMFA, b.Now(), nil)
+		mf.mu.Unlock()
 		mfaRec = v.rec
 		if v.reason != "" {
 			item = deny(v.reason, dev.Platform)
@@ -1547,7 +1630,8 @@ func (b *Broker) putBlob(ctx context.Context, out *heldLog, hash string, body []
 // heldLog is the records one request or pass writes while it holds the
 // policy, with the blob hashes it already carries a record for: two
 // devices, or two contexts, that compile to one blob buffer one blob record
-// between them, not one each (Task 4 review I1). One goroutine uses it.
+// between them, not one each (Task 4 review I1). One goroutine uses it: a
+// batch's devices each take a buffer of their own (mintDevices).
 type heldLog struct {
 	*decision.Buffer
 	blobs map[string]bool

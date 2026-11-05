@@ -768,8 +768,13 @@ func run(parent context.Context, cfgPath string) error {
 	hs := &healthState{}
 	return runLoop(parent, func(again bool) error {
 		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, dc, restored, hs)
-	}, 5*time.Second)
+	}, startAgainEvery)
 }
+
+// startAgainEvery is the wait between runs of a start that fails for a reason
+// other than the store (runLoop): an operator's fault gains nothing from a
+// quicker retry, and each run repeats the whole start.
+const startAgainEvery = 5 * time.Second
 
 // runLoop runs once until a run ends for a reason other than a store
 // gone, or, once a store gone has happened, until parent ends (re-check
@@ -783,6 +788,7 @@ func run(parent context.Context, cfgPath string) error {
 // returns its error, for exit 1 and a supervisor.
 func runLoop(parent context.Context, once func(again bool) error, every time.Duration) error {
 	again := false
+	var said outageSayer // across the runs: an hour of one fault is one line
 	for {
 		err := once(again)
 		if parent.Err() != nil {
@@ -794,14 +800,15 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 		case errors.As(err, &fault):
 			return err // a deferred check's fault ends the process in every mode (N2)
 		case errors.As(err, &gone):
-			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
+			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start (%s)\n", gone, storeScheduleText)
 			again = true
+			said = outageSayer{} // a fault said before this run served is news again, with a since of its own
 			continue
 		case err == nil, !again:
 			return err
 		}
-		fmt.Fprintf(stderr, "port49d: starting again after a store gone: %v; the listeners stay closed; trying "+
-			"again in %v\n", err, every)
+		said.say(stderr, fmt.Sprintf("port49d: starting again after a store gone: %v; the listeners stay closed; trying "+
+			"again every %v", err, every))
 		select {
 		case <-parent.Done():
 			return nil
@@ -886,21 +893,28 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if err != nil {
 		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 	}
-	defer mln.Close()
 	// rd is /readyz: 200 while the TACACS+ listener serves, and 503 with
 	// why before it opens and from the start of shutdown.
 	rd := newReadiness()
 	// status is GET /store/status, given the stores once they are open.
 	status := &statusHandler{}
 	metricsErr := make(chan error, 1)
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		mux.Handle("/readyz", rd)
-		mux.Handle("GET /store/status", status)
-		metricsErr <- http.Serve(mln, mux)
-	}()
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.Handle("/readyz", rd)
+	mux.Handle("GET /store/status", status)
+	// The metrics server is closed with the run, connections and all: a
+	// scraper that keeps its connection alive would otherwise go on reading
+	// this run's registry and /readyz after the next run has bound the same
+	// address.
+	msrv := &http.Server{Handler: mux}
+	closeMetrics := func() {
+		msrv.Close()
+		mln.Close()
+	}
+	defer closeMetrics()
+	go func() { metricsErr <- msrv.Serve(mln) }()
 	fmt.Fprintf(stderr, "port49d: metrics on %s\n", mln.Addr())
 
 	var startDoc *inventory.Published
@@ -1019,7 +1033,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The restore guard reads the store at once and every second, and
 		// redemptions wait for that first read once a witness was followed
 		// (Task 15d); joined before sts.close too.
-		restored.begin(m.RedemptionRestoreGuarded, m.StoreOps)
+		restored.begin(m.RedemptionRestoreGuarded, m.RedemptionRestoreGuardUntil, m.StoreOps)
 		gctx, stopGuard := context.WithCancel(ctx)
 		guardDone := make(chan struct{})
 		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Stores.Session.Etcd.CallTimeout) }()
@@ -1289,6 +1303,13 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	keysFor, allKeys := keysOf(cfg, dk)
 	seen := &keyring.Seen{}
+	// A key_ref one device holds is never a metric label; the reloader sets
+	// it again at each swap.
+	if live != nil {
+		m.SetSingleDeviceKeyRefs(policySingleDeviceKeyRefs(live.Load()))
+	} else {
+		m.SetSingleDeviceKeyRefs(indexSingleDeviceKeyRefs(cfg))
+	}
 	m.WatchKeys(func() []metrics.KeySample {
 		var out []metrics.KeySample
 		sets := allKeys()
@@ -1303,8 +1324,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// On etcd, a redemption asks the restore guard first (Task 15d); on
 	// memory nothing is restored.
 	var redeemGuard func() bool
+	var redeemFloor func() time.Time
 	if sts.etcd != nil {
-		redeemGuard = restored.Allows
+		redeemGuard, redeemFloor = restored.Allows, restored.RedeemFloor
 	}
 	if cfg.StalenessOff {
 		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
@@ -1316,7 +1338,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	limit := openFileLimit()
 	capN, err := connectionCap(cfg.Limits.MaxConnections, limit)
 	if err != nil {
-		mln.Close()
+		closeMetrics()
 		stopSpool()
 		<-spoolDone
 		return fmt.Errorf("config: %w", err)
@@ -1332,7 +1354,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The context cache is authorization's alone (plan 7f, Ruling 5): a
 		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard),
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard).WithRedeemFloor(redeemFloor),
 		// `session.staleness_ceiling` defaults to 4h (plan 7g; OR-1): the
 		// broker's scheduled refresh stamps `refreshed_at` every
 		// `broker.refresh_interval`. An explicit 0s turns the check off, which
@@ -1361,7 +1383,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	sayf := func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) }
 	tl, tlsChecker, err := tlsListenerOf(cfg, m, sayf, tlsDeviceSource(cfg, live))
 	if err != nil {
-		mln.Close()
+		closeMetrics()
 		stopSpool()
 		<-spoolDone
 		return err
@@ -1384,7 +1406,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		fmt.Fprintf(stderr, "port49d: store: the store answers; the listeners open again after %d consecutive "+
 			"health checks pass (%s.etcd.health.open_after)\n", sts.health.openAfter, cfg.Stores.SessionPath())
 		if err := sts.health.passes(ctx); err != nil {
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return nil
@@ -1402,7 +1424,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	if cfg.Listen != "" {
 		if ln, err = net.Listen("tcp", cfg.Listen); err != nil {
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return err
@@ -1411,7 +1433,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if tl != nil {
 		if tln, err = net.Listen("tcp", cfg.TLSListener.Listen); err != nil {
 			closeListeners()
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("tls_listener.listen %s: %w", cfg.TLSListener.Listen, err)
@@ -1425,7 +1447,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if brokerSrv != nil {
 		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
 			closeListeners()
-			mln.Close()
+			closeMetrics()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
@@ -1676,7 +1698,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	stopSpool()
 	<-spoolDone
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
-	mln.Close()
+	closeMetrics()
 	return runErr
 }
 

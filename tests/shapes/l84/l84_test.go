@@ -73,8 +73,8 @@ func TestMayOfferNeedsTheStartAndTheNoRestartCell(t *testing.T) {
 		{"start passes, no-restart fails", []Cell{c("b-long", Pass), c("c-long", Fail)}, "long", false},
 		{"no-restart passes, start fails", []Cell{c("b-long", Fail), c("c-long", Pass)}, "long", false},
 		{"not run", nil, "short", false},
-		{"systemd both", []Cell{c("a", Pass), c("c-systemd", Pass)}, "systemd", true},
-		{"systemd start only", []Cell{c("a", Pass)}, "systemd", false},
+		{"systemd both", []Cell{c("a-host", Pass), c("c-host", Pass)}, "systemd", true},
+		{"systemd start only", []Cell{c("a-host", Pass), c("a", Pass), c("c-systemd", Pass)}, "systemd", false},
 		{"the other syntax does not count", []Cell{c("b-long", Pass), c("c-long", Pass)}, "short", false},
 	}
 	for _, tc := range cases {
@@ -93,7 +93,7 @@ func TestNoteIsBuiltFromTheCellsAndKeepsUnrunCellsOpen(t *testing.T) {
 	for _, want := range []string{
 		"| (b) Compose secrets:, long syntax (uid \"0\", gid \"65532\", mode 0440) | PASS |",
 		"| (c) Compose, long syntax: a second secrets: entry, no restart | FAIL |",
-		"| (a) systemd LoadCredential= against fence.ReadSecret | NOT RUN |",
+		"| (a) systemd LoadCredential= against fence.ReadSecret, in the Debian container | NOT RUN |",
 		"yes \\| the container id changed",
 		"Compose `secrets:`, long syntax: not for a device key (start PASS, no-restart FAIL)",
 		"The register row stays open while any cell is NOT RUN.",
@@ -123,5 +123,22 @@ func TestSaveLoadMerge(t *testing.T) {
 	m := Merge([]Cell{{ID: "a", Verdict: Fail}, {ID: "b-long", Verdict: Pass}}, got)
 	if Verdict(m, "a") != Pass || Verdict(m, "b-long") != Pass || len(m) != 2 {
 		t.Errorf("merged: %v", m)
+	}
+}
+
+func TestAnInvalidContainerCellDoesNotDecideWhatTheREADMEMaySay(t *testing.T) {
+	cells := []Cell{
+		{ID: "a", Verdict: Invalid}, {ID: "c-systemd", Verdict: Invalid},
+		{ID: "a-host", Verdict: Pass}, {ID: "c-host", Verdict: Fail},
+	}
+	if MayOffer(cells, "systemd") {
+		t.Error("a host cell that failed (c) still lets the README name LoadCredential=")
+	}
+	n := Note(Env{}, cells)
+	for _, want := range []string{"in the Debian container | INVALID |", "on the runner's systemd with the shipped unit's hardening | PASS |",
+		"systemd `LoadCredential=`: not for a device key (start PASS, no-restart FAIL)"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("the note lacks %q:\n%s", want, n)
+		}
 	}
 }

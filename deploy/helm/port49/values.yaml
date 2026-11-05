@@ -66,8 +66,8 @@ tlsListener:
 
 service:
   type: LoadBalancer
-  # Local keeps the device's source address. Whether it does on a given cluster is unmeasured
-  # (spec §15 L39 b, c).
+  # Local keeps the device's source address when the device dials a node running a pod; Cluster does not,
+  # and device binding then fails (spec §15 L39 b, measured on kind with kube-proxy in iptables mode).
   externalTrafficPolicy: Local
   annotations: {}
   # An anycast address advertised by MetalLB in BGP mode (spec §15 L85, measured on kind with an FRR
@@ -84,7 +84,18 @@ autoscaling:
   enabled: false
   minReplicas: 2
   maxReplicas: 6
-  averageConnections: 500
+  # Half the peak port49_connections per replica at the design rate (62 on one replica, TLS,
+  # 170/s on a real disk: tests/lab/results/load-beehive.md cell b), to the nearest 50.
+  # The target cells peak at 7 and 11 on GCE pd-ssd (operator-declared type), which would round to 0, so 50 stands as the
+  # floor from beehive's figure; see tests/lab/results/load-beehive-gates.md.
+  averageConnections: 50
+
+# The alert rules (files/port49.rules.yaml, a copy of deploy/alerts/port49.rules.yaml) as a
+# Prometheus Operator PrometheusRule. Off: it needs the operator's CRD. labels are the ones your
+# Prometheus selects rules on.
+prometheusRule:
+  enabled: false
+  labels: {}
 
 issuerDiscovery:
   enabled: false

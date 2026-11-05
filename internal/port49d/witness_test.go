@@ -548,7 +548,7 @@ func TestRestorePassedCountsPasses(t *testing.T) {
 	ctx := context.Background()
 	pass := func(g *restoreGuard) {
 		t.Helper()
-		if !g.pass(ctx, time.Second, s.RestoreRead) {
+		if !g.pass(ctx, time.Second, s.RestoreRead, nil) {
 			t.Fatal("a pass was cut short")
 		}
 	}
@@ -581,7 +581,7 @@ func TestTheGuardHooksFireAfterTheirWork(t *testing.T) {
 	var atFollow, atPass []string
 	oldF, oldP := guardFollowed, restorePassed
 	guardFollowed = func(g *restoreGuard, rev uint64) {
-		if high, _ := g.recorded(); high < rev {
+		if high, _, _ := g.recorded(); high < rev {
 			atFollow = append(atFollow, fmt.Sprintf("followed %d, recorded %d", rev, high))
 		}
 	}
@@ -600,7 +600,7 @@ func TestTheGuardHooksFireAfterTheirWork(t *testing.T) {
 	g.mu.Lock()
 	g.checked = false
 	g.mu.Unlock()
-	if !g.pass(context.Background(), time.Second, s.RestoreRead) {
+	if !g.pass(context.Background(), time.Second, s.RestoreRead, nil) {
 		t.Fatal("a pass was cut short")
 	}
 	if len(atFollow) > 0 {

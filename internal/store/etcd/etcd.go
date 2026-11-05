@@ -46,6 +46,9 @@ type Config struct {
 	// LeaseGrace is how long past its expiry a record's lease outlives it;
 	// 5m when zero.
 	LeaseGrace time.Duration
+	// CallTimeout bounds each lease grant, from the moment it starts
+	// (stores.*.etcd.call_timeout); 5s when zero.
+	CallTimeout time.Duration
 	// DialTimeout bounds Open's connect; 5s when zero.
 	DialTimeout time.Duration
 	// Logf says what a read skipped, by key alone; log.Printf when nil.
@@ -54,6 +57,17 @@ type Config struct {
 	// unread because they do not decode
 	// (metrics.IndexRecordsUndecodable); nil counts nothing.
 	IndexUndecodable prometheus.Counter
+	// MemberSuspect counts each time the client stops choosing a member
+	// because a call on it timed out (port49_store_member_suspect_total); nil
+	// counts nothing. It is the process's: the last store opened sets it.
+	MemberSuspect prometheus.Counter
+	// LegsColocated is told when both legs of a feed's watch come to be on one
+	// member (on) and when they are on different ones again, by feed
+	// (port49_store_feed_legs_colocated); nil tells nothing.
+	LegsColocated func(feed string, on bool)
+	// FastFail is told the reason of each call the client refused at once
+	// (port49_store_fast_fail_total); nil counts nothing.
+	FastFail func(reason string)
 }
 
 // Store is store.Store on etcd.
@@ -74,6 +88,7 @@ type Store struct {
 	ownLifts             ownLifts           // this process's own lifts, by key (marks.go)
 	seenRev              atomic.Uint64      // Seen: the highest revision a response carried
 	logf                 func(format string, args ...any)
+	legsColocated        func(feed string, on bool)
 	idxUndecodable       prometheus.Counter // nil counts nothing
 	// user is the etcd user this identity authenticates as, its client
 	// certificate's CN, or "" when Open could not read one. CheckIdentity
@@ -93,6 +108,12 @@ var _ store.Store = (*Store)(nil)
 // so the guard, which imports no backend, tells it from an outage: it trips
 // no circuit (Task 9).
 var ErrRefused = store.ErrRefused
+
+// ErrNoSpace is etcd refusing a write because its backend is over its space
+// quota (alarm NOSPACE): compaction and defragmentation, then an alarm
+// disarm, mend it; roles and certificates do not. It travels with
+// store.ErrUnavailable.
+var ErrNoSpace = errors.New("etcd: space quota exceeded (alarm NOSPACE)")
 
 // ErrTooLarge is a request etcd will not take for its size (its
 // --max-request-bytes, 1.5 MiB by default, or gRPC's 2 MiB message
@@ -153,7 +174,7 @@ func dial(c Config) (*clientv3.Client, error) {
 		Logger:               zap.NewNop(),
 		DialKeepAliveTime:    10 * time.Second,
 		DialKeepAliveTimeout: 2 * time.Second,
-		DialOptions:          []grpc.DialOption{grpc.WithChainUnaryInterceptor(hedgeReads)},
+		DialOptions:          append([]grpc.DialOption{grpc.WithChainUnaryInterceptor(hedgeReads, fastFails(c.FastFail))}, hedgeDialOptions...),
 		// Not RejectOldCluster: its version check asks every endpoint under
 		// DialTimeout and fails New when any one is down, quorum or not. New
 		// then never waits, and Ping's WithRequireLeader says an outage.
@@ -184,13 +205,17 @@ func userOf(t *tls.Config) string {
 // newStore is a store on clients the caller owns: tests build many on one.
 func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	c = c.withDefaults()
-	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
+	if c.MemberSuspect != nil {
+		inc := c.MemberSuspect.Inc
+		onSuspect.Store(&inc)
+	}
+	s := &Store{legsColocated: c.LegsColocated, k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
 		clear: c.TLS == nil}
 	s.ctxKV = sawKV{KV: ctx, saw: s.saw}
-	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace)
+	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace, c.CallTimeout)
 	s.ctxLeases = s.tokLeases
 	if ctx != tok {
-		s.ctxLeases = newLeases(ctx, c.Now, c.LeaseGrace)
+		s.ctxLeases = newLeases(ctx, c.Now, c.LeaseGrace, c.CallTimeout)
 	}
 	// The context client's grants are its responses too. With one client
 	// for both pools the token pool's grants are as well.
@@ -256,6 +281,8 @@ func unavailable(err error) error {
 	case errors.Is(err, rpctypes.ErrPermissionDenied), errors.Is(err, rpctypes.ErrAuthFailed),
 		errors.Is(err, rpctypes.ErrUserEmpty), errors.Is(err, rpctypes.ErrInvalidAuthToken):
 		return fmt.Errorf("%w: %v", ErrRefused, err)
+	case errors.Is(err, rpctypes.ErrNoSpace), errors.Is(err, rpctypes.ErrGRPCNoSpace):
+		return fmt.Errorf("%w: %w: %v", store.ErrUnavailable, ErrNoSpace, err)
 	case errors.Is(err, rpctypes.ErrRequestTooLarge), status.Code(err) == codes.ResourceExhausted:
 		return fmt.Errorf("%w: %v", ErrTooLarge, err)
 	}

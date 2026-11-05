@@ -54,6 +54,7 @@ func openIssuerFrom(cfg config.Config, m *metrics.Metrics, say func(string, ...a
 	}
 	say("issuance: certificates of %s over an OIDC sign-in, from the issuing CA in %s",
 		cfg.Broker.Identity.Issuance.CertificateLifetime, dir)
+	m.IssuingCAConfigured.Set(1)
 	if ca.Cert != nil && ca.Unavailable == nil {
 		m.IssuingCANotAfter.Set(float64(ca.Cert.NotAfter.Unix()))
 	}

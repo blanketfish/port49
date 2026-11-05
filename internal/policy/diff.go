@@ -34,6 +34,9 @@ type Diff struct {
 	Changes []Change
 	Access  []AccessChange
 	Levels  []LevelChange
+	// SessionCeilings are the changes to a subject's max_session_age; a
+	// ceiling is not a gate (spec §12), so none fails the diff.
+	SessionCeilings []SessionCeilingChange
 	// MFA are the changes to a subject's effective per-login requirement
 	// (spec §5.1.5, §12); a weakening no session test asserts fails the gate
 	// as a privilege raise does (decision 45 ruling 24).
@@ -241,6 +244,38 @@ type AccessChange struct {
 	Gained  bool
 }
 
+// SessionCeilingChange is a change to the session ceiling the roles composing
+// for a subject declare (spec §5.6): Old and New are SessionAge.String.
+// Lengthened is true when the new ceiling may outlast the old; the diff loads
+// no port49d.yaml, so a move toward the default counts as a possible
+// lengthening.
+type SessionCeilingChange struct {
+	Subject    string
+	Devices    []string
+	At         time.Time
+	Old, New   string
+	Lengthened bool
+	// DependsOnDefault is whether either side leaves a role's ceiling to
+	// port49d's default, which the diff cannot see.
+	DependsOnDefault bool
+}
+
+// lengthens is whether now may outlast was, given that the default is
+// unknown: where the outcome depends on it, the answer is yes.
+func (now SessionAge) lengthens(was SessionAge) bool {
+	switch {
+	case now.Never:
+		return !was.Never
+	case was.Never:
+		return false
+	case now.Least == 0:
+		return true // the default
+	case !now.Unset && was.Unset:
+		return true // a role's own age replaces the default
+	}
+	return was.Least != 0 && now.Least > was.Least
+}
+
 // LevelChange is a privilege change (spec §6, §12): the level the roles
 // compose to, the ceiling the grants do, the device privilege the session
 // lands at, or the subject's enable.
@@ -348,6 +383,19 @@ type side struct {
 	refused, refusedDetail string
 	err                    error
 	priv                   privilege
+	age                    SessionAge
+	// core is the memoized answer this side was made from, nil where the
+	// side was resolved on its own device.
+	core *sideCore
+}
+
+// part is what makes two sides alike in a group's key: the blob, what port49
+// enforces and the session ceiling.
+func (s side) part() string {
+	if s.core != nil && s.core.keyPart != "" {
+		return s.core.keyPart
+	}
+	return s.hash + "|" + s.priv.key() + "|" + s.age.String()
 }
 
 // privilege is what one side gives the device and what port49 enforces there
@@ -407,7 +455,7 @@ func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
 	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
 		priv.device = strconv.Itoa(int(n))
 	}
-	return side{prog: prog, res: res, hash: hash, priv: priv}
+	return side{prog: prog, res: res, hash: hash, priv: priv, age: res.SessionAge}
 }
 
 // decide is the side's answer to one command vector, each argument sent as
@@ -431,6 +479,19 @@ func (s side) decide(vector []string) engine.Outcome {
 // same inventory; after's is the one walked. A change is reported once, at
 // the first instant it holds.
 func Compare(before, after *Policy, now time.Time) Diff {
+	return compareWith(before, after, now, newMemoSides(after.Devices()))
+}
+
+// sideSource answers what Compare asks of one policy about one subject on
+// the i'th device of the inventory it walks, at one instant: the side, and
+// the per_login_mfa requirement. memoSides resolves once per device class.
+type sideSource interface {
+	side(p *Policy, subject string, i int, d admission.Device, at time.Time) side
+	mfaAt(p *Policy, subject string, i int, d admission.Device, at time.Time) (MFARequirement, bool)
+}
+
+// compareWith is Compare with its per-device answers from src.
+func compareWith(before, after *Policy, now time.Time, src sideSource) Diff {
 	instants := before.expiryInstants(now)
 	for _, at := range after.expiryInstants(now) {
 		if !slices.ContainsFunc(instants, at.Equal) {
@@ -438,7 +499,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		}
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
-	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
+	c := comparison{before: before, after: after, sides: src, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
 		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...),
 		patterns: slices.Concat(before.Redactions(), after.Redactions())}
 	for k := range after.sessionAcks(before, instants) {
@@ -578,6 +639,7 @@ func sortedRights(list []string) []string {
 // comparison is one Compare in progress.
 type comparison struct {
 	before, after *Policy
+	sides         sideSource
 	acks          map[string]bool
 	// seen holds what has been reported, so an instant repeats nothing an
 	// earlier one found.
@@ -650,8 +712,8 @@ func (c *comparison) at(at time.Time) {
 		var order []string
 		groups := map[string]*group{}
 		refusals := map[string][]string{}
-		for _, dev := range c.after.Devices() {
-			was, is := c.before.side(subject, dev, at), c.after.side(subject, dev, at)
+		for i, dev := range c.after.Devices() {
+			was, is := c.sides.side(c.before, subject, i, dev, at), c.sides.side(c.after, subject, i, dev, at)
 			if is.refused != "" && is.refused != was.refused {
 				refusals[is.refused+"\x00"+is.refusedDetail] = append(refusals[is.refused+"\x00"+is.refusedDetail], dev.Name)
 			}
@@ -674,8 +736,7 @@ func (c *comparison) at(at time.Time) {
 			// The ceiling, the device privilege and enable are the grants'
 			// and the subject's, not only the blob's, so they are part of
 			// what makes two devices alike.
-			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.priv.key() + "|" +
-				is.hash + "|" + is.priv.key()
+			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.part() + "|" + is.part()
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
 				order = append(order, key)
@@ -713,6 +774,24 @@ func currentEntries(p *Policy, device string, at time.Time) []QuarantineEntry {
 	return out
 }
 
+// ceiling records a changed session ceiling, one entry per subject and move
+// however many groups of devices hold it.
+func (c *comparison) ceiling(subject string, devices []string, at time.Time, was, is SessionAge) {
+	old, now := was.String(), is.String()
+	on := strings.Join(devices, ",")
+	if !c.once("ceiling", subject, on, old, now) {
+		return
+	}
+	for i, e := range c.d.SessionCeilings {
+		if e.Subject == subject && e.At.Equal(at) && e.Old == old && e.New == now {
+			c.d.SessionCeilings[i].Devices = append(e.Devices, devices...)
+			return
+		}
+	}
+	c.d.SessionCeilings = append(c.d.SessionCeilings, SessionCeilingChange{Subject: subject, Devices: slices.Clone(devices),
+		At: at, Old: old, New: now, Lengthened: is.lengthens(was), DependsOnDefault: was.Unset || is.Unset})
+}
+
 // group compares one subject on devices that hold the same blobs.
 func (c *comparison) group(subject string, devices []string, was, is side, at time.Time) {
 	on := strings.Join(devices, ",")
@@ -746,6 +825,9 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
 			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
 			was.priv, is.priv, wr.Projection, ir.Projection))
+	}
+	if was.age != is.age {
+		c.ceiling(subject, devices, at, was.age, is.age)
 	}
 	if pc, ok := projectionChange(wr.Projection, ir.Projection, c.patterns, c.secrets); ok && c.once("projection",
 		subject, on, pc.OldShape, pc.NewShape, strings.Join(pc.OldBits, " "), strings.Join(pc.NewBits, " "),
@@ -1361,4 +1443,200 @@ func canonical(v any) string {
 		return "unrenderable: " + err.Error()
 	}
 	return string(b)
+}
+
+// sideCore is what side computes that depends only on the policy, the
+// subject, the device's class and the instant: the resolution and everything
+// derived from it. The parts that read the device's own name stay per device
+// (memoSides.side): the refusal text of a per_login_mfa error (R6 of the 12c
+// Task 6b brief), a mint refusal where the reply carries {device} (R14), and
+// the quarantine (R12).
+type sideCore struct {
+	res       Resolution
+	err       error
+	noGrants  bool
+	encodeErr error
+	// readsDevice is whether the mint check's result can depend on the
+	// device's name: a session attribute carries the {device} placeholder, the
+	// only one SessionAttributes fills from the device.
+	readsDevice bool
+	// refusal is the mint refusal on the first device this core was made for,
+	// valid for every device of the class only when !readsDevice.
+	refusal, refusalDetail string
+	// built is whether the hash, program and privilege below are made: they
+	// are made when a device first passes the mint check.
+	built      bool
+	hash       string
+	hashErr    error
+	prog       *engine.Program
+	compileErr error
+	priv       privilege
+	age        SessionAge
+	keyPart    string
+}
+
+// memoSides is the sideSource that resolves once per subject, device class
+// and instant. It is made for one Compare: devs is the inventory Compare
+// walks, and every index it is asked for is a position in it. A policy has its
+// own state, so before and after never share an entry.
+type memoSides struct {
+	devs   []admission.Device
+	states map[*Policy]*policyMemo
+}
+
+func newMemoSides(devs []admission.Device) *memoSides {
+	return &memoSides{devs: devs, states: map[*Policy]*policyMemo{}}
+}
+
+// policyMemo is one policy's memo. Compare walks an instant, then a subject,
+// then the devices, so the cores of one subject at one instant are all it
+// keeps: a new subject or instant starts afresh.
+type policyMemo struct {
+	classOf []int
+	marks   []string // each class's marks (deviceClass.marks)
+	cores   struct {
+		subject string
+		at      time.Time
+		valid   bool
+		byClass map[int]*sideCore
+	}
+	mfas struct {
+		subject string
+		at      time.Time
+		valid   bool
+		byClass map[int]mfaEntry
+	}
+}
+
+type mfaEntry struct {
+	req MFARequirement
+	ok  bool
+}
+
+// state is p's memo, with the class of every device made on first use. ok is
+// false where i is not a position of d in the inventory.
+func (m *memoSides) state(p *Policy, i int, d admission.Device) (*policyMemo, bool) {
+	if i < 0 || i >= len(m.devs) || m.devs[i].Name != d.Name {
+		return nil, false
+	}
+	st, ok := m.states[p]
+	if !ok {
+		st = &policyMemo{classOf: make([]int, len(m.devs))}
+		classes, marks := p.deviceClassMarks(m.devs)
+		st.marks = marks
+		for k, members := range classes {
+			for _, j := range members {
+				st.classOf[j] = k
+			}
+		}
+		m.states[p] = st
+	}
+	return st, true
+}
+
+func (m *memoSides) side(p *Policy, subject string, i int, d admission.Device, at time.Time) side {
+	st, ok := m.state(p, i, d)
+	if !ok {
+		return p.side(subject, d, at)
+	}
+	// R12: the quarantine is the device's own, asked before any memo.
+	if _, ok := p.Quarantined(d.Name, at); ok {
+		return side{quarantined: true}
+	}
+	sub, ok := p.subs[subject]
+	if !ok {
+		return side{}
+	}
+	c := &st.cores
+	if !c.valid || c.subject != subject || !c.at.Equal(at) {
+		c.subject, c.at, c.valid, c.byClass = subject, at, true, map[int]*sideCore{}
+	}
+	core, ok := c.byClass[st.classOf[i]]
+	if !ok {
+		core = p.sideCoreOf(sub, d, at, st.marks[st.classOf[i]])
+		c.byClass[st.classOf[i]] = core
+	}
+	switch {
+	case core.noGrants:
+		return side{}
+	case core.err != nil:
+		// An error may quote this device's name (R6): it is this device's own.
+		return p.side(subject, d, at)
+	}
+	code, detail := core.refusal, core.refusalDetail
+	if core.readsDevice {
+		code, detail = mintCheckEncoded(core.res, sub.Identity, d.Name, core.encodeErr)
+	}
+	if code != "" {
+		return side{refused: code, refusedDetail: detail}
+	}
+	core.build(p, d)
+	switch {
+	case core.hashErr != nil:
+		return side{err: core.hashErr}
+	case core.compileErr != nil:
+		return side{err: core.compileErr}
+	}
+	return side{prog: core.prog, res: core.res, hash: core.hash, priv: core.priv, age: core.age, core: core}
+}
+
+// sideCoreOf resolves sub on d, the first device of its class that asked.
+func (p *Policy) sideCoreOf(sub *Subject, d admission.Device, at time.Time, marks string) *sideCore {
+	res, err := p.resolveMarked(sub, d, at, marks)
+	core := &sideCore{res: res}
+	switch {
+	case errors.Is(err, ErrNoGrants):
+		core.noGrants = true
+	case err != nil:
+		core.err = err
+	default:
+		core.encodeErr = encodeErrOf(res.Blob)
+		core.readsDevice = slices.ContainsFunc(res.Blob.Attributes, func(a string) bool { return strings.Contains(a, "{device}") })
+		if !core.readsDevice {
+			core.refusal, core.refusalDetail = mintCheckEncoded(res, sub.Identity, d.Name, core.encodeErr)
+		}
+	}
+	return core
+}
+
+// build makes what a side holds past the mint check, once, from the first
+// device that passes it: its class shares the platform they read.
+func (c *sideCore) build(p *Policy, d admission.Device) {
+	if c.built {
+		return
+	}
+	c.built = true
+	res := c.res
+	unbundled := res.Blob
+	unbundled.Bundle = "diff"
+	if _, c.hash, c.hashErr = engine.Encode(unbundled); c.hashErr != nil {
+		return
+	}
+	if c.prog, c.compileErr = engine.Compile(res.Blob); c.compileErr != nil {
+		return
+	}
+	c.priv = privilege{level: res.Level, ceiling: res.Ceiling, hasMax: res.HasCeiling, max: res.MaxPrivilege,
+		device: NoCeiling, enable: res.Enable, reply: strings.Join(sessionReply(res), replySep), platform: d.Platform}
+	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
+		c.priv.device = strconv.Itoa(int(n))
+	}
+	c.age = res.SessionAge
+	c.keyPart = c.hash + "|" + c.priv.key() + "|" + c.age.String()
+}
+
+func (m *memoSides) mfaAt(p *Policy, subject string, i int, d admission.Device, at time.Time) (MFARequirement, bool) {
+	st, ok := m.state(p, i, d)
+	if !ok {
+		return p.mfaAt(subject, d, at)
+	}
+	c := &st.mfas
+	if !c.valid || c.subject != subject || !c.at.Equal(at) {
+		c.subject, c.at, c.valid, c.byClass = subject, at, true, map[int]mfaEntry{}
+	}
+	e, ok := c.byClass[st.classOf[i]]
+	if !ok {
+		e.req, e.ok = p.mfaAtMarked(subject, d, at, st.marks[st.classOf[i]])
+		c.byClass[st.classOf[i]] = e
+	}
+	return e.req, e.ok
 }

@@ -1290,3 +1290,132 @@ func TestARespelledGroupDNIsNotAChange(t *testing.T) {
 		t.Fatalf("%+v", d.Subjects)
 	}
 }
+
+// ceilingBody is diffBase with max_session_age on both roles noc composes,
+// since a role naming none takes the default.
+func ceilingBody(age string) string {
+	if age == "" {
+		return diffBase
+	}
+	body := strings.Replace(diffBase, "permit: [show **]}", "permit: [show **], max_session_age: "+age+"}", 1)
+	return strings.Replace(body, "deny: [show chassis **]}", "deny: [show chassis **], max_session_age: "+age+"}", 1)
+}
+
+func ceilingDevices(t *testing.T, d Diff) int {
+	t.Helper()
+	n := 0
+	for _, c := range d.SessionCeilings {
+		if c.Subject != "noc" {
+			t.Errorf("subject %+v", c)
+		}
+		n += len(c.Devices)
+	}
+	return n
+}
+
+// A shortened ceiling is reported as old and new, on every device it moves.
+func TestADiffReportsAShortenedCeiling(t *testing.T) {
+	d := Compare(mustParse(t, ceilingBody("8h")), mustParse(t, ceilingBody("1h")), noon)
+	if len(d.SessionCeilings) != 1 {
+		t.Fatalf("one change: %+v", d.SessionCeilings)
+	}
+	c := d.SessionCeilings[0]
+	if c.Subject != "noc" || c.Old != "8h0m0s" || c.New != "1h0m0s" || c.Lengthened || len(c.Devices) != len(inventory()) {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestADiffReportsALengthenedCeiling(t *testing.T) {
+	d := Compare(mustParse(t, ceilingBody("1h")), mustParse(t, ceilingBody("never")), noon)
+	if len(d.SessionCeilings) != 1 || d.SessionCeilings[0].New != "never" || !d.SessionCeilings[0].Lengthened {
+		t.Fatalf("%+v", d.SessionCeilings)
+	}
+	d = Compare(mustParse(t, ceilingBody("1h")), mustParse(t, ceilingBody("2h")), noon)
+	if len(d.SessionCeilings) != 1 || !d.SessionCeilings[0].Lengthened {
+		t.Fatalf("a larger finite ceiling: %+v", d.SessionCeilings)
+	}
+}
+
+// The diff reads no port49d.yaml, so a move to the default may lengthen.
+func TestRemovingACeilingMayLengthenIt(t *testing.T) {
+	d := Compare(mustParse(t, ceilingBody("1h")), mustParse(t, ceilingBody("")), noon)
+	if len(d.SessionCeilings) != 1 || d.SessionCeilings[0].New != "default" || !d.SessionCeilings[0].Lengthened {
+		t.Fatalf("%+v", d.SessionCeilings)
+	}
+	d = Compare(mustParse(t, ceilingBody("never")), mustParse(t, ceilingBody("1h")), noon)
+	if len(d.SessionCeilings) != 1 || d.SessionCeilings[0].Lengthened {
+		t.Fatalf("never to finite shortens: %+v", d.SessionCeilings)
+	}
+}
+
+func TestAnUnchangedCeilingIsNotReported(t *testing.T) {
+	denied := strings.Replace(ceilingBody("1h"), "deny: [show chassis **]", "deny: [show chassis **, reload **]", 1)
+	d := Compare(mustParse(t, ceilingBody("1h")), mustParse(t, denied), noon)
+	if len(d.SessionCeilings) != 0 {
+		t.Fatalf("%+v", d.SessionCeilings)
+	}
+}
+
+// Spec §12's gate is privilege, access and regex; a ceiling is none of them.
+func TestACeilingChangeIsNotAGate(t *testing.T) {
+	d := Compare(mustParse(t, ceilingBody("1h")), mustParse(t, ceilingBody("never")), noon)
+	if ceilingDevices(t, d) == 0 || d.Unacknowledged() != 0 || d.UnacknowledgedLevels() != 0 || d.UnacknowledgedRegex() != 0 {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestSessionAgeString(t *testing.T) {
+	for _, tt := range []struct {
+		a    SessionAge
+		want string
+	}{
+		{SessionAge{Never: true}, "never"},
+		{SessionAge{Least: time.Hour}, "1h0m0s"},
+		{SessionAge{}, "default"},
+		{SessionAge{Unset: true}, "default"},
+		{SessionAge{Least: time.Hour, Unset: true}, "1h0m0s or the default, whichever is less"},
+	} {
+		if got := tt.a.String(); got != tt.want {
+			t.Errorf("%+v: %q, want %q", tt.a, got, tt.want)
+		}
+	}
+}
+
+// The diff cannot see port49d's default, so a move whose outcome depends on it
+// is flagged as a possible lengthening.
+func TestCeilingLengtheningCountsTheDefault(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		was, now SessionAge
+		want     bool
+	}{
+		{"default to a finite age", SessionAge{Unset: true}, SessionAge{Least: 8 * time.Hour}, true},
+		{"default to a finite age or the default", SessionAge{Unset: true}, SessionAge{Least: time.Hour, Unset: true}, false},
+		{"a bound role gains a finite age", SessionAge{Least: 8 * time.Hour, Unset: true}, SessionAge{Least: 4 * time.Hour}, true},
+		{"mixed composition raised", SessionAge{Least: 8 * time.Hour, Unset: true}, SessionAge{Least: 12 * time.Hour, Unset: true}, true},
+		{"mixed composition lowered", SessionAge{Least: 8 * time.Hour, Unset: true}, SessionAge{Least: time.Hour, Unset: true}, false},
+		{"never to finite", SessionAge{Never: true}, SessionAge{Least: time.Hour}, false},
+		{"never to default", SessionAge{Never: true}, SessionAge{Unset: true}, false},
+		{"finite to never", SessionAge{Least: time.Hour}, SessionAge{Never: true}, true},
+	} {
+		if got := tt.now.lengthens(tt.was); got != tt.want {
+			t.Errorf("%s: %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// One role names an age and the other none: the composition takes the least of
+// the one age and the default, so setting the other to 4h may lengthen it.
+func TestAMixedCeilingMayLengthen(t *testing.T) {
+	mixed := strings.Replace(diffBase, "permit: [show **]}", "permit: [show **], max_session_age: 8h}", 1)
+	set := strings.Replace(mixed, "deny: [show chassis **]}", "deny: [show chassis **], max_session_age: 4h}", 1)
+	d := Compare(mustParse(t, mixed), mustParse(t, set), noon)
+	if len(d.SessionCeilings) != 1 || !d.SessionCeilings[0].Lengthened || !d.SessionCeilings[0].DependsOnDefault {
+		t.Fatalf("%+v", d.SessionCeilings)
+	}
+	lowered := strings.Replace(mixed, "max_session_age: 8h", "max_session_age: 2h", 1)
+	d = Compare(mustParse(t, mixed), mustParse(t, lowered), noon)
+	if len(d.SessionCeilings) != 1 || d.SessionCeilings[0].Lengthened {
+		t.Fatalf("lowering: %+v", d.SessionCeilings)
+	}
+}

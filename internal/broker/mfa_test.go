@@ -1429,3 +1429,40 @@ func TestConfigNamesTheMethodsAndTheEndpointRefusesTheOthers(t *testing.T) {
 		t.Fatalf("an unknown field: %d, want 400", code)
 	}
 }
+
+// TestTheBrokerChecksThroughVerifyPair: a per-login proof and an admin call's
+// touch each judge their attestations through the one pivattest.VerifyPair
+// that `port49 hwkey` also calls, exactly once.
+func TestTheBrokerChecksThroughVerifyPair(t *testing.T) {
+	count := func(t *testing.T) *int {
+		n := new(int)
+		real := verifyPair
+		verifyPair = func(a pivattest.Anchors, device, session, touch *x509.Certificate, now time.Time) (pivattest.Attestation, pivattest.Attestation, string, error) {
+			*n++
+			return real(a, device, session, touch, now)
+		}
+		t.Cleanup(func() { verifyPair = real })
+		return n
+	}
+	t.Run("per-login proof", func(t *testing.T) {
+		f := newMFAFixture(t)
+		ch := f.ask(t, f.alice, "core-sw01")
+		n := count(t)
+		if code := f.proveTouch(t, f.alice, ch); code != 200 {
+			t.Fatalf("POST /v1/mfa = %d", code)
+		}
+		if *n != 1 {
+			t.Fatalf("VerifyPair called %d times, want 1", *n)
+		}
+	})
+	t.Run("admin touch", func(t *testing.T) {
+		f := newMFAFixture(t, withAllAdminRights())
+		n := count(t)
+		if code, _ := f.adminCall(t, f.alice, f.alice.conn, revokePath, `{"principal":"`+bobKey+`"}`); code != 200 {
+			t.Fatalf("admin call = %d", code)
+		}
+		if *n != 1 {
+			t.Fatalf("VerifyPair called %d times, want 1", *n)
+		}
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ func TestAFileOthersCouldWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(p, 0o620); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "writable by others") {
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), "is writable by group (mode 0620)") {
 		t.Fatalf("a group-writable file: %v", err)
 	}
 	if err := os.Chmod(p, 0o600); err != nil {
@@ -101,7 +102,7 @@ func TestADirectoryAboveOthersCanWriteIsRefused(t *testing.T) {
 	}
 	// The refusal says what the directory needs, and no chmod: it may be
 	// shared, as a group-writable ~/.config is.
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), top+" is writable by others") ||
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), top+" is writable by group and others (mode 0777)") ||
 		!strings.Contains(err.Error(), "writable by its owner alone (mode 0755 or 0700)") ||
 		strings.Contains(err.Error(), "chmod") {
 		t.Fatalf("a world-writable directory two up: %v", err)
@@ -140,11 +141,11 @@ func TestASymlinkedDirectoryIntoAWritableOneIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := filepath.Join(home, ".config", "port49", "config.yaml")
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by others") {
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by group and others (mode 0777)") {
 		t.Fatalf("a link into a world-writable directory: %v", err)
 	}
 	if err := WritePrivate(p, []byte("x\n"), "private test file"); err == nil ||
-		!strings.Contains(err.Error(), shared+" is writable by others") {
+		!strings.Contains(err.Error(), shared+" is writable by group and others (mode 0777)") {
 		t.Fatalf("a write through it: %v", err)
 	}
 }
@@ -210,7 +211,7 @@ func TestAChainOfLinksThroughAWritableDirectoryIsRefused(t *testing.T) {
 		os.Symlink(real, filepath.Join(shared, "hop")),
 		os.Symlink(filepath.Join(shared, "hop"), filepath.Join(home, ".config")))
 	p := filepath.Join(home, ".config", "port49", "config.yaml")
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by others") {
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), shared+" is writable by group and others (mode 0777)") {
 		t.Fatalf("a chain through a writable directory: %v", err)
 	}
 }
@@ -225,7 +226,7 @@ func TestALinkInsideALinksTargetIsRefused(t *testing.T) {
 		os.Symlink(stuff, filepath.Join(shared, "a")),
 		os.Symlink(filepath.Join(shared, "a", "b"), filepath.Join(home, ".config")))
 	if _, _, err := Load(filepath.Join(home, ".config", "config.yaml")); err == nil ||
-		!strings.Contains(err.Error(), shared+" is writable by others") {
+		!strings.Contains(err.Error(), shared+" is writable by group and others (mode 0777)") {
 		t.Fatalf("a link mid-target: %v", err)
 	}
 }
@@ -361,7 +362,7 @@ func TestABrokerCAOthersCanWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(ca, 0o664); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by others") {
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by group (mode 0664)") {
 		t.Fatalf("a group-writable CA: %v", err)
 	}
 }
@@ -388,7 +389,7 @@ func TestTheBrokerCAIsReadOnceThroughTheWalk(t *testing.T) {
 		t.Fatal(err)
 	}
 	p = private(t, "config.yaml", "broker_ca: "+filepath.Join(open, "ca.pem")+"\n")
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), open+" is writable by others") {
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), open+" is writable by group and others (mode 0777)") {
 		t.Fatalf("a CA in a writable directory: %v", err)
 	}
 	// A CA that is not there is said so, naming the path.
@@ -514,7 +515,7 @@ func TestWritePrivateCreatesNothingUnderARefusedDirectory(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(top, 0o700) })
 	p := filepath.Join(top, "a", "b", "known_hosts")
 	if err := WritePrivate(p, []byte("x\n"), "private test file"); err == nil ||
-		!strings.Contains(err.Error(), top+" is writable by others") {
+		!strings.Contains(err.Error(), top+" is writable by group and others (mode 0777)") {
 		t.Fatalf("a world-writable parent: %v", err)
 	}
 	if ents, err := os.ReadDir(top); err != nil || len(ents) != 0 {
@@ -548,7 +549,7 @@ func TestPrivateDirCreatesAndJudges(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(top, 0o700) })
 	if _, err := PrivateDir(filepath.Join(top, "c"), "private test file"); err == nil ||
-		!strings.Contains(err.Error(), "writable by others") {
+		!strings.Contains(err.Error(), "is writable by group and others (mode 0777)") {
 		t.Fatalf("a world-writable parent: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(top, "c")); !errors.Is(err, fs.ErrNotExist) {
@@ -584,7 +585,7 @@ func TestAnOIDCCAOthersCanWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(ca, 0o664); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by others") ||
+	if _, _, err := Load(p); err == nil || !strings.Contains(err.Error(), ca+" is writable by group (mode 0664)") ||
 		!strings.Contains(err.Error(), "oidc_ca in") {
 		t.Fatalf("%v", err)
 	}
@@ -846,7 +847,7 @@ func TestASystemFileNotRootsIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := LoadAll(filepath.Join(privateDir(t), "config.yaml"), false); err == nil ||
-		!strings.Contains(err.Error(), sys+" is writable by others") {
+		!strings.Contains(err.Error(), sys+" is writable by group (mode 0664)") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -964,8 +965,20 @@ func TestCheckOwnedJudgesTheModuleAndItsDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), mod) ||
-		!strings.Contains(err.Error(), "writable by others") {
+		!strings.Contains(err.Error(), "is writable by group (mode 0775)") {
 		t.Fatalf("a group-writable module: %v", err)
+	}
+	if err := os.Chmod(mod, 0o757); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), "is writable by others (mode 0757)") {
+		t.Fatalf("an other-writable module: %v", err)
+	}
+	if err := os.Chmod(mod, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), "is writable by group and others (mode 0777)") {
+		t.Fatalf("a module writable by both: %v", err)
 	}
 	if err := os.Chmod(mod, 0o755); err != nil {
 		t.Fatal(err)
@@ -1008,5 +1021,86 @@ func TestCheckOwnedJudgesTheModuleAndItsDirectories(t *testing.T) {
 	}
 	if err := CheckOwned(dlink); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("a link to a directory: %v", err)
+	}
+}
+
+// Ryan's ruling 2026-11-03: on macOS the admin group (gid 80) counts as
+// root-equivalent for a PKCS#11 module, because Homebrew's prefix is group
+// admin by design (GHA run 41633453384). Nothing else does.
+func TestGroupWriteTrusted(t *testing.T) {
+	for _, c := range []struct {
+		goos string
+		gid  uint32
+		want bool
+	}{
+		{"darwin", 80, true},
+		{"darwin", 20, false},
+		{"linux", 80, false},
+		{"linux", 0, false},
+	} {
+		if got := groupWriteTrusted(c.goos, c.gid); got != c.want {
+			t.Errorf("groupWriteTrusted(%q, %d) = %v, want %v", c.goos, c.gid, got, c.want)
+		}
+	}
+}
+
+// On Linux, a group-writable directory owned by your own gid is refused by
+// CheckOwned, and ReadPrivate's walk never takes the option at all.
+func TestCheckOwnedRefusesAGroupWritableDirectoryOnLinux(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("darwin trusts gid 80 only")
+	}
+	open := filepath.Join(privateDir(t), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mod := filepath.Join(open, "libmod.so")
+	if err := os.WriteFile(mod, []byte("ELF"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(open, 0o700) })
+	if err := CheckOwned(mod); err == nil || !strings.Contains(err.Error(), open+" is writable by group (mode 0770)") {
+		t.Fatalf("a group-writable directory: %v", err)
+	}
+	if _, err := ReadPrivate(mod, 16, "PKCS#11 module"); err == nil ||
+		!strings.Contains(err.Error(), open+" is writable by group (mode 0770)") {
+		t.Fatalf("ReadPrivate in a group-writable directory: %v", err)
+	}
+}
+
+// The option is threaded, not global: with a trust that accepts the entry's
+// group, group write passes, other write still does not, and a nil trust is
+// today's rule.
+func TestOwnedAloneGroupTrustIsExplicit(t *testing.T) {
+	dir := privateDir(t)
+	f := filepath.Join(dir, "m")
+	if err := os.WriteFile(f, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	trustAll := func(uint32) bool { return true }
+	for _, c := range []struct {
+		mode  os.FileMode
+		trust func(uint32) bool
+		want  string // the refusal's text; "" passes
+	}{
+		{0o775, nil, "is writable by group (mode 0775)"},
+		{0o775, trustAll, ""},
+		{0o757, trustAll, "is writable by others (mode 0757)"},
+		{0o777, trustAll, "is writable by others (mode 0777)"},
+	} {
+		if err := os.Chmod(f, c.mode); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Lstat(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ownedAlone(f, fi, "PKCS#11 module", c.trust)
+		if (c.want == "") != (got == nil) || (got != nil && !strings.Contains(got.Error(), c.want)) {
+			t.Errorf("mode %04o trust=%v: %v, want %q", c.mode, c.trust != nil, got, c.want)
+		}
 	}
 }

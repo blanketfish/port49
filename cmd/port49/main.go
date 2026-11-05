@@ -100,6 +100,11 @@ const usage = `usage:
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 keys status --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE DEVICE
+  port49 hwkey setup [--module PATH] [--token N] [--session-slot 9a|9e] [--roots FILE] [--broker URL]
+  port49 hwkey status [--module PATH] [--token N] [--session-slot 9a|9e] [--roots FILE] [--broker URL] [--json]
+                (check the security key hardware_key_touch needs, read-only on the token; setup writes
+                issued_key and touch_key when every check passes, and prints the ykman commands for what
+                is missing; exits 0 ready, 1 action needed, 2 error)
   port49 store status [--metrics ADDR]
                 (reads GET /store/status on the metrics listener of port49d or port49-broker: each
                 store as that process sees it, backend, members, reachable, the directory cache's
@@ -203,6 +208,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	case "keys":
 		return keysCmd(args[1:], stdout, stderr)
+	case "hwkey":
+		return hwkeyCmd(args[1:], stdout, stderr)
 	case "store":
 		return storeCmd(args[1:], stdout, stderr)
 	case "revoke":
@@ -502,6 +509,7 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if hwkey.IsRef(s.key) {
 		cfg.KeyRef = clientkey.CanonicalRef(s.key)
 	}
+	cfg.KeyStore = clientkey.StoreOf(s.key)
 	return cfg, nil
 }
 

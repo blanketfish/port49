@@ -153,6 +153,13 @@ type Spool struct {
 	// holds it; the drain path's own throttles belong to its goroutine alone.
 	lastOfferLog time.Time
 
+	// qmu guards queue and flushing: the offers waiting for the next sync,
+	// and whether a leader is writing one. Never held over I/O, so an offer
+	// joins a batch while the leader syncs under mu.
+	qmu      sync.Mutex
+	queue    []*offerWaiter
+	flushing bool
+
 	signal chan struct{}
 
 	// redact is the redaction a drained record passes through before the
@@ -179,8 +186,9 @@ type Spool struct {
 
 	// Test-only hooks (see spool_test.go); both are zero-valued no-ops in
 	// production.
-	failAfterBytes int64 // >0: fail the read after this many bytes of .draining, once
-	forceFail      bool  // true: drainOnce returns (false, 0) immediately, touching nothing
+	syncFile       func(*os.File) error // fsync of the spool file; nil is (*os.File).Sync
+	failAfterBytes int64                // >0: fail the read after this many bytes of .draining, once
+	forceFail      bool                 // true: drainOnce returns (false, 0) immediately, touching nothing
 }
 
 // NewSpool prepares the spool at overflowPath. It refuses a path it cannot
@@ -312,10 +320,13 @@ func readBoundedLine(br *bufio.Reader) (line []byte, read int64, oversized bool,
 }
 
 // Offer marshals r to one JSON line, appends it to the spool file, and syncs
-// before returning. If this write created the file, it also syncs the
-// parent directory so the new directory entry survives a crash (a data
-// fsync alone does not guarantee the file is findable after one). It
-// returns nil only once every one of those durable writes has succeeded;
+// before returning. Offers that arrive while a sync runs are written and
+// synced together by the next one (group commit, load run 2: an fsync per
+// record capped accounting at the disk's fsync rate); each still returns only
+// after a sync that covers its line, and a failed batch fails every offer in
+// it. If this write created the file, it also syncs the parent directory so
+// the new directory entry survives a crash (a data fsync alone does not
+// guarantee the file is findable after one). It returns nil only once every one of those durable writes has succeeded;
 // any error along the way counts a drop and returns ErrSpoolFull.
 //
 // A record is never appended to a line that may be incomplete. If the file
@@ -335,52 +346,136 @@ func (s *Spool) Offer(r decision.Record) error {
 	}
 	b = append(b, '\n')
 
+	w := &offerWaiter{line: b, done: make(chan offerResult, 1)}
+	s.qmu.Lock()
+	s.queue = append(s.queue, w)
+	if s.flushing {
+		// A leader is syncing: this line rides its next batch, or this
+		// offer is handed the lead when that batch ends.
+		s.qmu.Unlock()
+		res := <-w.done
+		if !res.lead {
+			return res.err
+		}
+		return s.lead(w)
+	}
+	s.flushing = true
+	s.qmu.Unlock()
+	return s.lead(w)
+}
+
+// offerWaiter is one Offer's line waiting for its batch's sync.
+type offerWaiter struct {
+	line []byte
+	done chan offerResult
+}
+
+// offerResult is a batch's answer to one waiter: its error, or the lead.
+type offerResult struct {
+	err  error
+	lead bool
+}
+
+// lead writes and syncs every queued line as one batch, answers each, and
+// hands the lead to the first offer that queued meanwhile, so no offer
+// leads longer than one batch. self is the leader's own waiter; its answer
+// is returned, not sent.
+func (s *Spool) lead(self *offerWaiter) error {
+	s.qmu.Lock()
+	batch := s.queue
+	s.queue = nil
+	s.qmu.Unlock()
+
+	err := s.writeBatch(batch)
+
+	s.qmu.Lock()
+	var next *offerWaiter
+	if len(s.queue) > 0 {
+		next = s.queue[0]
+	} else {
+		s.flushing = false
+	}
+	s.qmu.Unlock()
+	for _, w := range batch {
+		if w != self {
+			w.done <- offerResult{err: err}
+		}
+	}
+	if next != nil {
+		next.done <- offerResult{lead: true}
+	}
+	return err
+}
+
+// writeBatch appends the batch's lines in one write and syncs once; a
+// failure at any step fails every offer in it. A short write can leave the
+// batch's earlier complete lines in the file, and a sync that fails after a
+// full write leaves all of them, while every offer gets ErrSpoolFull: the
+// drain forwards the lines and the devices retransmit, so a record can arrive
+// twice, up to a batch of them (accounting is at-least-once). See Offer.
+func (s *Spool) writeBatch(batch []*offerWaiter) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_, statErr := os.Stat(s.path)
 	isNew := os.IsNotExist(statErr)
 
-	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		s.offerFailed("open", err)
+	fail := func(stage string, err error) error {
+		for range batch {
+			s.offerFailed(stage, err)
+		}
 		return ErrSpoolFull
 	}
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fail("open", err)
+	}
+	var buf []byte
 	if s.needNewline {
 		// The file may end mid-record (a short write, or a crash during one).
-		// Starting this record on its own line keeps the fragment a line of its
-		// own, which the drain drops by itself, instead of gluing this record
-		// onto it and losing a record that is about to be acknowledged.
-		b = append([]byte{'\n'}, b...)
+		// Starting this batch on its own line keeps the fragment a line of its
+		// own, which the drain drops by itself, instead of gluing a record
+		// onto it and losing one that is about to be acknowledged.
+		buf = append(buf, '\n')
 	}
-	_, werr := f.Write(b)
+	for _, w := range batch {
+		buf = append(buf, w.line...)
+	}
+	_, werr := f.Write(buf)
 	var serr error
+	syncStart := time.Now()
 	if werr == nil {
-		serr = f.Sync()
+		serr = s.sync(f)
 	}
 	cerr := f.Close()
 	if werr != nil || serr != nil {
+		if werr == nil {
+			s.metrics.SpoolSyncSeconds.Observe(time.Since(syncStart).Seconds())
+		}
 		// A partial write leaves the file ending mid-record; so does a write
-		// whose sync never landed. Either way the next Offer must separate.
+		// whose sync never landed. Either way the next batch must separate.
 		s.needNewline = true
 		if werr != nil {
-			s.offerFailed("write", werr)
-		} else {
-			s.offerFailed("sync", serr)
+			return fail("write", werr)
 		}
-		return ErrSpoolFull
+		return fail("sync", serr)
 	}
 	s.needNewline = false
 	_ = cerr // a close failure after a successful sync does not lose the write
 
 	if isNew {
 		if err := syncDir(filepath.Dir(s.path)); err != nil {
-			s.offerFailed("directory sync", err)
-			return ErrSpoolFull
+			s.metrics.SpoolSyncSeconds.Observe(time.Since(syncStart).Seconds())
+			return fail("directory sync", err)
 		}
 	}
+	// One observation per group commit: the data fsync, and the directory
+	// fsync when this batch created the file. It is what every ack in the
+	// batch waited on, so a slow spool disk shows here and not only as slow
+	// accounting.
+	s.metrics.SpoolSyncSeconds.Observe(time.Since(syncStart).Seconds())
 
-	s.depth++
+	s.depth += len(batch)
 	s.metrics.SpoolDepth.Set(float64(s.depth))
 
 	select {
@@ -388,6 +483,14 @@ func (s *Spool) Offer(r decision.Record) error {
 	default:
 	}
 	return nil
+}
+
+// sync fsyncs the spool file through the test hook, if any.
+func (s *Spool) sync(f *os.File) error {
+	if s.syncFile != nil {
+		return s.syncFile(f)
+	}
+	return f.Sync()
 }
 
 // offerFailed counts a drop and says why, at most once a minute: on a disk

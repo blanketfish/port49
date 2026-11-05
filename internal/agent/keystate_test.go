@@ -330,3 +330,22 @@ func TestUnlockReachesAUsableTouchKeyOnly(t *testing.T) {
 		t.Fatalf("the PIN went to a key on another token (%d tries)", n)
 	}
 }
+
+// Status carries the store the session key sits in, one word of a closed set
+// and never a reference: `port49 hwkey` and the login's remedy lines choose by
+// it, not by matching a message (decision 55 ruling 16).
+func TestStatusCarriesTheSessionKeyStore(t *testing.T) {
+	session := newFakeKey(t, hwkey.Present)
+	cert := func(k any) tls.Certificate { return tls.Certificate{PrivateKey: k, Certificate: [][]byte{{1}}} }
+	for _, store := range []string{"pkcs11", "tpm", "file", "secure_enclave"} {
+		_, c := agentWith(t, Config{Cert: cert(session.PrivateKey), KeyStore: store, KeyRef: "pkcs11:token=x;id=%01"})
+		st, err := c.Status(context.Background())
+		if err != nil || st.SessionKeyStore != store {
+			t.Fatalf("store %q: status %+v err %v", store, st, err)
+		}
+	}
+	_, c := agentWith(t, Config{Cert: cert(session.PrivateKey)})
+	if st, err := c.Status(context.Background()); err != nil || st.SessionKeyStore != "" {
+		t.Fatalf("an agent told no store reports one: %+v %v", st, err)
+	}
+}

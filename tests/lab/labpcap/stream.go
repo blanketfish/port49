@@ -12,6 +12,11 @@ import (
 // package's business, whatever else it is.
 const Port = 49
 
+// TLSPort is the RFC 9887 port. Redact keeps its records untouched, because TLS 1.3 hides the
+// stream, but only after checking that each direction of each connection opens with a TLS
+// handshake record (0x16 0x03): a device that sends plain TACACS+ to 300 is refused, not kept.
+const TLSPort = 300
+
 // Segment is one TCP segment's payload, and where it came from.
 //
 // StreamOff is what makes a rewriter possible. `tcpdump -i any` sees a packet

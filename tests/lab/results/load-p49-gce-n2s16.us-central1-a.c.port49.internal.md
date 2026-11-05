@@ -1,0 +1,477 @@
+# Load at the design rate
+
+- **session_etcd_storage:** PersistentDisk, ext4
+- **disk_declared:** GCE pd-ssd 400 GB, ext4 (declared by the operator, not read from the host)
+- **accounting_spool_storage:** PersistentDisk, ext4
+- **Date measured:** 2026-11-03
+- **Host CPU:** Intel(R) Xeon(R) CPU @ 2.80GHz, 16 cores
+- **Host RAM:** 64293 MB
+- **Host disk:** 392 GB total, 363 GB free under the run directory
+- **Host kernel:** 7.0.0-1014-gcp
+- **Host:** p49-gce-n2s16.us-central1-a.c.port49.internal
+- **Commit:** 15e77241a360b1ba2b7229c65c22330ecc4651d4
+- **Fleet:** 10000 devices, 50 machine principals, 450 people
+- **run_dir_fs:** ext4
+- **etcd_session_wal_fsync_mean_ms:** 0.77
+
+Sizing the session etcd's quota: compare `etcd_session_db_mb` (the file's total size, which the quota counts) with 8589934592 bytes (8192 MB). `etcd_session_db_growth_mb_per_min` is the in-use size's change and is understated when `etcd_session_compacted_during_cell` is true (a compaction freed space in the cell); `etcd_session_revisions_per_min` is the write rate compaction cannot hide.
+
+## Cell a
+
+- **Transport:** tcp
+- **Rate:** 170 per second
+- **Duration:** 10m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=10.00
+- `cpu_seconds_etcd_d1`: 4.9
+- `cpu_seconds_etcd_d2`: 4.4
+- `cpu_seconds_etcd_d3`: 4.1
+- `cpu_seconds_etcd_session`: 1017.0
+- `cpu_seconds_port49-broker`: 270.4
+- `cpu_seconds_port49d`: 811.0
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=5.00
+- `errors`: 0
+- `etcd_session_apply_slow_total_delta`: 44
+- `etcd_session_backend_commit_p99_ms`: <=8.00
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: 114.98
+- `etcd_session_db_in_use_mb`: 1150
+- `etcd_session_db_mb`: 1150
+- `etcd_session_revisions_per_min`: 43095
+- `etcd_session_wal_fsync_mean_ms`: 0.72
+- `late`: 0
+- `mint_errors`: 0
+- `mint_fail_p50_ms`: 0.00
+- `mint_fail_p99_ms`: 0.00
+- `mint_p50_ms`: 4.69
+- `mint_p99_ms`: 10.18
+- `peak_port49_connections`: 7
+- `peak_rss_mb_etcd_d1`: 44
+- `peak_rss_mb_etcd_d2`: 44
+- `peak_rss_mb_etcd_d3`: 44
+- `peak_rss_mb_etcd_session`: 1604
+- `peak_rss_mb_port49-broker`: 72
+- `peak_rss_mb_port49d`: 98
+- `peak_spool_depth`: 2
+- `play_max_ms`: 395.53
+- `play_p50_ms`: 25.46
+- `play_p99_ms`: 41.73
+- `plays`: 102000
+- `spool_drops_during`: 0
+- `step_p50_ms_account_start`: 5.22
+- `step_p50_ms_account_stop`: 3.10
+- `step_p50_ms_authorize_session`: 1.54
+- `step_p50_ms_command_denied`: 1.09
+- `step_p50_ms_command_permitted`: 0.93
+- `step_p50_ms_login`: 7.43
+- `step_p99_ms_account_start`: 9.69
+- `step_p99_ms_account_stop`: 6.18
+- `step_p99_ms_authorize_session`: 5.28
+- `step_p99_ms_command_denied`: 3.55
+- `step_p99_ms_command_permitted`: 3.30
+- `step_p99_ms_login`: 14.72
+
+## Cell b
+
+- **Transport:** tls
+- **Rate:** 170 per second
+- **Duration:** 10m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=10.00
+- `cpu_seconds_etcd_d1`: 5.0
+- `cpu_seconds_etcd_d2`: 4.4
+- `cpu_seconds_etcd_d3`: 4.1
+- `cpu_seconds_etcd_session`: 1086.7
+- `cpu_seconds_port49-broker`: 276.8
+- `cpu_seconds_port49d`: 1236.7
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=10.00
+- `errors`: 0
+- `etcd_session_apply_slow_total_delta`: 0
+- `etcd_session_backend_commit_p99_ms`: <=8.00
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: 44.53
+- `etcd_session_db_in_use_mb`: 1641
+- `etcd_session_db_mb`: 2340
+- `etcd_session_revisions_per_min`: 42108
+- `etcd_session_wal_fsync_mean_ms`: 0.77
+- `late`: 0
+- `mint_errors`: 0
+- `mint_fail_p50_ms`: 0.00
+- `mint_fail_p99_ms`: 0.00
+- `mint_p50_ms`: 5.10
+- `mint_p99_ms`: 15.08
+- `peak_port49_connections`: 11
+- `peak_rss_mb_etcd_d1`: 46
+- `peak_rss_mb_etcd_d2`: 45
+- `peak_rss_mb_etcd_d3`: 44
+- `peak_rss_mb_etcd_session`: 3123
+- `peak_rss_mb_port49-broker`: 74
+- `peak_rss_mb_port49d`: 157
+- `peak_spool_depth`: 2
+- `play_max_ms`: 103.66
+- `play_p50_ms`: 36.30
+- `play_p99_ms`: 65.73
+- `plays`: 102000
+- `spool_drops_during`: 0
+- `step_p50_ms_account_start`: 5.97
+- `step_p50_ms_account_stop`: 3.63
+- `step_p50_ms_authorize_session`: 2.37
+- `step_p50_ms_command_denied`: 1.53
+- `step_p50_ms_command_permitted`: 1.51
+- `step_p50_ms_login`: 8.66
+- `step_p99_ms_account_start`: 12.71
+- `step_p99_ms_account_stop`: 8.24
+- `step_p99_ms_authorize_session`: 6.67
+- `step_p99_ms_command_denied`: 4.80
+- `step_p99_ms_command_permitted`: 4.90
+- `step_p99_ms_login`: 20.61
+
+## Cell c
+
+- **Transport:** tcp
+- **Rate:** 2905 per second
+- **Duration:** 9m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=5.00
+- `capacity_per_s`: 2905
+- `cpu_seconds_etcd_d1`: 4.3
+- `cpu_seconds_etcd_d2`: 3.8
+- `cpu_seconds_etcd_d3`: 3.5
+- `cpu_seconds_etcd_session`: 523.5
+- `cpu_seconds_port49-broker`: 22.7
+- `cpu_seconds_port49d`: 1036.8
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=25.00
+- `errors`: 0
+- `etcd_session_apply_slow_total_delta`: 74
+- `etcd_session_backend_commit_p99_ms`: <=4.00
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: -103.31
+- `etcd_session_db_in_use_mb`: 750
+- `etcd_session_db_mb`: 2340
+- `etcd_session_revisions_per_min`: 2895
+- `etcd_session_wal_fsync_mean_ms`: 0.82
+- `late`: 0
+- `mint_errors`: 0
+- `mint_fail_p50_ms`: 0.00
+- `mint_fail_p99_ms`: 0.00
+- `mint_p50_ms`: 0.00
+- `mint_p99_ms`: 0.00
+- `peak_port49_connections`: 208
+- `peak_rss_mb_etcd_d1`: 46
+- `peak_rss_mb_etcd_d2`: 45
+- `peak_rss_mb_etcd_d3`: 44
+- `peak_rss_mb_etcd_session`: 3171
+- `peak_rss_mb_port49-broker`: 76
+- `peak_rss_mb_port49d`: 98
+- `peak_spool_depth`: 33418
+- `play_max_ms`: 405.02
+- `play_p50_ms`: 7.45
+- `play_p99_ms`: 148.81
+- `plays`: 261414
+- `spool_drops_during`: 0
+- `step_1_account_p99_ms`: 3.67
+- `step_1_errors_late`: 0, 0
+- `step_1_rate_per_s`: 170
+- `step_1_spool_drops`: 0
+- `step_2_account_p99_ms`: 3.79
+- `step_2_errors_late`: 0, 0
+- `step_2_rate_per_s`: 255
+- `step_2_spool_drops`: 0
+- `step_3_account_p99_ms`: 4.62
+- `step_3_errors_late`: 0, 0
+- `step_3_rate_per_s`: 382
+- `step_3_spool_drops`: 0
+- `step_4_account_p99_ms`: 4.84
+- `step_4_errors_late`: 0, 0
+- `step_4_rate_per_s`: 574
+- `step_4_spool_drops`: 0
+- `step_5_account_p99_ms`: 5.70
+- `step_5_errors_late`: 0, 0
+- `step_5_rate_per_s`: 861
+- `step_5_spool_drops`: 0
+- `step_6_account_p99_ms`: 10.39
+- `step_6_errors_late`: 0, 0
+- `step_6_rate_per_s`: 1291
+- `step_6_spool_drops`: 0
+- `step_7_account_p99_ms`: 13.14
+- `step_7_errors_late`: 0, 0
+- `step_7_rate_per_s`: 1936
+- `step_7_spool_drops`: 0
+- `step_8_account_p99_ms`: 26.42
+- `step_8_errors_late`: 0, 0
+- `step_8_rate_per_s`: 2905
+- `step_8_spool_drops`: 0
+- `step_9_account_p99_ms`: 78.12
+- `step_9_errors_late`: 0, 0
+- `step_9_rate_per_s`: 4357
+- `step_9_spool_drops`: 0
+- `step_p50_ms_account_start`: 3.34
+- `step_p50_ms_account_stop`: 3.69
+- `step_p99_ms_account_start`: 78.12
+- `step_p99_ms_account_stop`: 64.75
+
+## Cell d
+
+- **Transport:** tcp
+- **Rate:** 170 per second
+- **Duration:** 10m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=10.00
+- `cpu_seconds_etcd_d1`: 5.1
+- `cpu_seconds_etcd_d2`: 4.4
+- `cpu_seconds_etcd_d3`: 4.2
+- `cpu_seconds_etcd_session`: 1087.7
+- `cpu_seconds_port49-broker`: 757.6
+- `cpu_seconds_port49d`: 805.8
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=10.00
+- `errors`: 4147
+- `errors_connection`: 3272
+- `errors_no_reaction`: 875
+- `etcd_session_apply_slow_total_delta`: 1
+- `etcd_session_backend_commit_p99_ms`: <=4.00
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: 96.85
+- `etcd_session_db_in_use_mb`: 1719
+- `etcd_session_db_mb`: 2340
+- `etcd_session_revisions_per_min`: 42460
+- `etcd_session_wal_fsync_mean_ms`: 0.86
+- `fault`: policy edit at one third; session store stopped 20s at two thirds
+- `fault_inside_run`: true
+- `hang_bound_ms`: 10000.00
+- `late`: 151
+- `mint_errors`: 3422
+- `mint_errors_200_store_unavailable`: 1941
+- `mint_errors_503_store_unavailable`: 1481
+- `mint_fail_p50_ms`: 0.36
+- `mint_fail_p99_ms`: 500.72
+- `mint_p50_ms`: 5.64
+- `mint_p99_ms`: 26.38
+- `peak_port49_connections`: 107
+- `peak_rss_mb_etcd_d1`: 46
+- `peak_rss_mb_etcd_d2`: 46
+- `peak_rss_mb_etcd_d3`: 45
+- `peak_rss_mb_etcd_session`: 3349
+- `peak_rss_mb_port49-broker`: 134
+- `peak_rss_mb_port49d`: 100
+- `peak_spool_depth`: 27039
+- `play_max_ms`: 1453.04
+- `play_p50_ms`: 30.11
+- `play_p99_ms`: 86.05
+- `plays`: 102000
+- `port49_broker_reload_seconds`: 7.3
+- `port49d_reload_seconds`: 8.4
+- `spool_drops_during`: 0
+- `step_p50_ms_account_start`: 6.09
+- `step_p50_ms_account_stop`: 3.62
+- `step_p50_ms_authorize_session`: 2.13
+- `step_p50_ms_command_denied`: 1.44
+- `step_p50_ms_command_permitted`: 1.18
+- `step_p50_ms_login`: 8.99
+- `step_p99_ms_account_start`: 15.25
+- `step_p99_ms_account_stop`: 8.53
+- `step_p99_ms_authorize_session`: 7.48
+- `step_p99_ms_command_denied`: 5.25
+- `step_p99_ms_command_permitted`: 4.99
+- `step_p99_ms_login`: 29.25
+
+## Cell e
+
+- **Transport:** tcp
+- **Rate:** 170 per second
+- **Duration:** 10m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=10.00
+- `burst_devices_each`: 100
+- `burst_errors`: 0
+- `burst_mints`: 20
+- `burst_p50_ms`: 1578.11
+- `burst_p99_ms`: 3149.53
+- `cpu_seconds_etcd_d1`: 5.2
+- `cpu_seconds_etcd_d2`: 4.5
+- `cpu_seconds_etcd_d3`: 4.2
+- `cpu_seconds_etcd_session`: 1133.8
+- `cpu_seconds_port49-broker`: 1076.0
+- `cpu_seconds_port49d`: 832.3
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=10.00
+- `errors`: 0
+- `etcd_session_apply_slow_total_delta`: 0
+- `etcd_session_backend_commit_p99_ms`: <=8.00
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: 30.66
+- `etcd_session_db_in_use_mb`: 2026
+- `etcd_session_db_mb`: 2956
+- `etcd_session_revisions_per_min`: 43281
+- `etcd_session_wal_fsync_mean_ms`: 0.82
+- `late`: 0
+- `mint_errors`: 0
+- `mint_fail_p50_ms`: 0.00
+- `mint_fail_p99_ms`: 0.00
+- `mint_p50_ms`: 5.63
+- `mint_p99_ms`: 23.45
+- `peak_port49_connections`: 15
+- `peak_rss_mb_etcd_d1`: 47
+- `peak_rss_mb_etcd_d2`: 46
+- `peak_rss_mb_etcd_d3`: 44
+- `peak_rss_mb_etcd_session`: 4217
+- `peak_rss_mb_port49-broker`: 135
+- `peak_rss_mb_port49d`: 101
+- `peak_spool_depth`: 3
+- `play_max_ms`: 2904.81
+- `play_p50_ms`: 29.88
+- `play_p99_ms`: 83.78
+- `plays`: 102000
+- `spool_drops_during`: 0
+- `step_p50_ms_account_start`: 6.09
+- `step_p50_ms_account_stop`: 3.61
+- `step_p50_ms_authorize_session`: 2.10
+- `step_p50_ms_command_denied`: 1.41
+- `step_p50_ms_command_permitted`: 1.17
+- `step_p50_ms_login`: 8.96
+- `step_p99_ms_account_start`: 13.63
+- `step_p99_ms_account_stop`: 8.08
+- `step_p99_ms_authorize_session`: 7.21
+- `step_p99_ms_command_denied`: 5.16
+- `step_p99_ms_command_permitted`: 5.01
+- `step_p99_ms_login`: 29.17
+
+## Cell e2
+
+- **Transport:** tcp
+- **Rate:** 170 per second
+- **Duration:** 10m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=25.00
+- `cpu_seconds_etcd_d1`: 5.1
+- `cpu_seconds_etcd_d2`: 4.4
+- `cpu_seconds_etcd_d3`: 4.2
+- `cpu_seconds_etcd_session`: 1142.3
+- `cpu_seconds_port49-broker`: 1069.2
+- `cpu_seconds_port49d`: 826.7
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=10.00
+- `errors`: 16
+- `errors_no_reaction`: 16
+- `etcd_session_apply_slow_total_delta`: 0
+- `etcd_session_backend_commit_p99_ms`: <=4.00
+- `etcd_session_compacted_during_cell`: true
+- `etcd_session_db_growth_mb_per_min`: 19.86
+- `etcd_session_db_in_use_mb`: 2224
+- `etcd_session_db_mb`: 3274
+- `etcd_session_revisions_per_min`: 43874
+- `etcd_session_wal_fsync_mean_ms`: 0.77
+- `fleet_principal_cap_evicted_delta`: 0
+- `fleet_window_s`: 300.0
+- `late`: 0
+- `mint_errors`: 16
+- `mint_errors_503_too_many_connections`: 16
+- `mint_fail_p50_ms`: 2.16
+- `mint_fail_p99_ms`: 3.36
+- `mint_p50_ms`: 5.31
+- `mint_p99_ms`: 27.87
+- `peak_port49_connections`: 15
+- `peak_rss_mb_etcd_d1`: 47
+- `peak_rss_mb_etcd_d2`: 46
+- `peak_rss_mb_etcd_d3`: 45
+- `peak_rss_mb_etcd_session`: 4840
+- `peak_rss_mb_port49-broker`: 134
+- `peak_rss_mb_port49d`: 101
+- `peak_spool_depth`: 2
+- `play_max_ms`: 227.88
+- `play_p50_ms`: 28.21
+- `play_p99_ms`: 95.04
+- `plays`: 102000
+- `principal_cap_evicted_burst_window_s`: 6.0
+- `principal_cap_evicted_delta`: 5
+- `principal_cap_refused_delta`: 72
+- `spool_drops_during`: 0
+- `step_p50_ms_account_start`: 5.75
+- `step_p50_ms_account_stop`: 3.42
+- `step_p50_ms_authorize_session`: 1.93
+- `step_p50_ms_command_denied`: 1.33
+- `step_p50_ms_command_permitted`: 1.11
+- `step_p50_ms_login`: 8.48
+- `step_p99_ms_account_start`: 14.11
+- `step_p99_ms_account_stop`: 7.96
+- `step_p99_ms_authorize_session`: 7.63
+- `step_p99_ms_command_denied`: 5.20
+- `step_p99_ms_command_permitted`: 5.12
+- `step_p99_ms_login`: 32.88
+- `workload_devices_each`: 100
+- `workload_exit_0`: 20
+- `workload_exit_codes_not_0`: 
+- `workload_not_exit_0`: 0
+- `workload_p50_ms`: 4017.19
+- `workload_p99_ms`: 5967.91
+- `workload_processes`: 20
+
+## Cell f
+
+- **Transport:** tcp
+- **Rate:** 170 per second
+- **Duration:** 2m0s
+- **Verdict:** PASS
+
+- `broker_store_call_p99_ms`: <=10.00
+- `call_timeout_ms`: 500.00
+- `cpu_seconds_etcd_d1`: 1.0
+- `cpu_seconds_etcd_d2`: 0.9
+- `cpu_seconds_etcd_d3`: 0.8
+- `cpu_seconds_etcd_session`: 220.5
+- `cpu_seconds_port49-broker`: 210.5
+- `cpu_seconds_port49d`: 166.0
+- `daemon_run_restarts`: 0
+- `daemon_store_call_p99_ms`: <=10.00
+- `errors`: 0
+- `etcd_session_apply_slow_total_delta`: 0
+- `etcd_session_backend_commit_p99_ms`: <=4.00
+- `etcd_session_compacted_during_cell`: false
+- `etcd_session_db_growth_mb_per_min`: 121.02
+- `etcd_session_db_in_use_mb`: 2466
+- `etcd_session_db_mb`: 3274
+- `etcd_session_revisions_per_min`: 41025
+- `etcd_session_wal_fsync_mean_ms`: 0.77
+- `late`: 0
+- `mint_errors`: 0
+- `mint_fail_p50_ms`: 0.00
+- `mint_fail_p99_ms`: 0.00
+- `mint_p50_ms`: 5.08
+- `mint_p99_ms`: 28.86
+- `netem_delay`: 40ms
+- `peak_port49_connections`: 9
+- `peak_rss_mb_etcd_d1`: 47
+- `peak_rss_mb_etcd_d2`: 46
+- `peak_rss_mb_etcd_d3`: 44
+- `peak_rss_mb_etcd_session`: 4877
+- `peak_rss_mb_port49-broker`: 119
+- `peak_rss_mb_port49d`: 101
+- `peak_spool_depth`: 2
+- `play_max_ms`: 163.65
+- `play_p50_ms`: 27.42
+- `play_p99_ms`: 98.75
+- `plays`: 20400
+- `signin_p99_ms`: 32.66
+- `spool_drops_during`: 0
+- `step_p50_ms_account_start`: 5.57
+- `step_p50_ms_account_stop`: 3.36
+- `step_p50_ms_authorize_session`: 1.73
+- `step_p50_ms_command_denied`: 1.25
+- `step_p50_ms_command_permitted`: 1.05
+- `step_p50_ms_login`: 8.18
+- `step_p99_ms_account_start`: 13.03
+- `step_p99_ms_account_stop`: 7.36
+- `step_p99_ms_authorize_session`: 6.52
+- `step_p99_ms_command_denied`: 4.24
+- `step_p99_ms_command_permitted`: 4.08
+- `step_p99_ms_login`: 32.66
+

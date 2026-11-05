@@ -286,7 +286,7 @@ spec:
 	// The chart's enrollments export (backup.enrollments) is not run here: it exports the sealed enrollment
 	// store of a directory_password verifier, which needs a directory, and a directory supplies the human
 	// usernames the stack's policy declares (policy load refuses both). No LDAP server is in this stack, so
-	// the CronJob's pattern is checked by tests/helm and its run waits for a lab with one (12c).
+	// the CronJob's pattern is checked by tests/helm and its run is TestEnrollmentsExportRuns (enrollments_test.go).
 	for _, b := range []struct{ cron, glob, stale string }{
 		{"port49-etcd-snapshot", "etcd-snapshot-*.db", "etcd-snapshot.new"},
 	} {

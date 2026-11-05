@@ -203,7 +203,7 @@ func TestNoExampleStoreIsOpenToEveryNamespace(t *testing.T) {
 // No pod an example makes calls the Kubernetes API except the workload CronJob, whose token is projected
 // for another audience: every other one drops the default token (review m-6).
 func TestExamplePodsDropTheServiceAccountToken(t *testing.T) {
-	for _, f := range []string{"backup-cronjob.yaml", "etcd/statefulset.yaml", "etcd/etcd-init-job.yaml"} {
+	for _, f := range []string{"backup-cronjob.yaml", "init-enrollments-job.yaml", "etcd/statefulset.yaml", "etcd/etcd-init-job.yaml"} {
 		var d doc
 		if err := yaml.Unmarshal([]byte(read(t, "deploy/helm/port49/examples/"+f)), &d); err != nil {
 			t.Fatal(err)
@@ -476,5 +476,46 @@ func TestTheNotesGiveTheRunnableCopyIssuerLineOnlyWithIssuance(t *testing.T) {
 	}
 	if !strings.Contains(s[:i], `index $id "issuance"`) {
 		t.Error("the copy-issuer line is printed whether or not issuance is on")
+	}
+}
+
+// No PrometheusRule renders by default; with prometheusRule.enabled one does, holding the alert
+// file's groups, and the labels the operator's Prometheus selects on (plan 12c, Task 5).
+func TestPrometheusRuleIsOffByDefault(t *testing.T) {
+	for _, d := range render(t, goRender, "") {
+		if kindOf(d) == "PrometheusRule" {
+			t.Fatalf("a PrometheusRule renders by default: %v", nameOf(d))
+		}
+	}
+	docs := render(t, goRender, "prometheusRule: {enabled: true, labels: {release: kube-prometheus}}\n")
+	r := one(t, docs, "PrometheusRule", "t")
+	if str(at(r, "metadata", "labels", "release")) != "kube-prometheus" {
+		t.Errorf("the rule's labels: %v", at(r, "metadata", "labels"))
+	}
+	var want struct {
+		Groups []any `yaml:"groups"`
+	}
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/alerts/port49.rules.yaml")), &want); err != nil {
+		t.Fatal(err)
+	}
+	got := list(at(r, "spec", "groups"))
+	if len(want.Groups) == 0 || len(got) != len(want.Groups) {
+		t.Fatalf("the rule holds %d groups, the file %d", len(got), len(want.Groups))
+	}
+	for i := range got {
+		if str(at(got[i], "name")) != str(at(want.Groups[i], "name")) || len(list(at(got[i], "rules"))) != len(list(at(want.Groups[i], "rules"))) {
+			t.Errorf("group %d differs from the file's", i)
+		}
+	}
+}
+
+// autoscaling.averageConnections is half the peak port49_connections per replica
+// at target, to the nearest 50 (plan 12c decision 7): beehive's real-disk cell b
+// peaked at 62 with one replica; the GCE pd-ssd target cells peaked at 7 and 11, which round to 0,
+// so 50 stands as the floor (tests/lab/results/load-p49-gce-n2s16.us-central1-a.c.port49.internal.md).
+func TestHPAAverageConnections(t *testing.T) {
+	v := parseValuesFile(t, filepath.Join(chartDir, "values.yaml"))
+	if got := str(at(at(v, "autoscaling"), "averageConnections")); got != "50" {
+		t.Fatalf("autoscaling.averageConnections is %s, want 50", got)
 	}
 }

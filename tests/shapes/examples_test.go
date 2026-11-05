@@ -1,12 +1,15 @@
 package shapes
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/blanketfish/port49/internal/config"
 )
@@ -262,6 +265,51 @@ func TestComposeIsPinnedAndHardenedLikeTheChart(t *testing.T) {
 		for _, line := range []string{"no-new-privileges:true", "cap_drop: [ALL]", "read_only: true"} {
 			if !strings.Contains(block, line) {
 				t.Errorf("%s lacks %q", svc, line)
+			}
+		}
+	}
+}
+
+// etcdValues are the compaction and quota every shipped etcd shape carries,
+// read from the first systemd example: the one place they are stated, so the
+// other shapes cannot drift from it.
+func etcdValues(t *testing.T) (mode, retention, quota string) {
+	t.Helper()
+	var y map[string]any
+	if err := yaml.Unmarshal([]byte(read(t, "deploy/systemd/examples/etcd-1.yaml")), &y); err != nil {
+		t.Fatal(err)
+	}
+	mode, retention, quota = fmt.Sprint(y["auto-compaction-mode"]), fmt.Sprint(y["auto-compaction-retention"]),
+		fmt.Sprint(y["quota-backend-bytes"])
+	if mode == "<nil>" || retention == "<nil>" || quota == "<nil>" {
+		t.Fatal("etcd-1.yaml lacks compaction or a quota")
+	}
+	// One hour of history at the design rate (~150 MB/min) does not fit the 8 GiB
+	// quota; every use of history handles ErrCompacted by rescanning (load run 4).
+	if retention != "10m" || quota != "8589934592" {
+		t.Fatalf("etcd-1.yaml retention %q, quota %q; want 10m and 8589934592", retention, quota)
+	}
+	return mode, retention, quota
+}
+
+// Every shipped etcd shape compacts and has a quota: without them etcd's
+// defaults fill a 2 GiB backend and refuse every write (load run 3). The
+// systemd examples are held to etcd-1.yaml in units_test.go.
+func TestEveryShippedEtcdShapeCompactsAndHasAQuota(t *testing.T) {
+	mode, retention, quota := etcdValues(t)
+	for file, wants := range map[string][]string{
+		"deploy/compose/compose.yaml": {
+			"ETCD_AUTO_COMPACTION_MODE: " + mode, "ETCD_AUTO_COMPACTION_RETENTION: " + retention,
+			`ETCD_QUOTA_BACKEND_BYTES: "` + quota + `"`},
+		"deploy/helm/port49/examples/etcd/statefulset.yaml": {
+			"{name: ETCD_AUTO_COMPACTION_MODE, value: " + mode + "}",
+			`{name: ETCD_AUTO_COMPACTION_RETENTION, value: "` + retention + `"}`,
+			`{name: ETCD_QUOTA_BACKEND_BYTES, value: "` + quota + `"}`},
+	} {
+		body := read(t, file)
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q", file, want)
 			}
 		}
 	}

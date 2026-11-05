@@ -226,8 +226,21 @@ func (p *Policy) explain(subject string, m *Member, device, line string, now tim
 // a separator or control character (the fault is in the data, not the
 // broker), and broker_error for anything else.
 func MintCheck(res Resolution, principal, device string) (code, detail string) {
-	if _, _, err := engine.Encode(res.Blob); err != nil {
-		return "broker_error", err.Error()
+	return mintOne(res, principal, device, encodeErrOf(res.Blob))
+}
+
+// encodeErrOf is the error engine.Encode gives b, the first thing a mint
+// check asks.
+func encodeErrOf(b engine.Blob) error {
+	_, _, err := engine.Encode(b)
+	return err
+}
+
+// mintOne is MintCheck with the blob's encode error already known, so a
+// caller that checks one resolution for many devices encodes it once.
+func mintOne(res Resolution, principal, device string, encodeErr error) (code, detail string) {
+	if encodeErr != nil {
+		return "broker_error", encodeErr.Error()
 	}
 	_, err := res.Blob.SessionAttributes(engine.Values{Username: res.Username, Principal: principal, Device: device})
 	switch {
@@ -268,11 +281,16 @@ func (e Explanation) Answer() (verdict string, reason decision.Reason, mintError
 // the principal. With none to try (a group subject), {principal} is filled in
 // empty, and Explain says so.
 func mintCheck(res Resolution, principals []string, device string) (code, detail string) {
+	return mintCheckEncoded(res, principals, device, encodeErrOf(res.Blob))
+}
+
+// mintCheckEncoded is mintCheck with the blob's encode error already known.
+func mintCheckEncoded(res Resolution, principals []string, device string, encodeErr error) (code, detail string) {
 	if len(principals) == 0 {
 		principals = []string{""}
 	}
 	for _, pr := range principals {
-		if code, detail := MintCheck(res, pr, device); code != "" {
+		if code, detail := mintOne(res, pr, device, encodeErr); code != "" {
 			return code, fmt.Sprintf("for %s: %s", pr, detail)
 		}
 	}

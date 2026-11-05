@@ -1,6 +1,7 @@
 package sdtest
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -818,5 +819,176 @@ func TestTheSmokesPolicyGrantsBob(t *testing.T) {
 	}
 	if !strings.Contains(fmt.Sprintf("%+v", pol), "bob@example.com") {
 		t.Error("the loaded policy does not name bob")
+	}
+}
+
+func TestKeyDirIsTheShippedLineWithItsDirectoryReplaced(t *testing.T) {
+	out, err := KeyDir(shipped(t, "config", "port49d.yaml"), "/run/credentials/port49d.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Refs struct {
+			FileDir string `yaml:"file_dir"`
+		} `yaml:"key_secret_refs"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("the result is not YAML (a second key_secret_refs would be a duplicate key): %v", err)
+	}
+	if doc.Refs.FileDir != "/run/credentials/port49d.service" {
+		t.Errorf("file_dir = %q", doc.Refs.FileDir)
+	}
+	if strings.Count(out, "key_secret_refs") != 1 {
+		t.Errorf("key_secret_refs appears %d times", strings.Count(out, "key_secret_refs"))
+	}
+	for _, drift := range []string{
+		"listen: \":49\"\n",
+		"key_secret_refs: {file_dir: /etc/port49/keys, extra: x}\n",
+		"key_secret_refs: {file_dir: /somewhere/else}\n",
+	} {
+		if _, err := KeyDir(drift, "/d"); err == nil {
+			t.Errorf("a config of %q was accepted", drift)
+		}
+	}
+}
+
+func TestRefusalPhrasesAreTheProductsOwnWords(t *testing.T) {
+	for _, r := range Refusals {
+		if r.Source == "" {
+			continue // the operating system's words
+		}
+		b, err := os.ReadFile(filepath.Join(kindtest.Root(), r.Source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), r.Phrase) {
+			t.Errorf("%q is not in %s: the category %q would never match", r.Phrase, r.Source, r.Category)
+		}
+	}
+}
+
+func TestRenderedNeedsTheDirectoryAndTheFile(t *testing.T) {
+	for out, want := range map[string]bool{
+		"cred_dir=yes\ncred_file=yes\n":                        true,
+		"cred_dir=yes\ncred_file=no\n":                         false,
+		"cred_dir=no\ncred_file=no\n":                          false,
+		"CREDENTIALS_DIRECTORY=[/run/credentials/x.service]\n": false,
+		"": false,
+	} {
+		if got := Rendered(out); got != want {
+			t.Errorf("Rendered(%q) = %v, want %v", out, got, want)
+		}
+	}
+}
+
+func TestUnitPropertiesAreTheServiceKeysWithoutTheCommandsAndTheRestartPolicy(t *testing.T) {
+	got := UnitProperties("# c\n[Unit]\nAfter=x\n[Service]\nType=simple\nUser=port49d\nExecStart=/bin/x\nExecReload=/bin/y\n" +
+		"Restart=on-failure\nRestartSec=10s\n# a comment\nNoNewPrivileges=yes\nRestrictAddressFamilies=AF_INET AF_INET6\n[Install]\nWantedBy=multi-user.target\n")
+	want := []string{"User=port49d", "NoNewPrivileges=yes", "RestrictAddressFamilies=AF_INET AF_INET6"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("UnitProperties = %q, want %q", got, want)
+	}
+	shipped := UnitProperties(shipped(t, "port49d.service"))
+	has := func(p string) bool {
+		for _, g := range shipped {
+			if g == p {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("ProtectSystem=true") || !has("PrivateTmp=yes") || has("ExecStart=/usr/bin/port49d --config /etc/port49/port49d.yaml") {
+		t.Errorf("the shipped unit's properties: %q", shipped)
+	}
+}
+
+func TestCategoryNamesTheRefusalFromTheProductsWords(t *testing.T) {
+	for msg, want := range map[string]string{
+		"open /x/k: permission denied":                        "unreadable: permission denied",
+		"/x/k is owned by uid 5; whoever can write it":        "refused: the owner is neither port49d nor root",
+		"/x/k is group-readable by gid 0, which this process": "refused: the file's group is not one port49d is in",
+		"something else": "other",
+	} {
+		if got := Category(msg); got != want {
+			t.Errorf("Category(%q) = %q, want %q", msg, got, want)
+		}
+	}
+}
+
+func TestReportDescribesTheDirectoryAndTheFileAndNeverTheBytes(t *testing.T) {
+	dir := t.TempDir()
+	const bytesOfTheFile = "THE-KEY-BYTES-0123456789"
+	if err := os.WriteFile(filepath.Join(dir, "tacacs_v1"), []byte(bytesOfTheFile), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	var within string
+	lines := Report(dir, "tacacs_v1", func(path, w string, max int64) ([]byte, error) {
+		within = w
+		return []byte(bytesOfTheFile), nil
+	})
+	out := strings.Join(lines, "\n")
+	if strings.Contains(out, bytesOfTheFile) {
+		t.Fatalf("the report holds the key bytes:\n%s", out)
+	}
+	for _, want := range []string{"read: ok", "dir: ", "file: ", "mode -r--------", "acl=none", "uid="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report lacks %q:\n%s", want, out)
+		}
+	}
+	if within != dir {
+		t.Errorf("read within %q, want the credentials directory itself %q (livekeys passes file_dir)", within, dir)
+	}
+	bad := strings.Join(Report(dir, "tacacs_v1", func(string, string, int64) ([]byte, error) {
+		return nil, errors.New("open " + dir + "/tacacs_v1: permission denied")
+	}), "\n")
+	if !strings.Contains(bad, "read: unreadable: permission denied") || strings.Contains(bad, dir+"/tacacs_v1: ") {
+		t.Errorf("a refusal is reported as its category only:\n%s", bad)
+	}
+}
+
+func TestHostedRunnerIsOnlyAGitHubHostedRunner(t *testing.T) {
+	env := func(kv ...string) func(string) string {
+		m := map[string]string{}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return func(k string) string { return m[k] }
+	}
+	for name, tc := range map[string]struct {
+		get  func(string) string
+		want bool
+	}{
+		"hosted":            {env("GITHUB_ACTIONS", "true", "RUNNER_ENVIRONMENT", "github-hosted"), true},
+		"self-hosted":       {env("GITHUB_ACTIONS", "true", "RUNNER_ENVIRONMENT", "self-hosted"), false},
+		"actions unset":     {env("RUNNER_ENVIRONMENT", "github-hosted"), false},
+		"environment unset": {env("GITHUB_ACTIONS", "true"), false},
+		"a dev box":         {env(), false},
+		"actions false":     {env("GITHUB_ACTIONS", "false", "RUNNER_ENVIRONMENT", "github-hosted"), false},
+	} {
+		if got := HostedRunner(tc.get); got != tc.want {
+			t.Errorf("%s: HostedRunner = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestFormatACLWritesNumericTagIDPerms(t *testing.T) {
+	entry := func(tag, perm uint16, id uint32) []byte {
+		return []byte{byte(tag), byte(tag >> 8), byte(perm), byte(perm >> 8), byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24)}
+	}
+	raw := []byte{2, 0, 0, 0}
+	for _, e := range [][]byte{entry(1, 4, 0xffffffff), entry(2, 4, 999), entry(4, 0, 0xffffffff), entry(8, 5, 1001), entry(0x10, 4, 0xffffffff), entry(0x20, 0, 0xffffffff)} {
+		raw = append(raw, e...)
+	}
+	got, err := FormatACL(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "user::r--, user:999:r--, group::---, group:1001:r-x, mask::r--, other::---"; got != want {
+		t.Errorf("FormatACL = %q, want %q", got, want)
+	}
+	for name, bad := range map[string][]byte{"empty": nil, "version 1": {1, 0, 0, 0}, "truncated": append([]byte{2, 0, 0, 0}, 1, 0, 4), "unknown tag": append([]byte{2, 0, 0, 0}, entry(3, 4, 0)...), "perm past rwx": append([]byte{2, 0, 0, 0}, entry(1, 8, 0)...)} {
+		if _, err := FormatACL(bad); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }

@@ -111,3 +111,13 @@ func TestCloneIsDeep(t *testing.T) {
 		t.Fatal("Clone shares its lists with the original")
 	}
 }
+
+// single_device is the label the key series report every single-device key
+// under, so no key may be named it.
+func TestTheReservedKeyRefIsRefused(t *testing.T) {
+	raw := "keys:\n  ok:\n    current: {version: 1, secret_ref: env:A}\n  single_device:\n    current: {version: 1, secret_ref: env:A}\n"
+	_, err := Check(map[string]Set{"ok": {Current: v(1, "env:A")}, "single_device": {Current: v(1, "env:A")}}, []byte(raw))
+	if err == nil || !strings.Contains(err.Error(), "on line 4") || !strings.Contains(err.Error(), "reserved name single_device") {
+		t.Fatalf("%v", err)
+	}
+}

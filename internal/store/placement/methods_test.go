@@ -24,7 +24,7 @@ var sessionMethods = set(`
 	AnnotateContext RefreshContext SetRevokedAt SetContextPolicy StampRefreshed
 	DeleteContext DeleteContextIf PutBlob GetBlob BumpBlob
 	IndexContext UnindexContext UnindexRef ContextsByPrincipal ContextsBySid ContextsByCert
-	ReindexSid ActivePrincipals IndexToken TokensByPrincipal TokensByCert
+	ReindexSid ActivePrincipals TokensByPrincipal TokensByCert
 	ReserveIdempotency CompleteIdempotency ReleaseIdempotency
 	SupersedeTokens SupersedeAll SupersededAt
 	PutOnce TakeOnce PutOIDCOwner OIDCOwner PutMFAProof GetMFAProof

@@ -99,6 +99,10 @@ type Config struct {
 	// KeyRef is the session key's reference in canonical form, never a PIN;
 	// "" for a file key. `port49 login` compares it before it opens a token.
 	KeyRef string
+	// KeyStore is where the session key lives, one word of the issued_key_store
+	// set (file, tpm, pkcs11, secure_enclave), never a reference. Status reports
+	// it so a remedy is chosen by it and not by matching a message.
+	KeyStore string
 }
 
 // ErrSessionOver is a session that is over: past its ceiling by the agent's
@@ -239,6 +243,7 @@ type Agent struct {
 	brokerCAPEM string
 	brokerCRL   string
 	keyRef      string
+	keyStore    string
 
 	// wire is the held connection's one slot (plan 7d, Ruling 15): one
 	// exchange at a time, which the transport did already, now with the
@@ -291,7 +296,7 @@ func New(c Config) *Agent {
 	a.session = base64.RawURLEncoding.EncodeToString(session[:])
 	a.cert = c.Cert
 	a.fingerprint = CertFingerprint(c.Cert)
-	a.keyRef = c.KeyRef
+	a.keyRef, a.keyStore = c.KeyRef, c.KeyStore
 	a.key, _ = c.Cert.PrivateKey.(hwkey.Key)
 	a.touchUnusable = c.TouchKeyUnusable
 	a.brokerCAPEM, a.brokerCRL = string(c.BrokerCAPEM), c.BrokerCRL
@@ -1706,6 +1711,10 @@ type Status struct {
 	// KeyRef is the session key's reference in canonical form (never a PIN),
 	// "" for a file key: what login compares before it opens a token.
 	KeyRef string `json:"key_ref,omitempty"`
+	// SessionKeyStore is where the session key lives: file, tpm, pkcs11 or
+	// secure_enclave (the issued_key_store values; never a reference, so it can
+	// carry no serial). "" when the agent was not told.
+	SessionKeyStore string `json:"session_key_store,omitempty"`
 }
 
 // TokenKey is a key on a PKCS#11 token: the module it was opened through and
@@ -1820,7 +1829,8 @@ func (a *Agent) Handler() http.Handler {
 			TouchKeyState: a.touchKeyState(), BrokerCAPEM: a.brokerCAPEM, BrokerCRL: a.brokerCRL,
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
 			CeilingWarningSeconds: int(warn / time.Second), Sessions: sessions,
-			KeyState: a.keyState(), TouchKey: a.touch != nil, TouchKeyUnusable: a.touchUnusable, KeyRef: a.keyRef})
+			KeyState: a.keyState(), TouchKey: a.touch != nil, TouchKeyUnusable: a.touchUnusable, KeyRef: a.keyRef,
+			SessionKeyStore: a.keyStore})
 	})
 	mux.HandleFunc("POST /mfa/touch", func(w http.ResponseWriter, r *http.Request) {
 		var req TouchRequest

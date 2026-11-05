@@ -2097,7 +2097,10 @@ about revocation or a ceiling on such a platform, exactly as it must for `pipe_a
 false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
 `max_session_age`, which is an approximation but an enforced one: `port49 platform export
 --classes` prints each class a projected platform's replies rest on with `idle-timeout` set to
-`session.max_session_age_default` in whole minutes, rounded down and at least one (§8), and it ends an idle
+the least ceiling among the sessions the policy lands in it (each session's own ceiling being the
+least across its roles, `session.max_session_age_default` for a role naming none), in whole minutes,
+rounded down and at least one, and none for a class whose every session is `never`; a class no session
+lands in keeps `session.max_session_age_default` (§8, decision 55 ruling 14). It ends an idle
 session a reply landed in that class: `idle-timeout 1` closed one at 1m0s through
 `local-user-name` and through the `remote` template, on both Junos images (L24, closed;
 `tests/lab/results/L24-juniper_*.md`). The largest value the device takes is unmeasured
@@ -2656,7 +2659,7 @@ refused request named; any other path is recorded `mint`.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d does this itself while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd it checks the store every `stores.session.etcd.health.interval` (or `stores.directory.…` when `stores.session` is omitted), and after `close_after` consecutive failed checks it closes every listener and resets held connections, idle or loaded. It is dark within `close_after` × `interval` + `call_timeout` of the store stopping: 5.5s at the defaults, measured at 4.8–5.5s on five images (§15 L41, `tests/lab/results/L41-*.md`). It opens the listeners again after `open_after` consecutive checks pass (§13, decision 37). Losing its hold on the store, or a token or context pool's circuit staying open or every call on one being refused for `hold_ttl`, remains the backstop (decision 35). Before dark, a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done or every token the store holds has expired (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d does this itself while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd it checks the store every `stores.session.etcd.health.interval` (or `stores.directory.…` when `stores.session` is omitted), and after `close_after` consecutive failed checks it closes every listener and resets held connections, idle or loaded. It is dark within `close_after` × `interval` + `call_timeout` of the store stopping: 5.5s at the defaults, measured at 4.8–5.5s on five images (§15 L41, `tests/lab/results/L41-*.md`). It opens the listeners again after `open_after` consecutive checks pass (§13, decision 37). Losing its hold on the store, or a token or context pool's circuit staying open or every call on one being refused for `hold_ttl`, remains the backstop (decision 35). Before dark, a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -4546,8 +4549,11 @@ or a deactivated or protected ancestor — so the export does not prove the temp
 one that can log in locally: Juniper documents a template user as one with no authentication,
 and L12 measures whether it refuses a local login; the reference adds a locked
 `authentication encrypted-password "*"` only if that measurement finds it does not. Every class
-carries `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down
-and at least one, so a 30 s default exports `idle-timeout 1` (decision 21); the file is parsed strictly, as the daemon parses it, but only that key is used
+carries `idle-timeout` from the least ceiling among the sessions the policy lands in it, in whole
+minutes rounded down and at least one, so a 30 s ceiling exports `idle-timeout 1` (decision 21); a
+class whose every session is `never` carries none, and a class no session lands in carries
+`session.max_session_age_default` (decision 55 ruling 14); under `user_permissions` delivery every
+session lands in `p49-remote`, so the export prints one fleet-wide minimum; the file is parsed strictly, as the daemon parses it, but only that key is used
 and no key or secret is read, so none is needed to run it.
 `port49 devices check-config --config port49d.yaml` holds a device to it (§12).
 
@@ -6310,8 +6316,11 @@ entry can see: IOS-XE's level-7 command method list, without which a level-7 com
 asked about (§6). On a projected platform it also reads the configuration, as `show configuration | display set |
 display inheritance` prints it (the other pipe order expands the same, L57): groups' statements
 expanded where they apply, one capture, refusing any other form (§8). It reads it against the reference
-`platform export --classes` writes, and `--config port49d.yaml`, the classes' idle-timeout, is
-required. A reference line the device lacks fails it. So does any line under a template class or
+`platform export --classes` writes, and `--config port49d.yaml`, with the policy whose roles set
+each class's age, is required. A reference line the device lacks fails it, except that a class
+`idle-timeout` at or below the rendered value passes and a `never` class passes any value, so a
+grant that expires, or a scope that stops selecting a device, does not flag the fleet: the
+device's shorter timer is the safer one (decision 55 ruling 14). So does any line under a template class or
 template user the reference does not write: a class `allow-commands`, a permission, a template
 password. Exempt are the uid Junos assigns, a class's `idle-timeout`, `login-alarms` and
 `login-tip`, and a user's `full-name`, which change nothing a session runs (decision 44).
@@ -6605,6 +6614,13 @@ a `key_ref` has §10's shape (`^[a-z][a-z0-9_]{0,63}$`): one that is not a name 
 printed, since it is most likely a secret pasted there, and neither command prints a
 port49d.yaml parse error's text, only its line and a fixed category. A secret that is all
 lowercase hex and 64 characters or fewer passes the shape.
+
+**`port49 hwkey setup` and `port49 hwkey status`** check the user's YubiKey for `hardware_key_touch` (§13
+decision 55 rulings 16 and 17). `setup` reads the token (never writes it), runs the broker's own attestation
+checks against the broker's roots, prints the ykman commands for anything missing, and writes `issued_key`
+and `touch_key` to the user's config when all pass. `status` is the same checks plus the config, the issued
+certificate, its expiry and the agent's view, and writes nothing (`--json` is its alone). Exit 0 ready, 1
+not ready, 2 error.
 
 **`port49 revoke (--principal <principal> | --cert <file> | --cert-issuer <dn> --cert-serial
 <hex>) [--lift]`** and **`port49 revoke --list`** send the revocation, the lift or the list to the
@@ -7284,7 +7300,10 @@ the enforced approximation, and revocation records name the contexts they could 
 (§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8), and it
 ends an idle session: at 1m0s for `idle-timeout 1`, through `local-user-name` and the `remote`
 template, on both Junos images (L24, closed; `tests/lab/results/L24-juniper_*.md`); the largest
-value the device takes is unmeasured. Revocation
+value the device takes is unmeasured. *As built (plan 12c):* the export renders each class's
+`idle-timeout` from the least ceiling among the sessions the policy lands in it, and writes none for
+a class whose every session is `never`; under `user_permissions` delivery every session lands in
+`p49-remote`, so that is one fleet-wide minimum (decision 55 ruling 14). Revocation
 records naming contexts are plan 7a's (`unreached` on the `revoke` record, §5.7); a refresh's are
 plan 7b's.
 
@@ -7459,9 +7478,17 @@ released by its holder alone. The broker's listener completes each TLS handshake
 `server_cert_refused`, `timeout`, `client_closed`, `protocol`). A source holds at most
 `broker.max_pending_conns_per_source` (16) connections not yet bound to a principal, and the next
 is reset at accept; a principal holds at most `broker.max_conns_per_principal` (4) held
-connections, and a new one closes the oldest of its own certificate, else the principal's oldest,
-so dead connections never lock their owner out, one certificate cannot fill the listener, and a
-flood from one certificate churns only its own slots. A source is one address (an IPv6 /64 is not
+connections, and a new one past that closes the oldest **idle** connection of its own certificate,
+else the principal's oldest idle one; if every held connection has a request in flight, the new
+one is refused `503 too_many_connections` with `Retry-After` and nothing is closed (the
+`principal_cap_refused` connection event). A dead connection is idle, so dead connections still
+never lock their owner out, and a request in flight is bounded by the server's 30 s read timeout for its request, the 10 s hold of a mint, and `etcd.call_timeout` (500 ms by default, up to 5 s) for each store call, and a response write by 15 s from each write (every broker response is a single write; the deadline is set on every write, not the server's `WriteTimeout`, which would have to outlast a mint's hold and the admin import's long body read), plus up to 5 s for TLS's close_notify. A peer that vanishes mid-answer therefore stops counting as busy within about 20 s, not at TCP's 15-minute retransmission limit, and no in-flight request is unbounded. A connection just bound counts as busy until its first request is answered, and `ReadHeaderTimeout` (10 s) closes one that never sends. The refusal is a log line and the `principal_cap_refused` count, not a decision record, as a handshake's `identity_refused` is not (§5.7). One
+certificate cannot fill the listener, and a flood from one certificate churns only its own idle
+slots. The first wording closed the oldest connection even with a request in flight on it; the
+load run measured that (`tests/lab/results/load-beehive.md` cell e2: 926 evictions and 19 workloads
+exit 75, 20 live hosts under one principal churning each other's requests until every deadline
+passed), and a connection mid-request is provably alive. A busy-refused workload retries the 503
+within its deadline. A source is one address (an IPv6 /64 is not
 one source), and the global cap is taken before the per-source check, so at global saturation
 connections wait in the backlog; plan 12a owns the global cap (decision 53 ruling 8). A revocation
 by principal or by certificate is a mark that stands until an operator lifts it, because the agent
@@ -8057,9 +8084,21 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   the first takeover purges even when the runbook's delete of `meta/judged` was forgotten.
   It does not cover a port49d serving before that takeover: the runbook's token delete does,
   and so does port49d's own guard: a port49d that finds the witness below what it followed
-  refuses every token redemption `store_unavailable` until a runner, once a purge of every
-  unspent token is done, writes `meta/purged` (plan 7e Task 15d). A port49d started after the
-  restore has followed nothing and cannot tell. It takes the store's witness as its record only once the purge is done. A
+  refuses every token redemption `store_unavailable` until the first of two: a runner, once a
+  purge of every unspent token is done, writes `meta/purged` (plan 7e Task 15d); or every token
+  the store holds has expired, which port49d takes as its own clock passing the largest
+  `ExpiresAt` among the `v1/t/` records, scanned at the drop and again on every guarded read
+  (the bound only rises: a newer restore, or a token minted meanwhile, moves it later), and judged
+  as redemption judges a token's expiry (decision 55 ruling 15, plan 12c). So the bound needs no
+  witness time and no clock-skew allowance: both sides are the brokers' stamps against port49d's
+  clock, whose own error moves them together. A scan that fails, a record that does not decode, or a
+  latest expiry more than `token_ttl`'s ceiling (15m) plus 5m ahead of port49d's clock arms no
+  bound: only the purge lifts it. After a lift on its own, a token expiring at or before the bound
+  stays refused (`store_unavailable`) until a purge, so a clock stepped back revives none; and the
+  record of the witness is kept as it was, so a later restore is told. A restore whose records are
+  all expired is not guarded. The guard is about single-use tokens alone: the
+  revocations, marks and contexts a restore loses are the runbook's (design document §13). A port49d started after the
+  restore has followed nothing and cannot tell. It takes the store's witness as its record only once the purge is done (on a lift of its own it keeps the pre-restore record). A
   replica with no record says it cannot tell, and goes by `meta/judged`; a snapshot taken
   within about a second of the last witness recorded is not caught.
 - **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
@@ -8144,13 +8183,49 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     `call_timeout`; clientv3's round-robin puts the next reads on other members. An operator
     with a defragmenting member should expect an occasional `outcome="fail"` and a nonzero
     `port49_store_health_failures`, not zero.
+  - **Which calls are re-sent on another member (hedged).** A member hung with its TCP connection
+    alive costs round-robin's next call on its connection the whole `call_timeout`. Reads (a Range,
+    and the context pool's read-only transaction), and the writes a store method marks as safe
+    sent twice, are re-sent at a quarter and at half of the call's deadline, and the first answer wins
+    (`internal/store/etcd/hedge.go`). The copies of one call are placed on different members (`internal/store/etcd/balancer.go`): gRPC's round-robin shares one rotation among every call on the client, so under concurrent calls all of a call's copies could land on the dark member (8 to 10 percent of reads with four callers in `hedge_concurrent_test.go`). A member on which a call hit its deadline, or a hedged copy was cancelled after waiting 100 ms, is skipped by the picker for 15 s unless that leaves none, so the calls that are not re-sent do not keep landing on a member whose connection is up and silent (`TestUnhedgedCallsStopLandingOnAMemberThatJustTimedOut`: 59 of 175 unhedged writes failed with one of three members hung, 4 of 1376 after); `port49_store_member_suspect_total` counts it. Plan 12c adds the login's token redemption and context swap
+    to the marked writes, because each is a compare-and-swap on the revision it read: once one copy
+    has applied, the other's compare fails and writes nothing. A copy that finds the compare failed
+    reads back the record its own transaction wrote (the receipt, the context), and a per-request nonce
+    in it says whether it is this request's earlier copy, which is a success, or another request's
+    write, which is `token_spent` or a conflict as before; so the hedge itself adds no replay refusal
+    and no replay record. Only another write that intervenes between the copies (one that drops the
+    nonce, or a revocation) can still fail the call closed, as `token_spent` or a conflict, which is safe. Not hedged, and failing one call in three with a member hung: the
+    mint's transaction (a second copy would write a second token), `ExtendReceipt`, `DeleteToken`,
+    and the other single-key swaps. The matrix's `one_member_dark` (`deploy/failure-matrix.md`) logs
+    in thirty times with a member paused, tokens minted before the pause.
+  - **The feeds run as two legs.** A watch is one gRPC stream on one member, and a member that is
+    paused or cut off with its connection up stays silent until keepalive fails it (10 to 12 s):
+    the context feed on it left the fence behind and refused every login for that long, and the
+    marks feed on it would have delayed a revocation as long. So the context feed and the marks
+    feed each open the same watch on two different members and merge them
+    (`internal/store/etcd/twoleg.go`): an event at or below the highest revision already delivered
+    (an event's, or a progress notification's, which says every event through it was sent) is
+    dropped, so nothing is applied twice and nothing goes back; the merge relies on etcd sending a
+    revision's events in one response, which holds because no leg is opened `WithFragment`
+    (checked in code before a watch starts, and by `TestTheLegsAreNotFragmented`). A leg that
+    fails alone is opened again after a second and the watch goes on; the watch ends only when
+    both legs are down at once, or on a compaction. A leg that hears nothing for 1 s asks for its
+    progress, and one silent for 2 s is opened again on a member neither leg is on, but only while
+    a one-key read is answered: with every member dark (no quorum) a stream is left to revive when
+    the store returns. The token pool's other watches (memberships, logouts) are one leg still.
+    A fence wait that times out is outcome `feed_behind` in `port49_store_calls_total`, not a
+    failed call to the circuit: the store answered, and a feed that stays behind is the health
+    check's to see (below).
   - **Feed lag is a trigger.** The context connection's read waits for the context feed, so a
     feed more than `call_timeout` behind (a mass refresh burst, for example) fails the check,
     and `close_after` of them close every replica. The same reads are denied
     `store_unavailable` then. An operator who sees dark with etcd healthy looks at
     `port49_store_fence_timeouts_total`.
 - **Reopening.** A run after a store gone waits for the store as at a start, re-reading its
-  files. It binds TACACS+ only after `open_after` consecutive checks pass (default 3, 1 to 60);
+  files. It tries the store every second for ten attempts, then backs off to every 10s, each wait with 20%
+  jitter (`storeAttemptEvery`: the listeners open up to about 1.2s after etcd answers during the
+  first ten, and an outage is said once, then when it changes and every 10 minutes as "still waiting since <time>, N attempts"), and binds TACACS+ only after `open_after`
+  consecutive checks pass (default 3, 1 to 60);
   a failure starts the count again. A cold start is not gated.
 - **Break-glass.** Nothing port49 answers changes. On IOS-XE, whose authentication `ERROR` is
   final (§15 L4, L35), break-glass is refused until port49d is dark, now at most
@@ -8190,7 +8265,7 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
     kept, and finds the session, a token minted before, and `broker.state_dir` kept.
   - **Not required.** It is one shape beside systemd and Kubernetes. Nothing requires it.
   - **Source addresses.** What a published port does to a device's source address is §15 L39
-    (a).
+    (a); behind a Kubernetes Service and on the host network, L39 (b) and (c).
 
 **38. The directory: one entry per certificate or no principal, membership kept in the store,
 every matching subject composes, and a scheduled refresh stamps refreshed_at.** *Plan 7g,
@@ -8540,7 +8615,7 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   Task 11. A broker that issues certificates takes a person's ID token at `POST /v1/certificate`
   alone (decision 43 ruling 13, as amended by decision 45 ruling 20), so there a person refreshes by a key signature.
 - **16. `/v1/config`** lists `methods` and, per human OIDC verifier, `{issuer, client_id,
-  scopes}`. Task 10. Plan 9b adds `issuance` (decision 43 ruling 18).
+  scopes}. Task 10. Plan 9b adds `issuance` (decision 43 ruling 18); plan 12c adds `hardware_key_touch.attestation_roots_pem` (decision 55 ruling 16).
 - **17. The metrics.** `port49_oidc_tokens_total{issuer,outcome}`,
   `port49_oidc_keys_last_success_timestamp_seconds{issuer}`,
   `port49_oidc_keys_fetch_failures_total{issuer}`, `port49_oidc_logouts_total{outcome}`; no
@@ -9530,12 +9605,16 @@ a `CGO_ENABLED=0` build importing purego measured dynamically linked (plan 9c pr
 - **3. The module.** The `module-path` must be absolute, a regular file, and owned by root or the
   user, with it and every directory above it not writable by group or others: it is code the agent
   runs. `userconfig.CheckOwned(path)` walks the directory with `resolveOwned(filepath.Dir(path),
-  false, what)` (which judges directories only, and refuses a non-directory as "not a
+  false, what, trust)` (which judges directories only, and refuses a non-directory as "not a
   directory"), then follows the base name's symbolic links (`libykcs11.so` is usually a chain),
   each link owned by root or the user, and judges the final regular file by `ownedBy` and a mode
-  with no group or other write bit. One module per process, `C_Initialize` with
-  `CKF_OS_LOCKING_OK` and no mutex callbacks, so the module never calls into Go. Memory the module
-  sees is heap-allocated and pinned with `runtime.Pinner` for the call.
+  with no group or other write bit. On macOS, write access by the `admin` group (gid 80) is
+  accepted, and no other group's is: admins can sudo, and Homebrew's prefix is group-`admin` by
+  design (`groupWriteTrusted`; Ryan's ruling of 2026-11-03; GHA run 41633453384 showed
+  Homebrew's `libykcs11.dylib` refused on `macos-15` and `macos-15-intel` without it); an
+  other-write bit is refused as everywhere, and Linux is unchanged. One module per process,
+  `C_Initialize` with `CKF_OS_LOCKING_OK` and no mutex callbacks, so the module never calls into
+  Go. Memory the module sees is heap-allocated and pinned with `runtime.Pinner` for the call.
 - **4. The PIN.** Asked by `port49 login` on the terminal only when the token says
   `CKF_LOGIN_REQUIRED`, with echo off; handed to the agent on descriptor 4 (`--pin-fd 4`), as the
   broker CA is on 3; dropped (zeroed) after `C_Login`. It is held as bytes, decoded by hand, never
@@ -11043,7 +11122,15 @@ checks (plan 12a; Ryan and the team lead, 2026-10-24 and 2026-10-25).**
   fence's rule, and the file is owned by port49's user or root, writable by its owner alone, with
   no world bit; group-read is allowed for a group the process is in (its gid or a supplementary group;
   decision 54 ruling 16 narrows this: a group-readable file of any other group is refused), which Kubernetes
-  Secret volumes (fsGroup) and agents' `perms` give. A
+  Secret volumes (fsGroup) and agents' `perms` give. A POSIX ACL on the file is read (`system.posix_acl_access`), not the mode: with one, the mode's group
+  bits are the ACL mask, so the entries decide. A named user other than port49d's or root, a named
+  group port49d is not in, an owning-group read when that group is not ours, any write, or any `other`
+  access is refused, naming the entry by numeric id with the `setfacl` that fixes it (`-x u:N` for a
+  named entry, `-m g::-` or `-m o::-` for a base one); an unparseable or incomplete ACL is refused. On
+  its directory, only a write entry for anyone but port49d or root is refused. A file with `group::---`
+  and only port49d named is accepted, which is the shape systemd's `LoadCredential=` renders
+  (measured in L84 on systemd 255, 2026-11-04: `tests/lab/results/L84-systemd-docker.md`). NFSv4 and
+  CIFS ACLs are not read: there the mode rule alone applies. A
   reference that does not parse is refused by its key and never printed, and an `env:` error names
   the key that holds the reference and never the variable: a secret pasted where a name goes parses
   as one (a 40-character hex token starting with a letter does). A reference outside ruling 12's
@@ -11151,7 +11238,7 @@ shapes; Kubernetes is native and never required.
   Container: `Dockerfile` and `deploy/compose/`, smokes `make compose-smoke` and `make
   image-check`. Kubernetes: `deploy/helm/port49/`, smoke `make kind-smoke`. A shape whose smoke
   does not pass in CI is not shipped.
-- **2. Where each shape keeps its secrets** (L82 and L83 closed 2026-10-31; L84 is open, so `LoadCredential=` stays unnamed for a device key).
+- **2. Where each shape keeps its secrets** (L82 and L83 closed 2026-10-31; L84 closed 2026-11-04: `LoadCredential=` reads under the fence but a credential is added only by a restart, so it is named for the encryption key only (ruling 2's rule)).
   systemd: `key_secret_refs.file_dir: /etc/port49/keys` (`/run` is cleared at reboot and
   `RuntimeDirectory=` at every stop), the directory `root:port49d 0750` and each key file
   `root:port49d 0440`; the encryption key is `/etc/port49/secrets/encryption.key`,
@@ -11167,9 +11254,11 @@ shapes; Kubernetes is native and never required.
   (`etcd.port49d.existingSecret` in port49d alone, `etcd.broker.existingSecret` in the broker
   alone, `etcd.caSecret`, the CA certificate alone, in both), so no pod holds the other's etcd
   key. `LoadCredential=`, Compose `secrets:`, the Vault Agent injector and the Secrets Store CSI
-  driver are named for a device key in a README only after L83 or L84 closes with them passing (L83
-  closed with the injector failing the no-restart cell and the CSI driver failing to start, so the
-  injector is named for the encryption key only and the CSI driver not at all); rotation is a
+  driver are named for a device key in a README only after L83 or L84 closes with them passing (L84
+  closed with `LoadCredential=` and Compose `secrets:` failing the no-restart cell, so both are named
+  for the encryption key only; L83 closed with the injector failing the no-restart cell and the CSI
+  driver failing to start, so the injector is named for the encryption key only and the CSI driver
+  not at all); rotation is a
   reload, never a restart (Ryan, 2026-10-26), and a mechanism that fails the cell "a version added
   reaches the running process with no restart" may be named for the encryption key only, never for
   device keys.
@@ -11245,8 +11334,8 @@ shapes; Kubernetes is native and never required.
   initContainers and `copy-issuer.sh`'s pods run as root, so the namespace needs the `baseline`
   Pod Security level, not `restricted`. Binding 49 as non-root uses the safe pod sysctl
   `net.ipv4.ip_unprivileged_port_start=0`. The Services (TACACS+ 49, and the TLS listener's port,
-  default 300, when `tlsListener.enabled`) set `externalTrafficPolicy: Local`; whether that keeps
-  the source is L39 (b), still open and 12c's, and the README says so. An optional HPA on
+  default 300, when `tlsListener.enabled`) set `externalTrafficPolicy: Local`; that keeps
+  the source (L39 (b3), measured 2026-11-04), and `Cluster` does not (b1, b2); the README says so. An optional HPA on
   `port49_connections` is off by default, rendered and tested and never exercised (design §13: scale
   on connections, never CPU). Two server groups are two releases. etcd is not in the chart:
   `deploy/helm/port49/examples/etcd/` is a reference StatefulSet with an `etcd-init` Job, which
@@ -11384,8 +11473,283 @@ shapes; Kubernetes is native and never required.
   the fence admits (a read-only mount of a root-owned source, a link that stays inside its own volume). `subPath` is no remedy:
   it still gives 0440 under `fsGroup`, and it loses the kubelet's in-place update (ruling 2).
 - **Open.** The `.rpm`'s Python library (ruling 6) is ruled pip-only and may be
-  overridden by Ryan (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waits on L84
-  (L82 and L83 are closed, ruling 12's L85 too), and ruling 9's Services claim on L39 (b).
+  overridden by Ryan (per-distribution RPMs, or a `%post` running `pip`). Ruling 2 waited on L84
+  (L82, L83 and L84 are closed, ruling 12's L85 too), and ruling 9's Services claim held in L39 (b3).
+
+**55. Reference device configuration, alarms, load and the failure matrix (plan 12c; Ryan, the
+team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. Rulings 2,
+14 and 15 are Ryan's and none is provisional; ruling 10 was measured in L89; ruling 5 was measured in L39; ruling 9 was measured in L90. Rulings 16 and 17 are the lead's and Ryan's (2026-11-01). Row L91 is open.
+
+- **1. The Junos and NX-OS "ERROR disagreement" is two method lists and two questions, not a
+  contradiction.** On Junos, `tests/lab/results/L73-juniper_vjunos-router.md` cell (i) ran
+  `authentication-order [ tacplus password ]`, which falls through on ERROR and on FAIL (L4), while
+  `L4-error-juniper_*.md` ran `tacplus` alone, where ERROR is final. On NX-OS, `L73-cisco_nxos.md`
+  cell (i) recorded the break-glass *login* landing in 5.2 s, while `L4-error-cisco_nxos.md` and
+  design §12 record that the commands after it are refused by port49's authorization `FAIL
+  store_unavailable`. Both readings stand; design §12 says so, and L88's cell (c) measures login and a
+  command under each reference on every platform.
+- **2. Junos's reference `authentication-order` is `tacplus` alone (Ryan, 2026-11-02).** With
+  `password` listed, a port49 FAIL falls through to the local password (L4, both Junos images), which
+  voids §5.6's argument and design §12's "the reference configuration is what disables fall-through
+  on FAIL". Under `tacplus` alone an ERROR is final until go-dark closes the listener (at most 5.5 s
+  at the defaults, L41); after that the server is unreachable and break-glass logs in (L4, L17). The
+  cost, stated in the reference's README: break-glass waits up to 5.5 s while port49 is up with its
+  store failing, and under the restore guard until port49d is stopped (ruling 15). The alternative,
+  `[ tacplus password ]`, is not built: it would need a rule that no Junos device holds a local
+  account sharing a port49 username, which is device toil and nothing port49 can check.
+- **3. SR Linux ships `exit-on-reject true`.** Without it a port49 deny falls through to `local`
+  (L76 cell d, measured 1.2 s), which voids §5.6's argument. L87 measured it (2026-11-04,
+  tests/lab/results/L87-nokia_srlinux.md): with authentication answered ERROR the break-glass account still logs in at once (2.4 s), and
+  with port49d dark after the store stopped answering it logs in in 2.3 s (cell b, PASS), so the 3am
+  line is "break-glass logs in at once". The reference keeps `priv-lvl-authorization true` and
+  `services [ cli ]` on every mapped role (L76). A login port49 authenticated whose session
+  authorization is answered ERROR is refused (L87 c).
+- **4. The `key_ref` label never names one device.** A `key_ref` that admits exactly one device in
+  the snapshot in force (a tier-1 pin, or a key group of one) is a device identity, so it is reported
+  under `key_ref="single_device"` with `version="any"`: `port49_key_validations_total` counts that
+  device's trials there; `port49_key_version_devices{key_ref="single_device",version="any"}` is the
+  number of such devices on a version that has a `retire_after`;
+  `port49_key_retirement_seconds{key_ref="single_device",version="any"}` is the least time to
+  retirement among those versions still presented by a device. Which device is on which version is
+  `port49 keys status`'s answer, from the log. A `key_ref` held by two or more devices keeps its own
+  label. `single_device` matches `admission.KeyRefShape`, so it is reserved: a policy or inventory
+  naming it as a `key_ref` is refused at load (pre-beta, no shim).
+- **5. The chart offers no host networking.** Pod Security `baseline`, which the chart's namespace
+  runs at (decision 54), refuses `hostNetwork`. L39 (c) was measured, on a lab-only `privileged`
+  namespace (PASS, 2026-11-04: the source is the device's own address); the result goes in the note and the chart README, and the chart keeps
+  `externalTrafficPolicy: Local`, which L39 (b3) measured as keeping the source. *Measured in L39.*
+- **6. One alert file for every shape.** `deploy/alerts/port49.rules.yaml` is canonical. The chart's
+  `files/port49.rules.yaml` is a byte-identical copy, rendered as a `PrometheusRule` only when
+  `prometheusRule.enabled` (default false, since it needs the operator's CRD). Alert names and label
+  keys are snake_case; `severity` is `page` or `ticket`; no rule groups or filters by a
+  device-identifying label; the `etcd` group names etcd's own metrics, and only those are exempt from
+  the registered-metric check.
+- **7. Defaults sized from load are ruled in advance.** The measurement and the gates decide, and a
+  number that misses a design §5 target stops the plan; a target is never relaxed to fit. TLS session
+  tickets stay off (`session_ticket_lifetime: 0s`) if the full-handshake run meets the per-command
+  p99 < 5 ms target at 170 logins/s. Accounting group commit is built if the spool's capacity is
+  less than twice the sustained accounting rate at target. `limits.max_connections`'s sizing stands
+  if the target run's peak `port49_connections` is under a quarter of the cap sized from
+  `LimitNOFILE=65536`; otherwise the units' `LimitNOFILE=` rises. The chart's
+  `autoscaling.averageConnections` is half the peak `port49_connections` per replica measured at
+  target, rounded to the nearest 50. `stores.session.etcd.call_timeout` (500 ms),
+  `stores.session.etcd.bulk_timeout` (30 s) and `stores.session.packet_deadline` (2 s) stand if the
+  store call p99 at target is under a fifth of `call_timeout`; otherwise the lead rules.
+  `stores.directory.etcd.call_timeout`'s guidance is at least four times the measured cross-region
+  round trip.
+- **8. A key version retired under an open connection, per platform.** L29 measured the device's side
+  of the reset a reload sends on vEOS, the N9Kv, the C8000V and vJunos-router, and a retiring reload
+  sends that same reset with no strike, so for those four L29 is the answer. L88 cell (g) measures it
+  on XRd, SR Linux, and the RFC 9887 listener on each TLS image.
+- **9. Oxidized host keys.** `examples/oxidized/config` keeps `secure: true`; a per-device
+  `known_hosts` step is toil at fleet scale. L90 (d) asks whether Oxidized can accept-new itself and
+  (c) whether it reads an entry OpenSSH's accept-new wrote. If (d) passes the example uses that
+  setting; else if (c) passes `port49-oxidized-run` pre-populates each node absent from `known_hosts`
+  with `ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o PreferredAuthentications=none -o
+  PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes <address> exit` (the host key
+  is saved at key exchange, before authentication, and the flags stop every method that would sign or
+  send); else the README says why neither works. `secure: false` is never offered. *Measured in L90
+  (vEOS, Oxidized 0.37.0): (d) fails, because Oxidized's one setting, `secure`, is a boolean and any other
+  value, `accept_new` included, turns verification off; (b) a changed key is refused and (c) an entry
+  OpenSSH's accept-new wrote, hashed or not, is read and the backup runs, so the pre-population
+  line is the example's. The shipped line is the measured one, `ssh -F /dev/null -o
+  UserKnownHostsFile=<file> -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o
+  PreferredAuthentications=none -o PubkeyAuthentication=no -o IdentityAgent=none -o IdentitiesOnly=yes
+  -o ConnectTimeout=15 -- <address> exit`, so it ignores the operator's ssh configuration.*
+- **10. Velero** is named in the chart README only if L89 passes. The example uses file-system backup
+  (the node agent), because kind has no snapshot-capable CSI driver; CSI snapshots stay unmeasured
+  and unnamed. The backup holds the issuing CA's private key (`state/issuing-ca.key`), the broker's
+  state and the accounting spool, and the example and the L89 note say so. The bucket also holds the
+  namespaces' Secrets as Velero reads them, unencrypted by Velero (the TACACS+ keys, the store's
+  encryption key, the etcd CA and client identities, the TLS key): the repository key protects only the
+  volumes, and the example and the note say that too. Its repository password comes from a Secret created
+  before Velero is installed, never the well-known default (Velero writes the default into that Secret
+  itself when it finds none), and its README requires bucket encryption and access limited to the
+  backup's own credentials. *Measured in L89 (2026-11-04, `tests/lab/results/L89-kind.md`): PASS on (a) and (b). Velero's file-system backup skips a hostPath volume with only a warning and the backup reads Completed (run 41855911600: etcd restored empty), so the README says to check every claim has a pod volume backup after each backup.*
+- **11. The failure matrix runs on the compose stack with mock devices.** A §12 row the stack cannot
+  reach is not re-measured. Every design §12 row gets evidence (design §14: "every row of the failure
+  matrix"): a subtest, an existing named test, or a closed lab row (directory unavailable: L42, L43,
+  L67; identity provider: L45, L46; a cut region: L74; device fall-through: L4, L28, L29, L35, L41),
+  and a test holds every row to it.
+- **12. L84 closes in CI.** The systemd cells run on a GitHub-hosted runner in a label-gated
+  `lab-hosted` workflow, and `make lab-l84 A_CELLS=` merges them with the Compose half on the same
+  runner.
+- **13. The enrollments export CronJob** runs in a kind test with an OpenLDAP container and a
+  username-free policy. It is a test of port49's own artifact, not a lab row.
+- **14. A Junos class's `idle-timeout` is the least ceiling landing in it (Ryan, 2026-11-02).** A
+  class is shared by every session the policy lands at its template on a Junos device, so "per role"
+  becomes "per class": each class takes the least ceiling among those sessions, each session's
+  ceiling being the least across its own roles with `session.max_session_age_default` for a role that
+  names none. A class whose every session is `never` gets no `idle-timeout` line, never `0`; a class
+  no session lands in keeps the default. `devices check-config` passes a class `idle-timeout` at or
+  below the rendered value and reports only a longer or a missing one, so a grant that expires, or a
+  scope that stops selecting a device, does not flag the fleet. Under the built-in adapter's
+  `user_permissions` delivery (decision 22) every session lands in `p49-remote`, so the result is one
+  fleet-wide minimum: the least ceiling of any role granted on any Junos device. Only a policy whose
+  `platforms: juniper_junos:` block sets `bit_delivery: local_user_name` gets distinct per-level
+  classes. The cost, which the export's header states: a short role shortens every Junos session's
+  idle timer. The alternative (the default on every class) is not built. Decision 21's timer is the
+  only thing that ends a session on a session-only platform, so this takes decision 33's "the option
+  that denies more".
+- **15. The restore guard's ERROR stands, bounded in time (Ryan, 2026-11-02).** After an etcd restore
+  port49d refuses token logins until a runner's purge, and its refusal is an ERROR, which IOS XE
+  treats as final, and Junos under `tacplus` alone (ruling 2) does the same, so break-glass is
+  refused there until the brokers start and purge. SR Linux under `exit-on-reject true` does not:
+  break-glass logs in on an authentication ERROR while a port49 user's token login is refused (L87 a,
+  `tests/lab/results/L87-nokia_srlinux.md`). The ERROR is kept: closing the
+  listener for the guard would hand every open session's commands to local authorization for the
+  whole purge (measured L41 on EOS, NX-OS and both Junos images, refused only on IOS XE), a wider
+  exposure than a delay that the brokers' start or one operator command ends. The escape is **stop
+  port49d**: each device then finds the connection refused and falls to its local method (§5.7
+  `store_unavailable`; L4, L35). `port49_redemption_restore_guarded == 1` for 10m pages, and the 3am
+  table of `deploy/failure-matrix.md` carries that row. In addition the guard lifts on its own at the
+  earlier of the purge (as before) and the largest `ExpiresAt` among the `v1/t/` records, read
+  against port49d's own clock exactly as redemption reads a token's expiry (`liveTokens`). The
+  records are scanned at the drop and again on every guarded read, and the bound only rises. It
+  replaced a bound taken from the restored `meta/witness`'s time + 15m + 5m, whose premise failed:
+  the runner rewrites the witness only when the store has moved (`witnessPass`, "a quiet store
+  writes nothing"), so its time can be hours older than the snapshot's last mint, and a newer
+  restore under the guard, or a clock stepped back, kept the shorter bound (reviewed 2026-11-02).
+  The tokens' own expiry needs no premise about the witness's lead or the brokers' skew, and
+  port49d's own clock error cancels, because both the lift time and a restored token's expiry are
+  broker stamps compared with its clock. Fail closed, the guard lifting only on the purge and the
+  gauge reading 0: the scan fails, a record does not decode, or the latest expiry is more than
+  `policy.MaxTokenTTL` (15m) + 5m ahead of port49d's clock, which is a broker clock or port49d's
+  too far off to wait on (5m is the largest clock disagreement port49 tolerates anywhere:
+  `broker.identity.clock_skew`'s ceiling, decision 39 ruling 5, `internal/config/identity.go:643`;
+  an inventory's `published_at` lead, §10; OCSP's and CRLs' `ThisUpdate`,
+  `internal/certstatus/ocsp.go:70`, `crl.go:55`). A scan that finds every token already expired
+  guards nothing, and says so once. After a lift on its own, a token expiring at or before the
+  bound stays refused until a purge (the redeem floor, `store_unavailable`, no new reason), and
+  port49d keeps the pre-restore witness record, so a later restore whose tokens are still live
+  guards again. The cost: while brokers keep minting and no purge lands, the bound keeps rising and
+  only the purge (or stopping port49d) lifts it, which is the guard as it was before this ruling; a
+  token from a broker whose clock runs far behind may be refused once. Revocations made after the
+  snapshot are lost by any restore, and the runbook covers them. The guard's own text is decision
+  36's (plan 12c Task 9a). The alternative (close the listener while guarded) is not built.
+  *Trace, a snapshot 5 minutes old restored with the brokers crash-looping.* The snapshot's latest
+  token expires about 10 minutes after the restore (a mint just before the snapshot, 15m ttl).
+  port49d's first read after the restore finds the drop, scans, and guards, the until gauge at that
+  expiry, and its line names the lift time and the escape. Token logins are refused
+  `store_unavailable`, and on IOS XE and on Junos under `tacplus` alone break-glass is refused too.
+  The 10m page fires with the lift time in its summary; the operator waits the remaining minutes or
+  stops port49d at once (the 3am row). At the latest expiry the guard lifts on its own with no
+  broker running, and the line says so. Every token the snapshot held has expired by then on
+  port49d's clock, so a replay finds no live token, and a login needs a fresh mint, which needs a
+  broker. The lift does not by itself let break-glass in on those devices: with port49d up, a
+  password that is no live token is answered FAIL, which they also treat as final, as on any day the
+  brokers are down (design §12, "Broker unavailable"); with the brokers still down, "stop port49d"
+  stays the escape. What the bound changes is that the ERROR state ends, and that a restore whose
+  tokens have all expired never enters it. *Trace, a quiet store.* The witness was last written at
+  02:00, a token minted at 03:00, and the snapshot taken at 03:00:00.4: the witness is an hour old
+  and the token is live until 03:15. A witness-time bound would have lifted at 02:20 and left a
+  10-minute replay window; the scan reads 03:15, and the guard holds to it. *Trace, a wrong clock on
+  port49d.* Behind by d: the guard lasts d longer in real time, and so would a restored token's life
+  by port49d's judgment, so no replay window opens. Behind so far that the latest expiry is more
+  than 20m ahead of its clock: no bound is armed, only the purge lifts the guard, and the line says
+  why. Ahead by any amount: the lift comes earlier in real time, and port49d takes every restored
+  token as expired earlier by the same amount; a port49d more than 15m ahead refuses every fresh
+  token as expired too, which its logins show at once (unchanged). *Trace, the clock stepped back
+  after a lift.* port49d, 8m ahead, lifts 8m early in real time; NTP steps it back, and a restored
+  token is live on its clock again: the redeem floor refuses every token expiring at or before the
+  lifted bound, and the next read's scan, if the witness is below the record, guards again until
+  that expiry. A minting broker's clock needs no premise, its stamp being the one compared.
+- **16. `port49 hwkey setup` checks a user's security key and writes `issued_key` and `touch_key` (the lead and Ryan, 2026-11-01).**
+  Each user needs one YubiKey with a session key in slot 9a and a touch key in 9c, the pair
+  `hardware_key_touch` proves from (decision 45 ruling 12). The command is `hwkey` because `port49 keys
+  status` already names TACACS+ shared keys.
+  - **Read-only on the token.** It never generates a key, writes an object, or asks for the PIV management
+    key. Decision 45 ruling 7's "For `pkcs11`, port49 never generates a key or writes an object on the
+    token" stands. It opens each slot with no PIN: attestation objects are public, and a PIN is never asked.
+  - **The module.** A first-time user must not have to find their libykcs11 path. The first source that
+    applies wins: (1) `--module PATH`; (2) the `module-path` of an existing `issued_key` or `touch_key`;
+    (3) a probe of a fixed list of system install paths, in order: `/usr/lib/<multiarch>/libykcs11.so.2`,
+    then `.../libykcs11.so` (Debian and Ubuntu; `<multiarch>` is `x86_64-linux-gnu` or
+    `aarch64-linux-gnu` from `runtime.GOARCH`); `/usr/lib64/libykcs11.so.2` (Fedora and RHEL). Each is a
+    path a package's published file list shows (2026-11-02). No macOS path is probed, because none could be
+    confirmed (Homebrew's formula names no libykcs11 file, and its group-writable prefix fails `CheckOwned`): a Mac
+    passes `--module`, and its "none found" line says "no libykcs11 is probed on macOS: pass --module PATH",
+    not "install yubico-piv-tool". No Linux `/usr/local/lib` path is probed either:
+    only a source build puts one there. A module is loaded only if it passes `userconfig.CheckOwned`, the
+    rule the agent applies: every link and the file owned by root or the user, with no group or world
+    write, because an attacker-writable library is code execution. A `--module` or an existing key's
+    `module-path` that fails is refused (exit 2), naming the path and the rule, before anything loads. A
+    probed candidate that does not exist is passed over silently; one that exists and fails the check is
+    skipped, with one line naming it. The first that passes is used and printed as `module: <path>
+    (found)`, and setup writes it into `issued_key` and `touch_key`, so later commands do not probe. None
+    found: exit 2, "no libykcs11 found; install yubico-piv-tool or pass --module". This adds no config key.
+  - **The token.** `pkcs11.Tokens` lists the tokens the module shows, never logging in. More than one
+    refuses (exit 2) and prints the list: number, model and masked label. `--token <n>` picks one by that
+    number, so the user never needs the serial.
+  - **The slots.** It reads the attestations of 9a (the session key; `--session-slot 9e` for a site that
+    keeps it there, as L86 did) and 9c (the touch key), and the f9 device certificate. It finds them by the
+    fixed slot-to-`CKA_ID` table (`hwkeysetup.SlotIDs`; 9a `0x01`, 9c `0x02`, 9e `0x04` measured in L60,
+    9d `0x03` the PIV standard's and unmeasured, used by no default) and builds each `pkcs11:` URI with the
+    token's label.
+  - **The checks are the broker's own code**: `pivattest.VerifyPair`, which `verifyTouchMessage` calls for
+    a per-login proof and for an admin call's touch. It holds the chain of both slots to the roots, the
+    same device serial, and touch policy always for 9c, and it returns the broker's fixed words
+    (`touch_slot_chain`, `session_slot_chain`, `device_mismatch`, `touch_policy`). `agent.SameToken` adds
+    that both keys are on one token. The only PIN-policy rule is `Verify`'s closed set (1 to 3), which
+    `VerifyPair` inherits; no PIN rule is added, so there is no `pin_policy` check. The closed set of
+    check names is `session_slot`, `touch_slot`, `attestation_roots`, `session_attested`,
+    `touch_attested`, `touch_policy`, `same_token`, and, for status alone, `config_issued_key`,
+    `config_touch_key`, `issued_certificate`, `certificate_expiry`, `agent`.
+  - **The roots are the broker's own.** A copy held by every user or host would be toil and could drift
+    from what the broker checks. When `broker.identity.per_login_mfa.hardware_key_touch.attestation_roots_file`
+    is loaded, `GET /v1/config` gains `hardware_key_touch: {attestation_roots_pem: "..."}`: the file's
+    CERTIFICATE blocks re-encoded, public certificates and nothing else. The client fetches it as it
+    fetches the rest of `/v1/config`, over TLS 1.3 against the configured broker CA (no proxy). Precedence:
+    `--roots FILE` first, for offline use, then the broker. There is no config key for roots. `--broker
+    URL` names the broker to fetch from (default: the config's `broker`). With no roots from either, the
+    command says so and exits 2. An unreachable broker gets its own line, exit 2: "port49: the broker
+    <host> is unreachable, so the attestation roots could not be fetched: retry, or pass --roots FILE". A
+    broker whose certificate is not from the configured broker CA is a trust failure, not an outage: it
+    gets a distinct line, "port49: the broker <host> did not present a certificate from the configured
+    broker CA, so the attestation roots were not fetched: check broker_ca, or pass --roots FILE", exit 2.
+    Each run says which roots it used: `roots: from broker <host>` or `roots: --roots <file>`.
+  - **For anything missing or wrong** it prints the exact commands to run; ykman, not port49, asks for the
+    management key: `ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a
+    port49-9a.pub.pem`; the same with `--touch-policy ALWAYS 9c port49-9c.pub.pem`; and, for a slot that
+    has a key but no certificate, `ykman piv certificates generate --subject "CN=port49 <slot>" <slot>
+    port49-<slot>.pub.pem` (libykcs11 lists a slot's key only with a certificate in it: unmeasured, L91
+    cell c). No line names a serial, PIN, PUK or management key.
+  - **It never prints a serial.** Every line goes through `serialmask.MaskSerial` (L60's rule, moved into
+    `internal/hwkey/serialmask`), error lines included (a `pkcs11.Open` error can name other tokens), and
+    every `why` in `--json`.
+  - **When every check passes** it writes `issued_key:` (the session slot's URI) and `touch_key:` (9c's) to
+    the user's config (`userconfig.Path()`), by line edit: a top-level line is replaced in place or
+    appended, every other byte stays, the write is atomic with the file's own mode. If both are present
+    and equal it changes nothing and says so. If either differs it shows the old and new values (serial
+    masked) and asks at a terminal; with no terminal it changes nothing and exits 1. A value that arrives
+    from the system config is reported, never edited.
+  - **Exit codes:** 0 ready; 1 action needed; 2 error (no module, an unreadable config, a bad flag, no
+    roots, an unreachable broker or a broker from another CA).
+  - **Where a user meets the missing key**, the remedy depends on the agent's reason. The agent reports
+    `Status.session_key_store`, a closed set (`file`, `tpm`, `pkcs11`, `secure_enclave`, the
+    `issued_key_store` values, never a reference or URI, so it can carry no serial), and the remedy is
+    chosen by it and never by matching a message. A session key in the TPM, the Secure Enclave or a file:
+    "hardware_key_touch needs both keys on one YubiKey; this device accepts only it", with the
+    `port49 hwkey setup` pointer; on a fallback line, that it needs both keys on one YubiKey and the
+    pointer. A token session key with no token present or no usable touch key: the pointer alone.
+  - **A TPM or file session key** (`issued_key_store: tpm` or `file`, or `auto` resolving to either) gets
+    one plain statement: "`hardware_key_touch` needs the session key and the touch key on one YubiKey;
+    this login's session key is not on a token. Your site's other per-login factor is `idp_mfa`." Exit 1.
+  - *Trace, the operator at 3am.* The broker is down and a user's key is not set up: `hwkey setup`
+    cannot fetch roots, says the broker is unreachable and that `--roots FILE` works offline, and exits 2
+    having changed nothing; the token was never written.
+- **17. `port49 hwkey status` is the read-only view (the lead and Ryan, 2026-11-01).** It runs ruling 16's
+  checks and also: the config's `issued_key` and `touch_key` name those slots; the issued certificate
+  (`userconfig.IssuedTokenPaths(broker, issued_key)`) holds the session slot's public key, or there is none
+  yet; the certificate's expiry (a FAIL once passed, the time left otherwise); and, when an agent is
+  running, its view (`touch_key: true`, or `touch_key_unusable: <why>`). It never writes config and never
+  prints a ykman line; any FAIL names `port49 hwkey setup` as the fix. It takes its roots, module, token
+  and `--broker` as ruling 16 does, and its output starts with the roots line. For a session key in a TPM
+  or a file it exits 1 with ruling 16's statement. Exit codes: 0 ready, 1 not ready, 2 error (no roots and
+  an unreachable broker or another CA's included). `--json` is status's only form and prints `{"token": "...",
+  "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys
+  snake_case, the serial masked, no secret.
+- **Open.** L91 is provisional until it closes. L89 closed 2026-11-04 (`tests/lab/results/L89-kind.md`). L39 (b) and (c) closed 2026-11-04 (`tests/lab/results/L39-kind.md`).
 
 ---
 
@@ -12134,7 +12498,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L36** | On etcd, whether a live Junos session's re-authorization (`authorization-time-interval`, 15 min) after a port49d restart is answered from the context the store kept, and whether a denial then ends the session. | The operator note on Junos re-authorization on etcd (plan 7d), and §15 L17's note on a restart's denied re-authorization | vJunos-router, vSRX | closed — measured 2026-10-04; tests/lab/results/L36-juniper_vjunos-router.md, L36-juniper_vsrx.md (run at 20fb9fa from a pinned worktree). Both images, `authorization-time-interval 15`, B stopped, A restarted: the device re-authorized the open session 15m0s after its login (14m59s after the restart), and A answered `PASS_ADD` from the context the store kept (`permit context_matched`); the session ran on. A second session logged in and revoked at once (`port49 revoke --principal` on the broker) was denied at its first re-authorization, 15m0s after its login: `AUTHOR` `FAIL` in 1ms, record `deny credential_revoked`; the device did not end the session, and the session's next `show version` printed an 83-byte error (first line `^`) on both images. On vJunos-router's first run (0cff0d0; `L36-juniper_vjunos-router.md`, "Earlier run", one observation, capture not kept) a session revoked after its first re-authorization sent no second request in 20 minutes; L40 is open on whether a second ever comes |
 | **L37** | On the split deployment (plan 7e; two port49d replicas and port49-broker on one etcd, each device listing both replicas as TACACS+ servers): whether a session opened through one replica has its next command answered by the other once the first stops; whether, with every broker stopped, an open session runs on and a token minted before the stop logs in; whether a revocation made on port49-broker denies the session's next command on either replica; and how long after its store hangs a port49d with no hold closes its listeners. | The failure model's "Broker unavailable" and store rows on the split deployment (design §12), and decision 36 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-20; tests/lab/results/L37-arista_eos.md, L37-cisco_nxos.md, L37-cisco_iosxe.md, L37-juniper_vjunos-router.md, L37-juniper_vsrx.md (rerun at 61d9b95f for decision 37's dark time; the other readings were first measured 2026-10-04 at 2a74f88 on EOS, NX-OS and IOS-XE and 20fb9fa on the Junos images, and the rerun's assertions held on all five). With A stopped the device tried B and B answered the open session from the context A wrote (`permit`, the same `ctx_id`, `AUTHOR` `PASS_ADD` in 3ms) on vEOS, the N9Kv and the C8000V, after one refused connection to A (two on the C8000V); on Junos the question does not arise: an open session's command sent no TACACS+ at all (`L37-juniper_*.md` cell 2, the device opened no connection; a device fact, decision 21). A fresh login through B with A stopped was measured instead and logged in (`token_redeemed`, `permit context_matched`). Whether a Junos re-authorization for a session A wrote is answered by B is unmeasured. With the broker stopped the open session ran on and a token minted before the stop logged in on all five (`token_redeemed`). A revocation on port49-broker denied the session's next command `credential_revoked` on A and on B on vEOS, the N9Kv and the C8000V; on Junos, which authorizes no command, a token minted before it was refused on B (`token_not_found`: the revocation deleted it). On a hung store each port49d closed its listeners on decision 37's health checks, 4.8–5.5s after the hang on all five images ("N consecutive store health checks failed", with no circuit-open line first), inside the 10.5s bound the configuration gives (`close_after` × `interval` + `call_timeout` + 5s of slack), and break-glass then logged in on every image. Plan 7e's probe, which closed the listeners 1m43s–2m0s in (measured 2026-10-04), was replaced by the health checks in plan 7f. The L35 re-check on vEOS with the second server removed matched L35's step-3 cells (appended to L37-arista_eos.md) |
 | **L38** | On IOS-XE, whether an open session's command runs under local authorization once port49 is unreachable, by the command (`show privilege`, `show version`) and by what port49 answered before it went away (nothing; a `FAIL store_unavailable`): `quarantine-cisco_iosxe.md` ran `show privilege` with port49d stopped, and `L35-cisco_iosxe.md` refused `show version` once port49d went dark on a hung store. | Design §12's IOS-XE cells for a store outage and an unreachable port49 | IOS-XE | closed — measured 2026-10-04; tests/lab/results/L38-cisco_iosxe.md (run at 2a74f88 from a pinned worktree). With both port49d replicas stopped, an open session's `show privilege` and `show version` were refused `% Authorization failed.` in both orders and in both columns, after a permit and after a `FAIL store_unavailable` (confirmed by a record and on the wire), so neither the command nor what came before changes the answer; the device opened three connections per command, every one refused, and sent no payload. Why `quarantine-cisco_iosxe.md`'s `show privilege` ran is unexplained: L38 rules out the command and the session's last answer, at the same privilege level (15) |
-| **L39** | Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with host networking. Measured by the device-binding check passing or failing for a known device. | Design §13's source-address requirement, applied to plan 12's deployment shapes (roadmap, Plan 12) | any one device platform per shape; the observation is the server's, not the device's | open — (a) measured 2026-10-05, on vEOS-lab 4.31.2F (image tagged 4.32.2F) through deploy/compose (plan 7f), Docker 29.1.3, the device on the clab management bridge and port49d published on its gateway address, with the clab network's own masquerade of its subnet kept off the device's traffic (a RETURN rule, modelling a device off the host): tests/lab/results/L39-docker-proxy-on-arista_eos.md, tests/lab/results/L39-docker-proxy-off-arista_eos.md. With the userland proxy on, and with `userland-proxy: false`, port49d saw the device's own address (172.100.100.11) as the source and the redeem passed `token_redeemed`; in both modes the kernel's DNAT carried the connection (the capture keeps the device's sequence number and source port), and docker-proxy carried none, so a connection docker-proxy relays is unmeasured. A first run without the RETURN rule saw the compose gateway in both modes; that was the lab's own masquerade, not the published port, and is recorded in the notes as invalid. A device on another host is modelled, not measured. (b) and (c), Kubernetes, are plan 12's |
+| **L39** | Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with host networking. Cells, on kind, the device a container on the kind network outside every node, port49d one replica: (b1) a NodePort Service with `externalTrafficPolicy: Cluster`, dialled at the node running the pod; (b2) the same, at a node not running it; (b3) `Local`, at the node running it; (b4) `Local`, at a node not running it (what the device sees: an observation); (c) port49d with `hostNetwork: true` on a lab-only `privileged` namespace, dialled at its node. PASS for (b1)–(b3) and (c) iff the device-binding check passes (`token_redeemed`); a FAIL is the measured answer. A LoadBalancer under `Local` is L85 (a) (closed, PASS). Measured by the device-binding check passing or failing for a known device. | Design §13's source-address requirement, applied to plan 12's deployment shapes (roadmap, Plan 12) | any one device platform per shape; the observation is the server's, not the device's | closed — measured 2026-11-04; tests/lab/results/L39-kind.md (b, c, run 41869399517, artifact `lab-l39`, cells in tests/lab/results/L39-kind-cells.json); (a) measured 2026-10-05, on vEOS-lab 4.31.2F (image tagged 4.32.2F) through deploy/compose (plan 7f), Docker 29.1.3, the device on the clab management bridge and port49d published on its gateway address, with the clab network's own masquerade of its subnet kept off the device's traffic (a RETURN rule, modelling a device off the host): tests/lab/results/L39-docker-proxy-on-arista_eos.md, tests/lab/results/L39-docker-proxy-off-arista_eos.md. With the userland proxy on, and with `userland-proxy: false`, port49d saw the device's own address (172.100.100.11) as the source and the redeem passed `token_redeemed`; in both modes the kernel's DNAT carried the connection (the capture keeps the device's sequence number and source port), and docker-proxy carried none, so a connection docker-proxy relays is unmeasured. A first run without the RETURN rule saw the compose gateway in both modes; that was the lab's own masquerade, not the published port, and is recorded in the notes as invalid. A device on another host is modelled, not measured. (b) and (c) on kind v0.29.0 (node image v1.33.1, kube-proxy in iptables mode), the device a container on the kind network outside every node (172.18.0.5), port49d one replica, GitHub-hosted runner: (b1) `Cluster` at the node running the pod, FAIL: the client was reset, port49d logged no decision record, and the source it recorded was a pod-network address (10.244.2.1), not the device's; (b2) `Cluster` at the other worker, FAIL: reset, and the source recorded was that worker's own address (172.18.0.2); (b3) `Local` at the node running the pod, PASS: `token_redeemed` with the device's own address (172.18.0.5) as the source; (b4) `Local` at a worker not running the pod, OBSERVED: the connection timed out and port49d recorded nothing; (c) `hostNetwork: true` on a lab-only `privileged` namespace, PASS: `token_redeemed`, source 172.18.0.5. So `externalTrafficPolicy: Cluster` loses the device's source address and device binding fails, `Local` keeps it when the device dials a node running the pod (a node without one drops the connection), and host networking keeps it. The TLS listener's Service (port 300) was not dialled; it has the same policy. The chart's pod sysctl (`net.ipv4.ip_unprivileged_port_start`) is refused by Kubernetes on the host network and the harness removes it for (c) |
 | **L40** | On Junos, whether `authorization-time-interval` re-authorizes a session more than once: after the first re-authorization (`L36-*.md` saw one, 15 minutes after login), whether a second request comes one interval later, and so whether a revocation made after the first reaches the session. | The operator note on Junos re-authorization on etcd (plans README, plan 7d's notes) and §15 L36 | vJunos-router, vSRX | open — added 2026-10-04 (plan 7e Task 17 review; L36 measured only the first re-authorization after login) |
 | **L41** | On the compose deployment (decision 37), what a device does when port49d closes its TACACS+ listener mid-session on its store health checks, beside port49d stopped: how long after the store hangs an idle port49d closes it (against `close_after` × `interval` + `call_timeout`); an open session's next command once it is closed, and with port49d stopped; break-glass once it is closed; once the store returns, how long until port49d listens again (after `open_after` passes) and until the device asks it again; and whether the session's next command port49d is asked is answered from the context the store kept. | Decision 37's defaults and design §12's store rows (the go-dark timing and what follows it) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-05; tests/lab/results/L41-arista_eos.md, L41-cisco_nxos.md, L41-cisco_iosxe.md, L41-juniper_vjunos-router.md, L41-juniper_vsrx.md (run at 9620e03 from a pinned worktree). Dark time after the hang: EOS 5.5s, NX-OS 5s, IOS-XE 5.3s, vJunos-router 5s, vSRX 4.8s, 4.8–5.5s, at or inside decision 37's 5.5s (read by a 250ms poll of port49d's followed `docker logs` from the moment `docker compose pause` returned, so ±~0.25s; the test failed only above its 10.5s harness bound). Cell 3 beside cell 7: the open session's `show version` ran on EOS, NX-OS and both Junos images and was refused `% Authorization failed.` on IOS-XE, identically with the listener closed and with port49d stopped. Break-glass logged in with the listener closed on all five and with port49d stopped. Time to listening: 3.5s after the release on every image (the `open_after` passes said at the same moment). Until asked again: EOS 100ms, NX-OS 800ms, IOS-XE 300ms after listening, answered from the kept context (same `ctx_id`, `permit`); vJunos-router and vSRX send no command, a fresh login 300ms after listening succeeded |
 | **L42** | Nested-group resolution, per directory. The fixture: a user three levels below a granted group (`alice` ∈ `g-leaf` ∈ `g-mid` ∈ `netops-oncall`), a loop (`dave` ∈ `g-loop-a` ∈ `g-loop-b` ∈ `g-loop-a`), and a user in the granted group directly (`carol` ∈ `netops-oncall`). For each user: which groups a search under the groups base returns with `member:1.2.840.113556.1.4.1941:=<user DN>` (`in_chain`), whether that search answers, errors or is refused on the loop, and how long it takes; whether the user entry's `memberOf` lists only its direct groups; what port49's `recursive` walk and `direct` read return; and whether a directory that does not implement the matching rule refuses the filter or answers it empty. | `broker.directory.nested_groups` and its three modes (§13 decision 38); design §10's "`memberOf` is not transitive" | OpenLDAP (slapd 2.5, `memberof` overlay), Samba AD (4.17) | closed — measured 2026-10-05; tests/lab/results/L42-openldap.md, tests/lab/results/L42-samba_ad.md |
@@ -12178,9 +12542,15 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L81** | An IP address as the TLS server name (decision 50 ruling 10): (a) `openssl s_client -servername <IPv6 literal>` against a listener whose `server_names` lists it in another spelling: accepted. An unlisted one is refused with the alert (best-effort, recorded) and `sni_mismatch`, and the next connection inside the window is reset at Accept, with no strike and no second record. (b) vJunos-router 26.2 with port49's IPv6 address over TLS: whether it sends SNI, and in what form. | `server_names` taking an IP address and matching an address SNI by address (§13 decision 50 ruling 10); whether an IPv6 Junos can be listed in `server_names` at all | (a) reference clients on the lab host; (b) Junos: vJunos-router 26.2 | open — (a) measured 2026-10-22; tests/lab/results/L81-reference.md: a server name `2001:0DB8:0:0::1` matched a `server_names` entry `2001:db8::1` and the handshake completed, and `2001:0DB8:0:0::2` got the `internal error` alert and `sni_mismatch` naming the spelling sent, with the next connection reset at Accept (declined_refused +1, held_refused +0). (a) uses IPv4 loopback transport, so it measures SNI handling only. (b), vJunos-router 26.2 over IPv6, is unmeasured, so the row stays open. The docs make no IPv6-Junos claim until (b) is measured. |
 | **L82** | Kubernetes Secret volumes as port49d's key directory, on kind. (a) The owner, group and mode of the mount's directory, its `..data` link and each key file under `defaultMode: 0440`, `fsGroup: 65532`, `fsGroupChangePolicy: OnRootMismatch`. PASS iff port49d starts with the key (`fence.ReadSecret` accepts). (b) A key added to the Secret reaching a whole-volume mount: the delay. PASS iff the file appears within 180 s. (c) A `subPath` mount of the same Secret after an update. PASS iff the `subPath` file is unchanged after 180 s while the whole mount changed: that confirms "never `subPath`". (d) An External Secrets Operator `ExternalSecret` (`fake` provider), one remote key per version. PASS iff a version added to the ExternalSecret reaches the mounted Secret, and a policy naming it is in force with no container restart (`restartCount` and start time unchanged) within 240 s. | Decision 54 ruling 2's Kubernetes key volume (provisional on this row); the ESO example; 12a's whole-volume hand-off | kind (node image recorded), ESO version recorded | closed — measured 2026-10-31; tests/lab/results/L82-kind.md |
 | **L83** | Secret-store agents rendering port49d's keys, on kind. (a) The Vault Agent injector's rendered file with `perms = "0440"`: owner, group, mode and the agent's uid (documented as 100), with and without `agent-run-as-same-user`. PASS iff port49d starts with the key. (b) The Secrets Store CSI driver with the Vault provider: the files' owner and mode with and without the provider's file-permission setting. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added at the store reaches the running process with no restart. PASS iff a policy naming the new version is in force with no container restart within 300 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether a README may name Vault Agent or the CSI driver (decision 54 ruling 2) | kind; Vault, injector, CSI driver and provider versions recorded | closed — measured 2026-10-31; tests/lab/results/L83-kind.md. (a) FAIL with the default agent user (uid 100 owns the file; port49d crash-loops on the owner rule), PASS with `agent-run-as-same-user: "true"`. (b) FAIL for both CSI configurations (`0:0 0644`, or `0:0 0440` unreadable by 65532; port49d crash-looped in each). (c) FAIL for the injector: a new version replaces the pod. Per ruling 2 the Vault Agent injector is named for the encryption key only (it fails the no-restart cell), with `agent-run-as-same-user: "true"`; device keys use External Secrets or a Secret volume (L82); the Secrets Store CSI driver is not named. |
-| **L84** | Host credential mechanisms against `fence.ReadSecret`. (a) systemd `LoadCredential=`: `$CREDENTIALS_DIRECTORY`'s path, owner and mode, and the files'. PASS iff port49d starts with `key_secret_refs.file_dir` naming it, and again on a second start. (b) Compose file-backed `secrets:`, long syntax `uid: "0"`, `gid: "65532"`, `mode: 0440`, and the short syntax (documented 0444): the mounted file's owner and mode. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added reaches the running process with no restart. PASS iff a policy naming it is in force with `ExecMainStartTimestamp` or `StartedAt` unchanged within 120 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether the systemd and compose READMEs may offer these (decision 54 ruling 2) | systemd 257 (Debian 13); Docker and Compose versions recorded | open — Compose half measured 2026-10-28; tests/lab/results/L84-systemd-docker.md (Docker 29.1.3, Compose 5.5.1, local `port49:dev`). (b) PASS for both syntaxes: port49d starts only with a host file that is `root:65532` 0440; Compose bind-mounts the file as it is and does not apply the long syntax's `uid`, `gid` or `mode`, so `0444` (the short syntax's documented mode) and a file the operator owns are refused. (c) FAIL for both: adding a second `secrets:` entry needs `docker compose up -d`, which recreates port49d (the container id and the start time change), though a version 2 login passes once it is up. The compose README therefore names `secrets:` for the encryption key only. (a) and systemd's (c) are not yet run: they need Task 9's container (`make lab-l84-systemd`), and `LoadCredential=` stays unnamed for a device key until they do. |
+| **L84** | Host credential mechanisms against `fence.ReadSecret`. (a) systemd `LoadCredential=`: `$CREDENTIALS_DIRECTORY`'s path, owner and mode, and the files'. PASS iff port49d starts with `key_secret_refs.file_dir` naming it, and again on a second start. (b) Compose file-backed `secrets:`, long syntax `uid: "0"`, `gid: "65532"`, `mode: 0440`, and the short syntax (documented 0444): the mounted file's owner and mode. PASS iff port49d starts with the key. (c) For each mechanism that passed (a) or (b): a version added reaches the running process with no restart. PASS iff a policy naming it is in force with `ExecMainStartTimestamp` or `StartedAt` unchanged within 120 s. A mechanism that fails (c) may be named for the encryption key only, never for device keys. | Whether the systemd and compose READMEs may offer these (decision 54 ruling 2) | systemd 255 (Ubuntu 24.04.5 runner, kernel 7.0.0-1017-azure) for the host cells; the Debian 13 container (systemd 257) rendered no credentials; Docker 28.0.4 and Compose 2.38.2 recorded | closed — measured 2026-11-04; tests/lab/results/L84-systemd-docker.md (cells: tests/lab/results/L84-systemd-docker-cells.json; hosted run 41930879677). systemd, on a GitHub-hosted runner (ubuntu-24.04, systemd 255.4, a real systemd as PID 1, `User=port49d` with the shipped unit's [Service] properties): (a) PASS: systemd renders the credential `root:root` 0440 in a `root` `dr-xr-x---` directory, each with a POSIX ACL (`user::r--, user:999:r--, group::---, mask::r--, other::---` on the file), and `fence.ReadSecret` reads it on both starts. (c) FAIL: `systemctl set-property` refuses `LoadCredential=`, and a drop-in with `daemon-reload` leaves the running unit's credentials directory and main PID unchanged; a credential is added only by `systemctl restart`. The Debian 13 container (systemd 257) sets `CREDENTIALS_DIRECTORY` but mounts no credentials, so its cells are INVALID for the platform, not a product result. Compose `secrets:` (2026-10-28: Docker 29.1.3, Compose 5.5.1; again 2026-11-04: Docker 28.0.4, Compose 2.38.2, local `port49:dev`): (b) PASS for both syntaxes: port49d starts only with a host file that is `root:65532` 0440; Compose bind-mounts the file as it is and does not apply the long syntax's `uid`, `gid` or `mode`, so `0444` (the short syntax's documented mode) and a file the operator owns are refused. (c) FAIL for both: adding a second `secrets:` entry needs `docker compose up -d`, which recreates port49d (the container id and the start time change), though a version 2 login passes once it is up. So `LoadCredential=` and Compose `secrets:` are named for the encryption key only, never for device keys. The first host run (41915756204) was refused: the fence judged the ACL by its mask, as the owning group's permission, so a lab result contradicted the fence. It now reads the ACL's entries (f14e9152). |
 | **L85** | MetalLB in BGP mode as an anycast VIP for port49d, on kind with an FRR peer. (a) The source address port49d sees under `externalTrafficPolicy: Local`. PASS iff it is the device's own address and the device-binding check passes. (b) Which nodes advertise the VIP. PASS iff exactly the nodes running a ready port49d pod. (c) A port49d pod deleted: the withdrawal time, and what an open single-connection session and a per-transaction client see. PASS iff the route is withdrawn within 10 s of the pod's listener closing, and no per-transaction login in the window fails past one retry; the deletion-to-withdrawal delay is an observation. (Redefined 2026-10-31 after two runs. Run 41142675001, no preStop: 6.6 s from deletion, but (d) lost one login in 42. Run 41151306253, preStop 15 s: 21.6 s from deletion, every login passing, and (d) PASS. The pod keeps serving through its preStop, so the deletion is the wrong clock for a route that is meant to outlast it.) (d) A rolling restart under the chart's PDB, with one login a second. PASS iff no login fails past one retry. | Whether the chart offers anycast (decision 54 ruling 12; Plan 12 rulings, B2); design §13's anycast note | kind; MetalLB and FRR versions recorded | closed — measured 2026-10-31; tests/lab/results/L85-kind.md (run 41155086403: all four cells PASS on (c) as redefined; the note states runs 41142675001 and 41151306253 too) |
 | **L86** | An admin call's touch on a real YubiKey, on the SER8 (needs Ryan present). (a) Two admin calls 5 s apart under touch policy `always`: whether the second blinks again. PASS iff each call needs its own touch, and the second fails without one. (b) No touch: the time to failure and the words. PASS iff the CLI prints the timeout line, exits 1, and `port49 revoke --list` shows no mark. (c) An OIDC-issued session key in the token's slot (`issued_key_store: pkcs11`, L60's open issued-key cell): an admin call. PASS iff it succeeds with one touch. (d) The key unplugged with the agent running: an admin call. PASS iff the CLI says to insert the key, nothing is sent, and the broker's log has no `admin_touch_refused`. Cites L60 (partial: the touch policy byte, the attestation chain and serial, a 14.4 s timeout on one token) and L62 (TPM session keys, which this path refuses before sending). | §5.1.6's "one touch per operation" and its 3am table; decision 54 ruling 15 | YubiKey 5 (firmware recorded), libykcs11 (version recorded), SER8 | closed — measured 2026-11-01; tests/lab/results/L86-ser8.md |
+| **L87** | SR Linux with `exit-on-reject true` when port49 is up and answers ERROR (`store_unavailable`, the lab fault switch), and once port49d has closed its listener on etcd (go-dark). (a) The break-glass account (local only) logs in, or not, and how fast, with authentication answered ERROR; and a port49 user's token login. (b) The same with port49d dark: break-glass logs in, and its time. (c) An ERROR to the session authorization of a login port49 authenticated: whether the login completes, and the roles it gets. | Decision 55 ruling 3: the reference configuration's 3am line for SR Linux (break-glass waits for go-dark, or it does not) | SR Linux 26.7.2 (`ghcr.io/nokia/srlinux:26.7.2-519`) | closed — measured 2026-11-04; tests/lab/results/L87-nokia_srlinux.md |
+| **L88** | Each platform under port49's reference AAA configuration (`deploy/device-aaa/`), loaded as shipped. (a) A user port49 denies who has a local account with the same password: PASS iff refused, with no fall-through. (b) port49d stopped (connections refused): PASS iff break-glass logs in within 10 s (recorded). The bound is fixed, because a refused connection is not L13's reply timeout; L4 and L41 measured 0.3 s to 5.2 s. (c) port49 answering ERROR: break-glass login and one command, recorded. (d) port49d dark (listener closed by its health checks, on etcd): PASS iff break-glass logs in and runs a command. (e) A token login, one permitted and one denied command: PASS iff the permit runs, the deny is refused, and accounting START and STOP arrive. (f) The first server refusing (reset at Accept), the second answering: PASS iff a token login succeeds through the second (time recorded). (g) A reload retiring the open connection's key version, single-connection on: what the in-flight and the next command do (observation; L29's question for the platforms L29 did not measure). (h) For each TLS image, (a), (b), (d), (e) and (f) over RFC 9887 under the TLS reference (SR Linux over RFC 9887 is not measured: L92); (c), (g) and (i) do not depend on the transport and stay on the plain pass (ruled 2026-11-04). (i) Junos only: the largest `idle-timeout` the commit accepts, by bisection. | Design §12 "port49 MUST ship tested reference AAA configuration per platform"; design §14's device fallback assertion; decision 55 rulings 1, 2, 3, 8 and 14 | vEOS 4.31.2F, cEOS 4.36.3M (TLS), C8000V 17.13.01a and 17.18.02 (TLS), N9Kv 10.4(2)F and 10.6(2)F (TLS), vJunos-router 23.4R2-S2.1 and 26.2R1.7 (TLS), vSRX 21.4R3.15, XRd 26.1.1 (both), SR Linux 26.7.2 | closed — measured 2026-11-04; `tests/lab/results/L88-*.md` (one note per platform and image listed; `L88-cisco_iosxe-f-evidence-run.md` is the history of an explained FAIL, not a closing note). Plain TCP, cells a to g (and i on Junos): vEOS, cEOS 4.36.3M, C8000V 17.13.01a and 17.18.02, N9Kv 10.4(2)F and 10.6(2)F, vJunos-router 23.4 and 26.2, vSRX, XRd 26.1.1 (default and named VRF), SR Linux 26.7.2 (c, e and g observed). RFC 9887, cells a, b, d, e, f, all passing (`L88-*-tls.md`): vJunos-router 26.2R1.7, C8000V 17.18.02, N9Kv 10.6(2)F, cEOS 4.36.3M, XRd 26.1.1. SR Linux 26.7.2 over RFC 9887 is not measured (L92); one observation, a `tls-profile` set with port 300, saw the client send plain TACACS+ (`L88-nokia_srlinux-tls.md`). Per platform, cell e: SR Linux: port49 command policy does not apply; the device asks for none (L76, `L88-nokia_srlinux.md`). |
+| **L89** | Velero file-system backup (node agent) of a chart release's PVCs, on kind with an S3-compatible store in the cluster. The backup holds `issuing-ca.key`; the repository password is set from a Secret. (a) Back up both StatefulSets, delete the namespace, and restore: the owner, group and mode of `state/`, `issuing-ca.key` and the spool directory. PASS iff both StatefulSets become ready with no fence refusal and the broker prints the CA fingerprint it printed before. (b) After the restore, a mint and a login. PASS iff both succeed. | Whether the chart README may name Velero (decision 55 ruling 10; 12b pre-flight M10) | kind; Velero, node agent and object-store versions recorded | closed — measured 2026-11-04; tests/lab/results/L89-kind.md |
+| **L90** | Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `secure: true` with no `known_hosts` entry: what Oxidized does. (b) `secure: true` with a changed key: PASS iff refused. (c) `secure: true` after ruling 9's `ssh … accept-new … PreferredAuthentications=none … exit` line wrote the entry: PASS iff the backup runs. (d) Any Oxidized input or `vars` setting that maps to net-ssh's `verify_host_key: :accept_new`: PASS iff an unknown key is saved and a changed key refused. | `examples/oxidized` (decision 55 ruling 9; plan 9d carry) | Oxidized (version recorded), vEOS 4.31.2F | closed — measured 2026-11-04; tests/lab/results/L90-oxidized-arista_eos.md |
+| **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan at the SER8, where he is away long-term from 2026-11-02; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 | open |
+| **L92** | SR Linux over RFC 9887 (L88 h). The schema has `system aaa server-group server tls-profile` (`tree flat system aaa server-group`, SR Linux 26.7.2), and `system tls profile` takes key, certificate and trust-anchor. (a) The port and the unencrypted flag with a profile set. (b) Whether the client sends a ClientHello (L88 saw plain TACACS+ on port 300 with a profile set and a CPM entry for replies from port 300; the default CPM entry 110 accepts only source port 49). (c) Server-certificate checking and client-certificate enrolment. (d) L88 cells a, b, d, e, f over RFC 9887. Needs an SR Linux enrolment dialect for L73. | Design §12; RFC 9887 | SR Linux 26.7.2 | open; one L88 observation in `tests/lab/results/L88-nokia_srlinux-tls.md` |
 
 Every cell of L82–L85 carries its own PASS condition, so a row closes when every cell has a PASS or a FAIL. A FAIL is a measured answer, not an open row. A README names a mechanism only where every one of its cells is PASS.
 
@@ -13699,8 +14069,11 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   and both images. So a class's `idle-timeout` binds a session a TACACS+ reply lands in, which is
   what `platform export --classes` writes from `session.max_session_age_default` (decision 21).
   Both images committed `idle-timeout 720` (a 12h `max_session_age`) in plan 5b's Task 19
-  (`L12-projection-juniper_*.md`). *Unmeasured:* the largest `idle-timeout` the device takes, so
-  an export of a longer `max_session_age` may write a value the commit checker refuses.
+  (`L12-projection-juniper_*.md`). The largest `idle-timeout` the device takes is 4294967295
+  minutes, measured by bisection on both images (L88 cell i;
+  `L88-juniper_vjunos-router.md`, `L88-juniper_vsrx.md`), and `platform export --classes` caps the
+  value there (`internal/platform/classes.go`). A `time.Duration` reaches only about 1.5e8
+  minutes, so no `max_session_age` passes the cap today.
 - **L26** — added by plan 5b and measured 2026-09-25 (`tests/lab/results/L26-juniper_*.md`,
   trees in `L26-keywords-juniper_*.yaml`; `tests/lab/junos_keywords_test.go`). Over the
   break-glass CLI, `| display xml rpc` showed the RPCs of `show system uptime` and `show version`

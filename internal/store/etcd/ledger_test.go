@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -181,5 +182,164 @@ func TestTheLedgerRecordReadsPages(t *testing.T) {
 	}
 	if _, got, err := s.LedgerMarks(ctx); err != nil || len(got) != 501 {
 		t.Fatalf("%d marks: %v", len(got), err)
+	}
+}
+
+// countKV counts the round trips a store makes through its KV, and runs
+// beforeTxn(n) just before the n-th transaction (from 1) commits: a test's
+// way to land a competing write between a batch's read and its write.
+type countKV struct {
+	clientv3.KV
+	mu        sync.Mutex
+	gets      int
+	txns      int
+	beforeTxn func(n int)
+}
+
+func (c *countKV) Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+	c.mu.Lock()
+	c.gets++
+	c.mu.Unlock()
+	return c.KV.Get(ctx, key, opts...)
+}
+
+func (c *countKV) Txn(ctx context.Context) clientv3.Txn { return &countTxn{Txn: c.KV.Txn(ctx), c: c} }
+
+type countTxn struct {
+	clientv3.Txn
+	c *countKV
+}
+
+func (t *countTxn) If(cs ...clientv3.Cmp) clientv3.Txn  { t.Txn = t.Txn.If(cs...); return t }
+func (t *countTxn) Then(os ...clientv3.Op) clientv3.Txn { t.Txn = t.Txn.Then(os...); return t }
+func (t *countTxn) Else(os ...clientv3.Op) clientv3.Txn { t.Txn = t.Txn.Else(os...); return t }
+func (t *countTxn) Commit() (*clientv3.TxnResponse, error) {
+	t.c.mu.Lock()
+	t.c.txns++
+	n, hook := t.c.txns, t.c.beforeTxn
+	t.c.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
+	return t.Txn.Commit()
+}
+
+func manyMarks(n int) []store.LedgerMark {
+	ms := make([]store.LedgerMark, n)
+	for i := range ms {
+		ms[i] = store.LedgerMark{Key: store.ContextKey{NAS: "leaf-01", Username: fmt.Sprintf("u%04d", i)}, Seq: uint64(i + 1)}
+	}
+	return ms
+}
+
+// 1000 marks cost a few transactions, not a read and a write each: the
+// keeper's record kept ~55 marks/s at ~18 ms a mark and fell 9000 behind
+// at 170 raised a second (run 4, finding 4). A batch is one read
+// transaction and one write transaction.
+func TestALedgerWriteBatchesItsMarks(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	c := &countKV{KV: s.ctxKV}
+	s.ctxKV = c
+	ms := manyMarks(1000)
+	if n, err := s.PutLedgerMarks(ctx, ms); err != nil || n != 1000 {
+		t.Fatalf("%d landed: %v", n, err)
+	}
+	batches := (1000 + ledgerBatch - 1) / ledgerBatch
+	if c.gets != 0 || c.txns > 2*batches {
+		t.Fatalf("1000 marks took %d gets and %d transactions; want no gets and at most %d transactions", c.gets, c.txns, 2*batches)
+	}
+	if _, got, err := s.LedgerMarks(ctx); err != nil || len(got) != 1000 {
+		t.Fatalf("%d marks read: %v", len(got), err)
+	}
+}
+
+// A mark whose compare is lost is read and written again alone: its batch's
+// other marks land once, in the first transaction, and the loser ends at the
+// higher of its own sequence and the competing writer's, whichever way the
+// competing write lands.
+func TestALostLedgerCompareRetriesOnlyThatMark(t *testing.T) {
+	// The competing write lands below the batch's mark (5), then above it.
+	for _, tc := range []struct {
+		name        string
+		competitor  uint64
+		wantAtEnd   uint64
+		wantRewrite bool
+	}{{"below", 3, 5, true}, {"above", 99, 99, false}} {
+		t.Run(tc.name, func(t *testing.T) { lostLedgerCompare(t, tc.competitor, tc.wantAtEnd, tc.wantRewrite) })
+	}
+}
+
+func lostLedgerCompare(t *testing.T, competitor, loserEnds uint64, rewritten bool) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	c := &countKV{KV: s.ctxKV}
+	s.ctxKV = c
+	ms := manyMarks(10)
+	loser := ms[4].Key
+	// Seed the loser, so the competing write below changes a record the
+	// batch's read saw (a compare on a revision, not on absence).
+	if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: loser, Seq: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.txns = 0
+	c.beforeTxn = func(n int) {
+		if n != 2 { // the batch's write; the read was the first
+			return
+		}
+		c.mu.Lock()
+		c.beforeTxn = nil
+		c.mu.Unlock()
+		if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: loser, Seq: competitor}}); err != nil {
+			t.Error(err)
+		}
+	}
+	c.mu.Unlock()
+	if n, err := s.PutLedgerMarks(ctx, ms); err != nil || n != 10 {
+		t.Fatalf("%d landed: %v", n, err)
+	}
+	_, got, err := s.LedgerMarks(ctx)
+	if err != nil || len(got) != 10 {
+		t.Fatalf("%d marks: %v", len(got), err)
+	}
+	for _, m := range got {
+		want := uint64(0)
+		for i, o := range ms {
+			if o.Key == m.Key {
+				want = uint64(i + 1)
+			}
+		}
+		if m.Key == loser {
+			want = loserEnds
+		}
+		if m.Seq != want {
+			t.Fatalf("%v is at %d, want %d", m.Key, m.Seq, want)
+		}
+	}
+	// The winners share the first write's revision; only the loser moved on.
+	revOf := func(k store.ContextKey) int64 {
+		r, err := s.ctx.Get(ctx, s.k.ledgerOf(k))
+		if err != nil || len(r.Kvs) != 1 {
+			t.Fatalf("%v: %v", k, err)
+		}
+		return r.Kvs[0].ModRevision
+	}
+	first := revOf(ms[0].Key)
+	for i, m := range ms {
+		if m.Key != loser && revOf(m.Key) != first {
+			t.Fatalf("mark %d was written again: revision %d, not %d", i, revOf(m.Key), first)
+		}
+	}
+	if rewritten && revOf(loser) <= first {
+		t.Fatalf("the loser was not written after the batch")
+	}
+	if !rewritten && revOf(loser) >= first {
+		t.Fatalf("a record already above the mark was written over")
+	}
+	// The batch's read and write, the competing writer's own read and write
+	// (counted, since it runs through the same KV), and the loser's retry.
+	if c.txns > 6 {
+		t.Fatalf("%d transactions for one lost compare", c.txns)
 	}
 }

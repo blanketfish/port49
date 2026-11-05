@@ -4,12 +4,14 @@ package metrics
 
 import (
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
+	"github.com/blanketfish/port49/internal/admission"
 	"github.com/blanketfish/port49/internal/devicecert"
 	"github.com/blanketfish/port49/internal/store/guard"
 )
@@ -94,12 +96,16 @@ type Metrics struct {
 	// an operator after three consecutive read failures. Not a record count —
 	// the records are still in the quarantined file.
 	SpoolQuarantines prometheus.Counter
+	// port49_accounting_spool_sync_seconds: the fsync of one group commit
+	// (plus the directory fsync of a batch that created the file), which every
+	// accounting ack in the batch waits on. No labels.
+	SpoolSyncSeconds prometheus.Histogram
 	StoreOps         *prometheus.CounterVec
 	// StoreCalls, StoreCallSeconds and StoreCircuitOpen are the guard's
 	// (internal/store/guard; plan 7d): every store call by component
 	// (daemon, broker), pool (token, context, bulk) and outcome (ok,
 	// not_found, conflict, error, timeout, deadline, unavailable, refused,
-	// canceled, saturated, circuit_open); how long they took; and whether
+	// canceled, saturated, feed_behind, circuit_open); how long they took; and whether
 	// each pool's circuit is open, design §15's circuit-breaker state. The
 	// gauge moves only when a call ends, so a pool no one calls keeps the
 	// value of its last call, open included, and never goes dark on it:
@@ -123,14 +129,20 @@ type Metrics struct {
 	// store writer makes either. No labels:
 	// its key, which names a device, is in the log line beside it.
 	IndexRecordsUndecodable prometheus.Counter
+	StoreMemberSuspect      prometheus.Counter
+	StoreFastFail           *prometheus.CounterVec
 	// StoreKeyspaceHeld is 1 while this port49d holds its keyspace on etcd
 	// (plan 7d): 0 while it waits for another or for the store, and alarmed
 	// when port49d runs with it 0.
-	StoreKeyspaceHeld prometheus.Gauge
+	StoreKeyspaceHeld *prometheus.GaugeVec
 	// StoreFeedUp is 1 while a feed's watch runs (plan 7e): feed is
 	// "contexts" or "marks". 0 for longer than hold_ttl is an alarm: this
 	// process's ledger or marks are not following the store.
 	StoreFeedUp *prometheus.GaugeVec
+	// StoreFeedLegsColocated is 1 while both legs of a feed's watch are on one
+	// etcd member (no redundancy against that member going dark); feed is
+	// contexts or marks.
+	StoreFeedLegsColocated *prometheus.GaugeVec
 	// StoreFeedRescans counts a feed's rescans after a compacted watch.
 	StoreFeedRescans *prometheus.CounterVec
 	// StoreFenceTimeouts counts context reads denied because this
@@ -170,11 +182,11 @@ type Metrics struct {
 	StoreCertExpiry *prometheus.GaugeVec
 	// StoreDirectoryReachable is 1 while this process's reads of the
 	// directory store answer, 0 while they do not (plan 11a; decision 51).
-	StoreDirectoryReachable prometheus.Gauge
+	StoreDirectoryReachable *prometheus.GaugeVec
 	// StoreDirectoryConfirmed is when this process last confirmed its copy
 	// of the directory store, in Unix seconds: a read answered while its
 	// marks feed ran. An alert subtracts it from now.
-	StoreDirectoryConfirmed prometheus.Gauge
+	StoreDirectoryConfirmed *prometheus.GaugeVec
 	// StoreLogoutsPending is how many back-channel logouts this region
 	// accepted while the directory store did not answer and has not yet
 	// forwarded to it (plan 11a, R26 as amended). No label.
@@ -208,8 +220,10 @@ type Metrics struct {
 	BrokerHandshakeFailures *prometheus.CounterVec
 	// port49_broker_connection_events_total{event}: source_cap_refused (reset
 	// at accept, its source holding max_pending_conns_per_source),
-	// principal_cap_evicted (a principal's oldest held connection closed for
-	// its newest), revoked_closed (closed by a revocation), revoked_refused
+	// principal_cap_evicted (a principal's oldest idle held connection closed for
+	// its newest), principal_cap_refused (answered 503 too_many_connections and
+	// closed at bind: every connection the principal holds has a request in
+	// flight), revoked_closed (closed by a revocation), revoked_refused
 	// (answered credential_revoked and closed at bind: its certificate or
 	// principal is marked, or its certificate is revoked at its CA),
 	// status_unavailable_refused (answered 503 certificate_status_unavailable
@@ -350,6 +364,14 @@ type Metrics struct {
 	// issuing CA in use expires; 0 when none is loaded. Where issuance is
 	// configured, alert on 0, and on it within 90 days.
 	IssuingCANotAfter prometheus.Gauge
+	// port49_issuing_ca_configured: 1 on a broker whose
+	// broker.identity.issuance is set, 0 otherwise, so the alert on the CA
+	// gauge's 0 needs no hand-set scrape label.
+	IssuingCAConfigured prometheus.Gauge
+	// port49_directory_password_configured: 1 on a broker with a
+	// directory_password verifier, 0 otherwise: the enrollment store gauge is
+	// absent until the store first answers, and this says whether it should exist.
+	DirectoryPasswordConfigured prometheus.Gauge
 	// port49_directory_queries_total{server, outcome}: directory queries by
 	// server (host:port) and outcome: ok, fault (the server's), error (the
 	// query's answer), refused (the dial or bind was refused, no fault).
@@ -389,7 +411,7 @@ type Metrics struct {
 	// port49_directory_refresh_last_complete_timestamp_seconds: the Unix
 	// time of the last scheduled refresh that verified every principal, 0
 	// before one has. No labels: no principal or device.
-	DirectoryRefreshLastComplete prometheus.Gauge
+	DirectoryRefreshLastComplete *prometheus.GaugeVec
 	// port49_oidc_keys_last_success_timestamp_seconds{issuer}: the Unix
 	// time the keys held were fetched: 0 from the key set's creation until
 	// a fetch or a restore, and after a restore the kept set's fetched_at,
@@ -468,9 +490,16 @@ type Metrics struct {
 	// port49_redemption_restore_guarded: 1 while this port49d refuses every
 	// token redemption store_unavailable, having found meta/witness below
 	// the highest it followed (an etcd restore; plan 7e, Task 15d), until
-	// a broker runner's purge is done; 1 too from a run's start after a
+	// a broker runner's purge is done or every token the restored store holds
+	// has expired (plan 12c, Task 9a); 1 too from a run's start after a
 	// store gone until its first read of the witness.
 	RedemptionRestoreGuarded prometheus.Gauge
+	// port49_redemption_restore_guard_until_timestamp_seconds: while the
+	// guard holds, the Unix time it lifts on its own: the largest expiry among
+	// the token records, read again on every guarded read, so it only rises
+	// (plan 12c, Task 9a); 0 while it does not hold, or when only a broker
+	// runner's purge lifts it.
+	RedemptionRestoreGuardUntil prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -535,6 +564,58 @@ type Metrics struct {
 	InventoryFetches *prometheus.CounterVec
 	inventoryAge     atomic.Pointer[func() float64]
 	keys             atomic.Pointer[keyWatch]
+	singleDevice     atomic.Pointer[map[string]bool]
+	// keyMu holds a key validation's label choice and its increment together
+	// (read), apart from a new set's store and its series delete (write): a
+	// count that read the old set must land before the delete, or it recreates
+	// the series the delete took out.
+	keyMu sync.RWMutex
+	// afterKeyLabels is a test hook, run between the label choice and the
+	// increment.
+	afterKeyLabels func()
+}
+
+// What the key series carry in place of a key_ref only one device holds, and
+// in place of the version: a label that named the key would name the device
+// (no device identity in metric labels). admission.ReservedKeyRef is the same
+// name, so no real key collides with it.
+const (
+	SingleDeviceKeyRef = admission.ReservedKeyRef
+	AnyVersion         = "any"
+)
+
+// SetSingleDeviceKeyRefs sets which key_refs exactly one device holds; the
+// key series report those under SingleDeviceKeyRef and AnyVersion. A counter
+// series already created under such a key_ref named it while two devices held
+// it, so each is deleted once the set is stored (new increments use KeyLabels).
+func (m *Metrics) SetSingleDeviceKeyRefs(refs map[string]bool) {
+	m.keyMu.Lock()
+	defer m.keyMu.Unlock()
+	m.singleDevice.Store(&refs)
+	for r := range refs {
+		m.KeyValidations.DeletePartialMatch(prometheus.Labels{"key_ref": r})
+	}
+}
+
+// CountKeyValidation counts one outcome for ref at version under KeyLabels'
+// labels. The label choice and the increment are one step against a new set.
+func (m *Metrics) CountKeyValidation(ref string, version int, outcome string) {
+	m.keyMu.RLock()
+	defer m.keyMu.RUnlock()
+	k, v := m.KeyLabels(ref, version)
+	if m.afterKeyLabels != nil {
+		m.afterKeyLabels()
+	}
+	m.KeyValidations.WithLabelValues(k, v, outcome).Inc()
+}
+
+// KeyLabels is the key_ref and version labels for ref at version: the pair
+// itself, or (SingleDeviceKeyRef, AnyVersion) when one device holds ref.
+func (m *Metrics) KeyLabels(ref string, version int) (keyRef, ver string) {
+	if s := m.singleDevice.Load(); s != nil && (*s)[ref] {
+		return SingleDeviceKeyRef, AnyVersion
+	}
+	return ref, strconv.Itoa(version)
 }
 
 // KeySample is one key version at a scrape: how many devices' latest
@@ -569,12 +650,34 @@ func (k keyCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	now := w.now()
+	// The single-device versions are one series: the devices on those that
+	// retire, and the soonest retirement among those a device presents.
+	var single, soonest *time.Time
+	var singleDevices int
+	set := k.m.singleDevice.Load() // once: one scrape sees one set
 	for _, s := range w.sample() {
+		if set != nil && (*set)[s.KeyRef] {
+			if s.RetireAt.IsZero() {
+				continue
+			}
+			single = &s.RetireAt
+			singleDevices += s.Devices
+			if s.Devices > 0 && (soonest == nil || s.RetireAt.Before(*soonest)) {
+				soonest = &s.RetireAt
+			}
+			continue
+		}
 		v := strconv.Itoa(s.Version)
 		ch <- prometheus.MustNewConstMetric(k.devices, prometheus.GaugeValue, float64(s.Devices), s.KeyRef, v)
 		if !s.RetireAt.IsZero() {
 			ch <- prometheus.MustNewConstMetric(k.retires, prometheus.GaugeValue, s.RetireAt.Sub(now).Seconds(), s.KeyRef, v)
 		}
+	}
+	if single != nil {
+		ch <- prometheus.MustNewConstMetric(k.devices, prometheus.GaugeValue, float64(singleDevices), SingleDeviceKeyRef, AnyVersion)
+	}
+	if soonest != nil {
+		ch <- prometheus.MustNewConstMetric(k.retires, prometheus.GaugeValue, soonest.Sub(now).Seconds(), SingleDeviceKeyRef, AnyVersion)
 	}
 }
 
@@ -654,6 +757,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Accounting records discarded by the spool, by the stage that discarded them."}, []string{"stage"}),
 		SpoolQuarantines: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_accounting_spool_quarantines_total",
 			Help: "Unreadable spool files renamed aside for an operator."}),
+		SpoolSyncSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "port49_accounting_spool_sync_seconds",
+			Help:    "Seconds one accounting spool group commit spent in fsync and close (plus the directory fsync of a new file); every record in the batch waits on it.",
+			Buckets: []float64{0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1}}),
 		StoreOps: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_operations_total",
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),
 		StoreCalls: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_calls_total",
@@ -677,10 +783,17 @@ func New(reg prometheus.Registerer) *Metrics {
 		IndexRecordsUndecodable: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "port49_store_index_records_undecodable_total",
 			Help: "etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted."}),
-		StoreKeyspaceHeld: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
-			Help: "1 while this port49d holds its keyspace on etcd."}),
+		StoreMemberSuspect: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "port49_store_member_suspect_total",
+			Help: "Times the etcd client stopped choosing a member for a while because a call on it timed out; a climb with a member paused or cut off, flat otherwise."}),
+		StoreFastFail: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_fast_fail_total",
+			Help: "Store calls the etcd client refused within 20 ms while the caller still waited, by reason (no_leader, leader_changed, no_connection, other); a call the guard refuses is port49_store_calls_total outcome circuit_open or saturated."}, []string{"reason"}),
+		StoreKeyspaceHeld: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
+			Help: "1 while this port49d holds its keyspace on etcd; absent where no runner starts (the memory backend)."}, nil),
 		StoreFeedUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_up",
 			Help: "1 while a feed's watch on the store runs, by feed (contexts or marks)."}, []string{"feed"}),
+		StoreFeedLegsColocated: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_legs_colocated",
+			Help: "1 while both legs of a feed's watch are on one etcd member, so that member going dark would stall the feed until a leg is moved; by feed (contexts or marks)."}, []string{"feed"}),
 		StoreFeedRescans: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_feed_rescans_total",
 			Help: "Rescans of the store after a feed's watch was compacted, by feed."}, []string{"feed"}),
 		StoreFenceTimeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_store_fence_timeouts_total",
@@ -703,11 +816,11 @@ func New(reg prometheus.Registerer) *Metrics {
 		StoreCertExpiry: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_store_client_cert_expiry_timestamp_seconds",
 			Help: "When each component's etcd client certificate expires, in Unix seconds."}, []string{"component"}),
-		StoreDirectoryReachable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_directory_reachable",
-			Help: "1 while this process's reads of the directory store answer."}),
-		StoreDirectoryConfirmed: prometheus.NewGauge(prometheus.GaugeOpts{
+		StoreDirectoryReachable: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_directory_reachable",
+			Help: "1 while this process's reads of the directory store answer; absent on the memory backend, which has no store to reach."}, nil),
+		StoreDirectoryConfirmed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_store_directory_confirmed_timestamp_seconds",
-			Help: "When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds."}),
+			Help: "When this process last confirmed its copy of the directory store (a read answered while its marks feed ran), in Unix seconds; 0 before one has, absent on the memory backend."}, nil),
 		StoreLogoutsPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_logouts_pending",
 			Help: "Back-channel logouts accepted while the directory store did not answer and not yet forwarded to it."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
@@ -779,6 +892,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			[]string{"outcome"}),
 		IssuingCANotAfter: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_not_after_timestamp_seconds",
 			Help: "The Unix time the issuing CA in use expires; 0 when none is loaded."}),
+		DirectoryPasswordConfigured: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_password_configured",
+			Help: "1 when this broker has a directory_password verifier; alert on port49_directory_enrollment_store_ok being 0 or absent where this is 1."}),
+		IssuingCAConfigured: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_issuing_ca_configured",
+			Help: "1 when this broker is configured to issue certificates; alert on port49_issuing_ca_not_after_timestamp_seconds == 0 where this is 1."}),
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
 			Help: "Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
 			[]string{"server", "outcome"}),
@@ -797,8 +914,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "People and workloads together that the last pre-warm pass verified and stored."}),
 		DirectoryPrewarmLastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_last_success_timestamp_seconds",
 			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
-		DirectoryRefreshLastComplete: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
-			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has."}),
+		DirectoryRefreshLastComplete: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
+			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has, absent where no scheduled refresh runs."}, nil),
 		OIDCKeysLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_oidc_keys_last_success_timestamp_seconds",
 			Help: "Unix time the OIDC or cluster issuer's held keys were fetched (restored included), 0 before any."}, []string{"issuer"}),
@@ -833,7 +950,12 @@ func New(reg prometheus.Registerer) *Metrics {
 				"runner that judges this broker's bundle."}),
 		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
 			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
-				"snapshot, until a broker runner's purge is done."}),
+				"snapshot, until a broker runner's purge is done or every token the store holds has expired."}),
+		RedemptionRestoreGuardUntil: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "port49_redemption_restore_guard_until_timestamp_seconds",
+			Help: "While port49_redemption_restore_guarded is 1: the Unix time the guard lifts on its own, the " +
+				"largest expiry among the token records, which a token minted meanwhile moves later and which may " +
+				"be in the past while the store's reads fail; 0 when only a broker runner's purge lifts it."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -939,20 +1061,20 @@ func New(reg prometheus.Registerer) *Metrics {
 	m.ConnectionsShed.WithLabelValues("global_cap") // the alarm's series exists before the first shed
 	reg.MustRegister(m.ConnectionsMax, m.ConnectionsShed)
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
-		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.Connections, m.ConnectionEvents, m.TLSHandshakes, m.TLSDeviceCertLifetime, m.TLSServerCertLifetime, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines, m.SpoolSyncSeconds,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreMemberSuspect, m.StoreFastFail, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedLegsColocated, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.StoreDirectoryReachable, m.StoreDirectoryConfirmed, m.StoreLogoutsPending, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.DevicesGenericPlatform, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.OIDCLogouts, m.PolicyReloads, m.PolicyFileRefused, m.KeySecretFilesChanged, m.PolicyFailClosed,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded, m.RedemptionRestoreGuardUntil,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches, m.WorkloadRenewalLate,
-		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter)
+		m.CertificatesIssued, m.SignIns, m.DirectoryEnrollmentStoreOK, m.PerLoginMFA, m.AdminTouch, m.IssuingCANotAfter, m.IssuingCAConfigured, m.DirectoryPasswordConfigured)
 	// Nothing is known to differ until a read says so: a process with no
 	// runner to compare with (memory) reads 1.
 	m.PolicyBundleMatchesRunner.Set(1)

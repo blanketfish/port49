@@ -189,9 +189,10 @@ func TestAPingFailsWhileTheFeedIsBehind(t *testing.T) {
 	}
 }
 
-// Under the guard, a read the feed never lets through is the guard's
-// timeout, counted in the context pool: a dead feed opens the circuit as
-// a dead store does.
+// Under the guard, a read the feed never lets through is store.ErrUnavailable,
+// counted in the context pool as its own outcome, feed_behind, and not as a
+// timeout: the store answered, so it does not open the circuit. A feed that
+// stays dead is the health check's to see (TestAPingFailsWhileTheFeedIsBehind).
 func TestAFeedThatNeverArrivesIsCountedByTheGuard(t *testing.T) {
 	inner, a, _, lb := fencedPair(t)
 	login(t, a, "ctx-alice", "user:alice")
@@ -201,8 +202,11 @@ func TestAFeedThatNeverArrivesIsCountedByTheGuard(t *testing.T) {
 	if _, err := g.GetContext(context.Background(), ka); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("%v", err)
 	}
-	if n := testutil.ToFloat64(calls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
-		t.Fatalf("the guard counted %v timeouts", n)
+	if n := testutil.ToFloat64(calls.WithLabelValues("daemon", "context", "feed_behind")); n != 1 {
+		t.Fatalf("the guard counted %v feed_behind outcomes", n)
+	}
+	if n := testutil.ToFloat64(calls.WithLabelValues("daemon", "context", "timeout")); n != 0 {
+		t.Fatalf("the guard counted %v timeouts for a fence wait", n)
 	}
 }
 

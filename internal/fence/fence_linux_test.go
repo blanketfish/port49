@@ -5,6 +5,7 @@ package fence
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/blanketfish/port49/internal/edkey"
+	"golang.org/x/sys/unix"
 )
 
 // maxPolicySize and maxInventorySize are port49d's bounds for its two files
@@ -1111,5 +1113,169 @@ func TestTheGroupRefusalOffersChmodOnlyToTheFilesOwner(t *testing.T) {
 		if got := strings.Contains(err.Error(), "chmod 0600"); got != tc.chmod {
 			t.Errorf("%s: the refusal offers chmod 0600 = %v, want %v: %v", tc.name, got, tc.chmod, err)
 		}
+	}
+}
+
+// secretWithACL writes a 0440 secret in a fresh directory and applies the setfacl specs to it,
+// skipping where setfacl is absent or the filesystem takes no ACL.
+func secretWithACL(t *testing.T, specs ...string) (path, dir string) {
+	t.Helper()
+	setfacl, err := exec.LookPath("setfacl")
+	if err != nil {
+		t.Skip("setfacl is not installed")
+	}
+	dir = safeDir(t)
+	path = filepath.Join(dir, "k")
+	if err := os.WriteFile(path, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if out, err := exec.Command(setfacl, "-m", s, path).CombinedOutput(); err != nil {
+			t.Skipf("this filesystem takes no ACL: %v %s", err, out)
+		}
+	}
+	return path, dir
+}
+
+// The mask in the mode's group bits is not the owning group's permission: a named user the ACL
+// lets read is a reader of the secret the mode check cannot see.
+func TestAnACLGrantingAnotherUserReadIsRefused(t *testing.T) {
+	p, dir := secretWithACL(t, "u:nobody:r")
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "user:65534") || !strings.Contains(err.Error(), "setfacl") ||
+		strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("an ACL granting another user read: %v", err)
+	}
+}
+
+// A root:root 0440 file with an ACL granting the service user read and group:: empty: the owning
+// group has no access, so it need not be ours (the shape systemd's LoadCredential= renders on
+// systemd 255, measured in L84: tests/lab/results/L84-systemd-docker.md).
+func TestTheSystemdCredentialShapeIsAccepted(t *testing.T) {
+	p, dir := secretWithACL(t, fmt.Sprintf("u:%d:r", os.Geteuid()), "g::---")
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileGroup = f }(FileGroup)
+	FileGroup = func(fs.FileInfo) (uint32, bool) { return 4242, true }
+	defer func(e func() int, g func() ([]int, error)) { getegid, getgroups = e, g }(getegid, getgroups)
+	getegid = func() int { return 1 << 20 }
+	getgroups = func() ([]int, error) { return nil, nil }
+	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the systemd credential shape: %v", err)
+	}
+}
+
+// The same two cases with the ACL set as raw xattr bytes, so they run where setfacl is absent.
+func setRawACL(t *testing.T, path string, es ...aclEntry) {
+	t.Helper()
+	if err := unix.Setxattr(path, "system.posix_acl_access", aclBytes(2, es...), 0); err != nil {
+		t.Skipf("this filesystem takes no ACL: %v", err)
+	}
+}
+
+func TestAnACLXattrGrantingAnotherUserReadIsRefused(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	setRawACL(t, p, aclEntry{tUserObj, 4, none}, aclEntry{tUser, 4, 65534}, aclEntry{tGroupObj, 0, none},
+		aclEntry{tMask, 4, none}, aclEntry{tOther, 0, none})
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "user:65534") || strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("an ACL xattr granting another user read: %v", err)
+	}
+}
+
+func TestTheSystemdCredentialShapeXattrIsAccepted(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	setRawACL(t, p, aclEntry{tUserObj, 4, none}, aclEntry{tUser, 4, uint32(os.Geteuid())}, aclEntry{tGroupObj, 0, none},
+		aclEntry{tMask, 4, none}, aclEntry{tOther, 0, none})
+	defer func(f func(fs.FileInfo) (uint32, bool)) { FileGroup = f }(FileGroup)
+	FileGroup = func(fs.FileInfo) (uint32, bool) { return 4242, true }
+	defer func(e func() int, g func() ([]int, error)) { getegid, getgroups = e, g }(getegid, getgroups)
+	getegid = func() int { return 1 << 20 }
+	getgroups = func() ([]int, error) { return nil, nil }
+	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the systemd credential shape: %v", err)
+	}
+}
+
+// An ACL on the secret's directory granting another user write is refused, as the mode's would be.
+func TestAnACLXattrGrantingAnotherUserWriteOnTheDirIsRefused(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	// the mask stays r-x (setfacl -n -m), so the write entry is masked out and the mode check passes:
+	// only the ACL read can see the latent entry
+	setRawACL(t, dir, aclEntry{tUserObj, 7, none}, aclEntry{tUser, 2, 65534}, aclEntry{tGroupObj, 5, none},
+		aclEntry{tMask, 5, none}, aclEntry{tOther, 5, none})
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "user:65534") {
+		t.Fatalf("a directory ACL granting another user write: %v", err)
+	}
+}
+
+// A directory that cannot be reopened for reading (injected EACCES) falls back to /proc; with
+// /proc absent too the secret is refused naming the directory and why. With the reopen working,
+// /proc is never needed.
+func TestASecretNeedsProcOnlyWhereTheDirectoryCannotBeReopened(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(s string, r func(*os.File) (*os.File, error)) { procSelfFd, reopenDir = s, r }(procSelfFd, reopenDir)
+	procSelfFd = filepath.Join(dir, "no-proc")
+	if _, err := ReadSecret(p, dir, 1<<10); err != nil {
+		t.Fatalf("the reopen works, so /proc is not needed: %v", err)
+	}
+	reopenDir = func(*os.File) (*os.File, error) { return nil, syscall.EACCES }
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "the directory "+dir) || !strings.Contains(err.Error(), "/proc") ||
+		strings.Contains(err.Error(), "not-a-real-secret") {
+		t.Fatalf("no reopen and no /proc: %v", err)
+	}
+	procSelfFd = "/proc/self/fd"
+	if _, err := ReadSecret(p, dir, 1<<10); err != nil {
+		t.Fatalf("the /proc fallback: %v", err)
+	}
+	reopenDir = func(*os.File) (*os.File, error) { return nil, syscall.EIO }
+	if _, err := ReadSecret(p, dir, 1<<10); err == nil || !strings.Contains(err.Error(), "cannot be reopened") {
+		t.Fatalf("a reopen failing otherwise: %v", err)
+	}
+}
+
+// The systemd directory shape, r-x for the service user by ACL, is read through the reopened descriptor.
+func TestTheSystemdDirectoryShapeXattrIsAccepted(t *testing.T) {
+	dir := safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	setRawACL(t, dir, aclEntry{tUserObj, 5, none}, aclEntry{tUser, 5, uint32(os.Geteuid())}, aclEntry{tGroupObj, 0, none},
+		aclEntry{tMask, 5, none}, aclEntry{tOther, 0, none})
+	if raw, err := ReadSecret(p, dir, 1<<10); err != nil || string(raw) != "not-a-real-secret\n" {
+		t.Fatalf("the systemd directory shape: %v", err)
+	}
+}
+
+// A reopen that lands on another directory than the one walked is refused, not read.
+func TestAReopenOfAnotherDirectoryIsRefused(t *testing.T) {
+	dir, other := safeDir(t), safeDir(t)
+	p := filepath.Join(dir, "k")
+	if err := os.WriteFile(p, []byte("not-a-real-secret\n"), 0o440); err != nil {
+		t.Fatal(err)
+	}
+	defer func(r func(*os.File) (*os.File, error)) { reopenDir = r }(reopenDir)
+	reopenDir = func(*os.File) (*os.File, error) { return os.Open(other) }
+	_, err := ReadSecret(p, dir, 1<<10)
+	if err == nil || !strings.Contains(err.Error(), "the directory "+dir) || !strings.Contains(err.Error(), "not the directory") {
+		t.Fatalf("a reopen of another directory: %v", err)
 	}
 }

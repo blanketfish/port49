@@ -132,21 +132,45 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 	return p.composeAll([]*Subject{sub}, d, now)
 }
 
+// composeMarkedFor is compose with the device's class marks.
+func (p *Policy) composeMarkedFor(sub *Subject, d admission.Device, now time.Time, marks string) composition {
+	return p.composeMarked([]*Subject{sub}, d, now, marks)
+}
+
 // composeAll is compose for every subject a principal matches (plan 7g,
 // Ruling 5): the grants of any of subs, composed as one. Every subject a human
 // principal matches is in the humans domain, so subs[0]'s domain is the one
 // attached roles read.
 func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) composition {
+	return p.composeMarked(subs, d, now, "")
+}
+
+// composeMarked is composeAll with d's class marks (deviceClass.marks, over
+// p.scopeNames) when the caller has them: a scope's selection is then read
+// from them instead of from d, which is what makes composing for a fleet of
+// one-device scopes cost its selected scopes and not all of them. marks ""
+// selects live. Marks must be those of d's class under this policy.
+func (p *Policy) composeMarked(subs []*Subject, d admission.Device, now time.Time, marks string) composition {
+	selected := func(name string) (ok, byIncomparable bool) {
+		if marks == "" {
+			return p.scopes[name].selects(d)
+		}
+		switch marks[p.scopeIdx[name]] {
+		case '+':
+			return true, false
+		case '?':
+			return true, true
+		}
+		return false, false
+	}
 	sub := subs[0]
 	c := composition{subject: sub, attached: map[string][]string{}}
-	for _, g := range p.grants {
-		if !slices.ContainsFunc(subs, func(s *Subject) bool { return s.Name == g.Subject }) {
-			continue
-		}
+	for _, i := range p.grantIndexes(subs) {
+		g := p.grants[i]
 		if !g.Expires.IsZero() && !now.IsZero() && !now.Before(g.Expires) {
 			continue
 		}
-		if ok, _ := p.scopes[g.Scope].selects(d); ok {
+		if ok, _ := selected(g.Scope); ok {
 			c.grants = append(c.grants, g)
 		}
 	}
@@ -203,14 +227,14 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	if c.ceiling != "" && p.levelIndex(held) > p.levelIndex(c.ceiling) {
 		c.ceiling = held
 	}
-	names := make([]string, 0, len(p.scopes))
-	for name := range p.scopes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for i, name := range p.scopeNames {
+		// Marks say '-' without a map lookup: with thousands of scopes a
+		// device is selected by a few.
+		if marks != "" && marks[i] == '-' {
+			continue
+		}
 		s := p.scopes[name]
-		ok, byIncomparable := s.selects(d)
+		ok, byIncomparable := selected(name)
 		if !ok {
 			continue
 		}
@@ -233,29 +257,84 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	return c
 }
 
-// signature is everything compose and resolve read of a device, as one key:
-// its platform, whose adapter compiles and projects the composition, and for
-// every scope whether it selects the device and whether only by a version it
-// could not compare. compose reads the device's name and attributes only
-// through selects. Two devices with one signature resolve alike for every
-// subject at every moment, but for the name an error quotes, which a reader
-// that groups by signature must not read. scopes is every scope's name,
-// sorted (sortedKeys).
-func (p *Policy) signature(d admission.Device, scopes []string) string {
-	var b strings.Builder
-	b.WriteString(d.Platform)
-	b.WriteByte(0)
-	for _, name := range scopes {
+// grantIndexes are the indexes into p.grants of every grant of any of subs, in
+// file order, each once: a subject listed twice must not double its grants.
+// One subject's list is the stored one, which a caller must not change; several
+// are merged into a fresh slice (their file order is the sort of the indexes).
+func (p *Policy) grantIndexes(subs []*Subject) []int {
+	if len(subs) == 1 {
+		return p.grantsOf[subs[0].Name]
+	}
+	var idx []int
+	for _, s := range subs {
+		idx = append(idx, p.grantsOf[s.Name]...)
+	}
+	slices.Sort(idx)
+	return slices.Compact(idx)
+}
+
+// deviceClass is everything compose and resolve read of a device, as one
+// comparable key: its platform, whose adapter compiles and projects the
+// composition, and one mark per scope, in Policy.scopeNames order: '-' the
+// scope does not select the device, '?' it selects it only by a version it
+// could not compare, '+' it selects it. compose reads the device's name and
+// attributes only through selects. Two devices in one class resolve alike for
+// every subject at every moment, but for the name an error quotes (the
+// per_login_mfa refusal, resolve.go's "(on %s)") and the name a mint's
+// {device} placeholder fills, which a reader that shares a class's result
+// must not take from a representative (the 12c Task 6b brief's input
+// inventory, R6 and R14).
+type deviceClass struct{ platform, marks string }
+
+// String is the class as signature writes it.
+func (c deviceClass) String() string { return c.platform + "\x00" + c.marks }
+
+// classOf is d's class over scopes, every scope's name, sorted (sortedKeys).
+func (p *Policy) classOf(d admission.Device, scopes []string) deviceClass {
+	marks := make([]byte, len(scopes))
+	for i, name := range scopes {
 		switch ok, byIncomparable := p.scopes[name].selects(d); {
 		case !ok:
-			b.WriteByte('-')
+			marks[i] = '-'
 		case byIncomparable:
-			b.WriteByte('?')
+			marks[i] = '?'
 		default:
-			b.WriteByte('+')
+			marks[i] = '+'
 		}
 	}
-	return b.String()
+	return deviceClass{platform: d.Platform, marks: string(marks)}
+}
+
+// signature is d's class as a string, for readers that group by it
+// (projectionGroupsBy).
+func (p *Policy) signature(d admission.Device, scopes []string) string {
+	return p.classOf(d, scopes).String()
+}
+
+// deviceClasses groups devs by class: the indexes of each class, classes in
+// order of first appearance and indexes ascending.
+func (p *Policy) deviceClasses(devs []admission.Device) [][]int {
+	classes, _ := p.deviceClassMarks(devs)
+	return classes
+}
+
+// deviceClassMarks is deviceClasses with each class's marks, for compose.
+func (p *Policy) deviceClassMarks(devs []admission.Device) ([][]int, []string) {
+	var classes [][]int
+	var marks []string
+	at := map[deviceClass]int{}
+	for i, d := range devs {
+		c := p.classOf(d, p.scopeNames)
+		k, ok := at[c]
+		if !ok {
+			k = len(classes)
+			at[c] = k
+			classes = append(classes, nil)
+			marks = append(marks, c.marks)
+		}
+		classes[k] = append(classes[k], i)
+	}
+	return classes, marks
 }
 
 // granting is the subjects of subs, in order, with at least one grant in the

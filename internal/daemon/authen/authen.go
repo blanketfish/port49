@@ -95,6 +95,10 @@ type Handler struct {
 	// restore guard; plan 7e, Task 15d). A receipt's replay is not a
 	// redemption, and is not asked.
 	redeemable func() bool
+	// redeemFloor, when set, is the expiry at or before which a token is
+	// refused, store_unavailable, as the guard is (plan 12c, Task 9a); the
+	// zero time refuses none.
+	redeemFloor func() time.Time
 }
 
 // New builds the authentication handler. tags are the keys the token tag may be
@@ -120,6 +124,14 @@ func (h *Handler) WithMarks(m *store.Marks) *Handler {
 // 7e, Task 15d).
 func (h *Handler) WithRedeemGuard(redeemable func() bool) *Handler {
 	h.redeemable = redeemable
+	return h
+}
+
+// WithRedeemFloor sets the expiry at or before which a token stays refused
+// after the restore guard lifted on its own, so a clock stepped back cannot
+// make a restored token redeemable (plan 12c, Task 9a).
+func (h *Handler) WithRedeemFloor(floor func() time.Time) *Handler {
+	h.redeemFloor = floor
 	return h
 }
 
@@ -430,9 +442,16 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if err != nil {
 		return s.storeError(rec)
 	}
+	var floor time.Time
+	if s.h.redeemFloor != nil {
+		floor = s.h.redeemFloor()
+	}
 	var winner *store.Token
 	for i := range cands {
 		if cands[i].Kind == kind && match(cands[i]) {
+			if !floor.IsZero() && !cands[i].ExpiresAt.After(floor) {
+				return s.storeError(rec)
+			}
 			winner = &cands[i]
 			break
 		}

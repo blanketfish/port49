@@ -81,3 +81,21 @@ ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:uni
 ce85894b490af8fa63a887530d5cc972ec421335:tests/lab/device_debug_unit_test.go:junos-type9:353
 3ddba0021bf72abf7c4ead384c7c6eb6d9b8487f:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:115
 3ddba0021bf72abf7c4ead384c7c6eb6d9b8487f:tests/lab/device_debug_unit_test.go:tacacs-key-config-line:151
+#
+# srlinux-aes1 (rule added after the fact): the L88 SR Linux TLS notes recorded the lab tls-profile's $aes1$ key
+# (ba147308, 583a164a, 6a1fef4f; masked since e16e967c), and the L76/L88 masking tests and L76 plan hold $aes1$ fixtures.
+# All lab-only. Scoped to commit, file, rule and line, so a new $aes1$ anywhere is caught.
+5050376aa2bca559806552298ea006c6d95eabc5:tests/lab/l76_unit_test.go:srlinux-aes1:190
+583a164a8c7c273e20b60f0382aed4b61909756d:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:13
+583a164a8c7c273e20b60f0382aed4b61909756d:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:14
+583a164a8c7c273e20b60f0382aed4b61909756d:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:15
+6a1fef4f8afbc66867b5332dc9de391cb145531a:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:13
+6a1fef4f8afbc66867b5332dc9de391cb145531a:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:14
+6a1fef4f8afbc66867b5332dc9de391cb145531a:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:15
+7fc1022527f82bc01112ec085f9606330e291fe9:tests/lab/l88_unit_test.go:srlinux-aes1:266
+b37c10aa0b68967b7de8fffaeda9b894c62baff9:tests/lab/l76_unit_test.go:srlinux-aes1:351
+ba147308262463bf53644abb86b4b65aa574d023:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:13
+ba147308262463bf53644abb86b4b65aa574d023:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:14
+ba147308262463bf53644abb86b4b65aa574d023:tests/lab/results/L88-nokia_srlinux-tls.md:srlinux-aes1:15
+bf34ecab0a20d08a210949c4428d6224e6692f18:docs/superpowers/plans/2026-10-17-l76-srlinux.md:srlinux-aes1:614
+e16e967c1f44d67b5f95a4f52bf7afed4fc85d76:tests/lab/l88_unit_test.go:srlinux-aes1:262

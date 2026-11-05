@@ -6,8 +6,8 @@
 {{- if ne .Values.service.externalTrafficPolicy "Local" }}{{ fail "service.anycast.enabled needs service.externalTrafficPolicy Local, so that the device's source address survives and only nodes with a ready pod advertise" }}{{ end }}
 {{- if lt (int .Values.port49d.preStopSeconds) 15 }}{{ fail "service.anycast.enabled needs port49d.preStopSeconds of at least 15, the wait L85 measured: a shorter one closes the listener before the route is withdrawn" }}{{ end }}
 {{- end }}
-# TACACS+: the devices' address. Local keeps their source address where the platform supports it
-# (unmeasured on Kubernetes: spec §15 L39 b, c).
+# TACACS+: the devices' address. Local keeps their source address and Cluster loses it, so device binding
+# fails under Cluster (spec §15 L39 b, measured on kind).
 apiVersion: v1
 kind: Service
 metadata:

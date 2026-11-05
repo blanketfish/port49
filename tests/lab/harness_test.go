@@ -879,6 +879,9 @@ var platformSessionAttributes = map[string]string{
 // configPath is the daemon config this platform runs against: the checked-in
 // one unless platformSessionAttributes has something to say about it.
 func (l *lab) configPath() (string, error) {
+	if l88TLSConfig != "" { // L88 cell h: port49d keeps its RFC 9887 listener across restarts
+		return l88TLSConfig, nil
+	}
 	return l.derivedConfig("", platformSessionAttributes[l.p.name], "")
 }
 
@@ -1811,6 +1814,21 @@ func (e *notObserved) Error() string {
 // it are not run. Either way the error is a *notObserved naming each command
 // that did not finish; outs holds what arrived, one entry per command sent.
 func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
+	if l.p.name == "nokia_srlinux" {
+		// SR Linux's sshd does not run an exec command in sr_cli (L76), so this is a pty shell. Its
+		// prompt is redrawn before a command's output arrives, so the prompt ptyCommands waits for
+		// is the one that came before the output: each command's output is in the next command's
+		// slot (measured: L88 cell e). One trailing command takes the last output, and the slots
+		// shift back by one.
+		outs, err := l.ptyCommands(user, password, per, append(slices.Clone(commands), "echo l88-end")...)
+		if len(outs) > 0 {
+			outs = outs[1:]
+		}
+		if len(outs) > len(commands) {
+			outs = outs[:len(commands)]
+		}
+		return outs, err
+	}
 	if l.p.name == "cisco_iosxe" {
 		return l.ptyCommands(user, password, per, commands...)
 	}
@@ -2263,17 +2281,32 @@ func (f negativeFinding) render(t *testing.T) string {
 }
 
 // runLine is the commit the lab ran at and the test selection, for a note's
-// Run line: the commit of the working tree the test binary ran from.
+// Run line: the commit of the working tree the test binary ran from, with
+// "-dirty" when a tracked file differs from it (the note then does not name
+// the code that was measured). Untracked files do not count: the run's own
+// outputs are untracked.
 func runLine() string {
 	sha := "unknown"
 	if out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); err == nil {
 		sha = strings.TrimSpace(string(out))
 	}
+	dirty := true
+	if out, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=no").Output(); err == nil {
+		dirty = strings.TrimSpace(string(out)) != ""
+	}
 	run := ""
 	if f := flag.Lookup("test.run"); f != nil {
 		run = f.Value.String()
 	}
-	return fmt.Sprintf("commit `%s`, `PORT49_LAB_PLATFORMS=%s`, `-run %s`", sha, os.Getenv("PORT49_LAB_PLATFORMS"), run)
+	return runLineOf(sha, dirty, os.Getenv("PORT49_LAB_PLATFORMS"), run)
+}
+
+// runLineOf is runLine's text.
+func runLineOf(sha string, dirty bool, platforms, run string) string {
+	if dirty {
+		sha += "-dirty"
+	}
+	return fmt.Sprintf("commit `%s`, `PORT49_LAB_PLATFORMS=%s`, `-run %s`", sha, platforms, run)
 }
 
 // result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
@@ -2840,11 +2873,15 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 		}
 		return p
 	}
+	if l88TLSSplit.Block != "" { // L88 cell h: the split's daemon keeps the RFC 9887 listener
+		inventory = write("inventory.yaml", l88TLSSplit.Inventory)
+	}
 	a, err := splitDaemonYAML(string(base), splitNode{Listen: tacacsAddr, Metrics: metricsAddr,
 		Spool: spoolPath}, s.Policy, inventory, daemonStore)
 	if err != nil {
 		t.Fatal(err)
 	}
+	a += l88TLSSplit.Block
 	s.CfgA = write("port49d-a.yaml", a)
 	if cfg.SecondServer {
 		b, err := splitDaemonYAML(string(base), splitNode{Listen: splitSecondAddr + ":49", Metrics: splitMetricsB,

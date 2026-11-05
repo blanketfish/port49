@@ -439,12 +439,18 @@ func TestOxidizedOverlayIsHostNetworked(t *testing.T) {
 	// chown the directory to uid 30000 and lock the host-side wrapper out.
 	for _, want := range []string{"network_mode: host", "${PORT49_COMPOSE_LOCAL}/oxidized:/oxhome/.config/oxidized",
 		"${PORT49_COMPOSE_LOCAL}/oxidized/known_hosts:/oxhome/.ssh/known_hosts:ro", `user: "${PORT49_LAB_UID:?}:${PORT49_LAB_GID:?}"`,
-		`command: ["oxidized"]`, "HOME: /oxhome", "/etc/port49-workload/workload-ca.pem:ro",
+		`command: ["oxidized"]`, "HOME: /oxhome",
+		// the broker refuses a trust anchor owned by another uid (not its own, not root): the CA
+		// goes into a volume as the broker's user, never a bind mount of the host user's file
+		"install -o 65532 -g 65532 -m 0444 /src/workload-ca.pem /vol/workload-ca.pem", "workload-pki:/etc/port49-workload:ro",
 		// Oxidized exits on an empty router.db: it starts only after a wrapper run wrote one
 		"profiles: [oxidized]"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("the overlay lacks %q", want)
 		}
+	}
+	if strings.Contains(string(b), "/workload-ca.pem:/etc/port49-workload") {
+		t.Error("the overlay bind-mounts the host user's workload CA: the broker refuses an anchor owned by uid 1000")
 	}
 	// the image reloads in a loop when CONFIG_RELOAD_INTERVAL is set at all
 	for _, line := range strings.Split(string(b), "\n") {

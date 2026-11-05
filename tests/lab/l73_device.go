@@ -27,12 +27,19 @@ const (
 	l73SecondServer = "172.100.100.2" // splitSecondAddr's value (harness_test.go is lab-tagged)
 	l73TLSPort      = 300
 	l73Instance     = "mgmt_junos"
-	l73TrustGroup   = "l73-trust"
-	l73RootProfile  = "l73-root"
 	l73InterProfile = "l73-inter"
-	l73CertID       = "l73-dev"
 	l73CSRPath      = "/var/tmp/l73-dev.csr"
 )
+
+// The names L73 gives the device's trust material. L73 keeps its own; L88's TLS pass sets the
+// names the shipped reference files use (l88ReferenceNames), so the reference is applied
+// unchanged over the enrolment.
+var (
+	l73TrustGroup  = "l73-trust"
+	l73RootProfile = "l73-root"
+)
+
+const l73CertID = "l73-dev"
 
 // l73DeviceTLS is how the device's TACACS+ client is pointed at port49 in
 // one cell.

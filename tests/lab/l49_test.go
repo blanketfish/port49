@@ -819,14 +819,19 @@ func TestL49Oxidized(t *testing.T) {
 // would hold a token, a key or a compact JWS.
 func (r *l49Run) write(t *testing.T, captureLine string) {
 	t.Helper()
-	name := l49ResultName(r.l.p.name)
+	r.writeNote(t, "L49", l49ResultName(r.l.p.name), l49Claim, captureLine)
+}
+
+// writeNote writes the row's note and evidence under name (see write).
+func (r *l49Run) writeNote(t *testing.T, row, name, claim, captureLine string) {
+	t.Helper()
 	evPath := filepath.Join("tests", "lab", "evidence", name+".json")
 	body, err := r.ev.encode(r.secrets)
 	if err != nil {
 		t.Fatal(err)
 	}
 	obs := "- **Device capture:** " + captureLine + "\n" + r.obs.String()
-	note := workloadNote("L49", r.l.p.name, l49Claim, obs, evPath, runLine(), r.version)
+	note := workloadNote(row, r.l.p.name, claim, obs, evPath, runLine(), r.version)
 	if lerr := stepLeak(note, r.secrets); lerr != nil {
 		t.Fatalf("the note is not written: %v", lerr)
 	}
@@ -843,4 +848,342 @@ func (r *l49Run) write(t *testing.T, captureLine string) {
 		t.Fatal(err)
 	}
 	t.Logf("wrote %s and %s", notePath, filepath.Join(root, evPath))
+}
+
+// ---------------------------------------------------------------------------
+// L90: Oxidized's host-key handling against accept-new
+// ---------------------------------------------------------------------------
+
+// l90Claim is the row's text (a unit test holds the two equal).
+const l90Claim = "Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `secure: true` with no `known_hosts` entry: what Oxidized does. (b) `secure: true` with a changed key: PASS iff refused. (c) `secure: true` after ruling 9's `ssh … accept-new … PreferredAuthentications=none … exit` line wrote the entry: PASS iff the backup runs. (d) Any Oxidized input or `vars` setting that maps to net-ssh's `verify_host_key: :accept_new`: PASS iff an unknown key is saved and a changed key refused."
+
+// l90PrepopulateArgs are ssh's arguments for ruling 9's line against addr: it
+// saves the host key at key exchange and sends no credential and no
+// signature. -F /dev/null and UserKnownHostsFile keep the operator's own ssh
+// configuration and known_hosts out of the run; the rest is ruling 9's.
+func l90PrepopulateArgs(addr, knownHosts string) []string {
+	return []string{"-F", "/dev/null", "-o", "UserKnownHostsFile=" + knownHosts,
+		"-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes", "-o", "PreferredAuthentications=none",
+		"-o", "PubkeyAuthentication=no", "-o", "IdentityAgent=none", "-o", "IdentitiesOnly=yes",
+		"-o", "ConnectTimeout=15", "--", addr, "exit"}
+}
+
+// swapHostKeys is a keyscan's output with every key replaced by newKey(type),
+// for a device whose host key "changed". Comment lines are dropped.
+func swapHostKeys(scan string, newKey func(typ string) (string, error)) (string, error) {
+	var out strings.Builder
+	for _, ln := range strings.Split(scan, "\n") {
+		f := strings.Fields(ln)
+		if len(f) < 3 || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		k, err := newKey(f[1])
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&out, "%s %s %s\n", f[0], f[1], k)
+	}
+	if out.Len() == 0 {
+		return "", errors.New("the scan holds no host key")
+	}
+	return out.String(), nil
+}
+
+// sshKeygenKey makes a fresh host key of the OpenSSH type typ and returns its
+// base64 public part.
+func sshKeygenKey(dir, typ string) (string, error) {
+	args := map[string][]string{
+		"ssh-ed25519":         {"-t", "ed25519"},
+		"ssh-rsa":             {"-t", "rsa", "-b", "2048"},
+		"ecdsa-sha2-nistp256": {"-t", "ecdsa", "-b", "256"},
+		"ecdsa-sha2-nistp384": {"-t", "ecdsa", "-b", "384"},
+		"ecdsa-sha2-nistp521": {"-t", "ecdsa", "-b", "521"},
+	}[typ]
+	if args == nil {
+		return "", fmt.Errorf("no key generator for host key type %q", typ)
+	}
+	path := filepath.Join(dir, strings.ReplaceAll(typ, "/", "_"))
+	_ = os.Remove(path)
+	_ = os.Remove(path + ".pub")
+	if out, err := exec.Command("ssh-keygen", append(args, "-q", "-N", "", "-f", path)...).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("ssh-keygen %s: %v: %s", typ, err, oneLineMax(string(out), 200))
+	}
+	pub, err := os.ReadFile(path + ".pub")
+	if err != nil {
+		return "", err
+	}
+	f := strings.Fields(string(pub))
+	if len(f) < 2 {
+		return "", errors.New("ssh-keygen wrote no public key")
+	}
+	return f[1], nil
+}
+
+// l90Refused is whether a run was refused at the host key: it did not
+// succeed and no authentication reached port49d (the token was never sent).
+func l90Refused(status string, redeems int) bool { return status != "success" && redeems == 0 }
+
+// l90Verdict is PASS or FAIL for a cell's condition.
+func l90Verdict(ok bool) string {
+	if ok {
+		return "PASS"
+	}
+	return "FAIL"
+}
+
+// l90Cell is one run of Oxidized against the device, with known_hosts as the
+// cell set it.
+type l90Cell struct {
+	Status        string `json:"status"`
+	Ended         bool   `json:"ended"`
+	Redeems       int    `json:"redeems"`
+	Records       int    `json:"port49d_records"`
+	KnownHostsBy  int    `json:"known_hosts_lines_before"`
+	KnownHostsAft int    `json:"known_hosts_lines_after"`
+	Excerpt       string `json:"oxidized_log_excerpt"`
+}
+
+func (c l90Cell) String() string {
+	return fmt.Sprintf("the run %s with status `%s`; %d authentications reached port49d (%d port49d records in all); "+
+		"`known_hosts` held %d key line(s) before and %d after", endedWord(c.Ended, 5*time.Minute), c.Status, c.Redeems,
+		c.Records, c.KnownHostsBy, c.KnownHostsAft)
+}
+
+func keyLines(path string) int {
+	raw, _ := os.ReadFile(path)
+	n := 0
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if t := strings.TrimSpace(ln); t != "" && !strings.HasPrefix(t, "#") {
+			n++
+		}
+	}
+	return n
+}
+
+// l90Run sets known_hosts to kh (in place, so the container's file mount
+// follows), then mints, reloads and queues the node through the wrapper and
+// reads what happened. A setup fault is t.Fatal (INVALID).
+func (r *l49Run) l90Run(t *testing.T, o *oxidized, kh string) l90Cell {
+	t.Helper()
+	khPath := filepath.Join(o.dir, "known_hosts")
+	if err := os.WriteFile(khPath, []byte(kh), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := keyLines(khPath)
+	mark := r.l.mark()
+	start := time.Now()
+	if err := wrapperFault(o.runWrapper("15m")); err != nil {
+		t.Fatalf("%v", err)
+	}
+	status, ended := o.awaitRun(r.l.p.node, start, 5*time.Minute)
+	recs, _ := r.l.settleRecords(mark, func([]map[string]any) bool { return true })
+	n, _ := redeemSummary(recordsFor(recs, oxidizedUser))
+	logs, _ := o.c.run("--profile", "oxidized", "logs", "--no-color", "--since", start.UTC().Format(time.RFC3339Nano), "oxidized")
+	excerpt, xerr := staleRunExcerpt(logs, append(append([]string{}, r.secrets...), o.secrets...))
+	if xerr != nil {
+		excerpt = "(withheld: " + xerr.Error() + ")"
+	}
+	c := l90Cell{Status: status, Ended: ended, Redeems: n, Records: len(recs), KnownHostsBy: before,
+		KnownHostsAft: keyLines(khPath), Excerpt: excerpt}
+	if !ended {
+		t.Fatalf("Oxidized's run did not end within 5m (INVALID, not a measured no)")
+	}
+	return c
+}
+
+func (r *l49Run) l90Say(name string, c l90Cell) {
+	r.say("  - %s.", c)
+	if c.Excerpt != "" {
+		r.say("  - Oxidized's log for that run (class and message lines only):")
+		for _, ln := range strings.Split(c.Excerpt, "\n") {
+			r.say("    - `%s`", ln)
+		}
+	}
+	r.ev.add(name, c)
+}
+
+// execIn runs argv in the Oxidized container, output cut to max lines.
+func (o *oxidized) execIn(max int, argv ...string) (string, error) {
+	out, err := o.c.run(append([]string{"--profile", "oxidized", "exec", "-T", "oxidized"}, argv...)...)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) > max {
+		lines = lines[:max]
+	}
+	return strings.Join(lines, "\n"), err
+}
+
+// TestL90 measures L90 (policy engine spec §15) on vEOS: Oxidized's SSH host
+// key handling under `secure: true` (cells a, b, c) and whether any setting
+// reaches net-ssh's accept_new (cell d). A fault in the setup is t.Fatal,
+// INVALID; each cell's verdict is a measurement whatever it is.
+func TestL90(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		if l.p.name != "arista_eos" {
+			t.Skipf("L90 is measured on one EOS device, not %s", l.p.name)
+		}
+		stop := l.capture(t, "L90-oxidized")
+		defer stop()
+		r := &l49Run{t: t, l: l}
+		o := r.startStack(t, false, "l90")
+		addr := l.p.addr
+		scan, err := o.keyscan(addr, 90*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The wrapper's own pre-population (examples/oxidized, README 7a) would fill the
+		// file a cell leaves empty: it is given a decoy that already lists the device.
+		o.wrapperKnownHosts = filepath.Join(t.TempDir(), "wrapper_known_hosts")
+		if err := os.WriteFile(o.wrapperKnownHosts, []byte(scan), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		r.say("- **Oxidized** `oxidized --version`: %s; `examples/oxidized/config` with `secure: true`. `known_hosts` is the run's "+
+			"temp home's, mounted read-only at Oxidized's `~/.ssh/known_hosts`; nothing of the operator's `~/.ssh` is read or written.",
+			strings.TrimPrefix(r.version[strings.Index(r.version, "Oxidized "):], "Oxidized "))
+
+		// (a) no entry.
+		r.say("- **(a) `secure: true`, no `known_hosts` entry:**")
+		a := r.l90Run(t, o, "")
+		r.l90Say("a_no_entry", a)
+		r.say("  - Refused at the host key (no token sent): %s.", yesNo(l90Refused(a.Status, a.Redeems)))
+
+		// (b) a changed key.
+		keyDir := t.TempDir()
+		changed, err := swapHostKeys(scan, func(typ string) (string, error) { return sshKeygenKey(keyDir, typ) })
+		if err != nil {
+			t.Fatalf("making a changed key (INVALID): %v", err)
+		}
+		r.say("- **(b) `secure: true`, a changed key** (the device's address with a fresh public key of each type it offers):")
+		b := r.l90Run(t, o, changed)
+		r.l90Say("b_changed_key", b)
+		bPass := l90Refused(b.Status, b.Redeems)
+		r.say("  - **(b) %s**: PASS iff refused; refused: %s.", l90Verdict(bPass), yesNo(bPass))
+
+		// (c) the entry ruling 9's line wrote.
+		khPath := filepath.Join(o.dir, "known_hosts")
+		if err := os.WriteFile(khPath, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cMark := l.mark()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		out, serr := exec.CommandContext(ctx, "ssh", l90PrepopulateArgs(addr, khPath)...).CombinedOutput()
+		cancel()
+		exit := 0
+		var ee *exec.ExitError
+		if errors.As(serr, &ee) {
+			exit = ee.ExitCode()
+		} else if serr != nil {
+			t.Fatalf("running ssh (INVALID): %v", serr)
+		}
+		offered, _ := offeredMethods(string(out))
+		wrote := keyLines(khPath)
+		if wrote == 0 {
+			t.Fatalf("ruling 9's line wrote no entry (ssh exit %d, %s) (INVALID, not a measured no)", exit, oneLineMax(string(out), 200))
+		}
+		hashed := false
+		if raw, _ := os.ReadFile(khPath); strings.HasPrefix(strings.TrimSpace(string(raw)), "|1|") {
+			hashed = true
+		}
+		cRecs, _ := l.settleRecords(cMark, func([]map[string]any) bool { return true })
+		r.say("- **(c) `secure: true`, after ruling 9's line wrote the entry:**")
+		r.say("  - The line: `ssh %s`. It exited %d (a refusal of `none` is expected: methods listed `%s`); it wrote %d key line(s) "+
+			"to `known_hosts` (hostnames hashed: %s); %d port49d records arrived during it (no credential sent).",
+			strings.Join(l90PrepopulateArgs("<address>", "<known_hosts>"), " "), exit, offered, wrote, yesNo(hashed), len(cRecs))
+		c := r.l90Run(t, o, mustRead(t, khPath))
+		r.l90Say("c_entry_from_openssh", c)
+		cPass := c.Status == "success"
+		r.say("  - **(c) %s**: PASS iff the backup runs; status `%s`.", l90Verdict(cPass), c.Status)
+		r.ev.add("c_prepopulate", map[string]any{"ssh_exit": exit, "key_lines_written": wrote, "hashed": hashed,
+			"port49d_records_during": len(cRecs), "methods_listed": offered})
+
+		// (c2) the same line under an ssh_config that hashes known_hosts (the
+		// Debian and Ubuntu default): OpenSSH writes |1|salt|hash instead of the address.
+		if err := os.WriteFile(khPath, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		hargs := l90PrepopulateArgs(addr, khPath)
+		hargs = append(hargs[:len(hargs)-3:len(hargs)-3], "-o", "HashKnownHosts=yes", "--", addr, "exit")
+		hctx, hcancel := context.WithTimeout(context.Background(), 60*time.Second)
+		_, _ = exec.CommandContext(hctx, "ssh", hargs...).CombinedOutput()
+		hcancel()
+		if keyLines(khPath) == 0 {
+			t.Fatal("the hashing variant of ruling 9's line wrote no entry (INVALID, not a measured no)")
+		}
+		hraw := mustRead(t, khPath)
+		r.say("- **(c2) the same line with `-o HashKnownHosts=yes`:**")
+		hc := r.l90Run(t, o, hraw)
+		r.say("  - The entry's host field is hashed (`|1|`): %s.", yesNo(strings.HasPrefix(strings.TrimSpace(hraw), "|1|")))
+		r.l90Say("c2_hashed_entry", hc)
+		r.say("  - **(c2) %s**: the backup runs with a hashed entry; status `%s`.", l90Verdict(hc.Status == "success"), hc.Status)
+
+		// (c3) the wrapper's own sweep: it finds the address absent from the (empty) known_hosts
+		// Oxidized reads, saves the key with its own line, mints again, and the backup runs. The
+		// known_hosts is the run's, never the operator's ~/.ssh.
+		decoy := o.wrapperKnownHosts
+		o.wrapperKnownHosts = ""
+		r.say("- **(c3) the wrapper itself sweeps an empty `known_hosts`** (`port49-oxidized-run` with `OXIDIZED_KNOWN_HOSTS` the file Oxidized reads):")
+		c3 := r.l90Run(t, o, "")
+		r.l90Say("c3_wrapper_sweep", c3)
+		c3Pass := c3.Status == "success" && c3.KnownHostsAft > 0
+		r.say("  - **(c3) %s**: PASS iff the wrapper saved the key (lines after: %d) and the backup runs; status `%s`.",
+			l90Verdict(c3Pass), c3.KnownHostsAft, c3.Status)
+		o.wrapperKnownHosts = decoy
+
+		// (d) a setting for accept_new.
+		r.say("- **(d) A setting that maps to net-ssh's `verify_host_key: :accept_new`:**")
+		srcRoot := "/var/lib/gems/3.3.0/gems/oxidized-0.37.0/lib"
+		src, _ := o.execIn(12, "grep", "-rn", "-e", "verify_host_key", "-e", "must_secure", srcRoot)
+		acc, aerr := o.execIn(12, "grep", "-rniE", "accept[-_]new", srcRoot)
+		nsrc, _ := o.execIn(12, "sh", "-c", "grep -n 'accept_new\\|:never\\|:always' $(gem contents net-ssh | grep 'lib/net/ssh.rb$')")
+		r.say("  - Oxidized's source (`%s`, `lib/oxidized/input/sshbase.rb`) sets `verify_host_key` once, from the one boolean "+
+			"`secure`: `must_secure? ? :always : :never`. Lines naming `verify_host_key` or `must_secure` under `lib`:", "0.37.0 gem in the image")
+		for _, ln := range strings.Split(strings.ReplaceAll(src, srcRoot+"/", ""), "\n") {
+			r.say("    - `%s`", oneLineMax(ln, 200))
+		}
+		accSaid := strings.ReplaceAll(acc, srcRoot+"/", "")
+		if aerr != nil && accSaid == "" {
+			accSaid = "no line"
+		}
+		r.say("  - Lines naming `accept_new` or `accept-new` anywhere under Oxidized's `lib`: %s.", oneLineMax(strings.ReplaceAll(accSaid, "\n", " | "), 400))
+		r.say("  - net-ssh's own `ssh.rb` (documentation of `verify_host_key`): `%s`.", oneLineMax(strings.ReplaceAll(nsrc, "\n", " | "), 500))
+		// Live: the only value Oxidized reads is a boolean; try the string.
+		cfgPath := filepath.Join(o.dir, "config")
+		cfg := mustRead(t, cfgPath)
+		if !strings.Contains(cfg, "    secure: true\n") {
+			t.Fatal("the config has no `    secure: true` line (INVALID)")
+		}
+		if err := os.WriteFile(cfgPath, []byte(strings.Replace(cfg, "    secure: true\n", "    secure: accept_new\n", 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		restart := time.Now()
+		if out, err := o.c.run("--profile", "oxidized", "restart", "oxidized"); err != nil {
+			t.Fatalf("restarting Oxidized (INVALID): %v\n%s", err, tailOf(out, 500))
+		}
+		if err := o.awaitREST(3 * time.Minute); err != nil {
+			t.Fatalf("Oxidized's REST API never answered after the restart (INVALID): %v", err)
+		}
+		o.awaitRun(l.p.node, restart, 5*time.Minute) // its own startup run
+		r.say("  - Tried: `input: ssh: secure: accept_new` in `config` (Oxidized restarted).")
+		d1 := r.l90Run(t, o, "")
+		r.say("  - Unknown key (empty `known_hosts`):")
+		r.l90Say("d_unknown_key", d1)
+		d2 := r.l90Run(t, o, changed)
+		r.say("  - Changed key:")
+		r.l90Say("d_changed_key", d2)
+		dPass := d1.Status == "success" && d1.KnownHostsAft > 0 && l90Refused(d2.Status, d2.Redeems)
+		r.say("  - **(d) %s**: PASS iff an unknown key is saved (saved: %s) and a changed key refused (refused: %s).",
+			l90Verdict(dPass), yesNo(d1.KnownHostsAft > 0), yesNo(l90Refused(d2.Status, d2.Redeems)))
+		r.ev.add("verdicts", map[string]string{"b": l90Verdict(bPass), "c": l90Verdict(cPass), "c3": l90Verdict(c3Pass), "d": l90Verdict(dPass)})
+		r.finish(o, "L90")
+		r.say("- **Logs:** %s", strings.Join(r.logs, " "))
+		r.writeNote(t, "L90", "L90-oxidized-"+l.p.name, l90Claim, l.captureLine(t))
+	})
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }

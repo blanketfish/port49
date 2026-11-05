@@ -1,0 +1,19 @@
+# Add this block to your port49 policy file until platform_set carries adapters for
+# these two platforms. Without it every login is refused, because the generic adapter
+# sends no priv-lvl (tests/lab/results/QUAL-XRd-control-plane-26.1.1-cisco_xrd-no-priv-lvl.md
+# and QUAL-SR-Linux-26.7.2-519-nokia_srlinux-no-priv-lvl.md).
+#
+# Only priv-lvl=15 was measured on either platform. Level 1 for readonly and operator
+# can only grant less than the role says, and on XR that holds only with command
+# authorization configured on the device.
+platforms:
+  cisco_iosxr:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+  nokia_srlinux:
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]

@@ -304,6 +304,14 @@ entries:
     env: {PORT49_LAB_REMEASURE: "L49,L49-oxidized"}
     timeout_minutes: 90
     notes: [tests/lab/results/L49-oxidized-cisco_iosxe.md]
+  - id: L90
+    measured_minutes: 3.2
+    run: '^TestL90$'
+    platforms: eos
+    rows: [L90]
+    env: {PORT49_LAB_REMEASURE: "L90,L90-oxidized"}
+    timeout_minutes: 60
+    notes: [tests/lab/results/L90-oxidized-arista_eos.md]
   - id: L53
     measured_minutes: 28.6
     run: '^TestL53HostKeyScan$'
@@ -466,5 +474,15 @@ excluded:
     reason: measured in the Junos lab tests of 2026-09 and recorded in port49-junos-lab-tests-results.md, which no harness test writes.
   - rows: [L54]
     reason: its test went with `port49 devices trust` (459efda6); the note is a record and nothing rewrites it. L53's host-key scan remains in the L53 entry.
+  - rows: [L87]
+    reason: needs PORT49_LAB_ETCD_BIN (a real etcd to pause) and the SR Linux image, and runs on the L88 plumbing, which the runner has no entry shape for. Run by hand before a release with `make lab-l87 PORT49_LAB_ETCD_BIN=<dir>` (about a minute).
+  - rows: [L88]
+    reason: one image per run (`make lab-l88 PLATFORM=<selector>`, with PORT49_L88_TLS=1 for the RFC 9887 pass and PORT49_L88_XR_VRF=mgmt for XRd's named VRF), about twenty images and passes at up to an hour each; the runner has no per-image entry shape for it yet. Run by hand before a release.
+  - rows: [L39]
+    reason: (a) is the compose stack's source-address test (`TestL39DockerSourceAddress`), run by hand with the userland proxy on and off; (b) and (c) are kind clusters whose nodes are privileged containers, run in CI only (`make lab-l39` in .github/workflows/lab-kind.yml). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.
+  - rows: [L89]
+    reason: a kind cluster whose nodes are privileged containers, run in CI only (the lab-kind label and .github/workflows/lab-kind.yml, which runs make lab-l89). smoke-keyhost refuses it on this machine, so the runner cannot rerun it here.
+  - rows: [L84]
+    reason: a GitHub-hosted runner's own systemd, as root through sudo, in CI only (the lab-hosted label and .github/workflows/lab-hosted.yml, which runs make lab-l84-systemd, lab-l84-host and lab-l84). TestL84Host refuses anywhere else because it creates a system user and installs units, and the Compose half needs the key-host guard's override, so the runner cannot rerun it here.
   - rows: [L82, L83, L85]
     reason: kind clusters whose nodes are privileged containers, run in CI only (the lab-kind label and .github/workflows/lab-kind.yml, which run make lab-l82, lab-l83 and lab-l85). smoke-keyhost refuses them on this machine, so the runner cannot rerun them here.

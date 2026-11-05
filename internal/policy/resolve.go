@@ -76,6 +76,21 @@ type SessionAge struct {
 	Never bool
 }
 
+// String is the ceiling as the diff reports it, port49d's default being
+// unknown there: never, a duration, default (every role names none), or the
+// least duration or the default, whichever is less.
+func (a SessionAge) String() string {
+	switch {
+	case a.Never:
+		return "never"
+	case a.Least == 0:
+		return "default"
+	case a.Unset:
+		return a.Least.String() + " or the default, whichever is less"
+	}
+	return a.Least.String()
+}
+
 // Of is the ceiling given port49d's default: the least across the roles, a
 // role declaring none taking def; zero, never, only when every role says
 // never.
@@ -143,7 +158,13 @@ func (p *Policy) resolveNow(sub *Subject, d admission.Device, now time.Time) (Re
 // resolve is resolveNow without the quarantine: what the joint checks, the
 // diff and lint read.
 func (p *Policy) resolve(sub *Subject, d admission.Device, now time.Time) (Resolution, error) {
-	c := p.compose(sub, d, now)
+	return p.resolveMarked(sub, d, now, "")
+}
+
+// resolveMarked is resolve for a device whose class marks are known
+// (composeMarked); "" reads them from the device.
+func (p *Policy) resolveMarked(sub *Subject, d admission.Device, now time.Time, marks string) (Resolution, error) {
+	c := p.composeMarked([]*Subject{sub}, d, now, marks)
 	if len(c.grants) == 0 {
 		return Resolution{}, ErrNoGrants
 	}
@@ -576,20 +597,55 @@ func (p *Policy) checkDevices() {
 	if now.IsZero() {
 		now = time.Now()
 	}
-	for _, d := range p.env.Devices {
-		for _, name := range sortedKeys(p.subs) {
-			entries := p.checkDevice(p.subs[name], d, now)
+	// A subject's composition, and so its failures, depend on a device only
+	// through its class (scope.go, deviceClass): each subject is checked once
+	// per class, on its first device, and every other member takes the same
+	// entries. The one text that names the device, the per_login_mfa
+	// refusal, is checked on its own device (quotesDevice).
+	devs := p.env.Devices
+	classes, marks := p.deviceClassMarks(devs)
+	found := make([][]QuarantineEntry, len(devs))
+	for _, name := range sortedKeys(p.subs) {
+		sub := p.subs[name]
+		instants, lapsing := p.subjectInstants(sub, now)
+		for ci, members := range classes {
+			entries := p.checkDeviceOver(sub, devs[members[0]], instants, lapsing, marks[ci])
 			if len(entries) == 0 {
 				continue
 			}
-			q, ok := p.quarantine[d.Name]
-			if !ok {
-				q = &Quarantine{Device: d.Name, Platform: d.Platform}
-				p.quarantine[d.Name] = q
+			quotes := quotesDevice(entries)
+			for k, i := range members {
+				own := entries
+				if quotes && k > 0 {
+					own = p.checkDeviceOver(sub, devs[i], instants, lapsing, marks[ci])
+				}
+				found[i] = append(found[i], own...)
 			}
-			q.Entries = append(q.Entries, entries...)
 		}
 	}
+	// In inventory order, each device's entries by subject name: the order a
+	// check of every subject on every device, device by device, would give,
+	// even with two devices of one name.
+	for i, d := range devs {
+		if len(found[i]) == 0 {
+			continue
+		}
+		q, ok := p.quarantine[d.Name]
+		if !ok {
+			q = &Quarantine{Device: d.Name, Platform: d.Platform}
+			p.quarantine[d.Name] = q
+		}
+		q.Entries = append(q.Entries, found[i]...)
+	}
+}
+
+// quotesDevice reports whether any entry's cause names the device it was found
+// on, and so is the device's own text, never a class's. The only cause in
+// resolve's tree that does is per_login_mfa's refusal, which resolve wraps as
+// "(on %s)" with the device's name and checkDeviceAt marks MFA; the joint
+// checks name the platform, never the device.
+func quotesDevice(entries []QuarantineEntry) bool {
+	return slices.ContainsFunc(entries, func(e QuarantineEntry) bool { return e.MFA })
 }
 
 // checkDevice is one subject's joint checks on one device, at now and at
@@ -597,10 +653,17 @@ func (p *Policy) checkDevices() {
 // holds over; none is none failed.
 func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []QuarantineEntry {
 	instants, lapsing := p.subjectInstants(sub, now)
+	return p.checkDeviceOver(sub, d, instants, lapsing, "")
+}
+
+// checkDeviceOver is checkDevice over the instants subjectInstants gave for
+// sub, with d's class marks when known ("" reads them from d).
+func (p *Policy) checkDeviceOver(sub *Subject, d admission.Device, instants []time.Time,
+	lapsing map[time.Time]string, marks string) []QuarantineEntry {
 	var out []QuarantineEntry
 	open := false // whether the last entry is still failing
 	for _, at := range instants {
-		cause, mfa, pair := p.checkDeviceAt(sub, d, at)
+		cause, mfa, pair := p.checkDeviceAt(sub, d, at, marks)
 		if cause != "" {
 			cause = fmt.Sprintf("subject %q: %s", sub.Name, cause)
 		}
@@ -717,8 +780,8 @@ func (p *Policy) deliveredLevel(dialect platform.Dialect, level string, reply []
 
 // checkDeviceAt is one subject's joint checks on one device at one instant;
 // mfa is whether what fails is per_login_mfa's.
-func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) (cause string, mfa bool, pair string) {
-	res, err := p.resolve(sub, d, at)
+func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time, marks string) (cause string, mfa bool, pair string) {
+	res, err := p.resolveMarked(sub, d, at, marks)
 	if errors.Is(err, ErrNoGrants) {
 		return "", false, ""
 	}

@@ -357,9 +357,10 @@ failure matrix on the compose stack, the Junos `idle-timeout` per class, `policy
 lab rows L39 (b, c), L84's systemd cells and L87–L90. Its three decisions were ruled by Ryan 2026-11-02 (the plan's "Decisions for Ryan"). Revised 2026-10-31
 after its pre-flight (I1–I13 and M1–M22 applied). Amended 2026-11-01 (Ryan): Task 18 adds `port49 hwkey setup` and `port49 hwkey status`
 and lab row L91; nineteen tasks. Ruled 2026-11-02 (Ryan): the least ceiling per Junos class; `authentication-order tacplus` alone; the restore guard's
-ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the restored witness's time +
-15m + 5m on port49d's clock; fail closed on a witness with no usable time); L91 stays open "needs Ryan at the SER8", and Task 18 tests
-from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish).
+ERROR and 10m page kept, and new Task 9a lifts the guard once every token the snapshot could hold has expired (the largest `ExpiresAt` among the token records on port49d's
+clock; fail closed on a scan that fails, a bad record or an expiry far ahead); L91 stays open "needs Ryan at the SER8", and Task 18 tests
+from fixtures derived from his captured token facts with the serial masked. Twenty tasks. Rebased onto `edeee2c3` (blanketfish). Measured 2026-11-04: L39 (b, c) and L89 closed on kind in CI (`tests/lab/results/L39-kind.md`, `tests/lab/results/L89-kind.md`: Velero's file-system backup restored a working port49; it skips a hostPath volume with only a warning, so the chart README gives the every-claim check).
+**12c executed 2026-11-02 to 2026-11-04** on `feature/12c-reference-configs-alarms-load` (Plan 12c — As built, below; draft PR #40): done, pending merge. L39 (b, c), L84, L87, L88, L89 and L90 closed (L84 2026-11-04, hosted run 41930879677); L91 open (Ryan, SER8); L92 opened. Next are the pre-beta review, then plan 13.
 
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -7453,8 +7454,8 @@ when Task 14's review found a security-relevant device fact.
   - Fleet mode: a reload that changes the answer clears only the changed keys (§5.1.3), which is why the
     fleet asserts no `projection_fail_closed` in any phase.
 - **Lab.**
-  - **`make lab-regress` in full: 733.6 minutes** (the sum of the 59 `measured_minutes` in
-    `tests/lab/regress.yaml`, Task 4's first run plus the L35, L37, L66, L79 and L80 entries; the first
+  - **`make lab-regress` in full: 736.8 minutes** (the sum of the 60 `measured_minutes` in
+    `tests/lab/regress.yaml`, Task 4's first run plus the L35, L37, L66, L79, L80 and L90 entries; the first
     full run took 723.5 minutes of passing entries and about 18 h 45 min of wall time with NX-OS boot
     retries). Slowest: L34 (103), L36 (67), L22 (44). Routine use needs `-only=` subsets.
   - **`TestQual`'s wall time: 11.1 s** (Task 14's final run, all ten platforms then vetted); `make qual`
@@ -7608,7 +7609,7 @@ inventory every part draws from is `.superpowers/sdd/plan12-inputs.md` (105 item
   - **Plan:** `2026-10-31-12c-reference-configs-alarms-load.md`.
   - **Spec:** decision 55 (its Task 1); §5.6 and decision 21 (the class `idle-timeout`), decision 33; §15 L39, L84 and L87–L90; design §5, §12, §13, §14 and §15.
   - **Lab:** opens L87 (SR Linux on an ERROR), L88 (the reference configurations on every platform), L89 (Velero), L90 (Oxidized host keys) and L91 (`port49 hwkey` on a real YubiKey, Ryan's run on the SER8); closes L39 and L84 with them. Load runs on the lab host (`make lab-load`); the kind rows and L84 run in label-gated CI.
-  - Status: **written 2026-10-31**; eighteen tasks (one spec, three code, one alerts, three load, one failure matrix, one reference configurations, six lab, one CI test, one docs), nineteen since 2026-11-01's `port49 hwkey` task (Ryan), twenty with Task 9a (2026-11-02). Revised the same day after its pre-flight (13 Important, 22 Minor applied). **Ruled 2026-11-02 (Ryan):** the Junos `idle-timeout` per class as recommended (under the default delivery, one fleet-wide minimum); Junos's `authentication-order tacplus` alone; the restore guard's ERROR kept with its 10m page and the 3am "stop port49d" row, plus a time bound (Task 9a: the guard also lifts at the restored witness's time + 15m + 5m). L91 stays open, needs Ryan at the SER8. Ready to execute.
+  - Status: **written 2026-10-31**; eighteen tasks (one spec, three code, one alerts, three load, one failure matrix, one reference configurations, six lab, one CI test, one docs), nineteen since 2026-11-01's `port49 hwkey` task (Ryan), twenty with Task 9a (2026-11-02). Revised the same day after its pre-flight (13 Important, 22 Minor applied). **Ruled 2026-11-02 (Ryan):** the Junos `idle-timeout` per class as recommended (under the default delivery, one fleet-wide minimum); Junos's `authentication-order tacplus` alone; the restore guard's ERROR kept with its 10m page and the 3am "stop port49d" row, plus a time bound (Task 9a), which review changed from the restored witness's time + 15m + 5m to the token records' latest expiry. L91 stays open, needs Ryan at the SER8. **Executed 2026-11-02 to 2026-11-04** (Plan 12c — As built, below); done, pending merge.
 
 Carried here from plan 1's review:
 
@@ -7783,7 +7784,7 @@ reference config waits on the measurement.
   port49 was never asked; port49 now offers single-connect and the device honors it
   (`tests/lab/results/L80-cisco_nxos.md`). A §12 warning or
   refusing those logins is no longer pending (resolved above).
-- The pre-beta review runs `make lab-regress` in full (733.6 minutes).
+- The pre-beta review runs `make lab-regress` in full (736.8 minutes).
 
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
 required. Supporting every shape well matters for adoption. So "supported" means each shape has:
@@ -7807,10 +7808,10 @@ container's install page:
 Every shape states the same four requirements:
 
 - **The device's source address reaches port49d unrewritten** (design §13). On Kubernetes that means
-  `externalTrafficPolicy: Local` or host networking is expected to be needed (L39 (b), (c), open). Under Docker, for a device off the Docker host, a published port left it
+  `externalTrafficPolicy: Local` with the device dialling a node that runs a pod, or host networking (L39 (b), (c), measured on kind 2026-11-04, `tests/lab/results/L39-kind.md`: `Cluster` lost the source and device binding failed; `Local` and host networking kept it). Under Docker, for a device off the Docker host, a published port left it
   unchanged with the userland proxy on and off (L39 (a), 2026-10-05; modelled: a device on the clab bridge with an iptables RETURN rule keeping
   that bridge's own masquerade off its traffic, `tests/lab/results/L39-docker-proxy-*-arista_eos.md`). A device on another Docker network on the same
-  host is masqueraded to the compose gateway by Docker's rule for its own network (the notes' first run). Kubernetes is unmeasured until plan 12.
+  host is masqueraded to the compose gateway by Docker's rule for its own network (the notes' first run). Kubernetes: see L39 (b), (c) above.
 - **On etcd, two processes.** port49d and port49-broker run apart (plan 7e). The memory store stays one
   process.
 - **`broker.state_dir` survives a restart** (plan 7e Rulings 12 and 18). It holds `marks.json` and
@@ -8133,7 +8134,7 @@ and no result is asserted for it until its results note and spec §15 row exist.
     `examples/oxidized` or say why not;
   - **an alert on `port49_admin_touch_total{outcome="refused"}`** and the `admin_touch_refused` decision (spec §5.7): a refused admin proof is a stolen token or a broken key;
   - **a Velero example** for the chart's PVCs, with a measurement behind it (pre-flight M10);
-  - L84 (a) and the systemd (c) cells, run in CI or on a systemd host, to close the row; whatever L83 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
+  - Whatever L83 or L85 left FAIL that a later platform change might reopen: the injector as a reload (L83 c) and the CSI driver (L83 b).
 - **Plan 13:** install pages from each README, the "When it will not start" tables, and the `encryption:` rotation runbook; `--version` and
   `healthcheck`.
   - **Versioning (Ryan 2026-10-30): SemVer.** `v0.1.0` is the beta, and 0.x may break config with loud notes. `1.0.0` is the compatibility promise. Bumps come from Conventional Commits, and there is one version across every artifact. Tags are manual and carry no pre-release suffix unless it is mapped to PEP 440. The release docs state this.
@@ -8143,6 +8144,186 @@ and no result is asserted for it until its results note and spec §15 row exist.
   - still open: the one-time release setup (PyPI trusted publisher, the `galaxy` and `release` environments, tag restrictions, the `v*` tag
     ruleset, public GHCR at go-public); no automated admin call (offboarding goes through the identity provider's back-channel logout);
     the L86 run.
+
+### Plan 12c — As built
+
+Executed 2026-11-02 to 2026-11-04 on `feature/12c-reference-configs-alarms-load` (draft PR #40; base `3c0193dd`, rebased onto the blanketfish
+`main` at `edeee2c3`). Twenty tasks as written (Tasks 1–18 and 9a, Task 19 this record), plus work the lab forced: Task 6b (fleet-size
+`Parse`), the load fix waves under Task 7 and Task 8, the two-leg watches under Task 9, a macOS admin-group lane and a CI-test lane. Every task was
+reviewed by Opus (spec, then quality) and every finding closed or ruled before the next; implementers were Sonnet 5.5. **Lab states:** L39 (b, c),
+L84, L87, L88, L89 and L90 are closed (2026-11-04, results notes under `tests/lab/results/`); L91 is open and waits for Ryan
+(`TODO(L91)`); **L92 opened** (SR Linux over RFC 9887). **Done, pending merge:** next are the pre-beta review, then plan 13.
+
+#### Commits per task
+
+- **Task 1, spec** (decision 55, rows L87–L90, L39's cells, the ERROR readings): `ac6419d1`, `00f980b9`. Later rulings 16 and 17 (`hwkey`) and the L91 row: `a2ee7cd5`.
+- **Task 2, Junos `idle-timeout` per class:** `df5b08e4`; review fix `ac3dc231` (class ages skip a quarantined device; a policy-less export says no policy was read). Device cap: `1fbb2ab1`; delete an existing `authentication-order` first: `2a8e585f`.
+- **Task 3, `policy diff`'s ceiling line:** `8ec2fefd`; review fix `d9c9376f` (every move that depends on the default is flagged).
+- **Task 4, the `key_ref` label:** `203d0b81`; review fixes `79eb6338`, `2c9edc9b` (a key made single-device by a reload drops its named series; the set is in force before the swap).
+- **Task 9a, the restore guard's time bound:** `16900cc3`, `4f363c81`, `b4d45703`; review fixes `7d6c1096`, `d443a1a0` (the bound is the token records' latest `ExpiresAt`, not the witness's time).
+- **Task 5, alert rules:** `10deddba`; review fixes `6db119ee`, `b44948f9`. Added by later tasks: `47e6a0d2` (`etcd_disk_slow`), `ba1204b8` (`port49_accounting_spool_disk_slow`), `ded66ab5` (`port49_store_feed_legs_colocated`).
+- **Task 6, the load harness:** `64705949`; fixes `2ff5fe63`, `c7f8b016`, `1bd57ed0`.
+- **Task 6b, `Parse` at fleet size** (added when Task 6 hit the plan's STOP: `Parse` was about 72 s at 500 x 10 000): `e9af0b60`, `03e79aa6`, `8a59ec38`, `6234369d`, `f671abbb`, `4436e7ed`, `eca7ae4b`; review follow-up `66a1c998`, `e6c378a0`.
+- **Task 10, reference configurations:** `dbbbbfc9`; review fixes `81e429b5`, `1a7f6a3c`.
+- **Task 7, the load run and the defaults** (five product fixes before the numbers were honest; see "What changed in review"): `3494f47e`, `7531a7dd`, `1df29a6b`, `cc12c83f`, `f74995c1`, `10a34327`, `14dd1e83`, `61609f67`, `87300dd5` (leases); `18288b90` (`PutBlob`), `8eafa759`, `caf02488`, `36324a37`, `5f47a2ec`, `8e57c4b2`, `cfc62748`, `42264e7f`; `62b76641`, `820b49ff`, `8ffcd652`, `2dd94c8a`, `52b8a38f`, `e508787a` (compaction and quota); `f9d7cef7`, `ca986657`, `d6e00eb2`, `b60d39ec`, `45ee3574`, `c06c4e41`, `5ab7a7cd`, `3cc9cada`, `6038f970`, `5afcaa33`, `69e4b2b1`, `dc1ed3b5`, `f2a598b4`, `664b0e41`, `d10de9ae`, `fc40c5d5` (run 4 and 5 fixes, the disk requirement); `0a2876df`, `14026e47`, `add395ed`, `5b8fb012`, `432ce64c`, `e937a0f7`, `8fe85c1b`, `d120fed7`, `f59e41d6`, `96258bee`, `7c811b8b` (the principal cap, batch mints, the write deadline); `e87cae84`, `74c859e3`, `997dbea1`, `822a3c57`, `15e77241` (the RAM run, the spool metric); close `7e10db1f`, `feaf0051`, `6d0cfecf`; the GCE pd-ssd fold-in `74d0605b`, `02aef80b`, `ca06ea27`. `4bcae963` (accounting replies before its annotation) was reverted by `43eb63d8`.
+- **Task 8, accounting group commit** (the gate fired at run 2): `6cf27fc6`.
+- **Task 9, the failure matrix:** `330e0444`, `be10490f`, `4936edf6`, `f48f3706`, `1a781a9c` (the hedged redemption and context swap), `6d856aaa`, `8a89ae96`, `1464af92`, `c95aec52`, `e2cfc36b`, `c589d2b8`, `edf27a16`, `097a24f7`; the follow-ups the matrix drove: `b304253d` (hedge copies go to different members), `27b27e74`, `2a3ff1df`, `9a64d269`, `84c515a3`, `ac731e0f` (two-leg context and marks feeds), `505d6952`, `5389929c` (the suspect-member picker), `b272280d`, `77735547`, `a9b2651b`, `b5508184`, `25073c0b`, `e781ac14`, `55881a00`, `76359cd9`, `3c4169ef` (a key set's fetch ends with `Run`).
+- **The legs fix** (a startup collision found in CI): `53eec9a1` is on the branch and **superseded**: its deferral blocked `Watch()` in the merge goroutine, so a feed went dark about 20 s; review rejected it and `213cd271`, `1a622c0b`, `ded66ab5` replaced it with share-then-relocate, `3dbd62cf` the gauge's pointer to its log lines.
+- **Task 11, L87:** `8a4cd80b`, `f8911c6b`, `0c261d08`, `59521fec`, `ebd73ac1`.
+- **Task 12, L88:** `0524d75c` (harness), `bd49e97d`, `2ee8ef70`, `a482cb7f`, `7cb01916`, `fefdf5ad`, `87d34b25`, `b8323029`, `80be58c2`, `7a87e021`, `085c271a`, `aac89c6a`, `d89840f7`, `5fd787ee`, `fd547638`, `933d45bb`, `92fe55fc`, `150f27c3`, `c76792c3`, `e2881a6d`, `abeb0a8d`, `54efb1cd`, `ba147308`, `583a164a`, `6a1fef4f`, `8b30618d`, `11fe3cab`, `e16e967c`, `5e2333a3`, `83a2d9a5`, `72928495`, `e9a2c71b`, `7fc10225`, `301ec72d`, `11735900`; close `7f01224b`.
+- **Task 13, L39 (b, c):** `fbe4618d`, `df539bb7`, `01796e98`, `fbff5e42`, `1c211e6c`, `bdb02d18`, `0660f9a8`, `a174ddd5`, `19c9ee76`.
+- **Task 14, L84's systemd cells in CI:** `cbbd44e9`, `90d18fb2`, `b8abc806`, and the controller's `9e51ff8e`.
+- **Task 15, L89:** `2c3c9695`, `1a4ffc34`, `760c0c82`, `2ed5e89c`, `9d162c06`, `7c8e59c6`, `6d589a27`, `ae57b713`, `0c02466d`; close `9efebc14`, note `cebe65b2`.
+- **Task 16, L90:** `0c911a8d`, `69e5647c`, `e4ab387b`, `0f876419`, `d68eb1e8`, `821566be`, `05269b3e`.
+- **Task 17, the enrollments export CronJob, run:** `f9526159`, `ca687bf2`, `7f4b3354`, `e41a7c6b`, `b4561021`.
+- **Task 18, `port49 hwkey`:** `3b6f1e51` (fixtures, serial masked), `4ba79e30`, `980d0c9c`, `6d8a807c`, `c923b662`, `26e1d520`, `e4f39d43`, `35418a6b`, `3b0abba5`, `e20f9405`, `37cadfd2`.
+- **Lanes:** macOS admin group `f43f37b0`, `15df3ff0`, `7713143e`; principal-cap CI tests `bba559a1`, `b797dcb5`, `33405e15`; a key-set metric race `4c13a7eb`; the secret scan `6762fd82`.
+
+#### What changed in review
+
+- **The guard's bound moved from the witness to the tokens (Task 9a).** The plan bounded the guard at the restored witness's time plus 15m plus
+  5m. Review showed the premise false: the runner rewrites the witness only when the store moved, so a quiet store's witness can be hours older
+  than the snapshot's last mint, and a newer restore or a stepped-back clock kept a shorter bound. The bound is the largest `ExpiresAt` among the
+  token records, scanned at the drop and on every guarded read, judged on port49d's own clock as redemption judges a token. Decision 55 ruling 15
+  and decision 36 say it; **the plan file's Task 9a text still describes the witness bound and is not edited**.
+- **Task 6 hit its STOP and Task 6b exists.** `Parse` took about 72 s at the design's fleet (500 subjects x 10 000 devices), on every start and
+  reload. A subject-to-grants index and a memo by device equivalence class, held byte-identical to the old resolve by a differential test over
+  randomized fleets (300 seeds, 15 mutations red), brought it to 0.036 s; `policy diff` (`Compare`) from 282 s to about 3 s; named-scope fleets
+  (Ryan's Junos device lists) from 55 s to 8 s after a second round.
+- **The load run found six product bugs before its numbers meant anything** (ledger run 1 to run 7): the etcd lease check was quadratic on a
+  shared per-minute lease (each lease now takes at most 100 attaches, one grant in flight per bucket); `PutBlob` livelocked on one shared blob (it
+  writes only when the stored expiry is short, with a bounded backoff); accounting did one fsync per record (**group commit**, Task 8); the
+  harness etcd had no compaction and the 2 GiB default quota, while the shipped shapes lacked them (all shapes now run periodic compaction at 10m
+  and an 8 GiB quota; 1h retention would not have fit at the design rate); `supersedeTokens` held 3.4 GB of live heap per pass; the principal cap
+  evicted connections with a request in flight (decision 32 now evicts idle connections only and refuses 503 with `Retry-After` when all are busy),
+  and a broker response write could hang on a vanished peer (every response write has a 15 s deadline). The first real-disk run failed on a
+  DRAM-less QLC drive and the ceiling run in RAM passed, so the disk is a documented requirement and the defaults were then measured on GCE.
+- **The failure matrix found product gaps, not test bugs** (Task 9, CI runs 41706993718 to 41778528627). A login's redemption and context swap
+  were unhedged, so one dark etcd member refused a login with quorum intact; hedging them needed own-copy recognition by a per-call nonce so a
+  hedge copy's compare-failed never reads as `token_spent`. gRPC's round-robin shares one rotation per client, so every copy of a hedged call could
+  land on the dark member (a balancer places copies on different members); the context feed pinned to a paused leader until keepalive (two
+  watches on two members, merged by delivered revision); a member that timed out was chosen again (a suspect-member picker, 15 s). `store_hangs`
+  and `leader_dark` regressed and were fixed on the way.
+- **Task 3's rule was widened over the brief:** a move to or from the default, or `X or default` to `Y`, prints "may lengthen" because the diff
+  loads no port49d config; over-flagging is the safe direction.
+- **Task 4:** the first fix still leaked a single-device label through a stale series and a gap after the swap; the label set is held under a
+  read-write lock and the swap's set includes every old reference the new policy gives fewer than two devices.
+- **Task 5:** the first rules paged forever on the memory backend and left eight stated alarms without a rule; series that exist only under
+  etcd carry the etcd alarms, and `last_over_time` arms catch a fleet that vanished.
+- **Task 12:** a `$aes1$` device-encrypted TLS key line reached a pushed note (fixed forward, the lab key is a dummy and Ryan rotates it whenever;
+  no history rewrite; `6762fd82` adds the `srlinux-aes1` rule and the hook); lab notes are redacted by value; `labpcap` keeps TLS on port 300 only
+  after a handshake record each way; a harness bug briefly read as an IOS XE wedge (f2) and was retracted.
+- **Task 16:** the sweep ran after the mint and could outlast the token; it now runs before the mint (and again after, for nodes it visited), in
+  parallel (cap 32, budget 600 s), naming skipped nodes.
+- **Task 18:** a TPM or file session key gets one plain statement and exit 1 (setup would have advised generating over a slot the user did not
+  mean); the macOS module probe was dropped (Homebrew lists no `libykcs11` file and its prefix is group-writable); the runbook stores only a
+  sha256 of `ykman piv info`, which holds the serial.
+- **Test flakes classified:** the principal-cap tests raced the busy marker (test bug, `bba559a1`, `b797dcb5`, `b5508184`); a key-set metric
+  lagged the failure it counted (`4c13a7eb`); a fetch outlived `Run` and wrote a file after shutdown (product, `3c4169ef`); the legs collision (product).
+
+#### Carried forward
+
+- **Lab states.**
+  - **Closed 2026-11-04:** L39 (b, c) (`L39-kind.md`: under `externalTrafficPolicy: Cluster` the source address is lost, `Local` and host networking keep
+    it); L87 (`L87-nokia_srlinux.md`); L88 on every platform (`L88-*.md`; SR Linux cells c, e, g are observed, not passed; over RFC 9887 cells a, b, d, e, f
+    on five images); L89 (`L89-kind.md`: Velero's file-system backup restored a working port49); L90 (`L90-oxidized-arista_eos.md`).
+  - **L84 closed 2026-11-04** (`tests/lab/results/L84-systemd-docker.md`, hosted run 41930879677). Compose `secrets:` is measured (a new secret needs `up -d`). The systemd cells ran on the runner's own systemd 255 (Ubuntu 24.04): (a) PASS once the fence read a POSIX ACL's entries (the first run, 41915756204, was refused because the fence judged the ACL's mask as the owning group's permission; f14e9152); (c) FAIL, a credential is added only by `systemctl restart`. The Debian container's systemd rendered no credentials, so its cells are INVALID. By the row's rule a mechanism that fails (c) is named for the encryption key only: the systemd README names `LoadCredential=` for `encryption.current.secret_ref`, and device keys stay in `/etc/port49/keys`.
+  - **L91 stays open** and needs Ryan at the SER8 (`TODO(L91)`); Task 18's tests run on fixtures derived from his captured token facts with the serial masked.
+  - **L92 is new:** SR Linux over RFC 9887. 26.7.2 loads a `tls-profile` and was seen sending plain TACACS+ to port 300; no SR Linux enrolment dialect exists for L73.
+- **Standing FAILs a later version bump could reopen** (from 12b; re-run at each pin bump through `lab-kind`): L83 (b), the Secrets Store CSI driver, and
+  L83 (c), the Vault injector as a reload.
+- **The restore guard, as Ryan ruled it (2026-11-02):** the ERROR and its 10m page stay; "stop port49d" stays the escape; the guard lifts on its own
+  at the token records' latest expiry. Closing the listener while guarded is not built.
+- **Pre-beta list** (each is a ledger line marked PRE-BETA or "Carried to final review"):
+  - **Security-relevant:** a newer snapshot carrying a restored `meta/purged` above the drop lifts the guard (takeover purges write one, so it is reachable without
+    `--bump-revision`); the guard, the floor and the witness record do not survive a port49d restart (the drop line warns). Also `supersedeTokens` visiting
+    only the keys that hold tokens (deferred: it changes which pairs a revocation-relevant pass visits and depends on the index being atomic; the cost until then
+    is minutes of 2.5 cores per policy edit at fleet size).
+  - **From the final review (2026-11-05):** the restore guard was reworked in review (`a213fab9` to `ecdfc1a5`, four rounds, each probe kept as a test):
+    after a judged drop it compares against the drop's witness and, below the old record, counts only tokens minted by the drop read. Left for the review:
+    - while a failed scan holds redemptions, `port49_redemption_restore_guarded` reads 0 and no alert names it; only the log line says why (count the scan outcome, or hold the gauge at 1);
+    - on a busy store the witness moves every second, so the guard scans the token family on every pass until the store catches up (load, not safety; the final review's M1);
+    - a restored token a broker stamped more than 5m ahead of port49d's clock is not counted (outside the NTP tolerance; documented);
+    - `RequestProgress` racing a leg's stream close can leave an empty watcher stream (bounded; the closed flag narrows it; a `w.streams` count test after a forced `ErrNoLeader` would settle it).
+  - **The store and the feeds:**
+    - `WatchMemberships` and `WatchLogouts` are single-leg; only the context and marks feeds are two-leg (a stall delays a pin change or a logout forward by up to keepalive, not a loss).
+    - A member forgiven by a success takes load until the other suspicions expire.
+    - `port49_store_fast_fail_total` counts each hedged copy.
+    - An etcd election gap can open the breaker and stretch to at least 5 s of refusals (`open_for`).
+    - The mint is unhedged (a late duplicate `Put` could resurrect a redeemed token): a create-only compare with own-copy recognition is the fix; it measured 11 to 17 s with retries in one early run, and 0 of 30 needing a retry in the last runs.
+    - The leader-dark instant-deny tail: once in about 54 rounds a refusal ran 17.5 s with no circuit-open line (unseen since the success-forgives fix, run 41778528627, 18 rounds worst 2.37 s); `port49_store_fast_fail_total` and the matrix's counter dump are there to name it.
+    - Accounting disk latency can still darken port49d through the store guard (it counts a passed packet deadline); group commit removed the trigger measured, not the mechanism.
+    - Task 9's review Important I1 (`leader_dark` asserts no listener close) and its Minors 1 to 7.
+  - **Flakes to watch:**
+    - the compose `store_hangs` reopen ("listener open again within 5.5 s") failed once at `ca687bf2`, after the legs change, and passed on rerun;
+    - `TestARunningBrokerSaysALateUnreadableFileOnceAndFollowsTheFix` failed once locally (997 s package; 3 of 3 on rerun), and 5 of 5 with a TMPDIR under `~/.cache` where it passes under `/tmp` (is the lost-reason order path-dependent?);
+    - `TestAnEvictedContextIsNotServedThroughAnOutage` failed once in CI at `df539bb7`;
+    - the feed-dark tests' member-2 tail failed twice in CI and was not reproduced in 36 local runs (a placement bug was found and fixed, `25073c0b`; the failure-only trace stays);
+    - the l86 unit test takes the real lab lock `/tmp/port49-lab.lock` during `make test` (`tests/lab/l60/l86_unit_test.go`): unit tests must not.
+  - **Lab and CI:**
+    - L90's 32 parallel `ssh` appends to one `known_hosts` are unmeasured;
+    - `lab-kind.yml` and `lab-hosted.yml` rerun on `synchronize` after a label, so a labelled fork PR runs new pushes unreviewed (the jobs hold `contents: read`, no secrets, no `id-token`): remove the label on `synchronize`;
+    - **the go-public pcap check:** committed `tests/lab/evidence` pcaps carry TACACS+ bodies under the lab key; confirm none exposes a reusable secret (lab key, break-glass password, live token) before the repository is public.
+  - **Small:** `composeMarkedFor` (`scope.go:135`) is unused; the guard's scan pages are not pinned to one revision (it fails closed); each post-lift re-guard reprints the drop line; one scan timeout on a first drop leaves the guard purge-only (after a judged drop it only holds redemptions until a scan answers); no rule pages when every broker has been down past a day (the README pairs the rules with `up{job=<broker>} == 0`); `Retry-After` has no jitter; the `l84DiskFloorMB` comment ignores build caches; `testpki` import grouping in `listen_idle_cap_test.go`; the `addSamplerObserved` duplicate loop; cell b's margin on GCE is 0.1 ms (4.90 against 5).
+- **The Mac check (unmeasured on a real Mac).** The Homebrew `yubico-piv-tool` prefix is group-writable by `admin` (GitHub's `macos-15` and `macos-15-intel`, run 41633453384), so `CheckOwned` refused `--module` there. Ryan agreed 2026-11-03 to the exception, which is built (`f43f37b0`): on darwin only, group `admin` (gid 80) write is root-equivalent in `CheckOwned`; Linux is unchanged. Whether a real Homebrew Mac now loads the module is not measured.
+
+#### Operator notes (for the pull request body)
+
+Each is true of the code as built; the load, alert and matrix figures come from the notes cited.
+
+- **Reference device configurations** are `deploy/device-aaa/` (one file per platform and a `-tls` file for RFC 9887; `deploy/device-aaa/README.md` is the page).
+  Measured per platform, and the 3am lines it carries:
+  - **No fall-through on a reject.** A port49 deny is final on every platform under the reference (Junos: `authentication-order tacplus` alone, because `password` listed lets a deny fall through, L4).
+  - **An ERROR is final on IOS XE and Junos:** break-glass waits for go-dark's listener close (5.5 s at the defaults, Junos first login at +7 s on 23.4 and vSRX) and, under the restore guard, until port49d is stopped. SR Linux with `exit-on-reject true` logs break-glass in at once (2.4 s, L87 a).
+  - **After port49d returns,** IOS XE and XR answer locally for a dead window (IOS XE 30 s measured in f2, 55 s in cell e; XR about 46 s; over TLS 57 to 67 s): a token login there is refused with nothing sent to port49 and break-glass works, so a denied user's local account logs in during it.
+  - SR Linux sends no command authorization (L76, L88 e), so port49's command policy does not apply there; a `tls-profile` on 26.7.2 was seen to send plain TACACS+ (L92).
+  - Lines the lab never ran are listed under "Lines the lab never ran" in that README.
+- **Junos `idle-timeout` per class:** `port49 platform export --classes --config port49d.yaml juniper_junos` writes the login classes; each class's `idle-timeout` is the least session ceiling of the sessions landing in it, capped at 4294967295 minutes (the device maximum, L88 i). Under the default delivery that is one fleet-wide minimum. `port49 devices check-config` reads a captured configuration against that reference (`--config port49d.yaml` required) and fails a class carrying more than the reference writes.
+- **`port49 policy diff` prints a ceiling line** per subject whose session ceiling moved: `session ceiling: <subject> on <n> devices: <old> -> <new>`, with `(lengthened: ...)` or `(may lengthen: depends on session.max_session_age_default)` when the new one may outlast the old. It prints and never fails the gate: it cannot see port49d's default.
+- **`single_device`:** a `key_ref` held by exactly one device is reported as `key_ref="single_device"`, `version="any"` on the three key metrics, so no label names a device. The name is reserved: a policy or inventory naming it as a `key_ref` is refused at load (no shim, pre-beta). `port49 keys status` says which device is on which version.
+- **Alerts:** `deploy/alerts/port49.rules.yaml` is the canonical file (72 rules: 19 `page`, 53 `ticket`; route on `severity`); the chart renders a byte copy as a `PrometheusRule` with `prometheusRule.enabled: true` (default false: it needs the operator's CRD). `make alerts-check` runs `promtool`; `tests/alerts` checks every metric an expression names is registered. Thresholds follow the defaults: a setting lowered below its default can silence its alarm (`close_after: 3` makes the `>= 5` page unreachable), so recompute the rule with the setting.
+- **Load, on the design's rate** (170 authentications per second, 10 000 devices, 50 machine principals, 450 people; `tests/lab/results/load-beehive-gates.md` and the three harness notes):
+  - **GCE** (n2-standard-16, 400 GB pd-ssd, commit `15e77241`): every cell passes; per-command p99 3.30 ms (TCP) and 4.90 ms (TLS), a 0.1 ms margin against 5 ms; accounting capacity 2905 per second; reload settle 8.4 s and 7.3 s against a 30 s bound.
+  - **beehive in RAM** (SER8 Ryzen 7 8745HS, session etcd and spool in `/dev/shm`, the ceiling, not a deployable shape): every cell passes, capacity 1291 per second.
+  - **beehive on its QLC SSD** (DRAM-less): fails five cells; per-command p99 17.8 to 82.6 ms, capacity 0. The counter-example.
+  - **The disk is a requirement:** session etcd and the accounting spool need a WAL fsync p99 under 10 ms (etcd's own guidance). `etcd_disk_slow` and `port49_accounting_spool_disk_slow` (ticket, 10m) say when a disk is not.
+  - Defaults sized from it: `autoscaling.averageConnections` 50 (a floor, from the disk run's peak of 62), etcd compaction 10m with an 8 GiB quota in every shape, batch mints with concurrency 8, a 15 s response write deadline, and `stores.directory.etcd.call_timeout` at least four times the cross-region round trip (`deploy/examples/stores/README.md`).
+  - **A disk error can repeat accounting lines** (a short write repeats a batch, at-least-once, the same `task_id`): dedupe on `task_id`.
+- **The failure matrix** is `deploy/failure-matrix.md`: a 3am table (what you see, what the devices do, what to do, which alert) and one row per design §12 failure, each naming a `TestFailureMatrix/<row>` subtest, an existing test or a closed lab row; `make failure-matrix` runs it and `TestEveryMatrixRowHasEvidence` fails on a row without evidence. Measured on the compose stack in CI (run 41769703556): one etcd follower dark refused 0 of 30 logins, slowest 271 ms; a raft leader dark refused for at most 8.2 s over 36 rounds, most under 3 s, with one 17.5 s round in about 54 unexplained (pre-beta list); a store that hangs closes the listener in 5.5 s at the defaults.
+- **The restore guard:** after an etcd restore port49d refuses token logins (`store_unavailable`, an ERROR) until a runner's purge, or until port49d's own clock passes the latest `ExpiresAt` among the token records the restored store holds, whichever comes first. `port49_redemption_restore_guard_until_timestamp_seconds` says when (and port49d's guard line); `port49_redemption_restore_guarded` is 1 while it holds and pages at 10m. That is at most one token lifetime (15m) after the snapshot's last mint, so a snapshot older than that is not guarded. Only tokens minted by the drop read's time plus 5m of clock skew count (`MintedAt`): tokens minted more than 5m after port49d finds the restore never arm or extend the guard (a broker whose clock is more than 5m ahead has its restored tokens left out). After a drop is judged, port49d reads the witness against the one at the drop. While the witness stays below the old record it also scans the token records, at most every 5 s (at once when the witness it reads has changed, and always before the guard lifts), and guards again on a live token minted before its read of the drop; a token minted after that read never does (here a restored token that a fast broker clock stamps later than the read is left out). A witness below the drop's is a second restore, counted with the 5m skew as above. A scan that fails there arms no guard, but token redemptions are refused until a scan answers, tried again on the next read. A broker clock more than 5m ahead is outside the NTP tolerance, and its tokens minted after port49d finds the restore are not counted. If the scan fails, a record does not decode, or the latest expiry is more than 15m plus 5m ahead of port49d's clock, no bound is armed (the gauge reads 0) and only the purge lifts it. A restore still loses the revocations and marks made after the snapshot: re-issue them (the runbook). The lift does not let break-glass in on IOS XE or Junos while the brokers are down (port49d's FAIL is final there too); "stop port49d" is the escape. **Task 9a's two bad-day traces:** (1) a snapshot 5 minutes old restored with the brokers crash-looping: the latest token expires about 10 minutes later, port49d's first read finds the drop, scans and guards, token logins are refused, the 10m page fires with the lift time in its summary, and the guard lifts on its own at that expiry with no broker running; (2) a quiet store: the witness last written at 02:00, a token minted at 03:00 and the snapshot at 03:00:00.4, so a witness-time bound would have lifted at 02:20 and left a replay window, while the scan reads 03:15 and the guard holds to it.
+- **Velero and `LoadCredential=` (for the encryption key) are named.** The chart README's "Velero" section and `examples/velero/` carry the measured file-system backup (kind, Velero 1.18.4; the backup holds the issuing CA's private key and the bucket holds the namespaces' Secrets unencrypted; Velero skips a `hostPath` volume with only a warning, so check that every claim has a `PodVolumeBackup`, the README gives the commands). `LoadCredential=` is measured (L84, closed 2026-11-04): it failed the no-restart cell, so the systemd README names it for the encryption key only, not for a device key.
+- **The Oxidized change:** Oxidized keeps `secure: true`, which refuses an unknown host key and sends no token (L90 a); it has no accept-new of its own (L90 d FAIL). `port49-oxidized-run` therefore visits each node absent from `known_hosts` once with OpenSSH's `StrictHostKeyChecking=accept-new` and no authentication, before it mints (parallel, cap 32, a 600 s budget, skipped nodes named and retried next window, exit 1), then mints again if it visited a node. A changed key is still refused (b).
+- **`port49 hwkey setup` and `port49 hwkey status`:** both read the token and write nothing to it (no PIN is asked, no object is written); the serial is masked on every line, `--json` included.
+  - **Roots:** from the broker's `/v1/config` (TLS 1.3 against the configured broker CA, `--broker URL` to name one), or `--roots FILE` offline, which wins. Every run's first line says which: `roots: from broker <host>` or `roots: --roots <file>`.
+  - **Exit codes:** 0 ready, 1 action needed (status: not ready), 2 error (no module, a bad flag, no roots, an unreachable broker, a broker from another CA). A TPM or file session key gets one plain statement and exit 1.
+  - **`setup`** prints the `ykman` lines for what is missing (`ykman piv keys generate --algorithm ECCP256 --pin-policy ONCE --touch-policy NEVER 9a port49-9a.pub.pem`, the same with `ALWAYS` for 9c, and a certificate line placed before each generate line for a slot that holds a key libykcs11 does not list); ykman, not port49, asks for the management key. When every check passes it writes `issued_key:` and `touch_key:` to the user's config (a line edit; asks at a terminal if a different value is there; never edits a value from the system config).
+  - **`status`** never writes config and never prints a ykman line; `--json` is status only (`setup --json` is a usage error, exit 2) and prints `{"token", "roots", "ready", "checks": [{"name", "ok", "why"}]}`; it also reports the certificate's expiry and, with an agent running, `touch_key: true` or `touch_key_unusable: <why>`.
+  - **Plan 13's "set up your key" page is `port49 hwkey setup`.** Its risk notes: a lent YubiKey plus its PIN is the user's login and touch, so a key is never shared; a wrong attestation root makes every check pass against the wrong vendor or fail for everyone (the roots come from the broker over TLS to the broker CA, or `--roots` offline, and each run says which). A compromised broker could change the roots a user's check reads, but that broker already makes every verdict, so the check shows nothing it could not already decide.
+  - **L91 is `TODO(L91)` until Ryan's run on the SER8:** nothing here was measured on a real YubiKey.
+- **The legs change** (`213cd271`, `1a622c0b`, `ded66ab5`): the context and marks feeds each run two watches on two etcd members. `port49_store_feed_legs_colocated{feed}` (`feed` is `contexts` or `marks`) is 1 while both legs are on one member; the ticket `port49_store_feed_legs_colocated` fires at 1 for 10m: port49 reaches only one member for that feed, so check the other members. The log says it once on each change: `etcd: both legs of the <feed> watch are on one member (<address>): it going dark would stall the feed; one leg is moved when another member is ready` and `etcd: the legs of the <feed> watch are on different members again`. One leg is moved apart as soon as another member is ready (retried from 2 s, doubling to 30 s). No member is a label; the address is in the log only.
+- **The enrollments export CronJob** (Task 17): the chart's own, `--set backup.enrollments.enabled=true --set backup.enrollments.claimName=<pvc>`, rendered only when a `directory_password` verifier exists. A new install runs `init-enrollments` once: `deploy/helm/port49/examples/init-enrollments-job.yaml` is the Job (adapt its names, `kubectl -n <ns> apply -f`, wait for `condition=complete`). Measured on kind in CI (the `enrollments` job of the `kind` workflow, run 41887852175): the Job, then the export twice (a dated, non-empty, 0600 file owned by 65532 each, the log holding only the broker's certificate-validity warning), then once over a stale `enrollments.new` (the job fails and the `stale-check` log names it). **That export held a freshly initialised store; one holding enrollments is unmeasured.** Neither image has a shell, hence the three containers.
+- **Secret scan:** `make hooks` (once per clone) enables `.githooks/pre-commit`, which runs `make leaks-staged` before every commit; never `--no-verify`. `.gitleaks.toml` has the `srlinux-aes1` rule for SR Linux `$aes1$` secrets, and 28 lab-only history hits are fingerprinted commit-scoped.
+
+#### Hand-offs
+
+- **Pre-beta review:** the load note (`tests/lab/results/load-beehive-gates.md` and its three notes), the failure matrix, every open row (L91, L92) and the pre-beta list above, with these asks: a guard or wait whose protection a simpler fact already supplies (Ryan's 2026-11-02 rule); the principal cap against every shipped client (the workload client ran 20 of 20 processes clean under idle-only eviction, but does any other open more than 4 connections per principal?).
+- **Plan 13:**
+  - one device page per platform from `deploy/device-aaa/README.md`, with its measured dead windows;
+  - the alerts page from `deploy/alerts/README.md`;
+  - the 3am table from `deploy/failure-matrix.md`;
+  - the "set up your key" page from `port49 hwkey setup`, with its two risk notes (above);
+  - the macOS admin exception (Ryan, 2026-11-03): the module check trusts group `admin` on darwin, and a real-Mac check is open;
+  - the Mac and Homebrew install notes for `libykcs11` (`--module`; no probe path is shipped for macOS);
+  - the disk requirement, and "dedupe accounting on `task_id`";
+  - **the repository's top-level `README.md`** is rewritten as a high-level overview of the selling points (Ryan, 2026-11-03): why anyone would use port49, not a feature list.
+- **Go-public (before the repository is public):**
+  - **the `main` ruleset** (Ryan, 2026-11-04, "before public"): a pull request required; required checks `test`, `compose`, `kind`, `hwkeys`, `systemd`, `qual`, `python` and `leaks`; no force push and no deletion; linear history. A free private organization cannot enable it now. Ryan applies it, or grants the scope. The docs-to-`main` exception in `CLAUDE.md` is then a question for Ryan;
+  - the gitleaks pre-commit hook (`make hooks`, `6762fd82`) and the `srlinux-aes1` rule: a fresh clone must run `make hooks`; the history scan's commit-scoped fingerprints are the 28 lab-only hits and the three `$aes1$` lines in the SR Linux TLS note's history (a dummy lab key);
+  - the pcap check named in the pre-beta list.
+- **Ryan:**
+  - L91 on the SER8 (`tests/lab/L91-runbook.md`);
+  - applying the `main` ruleset;
+  - the one-time release setup from 12b is still open.
 
 ## Pre-beta review (between plan 12c and plan 13)
 
@@ -8157,7 +8338,13 @@ refusal or wait, ask what it protects against, whether something else in the sys
 a signature, a bound) already rules that out, and what it costs an operator at 3am. Ryan,
 2026-11-02, after the restore guard: it locked IOS XE out until a purge to stop replay of
 restored tokens, though every restored token is dead within the max `token_ttl` (15m) of the
-snapshot. Plan 12c bounds the guard by the restore witness's time.
+snapshot. Plan 12c bounds the guard by the token records' latest expiry.
+
+Decided 2026-11-04 (Ryan's lead): the wait for the store after a store gone, and a cold start's, retries every
+1 s for ten attempts, then backing off to 10 s with 20% jitter (`storeAttemptEvery`, `internal/port49d/store.go`), saying an outage once and again only when it changes;
+compose `store_hangs` failed twice in CI on the old 5 s. The other 5 s loops are untouched (`runLoop`'s start-again, now `startAgainEvery`, says a fault once) and carried to the
+pre-beta review as candidates: `startRetryWait` (the broker's start), the runner's hold, and the broker's late
+directory open (spec 11186).
 
 ## Plan 13 — User and admin documentation
 
@@ -8171,6 +8358,7 @@ GitHub Action — written when the repository goes public. Six sections:
   page per platform built from `tests/lab/results/`, including the traps the lab measured.
 - **Reference:** config keys, reason codes, metrics and the decision-log schema, generated from the
   code so it cannot drift.
+- **The repository's top-level `README.md`** (Ryan, 2026-11-03): rewritten as a high-level overview of the selling points, why anyone would use port49, not a feature list.
 - **Agent quick start** (Ryan, 2026-10-16), for people who let an AI agent reach devices through
   port49. The agent gets its own machine identity (a workload certificate or, plan 10, a
   Kubernetes service account), never a person's login or a password, and a policy subject of its

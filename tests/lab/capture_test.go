@@ -53,6 +53,9 @@ func (l *lab) capture(t *testing.T, name string) func() {
 	// redacted copy written at the end of the run (writeEvidence) is committed,
 	// holds the same packets, and decodes under the same key.
 	l.evidencePath = filepath.Join("tests/lab/evidence", filepath.Base(abs))
+	if l88TLSConfig != "" { // L88 cell h: the RFC 9887 listener is on 300
+		return l.captureWith(t, abs, "tcp port 49 or tcp port 300")
+	}
 	return l.captureWith(t, abs, "tcp port 49")
 }
 

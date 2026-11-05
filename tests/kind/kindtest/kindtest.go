@@ -254,11 +254,12 @@ func Filter(s string) string {
 	return string(out)
 }
 
-// DumpNamespaces is the namespaces a failure dump reads: every one but vault.
+// DumpNamespaces is the namespaces a failure dump reads: every one but vault, and the two L89 makes
+// (velero, whose repository key and store credentials are Secrets, and the object store's).
 func DumpNamespaces(all []string) []string {
 	var out []string
 	for _, n := range all {
-		if n != "vault" && n != "" {
+		if n != "vault" && n != "velero" && n != "l89-store" && n != "" {
 			out = append(out, n)
 		}
 	}

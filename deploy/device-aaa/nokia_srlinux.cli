@@ -1,0 +1,94 @@
+# port49 reference AAA configuration: Nokia SR Linux, TACACS+ over TCP (RFC 8907).
+# TLS on SR Linux is not measured (L92): the schema has `server tls-profile`; one L88 observation,
+# a profile set with port 300, saw the client send plain TACACS+ (tests/lab/results/L88-nokia_srlinux-tls.md).
+#
+# Replace each angle-bracket placeholder before you load this. README.md in this
+# directory says what each one is.
+#
+# Set the break-glass account's password by hand, never in this file. The policy needs
+# a platforms block for SR Linux: see policy-platforms.yaml in this directory.
+#
+# exit-on-reject true makes a port49 deny final. Without it a deny falls through to
+# local (L76 cell d). Break-glass still logs in on an authentication ERROR and once port49d
+# is dark (L87 a, b: tests/lab/results/L87-nokia_srlinux.md; README.md, "SR Linux").
+system {
+    aaa {
+        authentication {
+            exit-on-reject true
+            authentication-method [
+                port49
+                local
+            ]
+            user <BREAKGLASS_USER> {
+                role [
+                    p49-admin
+                ]
+            }
+        }
+        authorization {
+            # priv-lvl 1 and 15 are the two levels port49 sends. The operator level maps to
+            # 1, so an operator is read-only here until a level between them is measured.
+            role p49-read {
+                services [ cli ]
+                tacacs {
+                    priv-lvl 1
+                }
+            }
+            role p49-admin {
+                services [ cli ]
+                tacacs {
+                    priv-lvl 15
+                }
+            }
+        }
+        accounting {
+            accounting-method [
+                port49
+            ]
+            event command {
+                record start-stop
+            }
+        }
+        server-group local {
+            type local
+        }
+        server-group port49 {
+            type tacacs
+            tacacs {
+                priv-lvl-authorization true
+            }
+            server <PORT49_1> {
+                network-instance <MGMT_VRF>
+                tacacs {
+                    port 49
+                    secret-key <KEY>
+                    # source-address must be an address configured on an interface of the network
+                    # instance: the commit refuses a DHCP-learned one (L88 measured it so).
+                    source-address <SOURCE_ADDRESS>
+                }
+            }
+            server <PORT49_2> {
+                network-instance <MGMT_VRF>
+                tacacs {
+                    port 49
+                    secret-key <KEY>
+                    # source-address must be an address configured on an interface of the network
+                    # instance: the commit refuses a DHCP-learned one (L88 measured it so).
+                    source-address <SOURCE_ADDRESS>
+                }
+            }
+        }
+    }
+    configuration {
+        role p49-read {
+            rule / {
+                action read
+            }
+        }
+        role p49-admin {
+            rule / {
+                action write
+            }
+        }
+    }
+}

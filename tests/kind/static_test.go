@@ -376,3 +376,15 @@ func TestTheStackConfiguresNoDirectory(t *testing.T) {
 		t.Error("the backups cell runs the enrollments export, which needs a directory_password verifier")
 	}
 }
+
+// Options.EtcdOnLocalVolumes rewrites etcd's one claim template by this line; an example that changes it
+// must break this test, not leave L89's etcd on hostPath volumes that Velero skips.
+func TestTheEtcdExampleHasOneAccessModesLineForTheLocalClassRewrite(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "helm", "port49", "examples", "etcd", "statefulset.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(b), "accessModes: [ReadWriteOnce]"); n != 1 {
+		t.Fatalf("the etcd example has %d accessModes lines, want 1", n)
+	}
+}

@@ -103,6 +103,7 @@ func TestAKeyGroupTieOnOneDeviceRefusesThatDevice(t *testing.T) {
 	}
 }
 
+// TestTheReservedKeyRefIsRefused is the "the reserved key_ref" case below.
 func TestKeyGroupLoadErrors(t *testing.T) {
 	for _, c := range []struct{ name, groups, want string }{
 		{"no key_ref", "  - {match: {cidr: 10.0.0.0/8}}\n", "key_ref is required"},
@@ -115,6 +116,8 @@ func TestKeyGroupLoadErrors(t *testing.T) {
 			"tie for every device"},
 		{"a key_ref that is no name", "  - {match: {cidr: 10.0.0.0/8}, key_ref: Sx9qT4vLm2pR7zK0wYh5}\n",
 			"key_groups[0]: key_ref is not a valid key_ref name"},
+		{"the reserved key_ref", "  - {match: {cidr: 10.0.0.0/8}, key_ref: single_device}\n",
+			"key_groups[0]: key_ref is not a valid key_ref name (lowercase letters, digits and _, starting with a letter; at most 64) or is the reserved name single_device"},
 		// netip quotes the value it could not parse; the error names the
 		// position instead (Task 18 review m1).
 		{"a cidr that is no prefix", "  - {match: {cidr: Sx9qT4vLm2pR7zK0wYh5}, key_ref: k}\n",

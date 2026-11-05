@@ -212,7 +212,7 @@ func TestAStartAfterAStoreGoneRetriesEveryError(t *testing.T) {
 	if len(calls) != 4 || calls[0] || !calls[1] || !calls[3] {
 		t.Fatalf("runs %v; want a cold start, then three after the store gone", calls)
 	}
-	if strings.Count(out.String(), "starting again after a store gone: test: the policy file is half-written") != 2 {
+	if strings.Count(out.String(), "starting again after a store gone: test: the policy file is half-written") != 1 {
 		t.Fatalf("said %q", out.String())
 	}
 	cold := errors.New("test: a bad config")
@@ -573,9 +573,9 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 		!strings.Contains(string(resp.Kvs[0].Value), `"enc0"`) {
 		t.Fatalf("meta/ after the split daemon's start: %v %v", resp, err)
 	}
-	if testutil.ToFloat64(m.StoreKeyspaceHeld) != 0 || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 ||
+	if testutil.CollectAndCount(m.StoreKeyspaceHeld) != 0 || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 ||
 		!strings.Contains(out.String(), `whose current key is "enc0"`) {
-		t.Fatalf("held %v, key unknown %v:\n%s", testutil.ToFloat64(m.StoreKeyspaceHeld),
+		t.Fatalf("held series %v, key unknown %v:\n%s", testutil.CollectAndCount(m.StoreKeyspaceHeld),
 			testutil.ToFloat64(m.CryptStoreKeyUnknown), out.String())
 	}
 	if !marks.Holds(store.RevocationPrincipal, "user:alice@example.com") ||
@@ -651,7 +651,7 @@ func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
 // (final review 7e-1 M-4). The health check waits on the same fence, below
 // the guard (plan 7f, Ruling 1), so with the feed stopped it fails too, and
-// the guard does not count it. The broker's half is
+// the guard counts it feed_behind (not a failed call). The broker's half is
 // TestTheBrokersStoreIsFencedUnderItsGuard.
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
@@ -685,8 +685,8 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	if got, err := sts.daemon.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("the daemon read %q with the feed not running: %v", got.CtxID, err)
 	}
-	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
-		t.Fatalf("the daemon's guard counted %v context timeouts", n)
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "feed_behind")); n != 1 {
+		t.Fatalf("the daemon's guard counted %v feed_behind outcomes", n)
 	}
 	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
 		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)
@@ -852,4 +852,96 @@ func TestTheGuardNamesTheBlockItReadsThrough(t *testing.T) {
 // builds it.
 func testDirectoryCache() *directoryCache {
 	return &directoryCache{fresh: store.NewFreshness(time.Now)}
+}
+
+// A full etcd is not a roles problem: the operator is told to compact, and the
+// roles hint stays on a refusal alone.
+func TestAFullEtcdIsNotReportedAsARolesProblem(t *testing.T) {
+	const roles = "store-roles"
+	noSpace := fmt.Errorf("writing probe: %w: %w", store.ErrUnavailable, etcdstore.ErrNoSpace)
+	got := brokerRolesError("stores.session.etcd", "broker", noSpace).Error()
+	if !strings.Contains(got, "etcd's space quota is exceeded (alarm NOSPACE): compact and defragment etcd, then run 'etcdctl alarm disarm'") {
+		t.Errorf("no space sentence: %s", got)
+	}
+	if strings.Contains(got, roles) {
+		t.Errorf("a full etcd got the roles hint: %s", got)
+	}
+	refused := fmt.Errorf("writing probe: %w", store.ErrRefused)
+	if got := brokerRolesError("stores.session.etcd", "broker", refused).Error(); !strings.Contains(got, roles) {
+		t.Errorf("a refusal lost the roles hint: %s", got)
+	}
+	notSeparated := fmt.Errorf("%w: user %q holds etcd's root role", etcdstore.ErrNotSeparated, "b")
+	if got := brokerRolesError("stores.session.etcd", "broker", notSeparated).Error(); !strings.Contains(got, roles) {
+		t.Errorf("a broker that is not separated lost the roles hint: %s", got)
+	}
+	other := fmt.Errorf("reading x: %w", store.ErrUnavailable)
+	got = brokerRolesError("stores.session.etcd", "broker", other).Error()
+	if strings.Contains(got, roles) || strings.Contains(got, "NOSPACE") {
+		t.Errorf("an unavailable store got a hint: %s", got)
+	}
+}
+
+// runLoop's retry of a start that failed for another reason says one fault
+// once, however many runs it takes, and a different fault again; and its
+// wait is its own, not the store wait's.
+func TestARepeatedStartFaultIsSaidOnce(t *testing.T) {
+	var out bytes.Buffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := 0
+	once := func(bool) error {
+		switch n++; {
+		case n == 1:
+			return &storeGone{why: "test: the store went"}
+		case n <= 7:
+			return errors.New("test: the policy file is half-written")
+		case n == 8:
+			return errors.New("test: the broker's role is refused")
+		}
+		cancel()
+		return nil
+	}
+	if err := runLoop(ctx, once, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := strings.Count(out.String(), "half-written"), strings.Count(out.String(), "role is refused"); a != 1 || b != 1 {
+		t.Fatalf("6 runs of one fault and 1 of another said %d and %d lines:\n%s", a, b, out.String())
+	}
+	if startAgainEvery != 5*time.Second {
+		t.Fatalf("a start that fails for another reason is retried every %v, want 5s", startAgainEvery)
+	}
+}
+
+// A fault said before a run that served is said again after the next store
+// gone, at once, with a since of its own: the sayer starts over with each.
+func TestAFaultIsSaidAgainAfterTheNextStoreGone(t *testing.T) {
+	var out bytes.Buffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fault := errors.New("test: the policy file is half-written")
+	steps := []error{
+		&storeGone{why: "test: the store went"}, fault, fault, // said once
+		&storeGone{why: "test: the store went again"}, fault, // a run served in between: said again
+	}
+	n := 0
+	once := func(bool) error {
+		if n < len(steps) {
+			n++
+			return steps[n-1]
+		}
+		cancel()
+		return nil
+	}
+	if err := runLoop(ctx, once, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out.String(), "half-written"); got != 2 {
+		t.Fatalf("the fault was said %d times across two stores gone, want 2:\n%s", got, out.String())
+	}
 }

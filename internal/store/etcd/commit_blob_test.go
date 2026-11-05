@@ -1,0 +1,192 @@
+package etcd
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/blanketfish/port49/internal/store"
+)
+
+// A second PutBlob the stored blob already covers leaves the key at the
+// same ModRevision: the broker's mint puts one blob once a mint.
+func TestASecondPutBlobInsideTheBucketWritesNothing(t *testing.T) {
+	t.Parallel()
+	now := t0
+	s := onShared(t, func() time.Time { return now })
+	ctx := context.Background()
+	if err := s.PutBlob(ctx, "h", []byte("x"), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	r1, err := s.ctxKV.Get(ctx, s.k.blob("h"))
+	if err != nil || len(r1.Kvs) != 1 {
+		t.Fatal(err)
+	}
+	if err := s.PutBlob(ctx, "h", []byte("x"), 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	r2, _ := s.ctxKV.Get(ctx, s.k.blob("h"))
+	if r2.Kvs[0].ModRevision != r1.Kvs[0].ModRevision {
+		t.Fatalf("the second put wrote: mod %d then %d", r1.Kvs[0].ModRevision, r2.Kvs[0].ModRevision)
+	}
+	if err := s.PutBlob(ctx, "h", []byte("x"), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	r3, _ := s.ctxKV.Get(ctx, s.k.blob("h"))
+	if r3.Kvs[0].ModRevision == r1.Kvs[0].ModRevision {
+		t.Fatal("a longer ttl did not write")
+	}
+}
+
+// Fifty mints of one blob at once all return within the call timeout
+// (load run 2: half of them failed at 500 ms on a shared CAS).
+func TestFiftyConcurrentPutBlobsOnOneHashFinishInTime(t *testing.T) {
+	t.Parallel()
+	s := onShared(t, func() time.Time { return t0 }) // fixed, so no bucket boundary falls inside the run
+	var wg sync.WaitGroup
+	errs := make(chan error, 50)
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			errs <- s.PutBlob(ctx, "hot", []byte("x"), time.Minute)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The losers re-read and skip: one write lands, not fifty.
+	resp, err := s.ctxKV.Get(context.Background(), s.k.blob("hot"))
+	if err != nil || len(resp.Kvs) != 1 {
+		t.Fatal(err)
+	}
+	if v := resp.Kvs[0].Version; v != 1 {
+		t.Fatalf("the blob was written %d times by 50 puts", v)
+	}
+}
+
+// The backoff delay never passes casBackoffMax, is never zero, and grows to it.
+func TestCasBackoffDelayIsBoundedAndGrows(t *testing.T) {
+	t.Parallel()
+	for round := 1; round <= 40; round++ {
+		for range 200 {
+			d := casBackoffDelay(round)
+			if d <= 0 || d > casBackoffMax {
+				t.Fatalf("round %d: delay %v outside (0, %v]", round, d, casBackoffMax)
+			}
+		}
+	}
+	if d := casBackoffDelay(1); d > 2*time.Millisecond {
+		t.Fatalf("round 1: %v, want at most 2ms", d)
+	}
+	reached := false
+	for range 500 {
+		reached = reached || casBackoffDelay(20) > casBackoffMax*3/4
+	}
+	if !reached {
+		t.Fatal("the delay never grew toward casBackoffMax")
+	}
+}
+
+// memory's blob bucket is the lease bucket the etcd store rounds to.
+func TestTheBlobBucketIsTheLeaseBucket(t *testing.T) {
+	if store.BlobBucket != leaseBucket {
+		t.Fatalf("store.BlobBucket %v, leaseBucket %v", store.BlobBucket, leaseBucket)
+	}
+}
+
+// conflictKV is a KV whose every transaction loses its compare.
+type conflictKV struct {
+	clientv3.KV
+	gets int
+}
+
+func (c *conflictKV) Get(ctx context.Context, _ string, _ ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.gets++
+	return &clientv3.GetResponse{}, nil
+}
+
+func (c *conflictKV) Txn(context.Context) clientv3.Txn { return lostTxn{} }
+
+type lostTxn struct{}
+
+func (t lostTxn) If(...clientv3.Cmp) clientv3.Txn  { return t }
+func (t lostTxn) Then(...clientv3.Op) clientv3.Txn { return t }
+func (t lostTxn) Else(...clientv3.Op) clientv3.Txn { return t }
+func (lostTxn) Commit() (*clientv3.TxnResponse, error) {
+	return &clientv3.TxnResponse{Header: &etcdserverpb.ResponseHeader{}}, nil
+}
+
+func TestACasThatKeepsLosingBacksOffAndEndsOnItsContext(t *testing.T) {
+	t.Parallel()
+	kv := &conflictKV{}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := cas(ctx, kv, nil, "k", func(struct{}) bool { return true },
+		func(r *struct{}, found bool) (bool, time.Time, bool, error) { return true, time.Time{}, false, nil })
+	if !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("want unavailable from the context ending, got %v", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("did not end on ctx: %v", d)
+	}
+	// 300 ms of backoff growing to 50 ms is tens of rounds; a spin is millions.
+	if kv.gets > 200 || kv.gets < 3 {
+		t.Fatalf("%d rounds in 300 ms: not sleeping between rounds", kv.gets)
+	}
+}
+
+// A mint's token and its two index entries are one transaction: one revision,
+// so all three keys share a ModRevision. (The shared member's header revision
+// moves with every parallel test, so the keys are compared, not the counter.)
+func TestAPutTokenWithIndexKeysIsOneRevision(t *testing.T) {
+	t.Parallel()
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-one-rev", Username: "alice"}
+	const principal = "user:one-rev@example.com"
+	cert := store.CertKey("CN=CA", "01")
+	put := func(id string) {
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("s"), Kind: store.KindLogin,
+			ExpiresAt: t0.Add(time.Hour), IndexPrincipal: principal, IndexCertKey: cert, IndexTTL: 10 * time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mods := func() [3]int64 {
+		var out [3]int64
+		for i, key := range []string{s.k.token(k, "a"), s.k.tokenIndexed(famTokByPrin, principal, k),
+			s.k.tokenIndexed(famTokByCert, cert, k)} {
+			resp, err := s.tok.Get(ctx, key)
+			if err != nil || len(resp.Kvs) != 1 {
+				t.Fatalf("key %d: %v", i, err)
+			}
+			out[i] = resp.Kvs[0].ModRevision
+		}
+		return out
+	}
+	put("a")
+	m := mods()
+	if m[0] != m[1] || m[1] != m[2] {
+		t.Fatalf("the token and its index entries are in different revisions: %v", m)
+	}
+	// The pair mint's second token finds the index covering it and writes only itself.
+	put("b")
+	if got := mods(); got[1] != m[1] || got[2] != m[2] {
+		t.Fatalf("the second put rewrote a covering index entry: %v then %v", m, got)
+	}
+}

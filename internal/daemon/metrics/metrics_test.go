@@ -57,6 +57,10 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.CertStatusUnavailable.WithLabelValues("broker").Inc()
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
+	m.StoreKeyspaceHeld.WithLabelValues().Set(1)
+	m.StoreDirectoryReachable.WithLabelValues().Set(1)
+	m.StoreDirectoryConfirmed.WithLabelValues().Set(1)
+	m.DirectoryRefreshLastComplete.WithLabelValues().Set(1)
 	m.SetPolicyFailClosed(0)
 	m.PolicyRefreshPending.Set(0)
 	if v := testutil.ToFloat64(m.PolicyBundleMatchesRunner); v != 1 {
@@ -64,6 +68,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	}
 	m.BrokerMintGateClosed.Set(0)
 	m.RedemptionRestoreGuarded.Set(0)
+	m.RedemptionRestoreGuardUntil.Set(0)
 	m.InventoryReloads.WithLabelValues("applied").Inc()
 	m.InventoryFileRefused.Set(0)
 	m.InventoryFetches.WithLabelValues("unchanged").Inc()
@@ -82,68 +87,69 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 
 	// Expected metric names from brief + ConnectionEvents.
 	expectedMetrics := map[string]bool{
-		"port49_requests_total":                             false,
-		"port49_request_seconds":                            false,
-		"port49_decisions_total":                            false,
-		"port49_unvalidated_packets_total":                  false,
-		"port49_key_validations_total":                      false,
-		"port49_connections":                                false,
-		"port49_connection_events_total":                    false,
-		"port49_authentication_failures_total":              false,
-		"port49_accounting_spool_depth":                     false,
-		"port49_accounting_spool_drops_total":               false,
-		"port49_store_operations_total":                     false,
-		"port49_store_calls_total":                          false,
-		"port49_store_call_seconds":                         false,
-		"port49_store_circuit_open":                         false,
-		"port49_decision_log_write_failures_total":          false,
-		"port49_crypt_open_failures_total":                  false,
-		"port49_store_index_records_undecodable_total":      false,
-		"port49_store_keyspace_held":                        false,
-		"port49_store_feed_up":                              false,
-		"port49_store_feed_rescans_total":                   false,
-		"port49_store_fence_timeouts_total":                 false,
-		"port49_ledger_pending":                             false,
-		"port49_ledger_behind":                              false,
-		"port49_crypt_store_key_unknown":                    false,
-		"port49_store_client_cert_expiry_timestamp_seconds": false,
-		"port49_accounting_attributions_total":              false,
-		"port49_broker_item_errors_total":                   false,
-		"port49_broker_idempotency_refusals_total":          false,
-		"port49_broker_tls_handshake_failures_total":        false,
-		"port49_broker_connection_events_total":             false,
-		"port49_broker_connections":                         false,
-		"port49_blob_cache_lookups_total":                   false,
-		"port49_devices_quarantined":                        false,
-		"port49_devices_generic_platform":                   false,
-		"port49_context_refreshes_total":                    false,
-		"port49_contexts_reindexed_total":                   false,
-		"port49_contexts_reindex_failures_total":            false,
-		"port49_session_refreshes_total":                    false,
-		"port49_tokens_superseded_total":                    false,
-		"port49_ceiling_warnings_total":                     false,
-		"port49_revocations_total":                          false,
-		"port49_revocations_in_force":                       false,
-		"port49_revocations_file_failed":                    false,
-		"port49_cert_status_checks_total":                   false,
-		"port49_crl_loads_total":                            false,
-		"port49_crl_next_update_timestamp_seconds":          false,
-		"port49_cert_status_unavailable_total":              false,
-		"port49_policy_reloads_total":                       false,
-		"port49_policy_file_refused":                        false,
-		"port49_policy_refresh_pending":                     false,
-		"port49_policy_bundle_matches_runner":               false,
-		"port49_broker_mint_gate_closed":                    false,
-		"port49_redemption_restore_guarded":                 false,
-		"port49_inventory_reloads_total":                    false,
-		"port49_inventory_file_refused":                     false,
-		"port49_inventory_snapshot_age_seconds":             false,
-		"port49_inventory_bundle_sequence":                  false,
-		"port49_inventory_persist_failed":                   false,
-		"port49_inventory_bundle_refused":                   false,
-		"port49_inventory_policy_mismatch":                  false,
-		"port49_inventory_mirror_unreadable":                false,
-		"port49_inventory_fetches_total":                    false,
+		"port49_requests_total":                                   false,
+		"port49_request_seconds":                                  false,
+		"port49_decisions_total":                                  false,
+		"port49_unvalidated_packets_total":                        false,
+		"port49_key_validations_total":                            false,
+		"port49_connections":                                      false,
+		"port49_connection_events_total":                          false,
+		"port49_authentication_failures_total":                    false,
+		"port49_accounting_spool_depth":                           false,
+		"port49_accounting_spool_drops_total":                     false,
+		"port49_store_operations_total":                           false,
+		"port49_store_calls_total":                                false,
+		"port49_store_call_seconds":                               false,
+		"port49_store_circuit_open":                               false,
+		"port49_decision_log_write_failures_total":                false,
+		"port49_crypt_open_failures_total":                        false,
+		"port49_store_index_records_undecodable_total":            false,
+		"port49_store_keyspace_held":                              false,
+		"port49_store_feed_up":                                    false,
+		"port49_store_feed_rescans_total":                         false,
+		"port49_store_fence_timeouts_total":                       false,
+		"port49_ledger_pending":                                   false,
+		"port49_ledger_behind":                                    false,
+		"port49_crypt_store_key_unknown":                          false,
+		"port49_store_client_cert_expiry_timestamp_seconds":       false,
+		"port49_accounting_attributions_total":                    false,
+		"port49_broker_item_errors_total":                         false,
+		"port49_broker_idempotency_refusals_total":                false,
+		"port49_broker_tls_handshake_failures_total":              false,
+		"port49_broker_connection_events_total":                   false,
+		"port49_broker_connections":                               false,
+		"port49_blob_cache_lookups_total":                         false,
+		"port49_devices_quarantined":                              false,
+		"port49_devices_generic_platform":                         false,
+		"port49_context_refreshes_total":                          false,
+		"port49_contexts_reindexed_total":                         false,
+		"port49_contexts_reindex_failures_total":                  false,
+		"port49_session_refreshes_total":                          false,
+		"port49_tokens_superseded_total":                          false,
+		"port49_ceiling_warnings_total":                           false,
+		"port49_revocations_total":                                false,
+		"port49_revocations_in_force":                             false,
+		"port49_revocations_file_failed":                          false,
+		"port49_cert_status_checks_total":                         false,
+		"port49_crl_loads_total":                                  false,
+		"port49_crl_next_update_timestamp_seconds":                false,
+		"port49_cert_status_unavailable_total":                    false,
+		"port49_policy_reloads_total":                             false,
+		"port49_policy_file_refused":                              false,
+		"port49_policy_refresh_pending":                           false,
+		"port49_policy_bundle_matches_runner":                     false,
+		"port49_broker_mint_gate_closed":                          false,
+		"port49_redemption_restore_guarded":                       false,
+		"port49_redemption_restore_guard_until_timestamp_seconds": false,
+		"port49_inventory_reloads_total":                          false,
+		"port49_inventory_file_refused":                           false,
+		"port49_inventory_snapshot_age_seconds":                   false,
+		"port49_inventory_bundle_sequence":                        false,
+		"port49_inventory_persist_failed":                         false,
+		"port49_inventory_bundle_refused":                         false,
+		"port49_inventory_policy_mismatch":                        false,
+		"port49_inventory_mirror_unreadable":                      false,
+		"port49_inventory_fetches_total":                          false,
 		// The key-version alert gates on uptime with it (spec §10).
 		"process_start_time_seconds": false,
 	}
@@ -344,5 +350,201 @@ func TestTLSHandshakeSeriesExistFromTheStart(t *testing.T) {
 	m := New(prometheus.NewRegistry())
 	if n := testutil.CollectAndCount(m.TLSHandshakes); n != 14 {
 		t.Fatalf("%d outcome series before any handshake, want 14", n)
+	}
+}
+
+func TestASingleDeviceKeyRefIsNotALabel(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	m.SetSingleDeviceKeyRefs(map[string]bool{"r1_pin": true})
+	if k, v := m.KeyLabels("r1_pin", 3); k != SingleDeviceKeyRef || v != AnyVersion {
+		t.Fatalf("KeyLabels(r1_pin, 3) = (%q, %q)", k, v)
+	}
+	m.WatchKeys(func() []KeySample {
+		return []KeySample{{KeyRef: "r1_pin", Version: 3, Devices: 1, RetireAt: now.Add(time.Hour)}}
+	}, func() time.Time { return now })
+	ref, ver := m.KeyLabels("r1_pin", 3)
+	m.KeyValidations.WithLabelValues(ref, ver, "validated").Inc()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		for _, s := range mf.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if strings.Contains(l.GetValue(), "r1_pin") {
+					t.Fatalf("%s has a label naming the pin: %s", mf.GetName(), l.GetValue())
+				}
+			}
+		}
+	}
+}
+
+func TestTwoDevicesKeepTheirKeyRef(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	m.SetSingleDeviceKeyRefs(map[string]bool{"r1_pin": true})
+	if k, v := m.KeyLabels("core", 2); k != "core" || v != "2" {
+		t.Fatalf("KeyLabels(core, 2) = (%q, %q)", k, v)
+	}
+}
+
+// A single-device key that no device presents does not count, and the least
+// retirement among those that do is the one reported.
+func TestTheSingleDeviceRetirementIsTheLeastPresented(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	m.SetSingleDeviceKeyRefs(map[string]bool{"a_pin": true, "b_pin": true, "c_pin": true})
+	m.WatchKeys(func() []KeySample {
+		return []KeySample{
+			{KeyRef: "a_pin", Version: 1, Devices: 1, RetireAt: now.Add(10 * 24 * time.Hour)},
+			{KeyRef: "b_pin", Version: 1, Devices: 0, RetireAt: now.Add(24 * time.Hour)},
+			{KeyRef: "c_pin", Version: 2, Devices: 1},
+		}
+	}, func() time.Time { return now })
+	want := `
+# HELP port49_key_retirement_seconds Seconds until a key version's retire_after passes; negative once it has.
+# TYPE port49_key_retirement_seconds gauge
+port49_key_retirement_seconds{key_ref="single_device",version="any"} 864000
+# HELP port49_key_version_devices Devices whose latest validated connection since start used this key version.
+# TYPE port49_key_version_devices gauge
+port49_key_version_devices{key_ref="single_device",version="any"} 1
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "port49_key_version_devices",
+		"port49_key_retirement_seconds"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A series counted while two devices held the key names it once one does, so
+// setting it single-device takes the series out.
+func TestSettingAKeySingleDeviceDropsItsNamedSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	m.KeyValidations.WithLabelValues("edge", "3", "validated").Inc()
+	m.KeyValidations.WithLabelValues("core", "2", "validated").Inc()
+	m.SetSingleDeviceKeyRefs(map[string]bool{"edge": true})
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var core bool
+	for _, mf := range mfs {
+		for _, s := range mf.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if l.GetValue() == "edge" {
+					t.Fatalf("%s still has a series labelled edge", mf.GetName())
+				}
+				core = core || l.GetValue() == "core"
+			}
+		}
+	}
+	if !core {
+		t.Fatal("core's series was dropped with edge's")
+	}
+}
+
+// A count that chose its labels under the old set lands before a new set's
+// delete, never after it: the series must not come back under the key's name.
+func TestACountRacingASetNeverRecreatesTheNamedSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	done := make(chan struct{})
+	m.afterKeyLabels = func() {
+		go func() {
+			m.SetSingleDeviceKeyRefs(map[string]bool{"edge": true})
+			close(done)
+		}()
+		time.Sleep(50 * time.Millisecond) // the set has had every chance to run
+	}
+	m.CountKeyValidation("edge", 3, "validated")
+	<-done
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		for _, s := range mf.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if l.GetValue() == "edge" {
+					t.Fatalf("%s has a series labelled edge", mf.GetName())
+				}
+			}
+		}
+	}
+}
+
+// port49_redemption_restore_guard_until_timestamp_seconds reaches the
+// registry with no labels, and reads 0 until the guard sets it (plan 12c,
+// Task 9a).
+func TestRestoreGuardUntilReachesTheRegistryWithNoLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != "port49_redemption_restore_guard_until_timestamp_seconds" {
+			continue
+		}
+		if len(f.GetMetric()) != 1 || len(f.GetMetric()[0].GetLabel()) != 0 {
+			t.Fatalf("want one series without labels: %v", f.GetMetric())
+		}
+		if v := testutil.ToFloat64(m.RedemptionRestoreGuardUntil); v != 0 {
+			t.Fatalf("starts at %v, want 0", v)
+		}
+		return
+	}
+	t.Fatal("port49_redemption_restore_guard_until_timestamp_seconds is not registered")
+}
+
+// port49_issuing_ca_configured reaches the registry with no labels and reads
+// 0 until a broker with issuance sets it (plan 12c, Task 5).
+func TestIssuingCAConfiguredReachesTheRegistryAtZero(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	fams, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fams {
+		if f.GetName() != "port49_issuing_ca_configured" {
+			continue
+		}
+		if len(f.GetMetric()) != 1 || len(f.GetMetric()[0].GetLabel()) != 0 {
+			t.Fatalf("want one series without labels: %v", f.GetMetric())
+		}
+		if v := testutil.ToFloat64(m.IssuingCAConfigured); v != 0 {
+			t.Fatalf("starts at %v, want 0", v)
+		}
+		return
+	}
+	t.Fatal("port49_issuing_ca_configured is not registered")
+}
+
+// The gauges an alert reads as "0 is a fault" exist only where the thing they watch does, so a
+// process without it (the memory backend; no scheduled refresh) has no series to read 0 and page
+// on (plan 12c, Task 5 fix 1, C1/I2). Each is created by the code that starts what it watches.
+func TestEtcdOnlyGaugesHaveNoSeriesUntilSet(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	for name, c := range map[string]prometheus.Collector{
+		"port49_store_directory_reachable":                         m.StoreDirectoryReachable,
+		"port49_store_directory_confirmed_timestamp_seconds":       m.StoreDirectoryConfirmed,
+		"port49_store_keyspace_held":                               m.StoreKeyspaceHeld,
+		"port49_directory_refresh_last_complete_timestamp_seconds": m.DirectoryRefreshLastComplete,
+	} {
+		if n := testutil.CollectAndCount(c); n != 0 {
+			t.Errorf("%s has %d series at construction, want none", name, n)
+		}
+	}
+}
+
+// port49_directory_password_configured is 0 until a broker with a directory_password verifier sets it.
+func TestDirectoryPasswordConfiguredStartsAtZero(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	if v := testutil.ToFloat64(m.DirectoryPasswordConfigured); v != 0 {
+		t.Fatalf("starts at %v, want 0", v)
 	}
 }

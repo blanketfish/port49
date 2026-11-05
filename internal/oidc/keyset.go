@@ -124,6 +124,10 @@ type KeySet struct {
 	flight    chan struct{}  // a fetch in progress; nil when none
 	disco     string         // the last discovery note said, "" for none
 	noted     sync.WaitGroup // discovery reads under way, for WaitDiscoveryForTest
+	fetches   sync.WaitGroup // fetches (and their Save) under way, ended by Close
+	life      context.Context
+	stop      context.CancelFunc
+	closed    bool
 
 	afterFirstTry func()     // test hook, nil in production
 	saveMu        sync.Mutex // guards saving, pending and newest
@@ -235,10 +239,44 @@ func (s *KeySet) begin(force bool) (ch chan struct{}, started bool) {
 	if !force && !s.lastTry.IsZero() && now.Sub(s.lastTry) < RefetchEvery {
 		return nil, false
 	}
+	if s.closed {
+		ch = make(chan struct{}) // no fetch after Close: a caller gets the last outcome
+		close(ch)
+		return ch, false
+	}
+	if s.life == nil {
+		s.life, s.stop = context.WithCancel(context.WithoutCancel(context.Background()))
+	}
 	ch = make(chan struct{})
 	s.flight, s.lastTry = ch, now
-	go s.fetchOnce(context.WithoutCancel(context.Background()), ch)
+	s.fetches.Add(1)
+	go func() { defer s.fetches.Done(); s.fetchOnce(s.life, ch) }()
 	return ch, true
+}
+
+// closeWait is how long Close waits for a fetch or Save it has ended: a hung
+// Save is left behind rather than hold the process's exit.
+const closeWait = 5 * time.Second
+
+// Close ends a fetch in flight and starts no more, and returns once the fetch
+// and the Save it was making have ended (or after closeWait, for a Save that
+// hangs). A fetch is the issuer's, not its caller's, so a caller hanging up
+// leaves it running; the key set's end is what stops it, and nothing is
+// written after that.
+func (s *KeySet) Close() {
+	s.mu.Lock()
+	s.closed = true
+	stop := s.stop
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	done := make(chan struct{})
+	go func() { s.fetches.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(closeWait):
+	}
 }
 
 // fetchOnce is one fetch, its outcome recorded before ch closes. What is said
@@ -249,6 +287,13 @@ func (s *KeySet) begin(force bool) (ch chan struct{}, started bool) {
 // when they change.
 func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	uri, body, keys, skipped, err := s.fetch(ctx)
+	if ctx.Err() != nil { // the key set was closed: nothing is recorded, said or saved
+		s.mu.Lock()
+		s.flight = nil
+		s.mu.Unlock()
+		close(ch)
+		return
+	}
 	now := s.c.Now()
 	s.mu.Lock()
 	s.flight = nil
@@ -271,11 +316,14 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 		s.saidStale, s.jwksURI, s.skipped = time.Time{}, uri, skipped
 	}
 	s.mu.Unlock()
-	close(ch)
-
 	iss := s.c.Issuer
 	if err != nil {
+		// counted before ch closes: a caller that sees the failure sees the count
 		s.c.M.OIDCKeysFetchFailures.WithLabelValues(iss).Inc()
+	}
+	close(ch)
+
+	if err != nil {
 		if stale {
 			s.sayStale(fetched, held, err, now)
 		}
@@ -567,6 +615,7 @@ func NextWait(ok bool, prev time.Duration) time.Duration {
 // Run fetches at once when the set is older than Refresh (or empty), then
 // every Refresh, backing off after a failure, until ctx ends.
 func (s *KeySet) Run(ctx context.Context) {
+	defer s.Close()
 	var backoff time.Duration
 	for {
 		_, fetched, _ := s.Status()

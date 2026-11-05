@@ -436,3 +436,54 @@ func TestVerifyAcceptsAPasswordThatIsAlreadyFill(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Port 300 is kept verbatim when each direction opens with a TLS handshake record, and refused
+// when it carries anything else: a device sending plain TACACS+ to 300 must not reach evidence.
+func TestRedactKeepsTLSOnPort300AndRefusesPlainTACACS(t *testing.T) {
+	s := newSynth()
+	hello := []byte{0x16, 0x03, 0x01, 0x00, 0x04, 1, 2, 3, 4}
+	s.segment(synthDevice, synthServer, 50100, TLSPort, 1000, flagSYN, nil, false)
+	s.segment(synthDevice, synthServer, 50100, TLSPort, 1001, flagACK, hello, false)
+	s.segment(synthServer, synthDevice, TLSPort, 50100, 2000, flagACK, []byte{0x16, 0x03, 0x03, 0x00, 0x02, 9, 9}, false)
+	opt := synthOptions()
+	out, st, err := Redact(s.buf, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.RecordsKept != st.RecordsIn || st.Dropped["not_port_49"] != 0 {
+		t.Errorf("kept %d of %d, dropped %v", st.RecordsKept, st.RecordsIn, st.Dropped)
+	}
+	if err := Verify(s.buf, out, opt); err != nil {
+		t.Errorf("verify: %v", err)
+	}
+
+	p := newSynth()
+	p.segment(synthDevice, synthServer, 50101, TLSPort, 1001, flagACK, []byte{0xc0, 0x01, 0x01, 0x00, 0x00}, false)
+	if _, _, err := Redact(p.buf, synthOptions()); err == nil {
+		t.Error("plain TACACS+ on port 300 was accepted into evidence")
+	}
+}
+
+// A connection that reuses an earlier connection's 4-tuple is checked again: a new SYN starts it.
+func TestRedactRechecksATLSOpenAfterANewSYNOnTheSameTuple(t *testing.T) {
+	s := newSynth()
+	hello := []byte{0x16, 0x03, 0x01, 0x00, 0x04, 1, 2, 3, 4}
+	s.segment(synthDevice, synthServer, 50200, TLSPort, 1000, flagSYN, nil, false)
+	s.segment(synthDevice, synthServer, 50200, TLSPort, 1001, flagACK, hello, false)
+	// The same ports again, as a later connection, opening with plain TACACS+ bytes.
+	s.segment(synthDevice, synthServer, 50200, TLSPort, 9000, flagSYN, nil, false)
+	s.segment(synthDevice, synthServer, 50200, TLSPort, 9001, flagACK, []byte{0xc0, 0x01, 0x01, 0x00, 0x00}, false)
+	if _, _, err := Redact(s.buf, synthOptions()); err == nil {
+		t.Error("a reused 4-tuple escaped the TLS-open check")
+	}
+}
+
+// Verify checks the output itself: an output that holds plain data on port 300 is refused even
+// when it is byte-identical to its input.
+func TestVerifyRerunsTheTLSOpenCheck(t *testing.T) {
+	s := newSynth()
+	s.segment(synthDevice, synthServer, 50201, TLSPort, 1001, flagACK, []byte{0xc0, 0x01, 0x01, 0x00, 0x00}, false)
+	if err := Verify(s.buf, s.buf, synthOptions()); err == nil {
+		t.Error("Verify accepted an output with non-TLS data on port 300")
+	}
+}

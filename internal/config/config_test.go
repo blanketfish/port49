@@ -1657,3 +1657,21 @@ func safeTemp(t *testing.T) string {
 	}
 	return d
 }
+
+// single_device is the label the key series report every single-device key
+// under: a key named it, or a pin to it, is refused at load.
+func TestTheReservedKeyRefIsRefused(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "limits:", "  single_device:\n"+
+		"    current: {version: 5, secret_ref: env:T_PROD_V3}\nlimits:", 1)
+	if _, err := Load(write(t, "port49d.yaml", body)); err == nil || !strings.Contains(err.Error(), "reserved name single_device") {
+		t.Fatalf("a key named single_device: %v", err)
+	}
+	invPath = write(t, "inventory.yaml", strings.Replace(inv, "key_groups:", "  - {name: pinned, platform: arista_eos, "+
+		"addresses: [127.0.0.9], key_ref: single_device}\nkey_groups:", 1))
+	if _, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath))); err == nil ||
+		!strings.Contains(err.Error(), "reserved name single_device") {
+		t.Fatalf("a pin to single_device: %v", err)
+	}
+}

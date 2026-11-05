@@ -420,7 +420,8 @@ func (w *wrapped) sealToken(k store.TokenKey, t store.Token) (store.Token, error
 	if err != nil {
 		return store.Token{}, err
 	}
-	return store.Token{ID: t.ID, ExpiresAt: t.ExpiresAt, Sealed: s}, nil
+	return store.Token{ID: t.ID, ExpiresAt: t.ExpiresAt, Sealed: s,
+		IndexPrincipal: t.IndexPrincipal, IndexCertKey: t.IndexCertKey, IndexTTL: t.IndexTTL}, nil
 }
 
 func (w *wrapped) openToken(k store.TokenKey, t store.Token) (store.Token, error) {
@@ -744,6 +745,9 @@ func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Dura
 		}
 		rev := c.Rev
 		moved, err := apply(&c)
+		if errors.Is(err, errNoChange) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -767,10 +771,20 @@ func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Dura
 	return fmt.Errorf("crypt: context still changing after %d attempts: %w", attempts, store.ErrConflict)
 }
 
-// SetPrivilege is a rewrite: the level is sealed (plan 7d).
+// errNoChange, returned by a rewrite's apply, ends it without a write: a
+// sealed record rewritten unchanged would still be a new revision.
+var errNoChange = errors.New("crypt: nothing to change")
+
+// SetPrivilege is a rewrite: the level is sealed (plan 7d). The level a
+// device repeats is not a write.
 func (w *wrapped) SetPrivilege(ctx context.Context, k store.ContextKey, level uint8) error {
 	return w.rewrite(ctx, k, 0, store.MaxJoinAttempts, func(c *store.Context) (bool, error) {
-		return store.ApplyPrivilege(c, level), nil
+		held := c.PrivLvl
+		moved := store.ApplyPrivilege(c, level)
+		if c.PrivLvl == held {
+			return false, errNoChange
+		}
+		return moved, nil
 	})
 }
 
@@ -966,12 +980,9 @@ func (w *wrapped) ActivePrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.ActivePrincipals(ctx)
 }
 
-// IndexToken, TokensByPrincipal and TokensByCert are plaintext indexes, as
+// The token index PutToken writes, TokensByPrincipal and TokensByCert are plaintext indexes, as
 // the context indexes are (the package comment): revocation must not depend
 // on the encryption key.
-func (w *wrapped) IndexToken(ctx context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
-	return w.inner.IndexToken(ctx, principal, certKey, k, ttl)
-}
 
 func (w *wrapped) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
 	return w.inner.TokensByPrincipal(ctx, principal)
