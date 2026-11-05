@@ -24,7 +24,7 @@ func judgeNow(g *restoreGuard, r etcdstore.RestoreRead, err error) {
 // judgeScan is judgeNow with the scan of the token family the read called for.
 func judgeScan(g *restoreGuard, r etcdstore.RestoreRead, err error, sc scanResult) {
 	high, seen, guardHigh := g.recorded()
-	g.judge(r, err, high, seen, guardHigh, sc)
+	g.judge(r, err, high, seen, guardHigh, sc, g.now())
 }
 
 // The guard's states (Task 15d): it enters when a read shows the witness
@@ -123,7 +123,7 @@ func TestAWitnessFollowedDuringTheGuardsReadIsNoDrop(t *testing.T) {
 	g.Saw(100)
 	high, seen, guardHigh := g.recorded()
 	g.Saw(160) // the runner's next witness, followed while the read was in flight
-	g.judge(etcdstore.RestoreRead{Witness: 100, Header: 150}, nil, high, seen, guardHigh, scanResult{})
+	g.judge(etcdstore.RestoreRead{Witness: 100, Header: 150}, nil, high, seen, guardHigh, scanResult{}, g.now())
 	if !g.Allows() {
 		t.Fatalf("a routine witness write guarded port49d: %q", out.String())
 	}
@@ -515,7 +515,7 @@ func TestAWitnessFollowedDuringAGuardedReadIsNoSecondRestore(t *testing.T) {
 	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30}, nil) // guarded, purge-only
 	high, seen, guardHigh := g.recorded()
 	g.Saw(50) // followed while the next read is in flight
-	g.judge(etcdstore.RestoreRead{Witness: 31, Header: 40}, nil, high, seen, guardHigh, scanResult{})
+	g.judge(etcdstore.RestoreRead{Witness: 31, Header: 40}, nil, high, seen, guardHigh, scanResult{}, g.now())
 	if g.Allows() {
 		t.Fatal("lifted by a plain witness")
 	}
@@ -679,5 +679,101 @@ func TestARereadOfTheSameDropScansAtMostEveryFiveSeconds(t *testing.T) {
 	pass()
 	if scans != 2 {
 		t.Fatalf("%d scans after scanEvery, want 2", scans)
+	}
+}
+
+// An all-expired drop, then a running broker mints one and four minutes after
+// port49d's read: such a mint is no restored token and never guards (final
+// re-review N1; the cutoff of the above-record check carries no skew).
+func TestAMintMinutesAfterAnAllExpiredDropNeverGuards(t *testing.T) {
+	for _, after := range []time.Duration{time.Minute, 4 * time.Minute} {
+		b := newBound(t)
+		t0 := b.now
+		f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
+		b.passAt(12, 100, f)
+		b.now = t0.Add(after)
+		f.recs = append(f.recs, fakeTok{minted: b.now, expires: b.now.Add(15 * time.Minute)})
+		for i := 0; i < 3; i++ {
+			b.now = b.now.Add(scanEvery)
+			b.passAt(13+uint64(i), 101+uint64(i), f)
+			if !b.g.Allows() {
+				_, u := b.gauges()
+				t.Fatalf("a mint %v after the drop guarded until %v: %q", after, time.Unix(int64(u), 0).UTC(), b.out.String())
+			}
+		}
+	}
+}
+
+// One failed scan while the witness catches up after an all-expired drop is no
+// judgment: nothing guards, and the next pass scans again at once (N2).
+func TestAScanErrorAfterAnAllExpiredDropGuardsNothingAndIsRetriedAtOnce(t *testing.T) {
+	b := newBound(t)
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
+	b.passAt(12, 100, f)
+	b.now = t0.Add(10 * time.Minute)
+	fail, scans := true, 0
+	scan := func(ctx context.Context, m time.Time) (time.Time, error) {
+		scans++
+		if fail {
+			return time.Time{}, errors.New("context deadline exceeded")
+		}
+		return f.latest(ctx, m)
+	}
+	pass := func(h uint64) {
+		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+			return etcdstore.RestoreRead{Witness: 13, Header: h}, nil
+		}, scan)
+	}
+	pass(101)
+	if !b.g.Allows() {
+		t.Fatalf("one failed scan guarded: %q", b.out.String())
+	}
+	fail = false
+	b.now = b.now.Add(time.Second)
+	pass(102)
+	if scans != 2 || !b.g.Allows() {
+		t.Fatalf("scans %d, allows %v: the failed scan was not retried at once, or guarded", scans, b.g.Allows())
+	}
+}
+
+// A second restore to the old timeline lands just after a scan: the first
+// read of it, its witness changed, scans and guards (N3).
+func TestASecondRestoreJustAfterAScanIsToldOnTheFirstRead(t *testing.T) {
+	b := newBound(t)
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
+	b.passAt(12, 100, f)
+	b.now = t0.Add(10 * time.Minute)
+	b.passAt(13, 101, f) // a scan
+	f.recs = append(f.recs, fakeTok{minted: t0.Add(-time.Hour), expires: b.now.Add(10 * time.Minute)})
+	b.now = b.now.Add(time.Second)
+	b.passAt(15, 120, f) // restore #2
+	if b.g.Allows() {
+		t.Fatalf("served after the first read of the second restore: %q", b.out.String())
+	}
+}
+
+// The pass reads the clock once: a bound reached between two reads of it never
+// lifts a pass that skipped its scan (N4).
+func TestAPassNeverLiftsOnASkippedScan(t *testing.T) {
+	b := newBound(t)
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-time.Minute), expires: t0.Add(5 * time.Minute)}}}
+	b.passAt(12, 100, f)
+	b.now = t0.Add(5*time.Minute - 2*time.Second)
+	b.passAt(12, 101, f) // a scan
+	f.recs = append(f.recs, fakeTok{minted: t0.Add(-time.Minute), expires: t0.Add(12 * time.Minute)})
+	calls := 0
+	b.g.now = func() time.Time {
+		calls++
+		if calls == 1 {
+			return t0.Add(5*time.Minute - time.Nanosecond)
+		}
+		return t0.Add(5 * time.Minute)
+	}
+	b.passAt(12, 102, f)
+	if b.g.Allows() {
+		t.Fatalf("lifted on a skipped scan (clock reads %d): %q", calls, b.out.String())
 	}
 }

@@ -76,9 +76,12 @@ type scanResult struct {
 // tokens minted by the cutoff, the drop read's time plus restoreSkew: a token
 // a broker minted more than restoreSkew after port49d found the restore never
 // arms the guard or extends it. Reads of the same drop scan at most every
-// scanEvery, and the pass that would lift scans first; while the witness is
-// below the old record after a judged drop, the scan goes on with the drop's
-// cutoff, so a second restore to the old timeline's snapshot is still told.
+// scanEvery while the witness read is unchanged, and the pass that would lift
+// scans first and lifts only on a scan that ran. While the witness is below
+// the old record after a judged drop, the scan goes on with the drop read's
+// own time as the cutoff (no skew: a mint after it is no restored token), so
+// a second restore to the old timeline's snapshot is told; a scan that fails
+// there guards nothing and is retried on the next read.
 type restoreGuard struct {
 	out     io.Writer
 	mu      sync.Mutex
@@ -95,6 +98,11 @@ type restoreGuard struct {
 	cutoff time.Time
 	// lastScan is when the token family was last scanned (scanDue).
 	lastScan time.Time
+	// lastScanWitness is the witness that read saw: a read of another is not
+	// rate-limited (scanDue), because a second restore changes it.
+	lastScanWitness uint64
+	// scanFailing is true while the scans of a judged drop fail, said once.
+	scanFailing bool
 	// bounded is true once a scan of the token family succeeded in this
 	// guard, and no scan since failed or looked wrong; liftAt, the largest
 	// ExpiresAt any scan saw, then says when the guard lifts on its own (zero:
@@ -194,7 +202,7 @@ func (g *restoreGuard) recorded() (high uint64, seen bool, guardHigh uint64) {
 // its error; high, seen and guardHigh are the record taken before it, and
 // sc the scan of the token family if one was needed (needsScan).
 func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, seen bool, guardHigh uint64,
-	sc scanResult) {
+	sc scanResult, now time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.ops != nil {
@@ -220,9 +228,8 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 	}
 	g.failing = false
 	g.checked = true
-	now := g.now()
-	if sc.ran && !sc.unchanged {
-		g.lastScan = now
+	if sc.ran && !sc.unchanged && sc.err == nil {
+		g.lastScan, g.lastScanWitness = now, r.Witness
 	}
 	switch {
 	case g.dropAt != 0 && r.Purged > g.dropAt:
@@ -247,7 +254,7 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 		}
 		g.high = max(g.high, r.Witness)
 		g.arm(sc, now)
-		if g.bounded && !now.Before(g.liftAt) {
+		if g.bounded && !now.Before(g.liftAt) && !sc.unchanged {
 			g.expired()
 		}
 	case g.dropAt != 0:
@@ -258,14 +265,29 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 		case r.Witness < guardHigh:
 			g.said = false
 			g.drop(r, guardHigh, sc, now)
-		case sc.ran && !sc.unchanged && seen && r.Witness < high && (sc.err != nil || sc.max.After(now)):
+		case sc.ran && !sc.unchanged && sc.err != nil:
+			// A failed scan is no judgment here: nothing shows a second
+			// restore, and a guard with no bound on one error would only
+			// refuse logins until a purge. The next pass scans again.
+			if !g.scanFailing {
+				fmt.Fprintf(g.out, "port49d: store: scanning the token records, to tell whether a second restore "+
+					"brought tokens back, failed: %v; tried again on the next read\n", sc.err)
+			}
+			g.scanFailing = true
+		case sc.ran && !sc.unchanged && seen && r.Witness < high && sc.max.After(now):
 			// Below the record but not below the drop's witness: a second
 			// restore, to a snapshot of the old timeline, whose tokens (minted
-			// by the first drop's cutoff) are live. A mint after the cutoff is
-			// not in the scan, so a running broker's never lands here.
-			g.said = false
+			// before the first drop's read) are live. A mint after that read
+			// is not in the scan, so a running broker's never lands here. The
+			// drop's cutoff stays the one of the first.
+			g.said, g.scanFailing = false, false
+			cutoff := g.cutoff
 			g.drop(r, high, sc, now)
+			g.cutoff = cutoff
 		default:
+			if sc.ran && !sc.unchanged {
+				g.scanFailing = false
+			}
 			g.guardHigh = max(g.guardHigh, r.Witness)
 		}
 	case seen && r.Witness < high:
@@ -316,7 +338,11 @@ func (g *restoreGuard) needsScan(r etcdstore.RestoreRead, high uint64, seen bool
 		if r.Witness < guardHigh {
 			return fresh, true, false
 		}
-		return g.cutoff, seen && r.Witness < high, true
+		// The drop read's own time, with no skew: a mint a broker made after it
+		// is no restored token. A restored token a fast broker clock stamps later
+		// than the read is left out here, and told only when the witness falls
+		// below the drop's.
+		return g.cutoff.Add(-restoreSkew), seen && r.Witness < high, true
 	}
 	return fresh, seen && r.Witness < high, false
 }
@@ -331,18 +357,18 @@ const scanEvery = 5 * time.Second
 // scanDue is whether a re-read of the same drop scans now: the last scan was
 // scanEvery ago (or the clock went back), or the guard's bound is reached and
 // this pass would lift it.
-func (g *restoreGuard) scanDue(now time.Time) bool {
+func (g *restoreGuard) scanDue(now time.Time, witness uint64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.lastScan.IsZero() || now.Before(g.lastScan) || now.Sub(g.lastScan) >= scanEvery ||
+	return g.lastScan.IsZero() || witness != g.lastScanWitness || now.Before(g.lastScan) || now.Sub(g.lastScan) >= scanEvery ||
 		g.guarded && g.bounded && !now.Before(g.liftAt)
 }
 
 // reset clears the guard's state, but not the record of the witness; g.mu is
 // held.
 func (g *restoreGuard) reset() {
-	g.guarded, g.bounded, g.liftAt, g.why, g.floor, g.said, g.dropAt, g.guardHigh, g.cutoff, g.lastScan =
-		false, false, time.Time{}, "", time.Time{}, false, 0, 0, time.Time{}, time.Time{}
+	g.guarded, g.bounded, g.liftAt, g.why, g.floor, g.said, g.dropAt, g.guardHigh, g.cutoff, g.lastScan, g.scanFailing =
+		false, false, time.Time{}, "", time.Time{}, false, 0, 0, time.Time{}, time.Time{}, false
 }
 
 // arm takes a scan into the guard's bound: liftAt only rises. A scan that was
@@ -500,10 +526,10 @@ func (g *restoreGuard) pass(ctx context.Context, callTimeout time.Duration,
 		return false
 	}
 	var sc scanResult
+	now := g.now() // once per pass: the scan decision and the judgment share it
 	if err == nil && scan != nil {
-		now := g.now()
 		if cutoff, ok, rescan := g.needsScan(r, high, seen, guardHigh, now); ok {
-			if rescan && !g.scanDue(now) {
+			if rescan && !g.scanDue(now, r.Witness) {
 				sc = scanResult{ran: true, cutoff: cutoff, unchanged: true}
 			} else {
 				sctx, scancel := context.WithTimeout(ctx, max(witnessEvery, callTimeout))
@@ -516,7 +542,7 @@ func (g *restoreGuard) pass(ctx context.Context, callTimeout time.Duration,
 			}
 		}
 	}
-	g.judge(r, err, high, seen, guardHigh, sc)
+	g.judge(r, err, high, seen, guardHigh, sc, now)
 	restorePassed(g)
 	return true
 }
