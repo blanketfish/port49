@@ -973,7 +973,7 @@ func restoreFloor(m matrix) {
 		t.Fatal("the login that moves the store past the snapshot did not pass")
 	}
 	witnessMovesPast()
-	// The broker is stopped across the restore: its runner purges once-records
+	// The broker is stopped across the restore: its runner purges tokens
 	// and could delete the replayed token before port49d refuses it, which
 	// would make the replay a plain unknown token and prove nothing about the
 	// floor.
@@ -999,9 +999,14 @@ func restoreFloor(m matrix) {
 	const refused = "port49_redemption_restored_refused_total"
 	shapetest.WaitFor(t, refused+" at 1 or more", 30*time.Second, func() bool { return m.gauge(daemonMetrics, refused) >= 1 })
 	// A token minted after the restore logs in: no purge, no wait. The broker
-	// is started again to mint it.
+	// is started again to mint it. /readyz does not wait for the runner's
+	// takeover, whose purge would delete a token minted before it ends, so the
+	// mint waits for the broker's purge line.
 	m.s.run("start", "port49-broker")
 	m.s.ready(brokerMetrics)
+	shapetest.WaitFor(t, "the broker's purge of the restored store", 2*time.Minute, func() bool {
+		return strings.Contains(m.s.run("logs", "--no-color", "port49-broker"), "every unspent token is purged")
+	})
 	next := m.mint()
 	shapetest.WaitFor(t, "a fresh login", 30*time.Second, func() bool { return m.passes(next) })
 	fmt.Fprintln(os.Stderr, "failure matrix: restore floor refused the replayed token and served a fresh one")

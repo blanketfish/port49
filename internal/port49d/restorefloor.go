@@ -117,9 +117,18 @@ func (f *restoreFloor) attach(path, prefix string) {
 	if f.attached && f.path == path && f.prefix == prefix {
 		return
 	}
+	if f.attached && f.prefix == prefix {
+		// Only the spool path moved: the keyspace is the same, so what the
+		// floor knows still holds. The record is written at the new path.
+		f.path = path
+		f.rev++
+		return
+	}
 	if f.attached {
 		f.witness, f.header, f.witnessHeader, f.highHeader, f.floor, f.band = 0, 0, 0, 0, 0, 0
 		f.bandFrom, f.bandUntil, f.detectedAt, f.unread, f.pending = time.Time{}, time.Time{}, time.Time{}, false, false
+		// The old record's unsaved changes are not this one's.
+		f.savedRev = f.rev
 	}
 	f.attached, f.path, f.prefix = true, path, prefix
 	body, err := readOwnerOnly(path)
@@ -354,7 +363,9 @@ func witnessWords(rev uint64) string {
 // and the next call tries again.
 func (f *restoreFloor) saveIfDirty() {
 	f.mu.Lock()
-	if f.path == "" || f.rev == f.savedRev {
+	// A state with no witness and no header is no record: it is read back at
+	// the next start as a record that holds nothing, and taken as a drop.
+	if f.path == "" || f.rev == f.savedRev || f.witness == 0 && f.header == 0 && !f.unread {
 		f.mu.Unlock()
 		return
 	}

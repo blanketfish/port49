@@ -722,3 +722,48 @@ func TestTheWitnessGoneAfterARestoreIsADrop(t *testing.T) {
 		t.Fatalf("served; floor %d", f.floor)
 	}
 }
+
+// A config change that moves only the spool path keeps the keyspace: the
+// floor stays, and the record is written at the new path.
+func TestAReattachToAnotherPathKeepsTheFloorAndMovesTheRecord(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(480, 500) // a drop, not yet saved
+	moved := filepath.Join(safeDir(t), "restore.json")
+	f.attach(moved, floorPrefix)
+	if !f.restored(400, f.now) {
+		t.Fatal("a path-only re-attach dropped the floor: the restored token was served")
+	}
+	f.saveIfDirty()
+	f.path = moved
+	f.restart()
+	f.read(480, 500)
+	if !f.restored(400, f.now) || f.said(dropped) != 1 {
+		t.Fatalf("the record was not written at the new path: %q", f.out.String())
+	}
+}
+
+// A re-attach that resets the state to an absent record must not leave the
+// reset state dirty: saving it would write a record with no witness, which
+// the next start reads as no record at all and takes as a drop.
+func TestAReattachToAnAbsentRecordSavesNothing(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(480, 500)
+	f.savedRev = 0 // the drop's save failed: the old record is dirty
+	other := filepath.Join(safeDir(t), "restore.json")
+	f.attach(other, "/other/")
+	f.saveIfDirty()
+	if _, err := os.Stat(other); err == nil {
+		t.Fatal("a record with no witness and no header was saved")
+	}
+}
+
+func TestAnEmptyStateIsNeverSaved(t *testing.T) {
+	f := floorAt(t)
+	f.rev++
+	f.saveIfDirty()
+	if _, err := os.Stat(f.path); err == nil {
+		t.Fatal("a record with no witness and no header was saved")
+	}
+}
