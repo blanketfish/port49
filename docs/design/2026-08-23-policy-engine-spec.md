@@ -5796,7 +5796,7 @@ sync:
     platform_aliases: {eos-lab: arista_eos}
 ```
 
-A device whose name is not 1–255 bytes of printable ASCII without a space, or whose platform or
+A device whose name is not 1–253 bytes of printable ASCII without a space (`bundle.DeviceNameOK`), or whose platform or
 attributes carry a control character, is left out of the sync, said and counted: it could not
 reach a record or a line safely, and the broker refuses to mint for such a name anyway.
 
@@ -8350,7 +8350,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   `credential_revoked` before the directory is asked. Marks made against the legacy
   email-SAN principal still apply. A refusal is answered 401 `identity_unmapped`,
   `identity_ambiguous` or `username_collision`, or 503 `directory_unavailable` with `Retry-After:
-  30`, which the agent retries with no session ended. Task 12.
+  30`, which says to try again in 30s, with no session ended. Task 12.
 - **5. A principal matches every subject that names it, and their grants compose.** The grants
   are unioned; `token_ttl` is the least among matching subjects with a grant on the device;
   `enable` the mechanism demanding the most proof (`token`, `auto`, `none`); `api:` rights the
@@ -8941,8 +8941,8 @@ built, and ruling 10's host-key options are replaced.
 - **1. Mint by scope** (design §17: "a device name or a `scope`, resolved through inventory").
   - **The request.** `POST /v1/tokens` takes `scope` in place of `devices`, one or the other, and
     `after` to continue a sweep. `scope` is 1 to 253 printable ASCII characters, as a device name
-    in a `devices` list always was. `after` is 1 to 255, the longest name the bundle admits for a
-    device (`bundle.NameOK`), so the `next` of a page is always an `after` the broker accepts and a
+    in a `devices` list always was. `after` is 1 to 253, the longest name the bundle admits for a
+    device (`bundle.DeviceNameOK`), so the `next` of a page is always an `after` the broker accepts and a
     long inventory name never stalls a sweep. Anything else is `400 bad_request`: both keys (a
     `devices` key beside `scope` is refused even when empty), `after` without `scope`, neither.
   - **The page.** In the byte order of their inventory names, after `after`, at most `batch_max`:

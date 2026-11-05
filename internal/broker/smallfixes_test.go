@@ -124,3 +124,30 @@ func TestADeviceNameOver253BytesIsRefusedByTheBundle(t *testing.T) {
 		t.Error("NameOK is not 1 to 255 for a platform or attribute key")
 	}
 }
+
+// Trailing data that begins past the read limit is refused too, not dropped unread: the bodies read
+// through http.MaxBytesReader, so a limit reached mid-body is an error, not an end of input.
+func TestTrailingDataPastTheReadLimitIsRefused(t *testing.T) {
+	pad := func(first string, limit int) string { return first + strings.Repeat(" ", limit-len(first)) + "{}" }
+	f, _ := newSignInFixture(t)
+	w := f.call(context.Background(), nil, "POST", "/v1/sign-in", pad(`{"name":"alice","password":"x","code":"123456"}`, 16<<10))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "trailing data") {
+		t.Errorf("sign-in: %d %s", w.Code, w.Body)
+	}
+	m := newMFAFixture(t, withAllAdminRights())
+	for _, c := range []struct{ path, first string }{
+		{"/v1/refresh/challenge", `{}`}, {"/v1/refresh", `{}`},
+	} {
+		code, raw := m.alice.conn.post(t, c.path, nil, pad(c.first, 4<<10))
+		if code != http.StatusBadRequest || !strings.Contains(string(raw), "trailing data") {
+			t.Errorf("%s: %d %s", c.path, code, raw)
+		}
+	}
+	g := newFixture(t, 8)
+	iss := g.withIssuance(t)
+	key := newECKey(t)
+	w = g.bearer(context.Background(), "POST", "/v1/certificate", pad(csrBody(t, key), 16<<10), g.signInFor(t, iss, key, nil))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "trailing data") {
+		t.Errorf("certificate: %d %s", w.Code, w.Body)
+	}
+}

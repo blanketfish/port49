@@ -204,7 +204,7 @@ func inventoryOf(raw []byte) (admission.Inventory, error) {
 	var inv admission.Inventory
 	for i, d := range c.Devices {
 		label := fmt.Sprintf("#%d", i)
-		if DeviceNameOK(d.Name) {
+		if NameOK(d.Name) { // a name too long to admit still quotes, so the line names the device
 			label = d.Name
 		}
 		if d.KeyRef != "" {
@@ -278,9 +278,9 @@ const MaxDeviceName = 253
 // DeviceNameOK is a device name: NameOK within MaxDeviceName bytes.
 func DeviceNameOK(s string) bool { return len(s) <= MaxDeviceName && NameOK(s) }
 
-// NameOK is a platform or attribute key, or a name of a source or platform set, platform or attribute key that can reach a record
-// and a line as it is: 1 to 255 bytes of printable ASCII, no space — the
-// broker's rule for a device name (pre-flight F11).
+// NameOK is a name that can reach a record and a line as it is: 1 to 255 bytes of printable ASCII,
+// no space. It is the rule for a platform, an attribute key, a source or platform set, and for a
+// device's name in a log label; a device name is admitted by DeviceNameOK (pre-flight F11).
 func NameOK(s string) bool {
 	return s != "" && len(s) <= 255 && strings.IndexFunc(s, func(r rune) bool { return r < 0x21 || r > 0x7e }) < 0
 }

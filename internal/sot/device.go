@@ -119,7 +119,7 @@ func (m Mapping) device(p Profile, api string, raw map[string]any) (admission.De
 	name, _ := raw["name"].(string)
 	d := admission.Device{Name: name, Transport: admission.TransportTCP}
 	label := name
-	if !bundle.DeviceNameOK(name) {
+	if !bundle.NameOK(name) {
 		label = "with an unusable name"
 	}
 	var notes []string

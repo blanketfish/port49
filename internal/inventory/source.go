@@ -108,7 +108,7 @@ func NewSources(cfgs []SourceConfig, log io.Writer) ([]Source, error) {
 // deviceLabel is a device as a line names it: its name where the name can
 // reach a line as it is (bundle.DeviceNameOK), and otherwise its position.
 func deviceLabel(i int, name string) string {
-	if bundle.DeviceNameOK(name) {
+	if bundle.NameOK(name) { // a name too long to admit still quotes, so the line names the device
 		return name
 	}
 	return fmt.Sprintf("#%d", i)
