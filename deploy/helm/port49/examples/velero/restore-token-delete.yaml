@@ -1,0 +1,43 @@
+# One-shot, as etcd's root: the token delete of design §13 step 3, for the Velero restore in README.md.
+# It mounts the Secret `port49-etcd-root` (ca.crt tls.crt tls.key) at /etcd-root, as
+# examples/etcd/etcd-init-job.yaml does, and deletes the unspent tokens and the two judged records.
+# UNVERIFIED until it runs on a cluster: like etcd-init-job.yaml it installs etcdctl on alpine (needs egress
+# to the package mirror: replace the image with one of your own that carries etcdctl and a shell).
+# Edit PREFIX to your store prefix (stores.session.etcd.prefix).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: restore-token-delete
+  namespace: port49-etcd
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      automountServiceAccountToken: false   # etcdctl does not call the Kubernetes API
+      restartPolicy: Never
+      containers:
+        - name: restore-token-delete
+          image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+          env:
+            - {name: PREFIX, value: /port49/}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              apk add --no-cache etcd-ctl >/dev/null
+              export ETCDCTL_ENDPOINTS=https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379
+              export ETCDCTL_CACERT=/etcd-root/ca.crt ETCDCTL_CERT=/etcd-root/tls.crt ETCDCTL_KEY=/etcd-root/tls.key
+              etcdctl endpoint health
+              etcdctl del --prefix "${PREFIX}v1/t/"
+              etcdctl del "${PREFIX}v1/meta/judged"
+              etcdctl del "${PREFIX}v1/meta/judged_bundle"
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
+      volumes:
+        - name: etcd-root
+          secret: {secretName: port49-etcd-root, defaultMode: 0400}

@@ -51,28 +51,52 @@ backup, so a revoked principal or certificate is admitted again until it is re-i
 every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
 `restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore: the token
 delete (design §13 step 3) is required, and it must land before port49d or a broker reaches the restored
-store. Restore etcd alone first, delete, then restore the rest:
+store. So the restore is made in this order, with nothing running against the store until the end.
+
+Run steps 2 and 3 in this directory (`deploy/helm/port49/examples/velero/`), which holds `restore-token-delete.yaml` and
+`restore-scale-zero.yaml`; step 4 from the repository root. `<release>` is your Helm release name, `<backup>` the Velero backup, `<brokers>` and `<port49d>` the
+`broker.replicas` and `port49d.replicas` you run, and `<prefix>` the store prefix (`/port49/` by default).
 
 ```sh
 kubectl delete namespace port49 port49-etcd
-# 1. etcd alone: no port49d or broker exists yet, so nothing reaches the store.
+
+# 1. etcd alone. No port49d or broker exists yet, so nothing reaches the store.
 velero restore create --from-backup <backup> --include-namespaces port49-etcd --wait
-kubectl -n port49-etcd wait --for=condition=Ready pod --all --timeout=5m
-# 2. As etcd's root (the flags are your etcd's TLS files; <prefix> is the store.prefix, "/port49/" by default):
-kubectl -n port49-etcd exec <etcd-pod> -- etcdctl --cacert <ca> --cert <root-cert> --key <root-key> \
-  del --prefix <prefix>v1/t/
-kubectl -n port49-etcd exec <etcd-pod> -- etcdctl --cacert <ca> --cert <root-cert> --key <root-key> \
-  del <prefix>v1/meta/judged
-kubectl -n port49-etcd exec <etcd-pod> -- etcdctl --cacert <ca> --cert <root-cert> --key <root-key> \
-  del <prefix>v1/meta/judged_bundle
-# 3. Re-issue the revocations made since the backup (below), then everything else.
-velero restore create --from-backup <backup> --include-namespaces port49 --wait
+kubectl -n port49-etcd wait --for=condition=Ready pod -l app.kubernetes.io/name=etcd --timeout=5m
+
+# 2. The token delete (design §13 step 3), from a one-shot pod holding etcd's root client
+#    certificate (the Secret port49-etcd-root, as etcd-init-job.yaml uses it). Edit PREFIX in the file
+#    if your prefix is not /port49/.
+kubectl apply -f restore-token-delete.yaml
+kubectl -n port49-etcd wait --for=condition=complete job/restore-token-delete --timeout=3m
+kubectl -n port49-etcd logs job/restore-token-delete
+kubectl -n port49-etcd delete job/restore-token-delete
+
+# 3. Everything else, with both StatefulSets at 0 replicas, so no broker or port49d starts yet.
+kubectl -n velero create configmap restore-scale-zero --from-file=restore-scale-zero.yaml
+velero restore create --from-backup <backup> --include-namespaces port49 \
+  --resource-modifier-configmap restore-scale-zero --wait
 ```
 
-Run the runbook's other steps that apply before the last command, while no broker exists:
+Then, with no broker and no port49d running:
 
-1. Re-issue the revocations made since the backup with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`).
-2. After the last command, lift again what was lifted since.
+```sh
+# 4. Re-issue the revocations made since the backup (design §13 step 4). The script leaves the brokers
+#    at the 0 it finds. Run it from deploy/helm/port49/scripts/ of the chart you installed.
+deploy/helm/port49/scripts/revoke-offline.sh port49 <release> -- --principal user:bob@example.com
+
+# 5. The brokers first, a broker whose broker.state_dir survived the restore first (the restore brings
+#    every broker's volume back, so any of them does); then port49d.
+kubectl -n port49 scale statefulset/<release>-broker --replicas=<brokers>
+kubectl -n port49 rollout status statefulset/<release>-broker --timeout=10m
+kubectl -n port49 scale statefulset/<release>-port49d --replicas=<port49d>
+kubectl -n port49 rollout status statefulset/<release>-port49d --timeout=10m
+
+# 6. Lift again what was lifted since (design §13 step 6).
+```
+
+With the chart's `autoscaling.enabled`, the HPA owns port49d's replica count and scales it up itself:
+pause it (delete the HorizontalPodAutoscaler) until step 5.
 
 Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
 as design §13 gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
