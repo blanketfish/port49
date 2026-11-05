@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"strings"
+	"unicode"
 
 	"github.com/blanketfish/port49/internal/secretref"
 	"github.com/blanketfish/port49/internal/username"
@@ -163,13 +164,55 @@ func randInt(r io.Reader, n int) (int, error) {
 
 // LoggedUsername is the username as the decision log may carry it. A user who
 // pastes a token into the username prompt would otherwise put it in the log, so
-// a token-shaped name is dropped and reported as redacted. The surrounding
-// whitespace is trimmed before the check because a pasted token often arrives
-// with a trailing space or CR. Only the log is redacted: lookups keep using the
-// canonical name.
+// a token-shaped name is dropped and reported as redacted. Control characters
+// are removed before the check, because a pasted token often arrives with a
+// trailing space, CR or NUL. The canonical form is checked too, since it is what
+// would be logged and strips a `domain\` prefix and an `@suffix` that can wrap a
+// token. A near-token shape is redacted as well (nearToken): a truncated or
+// over-long paste still holds most of a live secret. Only the log is redacted:
+// lookups keep using the canonical name.
 func LoggedUsername(raw string) (name string, redacted bool) {
-	if _, ok := Parse([]byte(strings.TrimSpace(raw))); ok {
+	clean := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, raw)
+	canonical := username.Canonical(raw)
+	for _, s := range []string{strings.TrimSpace(clean), username.Canonical(clean), canonical} {
+		if _, ok := Parse([]byte(s)); ok {
+			return "", true
+		}
+	}
+	if nearToken(clean) {
 		return "", true
 	}
-	return username.Canonical(raw), false
+	return canonical, false
+}
+
+// nearTokenRun is the shortest run of base62 characters that nearToken treats
+// as part of a pasted token.
+const nearTokenRun = 20
+
+// nearToken reports whether s holds a run of at least nearTokenRun base62
+// characters containing a digit, an uppercase and a lowercase letter. A real
+// username almost never has all three in a run that long; when it does, the cost
+// is a redacted name in the log and nothing else.
+func nearToken(s string) bool {
+	run, digit, upper, lower := 0, false, false, false
+	for i := 0; i <= len(s); i++ {
+		if i < len(s) && isAlphabet(s[i]) {
+			run++
+			c := s[i]
+			digit = digit || (c >= '0' && c <= '9')
+			upper = upper || (c >= 'A' && c <= 'Z')
+			lower = lower || (c >= 'a' && c <= 'z')
+			continue
+		}
+		if run >= nearTokenRun && digit && upper && lower {
+			return true
+		}
+		run, digit, upper, lower = 0, false, false, false
+	}
+	return false
 }

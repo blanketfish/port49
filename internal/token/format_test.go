@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"strings"
 	"testing"
+
+	"github.com/blanketfish/port49/internal/username"
 )
 
 func isBase62(s string) bool {
@@ -131,6 +133,42 @@ func TestLoggedUsernameRedactsOnlyTokenShapedNames(t *testing.T) {
 			got, red := LoggedUsername(c.in)
 			if got != c.want || red != c.redacted {
 				t.Fatalf("LoggedUsername(%q) = %q, %v; want %q, %v", c.in, got, red, c.want, c.redacted)
+			}
+		})
+	}
+}
+
+func TestLoggedUsernameRedactsWrappedAndNearTokenShapes(t *testing.T) {
+	tok := synthTokenShaped
+	lower := strings.ToLower(tok)
+	redacted := map[string]string{
+		"domain_prefix":        `corp\` + tok,
+		"domain_prefix_lower":  `CORP\` + lower,
+		"at_suffix":            tok + "@",
+		"at_host":              tok + "@example",
+		"at_host_lower":        lower + "@Example.com",
+		"truncated_paste":      tok[:len(tok)-1],
+		"truncated_paste_more": tok[:27],
+		"one_char_too_long":    tok + "x",
+		"trailing_nul":         tok + "\x00",
+		"leading_nul":          "\x00" + tok,
+		"interior_control":     tok[:10] + "\x01" + tok[10:],
+	}
+	for name, in := range redacted {
+		t.Run("redacted_"+name, func(t *testing.T) {
+			got, red := LoggedUsername(in)
+			if got != "" || !red {
+				t.Fatalf("LoggedUsername(%q) = %q, %v; want empty, true", in, got, red)
+			}
+		})
+	}
+	clear := []string{"alice", "firstname.lastname.contractor", "svc_backup_nightly_runner", `corp\alice`, "alice@example.com",
+		"administratorsecondaccount"}
+	for _, in := range clear {
+		t.Run("clear_"+in, func(t *testing.T) {
+			got, red := LoggedUsername(in)
+			if red || got != username.Canonical(in) {
+				t.Fatalf("LoggedUsername(%q) = %q, %v; want the canonical name in clear", in, got, red)
 			}
 		})
 	}
