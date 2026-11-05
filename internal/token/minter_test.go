@@ -869,12 +869,14 @@ func TestEveryTokenCarriesItsVerifiedAt(t *testing.T) {
 // put does for a token ID that is already taken.
 type conflictOnceStore struct {
 	*memory.Store
-	n   int
-	ids []string
+	n       int
+	ids     []string
+	secrets []string
 }
 
 func (c *conflictOnceStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
 	c.ids = append(c.ids, t.ID)
+	c.secrets = append(c.secrets, string(t.Secret))
 	if c.n > 0 {
 		c.n--
 		return 0, store.ErrConflict
@@ -894,6 +896,9 @@ func TestAMintWhoseTokenIDIsTakenMintsAgainWithAFreshID(t *testing.T) {
 	}
 	if len(st.ids) != 2 || st.ids[0] == st.ids[1] {
 		t.Fatalf("puts %v, want two with different IDs", st.ids)
+	}
+	if st.secrets[0] == st.secrets[1] {
+		t.Fatal("the redraw put the same secret under a new ID: a landed late copy would leave two redeemable records")
 	}
 
 	always := &conflictOnceStore{Store: memory.New(time.Now), n: 100}

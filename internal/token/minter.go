@@ -518,14 +518,18 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	var hashes []string
 
 	mint := func(kind string) (string, error) {
-		secret, err := New(m.rand, m.tagKey.Bytes(), r.Device)
-		if err != nil {
-			return "", err
-		}
 		// The put is create-only, so a taken ID is refused (ErrConflict). That
 		// is the store's coincidence, not the caller's: draw another ID, up to
-		// mintIDDraws times, and then fail as the store failing.
+		// mintIDDraws times, and then fail as the store failing. The secret is
+		// drawn again with it: the usual taken ID is a late copy of this very
+		// put that already landed, and a redraw with the same secret would
+		// leave two redeemable records for one credential.
+		var secret string
 		for draw := 1; ; draw++ {
+			var err error
+			if secret, err = New(m.rand, m.tagKey.Bytes(), r.Device); err != nil {
+				return "", err
+			}
 			id, err := New(m.rand, m.tagKey.Bytes(), r.Device) // any random string is a removal handle
 			if err != nil {
 				return "", err
