@@ -649,3 +649,25 @@ func TestAPersistThatFailsIsAlarmed(t *testing.T) {
 		t.Fatalf("not alarmed: %s", out.String())
 	}
 }
+
+// A start with no local copy took its bundle from the service, and says so:
+// the operator reading the log at 3am sees that nothing local backed it (policy M5).
+func TestAColdStartWithNoLocalCopySaysWhatItTook(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	svc.MirrorDir = ""
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	at := time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC)
+	p, from, err := coldStart(context.Background(), svc, keys,
+		&fakeService{bundles: [][]byte{sealedDocAt(t, key, 4, 1, at)}}, testMetrics(), nil)
+	if err != nil || from != "the service" {
+		t.Fatalf("%v %q %v", p, from, err)
+	}
+	sayStart("port49d", svc, coldPick{p, from})
+	want := "port49d: inventory: no local copy; took bundle 4 published 2026-11-05T03:00:00Z from the service;"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("the start line lacks %q:\n%s", want, out.String())
+	}
+}

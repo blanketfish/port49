@@ -252,6 +252,19 @@ func Project(in Input) (Result, error) {
 			return Result{}, merr
 		}
 		res.model = m
+		// The proof reads the rules the reply was rendered from; the reply
+		// is the regexes. Read what was rendered, compiled as the device
+		// compiles it, against the same probes (policy M4).
+		if renderFault != nil {
+			res.Attributes = renderFault(slices.Clone(res.Attributes))
+		}
+		if v, attr, rerr := m.unsoundRendered(res.Attributes); rerr != nil || attr != "" {
+			if rerr != nil {
+				return Result{}, fmt.Errorf("projection defect on %s: the rendered %w", in.Platform, rerr)
+			}
+			return Result{}, fmt.Errorf("projection defect on %s: with the rendered %s the device would run %s, "+
+				"which port49 denies", in.Platform, attr, platform.QuoteShown(in.Hidden, strings.Join(v, " ")))
+		}
 		v, bad := m.unsound()
 		if !bad {
 			return res, nil
@@ -266,6 +279,10 @@ func Project(in Input) (Result, error) {
 	}
 	return g.failClosed(r)
 }
+
+// renderFault, where a test sets it, edits the rendered attributes before the
+// recheck reads them: the rendering fault the recheck exists to catch.
+var renderFault func(attributes []string) []string
 
 // FailClosed is the fail-closed reply for a composition refused before it
 // can be rendered, with in's Bits the ceiling the reply stays within: a level

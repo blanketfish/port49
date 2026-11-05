@@ -401,6 +401,14 @@ func persistStart(proc string, svc *config.InventoryServiceConfig, pk coldPick, 
 
 // sayStart is the start's line for the copy it serves, begun with proc.
 func sayStart(proc string, svc *config.InventoryServiceConfig, pk coldPick) {
+	// The service is the source only where no local copy could be taken, so
+	// the line says what backs the start (policy M5).
+	if pk.from == "the service" {
+		fmt.Fprintf(stderr, proc+": inventory: no local copy; took bundle %d published %s from the service; the "+
+			"service at %s is asked every %s\n", pk.p.Doc.Sequence, pk.p.Doc.PublishedAt.Format(time.RFC3339),
+			svc.URL, svc.PollInterval)
+		return
+	}
 	fmt.Fprintf(stderr, proc+": inventory: starting from bundle %d (%s), published %s; the service at %s is "+
 		"asked every %s\n", pk.p.Doc.Sequence, pk.from, pk.p.Doc.PublishedAt.Format(time.RFC3339), svc.URL,
 		svc.PollInterval)

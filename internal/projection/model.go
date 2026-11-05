@@ -1,6 +1,8 @@
 package projection
 
 import (
+	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -27,6 +29,9 @@ import (
 // widest reading, which for the reach errs toward the device running more.
 type model struct {
 	port, allow, deny, reach, carve *engine.Program
+	// closed are the baseline denies the reply's entry deny refuses on the
+	// device, sent as no regex (Result.Closed).
+	closed *engine.Program
 	// carveHolds are the carve-outs a matching allow was measured not to run
 	// past, carveOpen those no cell measured (Facts.AllowPastCarve).
 	carveHolds, carveOpen *engine.Program
@@ -64,6 +69,9 @@ func (g generator) model(res Result) (*model, error) {
 		denies = []engine.Rule{{Verdict: engine.Deny, Rule: "**", Role: "projection"}}
 	}
 	if m.deny, err = prog(denies); err != nil {
+		return nil, err
+	}
+	if m.closed, err = prog(res.Closed); err != nil {
 		return nil, err
 	}
 	held := g.held(res.Bits)
@@ -209,6 +217,57 @@ func (m *model) unsound() ([]string, bool) {
 		}
 	}
 	return nil, false
+}
+
+// unsoundRendered is unsound read from the rendered attributes rather than the
+// rules: each allow-commands and deny-commands value compiled as POSIX ERE,
+// as the device compiles it, and tried on every probe joined by spaces. It
+// names the attribute that lets the device run a command port49 denies, or an
+// error for a value that does not compile.
+func (m *model) unsoundRendered(attrs []string) ([]string, string, error) {
+	var allow, deny *regexp.Regexp
+	var allowAttr, denyAttr string
+	for _, a := range attrs {
+		name, value, _ := strings.Cut(a, "=")
+		if name != "allow-commands" && name != "deny-commands" {
+			continue
+		}
+		re, err := regexp.CompilePOSIX(value)
+		if err != nil {
+			return nil, "", fmt.Errorf("%s does not compile: %v", name, err)
+		}
+		if name == "allow-commands" {
+			allow, allowAttr = re, name
+		} else {
+			deny, denyAttr = re, name
+		}
+	}
+	for _, v := range m.probes() {
+		if len(v) == 0 {
+			continue
+		}
+		line := strings.Join(v, " ")
+		var runs bool
+		switch {
+		case allow != nil && allow.MatchString(line):
+			runs = true
+		case deny != nil && deny.MatchString(line), len(m.closed.Command(raw(v)).Denies) > 0:
+		default:
+			r := raw(v)
+			runs = len(m.reach.Command(r).Denies) > 0 && len(m.carve.Command(r).Denies) == 0
+		}
+		if runs && !m.port.Command(raw(v)).Permit {
+			attr := denyAttr
+			if allow != nil && allow.MatchString(line) {
+				attr = allowAttr
+			}
+			if attr == "" {
+				attr = "reply"
+			}
+			return v, attr, nil
+		}
+	}
+	return nil, "", nil
 }
 
 // Narrower lists up to max commands port49 permits and the device, under the
