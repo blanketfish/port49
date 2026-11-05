@@ -5,7 +5,6 @@ package lab
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -263,39 +262,27 @@ func TestOIDCBrokerSaidIsTheErrorAndNeverABody(t *testing.T) {
 	}
 }
 
-func TestOIDCRefreshSaid(t *testing.T) {
-	resp, said := refreshSaid(200, `{"auth_time":"2026-10-07T01:02:03Z","session_ends_at":"x","sessions":[`+
-		`{"device":"leaf1","username":"alice","outcome":"extended"}]}`, nil)
-	if resp.AuthTime != "2026-10-07T01:02:03Z" || len(resp.Sessions) != 1 || !strings.Contains(said, "leaf1/alice extended") {
-		t.Errorf("%+v %q", resp, said)
-	}
-	_, said = refreshSaid(401, `{"error":"refresh_not_fresh","detail":"your identity provider did not authenticate you again"}`, nil)
-	if !strings.HasPrefix(said, "401 refresh_not_fresh:") {
-		t.Errorf("%q", said)
-	}
-}
-
 // The bearer is in the Authorization header and in no URL, a transport
-// failure says no URL, and a refusal's nonce is a value the run registered.
+// failure says no URL, and a minted token is a value the run registered.
 func TestOIDCBrokerCallPutsTheBearerInTheHeaderAlone(t *testing.T) {
 	bearer := "bearer-0123456789-abcdef"
 	var gotURL, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotURL, gotAuth = r.URL.String(), r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"nonce": "n-0123456789", "expires_at": "x"})
+		_, _ = w.Write([]byte(`{"principal":"app:x","results":[{"device":"leaf1","verdict":"permit","username":"svc","login":"l0gin-0123456789"}]}`))
 	}))
 	defer srv.Close()
 	kc := &keycloak{}
 	br := oidcBroker{c: srv.Client(), kc: kc, base: srv.URL}
-	if n := br.challenge(t, bearer); n != "n-0123456789" {
-		t.Fatalf("nonce %q", n)
+	if tok, _ := br.mint(t, bearer, "leaf1"); tok != "l0gin-0123456789" {
+		t.Fatalf("login %q", tok)
 	}
 	if strings.Contains(gotURL, bearer) || gotAuth != "Bearer "+bearer {
 		t.Errorf("url %q, Authorization %q", gotURL, gotAuth)
 	}
-	if known := kc.known(); len(known) != 1 || known[0] != "n-0123456789" {
-		t.Errorf("the nonce is not registered as a secret: %v", known)
+	if known := kc.known(); len(known) != 1 || known[0] != "l0gin-0123456789" {
+		t.Errorf("the token is not registered as a secret: %v", known)
 	}
 	srv.Close()
 	code, text := br.post("/v1/tokens", bearer, "{}")

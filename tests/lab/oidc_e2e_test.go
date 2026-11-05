@@ -331,12 +331,11 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	// logout: 3- records what an immediate re-login is told, then 3a waits it out.
 	kc.HTTP = keycloakClient(idpCA) // a fresh browser
 	_, hSoon, saidSoon := br.signIn(t, oidcAlice, oidcAlicePassword, 0)
-	if hSoon != nil { // the exchange was let through: the mint is where the sub record refuses
-		_, saidSoon = br.mintAs(t, hSoon, l.p.node)
-	}
-	cell("3-. a new Keycloak login at once after the logout, its exchange and a new mint", saidSoon)
-	if !saidRevoked(saidSoon) {
-		fail("a login at once after the logout was not refused credential_revoked: %s", saidSoon)
+	cell("3-. a new Keycloak login at once after the logout, POST /v1/certificate with its ID token", saidSoon)
+	// A logged-out person is issued nothing: an exchange that gives a
+	// certificate here is the failure, whatever the mint after it says.
+	if hSoon != nil || !saidRevoked(saidSoon) {
+		fail("a login at once after the logout was not refused credential_revoked at the exchange: %s", saidSoon)
 	}
 	time.Sleep(time.Until(loginAgainAt(endedAt)))
 	kc.HTTP = keycloakClient(idpCA)
@@ -936,20 +935,6 @@ func (b oidcBroker) mintRetry(t *testing.T, bearer, device string, within time.D
 	return retryMint(func() (string, string) { return b.mint(t, bearer, device) }, within, 10*time.Second)
 }
 
-// challenge asks for a refresh challenge and returns its nonce, which is
-// registered as a value no message may hold. A refusal is INVALID: the harness
-// asked too soon (one per principal per 10s) or the bearer is not a person's.
-func (b oidcBroker) challenge(t *testing.T, bearer string) string {
-	t.Helper()
-	code, body := b.post("/v1/refresh/challenge", bearer, "")
-	var ch api.RefreshChallenge
-	if code != 200 || json.Unmarshal([]byte(body), &ch) != nil || ch.Nonce == "" {
-		t.Fatalf("INVALID: the refresh challenge: %s", brokerSaid(code, body, b.kc.known()))
-	}
-	b.kc.know(ch.Nonce)
-	return ch.Nonce
-}
-
 // retryMint calls mint until it gives a token, answers anything but 503
 // identity_provider_unavailable or store_unavailable or no answer at all (a
 // restarted broker's published port resets connections until it listens), or
@@ -1007,24 +992,6 @@ func mintSaid(code int, body string, secrets []string) (login, said string) {
 		return "", oneLineMax(scrubbed(fmt.Sprintf("200 %s: %s: %s", resp.Principal, r.Error, r.Detail), secrets), 300)
 	}
 	return r.Login, oneLineMax(scrubbed(fmt.Sprintf("200 %s: %s %s as %s", resp.Principal, r.Verdict, r.Reason, r.Username),
-		secrets), 300)
-}
-
-// refreshSaid is a refresh answer decoded, and a sentence for a cell: the fresh
-// auth_time and each session's outcome on a 200, the refusal otherwise.
-func refreshSaid(code int, body string, secrets []string) (api.RefreshResponse, string) {
-	var resp api.RefreshResponse
-	if code != 200 {
-		return resp, brokerSaid(code, body, secrets)
-	}
-	if json.Unmarshal([]byte(body), &resp) != nil {
-		return resp, fmt.Sprintf("%d (a %d-byte body that is no refresh answer)", code, len(body))
-	}
-	var ss []string
-	for _, s := range resp.Sessions {
-		ss = append(ss, fmt.Sprintf("%s/%s %s", s.Device, s.Username, s.Outcome))
-	}
-	return resp, oneLineMax(scrubbed(fmt.Sprintf("200 auth_time %s; sessions: %s", resp.AuthTime, strings.Join(ss, ", ")),
 		secrets), 300)
 }
 
