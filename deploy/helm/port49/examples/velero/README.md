@@ -45,23 +45,34 @@ digest you reviewed, or mirror the plugin by tag into a registry you control.
 
 ## Restore
 
-```sh
-kubectl delete namespace port49
-velero restore create --from-backup <backup> --wait
-```
-
 **A Velero restore that includes `port49-etcd` is a store restore** under design §13 (Deployment
 requirements, "A restore rolls the marks back too"). It loses every revocation and lift made since the
 backup, so a revoked principal or certificate is admitted again until it is re-issued, and it brings back
-every token redeemed since, redeemable again while it has not expired. Run the runbook's steps that apply
-before the members serve clients or the brokers start:
+every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
+`restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore: the token
+delete (design §13 step 3) is required, and it must land before port49d or a broker reaches the restored
+store. Restore etcd alone first, delete, then restore the rest:
 
-After a restore that includes `port49-etcd`, run the token delete (design §13 step 3) before scaling port49d up: the backup restores port49d's `restore.json` and the brokers' `witness.json` with the store, so neither can tell the restore.
+```sh
+kubectl delete namespace port49 port49-etcd
+# 1. etcd alone: no port49d or broker exists yet, so nothing reaches the store.
+velero restore create --from-backup <backup> --include-namespaces port49-etcd --wait
+kubectl -n port49-etcd wait --for=condition=Ready pod --all --timeout=5m
+# 2. As etcd's root (the flags are your etcd's TLS files; <prefix> is the store.prefix, "/port49/" by default):
+kubectl -n port49-etcd exec <etcd-pod> -- etcdctl --cacert <ca> --cert <root-cert> --key <root-key> \
+  del --prefix <prefix>v1/t/
+kubectl -n port49-etcd exec <etcd-pod> -- etcdctl --cacert <ca> --cert <root-cert> --key <root-key> \
+  del <prefix>v1/meta/judged
+kubectl -n port49-etcd exec <etcd-pod> -- etcdctl --cacert <ca> --cert <root-cert> --key <root-key> \
+  del <prefix>v1/meta/judged_bundle
+# 3. Re-issue the revocations made since the backup (below), then everything else.
+velero restore create --from-backup <backup> --include-namespaces port49 --wait
+```
 
-1. Delete `v1/t/` (the token family) and `meta/judged` and `meta/judged_bundle`, with the members on
-   loopback only.
-2. Re-issue the revocations made since the backup with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`).
-3. Lift again what was lifted since.
+Run the runbook's other steps that apply before the last command, while no broker exists:
+
+1. Re-issue the revocations made since the backup with `scripts/revoke-offline.sh` (it runs `port49-broker revoke --offline`).
+2. After the last command, lift again what was lifted since.
 
 Prefer restoring etcd from the `etcdctl snapshot` CronJob (`backup-cronjob.yaml`) with `--bump-revision`,
 as design §13 gives it, and use Velero for the other volumes. A file-system copy of a live etcd member is
