@@ -204,7 +204,6 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `internal/store/etcd/oidc.go`: `PurgeOnceRecords`;
   - `internal/store/memory/memory.go`, `internal/store/crypt/crypt.go` and `internal/store/guard/guard.go` (`PurgeOnceRecords` routed `Bulk`);
   - `internal/daemon/authen/authen_test.go` (`noStore` at ~:373, asserted `store.Store` at ~:590, gets a `PurgeOnceRecords` that panics like its siblings).
-- Delete: `LatestTokenExpiry` and `ErrTokenRecord` (`tokens.go:299-345`), and `internal/store/etcd/tokens_expiry_test.go`.
 - Test:
   - `internal/store/etcd/tokens_test.go`, or the package's token test file;
   - `internal/store/etcd/oidc_test.go`;
@@ -238,17 +237,17 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `PutToken`'s `If` gets `clientv3.Compare(clientv3.CreateRevision(s.k.token(k, t.ID)), "=", 0)`.
   - On `!resp.Succeeded`, `PutToken` reads the token key once. If the key exists, it returns the conflict without retrying, because the ID is taken. Otherwise it keeps today's index-moved retry.
   - Comment at `tokens.go:55`: the Txn is never hedged or re-sent, and the compare makes a late copy a refused one, not a second token (stores Moot 3).
-  - Delete `LatestTokenExpiry` and `ErrTokenRecord`. `PutPurged` and `RestoreRead.Purged` stay until Task 4, so the tree builds at every commit.
+  - `LatestTokenExpiry` and `ErrTokenRecord` stay until Task 3, which deletes them with `restoreguard.go`. `PutPurged` and `RestoreRead.Purged` stay until Task 4. So the tree builds and its tests pass at every commit, and this task touches nothing in `internal/port49d`.
 
 - [ ] **Step 4: Run the package tests.**
 
   `TMPDIR=/tmp go test ./internal/store/... -count=1`
 
-  Expected: PASS. Fix the compile errors this leaves in `internal/port49d`: delete only `restoreguard.go`'s use of `LatestTokenExpiry` (its scan reads nothing; Task 3 replaces the file), so the package builds. Then `go vet ./...`. It compiles every package's tests and must pass at this commit.
+  Expected: PASS. Then `go vet ./...`. It compiles every package's tests and must pass at this commit.
 
 - [ ] **Step 5: Commit.**
 
-  `git add internal/store internal/port49d internal/daemon/authen/authen_test.go && git commit -m "feat: a token carries its store revision, its put is create-only, and the once records can be purged"`
+  `git add internal/store internal/daemon/authen/authen_test.go && git commit -m "feat: a token carries its store revision, its put is create-only, and the once records can be purged"`
 
 ---
 
@@ -260,16 +259,19 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `internal/port49d/restorefloor_test.go`.
 - Delete:
   - `internal/port49d/restoreguard.go`;
-  - `internal/port49d/restoreguard_test.go`.
+  - `internal/port49d/restoreguard_test.go`;
+  - `LatestTokenExpiry` and `ErrTokenRecord` (`internal/store/etcd/tokens.go:299-345`), and `internal/store/etcd/tokens_expiry_test.go`.
 - Modify:
   - `internal/port49d/main.go` (~:763 `newRestoreGuard`, ~:1036–1040 `begin` and `keep`, ~:1325–1357 the redeem wiring);
   - `internal/daemon/authen/authen.go` (~:95–136 the `With…` setters, ~:430–455 the redeem checks);
   - `internal/daemon/metrics/metrics.go` (~:490–503 and ~:951–957);
-  - `internal/port49d/witness_test.go` (the guard hook tests at ~:440–600).
+  - `internal/port49d/witness_test.go` (the guard hook tests at ~:440–600);
+  - `internal/port49d/brokerd_test.go` (~:2216–2328): swap the four gauge waits for `port49_store_restore_detected_timestamp_seconds` above 0, and drop the `0` waits; Task 4 rewrites the tests;
+  - `deploy/alerts/port49.rules.yaml` (~:51), `port49.rules.test.yaml`, `deploy/alerts/README.md` (~:37) and the chart copy `deploy/helm/port49/files/port49.rules.yaml`: remove the `port49_redemption_restore_guarded` rule, its tests and its README row. Task 5 adds the two new rules.
 - Test:
   - `internal/port49d/restorefloor_test.go`;
   - `internal/daemon/authen/authen_test.go` (`TestATokenAtOrBelowTheRedeemFloorIsRefused` at ~:3225 is replaced);
-  - `internal/daemon/metrics/metrics_test.go` (~:142, ~:478–500).
+  - `internal/daemon/metrics/metrics_test.go` (~:70–71, ~:142, ~:478–500).
 
 **Interfaces:**
 - Consumes: `store.Token.Revision` and `etcdstore.RestoreRead{Witness, Header}` (Task 2).
@@ -351,7 +353,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `TestAnAbsentRecordIsSaidOnce`.
   - `TestTheHeaderFallingIsADrop`. The witness is unchanged at 1000, the header goes 1010 then 900, and that is a drop.
   - `TestAWitnessThatMovesBelowAReadHeaderIsADrop` (pre-flight m3). A read of `{1000, 1010}`, then `{1005, 1012}`, is a drop. A read of `{1000, 1010}`, then `{1011, 1012}`, is not.
-  - `TestAFollowedWitnessBelowAReadHeaderIsADropAtTheNextPass`. After a read of `{1000, 1010}`, `Saw(1005)`, then a pass reading `{1005, 1012}`, is a drop. `Saw(1011)` then `{1011, 1012}` is not, and neither is a late `Saw(998)` after a read of `{1000, 1010}`.
+  - `TestAFollowedWitnessBelowAReadHeaderIsADropAtTheNextPass`. After a read of `{1000, 1010}`, `Saw(1005)`, then a pass reading `{1005, 1012}`, is a drop. `Saw(1011)` then `{1011, 1012}` is not, and neither is a late `Saw(998)` after a read of `{1000, 1010}`, nor `Saw(1000)` after a read of `{1000, 1010}`.
   - `TestARestoredEnableTokenIsRefusedTokenSpent` (Review Focus 2; in `authen_test.go`).
   - `TestTheMemoryStoreHasNoFloor` (Review Focus 3; in `internal/port49d`): a `runOnce` on the memory store logs in with a minted token.
   - `TestATokenWithNoRevisionIsRefusedUnderAFloor`: with a floor set, a token whose `Revision` is 0 (a wrapper dropped it) is `Restored`.
@@ -382,7 +384,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `TestASecondRestoreWhileTheScanFailsRefusesUntilAScanAnswers`;
   - `authen_test.go`'s `TestATokenAtOrBelowTheRedeemFloorIsRefused`;
   - `metrics_test.go`'s check that `port49_redemption_restore_guard_until_timestamp_seconds` is registered (~:478–500);
-  - `tokens_expiry_test.go`'s two tests (Task 2).
+  - `tokens_expiry_test.go`'s two tests.
 
 - [ ] **Step 2: Run them and see them fail.**
 
@@ -419,7 +421,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   ```
 
   More rules:
-  - `Saw` (the follower) never judges and never lowers. A followed `rev > witness_header` raises `witness`, and `witness_header` becomes `max(witness_header, rev)`, a lower bound that keeps the m3 rule free of false positives. A followed `rev` above `witness` and at or below `witness_header` sets `pending_drop`, which the next pass judges as a drop: no live put lands in that range. A followed `rev` below `witness` is a late watch event and changes nothing; a real fall is the pass's to judge. Without this, the follower could raise `witness` to a restored value before the pass reads it, and the pass would see no change.
+  - `Saw` (the follower) never judges and never lowers. A followed `rev > witness_header` raises `witness`, and `witness_header` becomes `max(witness_header, rev)`, a lower bound that keeps the m3 rule free of false positives. A followed `rev` above `witness` and at or below `witness_header` sets `pending_drop`, which the next pass judges as a drop: no live put lands in that range. A followed `rev` below `witness` is a late watch event and changes nothing; a real fall is the pass's to judge. A followed `rev` equal to `witness` changes nothing. `pending_drop` is not saved: on a restart, rule A tells the same drop unless a runner rewrote the witness in that second. Without this, the follower could raise `witness` to a restored value before the pass reads it, and the pass would see no change.
   - An absent record says once: "no restore record at <path>: a restore made before this port49d's first read of the store cannot be told; start a broker first after a restore (design §13)".
   - An unreadable record is moved aside, as `openWitness` does, and sets `unread_record`.
   - `ownedHere` and `writeOwnerOnly` (`statedir_linux.go:47,87`) take the line prefix as a parameter, in place of their fixed `"broker.state_dir "`.
@@ -443,16 +445,17 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   - `authen.go`:
     - the `redeemable` check at ~:433 becomes `if s.h.floor != nil && s.h.floor.Held() { return s.storeError(rec) }`;
     - in the candidate loop, a matching `cands[i]` with `s.h.floor.Restored(cands[i], s.h.now())` sets `rec.Principal` and returns `s.fail(ctx, rec, decision.TokenSpent)` after incrementing `RedemptionRestoredRefused`.
+  - Remove the `port49_redemption_restore_guarded` alert from the rules, the rules test, `deploy/alerts/README.md` and the chart copy (byte-equal), and swap `brokerd_test.go`'s four gauge waits, as Files says.
 
 - [ ] **Step 5: Run the tests.**
 
-  `TMPDIR=/tmp go test ./internal/port49d/ -run 'Floor|Restor|Drop|Witness|Record|Header|Mint|Held' -count=1`, then `TMPDIR=/tmp go test ./internal/daemon/... -count=1`, then `go vet ./internal/port49d/ ./internal/daemon/...`
+  `TMPDIR=/tmp go test ./internal/port49d/ -run 'Floor|Restor|Drop|Witness|Record|Header|Mint|Held' -count=1`, then `TMPDIR=/tmp go test ./internal/daemon/... -count=1`, then `go vet ./internal/port49d/ ./internal/daemon/...`, then `TMPDIR=/tmp go test ./tests/alerts/ -count=1` and `make alerts-check`.
 
   Expected: PASS. Then run all of `./internal/port49d/` (about 9 minutes; timeout 600000).
 
 - [ ] **Step 6: Commit.**
 
-  `git add internal/port49d internal/daemon && git commit -m "feat: a per-token restore floor replaces the restore guard"`
+  `git add internal/port49d internal/daemon internal/store/etcd deploy/alerts deploy/helm/port49/files && git commit -m "feat: a per-token restore floor replaces the restore guard"`
 
 ---
 
@@ -539,7 +542,7 @@ The five failure modes these fixes imply that a reasonable operator meets first,
   Expected: FAIL. The compose subtest runs in CI only, because no docker runs here.
 
 - [ ] **Step 3: Write the rules and the docs.**
-  - **Rules.** Remove `port49_redemption_restore_guarded`. Add the two rules above.
+  - **Rules.** Task 3 removed `port49_redemption_restore_guarded`. Add the two rules above.
     - The page's summary: "port49d cannot read meta/witness, so it cannot tell whether its store was restored, and refuses every token login (store_unavailable) until it can; check the store and the daemon role's read of meta/witness; stopping port49d lets devices fall to break-glass".
     - The ticket's summary: "port49d found its session store restored from a snapshot: tokens minted before the restore are refused token_spent once (users mint again); revocations and marks made after the snapshot are lost: follow design §13's restore runbook".
     - Copy the file byte for byte to the chart.
