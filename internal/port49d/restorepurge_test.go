@@ -408,11 +408,12 @@ func TestAPurgeHoldsMintsWithAReasonTheAnswerMaySay(t *testing.T) {
 	}
 }
 
-// A runner whose broker.state_dir/marks.json holds no mark has nothing to put
-// back, and says that, not that every revocation is in the store: after a
-// restore, the marks made since the snapshot are back only if a broker that
-// holds them runs first (design §13 step 5; Task 5 review C1).
-func TestARunnerWithNoMarksCopySaysItHasNothingToPutBack(t *testing.T) {
+// A runner whose broker.state_dir had no marks.json when its copy opened
+// holds only what the store holds, however many marks that is (the marks
+// feed fills the copy from the start): it says it cannot put back a mark a
+// restore lost, not that every revocation is in the store (design §13 step 5;
+// Task 5 review C1, I1r1). It says so once.
+func TestARunnerWhoseCopyStartedFromTheStoreSaysItCannotPutBackWhatARestoreLost(t *testing.T) {
 	g := newPurgeRig(t)
 	var out syncBuffer
 	e := stderr
@@ -420,11 +421,47 @@ func TestARunnerWithNoMarksCopySaysItHasNothingToPutBack(t *testing.T) {
 	stderr = &out
 	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard), g.bs.st)
 	r.copy = openMarksCopy(filepath.Join(safeDir(t), stateMarksFile), io.Discard)
+	m := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:kept@example.com", At: time.Now()}
+	if err := g.bs.st.PutRevocation(g.ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	r.copy.Apply(store.MarkChange{Revocation: m, Standing: true}) // the feed's copy of what the store holds
 	if err := r.restoreMarks(g.ctx); err != nil {
 		t.Fatal(err)
 	}
-	got := out.String()
-	if strings.Contains(got, "is in the store") || !strings.Contains(got, "holds no revocation, so none is put back") {
-		t.Fatalf("a runner with no marks copy said:\n%s", got)
+	const line = "broker.state_dir had no marks.json at this start, so its copy holds only what the store holds"
+	if got := out.String(); strings.Contains(got, "is in the store") || strings.Count(got, line) != 1 {
+		t.Fatalf("a runner whose copy started from the store said:\n%s", got)
+	}
+	// Said once: the next put-back is the plain one.
+	if err := r.restoreMarks(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Count(got, line) != 1 {
+		t.Fatalf("the fresh-copy line was said again:\n%s", got)
+	}
+}
+
+// A copy that existed on disk keeps the plain line.
+func TestARunnerWithAMarksFileSaysEveryRevocationIsInTheStore(t *testing.T) {
+	g := newPurgeRig(t)
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	dir := safeDir(t)
+	first := openMarksCopy(filepath.Join(dir, stateMarksFile), io.Discard)
+	m := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:kept@example.com", At: time.Now()}
+	if err := g.bs.st.PutRevocation(g.ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	first.Apply(store.MarkChange{Revocation: m, Standing: true})
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard), g.bs.st)
+	r.copy = openMarksCopy(filepath.Join(dir, stateMarksFile), io.Discard)
+	if err := r.restoreMarks(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "every revocation in broker.state_dir/marks.json is in the store") {
+		t.Fatalf("a runner with a marks file said:\n%s", out.String())
 	}
 }

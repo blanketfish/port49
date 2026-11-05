@@ -1184,7 +1184,7 @@ func TestATakeoverDuringACutRunsTheSessionDuties(t *testing.T) {
 	waitWithin(t, &out, "the put-back of broker.state_dir/marks.json waits for the directory store", 30*time.Second)
 	_ = mintOn(t, api, f.pki, "leaf1") // the start's mint gate opened: the takeover finished in the cut
 	f.dproxy.Hang(false)
-	waitWithin(t, &out, "broker.state_dir/marks.json holds no revocation, so none is put back", 60*time.Second)
+	waitWithin(t, &out, "broker.state_dir had no marks.json at this start", 60*time.Second)
 }
 
 // N2: a key fault found when the directory opens after a snapshot start
