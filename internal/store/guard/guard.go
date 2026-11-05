@@ -138,7 +138,7 @@ type pool struct {
 	// whether Unhealthy has been told of this failing run, and toldRefused
 	// of this refused run: each is its own, so a refused probe on an open
 	// circuit already told does not tell it again (review M1).
-	// runStart is the first failure of the current failing run: only an
+	// runStart is when the current failing run first opened the circuit: only an
 	// answered call ends the run, a close by the health check does not, so
 	// the hold_ttl backstop (gone) keeps measuring through a store whose
 	// pings pass while its real calls fail. gen counts closes, so a probe
@@ -300,9 +300,6 @@ func (p *pool) leave(now time.Time, probe bool, gen uint64, outcome, op string, 
 		return false, p.open
 	case "timeout", "deadline", "unavailable":
 		p.fails++
-		if p.runStart.IsZero() {
-			p.runStart, p.toldOpen = now, false
-		}
 		p.cause = cause
 		if p.ops == nil {
 			p.ops = map[string]int{}
@@ -312,6 +309,9 @@ func (p *pool) leave(now time.Time, probe bool, gen uint64, outcome, op string, 
 			was := p.open
 			p.open, p.until = true, now.Add(openFor)
 			if !was {
+				if p.runStart.IsZero() {
+					p.runStart, p.toldOpen = now, false
+				}
 				p.openOps = opTally(p.ops)
 			}
 			return !was, true

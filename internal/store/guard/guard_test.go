@@ -1004,3 +1004,28 @@ func TestAProbeInFlightAtTheCloseDoesNotReopenOnOneFailure(t *testing.T) {
 		t.Fatalf("a probe from before the close reopened the circuit on one failure (%v)", v)
 	}
 }
+
+// The hold_ttl clock starts when the circuit first opens, not at the run's
+// first failure: one stray failure, a long quiet gap and then a blip that
+// opens the circuit must not go dark at once on "open for StopAfter".
+func TestTheHoldBackstopIsTimedFromTheFirstOpen(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 20*time.Millisecond
+	g := Wrap(inner, c)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{}) // a stray failure
+	time.Sleep(400 * time.Millisecond)                                // longer than StopAfter
+	for i := 0; i < 2; i++ {                                          // the third failure opens it
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{}) // refused or a probe, just after the open
+	if l := gone.all(); len(l) != 0 {
+		t.Fatalf("told before the circuit had been open for StopAfter: %q", l)
+	}
+	time.Sleep(350 * time.Millisecond)
+	g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	if l := gone.all(); len(l) != 1 {
+		t.Fatalf("told %d times after StopAfter open: %q", len(l), l)
+	}
+}
