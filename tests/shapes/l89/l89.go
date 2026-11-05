@@ -12,20 +12,24 @@ package l89
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/blanketfish/port49/tests/shapes/l82"
 )
 
 // Order is the cells' order in the results.
-var Order = []string{"a", "b"}
+var Order = []string{"a", "b", "c", "d"}
 
 func title(id string) string {
 	return map[string]string{
 		"a": "(a) back up both StatefulSets, delete the namespace, restore: ownership, mode, readiness, the CA",
 		"b": "(b) after the restore, a mint and a login",
+		"c": "(c) the README's warning: a restore with both StatefulSets at 0 replicas hangs (the restore InProgress, its pod volume restores New, their pods absent)",
+		"d": "(d) the README's restore order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool",
 	}[id]
 }
 
@@ -87,6 +91,539 @@ func JudgeA(a A) string {
 		return l82.Pass
 	}
 	return l82.Fail
+}
+
+// C is cell (c)'s and (d)'s measurements: the README's restore order, run step by step.
+type C struct {
+	RestorePhase      string            // the restore's phase, as the README's volume check prints it
+	Volumes           map[string]string // the restore's pod volume restores, "pod/volume": phase
+	Want              []string          // the chart's data volumes ("pod/volume"), each of which must be Completed
+	FingerprintBefore string            // the issuing CA's sha256 before the namespace was deleted
+	FingerprintAfter  string            // and after the scale-up
+	Before            map[string]string // the sha256 of each file the cell compares, "claim:path", when the backup was taken ("" absent)
+	AtZero            map[string]string // and after the restore, with both StatefulSets at 0, before the scale-up
+	MarksBefore       map[string][]Mark // each broker's decoded marks.json, by claim, when the backup was taken
+	MarksAtZero       map[string][]Mark // and with both StatefulSets at 0, before the scale-up
+	// Fallback is cell (d): the brokers ran against the restored store before the check, and a broker
+	// rewrites marks.json when the store and its copy disagree, so marks.json is compared by its decoded
+	// marks (every one recorded before still there), not by its hash.
+	Fallback  bool
+	FreshCopy bool // a broker's log after the scale-up says it had no marks.json at this start
+}
+
+// FreshCopyLine is what a broker logs when it starts with no broker.state_dir/marks.json
+// (internal/port49d/runner.go): after a restore, its state volume did not come back.
+const FreshCopyLine = "had no marks.json at this start"
+
+// JudgeC is PASS iff the restore Completed with a Completed pod volume restore for each of the chart's
+// data volumes by name (the lab's etcd volumes are in the same restore and do not count), the issuing CA
+// is the one it was, every file recorded at the backup is there with the same sha256 while both
+// StatefulSets are at 0 (marks.json, in the fallback, by its marks instead), every broker held a mark at
+// the backup and holds each of them at 0, and no broker started a fresh copy of the marks. A fingerprint
+// or a hash not read is a FAIL.
+func JudgeC(c C) string {
+	if c.RestorePhase != "Completed" || len(c.Want) == 0 || len(c.Before) == 0 || len(c.MarksBefore) == 0 || c.FreshCopy {
+		return l82.Fail
+	}
+	for _, v := range c.Want {
+		if c.Volumes[v] != "Completed" {
+			return l82.Fail
+		}
+	}
+	if c.FingerprintBefore == "" || c.FingerprintBefore != c.FingerprintAfter {
+		return l82.Fail
+	}
+	for k, h := range c.Before {
+		if c.Fallback && strings.HasSuffix(k, ":"+MarksPath) {
+			continue
+		}
+		if !sha256Hex.MatchString(h) || c.AtZero[k] != h {
+			return l82.Fail
+		}
+	}
+	for claim, before := range c.MarksBefore {
+		// a broker with no mark at the backup has none to lose: the restore would prove nothing about marks
+		if len(before) == 0 {
+			return l82.Fail
+		}
+		kept := map[Mark]bool{}
+		for _, m := range c.MarksAtZero[claim] {
+			kept[m] = true
+		}
+		for _, m := range before {
+			if !kept[m] {
+				return l82.Fail
+			}
+		}
+	}
+	return l82.Pass
+}
+
+// Mark is one entry of broker.state_dir/marks.json (internal/port49d/markscopy.go): a revocation's kind
+// and key, and when it took force, as written.
+type Mark struct {
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+	At   string `json:"at"`
+}
+
+// DecodeMarks reads marks.json. An entry it does not understand (no kind or key: a newer port49's) is
+// skipped, as the copy keeps it unread; an empty body is no marks.
+func DecodeMarks(body string) ([]Mark, error) {
+	if strings.TrimSpace(body) == "" {
+		return nil, nil
+	}
+	var f struct {
+		Marks []json.RawMessage `json:"marks"`
+	}
+	if err := json.Unmarshal([]byte(body), &f); err != nil {
+		return nil, fmt.Errorf("l89: marks.json does not decode: %w", err)
+	}
+	var out []Mark
+	for _, raw := range f.Marks {
+		var m Mark
+		if json.Unmarshal(raw, &m) == nil && m.Kind != "" && m.Key != "" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// The files cells (c) and (d) compare with the backup.
+const (
+	// Sentinel is the file cell (a) writes in each port49d spool before the backup: the spool holds no
+	// accounting record in the lab, and port49d writes restore.json there at every start, so a listing
+	// of the directory cannot tell a restored spool from an empty one.
+	Sentinel = "/v/data/l89-sentinel"
+	// MarksPath is a broker's copy of the marks. The copy writes it only when its marks change
+	// (markscopy.go), so it exists only once something was revoked.
+	MarksPath = "/v/state/marks.json"
+)
+
+// Files is the paths compared on one volume claim, mounted at /v.
+type Files struct {
+	PVC   string
+	Paths []string
+}
+
+// Hashed is the files cells (c) and (d) compare with the backup, by the kind lab's claims: each broker's
+// marks.json and issuing CA certificate (never the key), and each spool's sentinel.
+var Hashed = []Files{
+	{"data-t-broker-0", []string{MarksPath, "/v/state/issuing-ca.pem"}},
+	{"data-t-broker-1", []string{MarksPath, "/v/state/issuing-ca.pem"}},
+	{"data-t-port49d-0", []string{Sentinel}},
+	{"data-t-port49d-1", []string{Sentinel}},
+}
+
+// HashKeys is every "claim:path" of Hashed.
+func HashKeys() []string {
+	var keys []string
+	for _, v := range Hashed {
+		for _, p := range v.Paths {
+			keys = append(keys, v.PVC+":"+p)
+		}
+	}
+	return keys
+}
+
+func holdsMarks(f Files) bool {
+	for _, p := range f.Paths {
+		if p == MarksPath {
+			return true
+		}
+	}
+	return false
+}
+
+// Lab is what cell (a)'s step before the backup needs of the cluster.
+type Lab interface {
+	// Revoke revokes principal with revoke-offline.sh and returns once the brokers are back and ready.
+	Revoke(principal string) error
+	// Read is a file on a claim ("" when it is absent).
+	Read(pvc, path string) string
+	// WriteSentinel writes a random sentinel at path on a claim, owned by uid 65532, mode 0600.
+	WriteSentinel(pvc, path string) error
+	// Hashes is HashScript's result on a claim, as ParseHashes reads it.
+	Hashes(pvc string, paths []string) map[string]string
+	// Eventually is true once cond holds, false if it never did within the lab's time.
+	Eventually(what string, cond func() bool) bool
+}
+
+// Before is what the step before the backup recorded.
+type Before struct {
+	Hashes map[string]string // "claim:path": sha256
+	Marks  map[string][]Mark // each broker's decoded marks.json, by claim
+}
+
+// BeforeBackup is cell (a)'s step before the backup, in its order. It revokes principal, since a broker
+// writes marks.json only on a change and the lab revokes nothing else, and waits until every broker's
+// marks.json holds that revocation. Then it writes each spool's sentinel and hashes every file of Hashed.
+// A file still absent is an error: the cells could not compare it.
+func BeforeBackup(lab Lab, principal string) (Before, error) {
+	b := Before{Hashes: map[string]string{}, Marks: map[string][]Mark{}}
+	if err := lab.Revoke(principal); err != nil {
+		return b, fmt.Errorf("l89: the revocation before the backup: %w", err)
+	}
+	for _, f := range Hashed {
+		if !holdsMarks(f) {
+			continue
+		}
+		var marks []Mark
+		held := lab.Eventually("marks.json on "+f.PVC+" to hold "+principal, func() bool {
+			marks, _ = DecodeMarks(lab.Read(f.PVC, MarksPath))
+			for _, m := range marks {
+				if m.Kind == "principal" && m.Key == principal {
+					return true
+				}
+			}
+			return false
+		})
+		if !held {
+			return b, fmt.Errorf("l89: marks.json on %s never held the revocation of %s", f.PVC, principal)
+		}
+		b.Marks[f.PVC] = marks
+	}
+	for _, f := range Hashed {
+		for _, p := range f.Paths {
+			if p == Sentinel {
+				if err := lab.WriteSentinel(f.PVC, p); err != nil {
+					return b, fmt.Errorf("l89: the sentinel on %s: %w", f.PVC, err)
+				}
+			}
+		}
+	}
+	for _, f := range Hashed {
+		for k, h := range lab.Hashes(f.PVC, f.Paths) {
+			b.Hashes[k] = h
+		}
+	}
+	for _, k := range HashKeys() {
+		if !sha256Hex.MatchString(b.Hashes[k]) {
+			return b, fmt.Errorf("l89: %s is absent before the backup, so cells (c) and (d) cannot compare it", k)
+		}
+	}
+	return b, nil
+}
+
+// StepScript is a README step as the lab runs it under bash -e: an ERR trap names the command that
+// failed, so a FAIL's row can say which line of the README's text it was, and a DEBUG trap the command
+// about to run, so a step stopped at its bound can say which command it was in.
+func StepScript(script string) string {
+	return "trap 'echo \"l89-failed: $BASH_COMMAND\" >&2' ERR\ntrap 'echo \"l89-running: $BASH_COMMAND\" >&2' DEBUG\n" + script
+}
+
+// FailedCommand is the command StepScript's ERR trap named in a step's output, for a results row: the
+// README's text after Subst, through Reason (a long run as <LONG>, a line with a credential word
+// withheld unless an allowed name is all that holds it).
+func FailedCommand(out string) string { return trapLine(out, "l89-failed: ") }
+
+// RunningCommand is the last command StepScript's DEBUG trap named: the one a step stopped at its bound
+// was in. Shown as FailedCommand shows its own.
+func RunningCommand(out string) string { return trapLine(out, "l89-running: ") }
+
+// StepOutput is a step's output without StepScript's trap lines: what the README's command printed.
+func StepOutput(out string) string {
+	var keep []string
+	for _, ln := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(ln, "l89-running: ") && !strings.HasPrefix(ln, "l89-failed: ") {
+			keep = append(keep, ln)
+		}
+	}
+	return strings.Join(keep, "\n")
+}
+
+func trapLine(out, prefix string) string {
+	got := ""
+	for _, ln := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(ln, prefix); ok {
+			got = rest
+		}
+	}
+	if got == "" {
+		return "not named (no " + strings.TrimSuffix(prefix, ": ") + " line)"
+	}
+	return Reason(got)
+}
+
+// Reason is ReasonWith with no values of the run's own.
+func Reason(msg string) string { return ReasonWith(msg) }
+
+// DeleteJob is the delete Job of design §13 step 3 in the Velero README, and DeleteJobFile its example.
+// The name holds no word the job log's filter drops a line for: run 42058930263 lost every line about
+// the Job under its former name, its describe and logs among them.
+const DeleteJob, DeleteJobFile = "restore-unspent", "restore-unspent.yaml"
+
+// allowNames are the fixed names and phrases that hold a word the job log's filter drops a line for,
+// each masked to <word> with its line kept:
+//   - a port49 Secret named by its kind (run 42047911635 lost its reason to one), kept only where the line
+//     is kubectl's own error or the harness's command line (kubectlShape), so no data after the name
+//     passes (m1r5e);
+//   - etcd's own fixed auth errors (m1r7), which carry no value, kept only where the phrase ends the line
+//     or a quoted string; a value after one still drops the line.
+//
+// Nothing else is masked. The step and bound names hold none (TestReasonKeepsASetupFailureReadable).
+var allowNames = []struct {
+	re   *regexp.Regexp
+	with string
+	keep *regexp.Regexp // the line must match it too, when set
+}{
+	{regexp.MustCompile(`\bsecret(s?)( "| |/)(port49-[a-z0-9.-]+)`), "<word>$1$2$3", kubectlShape},
+	{regexp.MustCompile(`invalid user ID or password("|$)`), "invalid user ID or <word>$1", nil},
+	{regexp.MustCompile(`invalid auth token("|$)`), "invalid auth <word>$1", nil},
+}
+
+// kubectlShape is a line an allowed Secret name may keep: kubectl's NotFound, Forbidden or AlreadyExists
+// error, or the harness's own redacted kubectl command.
+var kubectlShape = regexp.MustCompile(`^kubectl |\((NotFound|Forbidden|AlreadyExists)\)|" not found$|" is forbidden:|" already exists$`)
+
+// keyValue is a credential word, or an allowed Secret's name, followed by : or = and a value.
+var keyValue = regexp.MustCompile(`(?i)(password|token|secret)[\w-]*(\s+"?port49-[a-z0-9.-]+)?["']?\s*[:=]\s*\S`)
+
+var printable = regexp.MustCompile(`^[\x20-\x7e\t]*$`)
+
+// ReasonWith is a harness message as a row and a log line can both hold it. A line is dropped whole when
+// it holds one of own (the run's generated values, some under Scrub's run length), a key and its value
+// (keyValue), a byte the job log's filter refuses, or, once allowNames are masked, any credential word;
+// the rest are Scrubbed and joined, and the whole is withheld if Leak still trips.
+func ReasonWith(msg string, own ...string) string {
+	var lines []string
+next:
+	for _, ln := range strings.Split(msg, "\n") {
+		ln = strings.TrimSpace(ln)
+		for _, o := range own {
+			if o != "" && strings.Contains(ln, o) {
+				continue next
+			}
+		}
+		if ln == "" || keyValue.MatchString(ln) || !printable.MatchString(ln) {
+			continue
+		}
+		for _, a := range allowNames {
+			if a.keep != nil && a.re.MatchString(ln) && !a.keep.MatchString(ln) {
+				continue next
+			}
+			ln = a.re.ReplaceAllString(ln, a.with)
+		}
+		if credWords.MatchString(ln) {
+			continue
+		}
+		lines = append(lines, longRun.ReplaceAllString(ln, "<LONG>"))
+	}
+	got := strings.Join(lines, " / ")
+	if got == "" || Leak(got) != "" {
+		return "withheld (the line looks like it holds a credential)"
+	}
+	if len(got) > 400 {
+		got = got[:400] + " ..."
+	}
+	return got
+}
+
+// JobProbe is the script the harness runs, bounded, when the README's wait for job in ns fails: the
+// Job's conditions, each of its pods' phase and exit code, and the pods' last log lines. Each line is
+// tagged (cond, pod, log) for JobRows; nothing is printed that JobRows does not pass through ReasonWith.
+func JobProbe(ns, job string) string {
+	return "kubectl -n " + ns + " get job " + job + ` -o jsonpath='{range .status.conditions[*]}cond {.type}={.status} {.reason}{"\n"}{end}'` + "\n" +
+		"kubectl -n " + ns + " get pods -l job-name=" + job +
+		` -o jsonpath='{range .items[*]}pod {.metadata.name} {.status.phase} {.status.containerStatuses[0].state.terminated.exitCode}{"\n"}{end}'` + "\n" +
+		"kubectl -n " + ns + " logs -l job-name=" + job + " --all-containers=true --tail=10 --prefix=false | sed 's/^/log /'\n"
+}
+
+// JobRows is JobProbe's output as rows: the conditions, one row per pod, and the log lines through
+// ReasonWith with the run's own values (own).
+func JobRows(out string, own ...string) []l82.Row {
+	var conds, logs []string
+	var rows []l82.Row
+	for _, ln := range strings.Split(out, "\n") {
+		tag, rest, _ := strings.Cut(ln, " ")
+		switch tag {
+		case "cond":
+			conds = append(conds, strings.TrimSpace(rest))
+		case "pod":
+			f := strings.Fields(rest)
+			if len(f) >= 2 {
+				obs := f[1]
+				if len(f) == 3 {
+					obs += ", exit " + f[2]
+				}
+				rows = append(rows, l82.Row{Case: "the delete Job's pod " + f[0], Observation: obs})
+			}
+		case "log":
+			logs = append(logs, rest)
+		}
+	}
+	cond := "none"
+	if len(conds) > 0 {
+		cond = ReasonWith(strings.Join(conds, "\n"), own...)
+	}
+	log := "none"
+	if len(logs) > 0 {
+		log = ReasonWith(strings.Join(logs, "\n"), own...)
+	}
+	return append([]l82.Row{{Case: "the delete Job's conditions", Observation: cond}}, append(rows,
+		l82.Row{Case: "the delete Job's pods' last log lines", Observation: log})...)
+}
+
+// KubectlFailure is a failed kubectl call as a reason: the command (redacted by the caller), kubectl's
+// exit, and its own stderr, unfiltered, which ReasonWith masks or drops line by line (the job filter
+// would drop a NotFound naming a Secret whole, and with it the cause).
+func KubectlFailure(cmd string, err error, stderr string, own ...string) string {
+	return ReasonWith(cmd+"\n"+err.Error()+"\n"+stderr, own...)
+}
+
+// ParseVolumes reads the output of the README's volume check (the marker "volumes"): the restore's phase
+// on the first line, then kubectl's PHASE POD VOLUME columns. It returns the phase and each pod volume
+// restore as "pod/volume": phase. A line of any other shape (kubectl's "No resources found") is skipped:
+// a volume missing from the map is a volume that did not come back.
+func ParseVolumes(out string) (string, map[string]string) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	vols := map[string]string{}
+	phase := strings.TrimSpace(lines[0])
+	if strings.Contains(phase, " ") {
+		phase = ""
+	}
+	for _, ln := range lines[1:] {
+		f := strings.Fields(ln)
+		if len(f) != 3 || f[0] == "PHASE" {
+			continue
+		}
+		vols[f[1]+"/"+f[2]] = f[0]
+	}
+	return phase, vols
+}
+
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// HashScript is the debug pod's script that prints `sha256sum` of each path, or "absent <path>" for a
+// path that is missing or empty.
+func HashScript(paths ...string) string {
+	return "for f in " + strings.Join(paths, " ") + `; do if [ -s "$f" ]; then sha256sum "$f"; else echo "absent $f"; fi; done`
+}
+
+// ParseHashes reads HashScript's output on claim's volume: "claim:path" to the sha256, "" for an absent
+// path. A line of any other shape is skipped, so the path is missing from the map.
+func ParseHashes(claim, out string) map[string]string {
+	got := map[string]string{}
+	for _, ln := range strings.Split(out, "\n") {
+		f := strings.Fields(ln)
+		switch {
+		case len(f) == 2 && f[0] == "absent":
+			got[claim+":"+f[1]] = ""
+		case len(f) == 2 && sha256Hex.MatchString(f[0]):
+			got[claim+":"+f[1]] = f[0]
+		}
+	}
+	return got
+}
+
+// The README's commands name etcd's namespace (the shipped etcd example's) and the release's, port49. The
+// kind lab runs both in one namespace, so Steps puts etcd's into it; the release's is the lab's own.
+const etcdNamespace = "port49-etcd"
+
+// Steps is the Velero README's restore steps (their markers' commands) as the kind lab runs them: etcd's
+// namespace replaced by the lab's ns everywhere a command names it, and the placeholders filled. It fails
+// on a step whose command lacks what it replaces, so a changed README cannot run half-substituted.
+func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[string]string, error) {
+	if ns != "port49" {
+		return nil, fmt.Errorf("l89: the README's commands name the namespace port49, not %q", ns)
+	}
+	repl := map[string]map[string]string{
+		"etcdrestore": {"<backup>": backup, etcdNamespace: ns},
+		"deletejob":   {etcdNamespace: ns},
+		"volumes":     {"<restore>": restore},
+		"revoke":      {"<release>": release},
+		"scaleup":     {"<release>": release, "<brokers>": fmt.Sprint(brokers), "<port49d>": fmt.Sprint(port49d)},
+		"restore":     {"<restore>": restore, "<backup>": backup},
+		"scalezero":   {"<release>": release},
+	}
+	out := map[string]string{}
+	for name, r := range repl {
+		cmd, err := Command(doc, name)
+		if err != nil {
+			return nil, err
+		}
+		if cmd, err = Subst(cmd, r); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		out[name] = cmd
+	}
+	// (c)'s restore at 0 replicas, which the README no longer holds: the lab's input, ZeroReplicaRestore
+	zero, err := Subst(ZeroReplicaRestore, map[string]string{"<restore>": restore, "<backup>": backup})
+	if err != nil {
+		return nil, fmt.Errorf("restorezero: %w", err)
+	}
+	out["restorezero"] = zero
+	// step 1's wait for etcd, alone: the lab's etcd is restored with the release, so the restore line is
+	// folded and only the wait is run
+	for _, ln := range strings.Split(out["etcdrestore"], "\n") {
+		if strings.HasPrefix(ln, "kubectl ") && strings.Contains(ln, " wait ") {
+			out["etcdwait"] = ln + "\n"
+		}
+	}
+	if out["etcdwait"] == "" {
+		return nil, fmt.Errorf("l89: step 1 has no kubectl wait for etcd")
+	}
+	return out, nil
+}
+
+// ZeroReplicaRestore is cell (c)'s restore: the order the Velero README once gave, both StatefulSets
+// restored at 0 replicas by the resource modifier in testdata/restore-scale-zero.yaml. L89 cell (c), run
+// 42053716808, measured it hanging, and the README dropped it; (c) runs it as the measured negative.
+const ZeroReplicaRestore = `kubectl -n velero create configmap restore-scale-zero --from-file=restore-scale-zero.yaml
+velero restore create <restore> --from-backup <backup> --include-namespaces port49 \
+  --resource-modifier-configmap restore-scale-zero --wait
+`
+
+// Recover is the README's recovery from a restore at 0 replicas (the marker "recover"), for the stuck
+// restore named stuck.
+func Recover(doc, stuck string) (string, error) {
+	cmd, err := Command(doc, "recover")
+	if err != nil {
+		return "", err
+	}
+	return Subst(cmd, map[string]string{"<restore>": stuck})
+}
+
+// Subst replaces each key of repl in a README command. A key the command does not hold is an error, so
+// a command that changed cannot run with a placeholder left in it.
+func Subst(cmd string, repl map[string]string) (string, error) {
+	keys := make([]string, 0, len(repl))
+	for k := range repl {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !strings.Contains(cmd, k) {
+			return "", fmt.Errorf("l89: the command does not hold %q", k)
+		}
+		cmd = strings.ReplaceAll(cmd, k, repl[k])
+	}
+	return cmd, nil
+}
+
+// shippedModifier is the rule's conditions in testdata/restore-scale-zero.yaml. The kind lab runs etcd in the
+// release's namespace, where the rule would also scale etcd to 0; LabModifier limits it to the release's
+// two StatefulSets (named t-broker and t-port49d there), so the README's order is otherwise run as written.
+const shippedModifier = "      groupResource: statefulsets.apps\n"
+
+// LabDeleteJob is the shipped delete Job (DeleteJobFile) pointed at the lab's one namespace:
+// its namespace and etcd's service names move to ns. The Secret port49-etcd-root keeps its name, which
+// the lab's stack creates in ns; any other port49-etcd left is an error, so the lab never runs a Job
+// that still reaches for a namespace it does not have.
+func LabDeleteJob(example, ns string) (string, error) {
+	out := strings.ReplaceAll(example, "port49-etcd.svc", ns+".svc")
+	out = strings.ReplaceAll(out, "namespace: port49-etcd\n", "namespace: "+ns+"\n")
+	if left := strings.ReplaceAll(out, "port49-etcd-root", ""); strings.Contains(left, "port49-etcd") {
+		return "", fmt.Errorf("l89: the delete Job names port49-etcd in a way the lab does not rewrite")
+	}
+	return out, nil
+}
+
+func LabModifier(example, release string) (string, error) {
+	if strings.Count(example, shippedModifier) != 1 {
+		return "", fmt.Errorf("l89: the modifier does not hold %q exactly once", shippedModifier)
+	}
+	return strings.Replace(example, shippedModifier, shippedModifier+"      resourceNameRegex: \"^"+release+"-(broker|port49d)$\"\n", 1), nil
 }
 
 var issuingAs = regexp.MustCompile(`issuing as .* \(([^()\s]+)\), valid until `)
@@ -326,7 +863,7 @@ func verdict(cells []l82.Cell, id string) string {
 // Leak is why text must not be written: what l82.Leak refuses (24 or more key characters, a JWT, the
 // words for a credential), and a PEM block. Empty when the text is clean.
 func Leak(s string) string {
-	if strings.Contains(s, "-----BEGIN") {
+	if strings.Contains(s, "-----BEGIN") || strings.Contains(s, "-----END") || strings.Contains(s, "PRIVATE KEY") {
 		return "a PEM block"
 	}
 	return l82.Leak(s)
@@ -375,7 +912,7 @@ func Results(env Env, cells []l82.Cell) (string, error) {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("The register row closes only when both cells have a PASS or a FAIL; a FAIL is a measured answer.\n")
+	b.WriteString("The register row closes only when every cell has a PASS or a FAIL; a FAIL is a measured answer.\n")
 	out := b.String()
 	if why := Leak(out); why != "" {
 		return "", fmt.Errorf("l89: the results hold %s: nothing is written", why)

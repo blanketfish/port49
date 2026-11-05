@@ -21,7 +21,7 @@ type kindWorkflow struct {
 	Jobs map[string]struct {
 		If             string            `yaml:"if"`
 		RunsOn         any               `yaml:"runs-on"`
-		TimeoutMinutes int               `yaml:"timeout-minutes"`
+		TimeoutMinutes minutes           `yaml:"timeout-minutes"`
 		Env            map[string]any    `yaml:"env"`
 		Permissions    map[string]string `yaml:"permissions"`
 		Defaults       struct {
@@ -116,8 +116,15 @@ func kindWorkflowProblems(lab, kind []byte, mk string) []string {
 			add("lab-kind.yml job %s: adding some other label would start a run: %q", id, j.If)
 		}
 		hosted("lab-kind.yml", id, j.RunsOn, j.Env)
-		if j.TimeoutMinutes != 60 {
-			add("lab-kind.yml job %s: timeout-minutes %d, want 60", id, j.TimeoutMinutes)
+		// l89 runs go test with -timeout 85m (four namespace restores) and its builds before that
+		for _, cell := range j.Strategy.Matrix.Cell {
+			want := 60
+			if cell == "l89" {
+				want = 100
+			}
+			if got := j.TimeoutMinutes.For(cell); got != want {
+				add("lab-kind.yml job %s: timeout-minutes %d for %s, want %d", id, got, cell, want)
+			}
 		}
 		if j.Strategy.FailFast == nil || *j.Strategy.FailFast {
 			add("lab-kind.yml job %s: fail-fast is not false, so one cell's failure would cancel the others' evidence", id)
@@ -176,8 +183,8 @@ func kindWorkflowProblems(lab, kind []byte, mk string) []string {
 	want := map[string]string{"make kind-smoke": "", "make kind-smoke-red": "", "make kind-enrollments": ""}
 	for id, j := range k.Jobs {
 		hosted("kind.yml", id, j.RunsOn, j.Env)
-		if j.TimeoutMinutes != 45 {
-			add("kind.yml job %s: timeout-minutes %d, want 45", id, j.TimeoutMinutes)
+		if j.TimeoutMinutes.Default != 45 || len(j.TimeoutMinutes.Cell) != 0 {
+			add("kind.yml job %s: timeout-minutes %d, want 45 for every cell", id, j.TimeoutMinutes.Min())
 		}
 		if j.Permissions["contents"] != "read" || len(j.Permissions) != 1 {
 			add("kind.yml job %s: permissions %v, want contents: read alone", id, j.Permissions)
@@ -273,7 +280,11 @@ func TestTheKindWorkflowRulesCatchEachMistake(t *testing.T) {
 		{"no pipefail shell", "lab", "    defaults: {run: {shell: bash}}\n", "", "pipefail"},
 		{"no override", "lab", envLine, "      OTHER: \"1\"\n", "override"},
 		{"a self-hosted runner", "lab", "runs-on: ubuntu-24.04", "runs-on: self-hosted", "runs-on"},
-		{"a short timeout", "lab", "timeout-minutes: 60", "timeout-minutes: 40", "timeout-minutes"},
+		{"a short timeout", "lab", "timeout-minutes: ${{ matrix.cell == 'l89' && 100 || 60 }}", "timeout-minutes: 40", "timeout-minutes"},
+		{"l89 at the others' timeout", "lab", "timeout-minutes: ${{ matrix.cell == 'l89' && 100 || 60 }}", "timeout-minutes: 60", "for l89, want 100"},
+		{"l89 short", "lab", "timeout-minutes: ${{ matrix.cell == 'l89' && 100 || 60 }}", "timeout-minutes: ${{ matrix.cell == 'l89' && 70 || 60 }}", "for l89, want 100"},
+		{"another cell long", "lab", "timeout-minutes: ${{ matrix.cell == 'l89' && 100 || 60 }}", "timeout-minutes: ${{ matrix.cell == 'l82' && 100 || 60 }}", "for l89, want 100"},
+		{"another expression", "lab", "timeout-minutes: ${{ matrix.cell == 'l89' && 100 || 60 }}", "timeout-minutes: ${{ fromJSON(vars.T) }}", "timeout-minutes"},
 		{"fail-fast", "lab", "fail-fast: false", "fail-fast: true", "fail-fast"},
 		{"no l82 in the matrix", "lab", "cell: [l82, l83, l85, l39, l89]", "cell: [l83, l85, l39, l89]", "lack l82"},
 		{"no l83 in the matrix", "lab", "cell: [l82, l83, l85, l39, l89]", "cell: [l82, l85, l39, l89]", "lack l83"},

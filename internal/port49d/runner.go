@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +25,7 @@ import (
 // runner is one port49-broker's part in the keyspace's one runner (plan
 // 7e, Ruling 6): it takes the hold (etcd.Store.Hold, as the broker),
 // runs the takeover, then the duties, until the hold is lost or ctx ends;
-// then it lets go and tries again every 5s. running is read by the
+// then it lets go and tries again on the store wait's schedule (retryWait). running is read by the
 // reloader's pass to choose the whole refresh or its token half.
 type runner struct {
 	cfg    config.Config
@@ -71,6 +72,13 @@ type runner struct {
 	// tookOver is told the policy each takeover carried, once it is done:
 	// it opens the start's mint gate (decision 36). nil tells nothing.
 	tookOver func(carried *policy.Policy)
+	// holdMints closes the mint gate while a purge runs, and opens it again:
+	// nil holds nothing.
+	holdMints func(on bool)
+	// standby is told when another replica runs the keyspace: its takeover
+	// is the one that purges, so this replica's start gate need not wait on
+	// a purge it owes itself (brokerd.go owes). nil tells nothing.
+	standby func()
 	// followed is told each mark the marks feed brings that stands, in a
 	// split (plan 11a, R20): the duties reach it in this region's session
 	// store (reachFollowed). Nil in a shared store, where the broker that
@@ -79,6 +87,15 @@ type runner struct {
 	// followedLogouts is told each logout the logouts feed brings, in a
 	// split (R26): the duties reach it in this region's session store.
 	followedLogouts chan store.LogoutEntry
+	// logoutRescanOwed is set when a logout found followedLogouts full: the
+	// duties then reach every entry of logouts, which holds what the queue
+	// dropped. wakeLogouts (capacity 1) wakes reachFollowed to do it.
+	logoutRescanOwed atomic.Bool
+	wakeLogouts      chan struct{}
+	// retrying holds the keys of the logouts a retry timer is armed for
+	// (retryLogout): a rescan leaves those alone, and only those.
+	retryMu  sync.Mutex
+	retrying map[string]struct{}
 	// reach reaches a logout here: Broker.ReachLogout, or a test's (nil is
 	// the broker's).
 	reach func(ctx context.Context, l store.Logout) (broker.RevokeReport, error)
@@ -148,6 +165,8 @@ func (r *runner) run(ctx context.Context) {
 	e := r.cfg.Stores.Session.Etcd
 	// The series exists once a runner does, at 0 until the hold is taken.
 	r.m.StoreKeyspaceHeld.WithLabelValues().Set(0)
+	var say outageSayer
+	failed := 0 // runs and attempts in a row that did not last (retryWait's schedule)
 	for ctx.Err() == nil {
 		lost, release, err := r.raw.Hold(ctx, e.HoldTTL, r.who, func(holder string) {
 			if r.held != "" && holder == r.held {
@@ -161,14 +180,22 @@ func (r *runner) run(ctx context.Context) {
 			}
 			fmt.Fprintf(stderr, "port49-broker: runner: keyspace %s is run by %s; this replica serves the API and "+
 				"takes over if that one stops\n", e.Prefix, lineHolder(holder))
+			if r.standby != nil {
+				r.standby()
+			}
 		})
 		if err != nil {
 			if ctx.Err() == nil {
-				fmt.Fprintf(stderr, "port49-broker: runner: taking keyspace %s: %v; trying again in 5s\n", e.Prefix, err)
-				sleepCtx(ctx, 5*time.Second)
+				failed++
+				if holdWaiting != nil {
+					holdWaiting(failed)
+				}
+				waitToHold(ctx, &say, failed, e.Prefix, err)
 			}
 			continue
 		}
+		took := time.Now()
+		say = outageSayer{}
 		r.held = r.who
 		r.m.StoreKeyspaceHeld.WithLabelValues().Set(1)
 		fmt.Fprintf(stderr, "port49-broker: runner: took keyspace %s (%s): this replica runs the start, the sweep "+
@@ -181,22 +208,57 @@ func (r *runner) run(ctx context.Context) {
 		case <-lost:
 			fmt.Fprintln(stderr, "port49-broker: runner: lost the keyspace's hold (its lock key is gone, or etcd "+
 				"stopped answering with half its lease or less left); the runner's duties stop; this replica keeps "+
-				"serving the API and tries to take the hold again every 5s")
+				"serving the API and tries to take the hold again, after a wait that is about a second at first "+
+				"and grows to 10s while it keeps failing")
 		case <-done:
 			// The takeover stopped on an error that waiting does not mend
 			// (duties says it): the hold is let go, so another replica may
-			// run, and taken again in 5s.
+			// run, and taken again on the store wait's schedule.
 		}
 		stop()
 		<-done
+		// A purge that failed is still owed (the record says so), but this
+		// replica no longer runs it: its mints are not held for a purge the
+		// next run makes, which holds them again (purgeRestored).
+		if r.holdMints != nil {
+			r.holdMints(false)
+		}
 		r.m.StoreKeyspaceHeld.WithLabelValues().Set(0)
 		// The keeper reports (0, false) as it stops; set them here too, for
 		// a takeover that failed before the keeper started (pre-flight I11).
 		r.m.LedgerPending.Set(0)
 		r.m.LedgerBehind.Set(0)
 		release()
-		sleepCtx(ctx, 5*time.Second)
+		// A run that lasted starts the schedule over; one that did not (a hold
+		// lost at once, again and again) backs off like a store that is down.
+		failed = nextFailed(failed, time.Since(took))
+		if holdWaiting != nil {
+			holdWaiting(failed)
+		}
+		retryWait(ctx, failed, retryRnd)
 	}
+}
+
+// holdWaiting, set by a test, is told the failure count each time the hold loop
+// is about to wait. Nil in production.
+var holdWaiting func(failed int)
+
+// nextFailed is the failure count for the wait after a run of the duties that
+// lasted ran: a run of storeAttemptMax or more starts the schedule over, one
+// that did not counts as one more failure.
+func nextFailed(failed int, ran time.Duration) int {
+	if ran >= storeAttemptMax {
+		failed = 0
+	}
+	return failed + 1
+}
+
+// waitToHold says why the hold was not taken (an outage once, again if it
+// changes, as outageSayer does) and waits failed's step of the store wait's
+// schedule. It reports whether the wait passed.
+func waitToHold(ctx context.Context, say *outageSayer, failed int, prefix string, err error) bool {
+	say.say(stderr, fmt.Sprintf("port49-broker: runner: taking keyspace %s: %v; trying again: %s", prefix, err, storeScheduleText))
+	return retryWait(ctx, failed, retryRnd)
 }
 
 // duties is the takeover, then the sweep, the ledger record's keeper, the
@@ -397,6 +459,18 @@ func (r *runner) restoreMarks(ctx context.Context) error {
 			sayPutBack(put)
 		}
 		return err
+	}
+	if r.copy.takeFresh() {
+		// The copy started from the store (the marks feed fills it from the
+		// start), so it holds what the store holds, however many marks that is:
+		// after a store restore, a revocation made since the snapshot is back
+		// only if a broker whose marks.json survived runs first (design §13
+		// step 5).
+		fmt.Fprintln(stderr, "port49-broker: runner: broker.state_dir had no marks.json at this start; "+
+			"a revocation a store restore lost is put back only if this copy saw it (design §13 step 5)")
+		if len(put) == 0 {
+			return nil
+		}
 	}
 	if len(put) == 0 {
 		fmt.Fprintln(stderr, "port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store")
@@ -723,66 +797,79 @@ func (r *runner) witnessPassOnce(ctx context.Context) error {
 	return err
 }
 
-// purgeRestored purges every unspent token after the witness caught a
-// restore (plan 7e, Ruling 18), as an unjudged takeover does: SupersedeAll
-// first, so a replay mints afresh. It lifts no mark: a mark the restore
-// lost is the copy's to put back (restoreMarks). It takes the store's
-// witness as the replica's record only once the purge is done: until then
-// every pass, and every replica's takeover, still sees the restore, so a
-// purge cut short by a lost hold is made by the next runner.
+// purgeRestored purges every unspent token and every once-only record (the
+// sign-in challenges, proofs and nonces) after the witness caught a restore,
+// or found no record to tell by (plan 7e, Ruling 18; decision 56 ruling 2),
+// as an unjudged takeover does: SupersedeAll first, so a replay mints afresh.
+// It lifts no mark: a mark the restore lost is the copy's to put back
+// (restoreMarks). Mints are held while it runs (holdMints), or a token minted
+// in the window would be minted and then deleted. It takes the store's
+// witness as the replica's record only once the purge is done and the
+// witness has not moved (confirmPurged): until then every pass, and every
+// replica's takeover, still owes the purge, and this replica writes no
+// meta/witness and saves no witness.json, so a purge cut short is made by
+// the next runner.
 func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.WitnessRead) error {
+	// The hold ends with a purge that is done, or with the runner (its ctx):
+	// a purge that failed is still owed, and a token minted now would be
+	// deleted by the next try.
+	done := false
+	if r.holdMints != nil {
+		r.holdMints(true)
+		defer func() {
+			if done || ctx.Err() != nil {
+				r.holdMints(false)
+			}
+		}()
+	}
 	at := r.brk.Now()
 	if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
 		return err
 	}
-	var n int
+	var n, once int
 	if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 		return err
 	}
-	written, err := r.markPurged(ctx, read.ModRevision)
+	if err := retryCtx(ctx, func() (e error) { once, e = r.st.PurgeOnceRecords(ctx); return }); err != nil {
+		return err
+	}
+	took, err := r.confirmPurged(ctx, read.ModRevision)
 	if err != nil {
 		return err
 	}
-	// A refused meta/purged means the store changed under the purge: the
-	// record stays, so the next pass judges the store again and purges once more.
-	if written {
-		r.witness.Reset(read.ModRevision)
-	}
+	done = took
 	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
-		"(port49 token): %d purged\n", why, n)
+		"(port49 token): %d purged; %d once-only records (sign-in challenges, proofs, nonces) deleted\n", why, n, once)
 	return nil
 }
 
-// markPurged writes meta/purged once a purge of every unspent token is
-// done (Task 15d), retried while the store is unavailable: a port49d that
-// found the store restored serves redemptions again only on one written
-// after it found it. Every whole purge writes it, not only a restore's:
-// any of them, done after the restore, leaves no restored token behind.
-// over is the meta/witness ModRevision the purge read: a witness that has
-// changed since means the store may not be the one purged, and nothing is
-// written; the next purge writes it. It reports whether it wrote.
-func (r *runner) markPurged(ctx context.Context, over uint64) (written bool, err error) {
-	err = retryCtx(ctx, func() error {
-		at, err := r.raw.PutPurged(ctx, r.who, over)
-		if err != nil {
-			return fmt.Errorf("recording the purge done (meta/purged): %w", err)
-		}
-		written = at != 0
-		if at == 0 {
-			fmt.Fprintf(stderr, "port49-broker: runner: meta/witness changed during the purge, so the store may not "+
-				"be the one purged; meta/purged is not written, and a port49d on guard waits for the next purge\n")
-		}
-		return nil
-	})
-	return written, err
+// confirmPurged takes the store's witness as the replica's record once a
+// purge is done, if meta/witness is still at the ModRevision over (0: absent)
+// the purge started from: a witness that has changed means the store may not
+// be the one purged, and the record is left, so the next pass judges the
+// store again and purges once more. It reports whether it took the record.
+func (r *runner) confirmPurged(ctx context.Context, over uint64) (bool, error) {
+	var now etcdstore.WitnessRead
+	if err := retryCtx(ctx, func() (e error) { now, e = r.raw.Witness(ctx); return }); err != nil {
+		return false, fmt.Errorf("confirming the purge against meta/witness: %w", err)
+	}
+	if now.ModRevision != over {
+		fmt.Fprintf(stderr, "port49-broker: runner: meta/witness changed during the purge, so the store may not "+
+			"be the one purged; the next pass judges it again\n")
+		return false, nil
+	}
+	r.witness.Reset(over)
+	return true, nil
 }
 
 // retryCtx runs f until it returns nil, an error that is not
 // store.ErrUnavailable (or one of also), or ctx ends (ctx.Err()), waiting
-// 5s between tries and saying each wait. A failure fails toward purging
+// between tries on the store wait's schedule (retryWait), saying an outage
+// once. A failure fails toward purging
 // at the next takeover, which denies more.
 func retryCtx(ctx context.Context, f func() error, also ...error) error {
-	for {
+	var say outageSayer
+	for failed := 1; ; failed++ {
 		err := f()
 		if err == nil {
 			return nil
@@ -797,11 +884,29 @@ func retryCtx(ctx context.Context, f func() error, also ...error) error {
 		if !wait {
 			return err
 		}
-		fmt.Fprintf(stderr, "port49-broker: runner: %v; trying again in 5s\n", err)
-		if !sleepCtx(ctx, 5*time.Second) {
+		say.say(stderr, fmt.Sprintf("port49-broker: runner: %v; trying again: %s", err, storeScheduleText))
+		if !retryWait(ctx, failed, retryRnd) {
 			return ctx.Err()
 		}
 	}
+}
+
+// retrySleep and retryRnd are the retry loops' sleep and jitter source; a test
+// replaces them. retryRnd is nil (math/rand/v2) in production.
+var (
+	retrySleep = sleepCtx
+	retryRnd   func() float64
+)
+
+// retryWait is the wait after the failed-th failure (1 is the first) of a
+// loop that tries the store again: the store wait's schedule (storeWaitAfter
+// from storeAttemptEvery, with jitter), so every loop that waits on etcd
+// backs off the same way. It reports whether the wait passed.
+func retryWait(ctx context.Context, failed int, rnd func() float64) bool {
+	if rnd == nil {
+		rnd = rand.Float64
+	}
+	return retrySleep(ctx, jittered(storeWaitAfter(storeAttemptEvery, failed), rnd()))
 }
 
 // sleepCtx waits d or for ctx, and reports whether d passed.
@@ -881,7 +986,7 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //
 // The ledger's base was set before any of it, by runBroker's LoadLedger,
 // and the marks were loaded there before the API served. Each step that
-// reads the store retries every 5s while it is unavailable, and so does
+// reads the store retries on the store wait's schedule while it is unavailable, and so does
 // step 5 while a principal's contexts cannot be looked up (Ruling T12-c).
 func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	e := r.cfg.Stores.Session.Etcd
@@ -1002,9 +1107,6 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 			return nil, err
 		}
-		if _, err := r.markPurged(ctx, read.ModRevision); err != nil {
-			return nil, err
-		}
 		if ok && judged.InDoubt && judged.Bundle == bundle {
 			fmt.Fprintf(stderr, "port49-broker: runner: the bundle the last runner judged (%s) is in doubt, a "+
 				"replica having served another since; %d unspent token(s) purged (run 'port49 token' again)\n",
@@ -1088,8 +1190,10 @@ func (r *runner) follow(c store.MarkChange) {
 }
 
 // followLogout queues a logout the feed brought for the running duties,
-// as follow queues a mark; a full queue drops it, said: the logout set
-// refuses its mints and refreshes regardless.
+// as follow queues a mark. A full queue does not drop its reach: the
+// logout is in the followed set, so it owes a pass over the whole set
+// (logoutRescanOwed), which reachFollowed makes; the counter counts each
+// and one line says a run of them.
 func (r *runner) followLogout(e store.LogoutEntry) {
 	if r.followedLogouts == nil || !r.queuing() {
 		return
@@ -1097,8 +1201,17 @@ func (r *runner) followLogout(e store.LogoutEntry) {
 	select {
 	case r.followedLogouts <- e:
 	default:
-		fmt.Fprintln(stderr, "port49-broker: runner: a logout made elsewhere was not queued to reach this region's "+
-			"sessions (the queue is full); its mints and refreshes are refused regardless")
+		if r.m != nil {
+			r.m.BrokerLogoutsQueueFull.Inc()
+		}
+		if r.logoutRescanOwed.CompareAndSwap(false, true) {
+			fmt.Fprintln(stderr, "port49-broker: runner: the logout queue is full; a pass over the whole logout set "+
+				"follows")
+		}
+		select {
+		case r.wakeLogouts <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -1123,6 +1236,56 @@ var reachFailuresSeen func(n int)
 // takeover reaches every standing logout once more.
 func (r *runner) reachFollowed(ctx context.Context) {
 	failed := map[string]failedReach{}
+	// reachOne reaches one logout and says so (a rescan says only its failures,
+	// and one line for the pass). It returns false once the duties have ended,
+	// and the reach's error.
+	reachOne := func(l store.LogoutEntry, quiet bool) (bool, error) {
+		now := time.Now()
+		for k, f := range failed {
+			if !f.until.IsZero() && now.After(f.until) {
+				delete(failed, k) // the logout lapsed: nothing is left to reach
+			}
+		}
+		if reachingLogout != nil {
+			reachingLogout(l)
+		}
+		rep, err := r.reachLogout(ctx, l.Logout)
+		if err != nil && ctx.Err() != nil {
+			return false, err // the duties ended mid-reach: the next takeover reaches it
+		}
+		line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
+			"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
+		switch {
+		case err == nil:
+			delete(failed, l.Key)
+		case errors.Is(err, broker.ErrLogoutUnreachable):
+			delete(failed, l.Key) // ends its backoff: a later failure of this key starts over, guidance line included
+			line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
+		default:
+			f := failed[l.Key]
+			f.n++
+			f.until = l.Until
+			failed[l.Key] = f
+			wait := logoutRetryFirst << min(f.n-1, 6)
+			if f.n == 1 {
+				line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
+					"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
+					"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
+					r.brk.FollowedLogoutByHand(l.Logout, rep))
+			} else {
+				line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v (the remedy was said with the first failure)", f.n,
+					printsafe.Line(err.Error(), 300), wait)
+			}
+			r.retryLogout(ctx, l, wait)
+		}
+		if !quiet || err != nil {
+			fmt.Fprintln(stderr, line)
+		}
+		if reachFailuresSeen != nil {
+			reachFailuresSeen(len(failed))
+		}
+		return true, err
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -1137,44 +1300,34 @@ func (r *runner) reachFollowed(ctx context.Context) {
 			}
 			fmt.Fprintln(stderr, line)
 		case l := <-r.followedLogouts:
-			now := time.Now()
-			for k, f := range failed {
-				if !f.until.IsZero() && now.After(f.until) {
-					delete(failed, k) // the logout lapsed: nothing is left to reach
+			if ok, _ := reachOne(l, false); !ok {
+				return
+			}
+		case <-r.wakeLogouts:
+			// A logout found the queue full: reach every entry of the set, which
+			// holds what the queue dropped (each reach is safe to run twice).
+			if !r.logoutRescanOwed.CompareAndSwap(true, false) || r.logouts == nil {
+				continue
+			}
+			var reached, unfinished, waiting int
+			for _, e := range r.logouts.All() {
+				if r.isRetrying(e.Key) {
+					waiting++ // a retry timer already holds it
+					continue
 				}
-			}
-			rep, err := r.reachLogout(ctx, l.Logout)
-			if err != nil && ctx.Err() != nil {
-				return // the duties ended mid-reach: the next takeover reaches it
-			}
-			line := fmt.Sprintf("port49-broker: runner: a logout made elsewhere (%s) reached %d token key(s) and "+
-				"%d context(s) here", printsafe.Line(l.Origin, 160), rep.TokenKeys, len(rep.Contexts))
-			switch {
-			case err == nil:
-				delete(failed, l.Key)
-			case errors.Is(err, broker.ErrLogoutUnreachable):
-				line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
-			default:
-				f := failed[l.Key]
-				f.n++
-				f.until = l.Until
-				failed[l.Key] = f
-				wait := logoutRetryFirst << min(f.n-1, 6)
-				if f.n == 1 {
-					line += fmt.Sprintf("; not every step finished (%s): it is tried again in %v while this replica "+
-						"runs the keyspace, and its mints and refreshes are refused meanwhile; to end its live "+
-						"sessions here at once, %s", printsafe.Line(err.Error(), 300), wait,
-						r.brk.FollowedLogoutByHand(l.Logout, rep))
+				ok, err := reachOne(e, true)
+				if !ok {
+					return
+				}
+				if err != nil {
+					unfinished++
 				} else {
-					line += fmt.Sprintf("; still not reached after %d tries (%s); tried again in %v (the remedy was said with the first failure)", f.n,
-						printsafe.Line(err.Error(), 300), wait)
+					reached++
 				}
-				r.retryLogout(ctx, l, wait)
 			}
-			fmt.Fprintln(stderr, line)
-			if reachFailuresSeen != nil {
-				reachFailuresSeen(len(failed))
-			}
+			fmt.Fprintf(stderr, "port49-broker: runner: the pass over the whole logout set reached %d logout(s) here; "+
+				"%d did not finish (each says why above), and %d already wait to be tried again\n", reached,
+				unfinished, waiting)
 		}
 	}
 }
@@ -1189,22 +1342,80 @@ func (r *runner) madeBy(mark store.Revocation) string {
 	return "made elsewhere"
 }
 
+// logoutQueueSize is followedLogouts' capacity.
+var logoutQueueSize = 1024
+
+// openLogoutQueue makes the queue followedLogouts and the wake that a full
+// one rings, together: a runner with one and not the other would drop a
+// logout's reach again, so every runner that follows logouts gets both here.
+func (r *runner) openLogoutQueue() {
+	r.followedLogouts = make(chan store.LogoutEntry, logoutQueueSize)
+	r.wakeLogouts = make(chan struct{}, 1)
+}
+
 // logoutRetryFirst is the wait before a failed logout reach is tried again;
 // each failure in a row doubles it, up to 64 times it.
 var logoutRetryFirst = time.Second
 
+// reachingLogout, set by a test, is told each logout just before it is
+// reached; nil in production.
+var reachingLogout func(l store.LogoutEntry)
+
+// isRetrying says whether a retry timer is armed for key.
+func (r *runner) isRetrying(key string) bool {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	_, ok := r.retrying[key]
+	return ok
+}
+
+// arm marks key as holding a retry timer, false if one is armed already.
+func (r *runner) arm(key string) bool {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	if _, ok := r.retrying[key]; ok {
+		return false
+	}
+	if r.retrying == nil {
+		r.retrying = map[string]struct{}{}
+	}
+	r.retrying[key] = struct{}{}
+	return true
+}
+
+func (r *runner) disarm(key string) {
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
+	delete(r.retrying, key)
+}
+
 // retryLogout queues l for reachFollowed again after wait, unless the duties
-// end first or its record has expired by then.
+// end first or its record has expired by then. One timer holds a key at a
+// time, and it queues what the logout set holds when it fires, so a logout
+// extended meanwhile is retried to its new Until.
 func (r *runner) retryLogout(ctx context.Context, l store.LogoutEntry, wait time.Duration) {
+	if !r.arm(l.Key) {
+		return
+	}
 	go func() {
 		t := time.NewTimer(wait)
 		defer t.Stop()
 		select {
 		case <-ctx.Done():
+			r.disarm(l.Key)
 			return
 		case <-t.C:
 		}
-		if !l.Until.IsZero() && time.Now().After(l.Until) {
+		// The timer is spent before the entry is queued: the consumer may fail
+		// it again and arm the next.
+		r.disarm(l.Key)
+		if r.logouts != nil {
+			cur, ok := r.logouts.Entry(l.Key)
+			if !ok {
+				return // lapsed or removed
+			}
+			l = cur
+		} else if !l.Until.IsZero() && time.Now().After(l.Until) {
 			return
 		}
 		select {

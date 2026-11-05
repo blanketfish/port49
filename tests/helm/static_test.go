@@ -519,3 +519,38 @@ func TestHPAAverageConnections(t *testing.T) {
 		t.Fatalf("autoscaling.averageConnections is %s, want 50", got)
 	}
 }
+
+// The restore's delete Job fetches no package when it runs: a restore at 3am cannot depend on a mirror
+// or on egress. etcd-init still installs etcdctl from the Alpine mirror (it runs once, at install, and
+// needs a shell etcd's image lacks), and its header says so, and that the kind stack runs it in every
+// kind run. No shipped etcd Job uses a YAML anchor: an operator editing one container must see each.
+func TestTheEtcdJobsFetchNothingAtRunTime(t *testing.T) {
+	del := read(t, "deploy/helm/port49/examples/velero/restore-unspent.yaml")
+	if strings.Contains(del, "apk ") || strings.Contains(del, "image: alpine") {
+		t.Error("the restore's delete Job installs a package at run time")
+	}
+	init := read(t, "deploy/helm/port49/examples/etcd/etcd-init-job.yaml")
+	if strings.Contains(init, "UNVERIFIED") || !strings.Contains(init, "tests/kind/stack.go:244") ||
+		!strings.Contains(init, "every kind run") || !strings.Contains(init, "at install time") {
+		t.Error("etcd-init's header does not say the kind stack runs it and that it fetches etcdctl at install time")
+	}
+	for name, body := range map[string]string{"restore-unspent.yaml": del, "etcd-init-job.yaml": init} {
+		if regexp.MustCompile(`[&*][a-z][a-z0-9-]*\b`).MatchString(strings.Join(yamlValues(body), "\n")) {
+			t.Errorf("%s uses a YAML anchor or alias", name)
+		}
+	}
+}
+
+// yamlValues is each line of a YAML file outside its comments and its block scalars' shell text, enough
+// to find an anchor (&name) or an alias (*name) in a mapping value.
+func yamlValues(body string) []string {
+	var out []string
+	for _, ln := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "#") || !strings.Contains(t, ":") || strings.Contains(t, "$") {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}

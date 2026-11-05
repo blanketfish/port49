@@ -1,0 +1,467 @@
+package port49d
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/blanketfish/port49/internal/broker"
+	"github.com/blanketfish/port49/internal/config"
+	"github.com/blanketfish/port49/internal/daemon/metrics"
+	"github.com/blanketfish/port49/internal/decision"
+	"github.com/blanketfish/port49/internal/policy"
+	"github.com/blanketfish/port49/internal/session"
+	"github.com/blanketfish/port49/internal/store"
+	"github.com/blanketfish/port49/internal/store/crypt"
+	etcdstore "github.com/blanketfish/port49/internal/store/etcd"
+)
+
+// purgeRig is a split fleet's store with a witness at w0, from which runners
+// are built on a witness record and a session store of the test's choosing.
+type purgeRig struct {
+	t    *testing.T
+	ctx  context.Context
+	bs   brokerStores
+	m    *metrics.Metrics
+	cfg  config.Config
+	keys crypt.Keys
+	b    *broker.Broker
+	w0   uint64
+	out  *syncBuffer
+}
+
+func newPurgeRig(t *testing.T) *purgeRig {
+	t.Helper()
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	bcfg := brokerConfig(t, minimalPolicy)
+	_, b, err := buildBroker(bcfg, "inventory_file "+bcfg.InventoryFile, bs.st, seedMinter(),
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	b.Marks = store.NewMarks()
+	w0, err := bs.raw.PutWitness(ctx, "runner-a", 0)
+	if err != nil || w0 == 0 {
+		t.Fatalf("%d %v", w0, err)
+	}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	return &purgeRig{t: t, ctx: ctx, bs: bs, m: m, cfg: cfg, keys: keys, b: b, w0: w0, out: &out}
+}
+
+// runner is a runner for who on wit and st.
+func (g *purgeRig) runner(who string, wit *witnessRecord, st store.Store) *runner {
+	return &runner{cfg: g.cfg, brk: g.b, raw: g.bs.raw, st: st, meta: g.bs.raw, keys: g.keys, m: g.m,
+		alarm: newKeyAlarm(), who: who, witness: wit, marksReloaded: make(chan struct{}, 1)}
+}
+
+// witnessAtStore is meta/witness's ModRevision now.
+func (g *purgeRig) witnessAtStore() uint64 {
+	g.t.Helper()
+	w, err := g.bs.raw.Witness(g.ctx)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return w.ModRevision
+}
+
+// failsPurgeOnce fails the first PurgeTokens with an error that is not an
+// outage, as a purge cut short by anything but the store being away.
+type failsPurgeOnce struct {
+	store.Store
+	failed atomic.Bool
+}
+
+func (f *failsPurgeOnce) PurgeTokens(ctx context.Context) (int, error) {
+	if f.failed.CompareAndSwap(false, true) {
+		return 0, errors.New("purge cut short")
+	}
+	return f.Store.PurgeTokens(ctx)
+}
+
+// A purge cut short on a replica with no witness record, then the same broker
+// restarted on the same state_dir: with meta/purged gone, ordering is the
+// only safeguard. The cut-short purge saves no witness.json (the follower
+// told the record the store's own witness meanwhile), and writes no
+// meta/witness, so the restart still owes the purge (decision 56 ruling 2).
+func TestAPurgeCutShortIsOwedAgainAfterARestartOnTheSameStateDir(t *testing.T) {
+	for name, recorded := range map[string]uint64{"no record": 0, "a record above the store's": 1} {
+		t.Run(name, func(t *testing.T) {
+			g := newPurgeRig(t)
+			path := filepath.Join(safeDir(t), stateWitnessFile)
+			if recorded != 0 {
+				seed := openWitness(path, "/port49/", io.Discard)
+				seed.Reset(g.w0 + 1000)
+				seed.save()
+			}
+			wit := openWitness(path, "/port49/", io.Discard)
+			cut := &failsPurgeOnce{Store: g.bs.st}
+			if err := g.runner("runner-a", wit, cut).witnessPass(g.ctx); err == nil {
+				t.Fatal("the cut-short purge reported nothing")
+			}
+			if got := g.witnessAtStore(); got != g.w0 {
+				t.Fatalf("a purge cut short wrote meta/witness: %d, was %d", got, g.w0)
+			}
+			wit.Saw(g.w0) // the follower tells the record the store's own witness
+			wit.save()    // and the record is saved, as keep does each second
+			// The broker restarts on the same state_dir.
+			again := openWitness(path, "/port49/", io.Discard)
+			before := len(g.out.String())
+			if err := g.runner("runner-a", again, g.bs.st).witnessPass(g.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(g.out.String()[before:], "every unspent token is purged"); n != 1 {
+				t.Fatalf("the restart did not purge (%d purges):\n%s", n, g.out.String()[before:])
+			}
+		})
+	}
+}
+
+// The same cut-short purge, and the keyspace handed to another broker: B has
+// a state_dir of its own, with a record above the store's witness or none.
+func TestAPurgeCutShortIsOwedByTheBrokerTheKeyspaceIsHandedTo(t *testing.T) {
+	for name, recorded := range map[string]uint64{"no record": 0, "a record above the store's": 1} {
+		t.Run(name, func(t *testing.T) {
+			g := newPurgeRig(t)
+			a := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+			if err := g.runner("runner-a", a, &failsPurgeOnce{Store: g.bs.st}).witnessPass(g.ctx); err == nil {
+				t.Fatal("the cut-short purge reported nothing")
+			}
+			bPath := filepath.Join(safeDir(t), stateWitnessFile)
+			if recorded != 0 {
+				seed := openWitness(bPath, "/port49/", io.Discard)
+				seed.Reset(g.w0 + 1) // just above the store's witness: a write by A would catch it up
+				seed.save()
+			}
+			before := len(g.out.String())
+			if err := g.runner("runner-b", openWitness(bPath, "/port49/", io.Discard), g.bs.st).witnessPass(g.ctx); err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(g.out.String()[before:], "every unspent token is purged"); n != 1 {
+				t.Fatalf("the broker handed the keyspace did not purge (%d purges):\n%s", n, g.out.String()[before:])
+			}
+		})
+	}
+}
+
+// A purge owed is owed until it is done: a follower's tell does not lift it,
+// and nothing is saved meanwhile.
+func TestAnOwedPurgeIsNotLiftedByTheFollowerOrSaved(t *testing.T) {
+	path := filepath.Join(safeDir(t), stateWitnessFile)
+	w := openWitness(path, "/port49/", io.Discard)
+	if _, gone, _, err := readWitness(context.Background(), w, func(context.Context) (etcdstore.WitnessRead, error) {
+		return etcdstore.WitnessRead{ModRevision: 500, Header: 600}, nil
+	}); err != nil || !gone {
+		t.Fatalf("no record: gone %v, %v", gone, err)
+	}
+	w.Saw(500)
+	w.save()
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("a record owing a purge was saved")
+	}
+	// A record above the store's: found restored, then the store's witness
+	// climbs past the record before the purge is done. The owing stays.
+	w.Reset(1000)
+	at := func(rev uint64) func(context.Context) (etcdstore.WitnessRead, error) {
+		return func(context.Context) (etcdstore.WitnessRead, error) {
+			return etcdstore.WitnessRead{ModRevision: rev, Header: rev + 1}, nil
+		}
+	}
+	if _, gone, _, _ := readWitness(context.Background(), w, at(400)); !gone {
+		t.Fatal("a store below the record was not found restored")
+	}
+	w.Saw(2000)
+	if _, gone, why, _ := readWitness(context.Background(), w, at(1500)); !gone || !strings.Contains(why, "not yet done") {
+		t.Fatalf("the follower's tell lifted the owing: %v %q", gone, why)
+	}
+	w.Reset(500)
+	w.Saw(510)
+	if got, have := w.Recorded(); !have || got != 510 {
+		t.Fatalf("after the purge: %d %v", got, have)
+	}
+}
+
+// A mint during a restore's purge is refused with a retry message, and a mint
+// after it is served: a token minted in the window is never minted and then
+// purged.
+func TestAMintDuringARestoresPurgeIsRefusedNotPurged(t *testing.T) {
+	g := newPurgeRig(t)
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	if err := gate.allow(pol); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	blocking := &blocksPurge{Store: g.bs.st, in: make(chan struct{}), release: make(chan struct{})}
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard), blocking)
+	r.holdMints = gate.purge
+	done := make(chan error, 1)
+	go func() { done <- r.witnessPass(g.ctx) }()
+	select {
+	case <-blocking.in:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the purge never began")
+	}
+	if err := gate.allow(pol); err == nil || !strings.Contains(err.Error(), "purging") {
+		t.Fatalf("a mint during the purge: %v", err)
+	}
+	close(blocking.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.allow(pol); err != nil {
+		t.Fatalf("a mint after the purge: %v", err)
+	}
+}
+
+// blocksPurge holds PurgeTokens until released.
+type blocksPurge struct {
+	store.Store
+	in, release chan struct{}
+}
+
+func (b *blocksPurge) PurgeTokens(ctx context.Context) (int, error) {
+	close(b.in)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	return b.Store.PurgeTokens(ctx)
+}
+
+// A start whose meta/judged names its bundle opens its gate at once, except
+// when the replica owes a purge: the judged record may be a restore's, and a
+// token minted before the takeover's purge would be deleted by it.
+func TestAStartGateStaysClosedWhileAPurgeIsOwed(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	live := policy.NewLive(buildPolicy(t, cfg, minimalPolicy))
+	bundle := live.Load().Bundle
+	judged := judgedAt{ok: true}
+	judged.rec.Bundle = bundle
+	gate := newStartGate(nil)
+	owes := func(context.Context) bool { return true }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		openAtJudged(ctx, judged, gate, live, time.Second, 10*time.Millisecond, io.Discard, owes)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if gate.opened() {
+		t.Fatal("the gate opened at meta/judged while a purge is owed")
+	}
+	cancel()
+	<-done
+	gate = newStartGate(nil)
+	openAtJudged(context.Background(), judged, gate, live, time.Second, 10*time.Millisecond, io.Discard,
+		func(context.Context) bool { return false })
+	if !gate.opened() {
+		t.Fatal("control: the gate stayed closed with nothing owed")
+	}
+}
+
+// recordedWitness is a witness record that holds rev, as one read from a
+// witness.json a replica saved: a record fresh on an empty state_dir owes a
+// purge and takes no tell.
+func recordedWitness(t *testing.T, rev uint64) *witnessRecord {
+	t.Helper()
+	path := filepath.Join(safeDir(t), stateWitnessFile)
+	w := openWitness(path, "/port49/", io.Discard)
+	w.Reset(rev)
+	w.save()
+	return openWitness(path, "/port49/", io.Discard)
+}
+
+// The follower's read says nothing of when the witness it read was written, so
+// a replica with no record that has only read still owes its purge; a write it
+// sees on the watch is a runner's, made after that runner's own purge, and
+// gives the record. A record that owes a purge for a store found below it
+// takes neither.
+func TestAReplicaWithNoRecordTakesALiveWitnessButNotTheRead(t *testing.T) {
+	w := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	at := func(rev uint64) func(context.Context) (etcdstore.WitnessRead, error) {
+		return func(context.Context) (etcdstore.WitnessRead, error) {
+			return etcdstore.WitnessRead{ModRevision: rev, Header: rev + 1}, nil
+		}
+	}
+	w.followed(500, false) // the follower's first read
+	if _, have := w.Recorded(); have {
+		t.Fatal("the initial read gave a record")
+	}
+	if _, gone, _, _ := readWitness(context.Background(), w, at(500)); !gone {
+		t.Fatal("a replica that only read the witness did not owe its purge")
+	}
+	w.followed(510, true) // a runner's write, seen on the watch
+	if got, have := w.Recorded(); !have || got != 510 {
+		t.Fatalf("a live write gave %d %v", got, have)
+	}
+	if _, gone, why, _ := readWitness(context.Background(), w, at(510)); gone {
+		t.Fatalf("a replica that followed a live write still owes a purge: %q", why)
+	}
+	// A record found above the store: a live write does not clear it.
+	r := recordedWitness(t, 1000)
+	if _, gone, _, _ := readWitness(context.Background(), r, at(400)); !gone {
+		t.Fatal("a store below the record was not found restored")
+	}
+	r.followed(410, true)
+	if _, gone, _, _ := readWitness(context.Background(), r, at(1500)); !gone {
+		t.Fatal("a live write cleared the owing of a store found restored")
+	}
+}
+
+// A purge that fails keeps the mint gate closed while it is still owed; the
+// pass that completes it opens the gate. A runner that stops opens it too, so
+// a standby is not held for a purge it will not make.
+func TestAFailedPurgeKeepsTheMintGateClosedUntilItIsDone(t *testing.T) {
+	g := newPurgeRig(t)
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
+		&failsPurgeOnce{Store: g.bs.st})
+	r.holdMints = gate.purge
+	if err := r.witnessPass(g.ctx); err == nil {
+		t.Fatal("the cut-short purge reported nothing")
+	}
+	if err := gate.allow(pol); err == nil {
+		t.Fatal("the gate opened though the purge is still owed")
+	}
+	if err := r.witnessPass(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.allow(pol); err != nil {
+		t.Fatalf("the gate stayed closed after the purge was done: %v", err)
+	}
+	// A runner whose ctx ends mid-purge lets the gate go.
+	gate2 := newStartGate(nil)
+	gate2.flag(pol.Bundle)
+	gate2.open("test", io.Discard)
+	cctx, cancel := context.WithCancel(g.ctx)
+	r2 := g.runner("runner-b", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard),
+		&failsPurgeOnce{Store: g.bs.st})
+	r2.holdMints = gate2.purge
+	cancel()
+	_ = r2.witnessPass(cctx)
+	if err := gate2.allow(pol); err != nil {
+		t.Fatalf("a stopped runner left the gate closed: %v", err)
+	}
+}
+
+// A takeover whose purge fails lets the hold go; the replica then serves
+// mints again (its record still owes the purge, which its next run makes and
+// holds them for), instead of refusing every mint until a purge it does not
+// run.
+func TestATakeoverWhosePurgeFailsLetsTheMintGateGoAndPurgesOnTheNextRun(t *testing.T) {
+	g := newPurgeRig(t)
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	wit := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	r := g.runner("runner-a", wit, &failsPurgeOnce{Store: g.bs.st})
+	r.holdMints = gate.purge
+	r.ledger, r.judge, r.marks = crypt.NewLedger(), make(chan *policy.Policy, 1), store.NewMarks()
+	ctx, cancel := context.WithCancel(g.ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); r.run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitWithin(t, g.out, "the takeover stopped", 20*time.Second)
+	waitUntil(t, "the mint gate to let go", func() bool { return gate.allow(pol) == nil })
+	if _, _, owed := wit.state(); !owed {
+		t.Fatal("the record stopped owing a purge that was not done")
+	}
+	// The next run (5s later) makes the purge, and says so once.
+	waitWithin(t, g.out, "every unspent token is purged", 30*time.Second)
+	waitUntil(t, "the record to take the store's witness", func() bool { _, _, owed := wit.state(); return !owed })
+}
+
+// The mint gate's refusal during a purge says it is the purge, for the
+// broker's 503 to carry (Task 5 review m5).
+func TestAPurgeHoldsMintsWithAReasonTheAnswerMaySay(t *testing.T) {
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	gate.purge(true)
+	var held *broker.MintsHeld
+	if err := gate.allow(pol); !errors.As(err, &held) || !strings.Contains(held.Reason, "purging") {
+		t.Fatalf("the gate during a purge: %v", err)
+	}
+}
+
+// A runner whose broker.state_dir had no marks.json when its copy opened
+// holds only what the store holds, however many marks that is (the marks
+// feed fills the copy from the start): it says it cannot put back a mark a
+// restore lost, not that every revocation is in the store (design §13 step 5;
+// Task 5 review C1, I1r1). It says so once.
+func TestARunnerWhoseCopyStartedFromTheStoreSaysItCannotPutBackWhatARestoreLost(t *testing.T) {
+	g := newPurgeRig(t)
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard), g.bs.st)
+	r.copy = openMarksCopy(filepath.Join(safeDir(t), stateMarksFile), io.Discard)
+	m := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:kept@example.com", At: time.Now()}
+	if err := g.bs.st.PutRevocation(g.ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	r.copy.Apply(store.MarkChange{Revocation: m, Standing: true}) // the feed's copy of what the store holds
+	if err := r.restoreMarks(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	const line = "broker.state_dir had no marks.json at this start; a revocation a store restore lost is put back only if this copy saw it"
+	if got := out.String(); strings.Contains(got, "is in the store") || strings.Count(got, line) != 1 {
+		t.Fatalf("a runner whose copy started from the store said:\n%s", got)
+	}
+	// Said once: the next put-back is the plain one.
+	if err := r.restoreMarks(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Count(got, line) != 1 {
+		t.Fatalf("the fresh-copy line was said again:\n%s", got)
+	}
+}
+
+// A copy that existed on disk keeps the plain line.
+func TestARunnerWithAMarksFileSaysEveryRevocationIsInTheStore(t *testing.T) {
+	g := newPurgeRig(t)
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	dir := safeDir(t)
+	first := openMarksCopy(filepath.Join(dir, stateMarksFile), io.Discard)
+	m := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:kept@example.com", At: time.Now()}
+	if err := g.bs.st.PutRevocation(g.ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	first.Apply(store.MarkChange{Revocation: m, Standing: true})
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard), g.bs.st)
+	r.copy = openMarksCopy(filepath.Join(dir, stateMarksFile), io.Discard)
+	if err := r.restoreMarks(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "every revocation in broker.state_dir/marks.json is in the store") {
+		t.Fatalf("a runner with a marks file said:\n%s", out.String())
+	}
+}

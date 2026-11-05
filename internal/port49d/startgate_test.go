@@ -89,6 +89,7 @@ func TestAFirstStartMintsNothingBeforeItsTakeover(t *testing.T) {
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	f.recorded(t) // a broker that has run here; this test is the bundle's, not the record's
 	release := holdKeyspace(t, f)
 	api, _ := startBroker(t, f.broker, &out, 1)
 	metricsAt := brokerLine.FindAllStringSubmatch(out.String(), -1)[0][2]
@@ -131,7 +132,9 @@ func TestARollingRestartMintsAtOnce(t *testing.T) {
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	_, stopA := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
-	apiB, _ := startBroker(t, f.copyBroker(t), &out, 2)
+	cfgB := f.copyBroker(t)
+	f.recordedFor(t, cfgB) // a restart keeps its state_dir, and with it the witness record
+	apiB, _ := startBroker(t, cfgB, &out, 2)
 	status, tok, body := mintOnce(t, apiB, f.pki, "leaf1")
 	if status != http.StatusOK {
 		t.Fatalf("the first mint on a replica started under a runner that judged its bundle: %s",
@@ -184,6 +187,7 @@ func TestAJudgedBundleInDoubtHoldsMintsUntilATakeover(t *testing.T) {
 	f := splitFleet(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	putJudged(t, f, f.bundle(t), true)
+	f.recorded(t)
 	release := holdKeyspace(t, f)
 	api, _ := startBroker(t, f.broker, &out, 1)
 	metricsAt := brokerLine.FindAllStringSubmatch(out.String(), -1)[0][2]

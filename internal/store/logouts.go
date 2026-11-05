@@ -63,6 +63,18 @@ func (s *LogoutSet) Get(key string) (Logout, bool) {
 	return e.Logout, true
 }
 
+// Entry is the live entry under key, with the Until the set holds now (a
+// later Put may have extended it).
+func (s *LogoutSet) Entry(key string) (LogoutEntry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.m[key]
+	if !ok || !s.now().Before(e.Until) {
+		return LogoutEntry{}, false
+	}
+	return e, true
+}
+
 // Merge is a load: each entry of es is put as Put does, each live entry
 // the load lacks is kept, and each lapsed one is dropped. A load is a snapshot
 // that a concurrent Put (an ingestion, a forward) may have outrun, and

@@ -998,14 +998,16 @@ func restoreFloor(m matrix) {
 	// refused as restored, which an unknown or purged token never reaches.
 	const refused = "port49_redemption_restored_refused_total"
 	shapetest.WaitFor(t, refused+" at 1 or more", 30*time.Second, func() bool { return m.gauge(daemonMetrics, refused) >= 1 })
-	// A token minted after the restore logs in: no purge, no wait. The broker
-	// is started again to mint it. /readyz does not wait for the runner's
+	// A token minted after the restore logs in once the broker has purged the
+	// restored store: the broker is started again to mint it. /readyz does not wait for the runner's
 	// takeover, whose purge would delete a token minted before it ends, so the
 	// mint waits for the broker's purge line.
+	// Only lines since this start count: an earlier run's purge line is not it.
+	since := time.Now().UTC().Format(time.RFC3339Nano)
 	m.s.run("start", "port49-broker")
 	m.s.ready(brokerMetrics)
 	shapetest.WaitFor(t, "the broker's purge of the restored store", 2*time.Minute, func() bool {
-		return strings.Contains(m.s.run("logs", "--no-color", "port49-broker"), "every unspent token is purged")
+		return strings.Contains(m.s.run("logs", "--no-color", "--since", since, "port49-broker"), "every unspent token is purged")
 	})
 	next := m.mint()
 	shapetest.WaitFor(t, "a fresh login", 30*time.Second, func() bool { return m.passes(next) })

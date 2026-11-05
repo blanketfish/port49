@@ -157,7 +157,8 @@ func (f *restoreFloor) attach(path, prefix string) {
 		f.rev++
 	case body == nil:
 		fmt.Fprintf(f.out, "port49d: store: no restore record at %s: a restore made before this port49d's first read "+
-			"of the store cannot be told; start a broker first after a restore (design §13)\n", path)
+			"of the store cannot be told; after a restore, delete the unspent tokens before this port49d reaches the store "+
+			"(design §13 step 3)\n", path)
 	case rec.Prefix != prefix:
 		fmt.Fprintf(f.out, "port49d: store: %s is another prefix's (%s), not %s's; no restore record\n", path,
 			printsafe.Line(rec.Prefix, 256), prefix)

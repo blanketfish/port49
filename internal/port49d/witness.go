@@ -32,7 +32,13 @@ type witnessRecord struct {
 	high         uint64
 	have         bool
 	saved        bool // high is in the file
-	failing      bool // the last save failed: said once per run of failures
+	// owed is set when a check found a purge owed (no record, or a store
+	// below it) and stays until Reset, which the purge calls once it is done.
+	// While it is set the record takes no revision and saves nothing: a
+	// purge cut short is owed again by the next runner on this state_dir,
+	// since meta/purged no longer says it was done (decision 56 ruling 2).
+	owed    bool
+	failing bool // the last save failed: said once per run of failures
 }
 
 type witnessFile struct {
@@ -54,6 +60,10 @@ const unreadWitness = math.MaxUint64
 // unspent token once, which costs a re-login, and says why.
 func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 	w := &witnessRecord{path: path, prefix: prefix, out: out, saved: true}
+	// No record is a purge owed from the start, before the follower can tell
+	// the record the store's own witness: that would make the first check
+	// find nothing to purge (decision 56 ruling 2).
+	w.owed = true
 	body, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return w
@@ -74,16 +84,16 @@ func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 		fmt.Fprintf(out, "port49-broker: reading %s: %v; %s; this replica cannot tell whether the store was "+
 			"restored, so the first check purges every unspent token once\n", path, err, moved)
 		// Saved, so a restart before the purge still owes it (re-review 1 M-5).
-		w.high, w.have, w.saved = unreadWitness, true, false
+		w.high, w.have, w.saved, w.owed = unreadWitness, true, false, false
 	case f.Prefix != prefix:
 		fmt.Fprintf(out, "port49-broker: %s is another prefix's (%s), not %s's; no witness record\n", path,
 			printsafe.Line(f.Prefix, 256), prefix)
 	case f.ModRevision == unreadWitness:
 		fmt.Fprintf(out, "port49-broker: %s records that this replica's earlier witness record could not be read; "+
 			"the first check purges every unspent token once\n", path)
-		w.high, w.have = unreadWitness, true
+		w.high, w.have, w.owed = unreadWitness, true, false
 	default:
-		w.high, w.have = f.ModRevision, true
+		w.high, w.have, w.owed = f.ModRevision, true, false
 	}
 	return w
 }
@@ -94,10 +104,30 @@ func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 // test process may run several daemons.
 var witnessFollowed = func(rec *witnessRecord, rev uint64) {}
 
-// followed is what the broker's FollowWitness calls: Saw, then the hook.
-func (w *witnessRecord) followed(rev uint64) {
-	w.Saw(rev)
+// followed is what the broker's FollowWitnessLive calls: sawLive, then the
+// hook.
+func (w *witnessRecord) followed(rev uint64, live bool) {
+	w.sawLive(rev, live)
 	witnessFollowed(w, rev)
+}
+
+// sawLive is Saw for a revision the follower says whether it saw live. A
+// record that has none and owes a purge for that takes a live write as the
+// record: only a runner writes meta/witness, and only once its own purge is
+// done, so a runner that was safe to serve has run since this replica
+// started. The read that began the follow never does, or a restored store's
+// witness would stand for a store nobody purged. A record that owes a purge
+// for a store found below it stays owing: it saw a restore.
+func (w *witnessRecord) sawLive(rev uint64, live bool) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	if live && w.owed && !w.have {
+		w.owed = false
+	}
+	w.mu.Unlock()
+	w.Saw(rev)
 }
 
 // Saw raises the record to rev and never lowers it: a lower witness is a
@@ -108,6 +138,9 @@ func (w *witnessRecord) Saw(rev uint64) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.owed {
+		return
+	}
 	if !w.have || rev > w.high {
 		w.high, w.have, w.saved = rev, true, false
 	}
@@ -115,12 +148,28 @@ func (w *witnessRecord) Saw(rev uint64) {
 
 // Recorded is the record, and whether there is one.
 func (w *witnessRecord) Recorded() (uint64, bool) {
+	rec, have, _ := w.state()
+	return rec, have
+}
+
+// state is the record, whether there is one, and whether a purge is owed.
+func (w *witnessRecord) state() (rec uint64, have, owed bool) {
 	if w == nil {
-		return 0, false
+		return 0, false, false
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.high, w.have
+	return w.high, w.have, w.owed
+}
+
+// owe records that a purge is owed, until Reset.
+func (w *witnessRecord) owe() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.owed = true
 }
 
 // Reset takes rev as the record, lower or not. The runner calls it once
@@ -131,7 +180,7 @@ func (w *witnessRecord) Reset(rev uint64) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.high, w.have, w.saved = rev, true, false
+	w.high, w.have, w.saved, w.owed = rev, true, false, false
 }
 
 // keep saves the record, when it changed, once a second and as ctx ends.
@@ -153,7 +202,7 @@ func (w *witnessRecord) keep(ctx context.Context) {
 // file renamed into place, as the marks copy is written.
 func (w *witnessRecord) save() {
 	w.mu.Lock()
-	if w.saved || !w.have {
+	if w.saved || !w.have || w.owed {
 		w.mu.Unlock()
 		return
 	}
@@ -183,7 +232,8 @@ func (w *witnessRecord) save() {
 // read's header rises under the bump. why is said when it is not "".
 func restored(read etcdstore.WitnessRead, recorded uint64, haveRecord bool) (bool, string) {
 	if !haveRecord {
-		return false, "no witness record in broker.state_dir; cannot tell whether the store was restored"
+		return true, "no witness record in broker.state_dir; the store may have been restored, which only a " +
+			"witness record can tell"
 	}
 	if read.ModRevision >= recorded {
 		return false, ""
@@ -208,11 +258,20 @@ func restored(read etcdstore.WitnessRead, recorded uint64, haveRecord bool) (boo
 // which would purge at a routine handover (final check, Minor 1).
 func readWitness(ctx context.Context, w *witnessRecord,
 	read func(context.Context) (etcdstore.WitnessRead, error)) (etcdstore.WitnessRead, bool, string, error) {
-	rec, have := w.Recorded()
+	rec, have, owed := w.state()
 	got, err := read(ctx)
 	if err != nil {
 		return got, false, "", err
 	}
+	if w == nil { // a runner built without a record (tests): nothing to judge by
+		return got, false, "", nil
+	}
 	gone, why := restored(got, rec, have)
+	if !gone && owed {
+		gone, why = true, "an earlier check found a purge owed and it is not yet done"
+	}
+	if gone {
+		w.owe()
+	}
 	return got, gone, why, nil
 }

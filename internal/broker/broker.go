@@ -703,17 +703,32 @@ func (j joinInto) Emit(r decision.Record) {
 // page of a sweep asks it too, so a broker the gate has not cleared answers
 // no policy-derived page at all.
 func (b *Broker) mintGateRefuses(w http.ResponseWriter, pol *policy.Policy, now time.Time, c caller, req api.MintRequest) bool {
-	if b.MintGate == nil || b.MintGate(pol) == nil {
+	if b.MintGate == nil {
 		return false
+	}
+	gateErr := b.MintGate(pol)
+	if gateErr == nil {
+		return false
+	}
+	detail := "the broker has not yet recorded what it serves in the store, or seen it judged since it started, " +
+		"so it minted nothing; retry shortly"
+	var held *MintsHeld
+	if errors.As(gateErr, &held) {
+		detail = held.Reason + ", so it minted nothing; retry shortly"
 	}
 	b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
 		Reason: decision.StoreUnavailable, Principal: c.principal, Auth: c.auth(), Sweep: sweepOf(req)})
 	w.Header().Set("Retry-After", "5")
-	writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-		"the broker has not yet recorded what it serves in the store, or seen it judged since it started, "+
-			"so it minted nothing; retry shortly")
+	writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), detail)
 	return true
 }
+
+// MintsHeld is a MintGate refusal whose reason the caller may be told: a
+// fixed sentence naming no store content. Any other error from MintGate
+// answers with the generic detail, since its text is the gate's own.
+type MintsHeld struct{ Reason string }
+
+func (e *MintsHeld) Error() string { return e.Reason }
 
 // sweepRequestError is why a request naming scope or after is malformed, or
 // "" (decision 42 ruling 1): a scope in place of devices, after only beside

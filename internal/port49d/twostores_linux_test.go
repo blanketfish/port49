@@ -312,7 +312,7 @@ func TestNothingIsServedBeforeTheDirectorysMarksLoad(t *testing.T) {
 // it, so a mint or a refresh is never waved through a set that has not loaded.
 func TestNothingIsServedBeforeTheDirectorysLogoutsLoad(t *testing.T) {
 	notServedBeforeTheFirstLoad(t, "revocation(s) in force from the directory store",
-		"nothing is served yet; trying again in 5s", "revocation(s) in force from the directory store")
+		"nothing is served yet; trying again: an attempt every second", "revocation(s) in force from the directory store")
 }
 
 // metricsReadyz is the status /readyz answers on the metrics listener.
@@ -1184,7 +1184,7 @@ func TestATakeoverDuringACutRunsTheSessionDuties(t *testing.T) {
 	waitWithin(t, &out, "the put-back of broker.state_dir/marks.json waits for the directory store", 30*time.Second)
 	_ = mintOn(t, api, f.pki, "leaf1") // the start's mint gate opened: the takeover finished in the cut
 	f.dproxy.Hang(false)
-	waitWithin(t, &out, "every revocation in broker.state_dir/marks.json is in the store", 60*time.Second)
+	waitWithin(t, &out, "broker.state_dir had no marks.json at this start", 60*time.Second)
 }
 
 // N2: a key fault found when the directory opens after a snapshot start
