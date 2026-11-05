@@ -69,7 +69,7 @@ func TestEveryAlertNamesARegisteredMetric(t *testing.T) {
 	tok := regexp.MustCompile(`port49_[a-z0-9_]+`)
 	for _, r := range allRules(t) {
 		found := tok.FindAllString(r.Expr, -1)
-		if strings.HasPrefix(r.Alert, "port49_") && len(found) == 0 {
+		if strings.HasPrefix(r.Alert, "port49_") && len(found) == 0 && !scrapeExpr.MatchString(r.Expr) {
 			t.Errorf("%s: its expression names no port49 metric: %s", r.Alert, r.Expr)
 		}
 		for _, n := range found {
@@ -84,6 +84,22 @@ func TestEveryAlertNamesARegisteredMetric(t *testing.T) {
 			if !have[base] {
 				t.Errorf("%s: %s is not a registered metric", r.Alert, n)
 			}
+		}
+	}
+}
+
+// The target rules read Prometheus's own up series for port49's two jobs, which port49 does not register.
+var scrapeExpr = regexp.MustCompile(`\bup\{job=~?"port49`)
+
+func TestScrapeExprMatchesOnlyPort49sUpSeries(t *testing.T) {
+	for expr, want := range map[string]bool{
+		`up{job=~"port49d|port49-broker"} == 0`: true,
+		`absent(up{job="port49d"})`:             true,
+		`startup{job="port49d"} == 0`:           false,
+		`up{job="node"} == 0`:                   false,
+	} {
+		if got := scrapeExpr.MatchString(expr); got != want {
+			t.Errorf("%s: matches %v, want %v", expr, got, want)
 		}
 	}
 }

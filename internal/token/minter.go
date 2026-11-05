@@ -481,7 +481,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		// told to stop while every token already issued stays usable (design §8).
 		// The check is per mint, not per token, so a pair mint from cap-1 lands
 		// cap+1. That is the bound, not a ratchet — the next mint is refused —
-		// and §8 wants a backstop, not an exact ceiling.
+		// and §8 wants a backstop, not an exact ceiling. A mint whose reply is
+		// lost after its commit leaves a token nobody holds; it counts toward
+		// the cap until it expires (at most 15 minutes).
 		return Result{}, &ErrTooManyOutstanding{Device: r.Device, Username: r.Subject.Username, Count: len(cands), Cap: m.cap}
 	}
 

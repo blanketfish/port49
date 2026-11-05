@@ -509,6 +509,39 @@ func TestPrometheusRuleIsOffByDefault(t *testing.T) {
 	}
 }
 
+// The rules key on up{job="port49d"} and up{job="port49-broker"}, so the chart that renders them also
+// renders the PodMonitors that set those job names. Nothing renders by default (pre-beta fixes, Task 14).
+func TestPodMonitorRendersWithTheRulesAndSetsTheJobs(t *testing.T) {
+	for _, d := range render(t, goRender, "") {
+		if kindOf(d) == "PodMonitor" {
+			t.Fatalf("a PodMonitor renders by default: %v", nameOf(d))
+		}
+	}
+	docs := render(t, goRender, "prometheusRule: {enabled: true, labels: {release: kube-prometheus}}\n")
+	for component, job := range map[string]string{"port49d": "port49d", "broker": "port49-broker"} {
+		m := one(t, docs, "PodMonitor", "t-"+component)
+		if str(at(m, "metadata", "labels", "release")) != "kube-prometheus" {
+			t.Errorf("%s: the monitor's labels: %v", component, at(m, "metadata", "labels"))
+		}
+		if str(at(m, "spec", "selector", "matchLabels", "app.kubernetes.io/component")) != component {
+			t.Errorf("%s: selector %v", component, at(m, "spec", "selector"))
+		}
+		eps := list(at(m, "spec", "podMetricsEndpoints"))
+		if len(eps) != 1 || str(at(eps[0], "port")) != "metrics" {
+			t.Fatalf("%s: endpoints %v, want one on the metrics port", component, eps)
+		}
+		found := false
+		for _, r := range list(at(eps[0], "relabelings")) {
+			if str(at(r, "targetLabel")) == "job" && str(at(r, "replacement")) == job {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: no relabeling sets job to %s: %v", component, job, at(eps[0], "relabelings"))
+		}
+	}
+}
+
 // autoscaling.averageConnections is half the peak port49_connections per replica
 // at target, to the nearest 50 (plan 12c decision 7): beehive's real-disk cell b
 // peaked at 62 with one replica; the GCE pd-ssd target cells peaked at 7 and 11, which round to 0,

@@ -11,6 +11,13 @@ names is one port49 registers.
 Two severities. `page` is a fault that is refusing devices or losing records now. `ticket` is one
 that costs nothing yet, or that a person fixes in working hours. Route on the `severity` label.
 
+**The job names are the rules' parameter.** The two target rules read Prometheus's own `up` series for
+`job="port49d"` and `job="port49-broker"`. The chart's PodMonitors (rendered with
+`prometheusRule.enabled`) set those names; if you scrape another way, give the jobs those names or
+edit the rules. Without them `port49_target_absent` and `port49_broker_target_absent` fire, which is the
+point of them. The absent rules are fleet-wide: `absent()` stays quiet while any scrape of that job exists,
+so use one Prometheus per port49 fleet, or add a namespace matcher to the two expressions.
+
 No expression names a device, and none groups by one: the series carry no device identity (design
 §15), and the decision log answers "which devices". The labels used are bounded: `instance`,
 `key_ref`, `version`, `server`, `issuer`, `outcome`, `feed`, `pool`, `component`.
@@ -27,6 +34,9 @@ threshold when you change the setting it follows.
 
 | Statement | Alert | Severity | for | Why this threshold |
 |---|---|---|---|---|
+| pre-beta review, deploy I2: a port49d or broker that is down raises no alarm of its own, because every other rule reads series it no longer exports | `port49_target_down` | page | 2m | `up == 0` for a scrape target of either job; two minutes outlasts a restart's missed scrapes. |
+| pre-beta review, deploy I2: a target Prometheus is not scraping at all has no `up` series, so `== 0` never matches | `port49_target_absent` | page | 5m | `absent()` of port49d's `up`. Prometheus's pod discovery keeps a target only while its pod exists, so a StatefulSet with every pod Pending or deleted leaves no series for `== 0` to match, and every device has lost port49: a page. Five minutes outlasts a rollout. A mislabelled scrape config shows here too. |
+| pre-beta review, deploy I2: the same for the broker | `port49_broker_target_absent` | ticket | 10m | `absent()` of the broker's `up`: no token can be minted, but held tokens still log in. On the memory-store trial, which runs no separate broker, the broker rule fires; drop it there or silence it. |
 | roadmap, plan 12a hand-off: "an alarm on `port49_connections_shed_total{reason="global_cap"}` increasing" | `port49_global_cap_shedding` | page | none | Any shed connection is a device refused, so any increase pages; five minutes smooths one scrape. |
 | roadmap, plan 12a hand-off: "a warning on `port49_connections` near the cap" | `port49_connections_near_cap` | ticket | 10m | Ten minutes at 80% is a trend, not a burst; the page above covers the cap itself. |
 | roadmap, plan 12b hand-off: "an alarm on `port49_key_secret_files_changed > 0` for 10m" | `port49_key_secret_files_changed` | ticket | 10m | A rotated file is expected for minutes while the rollout restarts; ten minutes is a forgotten restart. |
