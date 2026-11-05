@@ -51,7 +51,8 @@ backup, so a revoked principal or certificate is admitted again until it is re-i
 every token redeemed since, redeemable again while it has not expired. The backup also restores port49d's
 `restore.json` and the brokers' `witness.json` with the store. port49d can then tell the restore only if
 `restore.json` is newer than the etcd copy, which is usual on a store with writes in the backup window and
-not so on an idle one, and a broker cannot tell it at all: the token delete (design §13 step 3) is
+not so on an idle one, and a broker tells it on the same terms (its `witness.json` is then newer than the
+restored witness), and purges once more and says so at its first takeover: the token delete (design §13 step 3) is
 required, and it must land before port49d or a broker reaches the restored store. A Velero restore cannot
 use `--bump-revision`, so when port49d does tell the restore it also arms the 5-minute band: see "What
 you see after step 9" below. So the restore is made in this order, with nothing reaching the store until
@@ -225,8 +226,10 @@ kubectl -n port49 rollout status statefulset/<release>-port49d --timeout=10m
    restore did not use `--bump-revision`, so for the 5 minutes after port49d's read **every token a user
    mints is refused `token_spent` (FAIL)**: the new timeline's revisions sit below the old `high_header`.
    Users see a failed login, and so does every retry until the window ends. The log line names the
-   time (`a token minted until <time> (5 minutes after this read)`). Tell users to retry after it; no
-   restored token is accepted at any point. Break-glass is unaffected. The band itself lasts 20 minutes,
+   time (`a token minted until <time> (5 minutes after this read)`). Tell users to mint a new token after it: a
+   token minted inside the window keeps its mint time, so it stays refused until the band ends (20 minutes
+   after the read), and a user who pastes the same token again keeps failing. A fresh mint after the window
+   is served. No restored token is accepted at any point. Break-glass is unaffected. The band itself lasts 20 minutes,
    but only tokens minted in its first 5 are refused.
 
 10. Lift again what was lifted since (design §13 step 6).
