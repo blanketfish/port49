@@ -462,6 +462,19 @@ func Subst(cmd string, repl map[string]string) (string, error) {
 // two StatefulSets (named t-broker and t-port49d there), so the README's order is otherwise run as written.
 const shippedModifier = "      groupResource: statefulsets.apps\n"
 
+// LabDeleteJob is the shipped delete Job (restore-token-delete.yaml) pointed at the lab's one namespace:
+// its namespace and etcd's service names move to ns. The Secret port49-etcd-root keeps its name, which
+// the lab's stack creates in ns; any other port49-etcd left is an error, so the lab never runs a Job
+// that still reaches for a namespace it does not have.
+func LabDeleteJob(example, ns string) (string, error) {
+	out := strings.ReplaceAll(example, "port49-etcd.svc", ns+".svc")
+	out = strings.ReplaceAll(out, "namespace: port49-etcd\n", "namespace: "+ns+"\n")
+	if left := strings.ReplaceAll(out, "port49-etcd-root", ""); strings.Contains(left, "port49-etcd") {
+		return "", fmt.Errorf("l89: the delete Job names port49-etcd in a way the lab does not rewrite")
+	}
+	return out, nil
+}
+
 func LabModifier(example, release string) (string, error) {
 	if strings.Count(example, shippedModifier) != 1 {
 		return "", fmt.Errorf("l89: the modifier does not hold %q exactly once", shippedModifier)

@@ -895,6 +895,31 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	}
 }
 
+// Run 42047911635: (c) and (d) stopped as a setup failure in 3s, because the harness refused the shipped
+// delete Job for still naming port49-etcd, which it does as the Secret port49-etcd-root, one the lab
+// creates in its own namespace. Only the namespace and the service names move.
+func TestLabDeleteJobMovesOnlyTheNamespace(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "restore-token-delete.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LabDeleteJob(string(b), "port49")
+	if err != nil {
+		t.Fatalf("the shipped delete Job: %v", err)
+	}
+	for _, want := range []string{"namespace: port49\n", "etcd-0.etcd.port49.svc:2379", "secretName: port49-etcd-root"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the lab's delete Job lacks %q", want)
+		}
+	}
+	if strings.Contains(got, "port49-etcd.svc") || strings.Contains(got, "namespace: port49-etcd") {
+		t.Error("the lab's delete Job still points at port49-etcd")
+	}
+	if _, err := LabDeleteJob(string(b)+"# kubectl -n port49-etcd get pods\n", "port49"); err == nil {
+		t.Error("a port49-etcd the rewrite does not move is accepted")
+	}
+}
+
 func TestSubstAndLabModifier(t *testing.T) {
 	if got, err := Subst("a <x> <x> b", map[string]string{"<x>": "1"}); err != nil || got != "a 1 1 b" {
 		t.Errorf("Subst: %q, %v", got, err)

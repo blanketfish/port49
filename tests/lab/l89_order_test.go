@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -181,13 +182,15 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	// the files the README's commands read from the working directory: the examples, for the lab's
 	// namespace (and, for the modifier, the lab's one namespace)
 	work := t.TempDir()
-	tokenFile, err := os.ReadFile(filepath.Join(example, "restore-token-delete.yaml"))
+	// the messages name the delete Job, never its file: the job log's filter drops every line with the
+	// file's name in it, and run 42047911635 lost this cell's reason that way
+	deleteFile, err := os.ReadFile(filepath.Join(example, "restore-token-delete.yaml"))
+	if err != nil {
+		t.Fatalf("reading the delete Job's example: %v", errors.Unwrap(err))
+	}
+	tok, err := l89.LabDeleteJob(string(deleteFile), ns)
 	if err != nil {
 		t.Fatal(err)
-	}
-	tok := strings.ReplaceAll(strings.ReplaceAll(string(tokenFile), "port49-etcd.svc", ns+".svc"), "namespace: port49-etcd", "namespace: "+ns)
-	if strings.Contains(tok, "port49-etcd") {
-		t.Fatalf("restore-token-delete.yaml names port49-etcd in a way the lab does not rewrite")
 	}
 	mod, err := os.ReadFile(filepath.Join(example, "restore-scale-zero.yaml"))
 	if err != nil {
@@ -199,7 +202,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 	for f, body := range map[string]string{"restore-token-delete.yaml": tok, "restore-scale-zero.yaml": labMod} {
 		if err := os.WriteFile(filepath.Join(work, f), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
+			t.Fatalf("writing an example into the working directory: %v", errors.Unwrap(err))
 		}
 	}
 
