@@ -1756,12 +1756,13 @@ lifting a mitigation is the failure to design against. So a scope with at least 
 key that delivers a deny — it attaches a role carrying one, or a grant on it holds one — MUST
 declare `on_missing`, and omitting it is a load error; any other scope defaults to `exclude`.
 A grant on a scope with `on_missing: include` and a match key (not `all_devices`, not a scope
-pinned by `name` alone) loads only if it cannot admit a session (decision 56 ruling 5): every
-role it carries has no `permit`, no `privilege` and no `attributes`, and the grant itself has no
-`max_privilege` and no `attributes`. A grant carries access, and the safe direction for access
-is *exclude*, so a missing attribute would hand it to a device the inventory could not describe.
-A pure-deny grant admits nothing and stays. Otherwise put the grant on a separate scope with the
-same match and `on_missing: exclude`, and leave the include scope for denies.
+pinned by `name` alone) is a load error, whatever its roles carry (decision 56 ruling 5). A grant
+is what lets a login reach a device, even one whose roles only deny, and the safe direction for
+access is *exclude*: a missing attribute would hand a session to a device the inventory could not
+describe. Put the grant on a separate scope with the same match and `on_missing: exclude`, and
+put the mitigation's deny in the include scope's `attached_roles`. An include scope with a match
+key may attach only roles that cannot widen access, with no `permit`, no `privilege` and no
+`attributes`; any other is a load error. (`attached_permit` stays a lint on exclude scopes.)
 A scope with no match key, `all_devices`, selects every device and needs neither (plan 4).
 
 `security_log: true` marks a scope whose membership changes are security events. This is
@@ -11839,11 +11840,11 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
    `POST /v1/certificate` (with `issuance`) and at `POST /v1/mfa` as an `idp_mfa` proof
    (decision 45 ruling 20). This amends decision 43 ruling 13 and retires plan 7h's bearer path
    for people (identity I4, Q1).
-5. **A grant on an `on_missing: include` scope with a match key loads only if it cannot admit a
-   session** (§5.5; policy I1): its roles carry no permit, `privilege` or `attributes`, and the
-   grant sets no `max_privilege` or `attributes`. A pure-deny mitigation grant loads; a role
-   with only a `privilege`, or a grant with `attributes`, would still give a session on a device
-   the inventory could not describe, so it is refused too.
+5. **A grant on an `on_missing: include` scope with a match key is a load error** (§5.5; policy
+   I1). Any grant, deny-only ones included, lets a login reach a device the inventory could not
+   describe, and on a platform that sends no command rules the deny is not even sent. A mitigation's
+   deny goes in the include scope's `attached_roles`, which may carry only roles with no permit,
+   `privilege` or `attributes`.
 6. **An attribute scope that delivers a deny defaults to `security_log: true`, and
    `platform_changed` is a security change** (§10; policy I2).
 7. **A passing store health check closes the token and context pools' circuits** (amends

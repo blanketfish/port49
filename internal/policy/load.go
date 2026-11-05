@@ -1399,6 +1399,16 @@ func (p *Policy) buildScopes(f file) error {
 					return fmt.Errorf("scope %q: attached_roles.%s: role %q is not declared", s.Name, domain, r)
 				}
 				deny = deny || len(role.Deny) > 0
+				// An include scope hands its attached roles to a device the
+				// inventory could not describe, so they may only restrict.
+				if s.OnMissing == "include" && len(s.Match) > 0 && !pinnedByName(s.Match) {
+					if why := widens(role); why != "" {
+						return fmt.Errorf("scope %q: attached_roles.%s: role %q %s, and the scope is on_missing: include, "+
+							"so a device the inventory cannot describe would get it; an include scope attaches only roles "+
+							"with no permit, privilege or attributes (put this one on an exclude scope; spec §5.5)",
+							s.Name, domain, r, why)
+					}
+				}
 			}
 		}
 		if deny && len(s.Match) > 0 {
@@ -1613,6 +1623,20 @@ func parseExpires(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
+// widens says how a role can widen access, "" for one that cannot: it
+// carries a permit, a privilege or attributes.
+func widens(r *Role) string {
+	switch {
+	case len(r.Permit) > 0:
+		return "carries a permit"
+	case r.Privilege != "":
+		return "carries a privilege"
+	case len(r.Attributes) > 0:
+		return "carries attributes"
+	}
+	return ""
+}
+
 func (p *Policy) buildGrants(f file) error {
 	p.grantsOf = map[string][]int{}
 	seen := map[string]int{} // subject, scope and sorted roles → first row
@@ -1664,38 +1688,30 @@ func (p *Policy) buildGrants(f file) error {
 				}
 			}
 		}
-		// A grant carries access, and access's safe direction is exclude: on an
-		// include scope a device the inventory could not describe would get a
-		// session from the grant alone. A scope that cannot miss, or is pinned
-		// by name, has nothing to include (spec §5.5, decision 56 ruling 5).
+		// A grant is what lets a login reach a device, even with roles that
+		// only deny, and access's safe direction is exclude: on an include
+		// scope a device the inventory could not describe would get a session
+		// from the grant alone. A scope that cannot miss, or is pinned by
+		// name, has nothing to include (spec §5.5, decision 56 ruling 5).
 		if sc := p.scopes[g.Scope]; sc.OnMissing == "include" && len(sc.Match) > 0 && !pinnedByName(sc.Match) {
-			admits := ""
+			admits := "a grant lets a login reach a device even when its roles only deny"
 			for _, r := range g.Roles {
-				switch role := p.roles[r]; {
-				case len(role.Permit) > 0:
-					admits = fmt.Sprintf("role %q carries a permit", r)
-				case role.Privilege != "":
-					admits = fmt.Sprintf("role %q carries a privilege", r)
-				case len(role.Attributes) > 0:
-					admits = fmt.Sprintf("role %q carries attributes", r)
-				}
-				if admits != "" {
+				if why := widens(p.roles[r]); why != "" {
+					admits = fmt.Sprintf("role %q %s", r, why)
 					break
 				}
 			}
 			switch {
-			case admits != "":
+			case strings.HasPrefix(admits, "role"):
 			case g.MaxPrivilege != "":
 				admits = "the grant sets max_privilege"
 			case len(g.Attributes) > 0:
 				admits = "the grant carries attributes"
 			}
-			if admits != "" {
-				return fmt.Errorf("%s: scope %q is on_missing: include and %s, so a device the inventory cannot "+
-					"describe would get a session from this grant; put the grant on a separate scope with the same "+
-					"match and on_missing: exclude, and leave the include scope for denies in attached_roles or "+
-					"deny-only grants (spec §5.5)", row, g.Scope, admits)
-			}
+			return fmt.Errorf("%s: scope %q is on_missing: include and %s, so a device the inventory cannot "+
+				"describe would get a session from this grant; put the grant on a separate scope with the same "+
+				"match and on_missing: exclude, and put a mitigation's deny in the include scope's attached_roles "+
+				"(spec §5.5)", row, g.Scope, admits)
 		}
 		// Roles are kept sorted, so nothing a grant reports — the mint
 		// record, explain, access review — depends on how the file lists them.

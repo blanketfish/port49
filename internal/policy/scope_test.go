@@ -204,22 +204,25 @@ func TestAKeyWithSeveralComparisonsSelectsTheSameWayEveryTime(t *testing.T) {
 	}
 }
 
-// A scope a principal's own grant is on is reported when it selected the
-// device on an incomparable version, even though it attaches nothing.
-func TestAGrantedScopeTakenInOnAnIncomparableVersionIsReported(t *testing.T) {
+// An include scope that selected the device on an incomparable version is
+// reported. It attaches a deny to the grant that reaches the device, since a
+// grant on an include scope is refused at load (spec §5.5).
+func TestAScopeTakenInOnAnIncomparableVersionIsReported(t *testing.T) {
 	p := mustParse(t, `
 scopes:
-  - {name: junos_old, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: include}
+  - {name: all_devices, match: {}}
+  - {name: junos_old, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: include, attached_roles: {humans: [no_reload]}}
 roles:
+  - {name: read_only, privilege: readonly, permit: [show **]}
   - {name: no_reload, deny: [reload]}
 subjects:
   - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
 grants:
-  - {subject: noc, scope: junos_old, roles: [no_reload]}
+  - {subject: noc, scope: all_devices, roles: [read_only]}
 `)
 	if c := composed(t, p, "noc", "srx-fw-22", time.Time{}); len(c.grants) != 1 ||
 		strings.Join(c.incomparable, ",") != "junos_old" {
-		t.Fatalf("the grant's own scope is reported: %+v", c)
+		t.Fatalf("the scope is reported: %+v", c)
 	}
 }
 

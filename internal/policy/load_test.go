@@ -656,9 +656,37 @@ func TestAGrantWithOnlyAMaxPrivilegeOnAnIncludeScopeIsRefused(t *testing.T) {
 	}
 }
 
-func TestADenyOnlyGrantOnAnIncludeScopeLoads(t *testing.T) {
-	if _, err := Parse([]byte(includeProbe+"grants:\n  - {subject: noc, scope: dc_fabric, roles: [no_reload]}\n"), env()); err != nil {
-		t.Fatalf("a deny-only grant on an include scope is the mitigation shape: %v", err)
+func TestADenyOnlyGrantOnAnIncludeScopeIsRefused(t *testing.T) {
+	// A grant is what lets a login reach the device, whatever its roles carry.
+	_, err := Parse([]byte(includeProbe+"grants:\n  - {subject: noc, scope: dc_fabric, roles: [no_reload]}\n"), env())
+	if err == nil {
+		t.Fatal("a deny-only grant on an include scope loaded")
+	}
+	for _, want := range []string{"grants[0] (subject noc, scope dc_fabric)", "same match", "on_missing: exclude",
+		"attached_roles"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal lacks %q: %v", want, err)
+		}
+	}
+}
+
+func TestAnIncludeScopeAttachesOnlyRolesThatCannotWidenAccess(t *testing.T) {
+	for _, tt := range []struct{ name, role, want string }{
+		{"a permit", "{name: w, permit: [\"**\"]}", `role "w" carries a permit`},
+		{"a privilege", "{name: w, privilege: admin}", `role "w" carries a privilege`},
+		{"attributes", "{name: w, deny: [reload], attributes: {all: [\"idletime*30\"]}}", `role "w" carries attributes`},
+	} {
+		body := "scopes:\n  - {name: all_devices, match: {}}\n" +
+			"  - {name: dc, match: {site: dc1}, on_missing: include, security_log: true, attached_roles: {humans: [w]}}\n" +
+			"roles:\n  - " + tt.role + "\nsubjects:\n  - {name: s, identity: [\"user:s@example.com\"], username: s, token_ttl: 60s}\n"
+		_, err := Parse([]byte(body), env())
+		if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "attached_roles") {
+			t.Errorf("%s: %v", tt.name, err)
+		}
+		// The same role on an exclude scope is the lint's, not a refusal.
+		if _, err := Parse([]byte(strings.Replace(body, "on_missing: include", "on_missing: exclude", 1)), env()); err != nil {
+			t.Errorf("%s on an exclude scope: %v", tt.name, err)
+		}
 	}
 }
 
@@ -733,7 +761,8 @@ func TestEveryShippedPolicyLoads(t *testing.T) {
 				}
 				return nil
 			}
-			if n := d.Name(); n == "policy.yaml" || strings.HasSuffix(n, "-policy.yaml") {
+			if n := d.Name(); n == "policy.yaml" || strings.HasSuffix(n, "-policy.yaml") ||
+				strings.HasSuffix(filepath.ToSlash(path), "quarantine-sync/fixed.yaml") {
 				files = append(files, path)
 				found++
 			}
