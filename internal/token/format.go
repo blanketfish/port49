@@ -8,8 +8,10 @@ import (
 	"crypto/subtle"
 	"io"
 	"math/big"
+	"strings"
 
 	"github.com/blanketfish/port49/internal/secretref"
+	"github.com/blanketfish/port49/internal/username"
 )
 
 // TagLen, SecretLen, and Len are the fixed sizes of the token format: a
@@ -157,4 +159,17 @@ func randInt(r io.Reader, n int) (int, error) {
 			return int(b[0]) % n, nil
 		}
 	}
+}
+
+// LoggedUsername is the username as the decision log may carry it. A user who
+// pastes a token into the username prompt would otherwise put it in the log, so
+// a token-shaped name is dropped and reported as redacted. The surrounding
+// whitespace is trimmed before the check because a pasted token often arrives
+// with a trailing space or CR. Only the log is redacted: lookups keep using the
+// canonical name.
+func LoggedUsername(raw string) (name string, redacted bool) {
+	if _, ok := Parse([]byte(strings.TrimSpace(raw))); ok {
+		return "", true
+	}
+	return username.Canonical(raw), false
 }

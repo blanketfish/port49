@@ -108,3 +108,30 @@ func TestTagWindowAcceptsEveryKeyInIt(t *testing.T) {
 		t.Fatal("an empty key is not a key")
 	}
 }
+
+// synthTokenShaped is token-shaped (Len base62 characters) and obviously not a
+// credential.
+const synthTokenShaped = "SyntheticTokenShapedNameXY1234"
+
+func TestLoggedUsernameRedactsOnlyTokenShapedNames(t *testing.T) {
+	if len(synthTokenShaped) != Len {
+		t.Fatalf("fixture is %d bytes, want %d", len(synthTokenShaped), Len)
+	}
+	cases := []struct {
+		name, in, want string
+		redacted       bool
+	}{
+		{"plain_name", "alice", "alice", false},
+		{"token_shaped", synthTokenShaped, "", true},
+		{"token_shaped_with_trailing_space_and_cr", synthTokenShaped + " \r", "", true},
+		{"thirty_chars_with_dot", "synthetic.name.of.thirty.chars", "synthetic.name.of.thirty.chars", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, red := LoggedUsername(c.in)
+			if got != c.want || red != c.redacted {
+				t.Fatalf("LoggedUsername(%q) = %q, %v; want %q, %v", c.in, got, red, c.want, c.redacted)
+			}
+		})
+	}
+}

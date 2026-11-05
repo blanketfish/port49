@@ -20,6 +20,7 @@ import (
 	"github.com/blanketfish/port49/internal/platform"
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 type Handler struct {
@@ -80,6 +81,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	// wire details that break the join").
 	vector := author.Vector(cmd, cmdArgs)
 	canonical := authen.Canonical(string(req.User))
+	loggedName, redacted := token.LoggedUsername(string(req.User))
 
 	// (nas, username), not (nas, port): the accounting port is a third value
 	// again on most platforms — `0`, `1` or `non-tty` on Junos where the
@@ -143,7 +145,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		Attribution: attribution, TaskID: avOf(raw, "task_id"),
 		Device:       peer.Device(),
 		PacketFields: decision.AcctFields(req),
-		Session:      &decision.Session{Username: canonical, Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
+		Session:      &decision.Session{Username: loggedName, UsernameRedacted: redacted, Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
 		AcctRecord: &decision.AcctRecord{Raw: raw, Vector: vector, PrivLvl: req.PrivLvl,
 			StartTime: num(avOf(raw, "start_time")), StopTime: num(avOf(raw, "stop_time")),
 			ElapsedTime: num(avOf(raw, "elapsed_time"))}}
