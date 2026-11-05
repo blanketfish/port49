@@ -419,7 +419,7 @@ func JobProbe(ns, job string) string {
 	return "kubectl -n " + ns + " get job " + job + ` -o jsonpath='{range .status.conditions[*]}cond {.type}={.status} {.reason}{"\n"}{end}'` + "\n" +
 		"kubectl -n " + ns + " get pods -l job-name=" + job +
 		` -o jsonpath='{range .items[*]}pod {.metadata.name} {.status.phase} {.status.containerStatuses[0].state.terminated.exitCode}{"\n"}{end}'` + "\n" +
-		"kubectl -n " + ns + " logs -l job-name=" + job + " --tail=10 --prefix=false | sed 's/^/log /'\n"
+		"kubectl -n " + ns + " logs -l job-name=" + job + " --all-containers=true --tail=10 --prefix=false | sed 's/^/log /'\n"
 }
 
 // JobRows is JobProbe's output as rows: the conditions, one row per pod, and the log lines through

@@ -2,51 +2,59 @@
 # records), for the Velero restore in README.md. Its name holds no word a log filter drops, so its
 # events, describe and logs stay readable where secrets are filtered out.
 # It mounts the Secret `port49-etcd-root` (ca.crt tls.crt tls.key) at /etcd-root, as
-# examples/etcd/etcd-init-job.yaml does. Like etcd-init it waits up to 120s for all three members to
-# answer: a member just restored may still be electing, and one `endpoint health` fails on any member
-# that does not answer within its timeout.
-# UNVERIFIED until it runs on a cluster: like etcd-init-job.yaml it installs etcdctl on alpine (needs egress
-# to the package mirror: replace the image with one of your own that carries etcdctl and a shell).
-# Edit PREFIX to your store prefix (stores.session.etcd.prefix).
+# examples/etcd/etcd-init-job.yaml does. It runs etcdctl from etcd's own image, the digest
+# examples/etcd/statefulset.yaml runs, so nothing is fetched at restore time; that image has no shell,
+# so each etcdctl call is its own container, the health check first. A member still electing after the
+# restore fails the health check, and the Job's backoff tries again (a new pod each time).
+# Edit PREFIX to your store prefix (stores.session.etcd.prefix); Kubernetes puts it into $(PREFIX).
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: restore-unspent
   namespace: port49-etcd
 spec:
-  backoffLimit: 2
+  backoffLimit: 4
+  activeDeadlineSeconds: 220
   template:
     spec:
       automountServiceAccountToken: false   # etcdctl does not call the Kubernetes API
       restartPolicy: Never
-      containers:
-        - name: restore-unspent
-          image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
-          env:
+      initContainers:
+        - name: health
+          image: &etcd gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
+          command: [etcdctl, endpoint, health, --dial-timeout=10s, --command-timeout=30s]
+          env: &env
             - {name: PREFIX, value: /port49/}
-          command:
-            - sh
-            - -c
-            - |
-              set -eu
-              apk add --no-cache etcd-ctl >/dev/null
-              export ETCDCTL_ENDPOINTS=https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379
-              export ETCDCTL_CACERT=/etcd-root/ca.crt ETCDCTL_CERT=/etcd-root/tls.crt ETCDCTL_KEY=/etcd-root/tls.key
-              i=0
-              until etcdctl endpoint health; do
-                i=$((i + 1))
-                [ "$i" -lt 120 ] || { echo "restore-unspent: the three members did not all answer in 120s" >&2; exit 1; }
-                sleep 1
-              done
-              etcdctl del --prefix "${PREFIX}v1/t/"
-              etcdctl del "${PREFIX}v1/meta/judged"
-              etcdctl del "${PREFIX}v1/meta/judged_bundle"
-          securityContext:
+            - {name: ETCDCTL_ENDPOINTS, value: "https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379"}
+            - {name: ETCDCTL_CACERT, value: /etcd-root/ca.crt}
+            - {name: ETCDCTL_CERT, value: /etcd-root/tls.crt}
+            - {name: ETCDCTL_KEY, value: /etcd-root/tls.key}
+          securityContext: &sc
             runAsUser: 0
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
-          volumeMounts:
+          volumeMounts: &mounts
             - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
+        - name: unspent
+          image: *etcd
+          command: [etcdctl, del, --prefix, "$(PREFIX)v1/t/"]
+          env: *env
+          securityContext: *sc
+          volumeMounts: *mounts
+        - name: judged
+          image: *etcd
+          command: [etcdctl, del, "$(PREFIX)v1/meta/judged"]
+          env: *env
+          securityContext: *sc
+          volumeMounts: *mounts
+      containers:
+        - name: judged-bundle
+          image: *etcd
+          command: [etcdctl, del, "$(PREFIX)v1/meta/judged_bundle"]
+          env: *env
+          securityContext: *sc
+          volumeMounts: *mounts
       volumes:
         - name: etcd-root
           secret: {secretName: port49-etcd-root, defaultMode: 0400}

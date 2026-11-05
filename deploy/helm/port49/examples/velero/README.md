@@ -88,15 +88,24 @@ kubectl -n port49-etcd wait --for=condition=Ready pod -l app.kubernetes.io/name=
 <!-- l89:deletejob:begin -->
 ```sh
 kubectl apply -f restore-unspent.yaml
-kubectl -n port49-etcd wait --for=condition=complete job/restore-unspent --timeout=3m
-kubectl -n port49-etcd logs job/restore-unspent
-kubectl -n port49-etcd delete job/restore-unspent
+state=
+for i in $(seq 120); do
+  state=$(kubectl -n port49-etcd get job/restore-unspent -o jsonpath='{.status.conditions[?(@.status=="True")].type}')
+  case "$state" in *Complete*|*Failed*) break ;; esac
+  sleep 2
+done
+kubectl -n port49-etcd logs job/restore-unspent --all-containers
+case "$state" in
+  *Complete*) kubectl -n port49-etcd delete job/restore-unspent ;;
+  *) echo "restore-unspent did not complete ($state): read its log above, and do not go on to step 3" >&2; exit 1 ;;
+esac
 ```
 <!-- l89:deletejob:end -->
 
-   If the wait fails, the Job's log says why (`kubectl -n port49-etcd logs job/restore-unspent`,
-   and `kubectl -n port49-etcd describe job/restore-unspent`); delete the Job before applying it
-   again.
+   This ends when the Job completes or fails, and prints its log either way. If it did not complete, do not
+   go on: the log says why (`kubectl -n port49-etcd describe job/restore-unspent` has its pods), and
+   delete the Job before applying it again. The Job runs etcdctl from etcd's own image, so it needs no
+   egress.
 
 3. Hold etcd down: `kubectl -n port49-etcd scale statefulset/etcd --replicas=0`.
 4. Restore `port49`, without the HorizontalPodAutoscaler (the chart's `autoscaling.enabled`): a pod it

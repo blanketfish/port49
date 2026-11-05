@@ -943,6 +943,9 @@ func TestParseHashesKeysEachFileByClaim(t *testing.T) {
 // The README's restore steps as the lab runs them: every command it names for etcd's namespace is the
 // lab's one namespace, and no placeholder is left (I1r3: the token delete's wait, logs and delete named
 // port49-etcd, which the lab does not have).
+// placeholder is a README placeholder left unfilled, <release> or <backup> (a shell's >&2 is not one).
+var placeholder = regexp.MustCompile(`<[a-z0-9-]+>`)
+
 func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "README.md"))
 	if err != nil {
@@ -957,11 +960,11 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 		if cmd == "" {
 			t.Errorf("no %s step", name)
 		}
-		if strings.Contains(cmd, "port49-etcd") || strings.ContainsAny(cmd, "<>") {
+		if strings.Contains(cmd, "port49-etcd") || placeholder.MatchString(cmd) {
 			t.Errorf("%s still names etcd's namespace or a placeholder:\n%s", name, cmd)
 		}
 	}
-	if !strings.Contains(steps["etcdrestore"], "--include-namespaces port49 ") || !strings.Contains(steps["deletejob"], "-n port49 wait") {
+	if !strings.Contains(steps["etcdrestore"], "--include-namespaces port49 ") || !strings.Contains(steps["deletejob"], "-n port49 get job/"+DeleteJob) {
 		t.Errorf("the restore or the token delete is not in the lab's namespace:\n%s\n%s", steps["etcdrestore"], steps["deletejob"])
 	}
 	if !strings.Contains(steps["volumes"], "podvolumerestores") || !strings.Contains(steps["volumes"], "velero.io/restore-name=l89-restore-c ") {
@@ -1001,15 +1004,19 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	type container struct {
+		Name    string
+		Image   string
+		Command []string
+	}
 	var job struct {
 		Metadata struct{ Name string }
 		Spec     struct {
-			Template struct {
+			BackoffLimit int `yaml:"backoffLimit"`
+			Template     struct {
 				Spec struct {
-					Containers []struct {
-						Name    string
-						Command []string
-					}
+					InitContainers []container `yaml:"initContainers"`
+					Containers     []container
 				}
 			}
 		}
@@ -1020,14 +1027,44 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 	if job.Metadata.Name != DeleteJob || filter.MatchString(DeleteJob) || filter.MatchString(DeleteJobFile) {
 		t.Errorf("the Job is %q (file %s), want %q with no word the filter drops", job.Metadata.Name, DeleteJobFile, DeleteJob)
 	}
-	for _, c := range job.Spec.Template.Spec.Containers {
+	// no package fetched at restore time: etcdctl from etcd's own image, the digest the chart's etcd runs,
+	// one etcdctl call per container (the image has no shell), the health check first, then the deletes
+	sts, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "etcd", "statefulset.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	etcdImage := regexp.MustCompile(`image: (\S+@sha256:[0-9a-f]{64})`).FindStringSubmatch(string(sts))
+	if etcdImage == nil {
+		t.Fatal("the etcd StatefulSet names no image by digest")
+	}
+	if strings.Contains(string(b), "apk ") || strings.Contains(string(b), "alpine") {
+		t.Error("the Job still installs a package at run time")
+	}
+	all := append(append([]container(nil), job.Spec.Template.Spec.InitContainers...), job.Spec.Template.Spec.Containers...)
+	var calls []string
+	for _, c := range all {
 		if filter.MatchString(c.Name) {
 			t.Errorf("the container %q is named with a word the filter drops", c.Name)
 		}
-		script := strings.Join(c.Command, "\n")
-		if !strings.Contains(script, "until etcdctl endpoint health; do") || !strings.Contains(script, `[ "$i" -lt 120 ]`) {
-			t.Errorf("the Job does not wait for every member's health as etcd-init does:\n%s", script)
+		if c.Image != etcdImage[1] {
+			t.Errorf("the container %s runs %q, want etcd's own %q", c.Name, c.Image, etcdImage[1])
 		}
+		if len(c.Command) == 0 || c.Command[0] != "etcdctl" {
+			t.Errorf("the container %s runs %q, want one etcdctl call", c.Name, c.Command)
+		}
+		calls = append(calls, strings.Join(c.Command, " "))
+	}
+	want := []string{"etcdctl endpoint health", "etcdctl del --prefix $(PREFIX)v1/t/", "etcdctl del $(PREFIX)v1/meta/judged", "etcdctl del $(PREFIX)v1/meta/judged_bundle"}
+	if len(calls) != len(want) {
+		t.Fatalf("the Job's calls are %q, want %q", calls, want)
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(calls[i], w) {
+			t.Errorf("call %d is %q, want %q", i, calls[i], w)
+		}
+	}
+	if job.Spec.BackoffLimit < 3 {
+		t.Errorf("backoffLimit %d: a member still electing after the restore gets too few tries", job.Spec.BackoffLimit)
 	}
 	if _, err := os.Stat(filepath.Join(root, "restore-token-delete.yaml")); !os.IsNotExist(err) {
 		t.Errorf("the old file is still shipped: %v", err)
@@ -1038,6 +1075,20 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 	}
 	if strings.Contains(string(doc), "restore-token-delete") || !strings.Contains(string(doc), "job/"+DeleteJob) {
 		t.Error("the README does not run the renamed Job")
+	}
+	// step 2 ends on the Job's own outcome, shows its log either way, and stops on a failure
+	step, err := Command(string(doc), "deletejob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := strings.Index(step, "logs job/"+DeleteJob+" --all-containers")
+	failed := strings.Index(step, "*Failed*")
+	stop := strings.Index(step, "do not go on to step 3")
+	if logs < 0 || failed < 0 || stop < 0 || logs > stop || strings.Contains(step, "wait --for=condition=complete") {
+		t.Errorf("step 2 does not end on Complete or Failed, show the log, and stop on a failure:\n%s", step)
+	}
+	if StepBounds["deletejob"] < 5*time.Minute {
+		t.Errorf("step 2's bound %v is under its own 4m loop plus a minute", StepBounds["deletejob"])
 	}
 
 	// the rows of a failed delete Job, from JobProbe's output: the conditions, each pod, its last lines
@@ -1073,7 +1124,7 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 	if rows := JobRows("", access); len(rows) == 0 || !strings.Contains(fmt.Sprint(rows), "none") {
 		t.Errorf("an empty probe gives %v", rows)
 	}
-	if p := JobProbe("port49", DeleteJob); !strings.Contains(p, "get job "+DeleteJob) || !strings.Contains(p, "job-name="+DeleteJob) || !strings.Contains(p, "--tail=") {
+	if p := JobProbe("port49", DeleteJob); !strings.Contains(p, "get job "+DeleteJob) || !strings.Contains(p, "job-name="+DeleteJob) || !strings.Contains(p, "--tail=") || !strings.Contains(p, "--all-containers") {
 		t.Errorf("JobProbe = %q", p)
 	}
 }
@@ -1147,7 +1198,7 @@ func TestTheREADMEsOrderRestoresWithThePodsRunning(t *testing.T) {
 			t.Errorf("the recovery lacks %q:\n%s", want, rec)
 		}
 	}
-	if strings.ContainsAny(rec, "<>") {
+	if placeholder.MatchString(rec) {
 		t.Errorf("the recovery keeps a placeholder:\n%s", rec)
 	}
 	sum, err := READMETimeouts(rec)

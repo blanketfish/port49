@@ -49,7 +49,7 @@ var StepBounds = map[string]time.Duration{
 	"volumes":     time.Minute,
 	"scalezero":   4 * time.Minute,
 	"recover":     12 * time.Minute, // a rollout and a wait of 5m each
-	"deletejob":   4 * time.Minute,
+	"deletejob":   6 * time.Minute,  // its own loop of 120 tries, 2s apart
 	"revoke":      6 * time.Minute,
 	"scaleup":     22 * time.Minute, // two rollouts of 10m each
 }
