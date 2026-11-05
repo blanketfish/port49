@@ -706,7 +706,7 @@ func TestAMintMinutesAfterAnAllExpiredDropNeverGuards(t *testing.T) {
 
 // One failed scan while the witness catches up after an all-expired drop is no
 // judgment: nothing guards, and the next pass scans again at once (N2).
-func TestAScanErrorAfterAnAllExpiredDropGuardsNothingAndIsRetriedAtOnce(t *testing.T) {
+func TestAScanErrorAfterAnAllExpiredDropArmsNoGuardAndIsRetriedAtOnce(t *testing.T) {
 	b := newBound(t)
 	t0 := b.now
 	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
@@ -726,8 +726,9 @@ func TestAScanErrorAfterAnAllExpiredDropGuardsNothingAndIsRetriedAtOnce(t *testi
 		}, scan)
 	}
 	pass(101)
-	if !b.g.Allows() {
-		t.Fatalf("one failed scan guarded: %q", b.out.String())
+	if g, u := b.gauges(); b.g.Allows() || g != 0 || u != 0 {
+		t.Fatalf("one failed scan: redemptions must wait for a scan (allows %v), and no guard may arm (%v %v): %q",
+			b.g.Allows(), g, u, b.out.String())
 	}
 	fail = false
 	b.now = b.now.Add(time.Second)
@@ -775,5 +776,65 @@ func TestAPassNeverLiftsOnASkippedScan(t *testing.T) {
 	b.passAt(12, 102, f)
 	if b.g.Allows() {
 		t.Fatalf("lifted on a skipped scan (clock reads %d): %q", calls, b.out.String())
+	}
+}
+
+// A second restore above the first drop's witness, with live tokens, while the
+// token scan fails: redemptions wait until a scan answers (a failed scan is
+// like a failed read), without a guard that only a purge lifts. The next scan
+// that answers settles it: all expired serves, a live token guards (final
+// re-review O1).
+func TestASecondRestoreWhileTheScanFailsRefusesUntilAScanAnswers(t *testing.T) {
+	b := newBound(t)
+	t0 := b.now
+	f := &fakeTokens{recs: []fakeTok{{minted: t0.Add(-3 * time.Hour), expires: t0.Add(-2 * time.Hour)}}}
+	b.passAt(12, 100, f)
+	b.now = t0.Add(time.Minute)
+	failing := true
+	scans := 0
+	scan := func(ctx context.Context, m time.Time) (time.Time, error) {
+		scans++
+		if failing {
+			return time.Time{}, errors.New("context deadline exceeded")
+		}
+		return f.latest(ctx, m)
+	}
+	pass := func(h uint64) {
+		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+			return etcdstore.RestoreRead{Witness: 15, Header: h}, nil
+		}, scan)
+	}
+	for i := 0; i < 3; i++ {
+		b.now = b.now.Add(time.Second)
+		pass(120 + uint64(i))
+		if b.g.Allows() {
+			t.Fatalf("pass %d: served while the scan failed", i)
+		}
+	}
+	if g, u := b.gauges(); g != 0 || u != 0 {
+		t.Fatalf("a failed scan armed a guard (%v, %v): only a scan that answers may judge", g, u)
+	}
+	if scans != 3 {
+		t.Fatalf("%d scans in 3 passes: every pass retries", scans)
+	}
+	failing = false
+	b.now = b.now.Add(time.Second)
+	pass(123)
+	if !b.g.Allows() {
+		t.Fatalf("a scan that answered with nothing live did not serve again: %q", b.out.String())
+	}
+	// And a live token, once a scan answers, guards.
+	failing = true
+	b.now = b.now.Add(scanEvery)
+	pass(124)
+	if b.g.Allows() {
+		t.Fatal("served while the scan failed again")
+	}
+	failing = false
+	f.recs = append(f.recs, fakeTok{minted: t0.Add(-time.Minute), expires: b.now.Add(10 * time.Minute)})
+	b.now = b.now.Add(time.Second)
+	pass(125)
+	if b.g.Allows() {
+		t.Fatalf("a live restored token was served once a scan answered: %q", b.out.String())
 	}
 }

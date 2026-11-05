@@ -81,7 +81,8 @@ type scanResult struct {
 // the old record after a judged drop, the scan goes on with the drop read's
 // own time as the cutoff (no skew: a mint after it is no restored token), so
 // a second restore to the old timeline's snapshot is told; a scan that fails
-// there guards nothing and is retried on the next read.
+// there guards nothing without a bound: redemptions wait until a scan
+// answers, retried on the next read.
 type restoreGuard struct {
 	out     io.Writer
 	mu      sync.Mutex
@@ -266,12 +267,15 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 			g.said = false
 			g.drop(r, guardHigh, sc, now)
 		case sc.ran && !sc.unchanged && sc.err != nil:
-			// A failed scan is no judgment here: nothing shows a second
-			// restore, and a guard with no bound on one error would only
-			// refuse logins until a purge. The next pass scans again.
+			// A failed scan is no judgment here: a guard with no bound on one
+			// error would refuse logins until a purge. But it is not proof
+			// of none either (a second restore may have brought live
+			// tokens): as for a failed read, redemptions wait until a scan
+			// answers, and the next pass scans again, rate limit or not.
+			g.checked, g.lastScan = false, time.Time{}
 			if !g.scanFailing {
 				fmt.Fprintf(g.out, "port49d: store: scanning the token records, to tell whether a second restore "+
-					"brought tokens back, failed: %v; tried again on the next read\n", sc.err)
+					"brought tokens back, failed: %v; token redemptions are refused until a scan answers, tried again on the next read\n", sc.err)
 			}
 			g.scanFailing = true
 		case sc.ran && !sc.unchanged && seen && r.Witness < high && sc.max.After(now):
