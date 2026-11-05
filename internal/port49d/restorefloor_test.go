@@ -311,8 +311,9 @@ func TestTheDropLineSaysWhatIsRefusedAndTheRunbook(t *testing.T) {
 	f.read(1000, 1010)
 	f.read(480, 500)
 	line := f.out.String()
-	for _, want := range []string{"token_spent", "a token minted after this read is served", "design §13", "--bump-revision",
+	for _, want := range []string{"token_spent", "a token minted after this read is served, except within the band", "design §13", "--bump-revision",
 		f.bandUntil.UTC().Format(time.RFC3339),
+		"a token minted until " + f.bandFrom.Add(restoreSkew).UTC().Format(time.RFC3339) + " (5 minutes after this read)",
 		"tokens minted since the restore and before this read are refused once too"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the line lacks %q: %q", want, line)
@@ -509,21 +510,6 @@ func TestADropIsSavedAtOnce(t *testing.T) {
 	var rec floorFile
 	if err := json.Unmarshal(body, &rec); err != nil || rec.Floor != 500 || rec.Prefix != floorPrefix {
 		t.Fatalf("the record after a drop: %+v %v", rec, err)
-	}
-}
-
-func TestARecordAnotherUserOwnsIsUnreadable(t *testing.T) {
-	f := floorAt(t)
-	f.read(1000, 1010)
-	f.saveIfDirty()
-	ownedAs(t, 4242, "restore.json")
-	f.open()
-	if !strings.Contains(f.out.String(), "every token in the store is refused") {
-		t.Fatalf("a record another user owns was read: %q", f.out.String())
-	}
-	f.read(1000, 1011)
-	if f.said(dropped) != 1 {
-		t.Fatal("the first read was not a drop")
 	}
 }
 

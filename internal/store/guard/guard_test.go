@@ -957,6 +957,28 @@ func TestAPassingHealthCheckDoesNotRestartTheHoldBackstop(t *testing.T) {
 	}
 }
 
+// A circuit a health check closed, then no token call for longer than
+// StopAfter, then a new blip: the new open is a new run, not an hours-old
+// one, so it must not go dark at once and "open for" must be true.
+func TestAHealthClosedRunIsNotRevivedByALaterBlip(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.StopAfter, c.OpenFor = 300*time.Millisecond, 20*time.Millisecond
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ { // the third failure opens it
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	g.(Closer).CloseCircuits("a store health check passed")
+	time.Sleep(400 * time.Millisecond) // no token call, longer than StopAfter
+	for i := 0; i < 4; i++ {           // three failures open it again, one more is refused or a probe
+		g.PutToken(context.Background(), store.TokenKey{}, store.Token{})
+	}
+	if l := gone.all(); len(l) != 0 {
+		t.Fatalf("a blip after a failure-free gap went dark at once: %q", l)
+	}
+}
+
 // An answered call ends the failing run: a later failing run is timed from
 // its own start.
 func TestAnAnsweredCallRestartsTheHoldBackstop(t *testing.T) {
