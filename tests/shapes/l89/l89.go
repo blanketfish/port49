@@ -353,20 +353,27 @@ func Reason(msg string) string { return ReasonWith(msg) }
 // the Job under its former name, its describe and logs among them.
 const DeleteJob, DeleteJobFile = "restore-unspent", "restore-unspent.yaml"
 
-// allowNames are the harness's own names that hold a word the job log's filter drops a line for: a
-// port49 Secret named by its kind (run 42047911635 lost its reason to one). It is masked to <word>, and
-// its line kept only when it is kubectl's own error or the harness's command line (kubectlShape), so no
-// data after the name passes (m1r5e). Nothing else is masked. The step and bound names hold none
-// (TestReasonKeepsASetupFailureReadable).
+// allowNames are the fixed names and phrases that hold a word the job log's filter drops a line for,
+// each masked to <word> with its line kept:
+//   - a port49 Secret named by its kind (run 42047911635 lost its reason to one), kept only where the line
+//     is kubectl's own error or the harness's command line (kubectlShape), so no data after the name
+//     passes (m1r5e);
+//   - etcd's own fixed auth errors (m1r7), which carry no value, kept only where the phrase ends the line
+//     or a quoted string; a value after one still drops the line.
+//
+// Nothing else is masked. The step and bound names hold none (TestReasonKeepsASetupFailureReadable).
 var allowNames = []struct {
 	re   *regexp.Regexp
 	with string
+	keep *regexp.Regexp // the line must match it too, when set
 }{
-	{regexp.MustCompile(`\bsecret(s?)( "| |/)(port49-[a-z0-9.-]+)`), "<word>$1$2$3"},
+	{regexp.MustCompile(`\bsecret(s?)( "| |/)(port49-[a-z0-9.-]+)`), "<word>$1$2$3", kubectlShape},
+	{regexp.MustCompile(`invalid user ID or password("|$)`), "invalid user ID or <word>$1", nil},
+	{regexp.MustCompile(`invalid auth token("|$)`), "invalid auth <word>$1", nil},
 }
 
-// kubectlShape is a line an allowed name may keep: kubectl's NotFound, Forbidden or AlreadyExists error,
-// or the harness's own redacted kubectl command.
+// kubectlShape is a line an allowed Secret name may keep: kubectl's NotFound, Forbidden or AlreadyExists
+// error, or the harness's own redacted kubectl command.
 var kubectlShape = regexp.MustCompile(`^kubectl |\((NotFound|Forbidden|AlreadyExists)\)|" not found$|" is forbidden:|" already exists$`)
 
 // keyValue is a credential word, or an allowed Secret's name, followed by : or = and a value.
@@ -392,7 +399,7 @@ next:
 			continue
 		}
 		for _, a := range allowNames {
-			if a.re.MatchString(ln) && !kubectlShape.MatchString(ln) {
+			if a.keep != nil && a.re.MatchString(ln) && !a.keep.MatchString(ln) {
 				continue next
 			}
 			ln = a.re.ReplaceAllString(ln, a.with)

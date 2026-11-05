@@ -519,3 +519,30 @@ func TestHPAAverageConnections(t *testing.T) {
 		t.Fatalf("autoscaling.averageConnections is %s, want 50", got)
 	}
 }
+
+// No etcd Job an example ships fetches a package when it runs: a restore at 3am cannot depend on a
+// mirror or on egress. etcd-init runs the repository's setup image (alpine with etcdctl copied from the
+// pinned etcd image at build time), named <setup-image> for the operator to set, and the kind stack,
+// which applies it in every kind run, gives it the image it builds and loads (port49-setup:dev).
+func TestTheEtcdJobsFetchNothingAtRunTime(t *testing.T) {
+	for _, f := range []string{"etcd/etcd-init-job.yaml", "velero/restore-unspent.yaml"} {
+		body := read(t, "deploy/helm/port49/examples/"+f)
+		if strings.Contains(body, "apk ") || strings.Contains(body, "image: alpine") {
+			t.Errorf("%s installs a package at run time", f)
+		}
+	}
+	init := read(t, "deploy/helm/port49/examples/etcd/etcd-init-job.yaml")
+	if !strings.Contains(init, "image: <setup-image>") || !strings.Contains(init, "docker build --target setup") {
+		t.Error("etcd-init does not name the setup image for the operator to build and set")
+	}
+	if strings.Contains(init, "UNVERIFIED") || !strings.Contains(init, "every kind run") {
+		t.Error("etcd-init's header does not say the kind stack runs it in every kind run")
+	}
+	stack := read(t, "tests/kind/stack.go")
+	if !strings.Contains(stack, `s.applyExample("examples/etcd/etcd-init-job.yaml", map[string]string{"<setup-image>": "port49-setup:dev"})`) {
+		t.Error("the kind stack does not give etcd-init the setup image it loads")
+	}
+	if !strings.Contains(read(t, "Dockerfile"), "COPY --from=etcd /usr/local/bin/etcdctl /usr/local/bin/etcdctl") {
+		t.Error("the setup image no longer copies etcdctl from the pinned etcd image")
+	}
+}

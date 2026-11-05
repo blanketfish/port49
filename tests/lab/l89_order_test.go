@@ -392,9 +392,6 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	l82SetVerdict(cell, l89.JudgeC(cs))
 }
 
-// phaseWait waits until the restore has ended and none of its pod volume restores is still running, so
-// the README's volume check reads where they ended. A restore that made none at all (the suspected
-// failure of cell c) ends too, and the check then lists nothing.
 // jobFailed records why the README's delete Job did not complete (l89.JobProbe, bounded at 30s inside
 // the cell): its conditions, its pods' phase and exit code, and their last log lines through
 // l89.ReasonWith with the run's own values. Run 42058930263's FAIL left none of that readable.
@@ -438,6 +435,9 @@ func (r *l89Run) hung(t *testing.T, cell *l82.Cell, dir string, env []string, re
 	}
 }
 
+// phaseWait waits until the restore has ended and none of its pod volume restores is still running, so
+// the README's volume check reads where they ended. A restore that made none at all (the suspected
+// failure of cell c) ends too, and the check then lists nothing.
 func (r *l89Run) phaseWait(t *testing.T, cell *l82.Cell, name string) {
 	t.Helper()
 	c := r.stack.Cluster()

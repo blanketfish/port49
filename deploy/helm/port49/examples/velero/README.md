@@ -66,7 +66,21 @@ measured on kind in L89 cell (c), run 42053716808, the restore stayed `InProgres
 every pod volume restore at `New` and its pod absent. It does not finish. If you started one, see
 "Recovering from a restore at 0 replicas" below.
 
-So the pods run for the restore, and etcd is held down while they do, so none of them reaches the store:
+So the pods run for the restore, and etcd is held down while they do, so none of them reaches the store.
+
+**First, if a GitOps controller manages the release, suspend it for both namespaces.** Argo CD with
+auto-sync or self-heal, or Flux, puts back what this order takes away: it re-creates the
+HorizontalPodAutoscaler that step 4 leaves out and reverts step 6's scale to 0, so brokers and port49d
+start before etcd is back or before step 8 re-issues the revocations.
+**Skipping this can admit a revoked principal** until step 8 runs. For each Argo CD Application or Flux
+HelmRelease that manages `port49` or `port49-etcd`:
+
+```sh
+argocd app set <app> --sync-policy none
+flux suspend helmrelease <name> -n <namespace>
+```
+
+Then:
 
 ```sh
 kubectl delete namespace port49 port49-etcd
@@ -110,7 +124,7 @@ esac
 3. Hold etcd down: `kubectl -n port49-etcd scale statefulset/etcd --replicas=0`.
 4. Restore `port49`, without the HorizontalPodAutoscaler (the chart's `autoscaling.enabled`): a pod it
    added while the pods run would have a claim with no backup, and step 5 would find a pod with no line.
-   Re-apply the chart after step 9 to bring it back. Its pods start, so the node agent can restore their volumes, and with etcd down they
+   Step 11 brings it back. Its pods start, so the node agent can restore their volumes, and with etcd down they
    cannot reach the store. The lab cannot hold its etcd down apart from the release (one namespace), so
    L89 (d) runs this command with its etcd up.
 
@@ -174,9 +188,22 @@ kubectl -n port49 rollout status statefulset/<release>-port49d --timeout=10m
 <!-- l89:scaleup:end -->
 
 10. Lift again what was lifted since (design §13 step 6).
+11. Bring back what step 4 left out, and resume what you suspended first. With a GitOps controller,
+    resuming it does both:
 
-With the chart's `autoscaling.enabled`, the HPA is not restored (step 4); re-applying the chart after step 9
-brings it back.
+```sh
+argocd app set <app> --sync-policy automated
+flux resume helmrelease <name> -n <namespace>
+```
+
+    Without one, upgrade the release to the chart version it runs, which re-creates the
+    HorizontalPodAutoscaler and changes nothing else:
+
+```sh
+helm upgrade <release> <chart> --version <version> -n port49 --reuse-values
+```
+
+With the chart's `autoscaling.enabled`, the HPA is not restored (step 4) until step 11.
 
 ### Recovering from a restore at 0 replicas
 

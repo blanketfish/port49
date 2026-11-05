@@ -1129,6 +1129,36 @@ func TestTheDeleteJobIsReadableAndWaitsForEtcd(t *testing.T) {
 	}
 }
 
+// m1r7: etcd's own fixed auth errors hold a word the filter drops; they are etcd's strings and carry no
+// value, so they stay readable, and a value after them still drops the line.
+func TestEtcdsAuthErrorsAreReadable(t *testing.T) {
+	filter := regexp.MustCompile(`(?i)password|token|secret|eyJ`)
+	v, err := Random(6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{
+		"Error: etcdserver: authentication failed, invalid user ID or password":                              "authentication failed, invalid user ID or <word>",
+		`{"level":"warn","error":"rpc error: code = InvalidArgument desc = etcdserver: invalid auth token"}`: "etcdserver: invalid auth <word>",
+		"Error: etcdserver: user name is empty":                                                              "user name is empty",
+	} {
+		got := Reason(in)
+		if !strings.Contains(got, want) || filter.MatchString(got) || Leak(got) != "" {
+			t.Errorf("Reason(%q) = %q, want it to keep %q", in, got, want)
+		}
+	}
+	for _, in := range []string{
+		"invalid user ID or password " + v,
+		"invalid user ID or password: " + v,
+		"etcdserver: invalid auth token " + v,
+		`{"error":"etcdserver: invalid auth token","token":"` + v + `"}`,
+	} {
+		if got := Reason("the Job stopped\n" + in); got != "the Job stopped" {
+			t.Errorf("Reason(%q) = %q, want the other line alone", in, got)
+		}
+	}
+}
+
 // m1r5e: an allowed Secret name keeps its line only in kubectl's own error shapes or the harness's
 // command line; anything else that names one is dropped, so data after the name cannot pass.
 func TestAnAllowedSecretNameKeepsOnlyKubectlsErrorShapes(t *testing.T) {
@@ -1153,6 +1183,32 @@ func TestAnAllowedSecretNameKeepsOnlyKubectlsErrorShapes(t *testing.T) {
 		if got := Reason(in); !strings.Contains(got, want) {
 			t.Errorf("Reason(%q) = %q, want it to keep %q", in, got, want)
 		}
+	}
+}
+
+// I1r7: a GitOps controller re-creates what the restore leaves out and reverts the scale to 0, so the
+// README suspends it first and resumes it after the scale-up; m2r6: the chart's own command brings the
+// HPA back, exactly.
+func TestTheREADMESuspendsGitOpsAndBringsTheHPABack(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(b)
+	first := strings.Index(doc, "kubectl delete namespace port49 port49-etcd")
+	for _, want := range []string{"argocd app set <app> --sync-policy none", "flux suspend helmrelease <name> -n <namespace>", "admit a revoked principal"} {
+		if at := strings.Index(doc, want); at < 0 || at > first {
+			t.Errorf("the README does not say %q before the first command", want)
+		}
+	}
+	scaleup := strings.Index(doc, "<!-- l89:scaleup:end -->")
+	for _, want := range []string{"flux resume helmrelease <name> -n <namespace>", "argocd app set <app> --sync-policy automated", "helm upgrade <release> <chart> --version <version> -n port49 --reuse-values"} {
+		if at := strings.Index(doc, want); at < scaleup {
+			t.Errorf("the README does not say %q after step 9", want)
+		}
+	}
+	if strings.Contains(doc, "Re-apply the chart") || strings.Contains(doc, "re-applying the chart") {
+		t.Error("the README still says to re-apply the chart without the command")
 	}
 }
 

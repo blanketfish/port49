@@ -11,10 +11,17 @@
 # naming the broker's own certificate (its etcd cert_file and key_file in another directory, where
 # you have put port49-etcd-broker's tls.crt and tls.key).
 #
-# Secret `port49-etcd-root` holds etcd's root client certificate (ca.crt tls.crt tls.key). UNVERIFIED
-# until Task 11's kind smoke runs it: the etcd image has no shell, so this Job runs alpine and
-# installs etcdctl from the distribution (needs egress to the package mirror: replace it with an
-# image of your own that carries etcdctl and a shell).
+# Secret `port49-etcd-root` holds etcd's root client certificate (ca.crt tls.crt tls.key).
+#
+# The image is the repository's setup image, alpine with etcdctl copied from the pinned etcd image when
+# it is built, so nothing is fetched when the Job runs (an install or a restore must not depend on a
+# package mirror or on egress). etcd's own image has no shell, and this Job needs one: it applies a
+# generated roles.sh line by line. Build it, push it to a registry you control, and set <setup-image>:
+#
+#   docker build --target setup -t <registry>/port49-setup:<version> .
+#
+# A lab exercises this Job: the kind stack applies it in every kind run (tests/kind/stack.go), with
+# the setup image the lab builds and loads, port49-setup:dev.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -28,13 +35,12 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: etcd-init
-          image: alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
+          image: <setup-image>
           command:
             - sh
             - -c
             - |
               set -eu
-              apk add --no-cache etcd-ctl >/dev/null
               export ETCDCTL_ENDPOINTS=https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379
               export ETCDCTL_CACERT=/etcd-root/ca.crt ETCDCTL_CERT=/etcd-root/tls.crt ETCDCTL_KEY=/etcd-root/tls.key
               i=0
