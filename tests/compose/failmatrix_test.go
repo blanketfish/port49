@@ -739,7 +739,7 @@ func counter(t *testing.T, addr, sample string) float64 {
 var ctxIDRe = regexp.MustCompile(`"ctx_id":"([^"]+)"`)
 
 // lastCtxID is the ctx_id of the last decision record in log, "" if none.
-var droppedRe = regexp.MustCompile(`the session store was restored from a snapshot: meta/witness is `)
+var droppedRe = regexp.MustCompile(`the session store was restored from a snapshot: meta/witness is (at revision \d+|absent) at revision \d+, from a record of witness (at revision \d+|absent) at revision \d+`)
 
 func lastCtxID(log string) string {
 	all := ctxIDRe.FindAllStringSubmatch(log, -1)
@@ -973,6 +973,11 @@ func restoreFloor(m matrix) {
 		t.Fatal("the login that moves the store past the snapshot did not pass")
 	}
 	witnessMovesPast()
+	// The broker is stopped across the restore: its runner purges once-records
+	// and could delete the replayed token before port49d refuses it, which
+	// would make the replay a plain unknown token and prove nothing about the
+	// floor.
+	m.s.run("stop", "port49-broker")
 	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
 	m.restoreMembers()
 	m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
@@ -981,7 +986,7 @@ func restoreFloor(m matrix) {
 	// names the witness it fell to.
 	shapetest.WaitFor(t, detected+" above 0", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, detected) > 0 })
 	if log := m.s.run("logs", "--no-color", "port49d"); !droppedRe.MatchString(log) {
-		t.Fatalf("port49d's log has no \"the session store was restored from a snapshot: meta/witness is ...\" line")
+		t.Fatalf("port49d's log has no \"the session store was restored from a snapshot: meta/witness is ..., from a record of witness at revision ...\" line")
 	}
 	// The token that was redeemed is refused token_spent (a FAIL), not
 	// redeemed again. An ERROR while the stack settles is tried again.
@@ -989,7 +994,14 @@ func restoreFloor(m matrix) {
 		st, err := m.dev.TryLogin("alice", replay)
 		return err == nil && st == wire.AuthenStatusFail
 	})
-	// A token minted after the restore logs in: no purge, no wait.
+	// The refusal is the floor's: the counter counts a matched candidate
+	// refused as restored, which an unknown or purged token never reaches.
+	const refused = "port49_redemption_restored_refused_total"
+	shapetest.WaitFor(t, refused+" at 1 or more", 30*time.Second, func() bool { return m.gauge(daemonMetrics, refused) >= 1 })
+	// A token minted after the restore logs in: no purge, no wait. The broker
+	// is started again to mint it.
+	m.s.run("start", "port49-broker")
+	m.s.ready(brokerMetrics)
 	next := m.mint()
 	shapetest.WaitFor(t, "a fresh login", 30*time.Second, func() bool { return m.passes(next) })
 	fmt.Fprintln(os.Stderr, "failure matrix: restore floor refused the replayed token and served a fresh one")
