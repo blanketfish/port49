@@ -347,6 +347,9 @@ not reach the running unit (its credentials directory keeps the files it started
 closes every session in flight, so adding a device credential that way would cost those sessions
 each time. A host whose systemd renders no credentials directory (a container's did not) cannot use this.
 
+This recipe is `port49d`'s alone. The broker's copy of the encryption key stays the file readable by
+`port49-broker`: L84 did not measure the broker unit's shape, so `LoadCredential=` is not claimed for it.
+
 ## Rotating the `encryption:` key
 
 One key, everywhere, from one secret, in three steps. In each, `reload` is `systemctl reload`.
