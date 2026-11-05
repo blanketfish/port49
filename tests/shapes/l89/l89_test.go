@@ -18,10 +18,10 @@ func TestL89ResultsNeedEveryCell(t *testing.T) {
 	if !strings.Contains(out, "NOT RUN") || !strings.Contains(out, "2026-11-04") || !strings.Contains(out, "not recorded") {
 		t.Errorf("the cell never run is not NOT RUN, or the environment is not rendered:\n%s", out)
 	}
-	if strings.Count(out, "NOT RUN") != 2 {
+	if strings.Count(out, "NOT RUN") != 6 {
 		t.Errorf("one cell never run should read NOT RUN twice (the table and its heading):\n%s", out)
 	}
-	if _, err := Results(Env{}, []l82.Cell{{ID: "c"}}); err == nil {
+	if _, err := Results(Env{}, []l82.Cell{{ID: "z"}}); err == nil {
 		t.Error("a cell the entry does not have is accepted")
 	}
 }
@@ -342,5 +342,50 @@ func TestScrubWithDropsTheRunsOwnValues(t *testing.T) {
 	}
 	if got := ScrubWith("a line", ""); got != "a line" {
 		t.Errorf("an empty own value drops lines: %q", got)
+	}
+}
+
+func TestJudgeCNeedsEveryCheck(t *testing.T) {
+	good := C{Volumes: 6, FingerprintBefore: "ab", FingerprintAfter: "ab", MarksPresent: true, SpoolBefore: "acct.jsonl", SpoolAfter: "acct.jsonl"}
+	if JudgeC(good) != l82.Pass {
+		t.Fatal("a complete restore is not a PASS")
+	}
+	for name, mod := range map[string]func(*C){
+		"too few volume restores": func(c *C) { c.Volumes = 3 },
+		"a failed volume restore": func(c *C) { c.NotCompleted = 1 },
+		"a different CA":          func(c *C) { c.FingerprintAfter = "cd" },
+		"no CA read":              func(c *C) { c.FingerprintBefore, c.FingerprintAfter = "", "" },
+		"no marks.json":           func(c *C) { c.MarksPresent = false },
+		"an empty spool":          func(c *C) { c.SpoolAfter = "" },
+	} {
+		c := good
+		mod(&c)
+		if JudgeC(c) != l82.Fail {
+			t.Errorf("%s is not a FAIL", name)
+		}
+	}
+}
+
+func TestSubstAndLabModifier(t *testing.T) {
+	if got, err := Subst("a <x> <x> b", map[string]string{"<x>": "1"}); err != nil || got != "a 1 1 b" {
+		t.Errorf("Subst: %q, %v", got, err)
+	}
+	if _, err := Subst("a b", map[string]string{"<x>": "1"}); err == nil {
+		t.Error("Subst accepts a placeholder the command lacks")
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "restore-scale-zero.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LabModifier(string(b), "t")
+	if err != nil || !strings.Contains(got, `resourceNameRegex: "^t-(broker|port49d)$"`) {
+		t.Fatalf("LabModifier: %q, %v", got, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(got), &doc); err != nil {
+		t.Fatalf("the lab modifier is not YAML: %v", err)
+	}
+	if _, err := LabModifier("version: v1\n", "t"); err == nil {
+		t.Error("LabModifier accepts a file without the line it rewrites")
 	}
 }

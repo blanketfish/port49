@@ -46,6 +46,12 @@ var l89Fence = regexp.MustCompile(`data-dir(-owner)?: |writable by its group or 
 //	    issuing CA's fingerprint unchanged; the owner, group and mode of state/, issuing-ca.key and the
 //	    spool directory are recorded before and after
 //	(b) after the restore, a mint and a login
+//	(c) the Velero README's restore order, steps run from its own text: the namespace restored with both
+//	    StatefulSets at 0 replicas (the resource modifier), the token delete, revoke-offline.sh, the scale-up;
+//	    then every pod volume restore Completed, the CA unchanged, marks.json and the spool back
+//	(d) the same checks after the README's fallback order, for when (c) fails: the pods run for the volume
+//	    restore and are scaled to 0 before the token delete (the lab's etcd shares the namespace, so it
+//	    cannot be held down apart; see the rows)
 //
 // The backup holds issuing-ca.key. The store's credentials and the repository key are generated per
 // run, written 0600 in the test's temp directory and handed over by file; they are never printed, never
@@ -60,7 +66,7 @@ func TestL89(t *testing.T) {
 	if out == "" {
 		out = t.TempDir()
 	}
-	cells := []l82.Cell{{ID: "a"}, {ID: "b"}}
+	cells := []l82.Cell{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}
 	env := l89Env(t)
 	defer func() {
 		text, err := l89.Results(*env, cells)
@@ -92,6 +98,8 @@ func TestL89(t *testing.T) {
 	r.first = &cells[0]
 	stack.Run(t, "a_backup_delete_restore", func(t *testing.T) { r.cellA(t, &cells[0]) })
 	stack.Run(t, "b_mint_and_login", func(t *testing.T) { r.cellB(t, &cells[1]) })
+	stack.Run(t, "c_readme_restore_order", func(t *testing.T) { r.cellOrder(t, &cells[2], false) })
+	stack.Run(t, "d_readme_fallback_order", func(t *testing.T) { r.cellOrder(t, &cells[3], true) })
 }
 
 type l89Run struct {
@@ -104,6 +112,8 @@ type l89Run struct {
 	bucketLog string   // the last curl attempt at the bucket
 	own       []string // the store credentials, which a diagnosis line must not hold
 	key       string   // the generated repository key, compared with the cluster's and never printed
+	// the port49d spools' listings when the backup was taken (cells c and d compare against them)
+	spoolBefore string
 }
 
 func l89Env(t *testing.T) *l89.Env {
@@ -469,6 +479,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	r.checkRepositoryKey()
 	l82Row(cell, "the repository key in the cluster is the one generated for this run", "yes")
 	before, fpBefore := r.snapshot()
+	r.spoolBefore = r.spools()
 	logBefore := l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
 		t.Fatalf("the brokers do not hold one CA before the backup")

@@ -14,18 +14,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/blanketfish/port49/tests/shapes/l82"
 )
 
 // Order is the cells' order in the results.
-var Order = []string{"a", "b"}
+var Order = []string{"a", "b", "c", "d"}
 
 func title(id string) string {
 	return map[string]string{
 		"a": "(a) back up both StatefulSets, delete the namespace, restore: ownership, mode, readiness, the CA",
 		"b": "(b) after the restore, a mint and a login",
+		"c": "(c) the README's restore order (StatefulSets restored at 0 replicas): volumes, the CA, marks.json, the spool",
+		"d": "(d) the README's fallback order (pods run for the volume restore, then scaled to 0): volumes, the CA, marks.json, the spool",
 	}[id]
 }
 
@@ -87,6 +90,56 @@ func JudgeA(a A) string {
 		return l82.Pass
 	}
 	return l82.Fail
+}
+
+// C is cell (c)'s and (d)'s measurements: the README's restore order, run step by step.
+type C struct {
+	Volumes           int    // pod volume restores the restore made
+	NotCompleted      int    // of them, not Completed
+	FingerprintBefore string // the issuing CA's sha256 before the namespace was deleted
+	FingerprintAfter  string // and after the scale-up
+	MarksPresent      bool   // broker.state_dir/marks.json is there and not empty after the scale-up
+	SpoolBefore       string // each port49d's spool directory listing before the backup, joined
+	SpoolAfter        string // and after the scale-up
+}
+
+// JudgeC is PASS iff the restore made pod volume restores for the chart's four data volumes at least,
+// every one Completed, the issuing CA is the one it was, marks.json is there and each spool holds what it
+// held. A fingerprint not read is a FAIL.
+func JudgeC(c C) string {
+	if c.Volumes < 4 || c.NotCompleted != 0 || c.FingerprintBefore == "" || c.FingerprintBefore != c.FingerprintAfter || !c.MarksPresent || c.SpoolBefore != c.SpoolAfter {
+		return l82.Fail
+	}
+	return l82.Pass
+}
+
+// Subst replaces each key of repl in a README command. A key the command does not hold is an error, so
+// a command that changed cannot run with a placeholder left in it.
+func Subst(cmd string, repl map[string]string) (string, error) {
+	keys := make([]string, 0, len(repl))
+	for k := range repl {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !strings.Contains(cmd, k) {
+			return "", fmt.Errorf("l89: the command does not hold %q", k)
+		}
+		cmd = strings.ReplaceAll(cmd, k, repl[k])
+	}
+	return cmd, nil
+}
+
+// shippedModifier is the rule's conditions in restore-scale-zero.yaml. The kind lab runs etcd in the
+// release's namespace, where the rule would also scale etcd to 0; LabModifier limits it to the release's
+// two StatefulSets (named t-broker and t-port49d there), so the README's order is otherwise run as written.
+const shippedModifier = "      groupResource: statefulsets.apps\n"
+
+func LabModifier(example, release string) (string, error) {
+	if strings.Count(example, shippedModifier) != 1 {
+		return "", fmt.Errorf("l89: the modifier does not hold %q exactly once", shippedModifier)
+	}
+	return strings.Replace(example, shippedModifier, shippedModifier+"      resourceNameRegex: \"^"+release+"-(broker|port49d)$\"\n", 1), nil
 }
 
 var issuingAs = regexp.MustCompile(`issuing as .* \(([^()\s]+)\), valid until `)
@@ -375,7 +428,7 @@ func Results(env Env, cells []l82.Cell) (string, error) {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("The register row closes only when both cells have a PASS or a FAIL; a FAIL is a measured answer.\n")
+	b.WriteString("The register row closes only when every cell has a PASS or a FAIL; a FAIL is a measured answer.\n")
 	out := b.String()
 	if why := Leak(out); why != "" {
 		return "", fmt.Errorf("l89: the results hold %s: nothing is written", why)
