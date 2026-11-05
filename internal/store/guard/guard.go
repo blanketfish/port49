@@ -113,7 +113,7 @@ type Metrics struct {
 
 // outcomes is every value of the outcome label: whether each is counted
 // toward the breaker, and whether it is a failure there.
-var outcomes = []string{"ok", "not_found", "conflict", "error", "timeout", "deadline", "unavailable", "refused",
+var outcomes = []string{"ok", "not_found", "conflict", "error", "timeout", "deadline", "deadline_on_entry", "unavailable", "refused",
 	"canceled", "saturated", "circuit_open"}
 
 type pool struct {
@@ -281,7 +281,7 @@ func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error,
 		p.lastRefused = now
 		p.refused++
 		return false, p.open
-	case "canceled", "saturated", "feed_behind":
+	case "canceled", "saturated", "feed_behind", "deadline_on_entry":
 		return false, p.open
 	case "timeout", "deadline", "unavailable":
 		p.fails++
@@ -370,13 +370,15 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	}
 	// A caller already gone, or already past its deadline, is read before
 	// the slot wait: a select on a free slot and a closed Done picks either
-	// at random, and the outcome must not (review I1). Past its deadline
-	// is a packet whose earlier calls spent the packet_deadline: the
-	// store too slow for it, a deadline as one struck mid-call is.
+	// at random, and the outcome must not (review I1). A deadline spent
+	// before the call is the caller's (decision 56 ruling 8, reversing review
+	// I1): deadline_on_entry, counted apart and not a failure of the pool. A
+	// store slow enough to spend it still fails the calls that spent it, each
+	// of which struck mid-call.
 	if err := ctx.Err(); err != nil {
 		outcome := "canceled"
 		if errors.Is(err, context.DeadlineExceeded) {
-			outcome, err = "deadline", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
+			outcome, err = "deadline_on_entry", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
 		}
 		g.count(p, outcome)
 		if changed, open := pl.leave(g.c.Now(), probe, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {

@@ -402,27 +402,27 @@ func TestACallersDeadlineWaitingForASlotIsSaturated(t *testing.T) {
 	wg.Wait()
 }
 
-// A caller whose deadline has already passed (a packet whose earlier store
-// calls spent packet_deadline) is the store too slow for it, on an
-// idle pool every time: deadline, counted, never saturated, and it never
-// reaches the store (review I1). Enough of them open the circuit.
-func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
+// A call that arrives past its deadline was spent by the caller's earlier
+// calls, not by this one: deadline_on_entry, counted apart, never saturated,
+// never sent, and never a failure of the pool's circuit (decision 56 ruling 8,
+// reversing review I1; stores I3).
+func TestACallArrivingPastItsDeadlineDoesNotOpenTheCircuit(t *testing.T) {
 	var said, gone told
 	inner := &stuck{}
 	c := config(&said, &gone)
-	c.Failures = 1000
+	c.Failures = 5
 	g := Wrap(inner, c)
 	past, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 10; i++ {
 		if _, err := g.GetContext(past, k); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, store.ErrNotSent) {
 			t.Fatalf("a call past its deadline: %v", err)
 		}
 	}
 	for _, o := range outcomes {
 		want := 0.0
-		if o == "deadline" {
-			want = 200
+		if o == "deadline_on_entry" {
+			want = 10
 		}
 		if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", o)); n != want {
 			t.Errorf("outcome %s: %v, want %v", o, n, want)
@@ -431,13 +431,32 @@ func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
 	if inner.count() != 0 {
 		t.Fatalf("%d calls past their deadline reached the store", inner.count())
 	}
-	c = config(&said, &gone)
-	g = Wrap(inner, c)
-	for i := 0; i < 3; i++ {
-		g.GetContext(past, k)
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
+		t.Fatalf("ten calls past their deadline opened the circuit (%v)", v)
+	}
+	if l := said.all(); len(l) != 0 {
+		t.Fatalf("said %q", l)
+	}
+}
+
+// A deadline that strikes inside the store is the store too slow for the
+// caller: it still counts, and opens the circuit.
+func TestADeadlineStruckMidCallStillCounts(t *testing.T) {
+	var said, gone told
+	inner := &stuck{delay: time.Hour}
+	c := config(&said, &gone)
+	c.Failures, c.CallTimeout = 5, time.Hour
+	g := Wrap(inner, c)
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		g.GetContext(ctx, k)
+		cancel()
 	}
 	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 1 {
-		t.Fatalf("three calls past their deadline left the circuit closed (%v)", v)
+		t.Fatalf("five deadlines struck mid-call left the circuit closed (%v)", v)
+	}
+	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "deadline")); n != 5 {
+		t.Fatalf("deadline outcomes: %v", n)
 	}
 }
 
