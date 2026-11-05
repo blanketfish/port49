@@ -520,56 +520,24 @@ func (s *Store) PutWitness(ctx context.Context, who string, over uint64) (uint64
 	return uint64(resp.Header.Revision), nil
 }
 
-// PutPurged writes meta/purged, as the broker, once a runner's purge of
-// every unspent token is done (Task 15d), if meta/witness is still at the
-// ModRevision over (0: absent), the witness the purge read: a store
-// restored since has another, and the write fails closed. It returns the
-// revision it landed at, 0 when it was refused. A port49d that found the
-// store restored serves redemptions again only on a meta/purged written
-// after it found it. It holds no secret: the runner's name and the time.
-func (s *Store) PutPurged(ctx context.Context, who string, over uint64) (uint64, error) {
-	body, err := json.Marshal(struct {
-		Who string    `json:"who"`
-		At  time.Time `json:"at"`
-	}{who, s.now().UTC()})
-	if err != nil {
-		return 0, err
-	}
-	resp, err := s.ctxKV.Txn(ctx).
-		If(clientv3.Compare(clientv3.ModRevision(s.k.meta("witness")), "=", int64(over))).
-		Then(clientv3.OpPut(s.k.meta("purged"), string(body))).Commit()
-	if err != nil {
-		return 0, unavailable(err)
-	}
-	if !resp.Succeeded {
-		return 0, nil
-	}
-	return uint64(resp.Header.Revision), nil
-}
-
-// RestoreRead is meta/witness's and meta/purged's ModRevisions, 0 for one
-// absent, and the revision etcd answered at, read at one revision (Task
-// 15d).
+// RestoreRead is meta/witness's ModRevision, 0 when it is absent, and the
+// revision etcd answered at, read at one revision (Task 15d; the restore
+// floor).
 type RestoreRead struct {
-	Witness, Purged, Header uint64
+	Witness, Header uint64
 }
 
-// RestoreRead reads meta/witness and meta/purged in one transaction, as
-// the daemon or the broker.
+// RestoreRead reads meta/witness and the revision it was read at, as the
+// daemon or the broker.
 func (s *Store) RestoreRead(ctx context.Context) (RestoreRead, error) {
-	resp, err := s.ctxKV.Txn(ctx).Then(clientv3.OpGet(s.k.meta("witness")), clientv3.OpGet(s.k.meta("purged"))).
-		Commit()
+	resp, err := s.ctxKV.Txn(ctx).Then(clientv3.OpGet(s.k.meta("witness"))).Commit()
 	if err != nil {
 		return RestoreRead{}, unavailable(err)
 	}
 	r := RestoreRead{Header: uint64(resp.Header.Revision)}
-	at := func(i int) uint64 {
-		if kvs := resp.Responses[i].GetResponseRange().GetKvs(); len(kvs) > 0 {
-			return uint64(kvs[0].ModRevision)
-		}
-		return 0
+	if kvs := resp.Responses[0].GetResponseRange().GetKvs(); len(kvs) > 0 {
+		r.Witness = uint64(kvs[0].ModRevision)
 	}
-	r.Witness, r.Purged = at(0), at(1)
 	return r, nil
 }
 

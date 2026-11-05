@@ -649,33 +649,20 @@ func TestFollowWitnessTellsEachWrite(t *testing.T) {
 	<-done
 }
 
-// A restore read is the witness's and meta/purged's revisions, and the
-// store's, at one revision; meta/purged is written by the runner after a
-// whole purge (Task 15d).
-func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
+// A restore read is the witness's revision and the store's, at one
+// revision (the restore floor).
+func TestARestoreReadSaysTheWitnessAndTheHeader(t *testing.T) {
 	ctx := context.Background()
 	s := onShared(t, time.Now)
-	if r, err := s.RestoreRead(ctx); err != nil || r.Witness != 0 || r.Purged != 0 || r.Header == 0 {
+	if r, err := s.RestoreRead(ctx); err != nil || r.Witness != 0 || r.Header == 0 {
 		t.Fatalf("nothing yet: %+v %v", r, err)
 	}
 	w, err := s.PutWitness(ctx, "runner-a", 0)
 	if err != nil || w == 0 {
 		t.Fatalf("%d %v", w, err)
 	}
-	// Written only over the witness the purge read: a store restored since
-	// has another, and the write fails closed.
-	if p, err := s.PutPurged(ctx, "runner-a", w+1); err != nil || p != 0 {
-		t.Fatalf("meta/purged over another witness: %d %v", p, err)
-	}
-	if r, err := s.RestoreRead(ctx); err != nil || r.Purged != 0 {
-		t.Fatalf("a refused write landed: %+v %v", r, err)
-	}
-	p, err := s.PutPurged(ctx, "runner-a", w)
-	if err != nil || p <= w {
-		t.Fatalf("meta/purged: %d %v", p, err)
-	}
-	if r, err := s.RestoreRead(ctx); err != nil || r.Witness != w || r.Purged != p || r.Header < p {
-		t.Fatalf("the read: %+v %v (witness %d, purged %d)", r, err, w, p)
+	if r, err := s.RestoreRead(ctx); err != nil || r.Witness != w || r.Header < w {
+		t.Fatalf("the read: %+v %v (witness %d)", r, err, w)
 	}
 }
 

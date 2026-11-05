@@ -183,6 +183,7 @@ func (f *fleet) policyOf(t *testing.T, cfg string) string {
 func (f *fleet) judged(t *testing.T) {
 	t.Helper()
 	putJudged(t, f, f.bundle(t), false)
+	f.recorded(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
@@ -191,6 +192,27 @@ func (f *fleet) judged(t *testing.T) {
 	}
 	judgedFleets.Store(f.pki, true)
 	t.Cleanup(func() { judgedFleets.Delete(f.pki) })
+}
+
+// recorded gives f.broker's state_dir a witness record at the store's own
+// witness, as a broker that has run on this keyspace before has: with none, a
+// start owes a purge of everything (decision 56 ruling 2), which a fleet
+// standing for a rolling restart is not testing.
+func (f *fleet) recorded(t *testing.T) { f.recordedFor(t, f.broker) }
+
+// recordedFor is recorded for the replica whose port49-broker.yaml is cfg.
+func (f *fleet) recordedFor(t *testing.T, cfg string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bs, _ := openBrokerFor(t, ctx, cfg, metrics.New(prometheus.NewRegistry()), io.Discard)
+	w, err := bs.raw.Witness(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := openWitness(filepath.Join(f.stateDirOf(t, cfg), stateWitnessFile), "/port49/", io.Discard)
+	rec.Reset(w.ModRevision)
+	rec.save()
 }
 
 // judgedFleets holds the lab PKI directory of every fleet.judged was called
@@ -541,6 +563,7 @@ func TestATakeoverPurgesOnlyAnUnjudgedBundle(t *testing.T) {
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	f.recorded(t) // a broker that has run here: this test is about the bundle
 	api, stop := startBroker(t, f.broker, &out, 1)
 	waitForCount(t, &out, "runner: recorded bundle ", 1)
 	kept := mintOn(t, api, f.pki, "leaf1")
@@ -1560,9 +1583,11 @@ func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
 	t.Cleanup(func() { stderr = e })
 	stderr = &out
 	f := splitFleet(t)
+	f.recorded(t)
 	_, stopA := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
 	cfgB := f.copyBroker(t) // still on the judged bundle
+	f.recordedFor(t, cfgB)  // and a replica that has run here, so its takeover goes by the bundle
 	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy)
 	waitFor(t, &out, "port49-broker: policy reloaded")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2112,12 +2137,13 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	}
 }
 
-// A replica that never ran, and only followed the witness, catches the
-// restore at its takeover as the runner would have: the record is every
-// replica's, not the runner's alone (Ruling 18; re-check R6). The backup
-// is taken before B starts and while A is stopped: Backup restarts the
-// member, and B could take a hold A lost across it.
-func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
+// A replica that never ran has no witness record, and following the
+// witness gives it none: a record taken from the store's own witness could
+// be a restored store's. Its first takeover therefore purges, restore or not,
+// and says why (decision 56 ruling 2). The backup is taken before B starts
+// and while A is stopped: Backup restarts the member, and B could take a
+// hold A lost across it.
+func TestAReplicaThatNeverRanPurgesAtItsFirstTakeover(t *testing.T) {
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
@@ -2138,12 +2164,13 @@ func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
 	_, stopB := startBroker(t, cfgB, &out, 3)
 	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
 	mintOn(t, apiA, f.pki, "leaf1") // brings a witness
-	waitUntil(t, "B's copy of the witness to rise", func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
-	// The follower path, proved: A held throughout, so B's record came only
-	// from following. Had A's hold lapsed, B would have run and recorded its
-	// own writes (final check, Minor 3).
+	waitUntil(t, "the witness to rise", func() bool { return witnessAt(t, root) > w0 })
+	time.Sleep(2 * time.Second) // B's follower has told its record by now, if it ever will
+	if got := witnessIn(t, f.stateDirOf(t, cfgB)); got != 0 {
+		t.Fatalf("B, which never ran, saved a witness record of %d from following", got)
+	}
 	if n := strings.Count(out.String(), "runner: took keyspace /port49/"); n != 2 {
-		t.Fatalf("the hold changed hands: %d takes; the follower path is not what was tested", n)
+		t.Fatalf("the hold changed hands: %d takes; B ran", n)
 	}
 	if err := stopB(); err != nil { // B first, so it never takes the hold
 		t.Fatal(err)
@@ -2151,19 +2178,19 @@ func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
 	if err := stopA(); err != nil {
 		t.Fatal(err)
 	}
-	recorded := witnessIn(t, f.stateDirOf(t, cfgB))
 	f.srv.Restore(t, snapshot)
+	before := len(out.String())
 	startBroker(t, cfgB, &out, 4)
-	waitWithin(t, &out, fmt.Sprintf("the store's meta/witness is at revision %d, below the %d this replica saw: "+
-		"the store was restored from a snapshot", w0, recorded), 30*time.Second)
+	waitWithinFrom(t, &out, before, "no witness record in broker.state_dir; the store may have been restored, which only a "+
+		"witness record can tell; every unspent token is purged", 30*time.Second)
 }
 
 // An etcd restore with port49d running across it and the runbook's token
 // delete skipped: port49d finds meta/witness below what it followed and
-// refuses every redemption store_unavailable, so a token spent since the
-// snapshot is not redeemed again, until the first runner's purge; then
-// a token minted after it logs in (Task 15d).
-func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
+// refuses the token spent since the snapshot token_spent, by its revision,
+// before any runner purges; the runner's purge then deletes it, and a token
+// minted after the restore logs in (Task 15d; decision 56 ruling 1).
+func TestPort49dRefusesARestoredTokenAndServesAFreshOne(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -2222,6 +2249,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	// Just after etcd returns, the token pool's receipt read can still fail
 	// (get_receipt, before the floor is asked), which answers ERROR
 	// store_unavailable: try again for 10s, and only for that reason.
+	lookups := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
 	st = dev.login("alice", spent)
 	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
 		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
@@ -2235,6 +2263,10 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	}
 	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("the refusal: %v", r[len(r)-1])
+	}
+	// The floor refused a token the store still holds: the candidates were read.
+	if now := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); now <= lookups {
+		t.Fatalf("the refusal read no candidates (%v, was %v): the token was refused before the store was asked", now, lookups)
 	}
 	api, _ = startBroker(t, f.broker, &out, 3)
 	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
@@ -2253,7 +2285,7 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 // process's, so the token spent since the snapshot is still refused
 // store_unavailable on that new run until the runner purges, and then
 // allowed (plan 7f, T6-a; the in-run path is the test above's).
-func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T) {
+func TestPort49dRefusesARestoredTokenAcrossAStoreGone(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -2322,6 +2354,7 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	// Just after etcd returns, the token pool's receipt read can still fail
 	// (get_receipt, before the floor is asked), which answers ERROR
 	// store_unavailable: try again for 10s, and only for that reason.
+	lookups := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
 	st = dev.login("alice", spent)
 	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
 		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
@@ -2335,6 +2368,10 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	}
 	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("the refusal: %v", r[len(r)-1])
+	}
+	// The floor refused a token the store still holds: the candidates were read.
+	if now := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); now <= lookups {
+		t.Fatalf("the refusal read no candidates (%v, was %v): the token was refused before the store was asked", now, lookups)
 	}
 	api, _ = startBroker(t, f.broker, &out, 3)
 	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)

@@ -836,16 +836,8 @@ func TestATakeoverPurgesOnceTheBundleJudgedIsInDoubt(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm()}
-	was, err := bs.raw.RestoreRead(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := r.takeover(ctx); err != nil {
 		t.Fatal(err)
-	}
-	// The purge is done: port49d's restore guard leaves on meta/purged (Task 15d).
-	if now, err := bs.raw.RestoreRead(ctx); err != nil || now.Purged <= was.Purged {
-		t.Fatalf("a takeover's whole purge left meta/purged at %d (was %d): %v", now.Purged, was.Purged, err)
 	}
 	if !strings.Contains(out.String(), "port49-broker: runner: the bundle the last runner judged ("+pol.Bundle+
 		") is in doubt, a replica having served another since; 0 unspent token(s) purged") {
@@ -1079,11 +1071,11 @@ func (f *storeFeed) WatchRevocations(ctx context.Context, _ uint64, _ func(store
 	return ctx.Err()
 }
 
-// meta/purged is written over the witness the purge read, so a purge that
-// finished on the store before a restore cannot release port49d's guard
-// on the store after it: a refused write says so and writes nothing
-// (Task 15d review M-2).
-func TestAPurgeDoneOnAnotherStoreWritesNoPurgeRecord(t *testing.T) {
+// The purge takes the store's witness as the replica's record only if
+// meta/witness is still the one the purge started from, so a purge that
+// finished on the store before a restore cannot stand for the store after it:
+// a moved witness says so and leaves the record (decision 56 ruling 2).
+func TestAPurgeUnderAMovedWitnessKeepsTheRecord(t *testing.T) {
 	f := splitFleet(t)
 	ctx := context.Background()
 	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
@@ -1095,20 +1087,21 @@ func TestAPurgeDoneOnAnotherStoreWritesNoPurgeRecord(t *testing.T) {
 	if err != nil || w == 0 {
 		t.Fatalf("%d %v", w, err)
 	}
-	r := &runner{raw: bs.raw, who: "runner-a"}
-	if _, err := r.markPurged(ctx, w+1); err != nil { // the witness the purge read, not the store's
-		t.Fatal(err)
+	wit := recordedWitness(t, w+1000)
+	r := &runner{raw: bs.raw, who: "runner-a", witness: wit}
+	if ok, err := r.confirmPurged(ctx, w+1); err != nil || ok { // the witness the purge read, not the store's
+		t.Fatalf("a purge read at another witness took the record: %v %v", ok, err)
 	}
-	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged != 0 {
-		t.Fatalf("a purge read at another witness wrote meta/purged: %+v %v", got, err)
+	if rec, _ := wit.Recorded(); rec != w+1000 {
+		t.Fatalf("the record moved to %d", rec)
 	}
-	if !strings.Contains(out.String(), "meta/purged is not written") {
-		t.Fatalf("a refused meta/purged was not said: %q", out.String())
+	if !strings.Contains(out.String(), "meta/witness changed during the purge") {
+		t.Fatalf("a moved witness was not said: %q", out.String())
 	}
-	if ok, err := r.markPurged(ctx, w); err != nil || !ok {
-		t.Fatal(err)
+	if ok, err := r.confirmPurged(ctx, w); err != nil || !ok {
+		t.Fatal(ok, err)
 	}
-	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged == 0 {
-		t.Fatalf("a purge read at the store's witness left no meta/purged: %+v %v", got, err)
+	if rec, _ := wit.Recorded(); rec != w {
+		t.Fatalf("a purge read at the store's witness left the record at %d, want %d", rec, w)
 	}
 }

@@ -71,6 +71,13 @@ type runner struct {
 	// tookOver is told the policy each takeover carried, once it is done:
 	// it opens the start's mint gate (decision 36). nil tells nothing.
 	tookOver func(carried *policy.Policy)
+	// holdMints closes the mint gate while a purge runs, and opens it again:
+	// nil holds nothing.
+	holdMints func(on bool)
+	// standby is told when another replica runs the keyspace: its takeover
+	// is the one that purges, so this replica's start gate need not wait on
+	// a purge it owes itself (brokerd.go owes). nil tells nothing.
+	standby func()
 	// followed is told each mark the marks feed brings that stands, in a
 	// split (plan 11a, R20): the duties reach it in this region's session
 	// store (reachFollowed). Nil in a shared store, where the broker that
@@ -161,6 +168,9 @@ func (r *runner) run(ctx context.Context) {
 			}
 			fmt.Fprintf(stderr, "port49-broker: runner: keyspace %s is run by %s; this replica serves the API and "+
 				"takes over if that one stops\n", e.Prefix, lineHolder(holder))
+			if r.standby != nil {
+				r.standby()
+			}
 		})
 		if err != nil {
 			if ctx.Err() == nil {
@@ -723,58 +733,59 @@ func (r *runner) witnessPassOnce(ctx context.Context) error {
 	return err
 }
 
-// purgeRestored purges every unspent token after the witness caught a
-// restore (plan 7e, Ruling 18), as an unjudged takeover does: SupersedeAll
-// first, so a replay mints afresh. It lifts no mark: a mark the restore
-// lost is the copy's to put back (restoreMarks). It takes the store's
-// witness as the replica's record only once the purge is done: until then
-// every pass, and every replica's takeover, still sees the restore, so a
-// purge cut short by a lost hold is made by the next runner.
+// purgeRestored purges every unspent token and every once-only record (the
+// sign-in challenges, proofs and nonces) after the witness caught a restore,
+// or found no record to tell by (plan 7e, Ruling 18; decision 56 ruling 2),
+// as an unjudged takeover does: SupersedeAll first, so a replay mints afresh.
+// It lifts no mark: a mark the restore lost is the copy's to put back
+// (restoreMarks). Mints are held while it runs (holdMints), or a token minted
+// in the window would be minted and then deleted. It takes the store's
+// witness as the replica's record only once the purge is done and the
+// witness has not moved (confirmPurged): until then every pass, and every
+// replica's takeover, still owes the purge, and this replica writes no
+// meta/witness and saves no witness.json, so a purge cut short is made by
+// the next runner.
 func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.WitnessRead) error {
+	if r.holdMints != nil {
+		r.holdMints(true)
+		defer r.holdMints(false)
+	}
 	at := r.brk.Now()
 	if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
 		return err
 	}
-	var n int
+	var n, once int
 	if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 		return err
 	}
-	written, err := r.markPurged(ctx, read.ModRevision)
-	if err != nil {
+	if err := retryCtx(ctx, func() (e error) { once, e = r.st.PurgeOnceRecords(ctx); return }); err != nil {
 		return err
 	}
-	// A refused meta/purged means the store changed under the purge: the
-	// record stays, so the next pass judges the store again and purges once more.
-	if written {
-		r.witness.Reset(read.ModRevision)
+	if _, err := r.confirmPurged(ctx, read.ModRevision); err != nil {
+		return err
 	}
 	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
-		"(port49 token): %d purged\n", why, n)
+		"(port49 token): %d purged; %d once-only records (sign-in challenges, proofs, nonces) deleted\n", why, n, once)
 	return nil
 }
 
-// markPurged writes meta/purged once a purge of every unspent token is
-// done (Task 15d), retried while the store is unavailable: a port49d that
-// found the store restored serves redemptions again only on one written
-// after it found it. Every whole purge writes it, not only a restore's:
-// any of them, done after the restore, leaves no restored token behind.
-// over is the meta/witness ModRevision the purge read: a witness that has
-// changed since means the store may not be the one purged, and nothing is
-// written; the next purge writes it. It reports whether it wrote.
-func (r *runner) markPurged(ctx context.Context, over uint64) (written bool, err error) {
-	err = retryCtx(ctx, func() error {
-		at, err := r.raw.PutPurged(ctx, r.who, over)
-		if err != nil {
-			return fmt.Errorf("recording the purge done (meta/purged): %w", err)
-		}
-		written = at != 0
-		if at == 0 {
-			fmt.Fprintf(stderr, "port49-broker: runner: meta/witness changed during the purge, so the store may not "+
-				"be the one purged; meta/purged is not written, and a port49d on guard waits for the next purge\n")
-		}
-		return nil
-	})
-	return written, err
+// confirmPurged takes the store's witness as the replica's record once a
+// purge is done, if meta/witness is still at the ModRevision over (0: absent)
+// the purge started from: a witness that has changed means the store may not
+// be the one purged, and the record is left, so the next pass judges the
+// store again and purges once more. It reports whether it took the record.
+func (r *runner) confirmPurged(ctx context.Context, over uint64) (bool, error) {
+	var now etcdstore.WitnessRead
+	if err := retryCtx(ctx, func() (e error) { now, e = r.raw.Witness(ctx); return }); err != nil {
+		return false, fmt.Errorf("confirming the purge against meta/witness: %w", err)
+	}
+	if now.ModRevision != over {
+		fmt.Fprintf(stderr, "port49-broker: runner: meta/witness changed during the purge, so the store may not "+
+			"be the one purged; the next pass judges it again\n")
+		return false, nil
+	}
+	r.witness.Reset(over)
+	return true, nil
 }
 
 // retryCtx runs f until it returns nil, an error that is not
@@ -1000,9 +1011,6 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		}
 		var n int
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
-			return nil, err
-		}
-		if _, err := r.markPurged(ctx, read.ModRevision); err != nil {
 			return nil, err
 		}
 		if ok && judged.InDoubt && judged.Bundle == bundle {

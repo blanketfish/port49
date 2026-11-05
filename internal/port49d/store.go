@@ -443,15 +443,14 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		return fail(err)
 	}
-	// The restore guard's two reads (final review 7e-2 M-7): a role without
-	// them leaves the guard silently off on a fresh process, and refuses
-	// every redemption for good once a witness was followed. A refusal is
+	// The restore floor's read (final review 7e-2 M-7): a role without it
+	// leaves the floor unable to judge, and every redemption is held. A refusal is
 	// roles applied by 7e-1's output or by hand, which waiting does not
 	// mend: a store fault.
 	if err := retry(func() error { _, err := d.RestoreRead(ctx); return err }); err != nil {
 		if errors.Is(err, store.ErrRefused) {
-			err = &storeFault{errors.New("store: the daemon's role cannot read meta/witness and meta/purged, " +
-				"which the restore guard reads: apply port49d store-roles (plan 7e) as etcd's root, then start again")}
+			err = &storeFault{errors.New("store: the daemon's role cannot read meta/witness, " +
+				"which the restore floor reads: apply port49d store-roles (plan 7e) as etcd's root, then start again")}
 		}
 		return fail(err)
 	}

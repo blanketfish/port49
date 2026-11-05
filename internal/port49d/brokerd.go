@@ -626,13 +626,28 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.MintGate = gate.allow
 	// Read once here, after the start's mark and before the API serves: a
 	// rolling restart, meta/judged already naming this bundle, mints at once.
-	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Stores.Session.Etcd.CallTimeout); named {
+	// Not when this replica owes a purge (no witness record, or a store below
+	// it): meta/judged then may be a restored one's, and a token minted before
+	// the takeover's purge would be deleted by it. A replica that finds
+	// another running the keyspace (standby) does not wait: that one's
+	// takeover purges, and this replica's own runs only if that one stops.
+	var standby atomic.Bool // another replica runs the keyspace: its takeover purges, not this one's
+	owes := func(ctx context.Context) bool {
+		if standby.Load() {
+			return false
+		}
+		rctx, cancel := context.WithTimeout(ctx, 4*cfg.Stores.Session.Etcd.CallTimeout)
+		defer cancel()
+		_, gone, _, err := readWitness(rctx, wit, bs.raw.Witness)
+		return gone || err != nil
+	}
+	if _, named := judgedNames(ctx, bs.raw, startBundle, 4*cfg.Stores.Session.Etcd.CallTimeout); named && !owes(ctx) {
 		gate.open(fmt.Sprintf("meta/judged names bundle %s, the one this replica serves", startBundle), stderr)
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Stores.Session.Etcd.CallTimeout, startGateEvery, stderr)
+		openAtJudged(ctx, bs.raw, gate, brk.Policy, 4*cfg.Stores.Session.Etcd.CallTimeout, startGateEvery, stderr, owes)
 	}()
 	swapped := make(chan struct{}, 1)
 	wg.Add(1)
@@ -643,6 +658,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
 		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who, copy: marksCopy, marks: marks,
 		marksReloaded: make(chan struct{}, 1), witness: wit,
+		holdMints: gate.purge, standby: func() { standby.Store(true) },
 		tookOver: func(carried *policy.Policy) {
 			gate.open(fmt.Sprintf("this replica's takeover is done (bundle %s)", carried.Bundle), stderr)
 		}}

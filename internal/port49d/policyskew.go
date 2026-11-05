@@ -196,7 +196,11 @@ type skewGate struct {
 	starting atomic.Bool
 	mu       sync.Mutex // orders the gauge's writes with the state they follow
 	swapping bool
-	closed   prometheus.Gauge
+	// purging holds mints while the runner purges a restored store: a token
+	// minted in that window would be deleted by the purge (decision 56
+	// ruling 2).
+	purging bool
+	closed  prometheus.Gauge
 }
 
 // newStartGate is a start's gate: closed until a takeover is seen done.
@@ -213,6 +217,12 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 	if g.starting.Load() {
 		return fmt.Errorf("no takeover is yet seen done for bundle %s since this replica started", pol.Bundle)
 	}
+	g.mu.Lock()
+	purging := g.purging
+	g.mu.Unlock()
+	if purging {
+		return errors.New("the runner is purging the tokens of a restored store: retry in a few seconds")
+	}
 	if f := g.flagged.Load(); f != nil && *f == pol.Bundle {
 		return nil
 	}
@@ -228,6 +238,15 @@ func (g *skewGate) open(why string, out io.Writer) {
 	}
 	g.gaugeLocked()
 	fmt.Fprintf(out, "port49-broker: policy: mints open: %s\n", why)
+}
+
+// purge holds mints while the runner purges a restored store (on), and lets
+// them go (off).
+func (g *skewGate) purge(on bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.purging = on
+	g.gaugeLocked()
 }
 
 // opened reports whether the start's hold is over.
@@ -249,7 +268,7 @@ func (g *skewGate) gauge() {
 
 func (g *skewGate) gaugeLocked() {
 	if g.closed != nil {
-		g.closed.Set(b2f(g.starting.Load() || g.swapping))
+		g.closed.Set(b2f(g.starting.Load() || g.swapping || g.purging))
 	}
 }
 
@@ -282,11 +301,14 @@ func judgedNames(ctx context.Context, judged judgedReader, bundle string, call t
 // API serves, so a rolling restart's first mint is never held. While the
 // gate stays closed it says once what the mints wait for.
 func openAtJudged(ctx context.Context, judged judgedReader, gate *skewGate, live *policy.Live, call,
-	every time.Duration, out io.Writer) {
+	every time.Duration, out io.Writer, owes func(context.Context) bool) {
 	said := false
 	for !gate.opened() {
 		bundle := live.Load().Bundle
 		rec, named := judgedNames(ctx, judged, bundle, call)
+		if named && owes != nil && owes(ctx) {
+			rec, named = "a purge of a restored store is owed; only this replica's takeover ends it", false
+		}
 		if named {
 			gate.open(fmt.Sprintf("meta/judged names bundle %s, the one this replica serves", bundle), out)
 			return

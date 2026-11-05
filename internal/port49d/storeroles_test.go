@@ -90,7 +90,6 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		"etcdctl role grant-permission port49_daemon readwrite --prefix=true /port49/v1/t/",
 		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/rv/",
 		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/witness\n",
-		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/purged\n",
 		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/seal_keys\n",
 		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/judged_bundle\n",
 		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/ping\n",
