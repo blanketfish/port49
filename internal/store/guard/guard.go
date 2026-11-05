@@ -113,7 +113,7 @@ type Metrics struct {
 
 // outcomes is every value of the outcome label: whether each is counted
 // toward the breaker, and whether it is a failure there.
-var outcomes = []string{"ok", "not_found", "conflict", "error", "timeout", "deadline", "unavailable", "refused",
+var outcomes = []string{"ok", "not_found", "conflict", "error", "timeout", "deadline", "deadline_on_entry", "unavailable", "refused",
 	"canceled", "saturated", "circuit_open"}
 
 type pool struct {
@@ -131,23 +131,62 @@ type pool struct {
 	// last opened: the open line names which calls fed it.
 	ops     map[string]int
 	openOps string
-	// openedAt is when the circuit last opened from closed; a failed probe
-	// opens it again without moving it. refusedSince is the first refusal
+	// refusedSince is the first refusal
 	// of the current run, lastRefused its latest, and refused its count: a
 	// run ends at an answer, or at a refusal more than OpenFor after the
 	// one before it, which starts the next (re-check R-I5). toldOpen is
-	// whether Unhealthy has been told of this open circuit, and toldRefused
+	// whether Unhealthy has been told of this failing run, and toldRefused
 	// of this refused run: each is its own, so a refused probe on an open
 	// circuit already told does not tell it again (review M1).
-	openedAt, refusedSince, lastRefused time.Time
-	refused                             int
-	toldOpen, toldRefused               bool
+	// runStart is when the current failing run first opened the circuit: only an
+	// answered call ends the run, a close by the health check does not, so
+	// the hold_ttl backstop (gone) keeps measuring through a store whose
+	// pings pass while its real calls fail. gen counts closes, so a probe
+	// that was in flight at one is not taken for the new circuit's.
+	runStart                  time.Time
+	gen                       uint64
+	refusedSince, lastRefused time.Time
+	refused                   int
+	toldOpen, toldRefused     bool
 }
 
 type guarded struct {
 	inner store.Store
 	c     Config
 	pools map[Pool]*pool
+}
+
+// Closer is what Wrap and WrapRev return besides a store: a passing store
+// health check closes the token and context circuits through it (stores I2).
+type Closer interface{ CloseCircuits(why string) }
+
+// CloseCircuits closes the token and context pools' circuits, and leaves
+// the bulk pool's alone: a health check that passed reads both hot
+// connections, so there is nothing for a probe to learn, and the probe
+// window (OpenFor) is the time a recovered store would be refused for. A
+// pool already closed is untouched; one that was open has its failure run
+// ended, is gauged 0 and says why it closed.
+func (g *guarded) CloseCircuits(why string) {
+	for _, p := range []Pool{Token, Context} {
+		pl := g.pools[p]
+		pl.mu.Lock()
+		was := pl.open
+		if was {
+			// The failing run (runStart, toldOpen) and the refused run are left
+			// as they are, deliberately: only an answered call ends them.
+			pl.open, pl.fails, pl.probe = false, 0, false
+			pl.gen++
+			clear(pl.ops)
+		}
+		pl.mu.Unlock()
+		if was {
+			g.changed(p, false, errClosedBy)
+			if g.c.Say != nil {
+				g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is closed: %s", g.c.Proc, g.noun(),
+					g.c.Component, p, why))
+			}
+		}
+	}
 }
 
 // Wrap guards inner.
@@ -220,26 +259,32 @@ func (g revGuarded) Ping(ctx context.Context) error {
 
 // enter decides whether a call may go: always while closed; while open,
 // only one probe once OpenFor has passed.
-func (p *pool) enter(now time.Time) (probe, ok bool) {
+func (p *pool) enter(now time.Time) (probe bool, gen uint64, ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
 	case !p.open:
-		return false, true
+		return false, p.gen, true
 	case now.Before(p.until) || p.probe:
-		return false, false
+		return false, p.gen, false
 	}
 	p.probe = true
-	return true, true
+	return true, p.gen, true
 }
 
 // leave records how a call ended, and reports whether the circuit changed
 // and how it now stands. A call not counted (a caller that went away, a
 // refusal, a slot never got) changes nothing but the probe it held; a
 // refusal also starts or continues the refused run, and an answer ends it.
-func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error, threshold int, openFor time.Duration) (changed, open bool) {
+func (p *pool) leave(now time.Time, probe bool, gen uint64, outcome, op string, cause error, threshold int, openFor time.Duration) (changed, open bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if probe && gen != p.gen {
+		// CloseCircuits ended the circuit this probe was sent on (and cleared
+		// its flag): it is an ordinary call of the new one, and a probe since
+		// started is not its to release.
+		probe = false
+	}
 	if probe {
 		p.probe = false
 	}
@@ -251,7 +296,7 @@ func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error,
 		p.lastRefused = now
 		p.refused++
 		return false, p.open
-	case "canceled", "saturated", "feed_behind":
+	case "canceled", "saturated", "feed_behind", "deadline_on_entry":
 		return false, p.open
 	case "timeout", "deadline", "unavailable":
 		p.fails++
@@ -264,7 +309,9 @@ func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error,
 			was := p.open
 			p.open, p.until = true, now.Add(openFor)
 			if !was {
-				p.openedAt, p.toldOpen = now, false
+				if p.runStart.IsZero() {
+					p.runStart, p.toldOpen = now, false
+				}
 				p.openOps = opTally(p.ops)
 			}
 			return !was, true
@@ -273,6 +320,7 @@ func (p *pool) leave(now time.Time, probe bool, outcome, op string, cause error,
 	}
 	// An answer: ok, not_found, conflict, error.
 	p.fails, p.refusedSince, p.refused, p.toldRefused = 0, time.Time{}, 0, false
+	p.runStart = time.Time{}
 	clear(p.ops)
 	if p.open {
 		p.open = false
@@ -293,7 +341,7 @@ func (p *pool) gone(now time.Time, stopAfter time.Duration, minRefused int, comp
 		return "", false
 	}
 	switch {
-	case p.open && !p.toldOpen && now.Sub(p.openedAt) >= stopAfter:
+	case p.open && !p.toldOpen && now.Sub(p.runStart) >= stopAfter:
 		p.toldOpen = true
 		return fmt.Sprintf("the %s's %s pool's circuit has been open for %v (%v)", component, p.name, stopAfter, p.cause), true
 	case !p.toldRefused && !p.refusedSince.IsZero() && p.refused >= minRefused && now.Sub(p.refusedSince) >= stopAfter:
@@ -333,23 +381,25 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	op := callerOp()
 	pl := g.pools[p]
 	defer g.watch(pl)
-	probe, ok := pl.enter(g.c.Now())
+	probe, gen, ok := pl.enter(g.c.Now())
 	if !ok {
 		g.count(p, "circuit_open")
 		return fmt.Errorf("%w: the %s pool's circuit is open (%w)", store.ErrUnavailable, p, store.ErrNotSent)
 	}
 	// A caller already gone, or already past its deadline, is read before
 	// the slot wait: a select on a free slot and a closed Done picks either
-	// at random, and the outcome must not (review I1). Past its deadline
-	// is a packet whose earlier calls spent the packet_deadline: the
-	// store too slow for it, a deadline as one struck mid-call is.
+	// at random, and the outcome must not (review I1). A deadline spent
+	// before the call is the caller's (decision 56 ruling 8, reversing review
+	// I1): deadline_on_entry, counted apart and not a failure of the pool. A
+	// store slow enough to spend it still fails the calls that spent it, each
+	// of which struck mid-call.
 	if err := ctx.Err(); err != nil {
 		outcome := "canceled"
 		if errors.Is(err, context.DeadlineExceeded) {
-			outcome, err = "deadline", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
+			outcome, err = "deadline_on_entry", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
 		}
 		g.count(p, outcome)
-		if changed, open := pl.leave(g.c.Now(), probe, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
+		if changed, open := pl.leave(g.c.Now(), probe, gen, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
 			g.changed(p, open, err)
 		}
 		return err
@@ -359,7 +409,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	select {
 	case pl.slots <- struct{}{}:
 	case <-cctx.Done():
-		pl.leave(g.c.Now(), probe, "saturated", op, nil, g.c.Failures, g.c.OpenFor)
+		pl.leave(g.c.Now(), probe, gen, "saturated", op, nil, g.c.Failures, g.c.OpenFor)
 		if errors.Is(ctx.Err(), context.Canceled) {
 			g.count(p, "canceled")
 			return ctx.Err()
@@ -390,7 +440,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 		err = fmt.Errorf("%w: no answer in %v (%w)", store.ErrUnavailable, pl.timeout, err)
 	}
 	g.count(p, outcome)
-	if changed, open := pl.leave(g.c.Now(), probe, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
+	if changed, open := pl.leave(g.c.Now(), probe, gen, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
 		g.changed(p, open, err)
 	}
 	return err
@@ -498,9 +548,15 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 			g.c.Failures, cause, ops, g.c.OpenFor, impact, closes))
 		return
 	}
+	if cause == errClosedBy {
+		return // CloseCircuits says its own line, with its reason
+	}
 	g.c.Say(fmt.Sprintf("%s: %s: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,
 		g.noun(), g.c.Component, p))
 }
+
+// errClosedBy marks changed's call from CloseCircuits.
+var errClosedBy = errors.New("closed by a passing health check")
 
 // noun is what the guard's lines call the store.
 func (g *guarded) noun() string {

@@ -1314,7 +1314,7 @@ func TestAnInventoryOnlySwapThatChangesAContextRewritesIt(t *testing.T) {
 	// netops on the devices it selects.
 	siteLab := edit(t,
 		"  - {name: all_devices, match: {}}\n",
-		"  - {name: all_devices, match: {}}\n  - {name: lab, match: {site: lab}, on_missing: include}\n",
+		"  - {name: all_devices, match: {}}\n  - {name: lab, match: {site: lab}, on_missing: exclude}\n",
 		roleList, roleList+"  - {name: no_debug, deny: [\"debug **\"]}\n") +
 		"  - {subject: netops, scope: lab, roles: [no_debug]}\n"
 	for _, c := range []struct {

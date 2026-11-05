@@ -238,7 +238,7 @@ func (b *Broker) adminGate(w http.ResponseWriter, r *http.Request, c caller, bod
 	if err == nil && len(header) <= maxAdminProofHeader {
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
-		err = dec.Decode(&proof)
+		err = decodeOne(dec, &proof)
 	} else if err == nil {
 		err = fmt.Errorf("over %d bytes", maxAdminProofHeader)
 	}
@@ -250,7 +250,7 @@ func (b *Broker) adminGate(w http.ResponseWriter, r *http.Request, c caller, bod
 	chSHA := hex.EncodeToString(chSum[:])
 	if err != nil || chErr != nil || len(ch) != api.MFAChallengeLen {
 		return refuse(chSHA, "the "+api.AdminProofHeader+" header is not a proof: base64url JSON with the "+
-			"challenge, the signature and three attestation certificates", "malformed_proof")
+			"challenge, the signature and three attestation certificates"+trailingNote(err), "malformed_proof")
 	}
 	touch, cause := parseTouch(api.MFAProofRequest{Challenge: proof.Challenge, Signature: proof.Signature,
 		Attestation: proof.Attestation})

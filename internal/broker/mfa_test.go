@@ -112,7 +112,12 @@ func mfaPolicy(o mfaOpts) string {
 	if o.adminRight {
 		netopsAPI = ", api: [revoke_others]"
 	}
-	bobsAPI := ""
+	bobsAPI, appAPI := "", ""
+	if o.adminRight {
+		// A machine's bearer is the one bearer left that reaches the admin
+		// proof, to be told it cannot prove.
+		appAPI = "\n  - {name: bearer_app, identity: [\"app:Oxidized-01\"], username: svc-bearer, token_ttl: 60s, api: [revoke_others]}"
+	}
 	if o.bobAPI != "" {
 		bobsAPI = ", api: [" + o.bobAPI + "]"
 	}
@@ -134,7 +139,7 @@ subjects:
   - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s%s}
   - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s%s}
   - {name: svc_oxidized, identity: ["spiffe://corp.example.com/host/oxidized-01"], username: svc-oxidized, token_ttl: 60s}
-  - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}
+  - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}%s
 grants:
   - {subject: netops, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: netops, scope: edge, roles: [network_admin], max_privilege: admin}%s
@@ -144,7 +149,7 @@ grants:
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: edge, roles: [network_admin], max_privilege: admin}
-`, coreMFA, ceilingRole, netopsAPI, bobsAPI, ceilingGrant)
+`, coreMFA, ceilingRole, netopsAPI, bobsAPI, appAPI, ceilingGrant)
 }
 
 // failStore fails the named store methods, for the store-down cases.
@@ -651,7 +656,7 @@ func (f *mfaFixture) proveIdP(t *testing.T, tok, ch string) int {
 func (f *mfaFixture) proveIdPDetail(t *testing.T, tok, ch string) (int, string) {
 	t.Helper()
 	body, _ := json.Marshal(api.MFAProofRequest{Challenge: ch, Method: "idp_mfa"})
-	w := f.bearer(context.Background(), "POST", "/v1/mfa", string(body), tok)
+	w := f.rawBearer(context.Background(), "POST", "/v1/mfa", string(body), tok)
 	return w.Code, w.Body.String()
 }
 
@@ -1198,6 +1203,25 @@ func TestAStoreUnavailableMintRecordCarriesTheRequirement(t *testing.T) {
 	}
 }
 
+// idp_mfa verifies a person's ID token directly, so an x509 people broker
+// with an oidc verifier and no issuance takes it as a proof at /v1/mfa while
+// /v1/tokens refuses the same token (decision 56 ruling 4).
+func TestAnIDPMFAProofStillTakesTheIDTokenOnANonIssuingBroker(t *testing.T) {
+	f := newMFAFixture(t)
+	if f.b.Issuer != nil {
+		t.Fatal("the fixture should have no issuance")
+	}
+	ch := f.ask(t, f.alice, "core-sw01")
+	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"pwd", "mfa"}, authTime: f.clock.Now()})
+	if code, detail := f.proveIdPDetail(t, tok, ch); code != 200 {
+		t.Fatalf("POST /v1/mfa (idp) = %d %s", code, detail)
+	}
+	w := f.rawBearer(context.Background(), "POST", "/v1/tokens", `{"devices":["core-sw01"],"purpose":"test"}`, tok)
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "trust_domain_unresolved") {
+		t.Fatalf("POST /v1/tokens with the same token = %d %s, want 401", w.Code, w.Body.String())
+	}
+}
+
 func TestAnIdPProofCoversTheMint(t *testing.T) {
 	f := newMFAFixture(t)
 	ch := f.ask(t, f.alice, "core-sw01")
@@ -1267,23 +1291,6 @@ func TestAnIdPSignInAtTheFreshnessLimitIsAccepted(t *testing.T) {
 		authTime: f.clock.Now().Add(-limit)})
 	if code, detail := f.proveIdPDetail(t, tok, ch); code != 200 {
 		t.Fatalf("exactly at the limit: %d %s, want 200", code, detail)
-	}
-}
-
-// Proof by idp spends the token: the same token posted for a second request
-// bound to the same challenge is refused even where the challenge record is
-// there (a fresh alice challenge is bound by its own nonce, so the token's
-// SHA-256 is what is spent).
-func TestAnIdPTokenIsSpent(t *testing.T) {
-	f := newMFAFixture(t)
-	ch := f.ask(t, f.alice, "core-sw01")
-	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", nonceFor: ch, amr: []string{"mfa"}, authTime: f.clock.Now()})
-	// Spend the token's hash as a first proof would, then post it.
-	if ok, err := f.st.PutOnce(context.Background(), mfaTokenKey(tok), nil, time.Hour); err != nil || !ok {
-		t.Fatalf("PutOnce: %v %v", ok, err)
-	}
-	if code, detail := f.proveIdPDetail(t, tok, ch); code != 401 || !strings.Contains(detail, "used as a proof already") {
-		t.Fatalf("a spent ID token: %d %s, want 401 saying it was used already", code, detail)
 	}
 }
 

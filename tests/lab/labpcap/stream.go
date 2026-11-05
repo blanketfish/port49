@@ -245,3 +245,28 @@ func (f *File) Decode(key string, subnet *net.IPNet) (*Decode, error) {
 	}
 	return d, nil
 }
+
+// Tail is a stream's bytes after its last whole TACACS+ packet: Off is the stream offset of the
+// first, Len how many. Nothing frames them, so no field list reaches them.
+type Tail struct {
+	Stream int
+	Off    int
+	Len    int
+}
+
+// Tails lists every stream's unframed tail, in stream order.
+func (d *Decode) Tails() []Tail {
+	end := map[int]int{}
+	for _, p := range d.Packets {
+		if e := p.BodyOff + len(p.Body); e > end[p.Stream] {
+			end[p.Stream] = e
+		}
+	}
+	var out []Tail
+	for i, s := range d.Streams {
+		if n := len(s.Payload) - end[i]; n > 0 {
+			out = append(out, Tail{Stream: i, Off: end[i], Len: n})
+		}
+	}
+	return out
+}

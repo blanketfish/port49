@@ -220,12 +220,12 @@ evidence:
 # The directory lab (plan 7g): OpenLDAP and Samba AD as containers, no devices, so
 # no containerlab and no image beyond debian:bookworm-slim. Needs Docker with
 # Compose v2.24.4+; see tests/lab/README.md, "Directories".
-lab-directory:
+lab-directory: build
 	go test -tags lab ./tests/lab/ -run 'TestL42|TestL43' -count=1 -v -timeout 30m
 
 # L74 and L75 (plan 11a): three simulated regions on this host; needs sudo -n,
 # PORT49_LAB_ETCD_BIN (etcd v3.6.15) and the L67 directory containers' images.
-lab-regions:
+lab-regions: build
 	go test -tags lab ./tests/lab/ -run '^TestRegions$$' -count=1 -timeout 120m -v
 
 # The load harness (plan 12c): the design 5 rate against port49d and port49-broker on
@@ -238,7 +238,7 @@ lab-regions:
 # volume type in PORT49_LAB_LOAD_DISK_DECLARED (free text, 64 printable characters; the note carries it as
 # declared by the operator, not read from the host; make passes it through the environment untouched, never
 # through the recipe's shell). A RAM run needs 9 GiB free in /dev/shm and no p49load-s* left there.
-lab-load:
+lab-load: build
 	PORT49_LAB_LOAD=1 PORT49_LAB_ETCD_BIN=$(PORT49_LAB_ETCD_BIN) PORT49_LAB_LOAD_CELLS=$(PORT49_LAB_LOAD_CELLS) \
 		PORT49_LAB_LOAD_IN_RAM=$(PORT49_LAB_LOAD_IN_RAM) \
 		go test -tags lab ./tests/lab/ -run '^TestLoad$$' -count=1 -v -timeout 150m
@@ -251,12 +251,12 @@ lab-regress: build
 # L50 (plan 8b): who can write a workload mapping's attribute, on Samba AD and
 # the Windows Server DC. Needs Docker with Compose v2.24.4+, KVM, the cached
 # evaluation ISO and PORT49_LAB_L50=1; see tests/lab/README.md, "Directories".
-lab-l50:
+lab-l50: build
 	PORT49_LAB_L50=1 go test -tags lab ./tests/lab/ -run '^TestL50WorkloadAttributeWriters$$' -count=1 -v -timeout 240m
 
 # The conformance run a firmware is vetted by (plan 11b). One platform selector at a time.
 # A re-vet of nxos106 re-measures L80 (closed), so PORT49_LAB_REMEASURE defaults to it there and nowhere else.
-lab-qualify:
+lab-qualify: build
 	@test -n "$(P)" || { echo "usage: make lab-qualify P=<selector, e.g. nxos106>"; exit 2; }
 	PORT49_LAB_QUALIFY=1 PORT49_LAB_REMEASURE=$${PORT49_LAB_REMEASURE:-$(if $(filter nxos106,$(P)),L80)} PORT49_LAB_PLATFORMS=$(P) go test -tags lab ./tests/lab/ -run '^TestQualify$$' -count=1 -v -timeout 180m
 
@@ -264,7 +264,7 @@ lab-qualify:
 # idle_timeout. The harness builds bin/port49d itself, in a private clone: ARM=baseline from
 # the commit before the fix, ARM=fixed from HEAD. Commit earlier evidence first (the tree must
 # be clean). CELLS=s1,idle31 runs a subset.
-lab-l80:
+lab-l80: build
 	@case "$(ARM)" in baseline|fixed) ;; *) echo "usage: make lab-l80 ARM=baseline|fixed [CELLS=...]"; exit 2;; esac
 	PORT49_L80_ARM=$(ARM) PORT49_L80_CELLS=$(CELLS) PORT49_LAB_PLATFORMS=nxos106 go test -tags lab ./tests/lab/ -run '^TestL80Remeasure$$' -count=1 -v -timeout 240m
 
@@ -306,47 +306,47 @@ lab-l84-host:
 # and `make build`; see tests/lab/README.md, "Directories". Cell (g)'s etcd half
 # runs on the compose stack, so it also brings up the lab's arista_eos or
 # juniper_vjunos-router (TestDirectoryEndToEnd's platforms), as that test does.
-lab-l67:
+lab-l67: build
 	go test -tags lab ./tests/lab/ -run '^TestL67$$' -count=1 -v -timeout 45m
 
 # L67 on the Windows Server DC (the L44 harness, on the SER8). Needs KVM, the
 # cached evaluation ISO and PORT49_LAB_L67_WINDOWS=1.
-lab-l67-windows:
+lab-l67-windows: build
 	PORT49_LAB_L67_WINDOWS=1 go test -tags lab ./tests/lab/ -run '^TestL67Windows$$' -count=1 -v -timeout 240m
 
 # The identity-provider lab (plan 7h): Keycloak as a container, no devices.
 # Needs Docker with Compose v2.24.4+; see tests/lab/README.md, "Identity provider".
-lab-oidc:
+lab-oidc: build
 	go test -tags lab ./tests/lab/ -run 'TestL45|TestL46' -count=1 -v -timeout 30m
 
 # L55 (plan 9b): Keycloak as port49's OIDC public client meets it. Needs
 # Docker with Compose v2.24.4+; a few minutes. lab-oidc re-measures the closed
 # L45 and L46; this runs L55 alone.
-lab-oidc-l55:
+lab-oidc-l55: build
 	go test -tags lab ./tests/lab/ -run 'TestL55' -count=1 -v -timeout 30m
 
 # L61 (plan 9c): Keycloak's amr and acr for idp_mfa, a password-and-OTP realm
 # flow against the same compose Keycloak. Needs Docker with Compose v2.24.4+.
-lab-mfa-idp:
+lab-mfa-idp: build
 	go test -tags lab ./tests/lab/ -run 'TestL61' -count=1 -v -timeout 30m
 
 # L56 (plan 9b): port49-issued certificates end to end, bin/port49 against
 # the compose stack's Keycloak, broker and vEOS. Needs the compose stack,
 # containerlab, the EOS image and `make build`.
-lab-oidc-agent:
+lab-oidc-agent: build
 	PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run 'TestL56' -count=1 -v -timeout 60m
 
 # L69 (plan 10): a Kubernetes cluster's service account tokens, on two kind
 # clusters and a local port49d, no devices. Needs Docker, kind v0.29.0 on PATH
 # (go install sigs.k8s.io/kind@v0.29.0), kubectl and `make build`; see
 # tests/lab/README.md, "Kubernetes (L69)".
-lab-k8s:
+lab-k8s: build
 	PORT49_LAB_K8S=1 go test -tags lab ./tests/lab/ -run '^TestL69$$' -count=1 -v -timeout 60m
 
 # The workload CA lab (plan 8, L48): step-ca as a container and a local
 # port49d, no devices. Needs Docker with Compose v2.24.4+ and `make build`;
 # see tests/lab/README.md, "Workload CA and Oxidized".
-lab-workload:
+lab-workload: build
 	go test -tags lab ./tests/lab/ -run 'TestL48' -count=1 -v -timeout 75m
 
 # Oxidized end to end (plan 8, L49): the compose stack with one platform, as
@@ -369,7 +369,7 @@ lab-oxidized:
 # L64 and L65 (plan 9d): `port49 ssh` under OpenSSH's accept-new and the Python
 # client against each platform, one at a time as `make lab` runs them. Each
 # device is reloaded once, so this is its own target. It installs
-# ./clients/python[netmiko] into /home/rwendt/lab-venv first. L53 (the host-key
+# ./clients/python[netmiko] into $HOME/lab-venv first. L53 (the host-key
 # scan) is closed and runs only as `PORT49_LAB_REMEASURE=L53 go test -tags lab
 # ./tests/lab/ -run TestL53HostKeyScan` with PORT49_LAB_SSH=1.
 # PORT49_LAB_REMEASURE passes through from the caller's environment only; set

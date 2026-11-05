@@ -30,7 +30,7 @@ func adminCall(name string, req agent.AdminRequest, unanswered string, stderr io
 		return agent.AdminResponse{}, adminFailed(name, err, unanswered, stderr)
 	}
 	if resp.Status != 200 {
-		return agent.AdminResponse{}, adminRefused(name, resp, touched, stderr)
+		return agent.AdminResponse{}, adminRefused(name, req.Path, resp, touched, stderr)
 	}
 	return resp, 0
 }
@@ -76,7 +76,7 @@ func adminFailed(name string, err error, unanswered string, stderr io.Writer) in
 
 // adminRefused says what the broker's answer other than a 200 means. A
 // refusal before the key was asked (touched false) did no touch and no work.
-func adminRefused(name string, resp agent.AdminResponse, touched bool, stderr io.Writer) int {
+func adminRefused(name, path string, resp agent.AdminResponse, touched bool, stderr io.Writer) int {
 	var e api.Error
 	_ = json.Unmarshal(resp.Body, &e)
 	detail := printsafe.Line(e.Detail, 600)
@@ -106,6 +106,10 @@ func adminRefused(name string, resp agent.AdminResponse, touched bool, stderr io
 	case resp.Status == 503 && e.Error == "revocation_unconfirmed":
 		// It may have gone through, even over a lift made meanwhile: the broker's words, not "nothing was done".
 		fmt.Fprintf(stderr, "%s: the broker could not confirm it: %s\n", name, printsafe.Line(e.Detail, 1200))
+	case resp.Status == 503 && e.Error == "store_unavailable" && path == "/v1/tokens/revoke":
+		// The mark went nowhere but the broker's own process: its words say where else to make it, not "run it
+		// again shortly".
+		fmt.Fprintf(stderr, "%s: the broker says: %s\n", name, printsafe.Line(e.Detail, 1200))
 	case resp.Status == 413:
 		fmt.Fprintf(stderr, "%s: the broker takes at most %d MiB; an export port49 wrote is smaller than that: check "+
 			"the file is the export\n", name, api.MaxImportBytes>>20)

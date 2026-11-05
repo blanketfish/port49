@@ -184,7 +184,6 @@ Carried from plan 2, and still binding:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ---
@@ -487,8 +486,7 @@ sealing layer cannot open is replaced fresh, carrying its revoked_at;
 a receipt replays only onto the context it was written for, and
 token_spent's §5.7 row now covers the one that no longer exists.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -699,8 +697,7 @@ authz) stands.
 The roadmap records the local-account config check plan 5 owes, and
 per-window contexts on EOS/IOS-XE as possible later work.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -814,8 +811,7 @@ Expected: PASS.
 git add internal/store/store.go internal/token/minter.go internal/token/minter_test.go
 git commit -m "feat: every minted token records when it was minted
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1219,8 +1215,7 @@ store-wide revision; SwapContext writes only at the revision the caller
 read. The sealing layer passes the plaintext revision through, so the
 merge can happen above it and the precondition below it.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2039,8 +2034,7 @@ refused: crypt hands up its plaintext revision and revocation in a
 store.UnreadableContextError, and the replace swaps on that revision
 and keeps the revocation by the minted-after rule.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2331,8 +2325,7 @@ A joined context is indexed under each login's credential; the reverse
 record held only the last, so the first login's entries aged out under
 a live context and revocation by that sid found nothing.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2602,8 +2595,7 @@ A second window's session authorization granted a lower level and
 SetPrivilege wrote it over the first window's enable. The stored level
 is now the highest granted on the device; the reply is still policy's.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3755,8 +3747,7 @@ retired key is replaced carrying its revocation, logged
 replaced_unreadable. A retransmitted login or enable replays only onto
 the context its receipt was written for; otherwise token_spent.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3902,8 +3893,7 @@ port49_accounting_attributions_total{attribution} counts every record
 the spool accepts; foreign is the series to alert on. A system record
 keeps the port it arrived on, which the test now pins.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

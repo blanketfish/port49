@@ -374,7 +374,7 @@ func TestPort49dFollowsTheService(t *testing.T) {
 	state := filepath.Join(safeDir(t), "state")
 	out, log, _ := port49dOn(t, svc.url, svc.pki(), svc.pubFile, state, "")
 	waitFor(t, out, "port49d: listening on")
-	if !strings.Contains(out.String(), "port49d: inventory: starting from bundle 1 (the service), published") {
+	if !strings.Contains(out.String(), "port49d: inventory: no local copy; took bundle 1 published") {
 		t.Fatalf("%s", out.String())
 	}
 	if st := leaf0(t, out).login("nobody", "not-a-token"); st != wire.AuthenStatusFail {
@@ -590,7 +590,7 @@ func TestAFreshPort49dWithNothingWaitsForTheService(t *testing.T) {
 	startService(t, dir, addr)
 	// Cold start asks again every poll_interval.
 	waitWithin(t, out, "port49d: listening on", e2ePoll+3*time.Second)
-	if !strings.Contains(out.String(), "starting from bundle 1 (the service), published") ||
+	if !strings.Contains(out.String(), "no local copy; took bundle 1 published") ||
 		readyz(t, out) != http.StatusOK {
 		t.Fatalf("%s", out.String())
 	}

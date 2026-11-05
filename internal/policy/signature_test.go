@@ -38,8 +38,8 @@ func fleetPolicy(tb testing.TB, devices int) *Policy {
 scopes:
   - {name: all_devices, match: {}}
   - {name: dc_fabric, match: {site: [dc1, dc2], role: [leaf, spine]}}
-  - {name: edge, match: {site: [edge]}, on_missing: include}
-  - {name: unpatched, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: include}
+  - {name: edge, match: {site: [edge]}, on_missing: exclude}
+  - {name: unpatched, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: exclude}
 roles:
   - {name: admin, privilege: admin, permit: ["**"]}
   - {name: ops, privilege: readonly, permit: [` + strings.Join(shows, ", ") + `]}
@@ -218,7 +218,7 @@ scopes:
   - {name: by_serial, match: {serial: {re: "^SN"}}, on_missing: exclude}
   - {name: unpatched, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: exclude}
   - {name: by_name, match: {name: [name-a]}, on_missing: exclude}
-  - {name: unpatched_or_unknown, match: {fw_version: {lt: "21.4R3-S5"}}, on_missing: include}
+  - {name: unpatched_or_unknown, match: {fw_version: {lt: "21.4R3-S5"}}, on_missing: exclude}
 roles:
   - {name: ro, privilege: readonly, permit: ["show **"]}
   - {name: plat, privilege: readonly, permit: ["show **"], deny: ["show interfaces ge-0/0/0"]}

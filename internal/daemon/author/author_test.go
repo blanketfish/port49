@@ -1698,3 +1698,20 @@ func TestSessionShapes(t *testing.T) {
 		})
 	}
 }
+
+const synthTokenAsName = "SyntheticTokenShapedNameXY1234"
+
+func TestAnAuthorizationNamingATokenLogsNoUsername(t *testing.T) {
+	for _, args := range [][]string{{"service=shell", "cmd="}, {"service=shell", "cmd=show", "cmd-arg=<cr>"}} {
+		h, _, log := setup(t)
+		h.Handle(context.Background(), peer, req(synthTokenAsName, "vty0", args...))
+		out := log.String()
+		if strings.Contains(out, synthTokenAsName) || strings.Contains(out, strings.ToLower(synthTokenAsName)) {
+			t.Fatalf("a token-shaped username reached the log (%v)", args)
+		}
+		sess := lastRecord(t, log)["session"].(map[string]any)
+		if sess["username"] != nil || sess["username_redacted"] != true {
+			t.Fatalf("session: %v", sess)
+		}
+	}
+}

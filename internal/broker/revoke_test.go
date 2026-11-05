@@ -284,7 +284,7 @@ func (markFailingStore) PutRevocation(context.Context, store.Revocation) error {
 // daemon's own copy keeps it, since the write may have committed with its
 // reply lost (Task 4b review M6), and a lift the store answers "not
 // revoked" takes it out.
-func TestAMarkThatCannotBeWrittenRevokesNothing(t *testing.T) {
+func TestAMarkThatCannotBeWrittenStillReachesThisRegion(t *testing.T) {
 	f := newFixture(t, 8)
 	conns := &fakeConns{held: [][2]string{{alice, certKey(f.alice)}}}
 	f.b.Conns = conns
@@ -305,8 +305,10 @@ func TestAMarkThatCannotBeWrittenRevokesNothing(t *testing.T) {
 	if f.b.Marks.Holds(store.RevocationPrincipal, alice) {
 		t.Fatal("a lift the store answered not revoked left the daemon's mark")
 	}
-	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"}); !c.RevokedAt.IsZero() {
-		t.Fatal("a context was marked without the mark")
+	// The unrecorded revoke reached this region's session store all the same (stores I1): the context is
+	// marked, the listener is not.
+	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"}); c.RevokedAt.IsZero() {
+		t.Fatal("an unrecorded revoke did not mark this region's context")
 	}
 	if len(conns.held) != 1 || len(conns.marked) != 0 {
 		t.Fatalf("the listener was reached without the mark: %v %v", conns.held, conns.marked)

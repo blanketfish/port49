@@ -113,7 +113,7 @@ func TestThePrincipalIsPinnedAtBind(t *testing.T) {
 // Each resolver refusal is answered as the agent can act on it (Ruling 4):
 // 401 identity_unmapped, identity_ambiguous and username_collision, each
 // closing the connection; 503 directory_unavailable with Retry-After 30,
-// which the agent retries.
+// which the operator is told to try again.
 func TestBindRefusalsReadAsTheAgentNeeds(t *testing.T) {
 	for err, want := range map[error]struct {
 		status int

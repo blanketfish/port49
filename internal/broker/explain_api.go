@@ -3,9 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -40,13 +38,7 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	// beyond it would otherwise go unseen.
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
-	err := dec.Decode(&req)
-	if err == nil {
-		// One object and nothing after it, as tokensRevoke reads its body.
-		if _, terr := dec.Token(); terr != io.EOF {
-			err = errors.New("trailing data")
-		}
-	}
+	err := decodeOne(dec, &req)
 	if err != nil || !deviceName(req.Device) || !commandLine(req.Command) {
 		writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("name a device (1 to %d printable ASCII "+
 			"characters) and, if you like, a command of at most %d printable characters", maxDeviceName,

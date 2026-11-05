@@ -19,6 +19,7 @@ import (
 	"github.com/blanketfish/port49/internal/platform"
 	"github.com/blanketfish/port49/internal/store"
 	"github.com/blanketfish/port49/internal/tacacs/wire"
+	"github.com/blanketfish/port49/internal/token"
 )
 
 // Decision is what an Authorizer returns. Engine is the one the daemon runs;
@@ -262,7 +263,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// on someone else's context, so there is nothing here to invalidate — the
 	// deletion this path used to perform is gone with the old key.
 	user := authen.Canonical(string(req.User))
-	rec.Session.Username = user
+	rec.Session.Username, rec.Session.UsernameRedacted = token.LoggedUsername(string(req.User))
 	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user})
 	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	if errors.Is(err, store.ErrNotFound) {

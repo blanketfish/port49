@@ -610,6 +610,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	fmt.Fprintf(out, "port49d: store: health checked every %v; every listener closes after %d consecutive failed "+
 		"checks and opens again after %d passes (%s.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter,
 		cfg.Stores.SessionPath())
+	closer := gd.(guard.Closer)
 	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
 	if !cfg.Stores.Shared {
 		de := cfg.Stores.Directory.Etcd
@@ -640,7 +641,8 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		fresh:      dc.fresh,
 		follow:     follow,
 		health: &health{every: h.Interval, timeout: e.CallTimeout, closeAfter: h.CloseAfter, openAfter: h.OpenAfter,
-			check: storeCheck(fd, d), m: m, state: &healthState{}, out: out},
+			check:  storeCheck(fd, d),
+			passed: func() { closer.CloseCircuits("a store health check passed") }, m: m, state: &healthState{}, out: out},
 		close: func() {
 			d.Close()
 			if !cfg.Stores.Shared {

@@ -15,10 +15,10 @@ import (
 	"github.com/blanketfish/port49/internal/printsafe"
 )
 
-// personBearerText answers a person's ID token at a broker that issues
-// certificates, anywhere but POST /v1/certificate (decision 43 ruling 13).
-const personBearerText = "this broker takes a person's ID token at POST /v1/certificate alone, which exchanges it " +
-	"for a short-lived certificate; run `port49 login` (spec §13 decision 43 ruling 13)"
+// personBearerText answers a person's ID token anywhere but POST
+// /v1/certificate and POST /v1/mfa (decision 56 ruling 4).
+const personBearerText = "a person's ID token is never a caller's credential: it is exchanged for a certificate at " +
+	"POST /v1/certificate (`port49 login`), or given as an idp_mfa proof at POST /v1/mfa (decision 56 ruling 4)"
 
 // issuedCaller is CertCallerOf for a chain ending at the broker's own
 // issuing CA (plan 9b; spec §13 decision 43 ruling 10): the certificate's

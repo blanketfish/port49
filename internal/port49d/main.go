@@ -1138,7 +1138,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 	}
 	if startDoc != nil {
-		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+		persistStart(procOf(cfg), cfg.InventoryService, coldPick{p: startDoc, from: startFrom}, m)
 	}
 	if sts.judged != nil && live != nil {
 		// Whether this port49d's policy is the bundle the runner last judged

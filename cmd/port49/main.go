@@ -192,14 +192,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "platform":
 		return platformCmd(args[1:], stdout, stderr)
 	case "devices":
-		if len(args) > 1 && args[1] == "trust" {
-			// Decision 46 ruling 4: host keys are OpenSSH's. Until the
-			// pre-beta review, the old command says where it went.
-			fmt.Fprintln(stderr, "port49 devices trust was removed in plan 9d: port49 ssh uses your OpenSSH "+
-				"known_hosts, which accepts a device's key at first contact and refuses a changed one. To check a "+
-				"key at first contact, compare the fingerprint ssh prints with the device's console")
-			return 2
-		}
 		if len(args) > 1 && args[1] == "check-config" {
 			return checkConfig(args[2:], stdout, stderr)
 		}

@@ -231,11 +231,12 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 // unsupported action/type, or a packet in the wrong phase), in which case
 // credHash is ignored.
 func (s *Session) newRecord(method string, credHash [32]byte) decision.Record {
+	name, redacted := token.LoggedUsername(s.user)
 	rec := decision.Record{TS: s.h.now(), Event: decision.EventRedeem,
 		Device:       s.peer.Device(),
 		PacketFields: decision.AuthenFields(s.start),
 		Session: &decision.Session{Port: string(s.start.Port), RemAddr: string(s.start.RemAddr),
-			Privilege: s.start.PrivLvl, Username: Canonical(s.user)}}
+			Privilege: s.start.PrivLvl, Username: name, UsernameRedacted: redacted}}
 	if method != "" {
 		rec.Auth = &decision.Auth{Method: method, CredentialSHA256: hex.EncodeToString(credHash[:])}
 	}
@@ -459,6 +460,15 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			}
 		}
 		return s.fail(ctx, rec, decision.TokenNotFound)
+	}
+
+	// An enable token raises the context of the principal it was minted for and
+	// no one else's. Two principals can hold tokens under one (nas, username);
+	// without this, B's enable token would raise A's context. Refused before the
+	// token is spent, so it stays B's.
+	if enable && winner.Principal != incumbent.Principal {
+		rec.Principal = incumbent.Principal
+		return s.fail(ctx, rec, decision.CredentialMismatch)
 	}
 
 	// A token whose session ceiling has passed opens nothing: the context it

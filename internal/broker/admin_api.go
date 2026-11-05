@@ -63,13 +63,31 @@ func readAdminBody(w http.ResponseWriter, r *http.Request, max int64) ([]byte, b
 func decodeAdminBody(body []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
+	return decodeOne(dec, v)
+}
+
+// errTrailingData is a body with something after its one JSON object.
+var errTrailingData = errors.New("trailing data")
+
+// decodeOne decodes one JSON value into v and refuses anything after it, which would otherwise
+// be dropped unread and narrow the request silently. Every broker body reads through it.
+func decodeOne(dec *json.Decoder, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return errors.New("trailing data")
+		return errTrailingData
 	}
 	return nil
+}
+
+// trailingNote is ": trailing data" when err is the trailing-data refusal, for the refusals whose
+// text does not carry the decoder's own error.
+func trailingNote(err error) string {
+	if errors.Is(err, errTrailingData) {
+		return ": " + errTrailingData.Error()
+	}
+	return ""
 }
 
 // adminRight reports whether the caller's subject declares one of rights,

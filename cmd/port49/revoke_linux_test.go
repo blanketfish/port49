@@ -261,3 +261,27 @@ func TestRevokeUnconfirmedIsNeverNothingWasDone(t *testing.T) {
 		t.Errorf("an unavailable store: exit %d: %q", code, errb.String())
 	}
 }
+
+// A revocation the broker never sent to the store did not happen anywhere but on that broker: the CLI
+// prints the broker's words as they are, with no "unavailable just now" and no "run it again shortly",
+// while a lift or a list that finds the store down is still the plain outage.
+func TestRevokeNotRecordedIsNotAPassingOutage(t *testing.T) {
+	const detail = "the revocation was not recorded in the store and will not land later, but this port49d denies what it " +
+		"names until a lift on this port49d or its restart; this region's session store: 1 token keys deleted and 0 " +
+		"contexts marked revoked; other regions have not learned of it: run `port49 revoke` now against a broker in a " +
+		"region that reaches the directory, or here once the store answers; cut access another way: remove the " +
+		"principal's grants from broker.policy_file (live within two watch intervals)"
+	newAdminStub(t, func(agent.AdminRequest) (int, any) {
+		return 503, api.Error{Error: "store_unavailable", Detail: detail}
+	})
+	var out, errb bytes.Buffer
+	code := run([]string{"revoke", "--principal", "user:carol@example.com", "--yes"}, &out, &errb)
+	if want := "port49 revoke: the broker says: " + detail + "\n"; code == 0 || errb.String() != want {
+		t.Errorf("exit %d:\n got %q\nwant %q", code, errb.String(), want)
+	}
+	errb.Reset()
+	if code := run([]string{"revoke", "--lift", "--principal", "user:carol@example.com"}, &out, &errb); code == 0 ||
+		!strings.Contains(errb.String(), "unavailable just now") || !strings.Contains(errb.String(), "run it again shortly") {
+		t.Errorf("a lift: exit %d: %q", code, errb.String())
+	}
+}

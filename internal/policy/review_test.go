@@ -27,9 +27,10 @@ func TestReviewListsEveryGrantRow(t *testing.T) {
 	if !later[1].Expired || later[0].Expired {
 		t.Fatalf("expiry: %+v", later)
 	}
-	// srx_unpatched holds srx-fw-04, and srx-fw-22 because its version could
-	// not be compared; srx-fw-05 is patched.
-	if rows, _ := p.Review("security_ir", noon); len(rows) != 1 || rows[0].Devices != 2 {
+	// srx_unpatched_known holds srx-fw-04 alone: srx-fw-22's version could not
+	// be compared, and a grant's scope excludes what it cannot compare (spec
+	// §5.5); srx-fw-05 is patched.
+	if rows, _ := p.Review("security_ir", noon); len(rows) != 1 || rows[0].Devices != 1 {
 		t.Fatalf("%+v", rows)
 	}
 	if _, err := p.Review("nobody", noon); err == nil {

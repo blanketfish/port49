@@ -773,8 +773,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   notes exist with platform, image version, observation and a capture pointer. L44 (Windows
   Server AD) stays open.
 - Conventional Commits; commit messages end with
-  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and
-  `Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc`.
+  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 
 ## Review Focus
 
@@ -1149,8 +1148,7 @@ Expected: the four rows in §5.7, decision 38's bullets, §5.1.3's table.
 ```bash
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
 git commit -m "docs: spec and design for plan 7g, decision 38, four reason codes, L42, L43 and L44 opened" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1280,8 +1278,7 @@ Expected: PASS.
 ```bash
 git add internal/decision internal/broker/api/identity.go
 git commit -m "feat(decision): the directory's four reasons, policy.subjects and auth.directory" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1664,8 +1661,7 @@ do today.
 ```bash
 git add internal/store internal/token internal/daemon/authen
 git commit -m "feat(store): StampRefreshed, a policy write's RefreshedAt, and a token's VerifiedAt as the login's refreshed_at" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2344,8 +2340,7 @@ Expected: PASS.
 ```bash
 git add go.mod go.sum internal/directory internal/config internal/keyfile
 git commit -m "feat(config): broker.directory and broker.refresh_interval" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3173,8 +3168,7 @@ crypt tamper tests; `roles_test.go` with `mb/` and `mk/` refused to the daemon.
 ```bash
 git add internal/store
 git commit -m "feat(store): a directory membership record, sealed, indexed by mapping key, refusable, the broker's alone" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4333,8 +4327,7 @@ Expected: PASS.
 ```bash
 git add internal/directory internal/daemon/metrics/metrics.go
 git commit -m "feat(directory): the server pool: same-site then priority, sticky, breakers, health checks, failback, site crossings" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4715,8 +4708,7 @@ Expected: PASS, and the build succeeds with cgo off.
 ```bash
 git add go.mod go.sum internal/directory
 git commit -m "feat(directory): TLS-only connections bound by EXTERNAL, GSSAPI (pure Go) or simple, secrets withheld" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5682,8 +5674,7 @@ L43 checks it against Samba, and L44 against a Windows DC.
 ```bash
 git add internal/directory
 git commit -m "feat(directory): the certificate-to-directory mapping, one entry or none, and a unique username" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6136,8 +6127,7 @@ Expected: PASS.
 ```bash
 git add internal/directory internal/daemon/metrics/metrics.go
 git commit -m "feat(directory): nested groups by configuration, loop-safe and depth-capped, names that must be unique" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7120,8 +7110,7 @@ Expected: PASS.
 ```bash
 git add internal/directory internal/daemon/metrics/metrics.go
 git commit -m "feat(directory): the resolver: map at bind, verify, grace from the store, pre-warm" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7621,8 +7610,7 @@ path is `resolveNow` as before.
 ```bash
 git add internal/policy cmd/port49
 git commit -m "feat(policy): resolve a member: every matching subject composes, a refused composition, rights through groups, the group gate" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7975,8 +7963,7 @@ directory: `Identity` unchanged).
 ```bash
 git add internal/broker internal/directory
 git commit -m "feat(broker): map the certificate at bind and pin the principal to the held connection" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8234,8 +8221,7 @@ Expected: PASS: the new tests and every existing broker test (no directory: `mem
 ```bash
 git add internal/broker
 git commit -m "feat(broker): mint, explain, identify and revoke through the directory membership, grace and composition_refused" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 6: The failing tests for the pin's escape (Ruling 3)**
@@ -8661,8 +8647,7 @@ Expected: PASS: the new tests, and every existing test (the unknown-op line upda
 git add internal/broker/forget.go internal/broker/forget_test.go internal/decision internal/daemon/admin \
   internal/port49d/revocations.go internal/port49d/brokerd.go internal/port49d/main.go cmd/port49
 git commit -m "feat(broker): port49 directory forget, the pin's escape for an entry re-created" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8911,8 +8896,7 @@ Expected: PASS. The port49d end-to-end tests run the reload's pass with no direc
 ```bash
 git add internal/broker
 git commit -m "feat(broker): the refresh judges a member by its stored membership; a session refresh verifies it" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9204,8 +9188,7 @@ Expected: PASS, the labpcap audit included.
 ```bash
 git add internal/broker internal/config internal/daemon/metrics/metrics.go tests/lab/port49d-lab.yaml
 git commit -m "feat(broker): the scheduled refresh stamps refreshed_at, and session.staleness_ceiling defaults to 4h" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9532,8 +9515,7 @@ does not touch its sessions.
 ```bash
 git add internal/port49d deploy/compose
 git commit -m "feat(port49d): run the directory: the resolver, health checks, the scheduled refresh and pre-warm on the runner" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9814,8 +9796,7 @@ comment that recommends a mode per directory.
 ```bash
 git add tests/lab docs/design/2026-08-23-policy-engine-spec.md Makefile
 git commit -m "docs: close lab register entries L42 and L43 (nested groups, bind mechanisms) on OpenLDAP and Samba AD" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9917,8 +9898,7 @@ Expected: PASS on both images, two notes written. Copy any raw captures to `main
 ```bash
 git add tests/lab
 git commit -m "test(lab): a directory login end to end on the compose stack: nested grant, removal, grace, ceiling, resume" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9958,8 +9938,7 @@ It follows 7f's shape:
 ```bash
 git add docs/superpowers/plans/README.md
 git commit -m "docs: plan 7g as built" \
-  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
-  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

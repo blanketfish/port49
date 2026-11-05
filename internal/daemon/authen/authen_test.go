@@ -3300,3 +3300,82 @@ func TestARestoredEnableTokenIsRefusedTokenSpent(t *testing.T) {
 		t.Fatalf("a restored enable token escalated: %+v", c)
 	}
 }
+
+// synthTokenAsName is token-shaped (30 base62 characters) and obviously not a
+// credential. A device user who pastes their token into the username prompt
+// puts it in the log unless the record redacts it.
+const synthTokenAsName = "SyntheticTokenShapedNameXY1234"
+
+func TestATokenTypedAsTheUsernameIsNeverLogged(t *testing.T) {
+	check := func(t *testing.T, f *fixture, reply wire.AuthenReply, done bool) {
+		t.Helper()
+		if !done || reply.Status != wire.AuthenStatusFail {
+			t.Fatalf("%+v %v", reply, done)
+		}
+		out := f.log.String()
+		if strings.Contains(out, synthTokenAsName) || strings.Contains(out, strings.ToLower(synthTokenAsName)) {
+			t.Fatal("a token-shaped username reached the log")
+		}
+		recs := f.records(t)
+		if len(recs) == 0 {
+			t.Fatal("no record")
+		}
+		for _, r := range recs {
+			sess := r["session"].(map[string]any)
+			if sess["username"] != nil || sess["username_redacted"] != true {
+				t.Fatalf("session: %v", sess)
+			}
+		}
+	}
+	t.Run("pap", func(t *testing.T) {
+		f := setup(t)
+		reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+			AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte(synthTokenAsName), Port: []byte("vty1"), Data: []byte("wrong")})
+		check(t, f, reply, done)
+	})
+	t.Run("ascii", func(t *testing.T) {
+		f := setup(t)
+		s := f.h.NewSession(f.peer)
+		s.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypeASCII,
+			Service: wire.AuthenServiceLogin, Port: []byte("vty0")})
+		s.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(synthTokenAsName)})
+		reply, done := s.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("wrong")})
+		check(t, f, reply, done)
+	})
+}
+
+// An enable token is the escalated principal's own. Two principals can hold
+// tokens under one (nas, username); B's enable token must not raise A's context.
+func TestAnEnableTokenOfAnotherPrincipalIsRefused(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	key := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	f.st.PutToken(context.Background(), key,
+		store.Token{ID: "en-b", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice-b@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, done := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	if !done || reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("%+v %v", reply, done)
+	}
+	recs := f.records(t)
+	if last := recs[len(recs)-1]; last["reason"] != "credential_mismatch" {
+		t.Fatalf("%v", last)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.PrivLvl != 1 {
+		t.Fatalf("the context's privilege must not change: %+v", c)
+	}
+	cands, _ := f.st.Candidates(context.Background(), key)
+	unspent := false
+	for _, c := range cands {
+		if c.ID == "en-b" {
+			unspent = true
+		}
+	}
+	if !unspent {
+		t.Fatal("the other principal's enable token was spent")
+	}
+}

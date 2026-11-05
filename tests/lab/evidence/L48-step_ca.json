@@ -230,7 +230,7 @@
     "step": "token_ca_down",
     "value": {
       "exit": 0,
-      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in 1m) with under a quarter of its validity left: its renewal is late; renew it against your CA",
+      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in 1m) with under a quarter of its validity left: its renewal is late; renew it against your CA",
       "at_seconds": 270
     }
   },
@@ -238,7 +238,7 @@
     "step": "token_ca_down",
     "value": {
       "exit": 0,
-      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in 1m) with under a quarter of its validity left: its renewal is late; renew it against your CA",
+      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in 1m) with under a quarter of its validity left: its renewal is late; renew it against your CA",
       "at_seconds": 300
     }
   },
@@ -246,7 +246,7 @@
     "step": "token_ca_down",
     "value": {
       "exit": 0,
-      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in ) with under a quarter of its validity left: its renewal is late; renew it against your CA",
+      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expires 2026-10-08T14:00:55Z (in ) with under a quarter of its validity left: its renewal is late; renew it against your CA",
       "at_seconds": 330
     }
   },
@@ -254,7 +254,7 @@
     "step": "token_ca_down",
     "value": {
       "exit": 77,
-      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
+      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
       "at_seconds": 360
     }
   },
@@ -262,7 +262,7 @@
     "step": "token_ca_down",
     "value": {
       "exit": 77,
-      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
+      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
       "at_seconds": 390
     }
   },
@@ -270,7 +270,7 @@
     "step": "token_ca_down",
     "value": {
       "exit": 77,
-      "stderr": "port49 workload token: the certificate /home/rwendt/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
+      "stderr": "port49 workload token: the certificate $HOME/git/port49/.worktrees/lab-p8f/tests/lab/logs/workload/host-w/w.pem expired at 2026-10-08T14:00:55Z: renew it against your CA (only the first enrollment is manual)",
       "at_seconds": 420
     }
   },

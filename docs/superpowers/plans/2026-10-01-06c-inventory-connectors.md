@@ -325,7 +325,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Running the lab (Tasks 14 and 15)
@@ -726,8 +725,7 @@ Spec §10, §12, §13 decision 31, §14, and two open register rows, L32
 (the connectors as built, through two kinds of proxy) and L33 (webhooks
 to port49-inventory over TLS, and the device run). Design §6 and §17.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1365,8 +1363,7 @@ only, reads its named CA at each handshake, sends the token as Bearer for
 a NetBox v2 token and Token otherwise (L27), follows no redirect, and
 bounds every body.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1769,8 +1766,7 @@ read as 2.4.43). An unmeasured minor is read with its major's profile; an
 unmeasured major is refused unless a profile is named. The map's
 vocabulary is the fields the lab recorded (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2389,8 +2385,7 @@ as each release answered them (L30), and the identifiers no recorded
 query asked for, so a connector test can say it asked for recorded
 fields only.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2786,8 +2781,7 @@ limit/offset; NetBox 3.7.8 by nothing. errors are read before data
 whatever the status, and printed safely. restCount gives REST's count,
 for the check Source makes (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3096,8 +3090,7 @@ the base, one naming another path is refused, and a loop or a total
 short of count fails the read (decision 31). ?depth=1 on Nautobot 2.x
 and 3.x (L27, L30).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3714,8 +3707,7 @@ named; a custom
 field that is not a scalar is left unset and said; an unrecognized
 platform slug is kept (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4142,8 +4134,7 @@ a GraphQL list matching neither REST count fails; the release, a rebuilt
 next and a fact that cannot be read are said once each, and the token
 never (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4747,8 +4738,7 @@ active, as a string or a list), map, addresses and platform_aliases
 checked at load; a webhook secret needs webhook_listen, and the
 listener a source (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5111,8 +5101,7 @@ for is said at each publication that changes the set, counted in
 port49_inventory_generic_platform_devices, and printed by inventory sync
 (spec §8, §10; decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5345,8 +5334,7 @@ under its name by an attribute key group but stripped of every address
 is out of service; checkSafety and bundle.CheckFrom now count it beside
 removed and newly refused, and name it (plan 6c pre-flight I2).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6034,8 +6022,7 @@ refusal is counted by source and outcome and said once, naming the
 sender's address, never the body, the signature or the secret
 (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6459,8 +6446,7 @@ debouncer: one sync 2s after a burst's first delivery, at most one per
 30s, one more for a delivery during a sync, none queued. Its goroutines
 and server are joined at shutdown (decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7005,8 +6991,7 @@ the bundle against --verify-key before it writes anything, and writes
 its inventory in inventory_file's schema, which reads back to the same
 bundle, to standard output or a new --out file (spec §12; decision 31).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7541,8 +7526,7 @@ client's as X-Forwarded-Host, and runs TestL32Connector, which reads the
 stack with sot.Source over GraphQL and REST through each and records
 what next named (spec §15 L32).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 6: Run it** from a detached worktree pinned to the Step 5 commit ("Running the lab"),
@@ -7592,8 +7576,7 @@ Five releases, two TLS proxies, GraphQL and REST, 50 to a page: <one
 line per product from the notes: which header next is built from, and
 the reads' counts>. The row closes in Task 16.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   (The `<…>` in the message is filled from the notes when the commit is made; it is the one part of
@@ -8475,8 +8458,7 @@ the lab CA, and records what arrived and when it published.
 TestSoTDeviceEndToEnd takes NetBox or Nautobot to vEOS's admission
 through the webhook, the service and port49d (spec §15 L33).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 6: Run the webhooks** from a detached worktree pinned to the Step 5 commit, one stack at
@@ -8534,8 +8516,7 @@ git commit -m "test(lab): L33 measured: webhooks from every release, and NetBox 
 CA, seconds to publication, whether a 401 is sent again; and the device
 run's times to port49d's reload>. The row closes in Task 16.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
   **This task gates the merge:** it is the first run of a source of truth through port49-inventory
@@ -8589,8 +8570,7 @@ git commit -m "docs: close lab register entries L32 and L33; plan 6c as built
 <what each row measured, one line each; any §10 sentence a result
 corrected, cited to its note>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

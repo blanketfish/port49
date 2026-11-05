@@ -26,7 +26,7 @@ func directoryRefusal(err error) *BindRefusal {
 		return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.DirectoryUnavailable,
 			Error: string(decision.DirectoryUnavailable), RetryAfter: 30,
 			Detail: "no directory server answered and no membership verified within the grace window is held; " +
-				"the agent retries"}
+				"try again in 30s"}
 	case errors.Is(err, directory.ErrAmbiguous):
 		return &BindRefusal{Status: http.StatusUnauthorized, Reason: decision.IdentityAmbiguous,
 			Error: string(decision.IdentityAmbiguous), Detail: "this certificate maps to more than one directory entry; tell the operator"}
@@ -38,10 +38,10 @@ func directoryRefusal(err error) *BindRefusal {
 			Error: string(decision.IdentityUnmapped), Detail: "this certificate maps to no usable directory entry; tell the operator"}
 	case errors.Is(err, store.ErrUnavailable), errors.Is(err, context.DeadlineExceeded):
 		return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.StoreUnavailable,
-			Error: string(decision.StoreUnavailable), RetryAfter: 30, Detail: "the broker's store did not answer; the agent retries"}
+			Error: string(decision.StoreUnavailable), RetryAfter: 30, Detail: "the broker's store did not answer; try again in 30s"}
 	}
 	return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.DirectoryUnavailable,
-		Error: string(decision.DirectoryUnavailable), RetryAfter: 30, Detail: "the directory lookup failed; the agent retries"}
+		Error: string(decision.DirectoryUnavailable), RetryAfter: 30, Detail: "the directory lookup failed; try again in 30s"}
 }
 
 // BindMap is Listener.Map (Ruling 4): the connection's certificate mapped

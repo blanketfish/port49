@@ -226,13 +226,6 @@ func proofKey(principal, fingerprint, agentSHA256 string, m policy.MFAMethod) st
 	return mfaSum(principal, fingerprint, agentSHA256) + "/" + string(m)
 }
 
-// mfaTokenKey is an idp_mfa sign-in's once-only key: its ID token's SHA-256,
-// so the store never holds a token.
-func mfaTokenKey(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return "mfa_token " + hex.EncodeToString(sum[:])
-}
-
 // agentKey is the hex SHA-256 of the request's agent session (the 32 bytes
 // of Port49-Agent-Session), "" for a caller with none: a workload, a 7h
 // bearer. Such a caller keeps no reusable proof; each request proves. The
@@ -527,7 +520,7 @@ func (b *Broker) mfaProve(w http.ResponseWriter, r *http.Request) {
 	var req api.MFAProofRequest
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	if err := decodeOne(dec, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a proof: "+printsafe.Line(err.Error(), 200))
 		return
 	}
@@ -667,16 +660,9 @@ func (b *Broker) mfaProve(w http.ResponseWriter, r *http.Request) {
 			refuse(cause)
 			return
 		}
-	} else {
-		switch first, err := b.Store.PutOnce(ctx, mfaTokenKey(raw), nil, b.Identity.Timing.MaxTokenAge); {
-		case err != nil:
-			storeDown()
-			return
-		case !first:
-			refuse("this sign-in was used as a proof already; sign in again")
-			return
-		}
 	}
+	// An idp_mfa proof writes no once-record of its own: its ID token's nonce names this challenge,
+	// and the challenge was taken above, so a second use of the token finds it spent.
 
 	prov, _ := json.Marshal(provedRecord{Method: string(method), At: now})
 	if _, err := b.Store.PutOnce(ctx, provedKey(ch, c.principal, bind.Fingerprint, bind.AgentSHA256), prov,

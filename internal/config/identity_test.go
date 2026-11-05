@@ -13,8 +13,29 @@ import (
 
 // brokerWithIdentity is brokerBlock with client_ca_file replaced by an
 // identity block.
+//
+// A person's ID token is taken only to issue a certificate or as an idp_mfa
+// proof (decision 56 ruling 4), so a block with a human oidc verifier and
+// neither gets `issuance: {}` here; brokerWithIdentityRaw leaves it alone.
 func brokerWithIdentity(identity string) string {
+	if hasHumanOIDC(identity) && !strings.Contains(identity, "issuance:") && !strings.Contains(identity, "idp_mfa:") {
+		identity += "    issuance: {}\n"
+	}
+	return brokerWithIdentityRaw(identity)
+}
+
+func brokerWithIdentityRaw(identity string) string {
 	return strings.Replace(brokerBlock, "  client_ca_file: /etc/port49/clients-ca.pem\n", identity, 1)
+}
+
+// hasHumanOIDC reports whether identity lists an oidc verifier under humans.
+func hasHumanOIDC(identity string) bool {
+	_, after, ok := strings.Cut(identity, "humans:")
+	if !ok {
+		return false
+	}
+	humans, _, _ := strings.Cut(after, "machines:")
+	return strings.Contains(humans, "type: oidc")
 }
 
 const twoLists = `  identity:
@@ -404,8 +425,48 @@ func TestIssuanceLoads(t *testing.T) {
 			t.Fatalf("%q: %+v %v", block, c.Broker.Identity, err)
 		}
 	}
-	if c, err := loadWith(t, brokerWithIdentity(twoLists)); err != nil || c.Broker.Identity.Issuance != nil {
+	if c, err := loadWith(t, brokerWithIdentity(twoLists+"    per_login_mfa:\n      idp_mfa: {}\n")); err != nil ||
+		c.Broker.Identity.Issuance != nil {
 		t.Fatalf("no issuance: %v", err)
+	}
+}
+
+// A person's ID token is taken to issue a certificate or as an idp_mfa proof
+// and nowhere else (decision 56 ruling 4), so a human oidc verifier with
+// neither loads nowhere: the broker could sign no one in with it.
+func TestAHumanOIDCVerifierNeedsIssuanceOrIdPMFA(t *testing.T) {
+	const want = "broker.identity.humans[1] (oidc): a person's ID token is taken only to issue a certificate or, beside " +
+		"an x509 humans verifier, as a per_login_mfa.idp_mfa proof; set issuance (`issuance: {}` takes its defaults), " +
+		"add an x509 humans verifier with idp_mfa, or remove this verifier"
+	if _, err := loadWith(t, brokerWithIdentityRaw(twoLists)); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("no issuance, no idp_mfa: got %v, want %q", err, want)
+	}
+	for name, block := range map[string]string{
+		"issuance": twoLists + "    issuance: {}\n",
+		"idp_mfa":  twoLists + "    per_login_mfa:\n      idp_mfa: {}\n",
+		"both":     twoLists + "    issuance: {}\n    per_login_mfa:\n      idp_mfa: {}\n",
+	} {
+		if _, err := loadWith(t, brokerWithIdentityRaw(block)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// idp_mfa with no x509 people verifier signs no one in.
+	oidcOnly := `  identity:
+    humans:
+      - {type: oidc, issuer: "https://sso.corp.example.com/realms/corp", client_id: port49-cli,
+         principal_claim: upn, principal_domains: [corp.example.com]}
+    per_login_mfa:
+      idp_mfa: {}
+`
+	noStatus := strings.Replace(brokerWithIdentityRaw(oidcOnly), "  certificate_status: {disabled: true}\n", "", 1)
+	if _, err := loadWith(t, noStatus); err == nil || !strings.Contains(err.Error(), "broker.identity.humans[0] (oidc)") ||
+		!strings.Contains(err.Error(), "beside an x509 humans verifier") {
+		t.Fatalf("an oidc human with idp_mfa and no x509: got %v", err)
+	}
+	// hardware_key_touch alone is not an idp_mfa.
+	touch := twoLists + "    per_login_mfa:\n      hardware_key_touch: {attestation_roots_file: /etc/port49/roots.pem}\n"
+	if _, err := loadWith(t, brokerWithIdentityRaw(touch)); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("hardware_key_touch alone: got %v, want %q", err, want)
 	}
 }
 
@@ -432,8 +493,8 @@ func TestIssuanceRefusals(t *testing.T) {
 
 // An issued certificate carries the sign-in's issuer URL, so with issuance
 // configured a human verifier whose issuer URL a certificate cannot carry (a
-// space, non-ASCII) is a load error naming it; without issuance it loads as
-// before.
+// space, non-ASCII) is a load error naming it; without issuance a human oidc
+// verifier loads only for idp_mfa.
 func TestIssuanceRefusesAnIssuerACertificateCannotCarry(t *testing.T) {
 	for _, bad := range []string{"https://kc.example.com/realms/my realm", "https://kc.example.com/realms/café"} {
 		lists := strings.Replace(twoLists, "https://sso.corp.example.com/realms/corp\n        client_id", bad+"\n        client_id", 1)
@@ -445,8 +506,8 @@ func TestIssuanceRefusesAnIssuerACertificateCannotCarry(t *testing.T) {
 			!strings.Contains(err.Error(), "issuance") || !strings.Contains(err.Error(), "printable") {
 			t.Errorf("%q with issuance: %v", bad, err)
 		}
-		if _, err := loadWith(t, brokerWithIdentity(lists)); err != nil {
-			t.Errorf("%q without issuance: %v", bad, err)
+		if _, err := loadWith(t, brokerWithIdentityRaw(lists+"    per_login_mfa:\n      idp_mfa: {}\n")); err != nil {
+			t.Errorf("%q with idp_mfa and no issuance: %v", bad, err)
 		}
 	}
 }

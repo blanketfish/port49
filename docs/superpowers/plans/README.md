@@ -6411,8 +6411,8 @@ all applied before Task 1.
     installs them beside the client build; the Oxidized example's `secure: true` asks for every device's key in
     `~/.ssh/known_hosts` before its first backup (per-device toil): measure Oxidized's own host-key
     options against accept-new and change the example, or say why not.
-  - **Pre-beta review:** the `port49 devices trust` removal line in `cmd/port49/main.go` goes; plan
-    9a's pins-file hint in `port49 ssh` goes.
+  - **Pre-beta review (done, pre-beta fixes Task 18):** the `port49 devices trust` removal line in
+    `cmd/port49/main.go` and plan 9a's pins-file hint in `port49 ssh` are gone.
   - **L60's session:** whether parallel Ansible forks under a `hardware_key_touch` requirement ask
     one touch or several (the agent's token lock serializes them; unmeasured). The README's
     pre-play `port49 token <one such device>` stands until then.
@@ -6461,11 +6461,12 @@ all applied before Task 1.
   - **Verified first contact for a shop.** Ship a managed `GlobalKnownHostsFile` keyed by inventory
     name, or host certificates with `@cert-authority`; `port49 ssh` leaves both alone. Your own
     `StrictHostKeyChecking yes` and `HostKeyAlias` in ssh_config stand; `no` is never used.
-  - **Plan 9a's pins file** (`~/.config/port49/known_hosts`) is no longer read. `port49 ssh` names
-    it while it exists; its lines are already OpenSSH's format under the same names, so keep keys
-    you verified with `cat ~/.config/port49/known_hosts >> ~/.ssh/known_hosts`, then remove it. A
-    group-writable `~/.config` (Ubuntu's default) no longer stops `port49 ssh`. `--known-hosts` is
-    refused: use `UserKnownHostsFile` in an ssh_config (`--ssh-config`).
+  - **Plan 9a's pins file** (`~/.config/port49/known_hosts`) is neither read nor named. Its lines
+    are already OpenSSH's format under the same names, so keep keys you verified there with a
+    one-time `cat ~/.config/port49/known_hosts >> ~/.ssh/known_hosts`, then remove it; without
+    that step the next `port49 ssh` accepts each device's key at first contact under `accept-new`.
+    A group-writable `~/.config` (Ubuntu's default) no longer stops `port49 ssh`. `--known-hosts`
+    is not a flag: name another file with `UserKnownHostsFile` in an ssh_config (`--ssh-config`).
   - **`--ssh` with a shell wrapper.** `port49 ssh --ssh PATH` takes a program that execs the real
     `ssh`. A wrapper that is not an exec (a shell script that runs `ssh` as a child) is not the
     process port49's askpass trusts, so the device's password prompt falls to the terminal and the

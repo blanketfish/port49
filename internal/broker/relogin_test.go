@@ -137,31 +137,6 @@ func TestEveryLogoutRefusalPathNamesTheLoginTimeForASubRecord(t *testing.T) {
 		f.b.Minter = token.NewMinter(hooked, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8)
 		check(t, f, at, f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)))
 	})
-	for name, failAfter := range map[string]bool{
-		"a logout landing during a refresh":             false,
-		"a logout landing during a refresh that failed": true,
-	} {
-		t.Run(name, func(t *testing.T) {
-			f, tok, iss := oidcSession(t)
-			twoContexts(t, f)
-			nonce := challenge(t, f, tok(nil))
-			f.advance(time.Minute)
-			at := f.b.Now()
-			calls := 0
-			f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"RefreshContext": func() error {
-				calls++
-				if calls == 1 {
-					return f.st.PutLogout(ctx, store.Logout{Key: store.OIDCKey(store.OIDCSub, iss, "sub-alice"), At: at}, time.Hour)
-				}
-				if failAfter {
-					return store.ErrUnavailable
-				}
-				return nil
-			}}}
-			check(t, f, at, f.bearer(ctx, "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
-				"sid": "s-second", "auth_time": f.b.Now().Unix()})))
-		})
-	}
 }
 
 // The time named is a literal, not the implementation's formula: a logout at

@@ -34,10 +34,10 @@ platforms:
 scopes:
   - {name: all_devices, match: {}}
   # Each platform is in exactly one of the next two (TestQualPolicyDeniesOncePerPlatform): a new
-  # platform goes in qual_other_platforms unless it is Junos. on_missing: include is what a scope
-  # carrying a deny must declare; the inventory always gives a platform.
-  - {name: qual_junos, match: {platform: juniper_junos}, on_missing: include}
-  - {name: qual_other_platforms, match: {platform: [arista_eos, cisco_iosxe, cisco_iosxr, cisco_nxos, nokia_srlinux]}, on_missing: include}
+  # platform goes in qual_other_platforms unless it is Junos. on_missing: exclude is safe for a scope
+  # a grant reaches, and a scope carrying a deny must declare one; the inventory always gives a platform.
+  - {name: qual_junos, match: {platform: juniper_junos}, on_missing: exclude}
+  - {name: qual_other_platforms, match: {platform: [arista_eos, cisco_iosxe, cisco_iosxr, cisco_nxos, nokia_srlinux]}, on_missing: exclude}
 roles:
   - {name: qual_admin, privilege: admin, permit: ["**"]}
   # The denied command is read-only everywhere, and the command_denied probe sends it. Junos

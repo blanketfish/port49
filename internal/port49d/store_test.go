@@ -532,6 +532,12 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	if sts.broker != nil || sts.health == nil {
 		t.Fatalf("the split daemon's stores: broker %v, health %v", sts.broker != nil, sts.health != nil)
 	}
+	// A passing health check closes the guard's circuits (stores I2): openDaemon
+	// wires it, and a check that passes with nothing open is harmless.
+	if sts.health.passed == nil {
+		t.Fatal("openDaemon left health.passed unset: a passing check would not close an open circuit")
+	}
+	sts.health.passed()
 }
 
 // port49d with no broker on etcd takes no hold and writes nothing under
