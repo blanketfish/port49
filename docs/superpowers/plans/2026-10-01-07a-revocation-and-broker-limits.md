@@ -331,7 +331,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Running the lab (Task 12)
@@ -616,8 +615,7 @@ and what a device does with a `credential_revoked` FAIL is already cited where t
   §12 (port49 revoke), §13 decision 32; design §12's store table, requirement and failure matrix,
   §17's idempotency reservation, listener limits and revocation.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ### Task 2: The store reserves an idempotency key atomically
@@ -1016,8 +1014,7 @@ read one back; after Task 3 the minter calls neither.
   ReleaseIdempotency takes only its own pending reservation. storetest.IdempotencyReservesOnce
   is the property every backend must pass, run against memory and through the sealing layer.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1649,8 +1646,7 @@ read one back; after Task 3 the minter calls neither.
   out under the same key), another body is 409 idempotency_conflict, and whatever is not
   completed is released. A batch naming a device twice is refused.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1946,8 +1942,7 @@ read one back; after Task 3 the minter calls neither.
   unspent tokens; the minter writes the index first and refuses the mint when it cannot.
   storetest.TokenIndex is the property every backend must pass.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2152,8 +2147,7 @@ read one back; after Task 3 the minter calls neither.
   ListRevocations; plaintext and never expiring. storetest.RevocationMarks is the property every
   backend must pass.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -3181,8 +3175,7 @@ before the handshake (plan 3, Decided 2).
   Revoked keeps an in-memory copy of the marks that refuses a marked connection as it binds.
   auth_time is still the accept time.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -3480,8 +3473,7 @@ before the handshake (plan 3, Decided 2).
   appeared in between deletes what the mint wrote. 401 credential_revoked closes the connection
   and ends the agent's session. Unreadable marks mint for no one.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -4396,8 +4388,7 @@ before the handshake (plan 3, Decided 2).
   revocation_lifted) naming what was reached and each context on a platform that never asks
   about a command. A mark that cannot be written revokes nothing.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5182,8 +5173,7 @@ before the handshake (plan 3, Decided 2).
   broker.max_pending_conns_per_source (16) bound it. The lab keeps the file in its private
   directory.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5506,8 +5496,7 @@ before the handshake (plan 3, Decided 2).
   origin is the caller's uid (SO_PEERCRED). Without a broker the ops say there is nothing to
   revoke.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5797,8 +5786,7 @@ before the handshake (plan 3, Decided 2).
   Revoke or lift a principal or one certificate (--cert reads the issuer and serial the broker
   compares), or list the revocations in force. keys diagnose and revoke share one admin dial.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -6138,8 +6126,7 @@ slice and spec §14's quarantine through a sync were. If it contradicts a doc, t
   agent's next mint was refused credential_revoked and the agent exited; a lift let a new login through; a revoked
   certificate stopped minting. Run at <sha>.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   (Write the message from what the notes say, not from this text, where they differ.)
@@ -6175,8 +6162,7 @@ slice and spec §14's quarantine through a sync were. If it contradicts a doc, t
   git add docs/superpowers/plans/README.md docs/design
   git commit -m "docs: plan 7a as built
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---

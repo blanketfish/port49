@@ -875,8 +875,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
     with platform, image version, observation and a capture pointer.
   - L47 (hosted providers) stays open.
 - Conventional Commits; commit messages end with
-  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and
-  `Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc`.
+  `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 
 ## Review Focus
 
@@ -1422,8 +1421,7 @@ Expected: only the lines this task wrote (no "arrives with plan 7h" or "until pl
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
 git commit -m "docs: spec and design for OIDC and trust domains (decision 39); open L45, L46, L47
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1744,8 +1742,7 @@ git add internal/decision/log.go internal/decision/log_test.go internal/broker/a
   internal/store/interface_test.go internal/broker/revoke.go internal/broker/revoke_test.go internal/policy/load.go
 git commit -m "feat(decision,api,store): auth.oidc, revocation by sid or sub, issuer-qualified sid keys, app: principals
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2907,8 +2904,7 @@ regression seed. Then `go vet ./internal/oidc/...`: clean.
 git add internal/oidc/
 git commit -m "feat(oidc): compact JWS and JWK on the standard library, five pinned algorithms, no header-named keys
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4091,8 +4087,7 @@ git add internal/oidc/keyset.go internal/oidc/keyset_test.go internal/oidc/oidct
   internal/daemon/metrics/metrics.go
 git commit -m "feat(oidc): one issuer's keys: discovery, refresh, one refetch a minute, kept across a restart, refused past jwks_max_age
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5187,8 +5182,7 @@ Expected: PASS.
 git add internal/oidc/config.go internal/oidc/verify.go internal/oidc/verify_test.go internal/daemon/metrics/metrics.go
 git commit -m "feat(oidc): verifiers per trust domain, exactly one accepting a token; claims within clock_skew and max_token_age; the principal claim
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5577,8 +5571,7 @@ Expected: PASS, Task 5's tests included (the shared `signature` changed none of 
 git add internal/oidc/
 git commit -m "feat(oidc): back-channel logout tokens validated per BCL 1.0 §2.6 against the human verifiers
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6240,8 +6233,7 @@ Expected: PASS, with `TestABrokerBlockMissingAKeyIsRefused` still naming `broker
 git add internal/config/identity.go internal/config/identity_test.go internal/config/config.go
 git commit -m "feat(config): broker.identity's humans and machines, the client_ca_file shorthand, and the OIDC timing
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7025,8 +7017,7 @@ own member through `etcdtest`, as 7d's do).
 git add internal/store/ internal/daemon/authen/authen_test.go
 git commit -m "feat(store): once-only records, the OIDC owner and the logout record, the broker's role alone
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -7903,8 +7894,7 @@ Expected: vet clean, and PASS: the new tests, and every certificate-path test un
 git add internal/broker/ internal/token/minter.go
 git commit -m "feat(broker): an OIDC bearer per request: one verifier, the session clock from auth_time, marks and logouts read before and after the mint, owner records first
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8132,8 +8122,7 @@ no `Identity` lists x509 alone.
 git add internal/broker/server.go internal/broker/broker.go internal/broker/oidcserver_test.go
 git commit -m "feat(broker): an OIDC-only broker requests no certificate; /v1/config names the human OIDC verifiers
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -8746,8 +8735,7 @@ Expected: PASS, the certificate-path refresh tests unchanged.
 git add internal/session/ internal/broker/
 git commit -m "feat(broker): the OIDC refresh: a store-held nonce answered by a prompt=login token, auth_time from it, the new sid indexed beside the old
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9459,8 +9447,7 @@ Expected: PASS, `RevokeOwn`'s tests unchanged by the extraction.
 git add internal/broker/ internal/daemon/metrics/metrics.go
 git commit -m "feat(broker): back-channel logout: a bounded logout record, the person's tokens, the session's contexts twice, no standing mark
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -9703,8 +9690,7 @@ Expected: PASS.
 git add internal/broker/revoke_api.go internal/broker/revoke.go internal/broker/revoke_api_test.go
 git commit -m "feat(broker): /v1/tokens/revoke ends one OIDC session by sid under revoke_others
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -10320,8 +10306,7 @@ clean. (`GOOS=darwin go vet` of the package's tests already fails on `main` at
 git add internal/port49d/ deploy/compose/ internal/oidc/oidctest/issuer.go
 git commit -m "feat(port49d): run broker.identity: one key set per issuer, kept in the state directory, refreshed in the background; an OIDC-only broker
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -11296,8 +11281,7 @@ git add tests/lab/oidc/ tests/lab/oidc_test.go tests/lab/oidcflow_test.go tests/
   tests/lab/l46_test.go Makefile tests/lab/README.md
 git commit -m "test(lab): Keycloak, a scripted login flow and a logout receiver for L45 and L46
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -11376,8 +11360,7 @@ broker leaf add `DNSNames: []string{"port49-broker"}` beside `IPs`, and run `go 
 git add internal/testpki/testpki.go internal/testpki/testpki_test.go
 git commit -m "test(testpki): the lab broker certificate names port49-broker, for the provider's back-channel logout
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 2: The end-to-end overlay**
@@ -11841,13 +11824,11 @@ make evidence
 git add tests/lab/compose/oidc.yaml tests/lab/oidc_e2e_test.go tests/lab/results/ tests/lab/evidence/
 git commit -m "test(lab): OIDC end to end on the compose stack; L45 and L46 measured on Keycloak
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git add docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: close lab register entries L45 and L46 on Keycloak
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 Copy the raw capture to `main`'s `tests/lab/captures/` before removing the lab worktree.
@@ -11913,8 +11894,7 @@ values are written at the merge.
 git add docs/superpowers/plans/README.md docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "docs: plan 7h as built
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---

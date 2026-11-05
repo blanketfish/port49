@@ -48,7 +48,6 @@ notes, "Carried" and "Open for the final review". Also read `docs/design/2026-08
   Conventional Commits, one per "Commit" step, each ending with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 - **Stay disjoint from plan 7h** (`feature/oidc-and-trust-domains`). This plan never touches
   `internal/oidc`, `internal/broker`, `internal/store`, `internal/policy`, `internal/decision`,
@@ -740,8 +739,7 @@ platform; newDirectories writes the PKI without starting the containers; L42's
 table is labDir.l42Observe; L43's mapping checks run wherever
 altSecurityIdentities exists. The containers' notes are unchanged.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1798,8 +1796,7 @@ offered beside port49's, the CSRs and certificates, MIT kinit's answer read
 from its trace, and the judges that keep a setup failure from reading as a
 mapping's verdict.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2515,8 +2512,7 @@ the first-logon hook that starts sshd; MIT kinit with PKINIT on pinned Debian;
 and sixteen PowerShell steps, each taking its params on stdin and writing
 none that is secret.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3498,8 +3494,7 @@ loads L42's fixture, installs AD CS, serves LDAPS on the lab CA's certificate,
 makes port49's keytab with ktpass and issues the run's client certificates.
 TestL44Bringup is the bring-up alone; its comment holds the command.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Step 5: Before the gate run, check the host**
@@ -4249,8 +4244,7 @@ the DC's own mapping by PKINIT and EXTERNAL under each
 StrongCertificateBindingEnforcement value, each block behind a control. A
 refusal whose cause is not proven is INVALID, never a verdict.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4356,8 +4350,7 @@ git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): L44 measured
 
 Run at <sha>: <one line per cell from Step 3's table, as the note reads>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 A Task 7 fix re-runs Steps 1–5 at the fix's commit, with `.worktrees/l44-fix-<part>` (the
@@ -4412,8 +4405,7 @@ git -C /home/rwendt/git/port49 commit -m "docs: <the rule> as a Windows DC measu
 tests/lab/results/L44-windows_ad.md: <the rows>. Rule 4: the doc follows the
 lab; the fix follows on fix/l44-<part>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git -C /home/rwendt/git/port49 push
 git -C /home/rwendt/git/port49 worktree add -b fix/l44-<part> /home/rwendt/git/port49/.worktrees/l44-fix-<part> main
 ```
@@ -4584,8 +4576,7 @@ git -C /home/rwendt/git/port49/.worktrees/l44-fix-<part> commit -m "fix(director
 
 L44 (tests/lab/results/L44-windows_ad.md) <the rows that showed it>.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 - [ ] **Each part, Step 4: Re-run Task 6 at the fix, and open the `fix/` PR**
@@ -4706,8 +4697,7 @@ git -C /home/rwendt/git/port49 commit -m "docs: close lab register entry L44 on 
 tests/lab/results/L44-windows_ad.md. Decision 38 items 1, 6 and 8 state what
 the DC measured; design §7 and §10 follow (rule 4 where they differed).
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 If the row stays open, the subject is `docs: narrow lab register entry L44 to what Windows Server

@@ -1190,7 +1190,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ## Review Focus
@@ -1736,8 +1735,7 @@ the first commit of 7e-2. Nothing here asserts what a device does.
   git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
   git commit -m "docs: decision 36 (7e-1): the sealed write sequence, the feeds, the ledger record
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -1888,8 +1886,7 @@ lose pins it.
   One retry could lose the pick-then-bind race again under load (7d's
   flake). Retry for 30s, and give up naming the port.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2012,8 +2009,7 @@ prints `?`.
   that will not open names it; one outside [A-Za-z0-9._-]{1,64} printed as
   '?'. Refused at load, never echoed (plan 7e Ruling 15; 7d Task 13 C2).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2421,8 +2417,7 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   blob is marked emitted only when its record lands, and blobsSeen is
   bounded at 4096 (plan 7e Rulings 9, 10).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -2896,8 +2891,7 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
   meta/superseded_all, the broker's role alone, kept 20 minutes, past the
   longest token_ttl: 4b m10's bound (plan 7e Ruling 9).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -3087,8 +3081,7 @@ empty carries the store's current revision.
   observes every context-pool response's header, an absent key's read
   included.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
   List in `git add` any test double Step 6 touched.
@@ -4119,8 +4112,7 @@ kept as a property of the new rule:
   context does not open: on etcd every live session ends once at the
   upgrade.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5022,8 +5014,7 @@ Ruling 3's "every process follows the store's contexts":
   (re-check R2). port49_store_feed_up and port49_store_feed_rescans_total
   say whether it follows (plan 7e Ruling 3).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5512,8 +5503,7 @@ Ruling 3's fence (pre-flight C1, the plan's one Critical).
   past it by then. A feed that never arrives is a counted store failure,
   and a ping waits too, so a dead feed goes dark as a dead store does.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -5881,8 +5871,7 @@ held connections through the feed. A lift does the same, removing the mark.
   held connections it names there; a lift removes it. A compacted watch
   reloads and applies the difference (plan 7e Ruling 5).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -6431,8 +6420,7 @@ with the broker's identity. In 7e-2 the runner does.
   once the keeper stops (pre-flight I11). A daemon role without the read
   on lw/ is told to re-apply store-roles.
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 **7e-1 ends here.** The controller runs the whole-branch review, merges, and only then
@@ -6837,8 +6825,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
   git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
   git commit -m "docs: decision 36 (7e-2): two processes, the runner, the retired file; open L37 and L38
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -6911,8 +6898,7 @@ test moves with its code and keeps its package-internal access.
   cmd/port49-broker can run the same start, store and reloader code
   (plan 7e).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -7322,8 +7308,7 @@ Rulings 1, 2, 12, 14.
   credentials, and the broker never holds a device key (plan 7e Rulings 1,
   2, 12).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -8044,8 +8029,7 @@ Ruling 11.
   since the daemon's role cannot put it back and the revocations file is
   retired on etcd (Ruling 5; final review 7e-1 C-1).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -8754,8 +8738,7 @@ and the offline revocation, each on this task's runner.
   policies until it completes, so a late replica's tokens are judged (plan
   7e Rulings 6-9, 12, 13).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -9318,8 +9301,7 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   stays not ready and takes no hold (7c's carry; pre-flight I6; plan 7e
   Rulings 8, 17).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -9895,8 +9877,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   the whole revocation through the store on the broker's identity, with
   no API and no hold (plan 7e Rulings 12, 13).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -10771,8 +10752,7 @@ forgetting it fail closed.
   purges every unspent token and names both revisions (plan 7e Ruling 18,
   pre-flight re-check R6).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -11121,8 +11101,7 @@ them.
   identity from port49-broker.yaml, and still reads a 7d file whole
   (plan 7e Rulings 13, 14).
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -11230,8 +11209,7 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   git add tests/lab/split_test.go tests/lab/harness_test.go tests/lab/store_test.go
   git commit -m "test(lab): L37, L38 and L36 on the split deployment
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 - [ ] **Step 2: The run.** From the pinned worktree, one platform at a time, as "Running the
@@ -11300,8 +11278,7 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   <one line per row: what was measured, on which images; any doc corrected
   by a result, named, per CLAUDE.md rule 4>
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---
@@ -11352,8 +11329,7 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   git add docs/superpowers/plans/README.md docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
   git commit -m "docs: plan 7e as built
 
-  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   ```
 
 ---

@@ -224,7 +224,6 @@ New in this plan:
 - Commit messages end with:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
 ---
@@ -437,8 +436,7 @@ that step 3 measures L7's eAPI /login clause but closes none of L3, L4
 or L7: L3 closed earlier, L4 and L7 stay open. The roadmap carries plan
 3's deferrals to plan 7.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -838,8 +836,7 @@ with the token spent. A retransmission is answered from the live
 context, so it is refused credential_revoked too rather than replayed
 from the receipt. Closes PR #7's first two follow-ups.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1052,8 +1049,7 @@ git commit -m "feat: mint records carry their policy, and the blob event its bod
 
 Adds candidate_cap_reached after its spec row.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1362,8 +1358,7 @@ git commit -m "feat: the slice's policy blob, content-addressed, with a subset o
 Borrowed ahead from plan 4: platform, privilege, session attributes, and
 permit/deny rules of words, * and a trailing **, deny-overrides.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -1599,8 +1594,7 @@ git commit -m "feat: answer a broker-minted context from its compiled blob
 Seeded contexts, which name no blob, keep the lab authorizer. A blob the
 store cannot produce is blob_unavailable and falls back to nothing.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2024,8 +2018,7 @@ or admin, grants on all_devices. Borrowed ahead from plan 4. The
 username check is the minter's own, now exported, and a subject whose
 roles land above its max_privilege is refused.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2275,8 +2268,7 @@ Roles union across grants, privilege max over roles, max_privilege max
 over grants, rules deduplicated and sorted so one decision is one blob.
 Session attributes for arista_eos only, borrowed ahead from plan 5.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -2773,8 +2765,7 @@ every request so a certificate that expires under a held connection
 stops minting. testpki cuts the certificates tests and the lab use;
 keyfile refuses a private key that is a symlink or readable by others.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -3544,8 +3535,7 @@ session ceiling as their own reasons. auth_time is the connection's
 accept time. A device name or Idempotency-Key the broker could not log
 or store safely refuses the batch. GET /v1/config is discovery only.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4023,8 +4013,7 @@ tickets, HTTP/1.1 only. An authenticated connection is held to
 max_session_age with auth_time stamped at accept; one with no
 certificate is closed when idle, and the listener is capped.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -4429,8 +4418,7 @@ and the broker's listener is capped at broker.MaxConns. Broker-minted
 contexts are answered from their blob; seeded ones keep the lab
 authorizer.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5334,8 +5322,7 @@ max_session_age or when the broker says the session or the certificate
 is over. Connect logs where it is going and gives up after 10s. A unix
 socket in a 0700 directory the user owns is how port49 token reaches it.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -5788,8 +5775,7 @@ through it and prints the login token on stdout, or the whole answer
 with --json. The client key must be its owner's alone, and the agent
 exits when the broker ends the session.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6243,8 +6229,7 @@ TestSliceEndToEnd logs into vEOS with a broker-minted token and checks
 the chain mint, blob, redeem, authorization, and a fresh second mint.
 The README gives the by-hand procedure the /login and RESTCONF runs use.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6301,8 +6286,7 @@ A certificate-backed session minted two tokens through port49 token;
 both logged into leaf1 as slice01 and every authorization was answered
 from the compiled blob. tests/lab/results/slice-arista_eos.md.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6438,8 +6422,7 @@ git commit -m "docs: measure the eAPI /login cookie flow on vEOS (L7)
 
 By hand, with a broker-minted token. tests/lab/results/L7-login-arista_eos.md.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6546,8 +6529,7 @@ git commit -m "docs: measure the port field on IOS-XE RESTCONF (L1)
 
 By hand, with a seeded token. tests/lab/results/L1-restconf-cisco_iosxe.md.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -6630,8 +6612,7 @@ provisional on it. L1 gains IOS-XE RESTCONF
 (tests/lab/results/L1-restconf-cisco_iosxe.md) and stays open on the
 console.
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
 
 (If a note records an attempt rather than a measurement, the body says which clause stayed

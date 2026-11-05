@@ -646,7 +646,6 @@ closes.
 
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 - Implementers never run `git checkout`, `restore`, `reset`, `stash` or `clean`.
 
