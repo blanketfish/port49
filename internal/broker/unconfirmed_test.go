@@ -240,8 +240,11 @@ func TestAnUnrecordedRevokeStillReachesThisRegionsSessionStore(t *testing.T) {
 	if !errors.Is(err, ErrUnrecorded) {
 		t.Fatalf("an unanswered write: %v", err)
 	}
+	if strings.Contains(err.Error(), "other regions have not learned of it") || strings.Contains(err.Error(), "at the heal") {
+		t.Errorf("an unanswered write promises nothing it does not: %v", err)
+	}
 	for _, want := range []string{"this region's session store: 1 token keys deleted and 1 contexts marked revoked",
-		"other regions learn of it at the heal"} {
+		"other regions learn of it only if the sent copy lands", "check `port49 revoke --list`"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error lacks %q: %v", want, err)
 		}
@@ -264,6 +267,19 @@ func TestANotSentRevokeReachesTooAndSaysSo(t *testing.T) {
 	if !errors.Is(err, ErrNotRecorded) || !strings.Contains(err.Error(), "this region's session store: 1 token keys deleted and 1 contexts marked revoked") {
 		t.Fatalf("a write never sent: %v", err)
 	}
+	// Nothing carries a write never sent to another region: the text says so and names the fix, and
+	// does not promise a heal.
+	for _, want := range []string{"other regions have not learned of it",
+		"run `port49 revoke` against a broker in a region that reaches the directory, now"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error lacks %q: %v", want, err)
+		}
+	}
+	for _, bad := range []string{"at the heal", "learn of it only if"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("the error says %q: %v", bad, err)
+		}
+	}
 	if c, gerr := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); gerr != nil || c.RevokedAt.IsZero() {
 		t.Errorf("the live context was not marked revoked: %+v %v", c, gerr)
 	}
@@ -284,7 +300,7 @@ func TestTheFallbackNoLongerSaysStopEveryPort49d(t *testing.T) {
 	f.b.Store = putRevocationFails{tokensByPrincipalFails{f.st}}
 	_, err = f.b.Revoke(ctx, RevokeRequest{Principal: alice})
 	if err == nil || !strings.Contains(err.Error(), "stop every port49d") ||
-		!strings.Contains(err.Error(), "reached only in part") {
+		!strings.Contains(err.Error(), "could not be reached") || strings.Contains(err.Error(), "only in part") {
 		t.Fatalf("the reach failed: %v", err)
 	}
 }

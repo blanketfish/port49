@@ -1138,11 +1138,15 @@ func l74CellJ(w *regionWorld, row func(id, claim, observed string, agrees bool))
 	if err := cut.healNow(); err != nil {
 		w.t.Fatalf("INVALID: the heal after cell j: %v", err)
 	}
+	// A copy sent during the cut can land after the heal (L79 k): wait out that window before
+	// cleaning, so a late-landing mark cannot leak alice's mark into L79 j.
+	polls := w.l79PollAfterHeal(time.Now())
+	landed := len(polls) > 0 && polls[len(polls)-1]
 	row("j", "during a cut, port49 revoke user:alice on region 3's broker exits 1 and says what it reached in region 3's session store, and region 3's open session's next command is denied credential_revoked within one command, with no heal",
-		fmt.Sprintf("revoke exit %d in %v: %s; the reach line: %s; region 3's next command: %s; port49d 3 names credential_revoked: %v",
-			code, took.Round(time.Millisecond), w.safeLine(out), w.safeLine(reach), cmd, strings.Contains(said, "credential_revoked")),
+		fmt.Sprintf("revoke exit %d in %v: %s; the reach line: %s; region 3's next command: %s; port49d 3 names credential_revoked: %v; the sent copy landed in the directory after the heal: %v",
+			code, took.Round(time.Millisecond), w.safeLine(out), w.safeLine(reach), cmd, strings.Contains(said, "credential_revoked"), landed),
 		code == 1 && strings.Contains(out, "this region's session store") && strings.Contains(out, "token keys deleted") &&
-			cmd == "deny" && strings.Contains(said, "credential_revoked"))
+			!strings.Contains(out, "only in part") && cmd == "deny" && strings.Contains(said, "credential_revoked"))
 	w.l79Clean()
 }
 

@@ -262,10 +262,10 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		if errors.Is(err, store.ErrNotSent) {
 			// Nothing reached the store, so nothing can land; the pending mark stays all the same (fail closed).
-			reach, reached := b.reachUnrecorded(ctx, mark)
+			reach, reached := b.reachUnrecorded(ctx, mark, false)
 			return RevokeReport{}, fmt.Errorf("%w: %s (%w); %s"+b.fallback(reached), ErrNotRecorded, b.notRecordedWhat(), err, reach)
 		}
-		reach, reached := b.reachUnrecorded(ctx, mark)
+		reach, reached := b.reachUnrecorded(ctx, mark, true)
 		return RevokeReport{}, fmt.Errorf("%w: %s (%w); %s"+b.fallback(reached), ErrUnrecorded, b.unrecordedWhat(), err, reach)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
@@ -480,16 +480,26 @@ func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
 
 // reachUnrecorded runs the session-store reach for a mark the directory did not record, so a region
 // cut from its directory still denies what the mark names in its own store (stores I1). It returns
-// the sentence for the error and whether the reach finished. ReachMark only denies more and is safe
-// to run again at the heal.
-func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation) (string, bool) {
+// the sentence for the error and whether the reach finished. sent is whether a copy of the write
+// left this process: only then can the mark reach other regions, and only if that copy lands. A write
+// never sent reaches no other region, and the operator is told to make it where the directory
+// answers. ReachMark only denies more and is safe to run again.
+func (b *Broker) reachUnrecorded(ctx context.Context, mark store.Revocation, sent bool) (string, bool) {
 	keys, ctxs, err := b.ReachMark(ctx, mark)
 	if err != nil {
+		if keys == 0 && len(ctxs) == 0 {
+			return "this region's session store could not be reached (" + printsafe.Line(err.Error(), 160) + "); ", false
+		}
 		return fmt.Sprintf("this region's session store was reached only in part (%d token keys deleted and %d contexts "+
-			"marked revoked before: %v); ", keys, len(ctxs), printsafe.Line(err.Error(), 160)), false
+			"marked revoked before: %s); ", keys, len(ctxs), printsafe.Line(err.Error(), 160)), false
 	}
-	return fmt.Sprintf("this region's session store: %d token keys deleted and %d contexts marked revoked; other "+
-		"regions learn of it at the heal; ", keys, len(ctxs)), true
+	tail := "other regions have not learned of it: run `port49 revoke` against a broker in a region that reaches " +
+		"the directory, now; "
+	if sent {
+		tail = "other regions learn of it only if the sent copy lands: after the heal check `port49 revoke --list`, " +
+			"and run it again if the mark is not there; "
+	}
+	return fmt.Sprintf("this region's session store: %d token keys deleted and %d contexts marked revoked; ", keys, len(ctxs)) + tail, true
 }
 
 // fallback is how to cut access when a revocation cannot be made. With the session store reached,

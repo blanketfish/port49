@@ -284,7 +284,7 @@ func (markFailingStore) PutRevocation(context.Context, store.Revocation) error {
 // daemon's own copy keeps it, since the write may have committed with its
 // reply lost (Task 4b review M6), and a lift the store answers "not
 // revoked" takes it out.
-func TestAMarkThatCannotBeWrittenRevokesNothing(t *testing.T) {
+func TestAMarkThatCannotBeWrittenStillReachesThisRegion(t *testing.T) {
 	f := newFixture(t, 8)
 	conns := &fakeConns{held: [][2]string{{alice, certKey(f.alice)}}}
 	f.b.Conns = conns
