@@ -165,14 +165,14 @@ func TestAPassTakesTheRecordBeforeItReads(t *testing.T) {
 	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		g.Saw(160) // the runner's next witness, followed while the read is in flight
 		return etcdstore.RestoreRead{Witness: 100, Header: 150}, nil
-	}, nil)
+	}, nil, nil)
 	if !g.Allows() {
 		t.Fatalf("a routine witness write followed during a read guarded port49d: %q", out.String())
 	}
 	// A real drop is still caught by the same pass.
 	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 40, Header: 200}, nil
-	}, nil)
+	}, nil, nil)
 	if g.Allows() {
 		t.Fatal("a pass that read the witness below the record did not guard")
 	}
@@ -424,7 +424,7 @@ func TestAMintAfterTheDropDoesNotExtendTheBound(t *testing.T) {
 		b.header++
 		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 			return etcdstore.RestoreRead{Witness: w, Header: b.header}, nil
-		}, f.latest)
+		}, f.latest, nil)
 	}
 	pass(12)
 	if _, u := b.gauges(); u != float64(restored.Unix()) {
@@ -541,7 +541,7 @@ func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
 	read := func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 12, Header: 99}, nil
 	}
-	b.g.pass(context.Background(), time.Second, read, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil })
+	b.g.pass(context.Background(), time.Second, read, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil }, nil)
 	if scans != 1 || b.g.Allows() {
 		t.Fatalf("scans %d, allows %v", scans, b.g.Allows())
 	}
@@ -552,8 +552,53 @@ func TestAPassScansWhenAReadCallsForIt(t *testing.T) {
 	noDrop.Saw(5)
 	noDrop.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
 		return etcdstore.RestoreRead{Witness: 5, Header: 9}, nil
-	}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil })
+	}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil }, nil)
 	if scans != 1 {
 		t.Fatal("scanned with nothing restored")
+	}
+}
+
+// A guarded re-read skips the scan of the token family while no token record
+// changed since the scan that armed the bound, and scans when one did; a
+// second restore always scans (final review M1).
+func TestAGuardedPassScansOnlyWhenTheTokenFamilyChanged(t *testing.T) {
+	b := newBound(t)
+	latest := b.now.Add(5 * time.Minute)
+	scans, changedCalls, moved := 0, 0, false
+	var gotSince int64
+	witness, header := uint64(12), uint64(100)
+	run := func() {
+		b.g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+			return etcdstore.RestoreRead{Witness: witness, Header: header}, nil
+		}, func(context.Context, time.Time) (time.Time, error) { scans++; return latest, nil },
+			func(_ context.Context, since int64) (bool, error) {
+				changedCalls++
+				gotSince = since
+				return moved, nil
+			})
+	}
+	run() // the drop: a full scan, no pre-check
+	if scans != 1 || changedCalls != 0 || b.g.Allows() {
+		t.Fatalf("drop: scans %d, checks %d", scans, changedCalls)
+	}
+	header++
+	run()
+	if scans != 1 || changedCalls != 1 || gotSince != 100 || b.g.Allows() {
+		t.Fatalf("unchanged: scans %d, checks %d, since %d", scans, changedCalls, gotSince)
+	}
+	moved = true
+	header++
+	run()
+	if scans != 2 {
+		t.Fatalf("changed family not scanned: %d", scans)
+	}
+	moved, witness = false, 9 // a second restore: scan whatever the pre-check says
+	header++
+	run()
+	if scans != 3 {
+		t.Fatalf("a second restore was not scanned: %d", scans)
+	}
+	if _, u := b.gauges(); u != float64(latest.Unix()) {
+		t.Fatalf("the bound %v", u)
 	}
 }

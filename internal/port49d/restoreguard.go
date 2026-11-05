@@ -40,6 +40,9 @@ type scanResult struct {
 	err error
 	// cutoff is the MintedAt bound the scan was taken with (needsScan).
 	cutoff time.Time
+	// unchanged is true when the scan was skipped because no token record
+	// changed since the last one: max is then zero and liftAt keeps its value.
+	unchanged bool
 }
 
 // restoreGuard is port49d's half of the restore witness (plan 7e, Task
@@ -85,6 +88,10 @@ type restoreGuard struct {
 	guardHigh uint64
 	// cutoff is the MintedAt bound of the scans of this drop (needsScan).
 	cutoff time.Time
+	// scanRev is the header of the read whose scan last succeeded in this drop:
+	// while no token record changed after it, a guarded re-read need not scan
+	// the family again (zero: none yet).
+	scanRev int64
 	// bounded is true once a scan of the token family succeeded in this
 	// guard, and no scan since failed or looked wrong; liftAt, the largest
 	// ExpiresAt any scan saw, then says when the guard lifts on its own (zero:
@@ -211,6 +218,9 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 	g.failing = false
 	g.checked = true
 	now := g.now()
+	if sc.ran && sc.err == nil && !sc.unchanged {
+		g.scanRev = int64(r.Header)
+	}
 	switch {
 	case g.dropAt != 0 && r.Purged > g.dropAt:
 		// The runner's purge, after the drop: nothing restored is left.
@@ -292,11 +302,23 @@ func (g *restoreGuard) needsScan(r etcdstore.RestoreRead, high uint64, seen bool
 	return fresh, seen && r.Witness < high
 }
 
+// rescanSince is the revision after which a token record must have changed to
+// call for a scan, and whether this is a re-read of the same drop (a guard
+// whose cutoff is unchanged, read at a revision no lower than the last scan's:
+// a store restored again goes back, and is always scanned). g.mu is held by
+// neither.
+func (g *restoreGuard) rescanSince(r etcdstore.RestoreRead, cutoff time.Time) (int64, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	same := g.guarded && r.Witness >= g.guardHigh && g.scanRev > 0 && !g.cutoff.IsZero() && cutoff.Equal(g.cutoff) && int64(r.Header) >= g.scanRev
+	return g.scanRev, same
+}
+
 // reset clears the guard's state, but not the record of the witness; g.mu is
 // held.
 func (g *restoreGuard) reset() {
-	g.guarded, g.bounded, g.liftAt, g.why, g.floor, g.said, g.dropAt, g.guardHigh, g.cutoff =
-		false, false, time.Time{}, "", time.Time{}, false, 0, 0, time.Time{}
+	g.guarded, g.bounded, g.liftAt, g.why, g.floor, g.said, g.dropAt, g.guardHigh, g.cutoff, g.scanRev =
+		false, false, time.Time{}, "", time.Time{}, false, 0, 0, time.Time{}, 0
 }
 
 // arm takes a scan into the guard's bound: liftAt only rises. A scan that was
@@ -429,7 +451,7 @@ func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store, callTimeout
 	t := time.NewTicker(witnessEvery)
 	defer t.Stop()
 	for {
-		if !g.pass(ctx, callTimeout, s.RestoreRead, s.LatestTokenExpiry) {
+		if !g.pass(ctx, callTimeout, s.RestoreRead, s.LatestTokenExpiry, s.TokensChangedSince) {
 			return
 		}
 		select {
@@ -445,7 +467,8 @@ func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store, callTimeout
 // reports false once ctx ended, with nothing judged.
 func (g *restoreGuard) pass(ctx context.Context, callTimeout time.Duration,
 	read func(context.Context) (etcdstore.RestoreRead, error),
-	scan func(context.Context, time.Time) (time.Time, error)) bool {
+	scan func(context.Context, time.Time) (time.Time, error),
+	changed func(ctx context.Context, sinceRev int64) (bool, error)) bool {
 	high, seen, guardHigh := g.recorded()
 	rctx, cancel := context.WithTimeout(ctx, max(witnessEvery, callTimeout))
 	r, err := read(rctx)
@@ -457,12 +480,25 @@ func (g *restoreGuard) pass(ctx context.Context, callTimeout time.Duration,
 	if err == nil && scan != nil {
 		if cutoff, ok := g.needsScan(r, high, seen, guardHigh, g.now()); ok {
 			sctx, scancel := context.WithTimeout(ctx, max(witnessEvery, callTimeout))
-			latest, serr := scan(sctx, cutoff)
+			skip := false
+			if since, same := g.rescanSince(r, cutoff); same && changed != nil {
+				// The same drop, re-read: a cheap look at the changed keys
+				// first, and no scan of every record while none changed
+				// (liftAt only rises, and a deleted token cannot raise it).
+				// An error scans.
+				moved, cerr := changed(sctx, since)
+				skip = cerr == nil && !moved
+			}
+			if skip {
+				sc = scanResult{ran: true, cutoff: cutoff, unchanged: true}
+			} else {
+				latest, serr := scan(sctx, cutoff)
+				sc = scanResult{ran: true, max: latest, err: serr, cutoff: cutoff}
+			}
 			scancel()
 			if ctx.Err() != nil {
 				return false
 			}
-			sc = scanResult{ran: true, max: latest, err: serr, cutoff: cutoff}
 		}
 	}
 	g.judge(r, err, high, seen, guardHigh, sc)

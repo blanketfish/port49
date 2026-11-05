@@ -69,3 +69,36 @@ func TestLatestTokenExpiryCountsOnlyTokensMintedByTheCutoff(t *testing.T) {
 		t.Fatalf("cutoff before every mint: %v %v", got, err)
 	}
 }
+
+// The guard's pre-check: a count of token records written after a revision.
+func TestTokensChangedSinceSeesOnlyLaterWrites(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	s := onShared(t, func() time.Time { return now })
+	put := func(user string) {
+		t.Helper()
+		if _, err := s.PutToken(ctx, store.TokenKey{NAS: "leaf", Username: user},
+			store.Token{ID: "t-" + user, Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("a")
+	resp, err := s.tok.Get(ctx, s.k.family(famToken)+"zz-none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := resp.Header.Revision
+	if moved, err := s.TokensChangedSince(ctx, rev); err != nil || moved {
+		t.Fatalf("nothing written since: %v %v", moved, err)
+	}
+	if _, err := s.tok.Put(ctx, "unrelated", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := s.TokensChangedSince(ctx, rev); err != nil || moved {
+		t.Fatalf("a write outside the family: %v %v", moved, err)
+	}
+	put("b")
+	if moved, err := s.TokensChangedSince(ctx, rev); err != nil || !moved {
+		t.Fatalf("a token written since: %v %v", moved, err)
+	}
+}
