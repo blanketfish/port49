@@ -649,6 +649,50 @@ func TestFollowWitnessTellsEachWrite(t *testing.T) {
 	<-done
 }
 
+// FollowWitnessLive says whether a revision came from a read or from the watch:
+// the witness already there is told as not live, and a write made after the
+// follower's read is told as live (decision 56 ruling 2).
+func TestFollowWitnessLiveSaysWhichRevisionsAreLive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := onShared(t, time.Now)
+	first, err := s.PutWitness(ctx, "runner-a", 0)
+	if err != nil || first == 0 {
+		t.Fatalf("the first witness: %d %v", first, err)
+	}
+	type tell struct {
+		rev  uint64
+		live bool
+	}
+	told := make(chan tell, 8)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.FollowWitnessLive(ctx, func(rev uint64, live bool) { told <- tell{rev, live} })
+	}()
+	wait := func() tell {
+		t.Helper()
+		select {
+		case got := <-told:
+			return got
+		case <-time.After(5 * time.Second):
+			t.Fatal("the follower told nothing within 5s")
+		}
+		return tell{}
+	}
+	if got := wait(); got != (tell{first, false}) {
+		t.Fatalf("the witness already there: %+v, want {%d false}", got, first)
+	}
+	next, err := s.PutWitness(ctx, "runner-a", first)
+	if err != nil || next == 0 {
+		t.Fatalf("the next witness: %d %v", next, err)
+	}
+	if got := wait(); got != (tell{next, true}) {
+		t.Fatalf("a write after the read: %+v, want {%d true}", got, next)
+	}
+	cancel()
+	<-done
+}
+
 // A restore read is the witness's revision and the store's, at one
 // revision (the restore floor).
 func TestARestoreReadSaysTheWitnessAndTheHeader(t *testing.T) {

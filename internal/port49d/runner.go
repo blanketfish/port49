@@ -199,6 +199,12 @@ func (r *runner) run(ctx context.Context) {
 		}
 		stop()
 		<-done
+		// A purge that failed is still owed (the record says so), but this
+		// replica no longer runs it: its mints are not held for a purge the
+		// next run makes, which holds them again (purgeRestored).
+		if r.holdMints != nil {
+			r.holdMints(false)
+		}
 		r.m.StoreKeyspaceHeld.WithLabelValues().Set(0)
 		// The keeper reports (0, false) as it stops; set them here too, for
 		// a takeover that failed before the keeper started (pre-flight I11).

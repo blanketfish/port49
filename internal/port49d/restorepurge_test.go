@@ -365,3 +365,31 @@ func TestAFailedPurgeKeepsTheMintGateClosedUntilItIsDone(t *testing.T) {
 		t.Fatalf("a stopped runner left the gate closed: %v", err)
 	}
 }
+
+// A takeover whose purge fails lets the hold go; the replica then serves
+// mints again (its record still owes the purge, which its next run makes and
+// holds them for), instead of refusing every mint until a purge it does not
+// run.
+func TestATakeoverWhosePurgeFailsLetsTheMintGateGoAndPurgesOnTheNextRun(t *testing.T) {
+	g := newPurgeRig(t)
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	wit := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	r := g.runner("runner-a", wit, &failsPurgeOnce{Store: g.bs.st})
+	r.holdMints = gate.purge
+	r.ledger, r.judge, r.marks = crypt.NewLedger(), make(chan *policy.Policy, 1), store.NewMarks()
+	ctx, cancel := context.WithCancel(g.ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); r.run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitWithin(t, g.out, "the takeover stopped", 20*time.Second)
+	waitUntil(t, "the mint gate to let go", func() bool { return gate.allow(pol) == nil })
+	if _, _, owed := wit.state(); !owed {
+		t.Fatal("the record stopped owing a purge that was not done")
+	}
+	// The next run (5s later) makes the purge, and says so once.
+	waitWithin(t, g.out, "every unspent token is purged", 30*time.Second)
+	waitUntil(t, "the record to take the store's witness", func() bool { _, _, owed := wit.state(); return !owed })
+}
