@@ -1755,6 +1755,10 @@ vulnerable); for a permit-bearing scope it means *exclude*. A broken inventory s
 lifting a mitigation is the failure to design against. So a scope with at least one match
 key that delivers a deny — it attaches a role carrying one, or a grant on it holds one — MUST
 declare `on_missing`, and omitting it is a load error; any other scope defaults to `exclude`.
+A grant on a scope with `on_missing: include`, whose roles carry a permit or which sets
+`max_privilege`, is a load error too (decision 56 ruling 5): a grant carries permits, and the
+safe direction for a permit is *exclude*, so a missing attribute would hand it to a device the
+inventory could not describe. Put a mitigation's deny in `attached_roles` on an include scope.
 A scope with no match key, `all_devices`, selects every device and needs neither (plan 4).
 
 `security_log: true` marks a scope whose membership changes are security events. This is
@@ -2373,6 +2377,8 @@ A deny at the per-command point:
 The record answers the question without anyone reading port49's source: Alice held a permit
 for `copy`, a deny matched the destination more specifically, and dominance failed.
 
+`session.username_redacted` (bool) is true when the username was token-shaped and `session.username` is therefore empty (decision 56 ruling 10).
+
 #### Three properties
 
 **Log inputs and policy identity, not a narrative.** The matched rules are included because
@@ -2659,12 +2665,12 @@ refused request named; any other path is recorded `mint`.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done or every token the store holds has expired (decision 36, the restore guard), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d does this itself while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd it checks the store every `stores.session.etcd.health.interval` (or `stores.directory.…` when `stores.session` is omitted), and after `close_after` consecutive failed checks it closes every listener and resets held connections, idle or loaded. It is dark within `close_after` × `interval` + `call_timeout` of the store stopping: 5.5s at the defaults, measured at 4.8–5.5s on five images (§15 L41, `tests/lab/results/L41-*.md`). It opens the listeners again after `open_after` consecutive checks pass (§13, decision 37). Losing its hold on the store, or a token or context pool's circuit staying open or every call on one being refused for `hold_ttl`, remains the backstop (decision 35). Before dark, a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem` on etcd, port49d's last read of `meta/witness` failed, so it cannot tell whether the store was restored (`port49_redemption_restore_unjudged`; decision 56 ruling 1), or, on `mint` at port49-broker, the mint gate is closed (`port49_broker_mint_gate_closed`): the replica's mark on `meta/judged` has not landed since its policy swap (one store round trip), or, since its start, the replica has seen no takeover done for the bundle it serves, neither its own runner's nor one `meta/judged` records, not in doubt (up to `hold_ttl`/3 and the takeover on a first start or a start after a policy edit, plus up to `hold_ttl` when the previous run's lease must expire first, as after a crash; none on a rolling restart; decision 36, the purge at a takeover). This is the start gate and not a store fault, and an operator should not look at etcd for it. Its 503 carries `Retry-After`. `port49 workload` retries it; the agent does not. `port49 token` retries a mint refused `store_unavailable`, waiting the reply's `Retry-After` (5s when it carries none) between tries, for up to 30s in all, then exits with the same code and its retry wording; it retries no other reason (owner's ruling 2026-10-15, issue #11), so a broker restart's start gate does not fail a script. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d does this itself while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd it checks the store every `stores.session.etcd.health.interval` (or `stores.directory.…` when `stores.session` is omitted), and after `close_after` consecutive failed checks it closes every listener and resets held connections, idle or loaded. It is dark within `close_after` × `interval` + `call_timeout` of the store stopping: 5.5s at the defaults, measured at 4.8–5.5s on five images (§15 L41, `tests/lab/results/L41-*.md`). It opens the listeners again after `open_after` consecutive checks pass (§13, decision 37). Losing its hold on the store, or a token or context pool's circuit staying open or every call on one being refused for `hold_ttl`, remains the backstop (decision 35). Before dark, a store that does not answer, or a pool's open circuit, is answered within `stores.session.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
-| `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
+| `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); or, on `redeem`, the token's store revision is at or below port49d's restore floor: an etcd restore brought it back (decision 56 ruling 1); FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
-| `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
+| `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome; or, on `escalate`, an enable token whose principal is not the escalated context's (decision 56 ruling 11) |
 | `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision; not while the context it names is revoked — that is `credential_revoked` (§5.6). A login refused after its join replays as FAIL once the revocation is lifted |
 | `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
 | `enable_refused` | `escalate`: the subject's mechanism is `none` |
@@ -6005,8 +6011,9 @@ Mitigations, designed in rather than documented afterward:
 - A scope MUST be able to pin a device set explicitly instead of by attribute:
   `match: {name: [leaf-01, leaf-02]}` reads the device's inventory name, as `platform` reads
   its platform (§5.5).
-- Scopes carrying denies SHOULD set `security_log: true`, so membership changes are logged
-  and alerted as security events rather than routine inventory churn.
+- An attribute scope that delivers a deny defaults to `security_log: true`, so membership
+  changes are logged and alerted as security events rather than routine inventory churn, and
+  `platform_changed` is a security change (decision 56 ruling 6).
 - Attributes used for security scoping SHOULD come from an attested path rather than a
   hand-editable field.
 - A connector's token MUST be able to read devices and nothing more. The service never writes
@@ -8083,7 +8090,7 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   store was restored: it takes `meta/judged` as absent and purges every unspent token, so
   the first takeover purges even when the runbook's delete of `meta/judged` was forgotten.
   It does not cover a port49d serving before that takeover: the runbook's token delete does,
-  and so does port49d's own guard: a port49d that finds the witness below what it followed
+  *Superseded by decision 56 ruling 1:* and so does port49d's own guard: a port49d that finds the witness below what it followed
   refuses every token redemption `store_unavailable` until the first of two: a runner, once a
   purge of every unspent token is done, writes `meta/purged` (plan 7e Task 15d); or every token
   the store holds has expired, which port49d takes as its own clock passing the largest
@@ -11591,7 +11598,7 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
   idle timer. The alternative (the default on every class) is not built. Decision 21's timer is the
   only thing that ends a session on a session-only platform, so this takes decision 33's "the option
   that denies more".
-- **15. The restore guard's ERROR stands, bounded in time (Ryan, 2026-11-02).** After an etcd restore
+- **15. The restore guard's ERROR stands, bounded in time (Ryan, 2026-11-02).** *Superseded by decision 56 ruling 1.* After an etcd restore
   port49d refuses token logins until a runner's purge, and its refusal is an ERROR, which IOS XE
   treats as final, and Junos under `tacplus` alone (ruling 2) does the same, so break-glass is
   refused there until the brokers start and purge. SR Linux under `exit-on-reject true` does not:
@@ -11750,6 +11757,88 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
   "roots": "...", "ready": bool, "checks": [{"name": "...", "ok": bool, "why": "..."}]}`, all keys
   snake_case, the serial masked, no secret.
 - **Open.** L91 is provisional until it closes. L89 closed 2026-11-04 (`tests/lab/results/L89-kind.md`). L39 (b) and (c) closed 2026-11-04 (`tests/lab/results/L39-kind.md`).
+
+
+**56. The pre-beta review's fixes (2026-11-05; the pre-beta review, plan `2026-11-05-pre-beta-fixes`).**
+Each ruling states the behaviour and the finding it closes.
+
+1. **The restore floor replaces the restore guard.** port49d judges an etcd restore from two reads
+   of the store, the highest `meta/witness` `ModRevision` and the read's header revision, and
+   refuses by token revision, not by time. It closes stores C1, identity I1, I2 and I5 (with ruling
+   2), stores I4 and deploy I3. It supersedes decision 36's guard sentences and decision 55 ruling
+   15, each marked in place. A fresh mint is never refused, because revisions rise on one timeline.
+
+   ```text
+   record (restore.json beside accounting.spool_path; written with writeOwnerOnly and read after ownedHere,
+           as witness.json is, a refusal of either being an unreadable record; saved each second when changed,
+           and at once by a pass that judged a drop):
+     prefix, witness, header       highest meta/witness ModRevision and read header since the last drop
+     witness_header                the header of the read that last showed witness
+     high_header                   highest header ever read, across drops
+     floor                         the latest drop read's header; 0: none
+     band, band_from, band_until   see below; band 0: none
+   a pass: take the record, then RestoreRead (Txn, linearizable)
+     read error  -> held = true (said once per run of failures; unjudged gauge 1); nothing else changes
+     read ok     -> held = false
+       drop := unread_record || pending_drop || have && (r.Witness < witness || r.Header < header
+                                           || r.Witness != witness && r.Witness <= witness_header)
+       drop:  floor = r.Header
+              band  = max(r.Header, high_header); if band > floor { band_from = now; band_until = now + MaxTokenTTL + restoreSkew } else band = 0
+              witness, header, witness_header = r.Witness, r.Header, r.Header; high_header = max(high_header, r.Header)
+              pending_drop = false; detected gauge = now; say the drop line; save at once
+       else:  witness, header, high_header = max with the read; witness_header = r.Header when the read moved witness
+   Restored(t, now) = floor != 0 && t.Revision <= floor
+                   || band != 0 && now.Before(band_until) && t.Revision <= band
+                      && !t.MintedAt.After(band_from.Add(restoreSkew))
+   ```
+
+   - `floor` is the drop read's header, held until the next drop replaces it. A redemption of a
+     token at or below it is refused `token_spent`, on every candidate kind (login and enable).
+     A failed read of the witness holds every redemption `store_unavailable`
+     (`port49_redemption_restore_unjudged` is 1) until a read answers. A port49d on the memory
+     store applies no floor; on etcd, a token whose `Revision` is 0 is refused under a floor.
+   - Without `--bump-revision`, a second restore to a newer snapshot of the old timeline can be
+     unseen: its witness and header can both sit above the first drop's values and below the old
+     record. A drop whose header is below `high_header` therefore also sets a `band`: tokens at or
+     below `high_header` whose `MintedAt` is not after the drop read plus `restoreSkew` (5m) are
+     refused too, for `MaxTokenTTL` + `restoreSkew` (20m) after the read. `MintedAt` keeps a fresh
+     mint served on the non-bumped timeline.
+   - **The residual**, which this is the one place in the spec to state, needs all of: a non-bumped
+     restore; a second old-timeline restore that no read tells, within 20m; a broker clock more
+     than 5m ahead of port49d's, outside every tolerance port49 states; and a token redeemed
+     between the second snapshot and the first restore.
+   - **The cost**, on the non-bumped path only: a token minted within 5m after the drop read
+     whose revision is at or below `high_header` is refused once. A token minted after the
+     timeline's revision passes `high_header` is served whatever its clock. `--bump-revision` (the
+     runbook) arms no band, because then `floor` is at least `high_header`.
+   - The record survives a restart. An absent record is said once; an unreadable one is moved
+     aside and makes the first read a drop (every token in the store is refused once). A record
+     that cannot be saved is kept in memory, said once, and saved again each second; port49d
+     keeps serving.
+2. **The runner's restore purge also deletes the `on/` and `mp/` families.** It closes identity I5
+   with ruling 1.
+3. **A revocation made in a region cut from the directory still reaches that region's session
+   store** (plan Task 8).
+4. **A person's ID token is never a caller's credential on any broker.** It is taken only at
+   `POST /v1/certificate` (with `issuance`) and at `POST /v1/mfa` as an `idp_mfa` proof
+   (decision 45 ruling 20). This amends decision 43 ruling 13 and retires plan 7h's bearer path
+   for people.
+5. **A grant on an `on_missing: include` scope whose roles carry a permit, or which sets
+   `max_privilege`, is a load error** (§5.5).
+6. **An attribute scope that delivers a deny defaults to `security_log: true`, and
+   `platform_changed` is a security change** (§10).
+7. **A passing store health check closes the token and context pools' circuits** (amends decision
+   35).
+8. **A call whose caller's deadline had passed before it entered is counted `deadline_on_entry`,
+   not as a store failure** (amends decision 35).
+9. **A full logout queue owes a rescan of the logout set and never drops a logout's reach.**
+10. **A token-shaped username (after trimming spaces and CR) is never logged:** `session.username`
+    is empty and `session.username_redacted` is true. A real 30-character alphanumeric username is
+    redacted too, in the redeem, authorization and accounting records alike; that is the cost.
+11. **An enable token is refused `credential_mismatch` unless its principal is the escalated
+    context's.**
+12. **An authorization or accounting packet with `seq_no` other than 1 is a protocol error.**
+13. **The `mfaTokenKey` once-record is removed.** The nonce-bound challenge is taken once already.
 
 ---
 
@@ -12551,6 +12640,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L90** | Oxidized's SSH host-key handling against accept-new, on one EOS device. (a) `secure: true` with no `known_hosts` entry: what Oxidized does. (b) `secure: true` with a changed key: PASS iff refused. (c) `secure: true` after ruling 9's `ssh … accept-new … PreferredAuthentications=none … exit` line wrote the entry: PASS iff the backup runs. (d) Any Oxidized input or `vars` setting that maps to net-ssh's `verify_host_key: :accept_new`: PASS iff an unknown key is saved and a changed key refused. | `examples/oxidized` (decision 55 ruling 9; plan 9d carry) | Oxidized (version recorded), vEOS 4.31.2F | closed — measured 2026-11-04; tests/lab/results/L90-oxidized-arista_eos.md |
 | **L91** | `port49 hwkey status` and `setup` on a real YubiKey, on the SER8 (needs Ryan at the SER8, where he is away long-term from 2026-11-02; the agent never runs ykman, and nothing writes to the token). (a) `status` before setup, with slots 9a and 9c made as L86's runbook made them and the config's `issued_key`/`touch_key` removed: PASS iff exit 1, the config checks FAIL and the slot checks pass, no PIN is asked, and no serial is printed. (b) `setup`: PASS iff exit 0, only `issued_key` and `touch_key` change in the config, and `ykman piv info` (Ryan types it) reads the same before and after. (c) Whether libykcs11 lists a slot's key with no certificate in it, if the token has such a slot: an observation, recorded as "no such slot" otherwise. (d) `status` after setup, with an agent logged in: PASS iff exit 0 and the agent check reads `touch_key: true`. (e) `status --json`: PASS iff the keys are snake_case and neither the serial nor the PIN appears. | Decision 55 rulings 16 and 17; plan 13's "set up your key" page | YubiKey 5 (firmware operator-reported), libykcs11 (version recorded), SER8 | open |
 | **L92** | SR Linux over RFC 9887 (L88 h). The schema has `system aaa server-group server tls-profile` (`tree flat system aaa server-group`, SR Linux 26.7.2), and `system tls profile` takes key, certificate and trust-anchor. (a) The port and the unencrypted flag with a profile set. (b) Whether the client sends a ClientHello (L88 saw plain TACACS+ on port 300 with a profile set and a CPM entry for replies from port 300; the default CPM entry 110 accepts only source port 49). (c) Server-certificate checking and client-certificate enrolment. (d) L88 cells a, b, d, e, f over RFC 9887. Needs an SR Linux enrolment dialect for L73. | Design §12; RFC 9887 | SR Linux 26.7.2 | open; one L88 observation in `tests/lab/results/L88-nokia_srlinux-tls.md` |
+| **L93** | IOS XR over plain TCP under the reference configuration: whether an authentication ERROR is final. | The device README's XR ERROR row | XRd (26.1.1) | open |
 
 Every cell of L82–L85 carries its own PASS condition, so a row closes when every cell has a PASS or a FAIL. A FAIL is a measured answer, not an open row. A README names a mechanism only where every one of its cells is PASS.
 
