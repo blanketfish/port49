@@ -700,7 +700,7 @@ func TestFailureMatrix(t *testing.T) {
 		})
 	})
 
-	run("restore_guarded", restoreGuarded)
+	run("restore_floor", restoreFloor)
 }
 
 // refusedAtOnce fails unless a connection to TCP 49 is refused (ECONNREFUSED)
@@ -739,7 +739,7 @@ func counter(t *testing.T, addr, sample string) float64 {
 var ctxIDRe = regexp.MustCompile(`"ctx_id":"([^"]+)"`)
 
 // lastCtxID is the ctx_id of the last decision record in log, "" if none.
-var followedRe = regexp.MustCompile(`meta/witness is [^,]+, below the [1-9][0-9]* this port49d followed`)
+var droppedRe = regexp.MustCompile(`the session store was restored from a snapshot: meta/witness is `)
 
 func lastCtxID(log string) string {
 	all := ctxIDRe.FindAllStringSubmatch(log, -1)
@@ -946,73 +946,51 @@ func (m matrix) restoreMembers() {
 	}
 }
 
-// restoreGuarded is the restore guard end to end (spec decision 36; Task 9a).
+// restoreFloor is the restore floor end to end (spec decision 56).
 // TestStoreSnapshotRestore is lab-tagged on a bare etcd binary; on compose the
 // same steps are spelled out.
-func restoreGuarded(m matrix) {
+func restoreFloor(m matrix) {
 	t := m.s.t
 	// A killed run's snapshot must not be the one restored.
 	exec.Command("docker", "volume", "rm", "-f", snapVolume).Run()
 	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", snapVolume).Run() })
-	const guarded, until = "port49_redemption_restore_guarded", "port49_redemption_restore_guard_until_timestamp_seconds"
+	const detected = "port49_store_restore_detected_timestamp_seconds"
 	// The runner rewrites meta/witness once a second, and only when the store
 	// moved (witnessPass). A restore is seen only if the witness it brings back
 	// is older than the one port49d followed, so after the login that moves the
 	// store the stack is polled until the witness is at or past that login's
 	// revision: a stop inside the first second would leave the snapshot's
-	// witness current, and the guard rightly sees no restore (runner.go
+	// witness current, and the floor rightly sees no restore (runner.go
 	// keepWitness: "about the most of a snapshot's lead over the last witness
 	// that the check cannot see").
 	witnessMovesPast := func() { m.witnessPast() }
 
-	// Steps 1-3: a token minted before the snapshot and redeemed after it is
-	// the replay a restore brings back.
+	// A token minted before the snapshot and redeemed after it is the replay a
+	// restore brings back.
 	replay := m.mint()
-	snapAt := m.snapshot()
+	m.snapshot()
 	if !m.passes(replay) {
 		t.Fatal("the login that moves the store past the snapshot did not pass")
 	}
 	witnessMovesPast()
 	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
-	// Steps 4-5.
 	m.restoreMembers()
 	m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
 
-	// Step 6: guarded, and the token that was redeemed is refused, not redeemed again.
-	shapetest.WaitFor(t, guarded+" at 1", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, guarded) == 1 })
-	// port49d had followed a witness before the restore: the drop line names
-	// it ("below the N this port49d followed"), which a guard that had followed
-	// none could not say.
-	if log := m.s.run("logs", "--no-color", "port49d"); !followedRe.MatchString(log) {
-		t.Fatalf("port49d's log has no \"meta/witness is ..., below the N this port49d followed\" line: it had followed no witness before the restore")
+	// port49d finds the restore: the gauge reads the time, and the drop line
+	// names the witness it fell to.
+	shapetest.WaitFor(t, detected+" above 0", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, detected) > 0 })
+	if log := m.s.run("logs", "--no-color", "port49d"); !droppedRe.MatchString(log) {
+		t.Fatalf("port49d's log has no \"the session store was restored from a snapshot: meta/witness is ...\" line")
 	}
-	if !m.refused(replay) {
-		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
-	}
-	// Step 9: the time bound is armed: the guard reads the restored tokens' latest expiry, at most a token_ttl (15m) + 5m skew after the snapshot's time.
-	u := m.gauge(daemonMetrics, until)
-	if u == 0 || u < float64(snapAt.Unix())-5 || u > float64(snapAt.Add(20*time.Minute+time.Minute).Unix()) {
-		t.Fatalf("%s is %.0f, want non-zero and within 15m + 5m + 60s of the snapshot (%d)", until, u, snapAt.Unix())
-	}
-	// Step 7: the brokers' witness sees the restore and their purge lifts it.
-	shapetest.WaitFor(t, guarded+" back at 0", 2*holdTTL, func() bool { return m.gauge(daemonMetrics, guarded) == 0 })
+	// The token that was redeemed is refused token_spent (a FAIL), not
+	// redeemed again. An ERROR while the stack settles is tried again.
+	shapetest.WaitFor(t, "the replay refused with a FAIL", 30*time.Second, func() bool {
+		st, err := m.dev.TryLogin("alice", replay)
+		return err == nil && st == wire.AuthenStatusFail
+	})
+	// A token minted after the restore logs in: no purge, no wait.
 	next := m.mint()
-	shapetest.WaitFor(t, "a fresh login", 20*time.Second, func() bool { return m.passes(next) })
-
-	// Step 8: with the guard standing and no broker to purge, stopping port49d
-	// leaves the device's connection refused at once.
-	again := m.mint()
-	m.snapshot()
-	if !m.passes(again) {
-		t.Fatal("the login after the second snapshot did not pass")
-	}
-	witnessMovesPast()
-	m.s.run("stop", "port49-broker")
-	m.s.run("stop", "etcd-1", "etcd-2", "etcd-3")
-	m.restoreMembers()
-	m.s.run("start", "etcd-1", "etcd-2", "etcd-3")
-	shapetest.WaitFor(t, guarded+" at 1 with the brokers stopped", 2*time.Minute, func() bool { return m.gauge(daemonMetrics, guarded) == 1 })
-	m.s.run("stop", "port49d")
-	refusedAtOnce(t, "the guard standing and port49d stopped")
-	fmt.Fprintln(os.Stderr, "failure matrix: restore guard held, lifted by the purge, and port49d stopped at the 3am escape; guard until "+strconv.FormatFloat(u, 'f', 0, 64))
+	shapetest.WaitFor(t, "a fresh login", 30*time.Second, func() bool { return m.passes(next) })
+	fmt.Fprintln(os.Stderr, "failure matrix: restore floor refused the replayed token and served a fresh one")
 }
