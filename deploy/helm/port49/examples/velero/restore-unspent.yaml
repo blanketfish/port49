@@ -6,7 +6,8 @@
 # examples/etcd/statefulset.yaml runs, so nothing is fetched at restore time; that image has no shell,
 # so each etcdctl call is its own container, the health check first. A member still electing after the
 # restore fails the health check, and the Job's backoff tries again (a new pod each time).
-# Edit PREFIX to your store prefix (stores.session.etcd.prefix); Kubernetes puts it into $(PREFIX).
+# Edit PREFIX to your store prefix (stores.session.etcd.prefix) in each of the four containers;
+# Kubernetes puts it into $(PREFIX). Each container is written out in full: change one, change all four.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -21,40 +22,70 @@ spec:
       restartPolicy: Never
       initContainers:
         - name: health
-          image: &etcd gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
+          image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
           command: [etcdctl, endpoint, health, --dial-timeout=10s, --command-timeout=30s]
-          env: &env
+          env:
             - {name: PREFIX, value: /port49/}
             - {name: ETCDCTL_ENDPOINTS, value: "https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379"}
             - {name: ETCDCTL_CACERT, value: /etcd-root/ca.crt}
             - {name: ETCDCTL_CERT, value: /etcd-root/tls.crt}
             - {name: ETCDCTL_KEY, value: /etcd-root/tls.key}
-          securityContext: &sc
+          securityContext:
             runAsUser: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
-          volumeMounts: &mounts
+          volumeMounts:
             - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
         - name: unspent
-          image: *etcd
+          image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
           command: [etcdctl, del, --prefix, "$(PREFIX)v1/t/"]
-          env: *env
-          securityContext: *sc
-          volumeMounts: *mounts
+          env:
+            - {name: PREFIX, value: /port49/}
+            - {name: ETCDCTL_ENDPOINTS, value: "https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379"}
+            - {name: ETCDCTL_CACERT, value: /etcd-root/ca.crt}
+            - {name: ETCDCTL_CERT, value: /etcd-root/tls.crt}
+            - {name: ETCDCTL_KEY, value: /etcd-root/tls.key}
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
         - name: judged
-          image: *etcd
+          image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
           command: [etcdctl, del, "$(PREFIX)v1/meta/judged"]
-          env: *env
-          securityContext: *sc
-          volumeMounts: *mounts
+          env:
+            - {name: PREFIX, value: /port49/}
+            - {name: ETCDCTL_ENDPOINTS, value: "https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379"}
+            - {name: ETCDCTL_CACERT, value: /etcd-root/ca.crt}
+            - {name: ETCDCTL_CERT, value: /etcd-root/tls.crt}
+            - {name: ETCDCTL_KEY, value: /etcd-root/tls.key}
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
       containers:
         - name: judged-bundle
-          image: *etcd
+          image: gcr.io/etcd-development/etcd:v3.6.15@sha256:5ed4e32061aa061f970d6500629213e8579ef17571dcf9789074966acb9afad1
           command: [etcdctl, del, "$(PREFIX)v1/meta/judged_bundle"]
-          env: *env
-          securityContext: *sc
-          volumeMounts: *mounts
+          env:
+            - {name: PREFIX, value: /port49/}
+            - {name: ETCDCTL_ENDPOINTS, value: "https://etcd-0.etcd.port49-etcd.svc:2379,https://etcd-1.etcd.port49-etcd.svc:2379,https://etcd-2.etcd.port49-etcd.svc:2379"}
+            - {name: ETCDCTL_CACERT, value: /etcd-root/ca.crt}
+            - {name: ETCDCTL_CERT, value: /etcd-root/tls.crt}
+            - {name: ETCDCTL_KEY, value: /etcd-root/tls.key}
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: etcd-root, mountPath: /etcd-root, readOnly: true}
       volumes:
         - name: etcd-root
           secret: {secretName: port49-etcd-root, defaultMode: 0400}

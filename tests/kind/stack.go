@@ -241,7 +241,7 @@ func (s *smoke) applyRoles() {
 		s.t.Fatalf("store-roles did not produce etcdctl commands (phase %s)\n%s", p.Phase, s.c.PodReport(ns, "store-roles"))
 	}
 	s.c.Kubectl("-n", ns, "create", "configmap", "port49-etcd-roles", "--from-file=roles.sh="+s.writeTemp("roles.sh", roles, 0o600))
-	s.applyExample("examples/etcd/etcd-init-job.yaml", map[string]string{"<setup-image>": "port49-setup:dev"})
+	s.applyExample("examples/etcd/etcd-init-job.yaml", nil)
 }
 
 // brokerConfigForRoles is the broker's config with its etcd client files named in the directory
