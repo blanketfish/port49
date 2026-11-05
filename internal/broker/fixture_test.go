@@ -55,13 +55,16 @@ grants:
 `
 
 type fixture struct {
-	b     *Broker
-	st    *memory.Store
-	log   *bytes.Buffer
-	now   time.Time
-	ca    *testpki.CA
-	alice tls.Certificate
-	mu    sync.Mutex
+	// personCA is the CA bearer borrows to present a person on a broker that
+	// issues nothing.
+	personCA *issuer.CA
+	b        *Broker
+	st       *memory.Store
+	log      *bytes.Buffer
+	now      time.Time
+	ca       *testpki.CA
+	alice    tls.Certificate
+	mu       sync.Mutex
 	// devices is the inventory the fixture's policy is loaded against, by
 	// name, for tests that load another policy over it.
 	devices map[string]admission.Device
@@ -440,11 +443,18 @@ func (f *fixture) bearer(ctx context.Context, method, path, body, token string) 
 		cancel()
 		if err == nil && a.Domain == oidc.Humans {
 			if f.b.Issuer == nil {
-				ca, err := issuer.Ephemeral(f.b.Now())
-				if err != nil {
-					panic(err)
+				// The broker under test issues nothing; this call borrows a
+				// CA for the one request and gives it back, so a test's
+				// broker is not made an issuing one.
+				if f.personCA == nil {
+					ca, err := issuer.Ephemeral(f.b.Now())
+					if err != nil {
+						panic(err)
+					}
+					f.personCA = ca
 				}
-				f.b.Issuer = ca
+				f.b.Issuer = f.personCA
+				defer func() { f.b.Issuer = nil }()
 			}
 			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			if err != nil {
@@ -456,7 +466,8 @@ func (f *fixture) bearer(ctx context.Context, method, path, body, token string) 
 			if err != nil {
 				panic(err)
 			}
-			cs := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{c, f.b.Issuer.Cert}}}
+			cs := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{c},
+				VerifiedChains: [][]*x509.Certificate{{c, f.b.Issuer.Cert}}}
 			return f.call(withHeldConn(ctx, f.b.Now(), nil), cs, method, path, body)
 		}
 	}

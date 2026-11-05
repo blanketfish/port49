@@ -306,8 +306,7 @@ func TestAPerLoginProofIsNotAnAdminProof(t *testing.T) {
 
 func TestABearerCannotProve(t *testing.T) {
 	f := newAdminFixture(t)
-	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", amr: []string{"mfa"}, authTime: f.b.Now()})
-	w := f.bearer(context.Background(), "POST", revokePath, bobBody, tok)
+	w := f.rawBearer(context.Background(), "POST", revokePath, bobBody, f.machineToken(t, f.iss))
 	ans := decodeAdminAnswer(t, w.Body.Bytes())
 	if w.Code != 401 || ans.Error != "admin_touch_refused" || ans.Admin != nil {
 		t.Fatalf("a bearer's admin call: %d %s with a challenge: %v, want 401 admin_touch_refused and none",
@@ -324,7 +323,7 @@ func TestABearerCannotProve(t *testing.T) {
 		t.Fatal("no admin_touch_refused record")
 	}
 	adm, _ := rec["admin"].(map[string]any)
-	if adm == nil || adm["operation"] != "revoke_principal" || adm["why"] == nil {
+	if adm == nil || adm["operation"] != "revoke_principal" || adm["why"] != "bearer" {
 		t.Fatalf("the record's admin part is %v: it names the operation and why", rec["admin"])
 	}
 	if f.adminRecords(t, "admin_touch_required") != 0 {
@@ -702,8 +701,7 @@ func TestTheRecordHoldsNoProofMaterial(t *testing.T) {
 		return adminHeader(t, ch, sign(key, ch, bobBody), atts)
 	})
 	// A bearer, and a proved call, for the records on either side.
-	tok := f.idToken(t, idTokenOpts{principal: "alice@example.com", amr: []string{"mfa"}, authTime: f.b.Now()})
-	if w := f.bearer(context.Background(), "POST", revokePath, bobBody, tok); w.Code != 401 {
+	if w := f.rawBearer(context.Background(), "POST", revokePath, bobBody, f.machineToken(t, f.iss)); w.Code != 401 {
 		t.Fatalf("a bearer: %d", w.Code)
 	}
 	if code, _ := f.adminSend(t, c, revokePath, bobBody, good(f.adminAsk(t, c, revokePath, bobBody).Challenge)); code != 200 {

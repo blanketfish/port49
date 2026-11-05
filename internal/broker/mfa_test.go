@@ -112,7 +112,12 @@ func mfaPolicy(o mfaOpts) string {
 	if o.adminRight {
 		netopsAPI = ", api: [revoke_others]"
 	}
-	bobsAPI := ""
+	bobsAPI, appAPI := "", ""
+	if o.adminRight {
+		// A machine's bearer is the one bearer left that reaches the admin
+		// proof, to be told it cannot prove.
+		appAPI = "\n  - {name: bearer_app, identity: [\"app:Oxidized-01\"], username: svc-bearer, token_ttl: 60s, api: [revoke_others]}"
+	}
 	if o.bobAPI != "" {
 		bobsAPI = ", api: [" + o.bobAPI + "]"
 	}
@@ -134,7 +139,7 @@ subjects:
   - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s%s}
   - {name: bobs, identity: ["user:bob@example.com"], username: bob, token_ttl: 60s%s}
   - {name: svc_oxidized, identity: ["spiffe://corp.example.com/host/oxidized-01"], username: svc-oxidized, token_ttl: 60s}
-  - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}
+  - {name: svc_k8s, identity: ["system:serviceaccount:netops:oxidized"], username: svc-k8s, token_ttl: 60s}%s
 grants:
   - {subject: netops, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: netops, scope: edge, roles: [network_admin], max_privilege: admin}%s
@@ -144,7 +149,7 @@ grants:
   - {subject: svc_oxidized, scope: edge, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: core, roles: [network_admin], max_privilege: admin}
   - {subject: svc_k8s, scope: edge, roles: [network_admin], max_privilege: admin}
-`, coreMFA, ceilingRole, netopsAPI, bobsAPI, ceilingGrant)
+`, coreMFA, ceilingRole, netopsAPI, bobsAPI, appAPI, ceilingGrant)
 }
 
 // failStore fails the named store methods, for the store-down cases.
