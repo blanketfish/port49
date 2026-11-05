@@ -142,6 +142,26 @@ func HangVerdict(expectHang, measured bool) string {
 	return l82.Fail
 }
 
+// ZeroRestoreEnded is (c)'s verdict on a restore at 0 replicas that ended, from both StatefulSets'
+// replicas ("0 0" when the lab's modifier applied) and HangProbe's read of the restore. Where the modifier
+// did not apply nothing was measured: NOT RUN, with a row saying so. Otherwise the README's warning is
+// wrong, a FAIL, with the restore's phase and each pod volume restore's (PartiallyFailed, Failed).
+func ZeroRestoreEnded(replicas, phase string, pvrs []PVR) (string, []l82.Row) {
+	if replicas != "0 0" {
+		return "", []l82.Row{{Case: "the two StatefulSets' replicas after the restore at 0 replicas",
+			Observation: replicas + ": the lab's resource modifier did not apply, not a measurement"}}
+	}
+	if phase == "" {
+		phase = "unset"
+	}
+	rows := []l82.Row{{Case: "the two StatefulSets' replicas after the restore at 0 replicas", Observation: replicas},
+		{Case: "the restore's phase when it ended", Observation: phase}}
+	for _, p := range pvrs {
+		rows = append(rows, l82.Row{Case: "the pod volume restore of " + p.Pod + "/" + p.Volume + " when the restore ended", Observation: p.Phase})
+	}
+	return l82.Fail, append(rows, l82.Row{Case: "the restore at 0 replicas ended", Observation: "the README's warning that it hangs is wrong"})
+}
+
 // Budget is the test's deadline (zero when go test has no -timeout) and the reserve kept before it.
 type Budget struct {
 	TestEnd time.Time

@@ -255,12 +255,6 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		}
 		return l89.StepOutput(out)
 	}
-	// measured ends the cell with a measured FAIL on a check that does not hold
-	measured := func(what, observation string) {
-		l82Row(cell, what, observation)
-		l82SetVerdict(cell, l82.Fail)
-		t.FailNow()
-	}
 
 	// the CA cell (a) read before the backup, not the cluster's now: (c) leaves the release's volumes
 	// empty when its restore hangs, and run 42053716808's (d) stopped reading them (a broker's state/ was
@@ -318,12 +312,28 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 			if r.hung(t, cell, work, env, restore, true) == l82.Pass {
 				return
 			}
+			l82Row(cell, "the restore at 0 replicas did not end, and no pod volume restore was seen waiting on a missing pod", "the cause was not seen: not a measurement")
 			t.Fatalf("the restore at 0 replicas did not end, and the hang probe saw no pod volume restore waiting on a missing pod: not a measurement\n%s", kindtest.Filter(l89.Scrub(out)))
 		case err != nil:
 			r.setupFail(t, cell, "the restore at 0 replicas failed before it could hang: %v (%s)", err, l89.FailedCommand(out))
 		}
-		measured("the restore "+restore+" at 0 replicas ended", "the README's warning that it hangs is wrong")
-		return
+		// it ended: the README's warning is wrong only where the lab's modifier made both StatefulSets 0
+		replicas := strings.TrimSpace(r.kubectl(t, cell, "-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
+		pin, _ := r.bound(30 * time.Second)
+		probe, probeOut, perr := l89.RunBounded(work, env, l89.HangProbe(ns, restore), pin)
+		if probeOut || perr != nil {
+			r.setupFail(t, cell, "reading the restore at 0 replicas once it ended: %v", perr)
+		}
+		pvrs, _, phase := l89.ParseHang(probe)
+		v, rows := l89.ZeroRestoreEnded(replicas, phase, pvrs)
+		for _, row := range rows {
+			l82Row(cell, row.Case, row.Observation)
+		}
+		if v == "" {
+			t.Fatalf("the restore at 0 replicas ended with the StatefulSets at %q: the lab's modifier did not apply", replicas)
+		}
+		l82SetVerdict(cell, v)
+		t.FailNow()
 	}
 
 	// (d), the README's order: the restore with the pods running

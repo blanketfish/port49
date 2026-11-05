@@ -1370,3 +1370,27 @@ func TestAHangIsAPassOnlyWhereTheREADMESaysItHangs(t *testing.T) {
 		t.Errorf("(c)'s title is %q, want the README's warning that the restore hangs", got)
 	}
 }
+
+// m1r11: a restore at 0 replicas that ended proves the README's warning wrong only where the lab's
+// modifier did apply (both StatefulSets at 0); where it did not, nothing was measured. The FAIL names the
+// restore's phase and each pod volume restore's, PartiallyFailed and Failed among them.
+func TestAZeroReplicaRestoreThatEndedIsAFailOnlyAtZero(t *testing.T) {
+	pvrs := []PVR{{"Completed", "t-broker-0", "data"}, {"Failed", "t-port49d-0", "data"}}
+	v, rows := ZeroRestoreEnded("0 0", "PartiallyFailed", pvrs)
+	joined := fmt.Sprint(rows)
+	if v != l82.Fail {
+		t.Errorf("an ended restore at 0 replicas is %q, want FAIL", v)
+	}
+	for _, want := range []string{"PartiallyFailed", "t-broker-0/data", "Completed", "t-port49d-0/data", "Failed", "0 0", "the README's warning that it hangs is wrong"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the rows lack %q: %v", want, rows)
+		}
+	}
+	v, rows = ZeroRestoreEnded("2 2", "Completed", nil)
+	if v != "" || !strings.Contains(fmt.Sprint(rows), "not a measurement") || !strings.Contains(fmt.Sprint(rows), "2 2") {
+		t.Errorf("a restore whose modifier did not apply is %q, %v; want NOT RUN with a row", v, rows)
+	}
+	if !NotMeasuredRowed(rows) {
+		t.Error("the NOT RUN row is not seen as one, so the generic setup row would be added")
+	}
+}
