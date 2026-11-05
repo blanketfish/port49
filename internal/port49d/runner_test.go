@@ -1253,6 +1253,8 @@ func TestARescanReachesALaterLogoutOfAKeyWhoseRetryEndedUnreachable(t *testing.T
 				return broker.RevokeReport{}, fmt.Errorf("%w: no quorum", store.ErrUnavailable)
 			case 2:
 				return broker.RevokeReport{}, broker.ErrLogoutUnreachable
+			case 3: // the rescan's reach fails again: a fresh first failure
+				return broker.RevokeReport{}, fmt.Errorf("%w: no quorum", store.ErrUnavailable)
 			}
 		}
 		return broker.RevokeReport{}, nil
@@ -1286,6 +1288,11 @@ func TestARescanReachesALaterLogoutOfAKeyWhoseRetryEndedUnreachable(t *testing.T
 	defer mu.Unlock()
 	if tries["x"] < 3 {
 		t.Fatalf("the later logout of x was never reached (tries %d); the rescan skipped it:\n%s", tries["x"], out.String())
+	}
+	// The unreachable end reset x's backoff and its first-failure guidance, so the next failure says the
+	// remedy again and does not count on from the first.
+	if n := strings.Count(out.String(), "to end its live sessions here at once"); n != 2 {
+		t.Fatalf("the by-hand guidance was said %d times, want 2 (before and after the unreachable end):\n%s", n, out.String())
 	}
 }
 

@@ -1202,7 +1202,7 @@ func (r *runner) reachFollowed(ctx context.Context) {
 		case err == nil:
 			delete(failed, l.Key)
 		case errors.Is(err, broker.ErrLogoutUnreachable):
-			delete(failed, l.Key) // nothing will retry it: a later rescan must reach it
+			delete(failed, l.Key) // ends its backoff: a later failure of this key starts over, guidance line included
 			line += fmt.Sprintf("; not every step finished (%s)", printsafe.Line(err.Error(), 300))
 		default:
 			f := failed[l.Key]
