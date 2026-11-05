@@ -578,9 +578,15 @@ func (b *Broker) notRecordedWhat() string {
 // unrecordedWhat is what an unrecorded revocation means for whoever asked, without the store's own
 // words: it can still land, and until then this process denies what it names.
 func (b *Broker) unrecordedWhat() string {
+	return b.unrecordedBody() + "; after the heal check `port49 revoke --list`"
+}
+
+// unrecordedBody is unrecordedWhat without its check after the heal, for the HTTP answer, whose own
+// closing note says to check once (unconfirmedNote).
+func (b *Broker) unrecordedBody() string {
 	return "a copy already sent can still land when the directory answers again, and then stands everywhere, even " +
 		"over a lift made meanwhile. Until then this " + b.proc() + " denies what it names, until a lift on this " +
-		b.proc() + " or its restart; after the heal check `port49 revoke --list`"
+		b.proc() + " or its restart"
 }
 
 // persist writes the marks in force to broker.revocations_file.

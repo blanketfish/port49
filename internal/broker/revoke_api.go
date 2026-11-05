@@ -228,7 +228,7 @@ func (b *Broker) runRevoke(w http.ResponseWriter, r *http.Request, pol *policy.P
 		b.logf("broker: a revocation asked by %s may not have been recorded: %v", asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the revocation may not have been "+
-			"recorded: "+b.unrecordedWhat()+"; "+reachOf(err)+b.unconfirmedNote())
+			"recorded: "+b.unrecordedBody()+"; "+reachOf(err)+b.unconfirmedNote())
 	case errors.Is(err, ErrNotRecorded):
 		b.logf("broker: a revocation asked by %s was not sent to the store: %v", asker, err)
 		w.Header().Set("Retry-After", "10")

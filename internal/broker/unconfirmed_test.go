@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -342,4 +343,64 @@ func TestTheRevokeAnswerNamesTheReachAndWhatToDoAboutOtherRegions(t *testing.T) 
 			}
 		})
 	}
+}
+
+// The exact detail an operator reads for each unrecorded branch, with the reach done and with it
+// failed: `port49 revoke --list` is named once, and the reach says what to do now (3am text).
+func TestTheUnrecordedRevokeAnswersAreExact(t *testing.T) {
+	const body = "a copy already sent can still land when the directory answers again, and then stands everywhere, " +
+		"even over a lift made meanwhile. Until then this port49d denies what it names, until a lift on this port49d " +
+		"or its restart; "
+	const reached = "this region's session store: 0 token keys deleted and 0 contexts marked revoked; "
+	const sentTail = "other regions have not learned of it yet: run `port49 revoke` now against a broker in a region that " +
+		"reaches the directory (the copy sent may land too); "
+	const notSentTail = "other regions have not learned of it: run `port49 revoke` now against a broker in a region that " +
+		"reaches the directory (this one, if the directory answers it again); "
+	const notReached = "this region's session store could not be reached (index unreadable); "
+	const closing = "check `port49 revoke --list` once the store answers, before trying again: if the mark is there it " +
+		"landed and needs nothing; if it is absent and nobody lifted it, run it again; meanwhile an operator can remove " +
+		"the principal's grants from broker.policy_file"
+	const notSentWhat = "the revocation was not recorded in the store and will not land later, but this port49d denies what " +
+		"it names until a lift on this port49d or its restart; run it again once the store answers; "
+	for _, c := range []struct {
+		name   string
+		wrap   func(store.Store) store.Store
+		reach  bool
+		detail string
+	}{
+		{"unanswered, reached", func(s store.Store) store.Store { return putRevocationUnavailable{s} }, true,
+			"the revocation may not have been recorded: " + body + reached + sentTail + closing},
+		{"unanswered, reach failed", func(s store.Store) store.Store { return putRevocationUnavailable{s} }, false,
+			"the revocation may not have been recorded: " + body + notReached + closing},
+		{"never sent, reached", func(s store.Store) store.Store { return putRevocationNotSent{s} }, true,
+			notSentWhat + reached + notSentTail + "check `port49 revoke --list` first"},
+		{"never sent, reach failed", func(s store.Store) store.Store { return putRevocationNotSent{s} }, false,
+			notSentWhat + notReached + "check `port49 revoke --list` first"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newMFAFixture(t, withAllAdminRights())
+			f.b.Store = c.wrap(f.b.Store)
+			if !c.reach {
+				f.b.Store = putRevocationUnavailableIndex{f.b.Store}
+			}
+			code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+			var a struct{ Detail string }
+			if err := json.Unmarshal(raw, &a); err != nil || code != http.StatusServiceUnavailable {
+				t.Fatalf("%d %s", code, raw)
+			}
+			if a.Detail != c.detail {
+				t.Errorf("detail:\n got %q\nwant %q", a.Detail, c.detail)
+			}
+			if n := strings.Count(a.Detail, "port49 revoke --list"); n != 1 {
+				t.Errorf("--list is named %d times", n)
+			}
+		})
+	}
+}
+
+// putRevocationUnavailableIndex fails the principal's token index, which the reach reads first.
+type putRevocationUnavailableIndex struct{ store.Store }
+
+func (putRevocationUnavailableIndex) TokensByPrincipal(context.Context, string) ([]store.TokenKey, error) {
+	return nil, errors.New("index unreadable")
 }
