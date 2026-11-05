@@ -752,3 +752,20 @@ func TestEveryShippedPolicyLoads(t *testing.T) {
 		}
 	}
 }
+
+func TestAKeyedScopeThatDeliversOnlyPermitsStaysUnlogged(t *testing.T) {
+	p := mustParse(t, `
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: dc, match: {site: dc1}, on_missing: exclude}
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+subjects:
+  - {name: s, identity: ["user:s@example.com"], username: s, token_ttl: 60s}
+grants:
+  - {subject: s, scope: dc, roles: [ro]}
+`)
+	if p.scopes["dc"].SecurityLog {
+		t.Error("a keyed scope that delivers no deny is security-logged")
+	}
+}

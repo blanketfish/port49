@@ -2497,7 +2497,9 @@ swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
 true` (§5.5, §10), `key_ref_changed` with `"from"` and `"to"` for a device's key assignment
 changing, `transport_changed` with `"from"` and `"to"` for a device's `transport` changing (its
-`key_ref_changed` is then not also written), `admission_changed` with `"to": "admitted"` for a
+`key_ref_changed` is then not also written), `platform_changed` with `"from"` and `"to"` for a
+device's `platform` changing (decision 56 ruling 6: it moves the device between platform-keyed
+scopes and rule sets, so it can lift a deny), `admission_changed` with `"to": "admitted"` for a
 device already in inventory becoming admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
 addresses are new capture targets. Its `device` block names the device. It is what makes a
 source-of-truth edit that moves privilege visible in the log it moved (§10), and

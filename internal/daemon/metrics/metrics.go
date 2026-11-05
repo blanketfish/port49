@@ -527,7 +527,9 @@ type Metrics struct {
 	// in inventory, which a mint hands to an SSH client), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
 	// device moved onto another key), "transport_changed" (a device moved
-	// between tcp and tls), "admission_changed" (a device already
+	// between tcp and tls), "platform_changed" (a device moved to another
+	// platform, which can lift a platform-keyed deny; decision 56 ruling 6),
+	// "admission_changed" (a device already
 	// in inventory newly admitted) and "device_added" (a device added and
 	// admitted). Each is an inventory_change record naming the device; the
 	// label is the kind only.
