@@ -143,7 +143,10 @@ type pool struct {
 	// the hold_ttl backstop (gone) keeps measuring through a store whose
 	// pings pass while its real calls fail. gen counts closes, so a probe
 	// that was in flight at one is not taken for the new circuit's.
+	// lastFail is the latest counted failure: one stopAfter or more after it
+	// ends the run at the next failure, whatever closed the circuit.
 	runStart                  time.Time
+	lastFail                  time.Time
 	gen                       uint64
 	refusedSince, lastRefused time.Time
 	refused                   int
@@ -276,7 +279,7 @@ func (p *pool) enter(now time.Time) (probe bool, gen uint64, ok bool) {
 // and how it now stands. A call not counted (a caller that went away, a
 // refusal, a slot never got) changes nothing but the probe it held; a
 // refusal also starts or continues the refused run, and an answer ends it.
-func (p *pool) leave(now time.Time, probe bool, gen uint64, outcome, op string, cause error, threshold int, openFor time.Duration) (changed, open bool) {
+func (p *pool) leave(now time.Time, probe bool, gen uint64, outcome, op string, cause error, threshold int, openFor, stopAfter time.Duration) (changed, open bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if probe && gen != p.gen {
@@ -299,6 +302,13 @@ func (p *pool) leave(now time.Time, probe bool, gen uint64, outcome, op string, 
 	case "canceled", "saturated", "feed_behind", "deadline_on_entry":
 		return false, p.open
 	case "timeout", "deadline", "unavailable":
+		// A failure stopAfter or more after the last one starts a new run: a
+		// circuit a health check closed keeps its run only while failures keep
+		// coming, so a blip hours later is not timed from the old one.
+		if stopAfter > 0 && !p.lastFail.IsZero() && now.Sub(p.lastFail) >= stopAfter {
+			p.runStart = time.Time{}
+		}
+		p.lastFail = now
 		p.fails++
 		p.cause = cause
 		if p.ops == nil {
@@ -399,7 +409,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 			outcome, err = "deadline_on_entry", fmt.Errorf("%w: the caller's deadline had passed (%w, %w)", store.ErrUnavailable, err, store.ErrNotSent)
 		}
 		g.count(p, outcome)
-		if changed, open := pl.leave(g.c.Now(), probe, gen, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
+		if changed, open := pl.leave(g.c.Now(), probe, gen, outcome, op, err, g.c.Failures, g.c.OpenFor, g.c.StopAfter); changed {
 			g.changed(p, open, err)
 		}
 		return err
@@ -409,7 +419,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	select {
 	case pl.slots <- struct{}{}:
 	case <-cctx.Done():
-		pl.leave(g.c.Now(), probe, gen, "saturated", op, nil, g.c.Failures, g.c.OpenFor)
+		pl.leave(g.c.Now(), probe, gen, "saturated", op, nil, g.c.Failures, g.c.OpenFor, g.c.StopAfter)
 		if errors.Is(ctx.Err(), context.Canceled) {
 			g.count(p, "canceled")
 			return ctx.Err()
@@ -440,7 +450,7 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 		err = fmt.Errorf("%w: no answer in %v (%w)", store.ErrUnavailable, pl.timeout, err)
 	}
 	g.count(p, outcome)
-	if changed, open := pl.leave(g.c.Now(), probe, gen, outcome, op, err, g.c.Failures, g.c.OpenFor); changed {
+	if changed, open := pl.leave(g.c.Now(), probe, gen, outcome, op, err, g.c.Failures, g.c.OpenFor, g.c.StopAfter); changed {
 		g.changed(p, open, err)
 	}
 	return err
