@@ -219,7 +219,7 @@ func TestAMintDuringARestoresPurgeIsRefusedNotPurged(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the purge never began")
 	}
-	if err := gate.allow(pol); err == nil || !strings.Contains(err.Error(), "retry") {
+	if err := gate.allow(pol); err == nil || !strings.Contains(err.Error(), "purging") {
 		t.Fatalf("a mint during the purge: %v", err)
 	}
 	close(blocking.release)
@@ -392,4 +392,39 @@ func TestATakeoverWhosePurgeFailsLetsTheMintGateGoAndPurgesOnTheNextRun(t *testi
 	// The next run (5s later) makes the purge, and says so once.
 	waitWithin(t, g.out, "every unspent token is purged", 30*time.Second)
 	waitUntil(t, "the record to take the store's witness", func() bool { _, _, owed := wit.state(); return !owed })
+}
+
+// The mint gate's refusal during a purge says it is the purge, for the
+// broker's 503 to carry (Task 5 review m5).
+func TestAPurgeHoldsMintsWithAReasonTheAnswerMaySay(t *testing.T) {
+	gate := newStartGate(nil)
+	pol := policy.NewLive(buildPolicy(t, brokerConfig(t, minimalPolicy), minimalPolicy)).Load()
+	gate.flag(pol.Bundle)
+	gate.open("test", io.Discard)
+	gate.purge(true)
+	var held *broker.MintsHeld
+	if err := gate.allow(pol); !errors.As(err, &held) || !strings.Contains(held.Reason, "purging") {
+		t.Fatalf("the gate during a purge: %v", err)
+	}
+}
+
+// A runner whose broker.state_dir/marks.json holds no mark has nothing to put
+// back, and says that, not that every revocation is in the store: after a
+// restore, the marks made since the snapshot are back only if a broker that
+// holds them runs first (design §13 step 5; Task 5 review C1).
+func TestARunnerWithNoMarksCopySaysItHasNothingToPutBack(t *testing.T) {
+	g := newPurgeRig(t)
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	r := g.runner("runner-a", openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard), g.bs.st)
+	r.copy = openMarksCopy(filepath.Join(safeDir(t), stateMarksFile), io.Discard)
+	if err := r.restoreMarks(g.ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "is in the store") || !strings.Contains(got, "holds no revocation, so none is put back") {
+		t.Fatalf("a runner with no marks copy said:\n%s", got)
+	}
 }

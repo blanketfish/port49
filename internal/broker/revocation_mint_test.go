@@ -509,3 +509,17 @@ func TestAMintTheGateRefusesMintsNothing(t *testing.T) {
 		t.Fatalf("an open gate: %s", answer(w))
 	}
 }
+
+// A gate that holds mints for a reason it may say (MintsHeld) has the 503
+// name it; any other gate error keeps the generic detail and none of its own
+// words (a restore's purge, Task 5 review m5).
+func TestAMintGateThatHoldsMintsNamesItsReason(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.MintGate = func(*policy.Policy) error {
+		return fmt.Errorf("wrapped: %w", &MintsHeld{Reason: "the broker is purging the unspent tokens of a restored store"})
+	}
+	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "purging the unspent tokens of a restored store") {
+		t.Fatalf("%s", answer(w))
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/blanketfish/port49/internal/broker"
 	"github.com/blanketfish/port49/internal/daemon/metrics"
 	"github.com/blanketfish/port49/internal/policy"
 	"github.com/blanketfish/port49/internal/printsafe"
@@ -221,7 +222,7 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 	purging := g.purging
 	g.mu.Unlock()
 	if purging {
-		return errors.New("the runner is purging the tokens of a restored store: retry in a few seconds")
+		return &broker.MintsHeld{Reason: "the broker is purging the unspent tokens of a restored store"}
 	}
 	if f := g.flagged.Load(); f != nil && *f == pol.Bundle {
 		return nil

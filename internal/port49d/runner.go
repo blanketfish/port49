@@ -420,6 +420,15 @@ func (r *runner) restoreMarks(ctx context.Context) error {
 		return err
 	}
 	if len(put) == 0 {
+		if len(r.copy.All()) == 0 {
+			// Nothing was held, so nothing could be missing: after a restore, the
+			// marks made since the snapshot are back only if a broker whose copy
+			// holds them runs first (design §13 step 5).
+			fmt.Fprintln(stderr, "port49-broker: runner: broker.state_dir/marks.json holds no revocation, so none is put "+
+				"back; after a store restore, a revocation made since the snapshot is back only if a broker that "+
+				"holds it ran first (design §13 step 5)")
+			return nil
+		}
 		fmt.Fprintln(stderr, "port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store")
 		return nil
 	}
