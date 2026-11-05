@@ -228,12 +228,12 @@ func (b *Broker) runRevoke(w http.ResponseWriter, r *http.Request, pol *policy.P
 		b.logf("broker: a revocation asked by %s may not have been recorded: %v", asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, "revocation_unconfirmed", "the revocation may not have been "+
-			"recorded: "+b.unrecordedWhat()+"; "+b.unconfirmedNote())
+			"recorded: "+b.unrecordedWhat()+"; "+reachOf(err)+b.unconfirmedNote())
 	case errors.Is(err, ErrNotRecorded):
 		b.logf("broker: a revocation asked by %s was not sent to the store: %v", asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation was "+
-			b.notRecordedWhat()+"; check `port49 revoke --list` first")
+			b.notRecordedWhat()+"; "+reachOf(err)+"check `port49 revoke --list` first")
 	case err != nil:
 		// The store refused the mark, so nothing was revoked beyond this
 		// port49d's own copy (Revoke): Revoke's own error names the store's

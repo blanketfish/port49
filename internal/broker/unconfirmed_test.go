@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/blanketfish/port49/internal/store"
 )
@@ -303,5 +305,41 @@ func TestTheFallbackNoLongerSaysStopEveryPort49d(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "stop every port49d") ||
 		!strings.Contains(err.Error(), "could not be reached") || strings.Contains(err.Error(), "only in part") {
 		t.Fatalf("the reach failed: %v", err)
+	}
+}
+
+// putRevocationHangs holds the write until the call's deadline, as a partitioned etcd does, and then
+// answers unavailable.
+type putRevocationHangs struct{ store.Store }
+
+func (putRevocationHangs) PutRevocation(ctx context.Context, _ store.Revocation) error {
+	<-ctx.Done()
+	return fmt.Errorf("%w: %v", store.ErrUnavailable, ctx.Err())
+}
+
+// The answer an operator reads over HTTP carries the reach sentence, not only the error Revoke
+// returned: what this region's session store was told and what to do about the other regions
+// (stores I1; found in the lab, where the CLI printed the unanswered text without it).
+func TestTheRevokeAnswerNamesTheReachAndWhatToDoAboutOtherRegions(t *testing.T) {
+	for name, wrap := range map[string]func(store.Store) store.Store{
+		"unavailable": func(s store.Store) store.Store { return putRevocationUnavailable{s} },
+		"hangs":       func(s store.Store) store.Store { return putRevocationHangs{s} },
+		"not sent":    func(s store.Store) store.Store { return putRevocationNotSent{s} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMFAFixture(t, withAllAdminRights())
+			f.b.RevokeTimeout = 200 * time.Millisecond
+			f.b.Store = wrap(f.b.Store)
+			code, raw := f.adminCall(t, f.alice, f.alice.conn, revokePath, bobBody)
+			if code != http.StatusServiceUnavailable {
+				t.Fatalf("%d %s", code, raw)
+			}
+			for _, want := range []string{"this region's session store: ", " token keys deleted and ", " contexts marked revoked",
+				"run `port49 revoke` now against a broker in a region that reaches the directory"} {
+				if !strings.Contains(string(raw), want) {
+					t.Errorf("the answer lacks %q: %s", want, raw)
+				}
+			}
+		})
 	}
 }

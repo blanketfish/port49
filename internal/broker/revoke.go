@@ -263,10 +263,10 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		if errors.Is(err, store.ErrNotSent) {
 			// Nothing reached the store, so nothing can land; the pending mark stays all the same (fail closed).
 			reach, reached := b.reachUnrecorded(ctx, mark, false)
-			return RevokeReport{}, fmt.Errorf("%w: %s (%w); %s"+b.fallback(reached), ErrNotRecorded, b.notRecordedWhat(), err, reach)
+			return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reached), ErrNotRecorded, b.notRecordedWhat(), err, reachNote(reach))
 		}
 		reach, reached := b.reachUnrecorded(ctx, mark, true)
-		return RevokeReport{}, fmt.Errorf("%w: %s (%w); %s"+b.fallback(reached), ErrUnrecorded, b.unrecordedWhat(), err, reach)
+		return RevokeReport{}, fmt.Errorf("%w: %s (%w); %w"+b.fallback(reached), ErrUnrecorded, b.unrecordedWhat(), err, reachNote(reach))
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
@@ -476,6 +476,21 @@ func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
 		}
 	}
 	return out
+}
+
+// reachNote is reachUnrecorded's sentence carried on the error, so the HTTP answer can say what the
+// error's text says: the answer is built from the error's class, and would otherwise drop it.
+type reachNote string
+
+func (n reachNote) Error() string { return string(n) }
+
+// reachOf is the reach sentence an unrecorded revocation's error carries, or "".
+func reachOf(err error) string {
+	var n reachNote
+	if errors.As(err, &n) {
+		return string(n)
+	}
+	return ""
 }
 
 // reachUnrecorded runs the session-store reach for a mark the directory did not record, so a region
