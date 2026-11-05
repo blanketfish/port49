@@ -2219,11 +2219,14 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	})
 	// Refused by the floor: the token is at or below the revision the drop was
 	// found at, token_spent.
-	// The ledger's fence may still be catching up with the restored store for
-	// a moment, which answers ERROR store_unavailable: try again until it
-	// answers.
+	// Just after etcd returns, the token pool's receipt read can still fail
+	// (get_receipt, before the floor is asked), which answers ERROR
+	// store_unavailable: try again for 10s, and only for that reason.
 	st = dev.login("alice", spent)
 	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
+		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+			t.Fatalf("an ERROR for a reason other than store_unavailable: %v", r[len(r)-1])
+		}
 		time.Sleep(200 * time.Millisecond)
 		st = dev.login("alice", spent)
 	}
@@ -2316,11 +2319,14 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	})
 	// Refused by the floor: the token is at or below the revision the drop was
 	// found at, token_spent.
-	// The ledger's fence may still be catching up with the restored store for
-	// a moment, which answers ERROR store_unavailable: try again until it
-	// answers.
+	// Just after etcd returns, the token pool's receipt read can still fail
+	// (get_receipt, before the floor is asked), which answers ERROR
+	// store_unavailable: try again for 10s, and only for that reason.
 	st = dev.login("alice", spent)
 	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
+		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+			t.Fatalf("an ERROR for a reason other than store_unavailable: %v", r[len(r)-1])
+		}
 		time.Sleep(200 * time.Millisecond)
 		st = dev.login("alice", spent)
 	}

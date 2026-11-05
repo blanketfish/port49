@@ -78,7 +78,7 @@ type restoreFloor struct {
 	// held is true while no read has answered in this run, or the last one
 	// failed.
 	held, failing bool
-	// detectedAt is the last time a drop was found, held by the process.
+	// detectedAt is the last time a drop was found, kept in the record.
 	detectedAt time.Time
 	m          *metrics.Metrics
 }
@@ -95,6 +95,7 @@ type floorFile struct {
 	BandFrom      time.Time `json:"band_from,omitzero"`
 	BandUntil     time.Time `json:"band_until,omitzero"`
 	UnreadRecord  bool      `json:"unread_record,omitempty"`
+	DetectedAt    time.Time `json:"detected_at,omitzero"`
 }
 
 func newRestoreFloor(out io.Writer, now func() time.Time) *restoreFloor {
@@ -103,22 +104,35 @@ func newRestoreFloor(out io.Writer, now func() time.Time) *restoreFloor {
 	}}
 }
 
-// attach opens the record at path, kept for prefix's keyspace, on its first
-// call; a later run's call changes nothing. An absent record is said once. A
+// attach opens the record at path, kept for prefix's keyspace. A later run's
+// call with the same path and prefix changes nothing; one with another (a
+// config reload between runs) opens that keyspace's record afresh. An absent
+// record is said once. A
 // record of another prefix is no record. One that cannot be read, does not
 // decode or is owned by another user is moved aside and makes the first read
 // a drop: this port49d cannot rule out a restore.
 func (f *restoreFloor) attach(path, prefix string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.attached {
+	if f.attached && f.path == path && f.prefix == prefix {
 		return
+	}
+	if f.attached {
+		f.witness, f.header, f.witnessHeader, f.highHeader, f.floor, f.band = 0, 0, 0, 0, 0, 0
+		f.bandFrom, f.bandUntil, f.detectedAt, f.unread, f.pending = time.Time{}, time.Time{}, time.Time{}, false, false
 	}
 	f.attached, f.path, f.prefix = true, path, prefix
 	body, err := readOwnerOnly(path)
 	var rec floorFile
-	if err == nil && body != nil && json.Unmarshal(body, &rec) != nil {
-		err = errors.New("it does not decode")
+	if err == nil && body != nil {
+		switch {
+		case json.Unmarshal(body, &rec) != nil:
+			err = errors.New("it does not decode")
+		case rec.Prefix == "" || rec.Witness == 0 && rec.Header == 0 && !rec.UnreadRecord:
+			// Valid JSON that is no record ({}, null, a prefix alone) is
+			// not read as one: that would be no record at all.
+			err = errors.New("it holds no record")
+		}
 	}
 	switch {
 	case err != nil:
@@ -141,6 +155,7 @@ func (f *restoreFloor) attach(path, prefix string) {
 	default:
 		f.witness, f.header, f.witnessHeader, f.highHeader = rec.Witness, rec.Header, rec.WitnessHeader, rec.HighHeader
 		f.floor, f.band, f.bandFrom, f.bandUntil, f.unread = rec.Floor, rec.Band, rec.BandFrom, rec.BandUntil, rec.UnreadRecord
+		f.detectedAt = rec.DetectedAt
 		f.savedRev = f.rev
 	}
 }
@@ -346,7 +361,7 @@ func (f *restoreFloor) saveIfDirty() {
 	rev := f.rev
 	body, err := json.Marshal(floorFile{Prefix: f.prefix, Witness: f.witness, Header: f.header,
 		WitnessHeader: f.witnessHeader, HighHeader: f.highHeader, Floor: f.floor, Band: f.band,
-		BandFrom: f.bandFrom, BandUntil: f.bandUntil, UnreadRecord: f.unread})
+		BandFrom: f.bandFrom, BandUntil: f.bandUntil, UnreadRecord: f.unread, DetectedAt: f.detectedAt})
 	path := f.path
 	f.mu.Unlock()
 	if err == nil {

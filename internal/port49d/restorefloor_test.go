@@ -588,3 +588,137 @@ func TestTheMemoryStoreHasNoFloor(t *testing.T) {
 		t.Fatalf("a memory store kept a restore record: %q", out.String())
 	}
 }
+
+// JSON that decodes but is no record fails closed, as a torn file does.
+func TestARecordThatIsNoRecordIsUnreadable(t *testing.T) {
+	for name, body := range map[string]string{"null": `null`, "empty object": `{}`,
+		"a prefix alone": `{"prefix":"` + floorPrefix + `"}`} {
+		t.Run(name, func(t *testing.T) {
+			f := &floorT{t: t, out: &bytes.Buffer{}, now: time.Date(2026, 11, 5, 3, 0, 0, 0, time.UTC),
+				path: filepath.Join(safeDir(t), "restore.json")}
+			if err := os.WriteFile(f.path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f.open()
+			if aside, _ := filepath.Glob(f.path + ".bad-*"); len(aside) != 1 {
+				t.Fatalf("not moved aside: %v", aside)
+			}
+			f.read(1000, 1010)
+			if f.said(dropped) != 1 || !f.restored(1010, f.now) {
+				t.Fatalf("the first read was not a drop: %q", f.out.String())
+			}
+		})
+	}
+}
+
+// The gauge is the time of the last drop, kept in the record: a restart does
+// not clear it.
+func TestTheDetectedTimeSurvivesARestart(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(480, 500)
+	want := float64(f.now.Unix())
+	f.now = f.now.Add(time.Hour)
+	f.restart()
+	if got := testutil.ToFloat64(f.m.StoreRestoreDetected); got != want {
+		t.Fatalf("after a restart the gauge reads %v, want %v", got, want)
+	}
+}
+
+// A run whose config named another spool path or prefix opens that record.
+func TestAReattachToAnotherPrefixOpensItsRecordAfresh(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(480, 500)
+	f.attach(f.path, "/other/")
+	if f.restored(400, f.now) || f.Restored(store.Token{Revision: 400}, f.now) {
+		t.Fatal("another prefix's floor was kept")
+	}
+	f.attach(filepath.Join(safeDir(t), "restore.json"), floorPrefix)
+	if f.restored(400, f.now) {
+		t.Fatal("another path's floor was kept")
+	}
+}
+
+// Ported from the Task 3 review's probes: sequences of restores, restarts and
+// failed saves the floor must hold through.
+
+func TestAWitnessRewrittenBeforeTheReadIsStillTold(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.Saw(501)
+	f.read(501, 502) // a restored timeline's rewrite, below the header already read
+	if !f.restored(900, f.now.Add(-time.Minute)) {
+		t.Fatalf("served; floor %d", f.floor)
+	}
+}
+
+func TestADoubleRestoreWithARestartBetweenKeepsBothFloors(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(480, 500)
+	f.restart()
+	f.read(985, 990)
+	if !f.restored(970, f.now.Add(-2*time.Minute)) || !f.restored(450, f.now.Add(-2*time.Minute)) {
+		t.Fatalf("served after a restart; floor %d band %d", f.floor, f.band)
+	}
+}
+
+func TestADropWhoseSaveFailedIsToldAgainAfterARestart(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.saveIfDirty()
+	f.save = func(string, []byte) error { return errors.New("disk full") }
+	f.read(480, 500)
+	f.restart() // the file still holds {1000, 1010}
+	f.read(510, 520)
+	if !f.restored(450, f.now.Add(-2*time.Minute)) {
+		t.Fatalf("served; floor %d", f.floor)
+	}
+}
+
+func TestTheBandEdgesAndItsSurvivalOfARestart(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(480, 500)
+	from := f.now
+	for _, c := range []struct {
+		at, minted time.Duration
+		want       bool
+	}{
+		{0, restoreSkew, true},
+		{0, restoreSkew + time.Nanosecond, false},
+		{20*time.Minute - time.Nanosecond, 0, true},
+		{20 * time.Minute, 0, false},
+		{-time.Hour, 0, true}, // a clock stepped back: still in the band
+	} {
+		tok := store.Token{Revision: 600, MintedAt: from.Add(c.minted)}
+		if got := f.Restored(tok, from.Add(c.at)); got != c.want {
+			t.Errorf("at +%v minted +%v: Restored %v, want %v", c.at, c.minted, got, c.want)
+		}
+	}
+	f.restart()
+	if !f.Restored(store.Token{Revision: 600, MintedAt: from}, from.Add(19*time.Minute)) {
+		t.Errorf("the band did not survive a restart: band %d until %v", f.band, f.bandUntil)
+	}
+}
+
+func TestAFollowedWitnessLostOnRestartIsStillADrop(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.Saw(1005)
+	f.restart()
+	f.read(1005, 1012)
+	if !f.restored(900, f.now) {
+		t.Fatalf("served; floor %d", f.floor)
+	}
+}
+
+func TestTheWitnessGoneAfterARestoreIsADrop(t *testing.T) {
+	f := floorAt(t)
+	f.read(1000, 1010)
+	f.read(0, 500)
+	if !f.restored(400, f.now) {
+		t.Fatalf("served; floor %d", f.floor)
+	}
+}
