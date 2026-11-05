@@ -1207,17 +1207,23 @@ func TestTheREADMESuspendsGitOpsAndBringsTheHPABack(t *testing.T) {
 	for _, want := range []string{"argocd app set <app> --sync-policy none", "flux suspend helmrelease <name> -n <namespace>",
 		"flux suspend kustomization <name> -n <namespace>", "admit a revoked principal",
 		// I1r8: a parent app turns a child's sync back on; resume restores the policy that was noted
-		"parent", "ApplicationSet", "argocd app get <app> -o json", ".spec.syncPolicy.automated"} {
+		"parent", "ApplicationSet", "argocd app get <app> -o json", ".spec.syncPolicy.automated",
+		// m1r9, m2r9: said to be unmeasured; the app that syncs the ApplicationSet is suspended first
+		"not measured in port49's lab (L89 runs no GitOps controller)", "syncs the ApplicationSet itself",
+		"check your Argo CD version supports `ignoreApplicationDifferences`"} {
 		if at := strings.Index(doc, want); at < 0 || at > first {
 			t.Errorf("the README does not say %q before the first command", want)
 		}
 	}
 	scaleup := strings.Index(doc, "<!-- l89:scaleup:end -->")
 	for _, want := range []string{"flux resume helmrelease <name> -n <namespace>", "flux resume kustomization <name> -n <namespace>",
-		"argocd app set <app> --sync-policy automated --self-heal --auto-prune", "helm upgrade <release> <chart> --version <version> -n port49 --reuse-values"} {
+		`argocd app patch <app> --type merge -p '{"spec":{"syncPolicy":{"automated":<noted JSON>}}}'`, "unmeasured, as above", "helm upgrade <release> <chart> --version <version> -n port49 --reuse-values"} {
 		if at := strings.Index(doc, want); at < scaleup {
 			t.Errorf("the README does not say %q after step 9", want)
 		}
+	}
+	if strings.Contains(doc, "--self-heal --auto-prune") {
+		t.Error("step 11 still restores the sync policy by flags, losing allowEmpty and enabled")
 	}
 	if strings.Contains(doc, "Re-apply the chart") || strings.Contains(doc, "re-applying the chart") {
 		t.Error("the README still says to re-apply the chart without the command")
