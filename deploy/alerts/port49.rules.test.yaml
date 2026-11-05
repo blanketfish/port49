@@ -41,7 +41,7 @@ tests:
       - eval_time: 3m
         alertname: port49_target_absent
         exp_alerts: []
-      - eval_time: 10m
+      - eval_time: 6m
         alertname: port49_target_absent
         exp_alerts:
           - exp_labels: {job: "port49d", severity: "page"}
