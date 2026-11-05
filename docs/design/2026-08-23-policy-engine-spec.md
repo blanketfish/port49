@@ -11822,8 +11822,29 @@ team lead and plan 12c's pre-flight reviews, 2026-11-02).** Each ruling stands. 
      aside and makes the first read a drop (every token in the store is refused once). A record
      that cannot be saved is kept in memory, said once, and saved again each second; port49d
      keeps serving.
-2. **The runner's restore purge also deletes the `on/` and `mp/` families.** It closes identity
-   I5 with ruling 1.
+2. **The runner's restore purge also deletes the `on/` and `mp/` families, `meta/purged` is
+   gone, and a takeover with no witness record purges.** It closes identity I5 with ruling 1 and
+   identity I2.
+   - `meta/purged`, `PutPurged` and `RestoreRead.Purged` are removed: port49d no longer waits on
+     a purge, because the floor refuses by revision. The purge's last step reads `meta/witness`
+     again and takes the witness record only if its `ModRevision` is the one the purge started
+     from (`confirmPurged`); a witness that moved says so, and the next pass judges again.
+   - A takeover whose replica holds no witness record (an empty or new `broker.state_dir`, or
+     another prefix's file) purges the tokens and the once-only records, as it does for a record
+     above the store's witness. The floor sees a restore only if port49d reads between the
+     restore and the next rewrite of the witness, and a broker starting on an empty
+     `state_dir` would otherwise rewrite it without purging. The cost is one re-login after
+     a first start on a new `state_dir`.
+   - **Order.** A takeover or pass that owes a purge saves no `witness.json` and writes no
+     `meta/witness` until the purge is done, and the owing stays with the record until then: a
+     purge cut short is made again by the next runner on this `state_dir` or by another
+     broker's. Nothing else guards it, now that `meta/purged` is gone.
+   - **The mint gate.** A replica holds its mints (`503 store_unavailable`, retry)
+     from the moment its runner finds a purge owed until the purge is done, so a token minted
+     in that window is never minted and then deleted. A start's gate also stays closed while the
+     replica owes a purge, though `meta/judged` names its bundle, until its takeover is done, or until it finds another replica running the keyspace, whose
+     takeover purges. A replica with no `witness.json` owes a purge from its first line, and a follower's tell
+     does not give it a record: only its own purge does.
 3. **A revocation made in a region cut from the directory still reaches that region's session
    store** (stores I1; plan Task 8).
 4. **A person's ID token is never a caller's credential on any broker.** It is taken only at
