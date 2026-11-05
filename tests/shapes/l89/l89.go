@@ -343,9 +343,25 @@ func trapLine(out, prefix string) string {
 	if got == "" {
 		return "not named (no " + strings.TrimSuffix(prefix, ": ") + " line)"
 	}
-	got = strings.TrimSpace(Scrub(credWords.ReplaceAllString(got, "<word>")))
+	return Reason(got)
+}
+
+// Reason is a harness message as a row and a log line can both hold it: the words the job log's filter
+// drops whole lines for masked as <word> (a step, file or Secret name that holds one, which is how run
+// 42047911635 lost its reason), then Scrub, the lines joined, then Leak, and withheld if it still trips.
+func Reason(msg string) string {
+	var lines []string
+	for _, ln := range strings.Split(Scrub(credWords.ReplaceAllString(msg, "<word>")), "\n") {
+		if ln = strings.TrimSpace(ln); ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	got := strings.Join(lines, " / ")
 	if got == "" || Leak(got) != "" {
 		return "withheld (the line looks like it holds a credential)"
+	}
+	if len(got) > 400 {
+		got = got[:400] + " ..."
 	}
 	return got
 }
@@ -408,7 +424,7 @@ func Steps(doc, ns, release, backup, restore string, brokers, port49d int) (map[
 	}
 	repl := map[string]map[string]string{
 		"etcdrestore":     {"<backup>": backup, etcdNamespace: ns},
-		"tokendelete":     {etcdNamespace: ns},
+		"deletejob":       {etcdNamespace: ns},
 		"restorezero":     {"<restore>": restore, "<backup>": backup},
 		"volumes":         {"<restore>": restore},
 		"revoke":          {"<release>": release},

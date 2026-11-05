@@ -48,7 +48,7 @@ var StepBounds = map[string]time.Duration{
 	"etcdwait":        6 * time.Minute,
 	"volumes":         time.Minute,
 	"fallbackzero":    4 * time.Minute,
-	"tokendelete":     4 * time.Minute,
+	"deletejob":       4 * time.Minute,
 	"revoke":          6 * time.Minute,
 	"scaleup":         22 * time.Minute, // two rollouts of 10m each
 }

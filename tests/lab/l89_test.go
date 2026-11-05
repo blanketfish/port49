@@ -155,6 +155,42 @@ func (r *l89Run) cell(t *testing.T, name string, cell *l82.Cell, f func(*testing
 	r.stack.Run(t, name, f)
 }
 
+// l89SetupRow is the row a cell stopped by the harness's own setup carries: NOT RUN, with the reason.
+const l89SetupRow = "the harness's own setup failed: not a measurement"
+
+// setupFail stops the cell NOT RUN for a failure of the harness's own setup. The reason goes through
+// l89.Reason, so the row and the log line both keep it past the job log's filter, which drops a line
+// that names a step, file or Secret holding a credential word.
+func (r *l89Run) setupFail(t *testing.T, cell *l82.Cell, format string, args ...any) {
+	t.Helper()
+	why := l89.Reason(fmt.Sprintf(format, args...))
+	l82Row(cell, l89SetupRow, why)
+	t.Fatal(l89SetupRow + ": " + why)
+}
+
+// l89SetupRowed says setupFail already gave the cell its row.
+func l89SetupRowed(cell *l82.Cell) bool {
+	cellsMu.Lock()
+	defer cellsMu.Unlock()
+	for _, row := range cell.Rows {
+		if row.Case == l89SetupRow {
+			return true
+		}
+	}
+	return false
+}
+
+// kubectl is the cluster's Kubectl for a cell: its failure, kubectl's own text, is a setupFail on the
+// cell's own test (the cluster's Kubectl fails the test it was made for).
+func (r *l89Run) kubectl(t *testing.T, cell *l82.Cell, args ...string) string {
+	t.Helper()
+	out, err := r.stack.Cluster().KubectlTry("", args...)
+	if err != nil {
+		r.setupFail(t, cell, "%v", err)
+	}
+	return out
+}
+
 // bound is a step's bound inside the running cell (its own outside one), and whether the cell's end
 // cut it short.
 func (r *l89Run) bound(own time.Duration) (time.Duration, bool) {
@@ -617,55 +653,55 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 			why = "see the test log"
 		}
 		l82Row(cell, "the harness's step before the backup failed: not a measurement", why)
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	r.before = before0
 	l82Row(cell, "a revocation before the backup (revoke-offline.sh), held in each broker's marks.json", l89MarksText(r.before.Marks))
 	l82Row(cell, "files hashed before the backup (each spool's sentinel, each broker's marks.json and CA certificate)", l89HashText(r.before.Hashes))
 	before, fpBefore := r.snapshot()
-	logBefore := l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
+	logBefore := l89.LogFingerprint(r.kubectl(t, cell, "-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
-		t.Fatalf("the brokers do not hold one CA before the backup")
+		r.setupFail(t, cell, "the brokers do not hold one CA before the backup")
 	}
 
 	// the chart's example, as shipped
 	// but for etcd's namespace: the kind stack runs etcd in the release's (l89.LabSchedule)
 	shipped, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero", "schedule.yaml"))
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	sched, err := l89.LabSchedule(string(shipped))
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	if _, err := c.KubectlTry(sched, "apply", "-f", "-"); err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	// skipImmediately must have been honoured. The CRD drops a field it does not know (the read-back would
 	// be empty), and Velero's schedule controller resets the field to false once it has skipped the first
 	// run, recording status.lastSkipped: so the proof is a known field plus lastSkipped, and no backup.
 	var spec, skipped string
 	r.waitFor(t, cell, "the schedule controller to skip the immediate run", 90*time.Second, func() bool {
-		spec = strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}"))
-		skipped = strings.TrimSpace(c.Kubectl("-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.status.lastSkipped}"))
+		spec = strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.spec.skipImmediately}"))
+		skipped = strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "schedule", "port49-daily", "-o", "jsonpath={.status.lastSkipped}"))
 		return skipped != ""
 	})
 	if spec != "true" && spec != "false" {
-		t.Fatalf("the Schedule's skipImmediately reads %q: the field was dropped or renamed", spec)
+		r.setupFail(t, cell, "the Schedule's skipImmediately reads %q: the field was dropped or renamed", spec)
 	}
-	if n := strings.Fields(c.Kubectl("-n", "velero", "get", "backups", "-l", "velero.io/schedule-name=port49-daily", "-o", "name")); len(n) != 0 {
-		t.Fatalf("the Schedule started %d backup(s) before the test asked for one: skipImmediately was not honoured", len(n))
+	if n := strings.Fields(r.kubectl(t, cell, "-n", "velero", "get", "backups", "-l", "velero.io/schedule-name=port49-daily", "-o", "name")); len(n) != 0 {
+		r.setupFail(t, cell, "the Schedule started %d backup(s) before the test asked for one: skipImmediately was not honoured", len(n))
 	}
 	l82Row(cell, "applying the example Schedule started no backup (skipImmediately skipped the first run)", "yes")
 	l82Row(cell, "the lab's etcd shares the release's namespace", "yes: the Schedule names both namespaces, the lab applies it with the one")
 	r.velero(6*time.Minute, "backup", "create", l89Backup, "--from-schedule", "port49-daily", "--wait")
-	phase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
+	phase := strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "backup", l89Backup, "-o", "jsonpath={.status.phase}"))
 	l82Row(cell, "the backup's phase", phase)
 	if phase != "Completed" {
-		t.Fatalf("the backup ended %s: nothing to restore", phase)
+		r.setupFail(t, cell, "the backup ended %s: nothing to restore", phase)
 	}
 	// which volumes the node agent backed up, by pod and volume name, and how
-	pvb := c.Kubectl("-n", "velero", "get", "podvolumebackups", "-l", "velero.io/backup-name="+l89Backup, "-o",
+	pvb := r.kubectl(t, cell, "-n", "velero", "get", "podvolumebackups", "-l", "velero.io/backup-name="+l89Backup, "-o",
 		`jsonpath={range .items[*]}{.status.phase} {.spec.pod.name} {.spec.volume}{"\n"}{end}`)
 	data, all := 0, 0
 	for _, ln := range strings.Split(strings.TrimSpace(pvb), "\n") {
@@ -682,18 +718,18 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	l82Row(cell, "pod volume backups completed", r.env.VolumeBackups)
 	// every volume claim in the namespace must be in the backup, etcd's too: Velero skips a hostPath volume
 	// with a warning and the restore then holds an empty store
-	pvcs := len(strings.Fields(c.Kubectl("-n", ns, "get", "pvc", "-o", "name")))
+	pvcs := len(strings.Fields(r.kubectl(t, cell, "-n", ns, "get", "pvc", "-o", "name")))
 	if all != pvcs {
-		t.Fatalf("the node agent backed up %d of the namespace's %d volume claims (see the backup's warnings in the diagnosis)", all, pvcs)
+		r.setupFail(t, cell, "the node agent backed up %d of the namespace's %d volume claims (see the backup's warnings in the diagnosis)", all, pvcs)
 	}
 	if data == 0 || data != len(l89Volumes) {
-		t.Fatalf("the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
+		r.setupFail(t, cell, "the node agent backed up %d of the chart's %d data volumes in backup %s", data, len(l89Volumes), l89Backup)
 	}
 
 	r.runREADMEChecks(t, cell)
 
 	// delete the namespace, and wait for its volumes to go before restoring over the names
-	c.Kubectl("delete", "namespace", ns, "--wait=true", r.kubectlTimeout(5*time.Minute))
+	r.kubectl(t, cell, "delete", "namespace", ns, "--wait=true", r.kubectlTimeout(5*time.Minute))
 	r.waitFor(t, cell, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
 		out, err := c.KubectlTry("", "get", "pv", "-o", `jsonpath={range .items[*]}{.spec.claimRef.namespace}{"\n"}{end}`)
 		return err == nil && !strings.Contains(out, ns)
@@ -701,7 +737,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 	l82Row(cell, "the namespace was deleted", "yes, and its volumes")
 
 	r.velero(6*time.Minute, "restore", "create", l89Restore, "--from-backup", l89Backup, "--wait")
-	rphase := strings.TrimSpace(c.Kubectl("-n", "velero", "get", "restore", l89Restore, "-o", "jsonpath={.status.phase}"))
+	rphase := strings.TrimSpace(r.kubectl(t, cell, "-n", "velero", "get", "restore", l89Restore, "-o", "jsonpath={.status.phase}"))
 	l82Row(cell, "the restore's phase", rphase)
 
 	// ready: both StatefulSets, with the time the restore of the volumes takes inside it
@@ -739,7 +775,7 @@ func (r *l89Run) cellA(t *testing.T, cell *l82.Cell) {
 		after, fpAfter := r.snapshot()
 		a.FingerprintAfter = l89.Short(fpAfter[0])
 		a.LogBefore = logBefore
-		a.LogAfter = l89.LogFingerprint(c.Kubectl("-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
+		a.LogAfter = l89.LogFingerprint(r.kubectl(t, cell, "-n", ns, "logs", "t-broker-0", "-c", "port49-broker"))
 		l82Row(cell, "the fingerprint the broker's \"issuing as\" line prints (first 12), before and after",
 			fmt.Sprintf("%s, %s", l89.FingerprintText(a.LogBefore), l89.FingerprintText(a.LogAfter)))
 		same := fpAfter[0] == fpBefore[0] && fpAfter[1] == fpBefore[1]

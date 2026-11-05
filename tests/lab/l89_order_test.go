@@ -155,19 +155,19 @@ func l89MarksText(m map[string][]l89.Mark) string {
 func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	c, ns := r.stack.Cluster(), r.stack.Namespace()
 	defer func() {
-		if t.Failed() && cell.Verdict == "" {
-			l82Row(cell, "the harness's own setup failed: not a measurement", "see the test log and l89-diagnosis.txt")
+		if t.Failed() && cell.Verdict == "" && !l89SetupRowed(cell) {
+			l82Row(cell, l89SetupRow, "see the test log and l89-diagnosis.txt")
 		}
 		if t.Failed() || cell.Verdict != l82.Pass {
 			r.diagnose()
 		}
 	}()
 	if len(r.before.Hashes) == 0 || len(r.before.Marks) == 0 {
-		t.Fatalf("cell (a) never recorded the files and marks before the backup, so they cannot be compared")
+		r.setupFail(t, cell, "cell (a) never recorded the files and marks before the backup, so they cannot be compared")
 	}
 	doc, err := os.ReadFile(filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero", "README.md"))
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	restore := l89RestoreC
 	if fallback {
@@ -175,7 +175,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	}
 	steps, err := l89.Steps(string(doc), ns, r.stack.Release(), l89Backup, restore, 2, 2)
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	example := filepath.Join(kindtest.Root(), "deploy", "helm", "port49", "examples", "velero")
 
@@ -186,34 +186,34 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	// file's name in it, and run 42047911635 lost this cell's reason that way
 	deleteFile, err := os.ReadFile(filepath.Join(example, "restore-token-delete.yaml"))
 	if err != nil {
-		t.Fatalf("reading the delete Job's example: %v", errors.Unwrap(err))
+		r.setupFail(t, cell, "reading the delete Job's example: %v", errors.Unwrap(err))
 	}
 	tok, err := l89.LabDeleteJob(string(deleteFile), ns)
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	mod, err := os.ReadFile(filepath.Join(example, "restore-scale-zero.yaml"))
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	labMod, err := l89.LabModifier(string(mod), r.stack.Release())
 	if err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	for f, body := range map[string]string{"restore-token-delete.yaml": tok, "restore-scale-zero.yaml": labMod} {
 		if err := os.WriteFile(filepath.Join(work, f), []byte(body), 0o600); err != nil {
-			t.Fatalf("writing an example into the working directory: %v", errors.Unwrap(err))
+			r.setupFail(t, cell, "writing an example into the working directory: %v", errors.Unwrap(err))
 		}
 	}
 
 	// kubectl and velero as the README writes them, pointed at the lab's cluster
 	bin := t.TempDir()
 	if err := os.Symlink(kindtest.Bin(t, "KUBECTL_BIN"), filepath.Join(bin, "kubectl")); err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	wrapper := fmt.Sprintf("#!/bin/sh\nexec %q --kubeconfig %q --kubecontext %q -n velero \"$@\"\n", kindtest.Bin(t, "VELERO_BIN"), c.Kubeconfig, c.Context())
 	if err := os.WriteFile(filepath.Join(bin, "velero"), []byte(wrapper), 0o755); err != nil {
-		t.Fatal(err)
+		r.setupFail(t, cell, "%v", err)
 	}
 	// readme runs one README step, by its name in steps, bounded by l89.StepBounds (inside the cell's
 	// end). Its failure is the measurement: the row names the command the ERR trap caught and the exit
@@ -224,7 +224,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	readme := func(what, dir, step string) string {
 		own, ok := l89.StepBounds[step]
 		if !ok {
-			t.Fatalf("README step %s has no bound", step)
+			r.setupFail(t, cell, "README step %s has no bound", step)
 		}
 		within, capped := r.bound(own)
 		env := append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "KUBECONFIG="+c.Kubeconfig)
@@ -255,11 +255,11 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 
 	_, fpBefore := r.snapshot()
 	if fpBefore[0] == "" || fpBefore[0] != fpBefore[1] {
-		t.Fatalf("the brokers do not hold one CA before the restore")
+		r.setupFail(t, cell, "the brokers do not hold one CA before the restore")
 	}
 
 	// the README's first command: both namespaces deleted (the lab has one), and its volumes gone
-	c.Kubectl("delete", "namespace", ns, "--wait=true", r.kubectlTimeout(5*time.Minute))
+	r.kubectl(t, cell, "delete", "namespace", ns, "--wait=true", r.kubectlTimeout(5*time.Minute))
 	r.waitFor(t, cell, "the namespace's volumes to be deleted", 5*time.Minute, func() bool {
 		out, err := c.KubectlTry("", "get", "pv", "-o", `jsonpath={range .items[*]}{.spec.claimRef.namespace}{"\n"}{end}`)
 		return err == nil && !strings.Contains(out, ns)
@@ -268,12 +268,12 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 
 	if !fallback {
 		l82Row(cell, "the resource modifier as the lab runs it", "restore-scale-zero.yaml with a resourceNameRegex the lab adds (its etcd shares the namespace), so the shipped file is not run as shipped")
-		c.Kubectl("-n", "velero", "delete", "configmap", "restore-scale-zero", "--ignore-not-found")
+		r.kubectl(t, cell, "-n", "velero", "delete", "configmap", "restore-scale-zero", "--ignore-not-found")
 		readme("README step 3 (the restore with the resource modifier)", work, "restorezero")
 		l82Row(cell, "README step 3 (the restore "+restore+" with the resource modifier, both StatefulSets at 0 replicas) ran from its own text", "yes")
 		readme("README step 1's wait for etcd", work, "etcdwait")
 		l82Row(cell, "README step 1's wait for etcd (the lab's etcd is restored by step 3's restore)", "ready")
-		replicas := strings.TrimSpace(c.Kubectl("-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
+		replicas := strings.TrimSpace(r.kubectl(t, cell, "-n", ns, "get", "statefulset", "t-broker", "t-port49d", "-o", `jsonpath={range .items[*]}{.spec.replicas} {end}`))
 		if replicas != "0 0" {
 			measured("the two StatefulSets' replicas after the restore (the resource modifier did not apply)", replicas)
 		}
@@ -342,7 +342,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 		return
 	}
 
-	readme("README step 2 (the delete Job of design 13 step 3)", work, "tokendelete")
+	readme("README step 2 (the delete Job of design 13 step 3)", work, "deletejob")
 	l82Row(cell, "README step 2 (the delete Job of design 13 step 3) ran from its own text and completed", "yes")
 	readme("README step 4 (revoke-offline.sh)", kindtest.Root(), "revoke")
 	l82Row(cell, "README step 4 (revoke-offline.sh) ran from its own text", "yes")
@@ -353,7 +353,7 @@ func (r *l89Run) cellOrder(t *testing.T, cell *l82.Cell, fallback bool) {
 	cs.FingerprintAfter = l89.Short(fpAfter[0])
 	l82Row(cell, "the issuing CA's fingerprint (first 12 hex) before the namespace was deleted, and after the scale-up", fmt.Sprintf("%s, %s", l89.Short(fpBefore[0]), l89.Short(fpAfter[0])))
 	for _, p := range []string{"t-broker-0", "t-broker-1"} {
-		logs := c.Kubectl("-n", ns, "logs", p, "-c", "port49-broker")
+		logs := r.kubectl(t, cell, "-n", ns, "logs", p, "-c", "port49-broker")
 		fresh := strings.Contains(logs, l89.FreshCopyLine)
 		cs.FreshCopy = cs.FreshCopy || fresh
 		l82Row(cell, p+"'s log after the scale-up says it had no marks.json at this start", map[bool]string{true: "yes", false: "no"}[fresh])

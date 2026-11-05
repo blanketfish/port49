@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -462,6 +463,52 @@ func TestDecodeMarksReadsTheCopysFile(t *testing.T) {
 	}
 }
 
+// m1r5c: a setup failure's reason survives the job log's filter (which drops a line with a credential
+// word in it) and Results' Leak, so the row and the log line both say why the cell stopped.
+func TestReasonKeepsASetupFailureReadable(t *testing.T) {
+	filter := regexp.MustCompile(`(?i)password|token|secret|eyJ`)
+	got := Reason("deletejob: kubectl -n port49 get secret port49-etcd-root: exit status 1\nError from server (NotFound): secrets \"port49-etcd-root\" not found\n")
+	if filter.MatchString(got) || Leak(got) != "" {
+		t.Errorf("the reason would be dropped or refused: %q", got)
+	}
+	for _, want := range []string{"exit status 1", "(NotFound)", "<word>s \"port49-etcd-root\" not found", " / "} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the reason %q lacks %q", got, want)
+		}
+	}
+	if got := Reason("reading restore-token-delete.yaml: no such file"); got != "reading restore-<word>-delete.yaml: no such file" {
+		t.Errorf("Reason = %q", got)
+	}
+	if got := Reason("a value " + strings.Repeat("Ab3", 12)); !strings.Contains(got, "<LONG>") || strings.Contains(got, "Ab3Ab3") {
+		t.Errorf("a long run is kept: %q", got)
+	}
+	if got := Reason("-----BEGIN PRIVATE KEY-----"); !strings.HasPrefix(got, "withheld") {
+		t.Errorf("a PEM block is kept: %q", got)
+	}
+	if got := Reason(strings.Repeat("x ", 400)); len(got) > 410 {
+		t.Errorf("a long reason is %d bytes", len(got))
+	}
+	// a step's name prefixes its errors, so none may hold a word the filter drops
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "port49", "examples", "velero", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps, err := Steps(string(b), "port49", "t", "l89-backup", "l89-restore-c", 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range steps {
+		if filter.MatchString(name) {
+			t.Errorf("the step %q is named with a word the job log's filter drops", name)
+		}
+	}
+	for name := range StepBounds {
+		if filter.MatchString(name) {
+			t.Errorf("the bound %q is named with a word the job log's filter drops", name)
+		}
+	}
+}
+
 func TestFailedCommandIsTheTrapsLineScrubbed(t *testing.T) {
 	out := "some output\nl89-failed: kubectl -n port49 wait --for=condition=complete job/restore-token-delete --timeout=3m\nError: timed out\n"
 	// the token delete's own lines hold a word Results refuses: the row shows it masked, and stays writable
@@ -866,7 +913,7 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"etcdrestore", "tokendelete", "restorezero", "volumes", "revoke", "scaleup", "fallbackrestore", "fallbackzero"} {
+	for _, name := range []string{"etcdrestore", "deletejob", "restorezero", "volumes", "revoke", "scaleup", "fallbackrestore", "fallbackzero"} {
 		cmd := steps[name]
 		if cmd == "" {
 			t.Errorf("no %s step", name)
@@ -875,8 +922,8 @@ func TestStepsRunTheVeleroREADMEInTheLabsNamespace(t *testing.T) {
 			t.Errorf("%s still names etcd's namespace or a placeholder:\n%s", name, cmd)
 		}
 	}
-	if !strings.Contains(steps["etcdrestore"], "--include-namespaces port49 ") || !strings.Contains(steps["tokendelete"], "-n port49 wait") {
-		t.Errorf("the restore or the token delete is not in the lab's namespace:\n%s\n%s", steps["etcdrestore"], steps["tokendelete"])
+	if !strings.Contains(steps["etcdrestore"], "--include-namespaces port49 ") || !strings.Contains(steps["deletejob"], "-n port49 wait") {
+		t.Errorf("the restore or the token delete is not in the lab's namespace:\n%s\n%s", steps["etcdrestore"], steps["deletejob"])
 	}
 	if !strings.Contains(steps["volumes"], "podvolumerestores") || !strings.Contains(steps["volumes"], "velero.io/restore-name=l89-restore-c ") {
 		t.Errorf("the volume check does not list the named restore's pod volume restores:\n%s", steps["volumes"])

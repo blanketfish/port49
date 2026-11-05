@@ -76,14 +76,14 @@ kubectl -n port49-etcd wait --for=condition=Ready pod -l app.kubernetes.io/name=
    Secret `port49-etcd-root`, as `etcd-init-job.yaml` uses it). Edit `PREFIX` in the file if your prefix is
    not `/port49/`.
 
-<!-- l89:tokendelete:begin -->
+<!-- l89:deletejob:begin -->
 ```sh
 kubectl apply -f restore-token-delete.yaml
 kubectl -n port49-etcd wait --for=condition=complete job/restore-token-delete --timeout=3m
 kubectl -n port49-etcd logs job/restore-token-delete
 kubectl -n port49-etcd delete job/restore-token-delete
 ```
-<!-- l89:tokendelete:end -->
+<!-- l89:deletejob:end -->
 
 3. Everything else, with both StatefulSets at 0 replicas, so no broker or port49d starts yet.
 
