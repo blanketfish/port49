@@ -187,6 +187,9 @@ func (r *runner) run(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() == nil {
 				failed++
+				if holdWaiting != nil {
+					holdWaiting(failed)
+				}
 				waitToHold(ctx, &say, failed, e.Prefix, err)
 			}
 			continue
@@ -205,7 +208,8 @@ func (r *runner) run(ctx context.Context) {
 		case <-lost:
 			fmt.Fprintln(stderr, "port49-broker: runner: lost the keyspace's hold (its lock key is gone, or etcd "+
 				"stopped answering with half its lease or less left); the runner's duties stop; this replica keeps "+
-				"serving the API and tries to take the hold again ("+storeScheduleText+")")
+				"serving the API and tries to take the hold again, after a wait that is about a second at first "+
+				"and grows to 10s while it keeps failing")
 		case <-done:
 			// The takeover stopped on an error that waiting does not mend
 			// (duties says it): the hold is let go, so another replica may
@@ -227,12 +231,26 @@ func (r *runner) run(ctx context.Context) {
 		release()
 		// A run that lasted starts the schedule over; one that did not (a hold
 		// lost at once, again and again) backs off like a store that is down.
-		if time.Since(took) >= storeAttemptMax {
-			failed = 0
+		failed = nextFailed(failed, time.Since(took))
+		if holdWaiting != nil {
+			holdWaiting(failed)
 		}
-		failed++
 		retryWait(ctx, failed, retryRnd)
 	}
+}
+
+// holdWaiting, set by a test, is told the failure count each time the hold loop
+// is about to wait. Nil in production.
+var holdWaiting func(failed int)
+
+// nextFailed is the failure count for the wait after a run of the duties that
+// lasted ran: a run of storeAttemptMax or more starts the schedule over, one
+// that did not counts as one more failure.
+func nextFailed(failed int, ran time.Duration) int {
+	if ran >= storeAttemptMax {
+		failed = 0
+	}
+	return failed + 1
 }
 
 // waitToHold says why the hold was not taken (an outage once, again if it

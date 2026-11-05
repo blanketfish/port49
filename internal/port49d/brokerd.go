@@ -156,7 +156,7 @@ func pagedLoad(ctx context.Context, out io.Writer, name string, f func() error) 
 		}
 		// Twice in a row means the load takes longer than etcd keeps
 		// revisions; say once what to change. It keeps trying: nothing is
-		// refused, and the retry line below still names each wait.
+		// refused, and the retry line below says an outage once.
 		if compacted++; compacted == 2 {
 			fmt.Fprintf(out, "port49-broker: the %s load keeps meeting a compaction before it finishes: raise "+
 				"etcd's --auto-compaction-retention\n", name)
