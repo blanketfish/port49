@@ -6,17 +6,10 @@ import (
 	"time"
 )
 
-// oidcPartialRefreshText answers a refresh whose challenge is spent and whose
-// extension did not finish: a retry with the same token is refused, so the
-// text asks for a new challenge, not a retry.
-const oidcPartialRefreshText = "the broker could not finish extending your live sessions; some may have been " +
-	"extended; ask for a new challenge (run `port49 refresh` again) after Retry-After and it reports them all"
-
 // markExtended marks every context rep extended, context by context, after a
 // logout landed during the refresh (pre-flight I-2). The logout's passes may
-// have run before the new sid was indexed, and a logout leaves no standing
-// mark (Ruling 13), so what this refresh extended is marked here. A sid-less
-// token indexed nothing, and the loop does not need the index.
+// have run before the refresh extended the context, and a logout leaves no standing
+// mark (Ruling 13), so what this refresh extended is marked here.
 func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshReport) {
 	at := b.Now()
 	var failed error
@@ -58,8 +51,7 @@ func (b *Broker) endThenLift(principal, its string) string {
 // failedRefresh answers a refresh whose extension failed part way. The
 // contexts already extended are checked against the logouts again as a
 // finished refresh's are (pre-flight I-2): the provider was answered 200 for
-// its logout and will not send it again. text is the 503's: the bearer path
-// asks for a new challenge, the certificate path for a retry.
+// its logout and will not send it again. text is the 503's.
 func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now time.Time, c caller,
 	rep SessionRefreshReport, text string) {
 	extended := false

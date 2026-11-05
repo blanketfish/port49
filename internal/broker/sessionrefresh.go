@@ -28,10 +28,28 @@ const (
 	refreshEvery    = 10 * time.Second
 )
 
+// refuseBearerRefresh answers a bearer at either refresh endpoint in words: a
+// person's ID token is refused as anywhere (personBearerText), and a
+// machine's, which holds no session, is told to fetch a new token. A request
+// with no bearer is not answered here.
+func (b *Broker) refuseBearerRefresh(w http.ResponseWriter, r *http.Request) bool {
+	if _, ok, _ := bearerOf(r); !ok {
+		return false
+	}
+	if _, ok := b.authenticate(w, r, decision.EventRefresh, "extended nothing"); !ok {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, "bad_request", "a machine has no session to refresh: fetch a new token")
+	return true
+}
+
 // refreshChallenge issues the nonce a refresh signs (spec §5.6; decision
 // 33). It is held on this connection alone; a new one replaces it. A
 // connection that refreshed within refreshEvery is told to wait.
 func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
+	if b.refuseBearerRefresh(w, r) {
+		return
+	}
 	now := b.Now()
 	principal, _, cred, _, _, err := b.callerOf(r, now)
 	if err != nil {
@@ -90,6 +108,9 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 // refresh verifies the signed challenge and extends the caller's live
 // sessions (spec §5.6). The nonce is taken whatever the outcome: single use.
 func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
+	if b.refuseBearerRefresh(w, r) {
+		return
+	}
 	now := b.Now()
 	principal, legacy, cred, issued, signIn, err := b.callerOf(r, now)
 	if err != nil {
@@ -230,7 +251,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if issued != nil {
 			// What the refresh extended before it failed answers to a logout
-			// that landed meanwhile, as on the OIDC path (pre-flight I-2).
+			// that landed meanwhile (pre-flight I-2).
 			b.failedRefresh(ctx, w, at, caller{principal: principal, cred: cred, oidc: issued}, rep, partialRefreshText)
 			return
 		}
@@ -249,7 +270,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		b.refuseRevokedAuth(w, decision.EventRefresh, b.Now(), principal, cred, via, viaDir, rv)
 		return
 	}
-	// The logouts again, after the extension's writes, as on the OIDC path:
+	// The logouts again, after the extension's writes:
 	// what a logout that landed meanwhile would have missed is marked.
 	if issued != nil {
 		switch l, out, err := b.loggedOut(ctx, *issued); {
