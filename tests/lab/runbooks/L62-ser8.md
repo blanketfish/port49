@@ -28,7 +28,7 @@ torn-down stack). Gated by `PORT49_L62_UP=1`, it:
   and `port49-broker` on `127.0.0.1:8449` (its certificate names IP `127.0.0.1`) with
   `broker.identity.issuance: {certificate_lifetime: 24h}`, the realm as its provider, and its
   CA made by `init-issuer`;
-- keeps the PKI and the broker's state in `~rwendt/.cache/port49-l62/` and reuses them on the
+- keeps the PKI and the broker's state in `~/.cache/port49-l62/` and reuses them on the
   next run. A certificate issued before the reboot then stays valid after it.
   `PORT49_L62_FRESH=1` starts over. The lab PKI lasts 24h: a kept state is reused only with at
   least 6h of validity left, otherwise it starts over with a new issuing CA;
@@ -77,7 +77,7 @@ A7. **Your browser.** On your workstation, add `127.0.0.1 keycloak.port49.lab` t
 file. Then keep this running for the whole session:
 
 ```
-ssh -N -L 18443:127.0.0.1:18443 -L 18749:127.0.0.1:18749 rwendt@beehive
+ssh -N -L 18443:127.0.0.1:18443 -L 18749:127.0.0.1:18749 <user>@<lab-host>
 ```
 
 Keycloak's redirect then lands on whichever `port49 login` is waiting on beehive's
@@ -103,7 +103,7 @@ Then set up `p49lab`'s local config. It is per host and lives outside the shared
 sudo install -d -m 755 /var/lib/port49-l62
 sudo install -d -o p49lab -g p49lab -m 700 /var/lib/port49-l62/ser8 /var/lib/port49-l62/host2
 for d in ser8 host2; do sudo install -o p49lab -g p49lab -m 600 \
-  ~rwendt/.cache/port49-l62/broker-ca.pem ~rwendt/.cache/port49-l62/oidc-ca.pem /var/lib/port49-l62/$d/; done
+  ~/.cache/port49-l62/broker-ca.pem ~/.cache/port49-l62/oidc-ca.pem /var/lib/port49-l62/$d/; done
 sudo install -d -m 1777 /var/tmp/port49-l62
 ```
 

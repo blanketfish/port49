@@ -13,7 +13,7 @@ without approval harmless.
 1. **PyPI trusted publisher.** Project `port49`, repository `blanketfish/port49`, workflow
    `release.yml`, environment `pypi`.
 2. **Environments** (Settings, Environments):
-   - `release` (the goreleaser, image and chart jobs): the maintainer as the **required reviewer**, so
+   - `release` (the goreleaser, image and chart jobs): the maintainer (Ryan Wendt) as the **required reviewer**, so
      no tag publishes without approval.
    - `pypi` and `galaxy`: created beside it.
    - Each of `release`, `pypi` and `galaxy`: deployment branches and tags restricted to the **`v*`
@@ -32,5 +32,5 @@ without approval harmless.
 1. Set the same version in `clients/python/pyproject.toml`, the collection's `galaxy.yml`, and the chart
    and app versions; `go run ./tests/ci/cmd/versioncheck -tag vX.Y.Z` must pass.
 2. Merge to `main`. The tag must be on `main`; the workflow refuses it otherwise.
-3. Push the tag. Approve the `release` environment when the run asks.
+3. The maintainer pushes the tag; nobody else, and no automation, does. The maintainer approves the `release` environment when the run asks.
 4. Check the draft release's assets and provenance attestations, then let the last job publish it.

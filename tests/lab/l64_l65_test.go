@@ -1168,7 +1168,7 @@ func TestL64L65(t *testing.T) {
 		t.Skip("L64 and L65 reload each device: run them with `make lab-ssh` (PORT49_LAB_SSH=1)")
 	}
 	if _, err := os.Stat(venvPython); err != nil {
-		t.Skipf("no client venv at %s: %v", venvPython, err)
+		t.Skipf("no client venv at %s: %v (set PORT49_LAB_VENV_PYTHON to a venv's python)", venvPython, err)
 	}
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		versions := installClient(t)
