@@ -2212,26 +2212,32 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	// refuses a context read below what this port49d saw, is not what
 	// refuses the replay.
 	padPast(t, root, uint64(top.Header.Revision))
-	waitWithin(t, &out, fmt.Sprintf("port49d: store: meta/witness is at revision %d, below the ", w0), 20*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 1")
-	// Refused by the guard, before any token is looked up: the ledger's
-	// fence would refuse this one too, at its context read, since alice's
-	// context was written after the snapshot, but not a token whose
-	// context port49d's ledger no longer keeps.
-	looked := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
-	if st := dev.login("alice", spent); st != wire.AuthenStatusError {
-		t.Fatalf("a token spent since the snapshot, presented while guarded: %d", st)
+	waitWithin(t, &out, "port49d: store: the session store was restored from a snapshot: meta/witness is at revision "+
+		fmt.Sprint(w0), 20*time.Second)
+	waitUntil(t, "the restore detected", func() bool {
+		return metricAt(t, metricsD, "port49_store_restore_detected_timestamp_seconds") > 0
+	})
+	// Refused by the floor: the token is at or below the revision the drop was
+	// found at, token_spent.
+	// Just after etcd returns, the token pool's receipt read can still fail
+	// (get_receipt, before the floor is asked), which answers ERROR
+	// store_unavailable: try again for 10s, and only for that reason.
+	st = dev.login("alice", spent)
+	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
+		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+			t.Fatalf("an ERROR for a reason other than store_unavailable: %v", r[len(r)-1])
+		}
+		time.Sleep(200 * time.Millisecond)
+		st = dev.login("alice", spent)
 	}
-	if n := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); n != looked {
-		t.Fatalf("a redemption while guarded looked up the tokens: %v after %v", n, looked)
+	if st != wire.AuthenStatusFail {
+		t.Fatalf("a token spent since the snapshot, presented under the floor: %d", st)
 	}
-	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("the refusal: %v", r[len(r)-1])
 	}
 	api, _ = startBroker(t, f.broker, &out, 3)
 	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
-	waitWithin(t, &out, "port49d: store: the broker runner's purge after the restore is done", 10*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 0")
 	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
 		t.Fatal("a token spent since the snapshot logged in after the purge")
 	}
@@ -2306,26 +2312,32 @@ func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T)
 	waitCountWithin(t, &out, "port49d: listening on ", bound+1, 60*time.Second)
 	metricsD = newestMatch(&out, `port49d: metrics on (127\.0\.0\.1:\d+)`) // the new run's
 	dev.addr = newestMatch(&out, `port49d: listening on (127\.0\.0\.1:\d+)`)
-	waitWithin(t, &out, fmt.Sprintf("port49d: store: meta/witness is at revision %d, below the ", w0), 20*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 1")
-	// Refused by the guard, before any token is looked up: the ledger's
-	// fence would refuse this one too, at its context read, since alice's
-	// context was written after the snapshot, but not a token whose
-	// context port49d's ledger no longer keeps.
-	looked := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
-	if st := dev.login("alice", spent); st != wire.AuthenStatusError {
-		t.Fatalf("a token spent since the snapshot, presented while guarded: %d", st)
+	waitWithin(t, &out, "port49d: store: the session store was restored from a snapshot: meta/witness is at revision "+
+		fmt.Sprint(w0), 20*time.Second)
+	waitUntil(t, "the restore detected", func() bool {
+		return metricAt(t, metricsD, "port49_store_restore_detected_timestamp_seconds") > 0
+	})
+	// Refused by the floor: the token is at or below the revision the drop was
+	// found at, token_spent.
+	// Just after etcd returns, the token pool's receipt read can still fail
+	// (get_receipt, before the floor is asked), which answers ERROR
+	// store_unavailable: try again for 10s, and only for that reason.
+	st = dev.login("alice", spent)
+	for deadline := time.Now().Add(10 * time.Second); st == wire.AuthenStatusError && time.Now().Before(deadline); {
+		if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+			t.Fatalf("an ERROR for a reason other than store_unavailable: %v", r[len(r)-1])
+		}
+		time.Sleep(200 * time.Millisecond)
+		st = dev.login("alice", spent)
 	}
-	if n := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); n != looked {
-		t.Fatalf("a redemption while guarded looked up the tokens: %v after %v", n, looked)
+	if st != wire.AuthenStatusFail {
+		t.Fatalf("a token spent since the snapshot, presented under the floor: %d", st)
 	}
-	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("the refusal: %v", r[len(r)-1])
 	}
 	api, _ = startBroker(t, f.broker, &out, 3)
 	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
-	waitWithin(t, &out, "port49d: store: the broker runner's purge after the restore is done", 10*time.Second)
-	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 0")
 	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
 		t.Fatal("a token spent since the snapshot logged in after the purge")
 	}

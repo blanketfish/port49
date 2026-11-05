@@ -541,6 +541,19 @@ func (s *Store) PurgeTokens(context.Context) (int, error) {
 	return n, nil
 }
 
+// PurgeOnceRecords clears the once-only records and the per-login proofs.
+func (s *Store) PurgeOnceRecords(context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := len(s.once) + len(s.mfaProof)
+	clear(s.once)
+	clear(s.mfaProof)
+	if n > 0 {
+		s.wroteLocked()
+	}
+	return n, nil
+}
+
 func (s *Store) GetReceipt(_ context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

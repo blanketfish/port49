@@ -48,12 +48,6 @@ groups:
           summary: "A key version with devices still on it passes its retire_after within a day, or already has; those devices fail authentication once it does."
   - name: port49_policy
     rules:
-      - alert: port49_redemption_restore_guarded
-        expr: "port49_redemption_restore_guarded == 1"
-        for: 10m
-        labels: {severity: page}
-        annotations:
-          summary: "port49d refuses every token redemption: it found its store restored from a snapshot. {{ with query (printf \"max(port49_redemption_restore_guard_until_timestamp_seconds{instance=%q})\" $labels.instance) }}{{ if gt (. | first | value) 0.0 }}The guard lifts on its own at {{ . | first | value | humanizeTimestamp }} unless new tokens are minted, or at the runner's purge. {{ else }}Its bound is unknown: only the runner's purge lifts it. {{ end }}{{ end }}To restore service sooner, stop port49d: devices then find the connection refused and fall to local authentication."
       - alert: port49_admin_touch_refused
         expr: "increase(port49_admin_touch_total{outcome=\"refused\"}[10m]) > 0"
         labels: {severity: page}

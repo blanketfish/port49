@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -29,6 +28,7 @@ func liveTokens(kvs []*mvccpb.KeyValue, now time.Time) []store.Token {
 			continue
 		}
 		t := r.token()
+		t.Revision = uint64(kv.CreateRevision)
 		t.Secret = bytes.Clone(t.Secret)
 		out = append(out, t)
 	}
@@ -55,8 +55,8 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		// The grant alone is hedged: a mint at a bucket's rollover grants,
 		// and an unhedged grant on a dark member's stalled connection fails
 		// one mint in three. The marked ctx goes to the grant only; the
-		// token's Txn is never hedged, since a second copy would write a
-		// second token.
+		// token's Txn is never hedged or re-sent, and its create-only
+		// compare makes a late copy a refused one, not a second token.
 		id, err := s.tokLeases.For(idempotent(ctx), t.ExpiresAt)
 		if err != nil {
 			return 0, unavailable(err)
@@ -65,6 +65,7 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		if err != nil {
 			return 0, err
 		}
+		cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(s.k.token(k, t.ID)), "=", 0))
 		ops = append([]clientv3.Op{clientv3.OpPut(s.k.token(k, t.ID), string(body), clientv3.WithLease(id))}, ops...)
 		ops = append(ops, clientv3.OpGet(s.k.tokens(k), clientv3.WithPrefix()))
 		if beforeTokenTxn != nil {
@@ -79,7 +80,14 @@ func (s *Store) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (
 		if err != nil {
 			return 0, unavailable(err)
 		}
-		if !resp.Succeeded { // an index entry moved since it was read: read it again
+		if !resp.Succeeded {
+			// The ID is taken, or an index entry moved since it was read. Taken
+			// is final: the same ID is never written twice.
+			if got, err := s.tok.Get(ctx, s.k.token(k, t.ID), clientv3.WithCountOnly()); err != nil {
+				return 0, unavailable(err)
+			} else if got.Count > 0 {
+				return 0, fmt.Errorf("etcd store: token %q already exists: %w", t.ID, store.ErrConflict)
+			}
 			lost++
 			if err := casBackoff(ctx, lost); err != nil {
 				return 0, unavailable(err)
@@ -293,51 +301,6 @@ func (s *Store) PurgeTokens(ctx context.Context) (int, error) {
 		if _, err := s.tok.Delete(ctx, string(resp.Kvs[0].Key), clientv3.WithRange(last+"\x00")); err != nil {
 			return n, unavailable(err)
 		}
-	}
-}
-
-// ErrTokenRecord is a token record LatestTokenExpiry could not decode. It
-// names no record and holds no body.
-var ErrTokenRecord = errors.New("etcd store: a token record does not decode")
-
-// LatestTokenExpiry is the largest ExpiresAt among every record under the
-// token family, expired or not, zero when there is none. It reads a page at a
-// time, writes nothing and keeps nothing of a record but its expiry. A record
-// that does not decode is an error (ErrTokenRecord), never skipped: port49d's
-// restore guard (plan 12c, Task 9a) lifts only once this time has passed, and a
-// record it could not read might be the latest. The time is the minting
-// broker's, to be compared with the caller's clock as redemption compares it.
-//
-// mintedBy bounds the records counted to those minted at or before it (zero:
-// every record): only a token minted before a restore can have been restored,
-// and one a running broker minted after it must not move the bound. A record
-// with no MintedAt cannot be shown to be later, so it counts. A record that
-// does not decode is an error whatever its age.
-func (s *Store) LatestTokenExpiry(ctx context.Context, mintedBy time.Time) (time.Time, error) {
-	end := clientv3.GetPrefixRangeEnd(s.k.family(famToken))
-	from := s.k.family(famToken)
-	var latest time.Time
-	for {
-		resp, err := s.tok.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(purgePage))
-		if err != nil {
-			return time.Time{}, unavailable(err)
-		}
-		for _, kv := range resp.Kvs {
-			var r tokenRec
-			if json.Unmarshal(kv.Value, &r) != nil {
-				return time.Time{}, ErrTokenRecord
-			}
-			if !mintedBy.IsZero() && r.MintedAt.After(mintedBy) {
-				continue
-			}
-			if r.ExpiresAt.After(latest) {
-				latest = r.ExpiresAt
-			}
-		}
-		if len(resp.Kvs) < purgePage {
-			return latest, nil
-		}
-		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
 }
 

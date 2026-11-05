@@ -18,7 +18,7 @@ var directoryMethods = set(`
 `)
 
 var sessionMethods = set(`
-	PutToken Candidates TokenIDs RedeemAndReceipt DeleteTokens DeleteToken PurgeTokens
+	PutToken Candidates TokenIDs RedeemAndReceipt DeleteTokens DeleteToken PurgeTokens PurgeOnceRecords
 	GetReceipt ExtendReceipt FailReceipt DeleteReceiptsByPrincipal
 	PutContext GetContext SwapContext SwapLogin RewriteContext TouchContext SetPrivilege
 	AnnotateContext RefreshContext SetRevokedAt SetContextPolicy StampRefreshed

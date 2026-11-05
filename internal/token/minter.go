@@ -40,6 +40,10 @@ var ErrIdempotencyInProgress = errors.New("token: a request under this idempoten
 // long for a live mint and short for a retry.
 const ReservationTTL = time.Minute
 
+// mintIDDraws bounds how many token IDs one mint draws when the store says
+// each is taken.
+const mintIDDraws = 3
+
 // Reservation is a request's hold on its idempotency key, one record per
 // device (idemScope), taken for the whole batch before any device is minted
 // (Reserve).
@@ -514,23 +518,40 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	var hashes []string
 
 	mint := func(kind string) (string, error) {
-		secret, err := New(m.rand, m.tagKey.Bytes(), r.Device)
-		if err != nil {
-			return "", err
-		}
-		id, err := New(m.rand, m.tagKey.Bytes(), r.Device) // any random string is a removal handle
-		if err != nil {
-			return "", err
-		}
-		if _, err := m.store.PutToken(ctx, key, store.Token{
-			ID: id[TagLen:], Secret: []byte(secret), Kind: kind, ExpiresAt: expires,
-			Principal: r.Subject.Principal, Username: r.Subject.Username, BlobHash: r.BlobHash,
-			MaxSessionAge: r.Subject.MaxSessionAge, Enable: r.Subject.Enable, MaxPrivilege: r.Subject.MaxPrivilege,
-			Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime, MintedAt: mintedAt,
-			VerifiedAt:     r.Subject.VerifiedAt,
-			IndexPrincipal: r.Subject.Principal, IndexCertKey: certKey, IndexTTL: indexTTL,
-		}); err != nil {
-			return "", err
+		// The put is create-only, so a taken ID is refused (ErrConflict). That
+		// is the store's coincidence, not the caller's: draw another ID, up to
+		// mintIDDraws times, and then fail as the store failing. The secret is
+		// drawn again with it: the usual taken ID is a late copy of this very
+		// put that already landed, and a redraw with the same secret would
+		// leave two redeemable records for one credential.
+		var secret string
+		for draw := 1; ; draw++ {
+			var err error
+			if secret, err = New(m.rand, m.tagKey.Bytes(), r.Device); err != nil {
+				return "", err
+			}
+			id, err := New(m.rand, m.tagKey.Bytes(), r.Device) // any random string is a removal handle
+			if err != nil {
+				return "", err
+			}
+			_, err = m.store.PutToken(ctx, key, store.Token{
+				ID: id[TagLen:], Secret: []byte(secret), Kind: kind, ExpiresAt: expires,
+				Principal: r.Subject.Principal, Username: r.Subject.Username, BlobHash: r.BlobHash,
+				MaxSessionAge: r.Subject.MaxSessionAge, Enable: r.Subject.Enable, MaxPrivilege: r.Subject.MaxPrivilege,
+				Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime, MintedAt: mintedAt,
+				VerifiedAt:     r.Subject.VerifiedAt,
+				IndexPrincipal: r.Subject.Principal, IndexCertKey: certKey, IndexTTL: indexTTL,
+			})
+			if errors.Is(err, store.ErrConflict) {
+				if draw < mintIDDraws {
+					continue
+				}
+				return "", fmt.Errorf("token store: %d token IDs in a row were taken: %v", draw, err)
+			}
+			if err != nil {
+				return "", err
+			}
+			break
 		}
 		sum := sha256.Sum256([]byte(secret))
 		hashes = append(hashes, hex.EncodeToString(sum[:]))

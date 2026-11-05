@@ -22,6 +22,10 @@ type health struct {
 	m                     *metrics.Metrics
 	state                 *healthState
 	out                   io.Writer
+	// passed, when set, is called after every passing check in watch: the
+	// store answers, so an open token or context circuit has nothing left to
+	// wait for (stores I2).
+	passed func()
 }
 
 // healthState is the failed checks in a row, owned by `run` beside the alarm,
@@ -138,6 +142,9 @@ func (h *health) watch(ctx context.Context, gone func(error)) {
 		if err == nil {
 			fails = 0
 			h.state.set(0)
+			if h.passed != nil {
+				h.passed()
+			}
 			continue
 		}
 		if fails == 0 {
